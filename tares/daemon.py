@@ -1159,6 +1159,17 @@ def make_app() -> FastAPI:
         return {"sampled": sampled, "fields": fields, "labels": labels}
 
     # ── in-app agent (the Ask view) — server-side chat loop over the read API ──
+    def _record_ask_usage(model: str, usage: dict) -> None:
+        """One ledger row per Ask turn (console chat or Slack /ask), so the cell's spend meter
+        covers everything that talks to Anthropic, not just agent runs."""
+        from .pricing import cost_usd
+        store.record_model_usage(
+            "ask", "", "", model, usage["calls"],
+            usage["input_tokens"], usage["output_tokens"],
+            usage["cache_creation_input_tokens"], usage["cache_read_input_tokens"],
+            cost_usd(model, usage["input_tokens"], usage["output_tokens"],
+                     usage["cache_creation_input_tokens"], usage["cache_read_input_tokens"]))
+
     @app.post("/api/agent/chat")
     async def agent_chat(request: Request):
         from .agent import run_agent
@@ -1174,7 +1185,8 @@ def make_app() -> FastAPI:
         self_headers = {"Authorization": f"Bearer {AUTH_TOKEN}"} if AUTH_TOKEN else {}
         return StreamingResponse(
             run_agent(key, body.get("messages") or [],
-                      model=body.get("model"), self_headers=self_headers),
+                      model=body.get("model"), self_headers=self_headers,
+                      on_usage=_record_ask_usage),
             media_type="text/event-stream")
 
     # ── MCP connections — external tool servers a Tares agent can opt into ─────
@@ -1538,10 +1550,14 @@ def make_app() -> FastAPI:
         no key configured is the common case on a fresh install and looks identical to "disabled"
         without this."""
         key, origin = resolve_anthropic_key(store)
+        stats = store.agent_stats()
+        zero = {"runs": 0, "ok": 0, "finished": 0, "avg_duration_ms": None,
+                "cost_usd": None, "input_tokens": 0, "output_tokens": 0, "uncosted_runs": 0}
         rows = []
         for a in store.list_catalog_agents():
             runs = store.list_agent_runs(a["name"], limit=1)
             rows.append({"name": a["name"], "trigger": a["trigger"], "prompt": a["prompt"],
+                         "stats": stats.get(a["name"]) or zero,
                          "slack_configured": bool(a.get("slack_webhook")),
                          "model": a.get("model") or "",
                          "slack_channel": a.get("slack_channel") or "",
@@ -1788,7 +1804,8 @@ def make_app() -> FastAPI:
             async def _run():
                 nonlocal text, error
                 async for chunk in run_agent(key, [{"role": "user", "content": question}],
-                                             self_headers=self_headers):
+                                             self_headers=self_headers,
+                                             on_usage=_record_ask_usage):
                     for line in chunk.splitlines():
                         if not line.startswith("data: "):
                             continue
@@ -2137,6 +2154,15 @@ def make_app() -> FastAPI:
         return {**u, "disk_total": disk_total, "disk_free": disk_free,
                 "max_bytes": MAX_DB_SIZE,
                 "pct_used": round(100 * used / MAX_DB_SIZE, 2) if MAX_DB_SIZE else None}
+
+    @app.get("/api/usage/model")
+    async def usage_model(days: int = 30):
+        """The cell's Anthropic spend meter: all-time totals plus a per-day tail, split by surface
+        (agent runs vs Ask). Generic data only — a hosted control plane polls this to enforce
+        credits, a self-hoster reads their own bill coming; the cell attaches no meaning to it.
+        `cost_usd` is a floor: `uncosted_calls` counts rows whose model had no known price, and
+        runs from before metering existed are absent entirely."""
+        return store.model_usage_summary(days=max(1, min(int(days), 366)))
 
     # ── console UI (built SPA; catch-all registered last so API routes win) ──
     @app.get("/{path:path}", include_in_schema=False)

@@ -84,6 +84,22 @@ export function formatBytes(n: number | null | undefined): string {
   return `${v >= 10 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
 
+/** USD cost for display. Null/undefined is *unknown*, not free — historical runs and unpriced
+ *  models have no cost, and "$0.00" would claim they were. Four decimals below a dollar: agent
+ *  runs cost fractions of a cent, and two decimals would flatten them all to "$0.00". */
+export function fmtCost(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  return v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(4)}`;
+}
+
+/** Token counts, compact ("12.4k", "1.2M"). Null/undefined renders as unknown. */
+export function fmtTokens(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return "—";
+  if (n < 1000) return String(Math.round(n));
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
 /** How a label rewrites its values, in as few characters as fit a table cell. "" when it passes
  *  values straight through. One implementation so the editor and the read-only tables can never
  *  describe the same rule differently. */

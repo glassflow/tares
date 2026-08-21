@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import threading
+import uuid
 from datetime import datetime
 
 import duckdb
@@ -141,6 +142,27 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   error       TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_agent_runs_agent ON agent_runs(agent);
+-- Model-usage ledger: one row per model interaction (an agent run's whole loop, an Ask turn),
+-- with token counts straight from the API's usage block and the USD cost priced at write time
+-- (tares/pricing.py). This is the cell's own meter for what it spends on Anthropic. A hosted
+-- control plane reads the aggregate over /api/usage/model to enforce credits, but the cell
+-- attaches no meaning to the total. cost_usd is NULL when the model has no known price.
+-- (No semicolons in these comments: _SCHEMA is split on them.)
+CREATE TABLE IF NOT EXISTS model_usage (
+  id       TEXT PRIMARY KEY,
+  ts       TIMESTAMPTZ,
+  surface  TEXT,
+  agent    TEXT,
+  run_id   TEXT,
+  model    TEXT,
+  calls    INTEGER,
+  input_tokens  BIGINT,
+  output_tokens BIGINT,
+  cache_creation_input_tokens BIGINT,
+  cache_read_input_tokens     BIGINT,
+  cost_usd DOUBLE
+);
+CREATE INDEX IF NOT EXISTS ix_model_usage_ts ON model_usage(ts);
 CREATE TABLE IF NOT EXISTS settings (
   key        TEXT PRIMARY KEY,
   value      TEXT,
@@ -262,6 +284,14 @@ _MIGRATIONS = [
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS customized BOOLEAN",
     "ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS owned_by TEXT",
     "ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS customized BOOLEAN",
+    # Per-run model usage (tokens from the API's usage block, cost priced at write time). Runs
+    # from before these columns keep NULL everywhere — their cost is unknown, never backfilled.
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS model TEXT",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS input_tokens BIGINT",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS output_tokens BIGINT",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS cache_creation_input_tokens BIGINT",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS cache_read_input_tokens BIGINT",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS cost_usd DOUBLE",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -928,9 +958,27 @@ class Store:
                  json.dumps(external_tools or []), now_utc(), now_utc(), run_id],
             )
 
+    def record_run_usage(self, run_id: str, model: str, input_tokens: int, output_tokens: int,
+                         cache_creation_input_tokens: int = 0,
+                         cache_read_input_tokens: int = 0,
+                         cost_usd: float | None = None) -> None:
+        """Stamp a run with what its model loop consumed. Separate from finish_agent_run on
+        purpose: usage exists for every outcome (ok, empty, exhausted, and failed after burning
+        tokens), so it is written by the loop's finally rather than each outcome path."""
+        with self._lock:
+            self.con.execute(
+                "UPDATE agent_runs SET model = ?, input_tokens = ?, output_tokens = ?, "
+                "cache_creation_input_tokens = ?, cache_read_input_tokens = ?, cost_usd = ? "
+                "WHERE id = ?",
+                [model, input_tokens, output_tokens, cache_creation_input_tokens,
+                 cache_read_input_tokens, cost_usd, run_id],
+            )
+
     def list_agent_runs(self, agent: str | None = None, limit: int = 50) -> list[dict]:
         sql = ("SELECT id, agent, trigger, dispatch_id, key_value, status, rounds, tool_calls, "
-               "started_at, duration_ms, finding, error, external_tools, max_rounds "
+               "started_at, duration_ms, finding, error, external_tools, max_rounds, "
+               "model, input_tokens, output_tokens, cache_creation_input_tokens, "
+               "cache_read_input_tokens, cost_usd "
                "FROM agent_runs ")
         params: list = []
         if agent:
@@ -944,9 +992,86 @@ class Store:
             {"id": r[0], "agent": r[1], "trigger": r[2], "dispatch_id": r[3], "key": r[4],
              "status": r[5], "rounds": r[6], "tool_calls": r[7], "started_at": r[8],
              "duration_ms": r[9], "finding": r[10], "error": r[11],
-             "external_tools": json.loads(r[12]) if r[12] else [], "max_rounds": r[13]}
+             "external_tools": json.loads(r[12]) if r[12] else [], "max_rounds": r[13],
+             "model": r[14], "input_tokens": r[15], "output_tokens": r[16],
+             "cache_creation_input_tokens": r[17], "cache_read_input_tokens": r[18],
+             "cost_usd": r[19]}
             for r in rows
         ]
+
+    def agent_stats(self) -> dict[str, dict]:
+        """Per-agent lifetime aggregates for the console, one grouped query. `finished` excludes
+        `running` and `capped` (a capped run made no model call), so the success rate reflects
+        runs that actually concluded or tried to. Cost sums skip NULL rows (historical runs and
+        unpriced models); `uncosted_runs` says how many finished runs the sum could not see, so
+        a total reads as a floor rather than a fact."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT agent, count(*), "
+                "count(*) FILTER (WHERE status = 'ok'), "
+                "count(*) FILTER (WHERE status IN ('ok', 'empty', 'failed', 'exhausted')), "
+                "avg(duration_ms) FILTER (WHERE status IN ('ok', 'empty', 'failed', 'exhausted')), "
+                "sum(cost_usd), sum(input_tokens), sum(output_tokens), "
+                "count(*) FILTER (WHERE status IN ('ok', 'empty', 'failed', 'exhausted') "
+                "                 AND cost_usd IS NULL) "
+                "FROM agent_runs GROUP BY agent"
+            ).fetchall()
+        return {
+            r[0]: {"runs": int(r[1]), "ok": int(r[2]), "finished": int(r[3]),
+                   "avg_duration_ms": int(r[4]) if r[4] is not None else None,
+                   "cost_usd": float(r[5]) if r[5] is not None else None,
+                   "input_tokens": int(r[6]) if r[6] is not None else 0,
+                   "output_tokens": int(r[7]) if r[7] is not None else 0,
+                   "uncosted_runs": int(r[8])}
+            for r in rows
+        }
+
+    # ── model-usage ledger (the cell's Anthropic spend meter) ─────────────────
+    def record_model_usage(self, surface: str, agent: str, run_id: str, model: str, calls: int,
+                           input_tokens: int, output_tokens: int,
+                           cache_creation_input_tokens: int = 0,
+                           cache_read_input_tokens: int = 0,
+                           cost_usd: float | None = None) -> None:
+        with self._lock:
+            self.con.execute(
+                "INSERT INTO model_usage (id, ts, surface, agent, run_id, model, calls, "
+                "input_tokens, output_tokens, cache_creation_input_tokens, "
+                "cache_read_input_tokens, cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ["mu_" + uuid.uuid4().hex[:12], now_utc(), surface, agent, run_id, model,
+                 calls, input_tokens, output_tokens, cache_creation_input_tokens,
+                 cache_read_input_tokens, cost_usd],
+            )
+
+    def model_usage_summary(self, days: int = 30) -> dict:
+        """All-time totals plus a per-day tail over the ledger. The shape a credits poller needs:
+        totals to enforce against, days to draw a burn-down. `uncosted_calls` counts rows whose
+        model had no known price, so the cost total is understood as a floor."""
+        agg = ("coalesce(sum(calls), 0), coalesce(sum(input_tokens), 0), "
+               "coalesce(sum(output_tokens), 0), coalesce(sum(cache_creation_input_tokens), 0), "
+               "coalesce(sum(cache_read_input_tokens), 0), sum(cost_usd), "
+               "coalesce(sum(calls) FILTER (WHERE cost_usd IS NULL), 0)")
+
+        def shape(r) -> dict:
+            return {"calls": int(r[0]), "input_tokens": int(r[1]), "output_tokens": int(r[2]),
+                    "cache_creation_input_tokens": int(r[3]),
+                    "cache_read_input_tokens": int(r[4]),
+                    "cost_usd": float(r[5]) if r[5] is not None else None,
+                    "uncosted_calls": int(r[6])}
+
+        with self._lock:
+            total = self.con.execute(f"SELECT {agg} FROM model_usage").fetchone()
+            surfaces = self.con.execute(
+                f"SELECT surface, {agg} FROM model_usage GROUP BY surface").fetchall()
+            daily = self.con.execute(
+                f"SELECT CAST(ts AS DATE) AS day, {agg} FROM model_usage "
+                f"WHERE ts > now() - INTERVAL {int(days)} DAY "
+                "GROUP BY day ORDER BY day").fetchall()
+        return {
+            "total": shape(total),
+            "by_surface": {r[0]: shape(r[1:]) for r in surfaces},
+            "days": [{"day": str(r[0]), **shape(r[1:])} for r in daily],
+            "window_days": int(days),
+        }
 
     def agent_runs_today(self, agent: str, exclude_run_id: str | None = None) -> int:
         """Runs started in the last 24h — the cost ceiling's counter. `exclude_run_id` leaves out the

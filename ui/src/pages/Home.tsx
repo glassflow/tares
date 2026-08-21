@@ -2,8 +2,8 @@ import { useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "../api";
-import { ErrorState, TimeAgo, formatBytes, usePolling } from "../components/bits";
-import type { Usage, Usecase } from "../types";
+import { ErrorState, TimeAgo, fmtCost, fmtTokens, formatBytes, usePolling } from "../components/bits";
+import type { ModelUsage, Usage, Usecase } from "../types";
 
 // The instance at a glance. This exists because the numbers that describe the WHOLE instance —
 // how full the disk is, how much has been ingested, how hard the agents are working — were living
@@ -28,6 +28,7 @@ export default function Home() {
   const { data: u, error: usageError, reload: reloadUsage } = usePolling(() => api.usage(), 30000);
   const { data: sources, error: sourcesError } = usePolling(() => api.sources(), 30000);
   const { data: uc } = usePolling(() => api.usecases(), 30000);
+  const { data: mu, error: muError, reload: reloadMu } = usePolling(() => api.modelUsage(30), 30000);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -89,6 +90,8 @@ export default function Home() {
 
       {uc && uc.usecases.length > 0 && <UsecasesPanel usecases={uc.usecases} />}
 
+      <ModelSpendPanel usage={mu} error={muError} reload={reloadMu} />
+
       <StoragePanel
         usage={u}
         error={usageError}
@@ -104,6 +107,66 @@ export default function Home() {
         </div>
       )}
     </>
+  );
+}
+
+// What has this instance spent on its Anthropic key? — the whole-instance counterpart of the
+// per-agent cost cards. Covers everything that burns the key inside the cell (Tares agent runs
+// and Ask); external agents run on their own keys and are deliberately absent. The total is a
+// floor: runs from before cost tracking, and models without a known price, carry no cost —
+// said out loud via the uncosted note rather than silently folded into $0.
+function ModelSpendPanel({ usage, error, reload }: {
+  usage: ModelUsage | undefined;
+  error?: string;
+  reload: () => void;
+}) {
+  const m = usage;
+  const today = m?.days.length ? m.days[m.days.length - 1] : null;
+  const windowCost = m?.days.reduce((s, d) => s + (d.cost_usd ?? 0), 0) ?? 0;
+  const agent = m?.by_surface.agent;
+  const ask = m?.by_surface.ask;
+  const uncosted = m?.total.uncosted_calls ?? 0;
+  return (
+    <div className="panel">
+      <h2 style={{ marginTop: 0 }}>Model spend</h2>
+      <p className="help" style={{ marginTop: 0 }}>
+        What this instance has spent on its Anthropic key; Tares agent runs plus Ask. External
+        agents run on their own keys and are not counted here.
+      </p>
+
+      {error && <ErrorState error={error} what="model spend" onRetry={reload} />}
+      {!m && !error && <div className="muted">loading…</div>}
+
+      {m && (m.total.calls === 0 ? (
+        <p className="help" style={{ marginBottom: 0 }}>
+          Nothing spent yet; the meter starts counting with the first agent run or Ask question.
+        </p>
+      ) : (
+        <>
+          <div className="cards" style={{ marginBottom: 8 }}>
+            <div className="card">
+              <div className="k">all time</div>
+              <div className="v">{fmtCost(m.total.cost_usd)}</div>
+            </div>
+            <div className="card">
+              <div className="k">last {m.window_days} days</div>
+              <div className="v">{fmtCost(windowCost)}</div>
+            </div>
+            <div className="card">
+              <div className="k">today</div>
+              <div className="v">{today ? fmtCost(today.cost_usd ?? 0) : fmtCost(0)}</div>
+            </div>
+          </div>
+          <p className="help" style={{ marginBottom: 0 }}>
+            {agent && <>agents {fmtCost(agent.cost_usd)} over {agent.calls.toLocaleString()} model call{agent.calls === 1 ? "" : "s"}</>}
+            {agent && ask && " · "}
+            {ask && <>Ask {fmtCost(ask.cost_usd)} over {ask.calls.toLocaleString()} call{ask.calls === 1 ? "" : "s"}</>}
+            {" · "}{fmtTokens(m.total.input_tokens)} tokens in, {fmtTokens(m.total.output_tokens)} out
+            {uncosted > 0 && <> · {uncosted} call{uncosted === 1 ? "" : "s"} on an unpriced model, not in the total</>}
+          </p>
+        </>
+      ))}
+    </div>
   );
 }
 

@@ -1,7 +1,7 @@
 import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "../api";
-import { TimeAgo, usePolling } from "../components/bits";
+import { TimeAgo, fmtCost, usePolling } from "../components/bits";
 import type { AgentRun } from "../types";
 
 // Tares agents: the prompts you author that run in-process when a trigger fires. Subscribers
@@ -52,7 +52,8 @@ export default function Agents() {
           </div>
         ) : (
           <table>
-            <thead><tr><th>agent</th><th>trigger</th><th>status</th><th>last run</th><th>finding</th></tr></thead>
+            <thead><tr><th>agent</th><th>trigger</th><th>status</th><th>last run</th>
+              <th className="num">runs</th><th className="num">cost</th><th>finding</th></tr></thead>
             <tbody>
               {data.agents.map((a) => (
                 <tr key={a.name} className="clickable"
@@ -62,6 +63,11 @@ export default function Agents() {
                   <td>{a.enabled ? <span className="badge ok">enabled</span> : <span className="badge">disabled</span>}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     {runBadge(a.last_run)}{a.last_run && <> <TimeAgo ts={a.last_run.started_at} /></>}
+                  </td>
+                  <td className="num">{a.stats?.runs ?? 0}</td>
+                  <td className="num"
+                      title={a.stats?.uncosted_runs ? `plus ${a.stats.uncosted_runs} run(s) with no recorded cost` : undefined}>
+                    {fmtCost(a.stats?.cost_usd)}
                   </td>
                   <td style={{ maxWidth: 360, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {a.last_run?.finding ?? <span className="dim">—</span>}

@@ -250,6 +250,20 @@ export interface BuiltinAgent {
   last_run?: AgentRun | null;
   owned_by?: string | null;
   customized?: boolean;
+  stats?: AgentStats;
+}
+
+// Lifetime aggregates over an agent's runs. cost_usd is a floor: runs from before usage tracking
+// and runs on unpriced models carry no cost (uncosted_runs counts those).
+export interface AgentStats {
+  runs: number;
+  ok: number;
+  finished: number;            // runs that concluded or tried to (excludes running and capped)
+  avg_duration_ms: number | null;
+  cost_usd: number | null;
+  input_tokens: number;
+  output_tokens: number;
+  uncosted_runs: number;
 }
 
 export interface AgentRun {
@@ -267,6 +281,32 @@ export interface AgentRun {
   duration_ms: number | null;
   finding: string | null;
   error: string | null;
+  // Model usage; null on runs from before cost tracking (unknown, not zero).
+  model?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  cost_usd?: number | null;
+}
+
+// The cell's Anthropic spend meter (/api/usage/model): all-time totals plus a per-day tail,
+// split by surface (agent runs vs Ask).
+export interface ModelUsageBucket {
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  cost_usd: number | null;
+  uncosted_calls: number;
+}
+
+export interface ModelUsage {
+  total: ModelUsageBucket;
+  by_surface: Record<string, ModelUsageBucket>;
+  days: ({ day: string } & ModelUsageBucket)[];
+  window_days: number;
 }
 
 export interface AgentPreset {

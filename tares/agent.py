@@ -292,8 +292,13 @@ def _sse(obj: dict) -> str:
 
 
 async def run_agent(api_key: str, messages: list,
-                    model: str | None = None, self_headers: dict | None = None):
-    """Async generator of SSE lines: the agent loop, streaming assistant text and tool activity."""
+                    model: str | None = None, self_headers: dict | None = None,
+                    on_usage=None):
+    """Async generator of SSE lines: the agent loop, streaming assistant text and tool activity.
+
+    `on_usage(model, usage_dict)` is called once per turn (after the loop, including on an error
+    mid-turn) with the summed token usage of every model call the turn made, so the caller can
+    meter Ask's Anthropic spend. Never called when no model call completed."""
     try:
         import anthropic
     except ImportError:
@@ -304,6 +309,9 @@ async def run_agent(api_key: str, messages: list,
     client = anthropic.AsyncAnthropic(api_key=api_key)
     convo = list(messages)
     headers = self_headers or {}
+    used_model = model or DEFAULT_MODEL
+    usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0,
+             "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
     try:
         for _ in range(MAX_ROUNDS):
             async with client.messages.stream(
@@ -315,6 +323,11 @@ async def run_agent(api_key: str, messages: list,
                         yield _sse({"type": "text", "text": event.delta.text})
                 final = await stream.get_final_message()
 
+            usage["calls"] += 1
+            for field in ("input_tokens", "output_tokens",
+                          "cache_creation_input_tokens", "cache_read_input_tokens"):
+                usage[field] += int(getattr(final.usage, field, 0) or 0)
+            used_model = final.model or used_model
             convo.append({"role": "assistant", "content": final.content})
             tool_uses = [b for b in final.content if b.type == "tool_use"]
             if not tool_uses:
@@ -356,3 +369,9 @@ async def run_agent(api_key: str, messages: list,
         yield _sse({"type": "done"})
     except Exception as e:  # noqa: BLE001 — surface auth/rate/other errors to the chat
         yield _sse({"type": "error", "detail": f"{type(e).__name__}: {e}"})
+    finally:
+        if usage["calls"] and on_usage is not None:
+            try:
+                on_usage(used_model, usage)
+            except Exception as e:  # metering must never break the chat
+                print(f"ask: usage record failed: {type(e).__name__}: {e}")

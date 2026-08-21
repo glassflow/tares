@@ -30,6 +30,7 @@ import httpx
 
 from .config import FINDINGS_SOURCE, agent_url
 from .envelope import now_utc
+from .pricing import cost_usd
 from .slack import deep_link as _slack_deep_link
 from .views import resolve_query_full, resolve_read
 
@@ -306,8 +307,26 @@ class AgentRunner:
             self.store.finish_agent_run(run_id, "capped", error=msg)
             return "capped", msg
 
-        finding, rounds, tool_calls, external_used, exhausted, partial = await self._loop(
-            agent, trigger_name, key, payload, api_key)
+        # Usage accumulates in a mutable dict rather than the loop's return value, so a run that
+        # dies mid-loop still records the tokens it already paid for (the finally below).
+        model = agent.get("model") or MODEL
+        usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0,
+                 "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+        try:
+            finding, rounds, tool_calls, external_used, exhausted, partial = await self._loop(
+                agent, trigger_name, key, payload, api_key, usage)
+        finally:
+            if usage["calls"]:
+                cost = cost_usd(model, usage["input_tokens"], usage["output_tokens"],
+                                usage["cache_creation_input_tokens"],
+                                usage["cache_read_input_tokens"])
+                self.store.record_run_usage(
+                    run_id, model, usage["input_tokens"], usage["output_tokens"],
+                    usage["cache_creation_input_tokens"], usage["cache_read_input_tokens"], cost)
+                self.store.record_model_usage(
+                    "agent", agent["name"], run_id, model, usage["calls"],
+                    usage["input_tokens"], usage["output_tokens"],
+                    usage["cache_creation_input_tokens"], usage["cache_read_input_tokens"], cost)
         if exhausted:
             # The round budget ran out before the model concluded. Keep whatever it said last as
             # a partial note (in `finding`, so it is visible) and say plainly what to do.
@@ -332,8 +351,12 @@ class AgentRunner:
                 "agent": agent["name"], "trigger": trigger_name, "key": key,
                 "finding": finding,
                 "run_id": run_id, "dispatch_id": dispatch_id,
-                "model": agent.get("model") or MODEL,
+                "model": model,
                 "rounds": rounds, "tool_calls": tool_calls,
+                "usage": {k: v for k, v in usage.items() if k != "calls"},
+                "cost_usd": cost_usd(model, usage["input_tokens"], usage["output_tokens"],
+                                     usage["cache_creation_input_tokens"],
+                                     usage["cache_read_input_tokens"]),
                 "started_at": started_at.isoformat(), "finished_at": now_utc().isoformat(),
                 "duration_s": round(time.monotonic() - t0, 2),
                 "prompt_hash": prompt_hash(agent["prompt"]),
@@ -342,7 +365,7 @@ class AgentRunner:
 
     # ── the bounded model loop ────────────────────────────────────────────────
     async def _loop(self, agent: dict, trigger_name: str, key: str, payload: str,
-                    api_key: str) -> tuple[str, int, int, list[str], bool, str]:
+                    api_key: str, usage: dict) -> tuple[str, int, int, list[str], bool, str]:
         # External tools: the agent's selected MCP servers, connected for the duration of this
         # run. A server that fails to connect is skipped (recorded below) — losing a tool server
         # must not lose the run.
@@ -353,10 +376,12 @@ class AgentRunner:
         async with RemoteToolbox(servers) as toolbox:
             for failure in toolbox.failures:
                 print(f"[agent {agent['name']}] mcp connect failed; {failure}")
-            return await self._loop_with(agent, trigger_name, key, payload, api_key, toolbox)
+            return await self._loop_with(agent, trigger_name, key, payload, api_key, toolbox,
+                                         usage)
 
     async def _loop_with(self, agent: dict, trigger_name: str, key: str, payload: str,
-                         api_key: str, toolbox) -> tuple[str, int, int, list[str], bool, str]:
+                         api_key: str, toolbox,
+                         usage: dict) -> tuple[str, int, int, list[str], bool, str]:
         """Returns (finding, rounds, tool_calls, external_tools_used, exhausted, partial_text)."""
         tools = TOOL_DEFS + toolbox.tool_defs
         max_rounds = effective_max_rounds(agent)
@@ -386,7 +411,14 @@ class AgentRunner:
                     json=body)
                 if r.status_code >= 400:
                     raise RuntimeError(f"anthropic {r.status_code}: {r.text[:300]}")
-                return r.json()
+                msg = r.json()
+                # Defensive get: stubs (tests) may answer without a usage block.
+                u = msg.get("usage") or {}
+                usage["calls"] += 1
+                for field in ("input_tokens", "output_tokens",
+                              "cache_creation_input_tokens", "cache_read_input_tokens"):
+                    usage[field] += int(u.get(field) or 0)
+                return msg
 
             for rounds in range(1, max_rounds + 1):
                 msg = await call(True)

@@ -4,7 +4,7 @@ import type {
   CatalogDescribe, CatalogList, ConnectorSpec, DiscoverProposal, DispatchDetail, DispatchLogEntry, Entity, EnvScan,
   AgentPreset, AgentRun, BuiltinAgent,
   GithubCredential,
-  LabelFacet, QueryLogEntry,
+  LabelFacet, ModelUsage, QueryLogEntry,
   Recipe, Usecase, UsecaseSummary, UsecaseUpdateReport,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, View,
@@ -167,6 +167,8 @@ export const api = {
   disableBuiltinAgent: (name: string) => request(`/api/agents/builtin/${name}/disable`, { method: "POST" }),
   builtinAgentRuns: (name: string, limit = 20) =>
     request<AgentRun[]>(`/api/agents/builtin/${name}/runs?limit=${limit}`),
+  // The cell's Anthropic spend meter: totals + per-day, split agent runs vs Ask.
+  modelUsage: (days = 30) => request<ModelUsage>(`/api/usage/model?days=${days}`),
 
   // The Anthropic key Tares agents run on. Never returned — only whether one resolves and where.
   anthropicKeyStatus: () =>

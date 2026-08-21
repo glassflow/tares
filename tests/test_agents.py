@@ -45,7 +45,8 @@ class Stub(BaseHTTPRequestHandler):
                         "input": {"selector": {"service": "checkout"}, "window": "1h"}}]
         else:
             content = [{"type": "text", "text": FINDING}]
-        out = json.dumps({"content": content, "model": body.get("model")}).encode()
+        out = json.dumps({"content": content, "model": body.get("model"),
+                          "usage": {"input_tokens": 100, "output_tokens": 50}}).encode()
         self.send_response(200)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(out)))
@@ -147,6 +148,31 @@ async def main():
             ck("run records the entity", run.get("key") == "checkout", str(run.get("key")))
             ck("run counted the tool call", (run.get("tool_calls") or 0) >= 1, str(run))
             ck("run is tied to a dispatch", bool(run.get("dispatch_id")), str(run.get("dispatch_id")))
+
+            # ── model usage: tokens from the stub's usage block, cost priced at write time ──
+            calls_made = run.get("rounds") or 0   # the stub concludes without the +1 call
+            ck("run records the model", run.get("model") == "claude-sonnet-4-6", str(run.get("model")))
+            ck("run sums input tokens over its calls",
+               run.get("input_tokens") == 100 * calls_made, str(run))
+            ck("run sums output tokens over its calls",
+               run.get("output_tokens") == 50 * calls_made, str(run))
+            want_cost = (100 * calls_made * 3.0 + 50 * calls_made * 15.0) / 1e6
+            ck("run cost matches the sonnet rate", abs((run.get("cost_usd") or 0) - want_cost) < 1e-9,
+               f"{run.get('cost_usd')} vs {want_cost}")
+
+            lst = (await cx.get(f"{B}/api/agents/builtin")).json()
+            me = next(a for a in lst["agents"] if a["name"] == "first-look")
+            ck("agent list carries stats", me.get("stats", {}).get("runs") == 1, str(me.get("stats")))
+            ck("stats sum the cost", abs((me["stats"].get("cost_usd") or 0) - want_cost) < 1e-9,
+               str(me["stats"]))
+
+            um = (await cx.get(f"{B}/api/usage/model")).json()
+            ck("usage meter totals the run's tokens",
+               um["total"]["input_tokens"] == 100 * calls_made
+               and um["total"]["output_tokens"] == 50 * calls_made, str(um["total"]))
+            ck("usage meter attributes it to the agent surface",
+               um["by_surface"].get("agent", {}).get("calls") == calls_made, str(um["by_surface"]))
+            ck("usage meter has a per-day tail", len(um.get("days") or []) == 1, str(um.get("days")))
 
             # ── the firing counts the agent as a delivered subscriber ────────
             async def _delivered():

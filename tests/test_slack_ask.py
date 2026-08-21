@@ -294,6 +294,16 @@ async def main():
                "checkout-svc" in json.dumps(MODEL_CALLS[0].get("messages", [])),
                str(MODEL_CALLS[:1])[:300])
 
+            # ── the turn is metered: tokens from the stream's usage, priced at write time ──
+            um = (await cx.get(f"{B}/api/usage/model")).json()
+            ask = um.get("by_surface", {}).get("ask", {})
+            ck("the ask turn landed on the usage meter", ask.get("calls") == 1, str(um))
+            ck("...with the stream's final usage (input 10, output 20)",
+               ask.get("input_tokens") == 10 and ask.get("output_tokens") == 20, str(ask))
+            want = (10 * 3.0 + 20 * 15.0) / 1e6
+            ck("...costed at the sonnet rate", abs((ask.get("cost_usd") or 0) - want) < 1e-9,
+               f"{ask.get('cost_usd')} vs {want}")
+
             # ── in a thread, the answer belongs in that thread ───────────────
             REPLIES.clear()
             r = await slash(cx, "ask what happened to checkout-svc", thread_ts="1700000000.000100")
