@@ -25,7 +25,7 @@ export interface Source {
 
 export interface ConnectorField {
   name: string;
-  type: "string" | "number" | "json" | "list" | "bool";
+  type: "string" | "number" | "json" | "map" | "list" | "bool";
   required: boolean;
   help: string;
   secret?: boolean;          // render as a password input (tokens, DSNs)

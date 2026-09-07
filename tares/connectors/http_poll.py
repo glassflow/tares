@@ -8,8 +8,8 @@ config:
   url: https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&current_weather=true
   method: GET                  # or POST, with `body` as the JSON to send
   headers: {"Accept": "application/json"}   # extra request headers, not secret
-  auth_header: Authorization   # the one credential header; `auth_value` is stored as a secret
-  auth_value: Bearer xyz
+  credential: Bearer xyz       # the one secret, sent as `credential_header: <credential>`
+  credential_header: Authorization
   items_path: data.items       # dotted path to the array of items; empty = the whole body is one
                                # event, a top-level array = one event per element
   event_type: reading          # fixed, or event_type_field: a field of the item
@@ -127,8 +127,8 @@ class RateLimited(Exception):
 
 def _request_kwargs(config: dict) -> dict:
     headers = {str(k): str(v) for k, v in _as_dict(config.get("headers"), "headers").items()}
-    if config.get("auth_value"):
-        headers[str(config.get("auth_header") or "Authorization")] = str(config["auth_value"])
+    if config.get("credential"):
+        headers[str(config.get("credential_header") or "Authorization")] = str(config["credential"])
     kw: dict = {"headers": headers}
     if str(config.get("method") or "GET").upper() == "POST":
         kw["json"] = _as_dict(config.get("body"), "body")
@@ -192,14 +192,17 @@ class HttpPollConnector(Connector):
                    "discover_input": True, "help": "GET, or POST with a body"},
         "body": {"type": "object", "discover_input": True,
                  "help": "POST only: the JSON object to send"},
-        "headers": {"type": "object", "discover_input": True,
-                    "help": 'extra request headers as a JSON object, e.g. {"Accept": '
-                            '"application/json"}; put a credential in auth_value instead'},
-        "auth_header": {"type": "string", "default": "Authorization", "discover_input": True,
-                        "help": "the header the credential goes in"},
-        "auth_value": {"type": "string", "secret": True, "discover_input": True,
-                       "help": "the credential, e.g. Bearer xyz or an API key; stored as a "
-                               "secret and never returned"},
+        "headers": {"type": "map", "discover_input": True,
+                    "help": "extra request headers, e.g. Accept: application/json or a version "
+                            "header; the credential goes in the field below, not here"},
+        "credential": {"type": "string", "secret": True, "discover_input": True,
+                       "help": "what the API wants for auth, sent as one header: the whole "
+                               "value, e.g. Bearer xyz for a token or abc123 for an API key. "
+                               "Stored as a secret, never shown again. Leave empty for a "
+                               "public API"},
+        "credential_header": {"type": "string", "default": "Authorization", "discover_input": True,
+                              "help": "the header the credential is sent in: Authorization for "
+                                      "a bearer token, X-API-Key or similar when the API says so"},
         "items_path": {"type": "string", "discover_input": True,
                        "help": "dotted path to the array of items in the response, e.g. "
                                "data.items; leave empty when the whole body is one event"},
@@ -364,7 +367,7 @@ class HttpPollConnector(Connector):
                 lab["primary"] = True
                 primary_set = True
         proposed = {"url": config["url"]}
-        for k in ("method", "headers", "auth_header", "body"):
+        for k in ("method", "headers", "credential_header", "body"):
             if config.get(k) not in (None, "", {}):
                 proposed[k] = config[k]
         if items_path:

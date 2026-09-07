@@ -84,7 +84,7 @@ async def main():
     RESPONSES[:] = [(200, {}, WEATHER)]
     c = connector({"url": f"{base}/v1/forecast?latitude=52.52&current_weather=true",
                    "headers": {"Accept": "application/json", "X-Client": "tares"},
-                   "auth_header": "X-Api-Key", "auth_value": "k-123",
+                   "credential_header": "X-Api-Key", "credential": "k-123",
                    "text_template": "wind {current_weather.windspeed} km/h from {current_weather.winddirection}",
                    "event_time_field": "current_weather.time", "event_type": "weather",
                    "labels": [{"name": "city", "const": "berlin", "primary": True},
@@ -222,9 +222,14 @@ async def main():
     check("10s poll accepted", True)
 
     print("== secrets ==")
-    red = redact_config("http_poll", {"url": base, "auth_header": "Authorization", "auth_value": "Bearer t",
+    red = redact_config("http_poll", {"url": base, "credential_header": "Authorization", "credential": "Bearer t",
                                       "headers": {"Accept": "application/json"}})
-    check("auth_value redacted, headers kept", red["auth_value"] != "Bearer t" and red["headers"] == {"Accept": "application/json"}, str(red))
+    check("credential redacted, headers kept", red["credential"] != "Bearer t" and red["headers"] == {"Accept": "application/json"}, str(red))
+    check("headers accept JSON text and drop blank keys", normalize_config("http_poll", {"url": base, "headers": '{"Accept": "a", " ": "x"}'})["headers"] == {"Accept": "a"})
+    try:
+        normalize_config("http_poll", {"url": base, "headers": "[1]"}); check("headers must be an object", False)
+    except CatalogError as ex:
+        check("headers must be an object", "key-value" in str(ex), str(ex))
 
     print("== discover ==")
     RESPONSES[:] = [(200, {}, WEATHER)]
@@ -261,7 +266,7 @@ async def main():
                                                  "config": {"url": f"{base}/forecast"}})
         check("daemon refuses a poll under the floor", r1.status_code == 400 and "at least 10s" in r1.text, r1.text[:120])
         r2 = await cx.post("/api/sources", json={"name": "wx_api", "connector": "http_poll", "poll": "5m",
-                                                 "config": {"url": f"{base}/forecast", "auth_value": "Bearer t",
+                                                 "config": {"url": f"{base}/forecast", "credential": "Bearer t",
                                                             "headers": {"Accept": "application/json"}}})
         check("source created", r2.status_code in (200, 201), r2.text[:120])
         listed = (await cx.get("/api/sources")).json()

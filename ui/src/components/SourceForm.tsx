@@ -81,7 +81,7 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
       // string), so the value the daemon would use is the value on screen
       if (cur === undefined || cur === null)
         v[f.name] = !initial && f.default != null && (f.type === "number" || f.type === "string") ? String(f.default) : "";
-      else if (f.type === "json") v[f.name] = JSON.stringify(cur, null, 2);
+      else if (f.type === "json" || f.type === "map") v[f.name] = JSON.stringify(cur, null, 2);
       else v[f.name] = String(cur);
     }
     return v;
@@ -205,7 +205,7 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
   const jsonErrors = useMemo(() => {
     const errs: Record<string, string> = {};
     for (const f of spec.fields) {
-      if (f.type === "json" && values[f.name]?.trim()) {
+      if ((f.type === "json" || f.type === "map") && values[f.name]?.trim()) {
         try { JSON.parse(values[f.name]); } catch (e) { errs[f.name] = "invalid JSON: " + ((e as Error).message ?? e); }
       }
     }
@@ -263,7 +263,7 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
         if (f.required) throw new Error(`${f.name} is required`);
         continue;
       }
-      if (f.type === "json") config[f.name] = JSON.parse(raw);
+      if (f.type === "json" || f.type === "map") config[f.name] = JSON.parse(raw);
       else if (f.type === "number") config[f.name] = Number(raw);
       else config[f.name] = raw;
     }
@@ -301,7 +301,10 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
     const cfg: Record<string, unknown> = {};
     for (const f of spec.fields) {
       const raw = values[f.name]?.trim();
-      if (raw && f.type !== "json") cfg[f.name] = f.type === "number" ? Number(raw) : raw;
+      if (!raw) continue;
+      // structured inputs go to Discover too: an API behind a required header needs them
+      if (f.type === "json" || f.type === "map") { try { cfg[f.name] = JSON.parse(raw); } catch { /* shown as invalid */ } }
+      else cfg[f.name] = f.type === "number" ? Number(raw) : raw;
     }
     Object.assign(cfg, override);
     const p = await api.discoverSource(connector, cfg);
@@ -454,6 +457,9 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
       return <input type="checkbox" checked={values[f.name] === "true"}
                     onChange={(e) => setValues({ ...values, [f.name]: e.target.checked ? "true" : "" })}
                     style={{ width: "auto" }} />;
+    if (f.type === "map")
+      return <KeyValueRows value={values[f.name] ?? ""} noun={f.name === "headers" ? "header" : "entry"}
+                           onChange={(v) => setValues({ ...values, [f.name]: v })} />;
     if (f.type === "json")
       return <textarea className="code" value={values[f.name]}
                        onChange={(e) => setValues({ ...values, [f.name]: e.target.value })} />;
@@ -1212,6 +1218,38 @@ function PatternRule({ row, onChange }:
         <span className="help">e.g. entering <span className="mono">.</span> turns{" "}
           <span className="mono">checkout.internal.eu</span> into <span className="mono">checkout</span></span>
       )}
+    </div>
+  );
+}
+
+/** Key-value rows for a `map` field, kept in the form as the JSON text the save path already
+ *  reads. Empty keys are dropped on the way out, so a half-filled row costs nothing. */
+function KeyValueRows({ value, noun, onChange }: { value: string; noun: string; onChange: (v: string) => void }) {
+  const parsed = useMemo<[string, string][]>(() => {
+    try { const o = JSON.parse(value || "{}"); return typeof o === "object" && o ? Object.entries(o).map(([k, v]) => [k, String(v)]) : []; }
+    catch { return []; }
+  }, [value]);
+  // local rows so a key being typed is not dropped as an empty entry mid-keystroke
+  const [rows, setRows] = useState<[string, string][]>(parsed);
+  useEffect(() => { if (JSON.stringify(parsed) !== JSON.stringify(rows.filter(([k]) => k.trim()))) setRows(parsed); }, [parsed]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const emit = (next: [string, string][]) => {
+    setRows(next);
+    const kept = next.filter(([k]) => k.trim());
+    onChange(kept.length ? JSON.stringify(Object.fromEntries(kept)) : "");
+  };
+  return (
+    <div className="kv-rows">
+      {rows.map(([k, v], i) => (
+        <div className="kv-row" key={i}>
+          <input type="text" value={k} placeholder="name" aria-label={`${noun} name`}
+                 onChange={(e) => emit(rows.map((r, j) => (j === i ? [e.target.value, r[1]] : r)))} />
+          <input type="text" value={v} placeholder="value" aria-label={`${noun} value`}
+                 onChange={(e) => emit(rows.map((r, j) => (j === i ? [r[0], e.target.value] : r)))} />
+          <button type="button" className="dim" aria-label={`remove ${noun}`}
+                  onClick={() => emit(rows.filter((_, j) => j !== i))}>remove</button>
+        </div>
+      ))}
+      <button type="button" onClick={() => emit([...rows, ["", ""]])}>+ Add {noun}</button>
     </div>
   );
 }

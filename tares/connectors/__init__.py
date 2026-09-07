@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import re as _re
 
+import json
+
 from ..config import CatalogError
 from .prometheus_alerts import PrometheusAlertsConnector
 from .alertmanager import AlertmanagerConnector
@@ -261,6 +263,16 @@ def _coerce(spec: dict, val):
         return _coerce_labels(val)
     if t == "list":
         return [_normalize_against(spec["item"], e, "list item") for e in val]
+    if t == "map":
+        # key-value rows in the form, an object in YAML and the API, JSON text from older clients
+        if isinstance(val, str):
+            try:
+                val = json.loads(val)
+            except ValueError:
+                raise CatalogError("expected an object of key-value pairs")
+        if not isinstance(val, dict):
+            raise CatalogError("expected an object of key-value pairs")
+        return {str(k).strip(): str(v) for k, v in val.items() if str(k).strip()}
     return val
 
 
@@ -327,6 +339,9 @@ def _fields_from_schema(schema: dict) -> list:
         elif spec["type"] == "object":
             fields.append({"name": name, "type": "json", "required": spec.get("required", False),
                            "help": spec.get("help", "")})
+        elif spec["type"] == "map":
+            fields.append({"name": name, "type": "map", "required": spec.get("required", False),
+                           "help": spec.get("help", ""), "discover_input": spec.get("discover_input", False)})
         else:
             fields.append(scalar(name, spec))
     return fields
