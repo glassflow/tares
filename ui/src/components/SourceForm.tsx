@@ -441,15 +441,14 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
       );
     }
     if (f.choices?.length) {
-      // the daemon refuses any other value, so the form only offers these
+      // the daemon refuses any other value, so the form only offers these; the same picker as
+      // the poll interval's unit, not the browser's own select
       const cur = values[f.name] ?? "";
-      return (
-        <select value={cur} onChange={(e) => setValues({ ...values, [f.name]: e.target.value })}>
-          {!f.required && f.default == null && <option value="">none</option>}
-          {(cur && !f.choices.includes(cur) ? [cur, ...f.choices] : f.choices).map((c) =>
-            <option key={c} value={c}>{c}</option>)}
-        </select>
-      );
+      const opts = [...(!f.required && f.default == null ? [""] : []),
+                    ...(cur && !f.choices.includes(cur) ? [cur] : []), ...f.choices];
+      return <Picker value={cur} options={opts} labels={{ "": "none" }} ariaLabel={fieldLabel(f)}
+                     style={{ width: 160 }}
+                     onChange={(v) => setValues({ ...values, [f.name]: v })} />;
     }
     if (f.type === "bool")
       return <input type="checkbox" checked={values[f.name] === "true"}
