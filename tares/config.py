@@ -673,6 +673,10 @@ def validate_source_dict(s: dict) -> None:
             f"source {s['name']!r}: unknown connector {s['connector']!r} "
             f"(available: {', '.join(sorted(REGISTRY))})")
     _check_duration(s.get("poll", "5s"), f"source {s['name']!r} poll")
+    floor = getattr(REGISTRY[s["connector"]], "MIN_POLL_SECONDS", None)
+    if floor and parse_duration(s.get("poll", "5s")) < floor:
+        raise CatalogError(f"source {s['name']!r}: {s['connector']} polls a third party API; "
+                           f"poll must be at least {floor}s")
     if not isinstance(s.get("config", {}) or {}, dict):
         raise CatalogError(f"source {s['name']!r}: config must be a mapping")
     _validate_labels(s)

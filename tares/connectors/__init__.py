@@ -21,6 +21,7 @@ from .otlp import OtlpConnector
 from .postgres import PostgresConnector
 from .prometheus import PrometheusConnector
 from .finding import FindingConnector
+from .http_poll import HttpPollConnector
 from .reference import ReferenceConnector
 from .vercel import VercelConnector
 from .webhook import WebhookConnector
@@ -40,6 +41,7 @@ REGISTRY = {
     "postgres": PostgresConnector,
     "claude_code": ClaudeCodeConnector,
     "finding": FindingConnector,
+    "http_poll": HttpPollConnector,
 }
 
 # Connector metadata for the UI. The `fields` of each are GENERATED from the connector's
@@ -86,6 +88,12 @@ SPECS = {
                "description": "Push source for Vercel logs; point a Vercel log drain (JSON) at this "
                               "source's ingest endpoint; one event per log entry, keyed by project, "
                               "with environment + source labels."},
+    "http_poll": {"label": "HTTP API (poll)", "mode": "poll", "discover": True, "poll": "5m",
+                  "description": "Polls any JSON endpoint on a schedule and stores one event per "
+                                 "item: a weather service, a status page, a SaaS export, your own "
+                                 "API. Give it the URL and Discover reads the fields. Nested values "
+                                 "are reachable by dotted name, so a trigger can watch "
+                                 "current_weather.windspeed."},
     "postgres": {"label": "Postgres table", "mode": "poll", "discover": True, "poll": "30s",
                  "description": "Polls a table incrementally (cursor by an id or updated_at); one "
                                 "event per new/changed row, keyed by an entity column (tenant_id). "
