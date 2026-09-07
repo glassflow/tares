@@ -243,7 +243,15 @@ def _coerce_labels(val) -> list:
 def _coerce(spec: dict, val):
     t = spec["type"]
     if t == "string":
-        return str(val)
+        sval = str(val)
+        choices = spec.get("choices")
+        if choices:
+            # a fixed set: match without regard to case, store the canonical spelling
+            match = next((c for c in choices if c.lower() == sval.strip().lower()), None)
+            if match is None:
+                raise CatalogError(f"{sval!r} is not one of {', '.join(choices)}")
+            return match
+        return sval
     if t == "number":
         f = float(val)
         return int(f) if f.is_integer() else f
@@ -303,7 +311,9 @@ def _fields_from_schema(schema: dict) -> list:
                 "help": spec.get("help", ""), "secret": spec.get("secret", False),
                 "discover_input": spec.get("discover_input", False),
                 # the value the connector uses when the field is left empty; the form shows it
-                **({"default": spec["default"]} if "default" in spec else {})}
+                **({"default": spec["default"]} if "default" in spec else {}),
+                # a fixed set of values: the form offers them as a dropdown, the save rejects others
+                **({"choices": spec["choices"]} if spec.get("choices") else {})}
 
     fields = []
     for name, spec in schema.items():

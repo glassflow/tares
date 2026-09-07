@@ -200,6 +200,18 @@ async def main():
         pass
     check("backoff starts at the poll interval and doubles", first_wait == 60.0 and r._backoff == 120.0, f"{first_wait} {r._backoff}")
 
+    print("== method is a fixed choice ==")
+    from tares.connectors import normalize_config
+    check("post accepted and canonical", normalize_config("http_poll", {"url": base, "method": "post"})["method"] == "POST")
+    check("GET is the default and omitted", "method" not in normalize_config("http_poll", {"url": base, "method": "get"}))
+    try:
+        normalize_config("http_poll", {"url": base, "method": "PUT"}); check("PUT refused on save", False)
+    except CatalogError as ex:
+        check("PUT refused on save", "GET, POST" in str(ex), str(ex))
+    from tares.connectors import SPECS
+    mf = next(f for f in SPECS["http_poll"]["fields"] if f["name"] == "method")
+    check("form field carries the choices", mf.get("choices") == ["GET", "POST"], str(mf))
+
     print("== poll floor ==")
     try:
         validate_source_dict({"name": "fast", "connector": "http_poll", "poll": "2s", "config": {"url": base}})

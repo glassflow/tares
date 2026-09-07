@@ -188,8 +188,8 @@ class HttpPollConnector(Connector):
                 "help": "the endpoint, query string included, e.g. "
                         "https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41"
                         "&current_weather=true"},
-        "method": {"type": "string", "default": "GET", "discover_input": True,
-                   "help": "GET or POST"},
+        "method": {"type": "string", "default": "GET", "choices": ["GET", "POST"],
+                   "discover_input": True, "help": "GET, or POST with a body"},
         "body": {"type": "object", "discover_input": True,
                  "help": "POST only: the JSON object to send"},
         "headers": {"type": "object", "discover_input": True,
