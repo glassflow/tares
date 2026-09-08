@@ -39,6 +39,19 @@ FINDING = "checkout is returning 500s since the 14:02 deploy; roll it back."
 # ── stub Anthropic: one tool_use round, then the conclusion ──────────────────
 _calls = []
 _headers = []   # the request headers per call: which credential reached the wire
+_hooks = []     # write-back bodies received by the fake customer endpoint
+
+
+class Hook(BaseHTTPRequestHandler):
+    """The customer's write-back endpoint: records the body; a path of /reject answers 401."""
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+        _hooks.append((self.path, body))
+        status = 401 if self.path == "/reject" else 200
+        self.send_response(status); self.send_header("content-length", "0"); self.end_headers()
+
+    def log_message(self, *a):
+        pass
 
 
 class Stub(BaseHTTPRequestHandler):
@@ -92,6 +105,9 @@ async def main():
 
     stub = HTTPServer(("127.0.0.1", int(STUB_PORT)), Stub)
     threading.Thread(target=stub.serve_forever, daemon=True).start()
+    hook = HTTPServer(("127.0.0.1", 0), Hook)
+    threading.Thread(target=hook.serve_forever, daemon=True).start()
+    HOOK = f"http://127.0.0.1:{hook.server_port}"
 
     env = {**os.environ, "TARES_DB": DB, "TARES_CATALOG": SEED, "TARES_PORT": PORT,
            "TARES_OTLP_GRPC_PORT": "off", "ANTHROPIC_API_KEY": "sk-test","ANTHROPIC_AUTH_TOKEN": "test_token",
@@ -230,6 +246,24 @@ async def main():
             ck("finding is on the entity's timeline", FINDING in rd["payload"], rd["payload"][:200])
             ck("findings source contributes to the read", "findings" in rd["sources"], str(rd["sources"]))
 
+            # ── the write-back reports a label as `key` and records its delivery (TR-285) ──
+            r = await cx.put(f"{B}/api/sources/evt", json={"name": "evt", "connector": "webhook", "poll": "5s", "config": {
+                "labels": [{"name": "service", "field": "service", "primary": True},
+                           {"name": "msg", "field": "msg"}]}})
+            ck("source gains a msg label", r.status_code == 200, r.text[:200])
+            r = await cx.put(f"{B}/api/agents/builtin/first-look", json={
+                "name": "first-look", "trigger": "incident", "prompt": "Take a first look.",
+                "webhook_url": f"{HOOK}/findings", "webhook_key_label": "msg"})
+            ck("write-back with a key label saved", r.status_code == 200, r.text[:200])
+            ag = next(a for a in (await cx.get(f"{B}/api/agents/builtin")).json()["agents"] if a["name"] == "first-look")
+            ck("key label reported by the API", ag.get("webhook_key_label") == "msg", str(ag.get("webhook_key_label")))
+            r = await cx.put(f"{B}/api/agents/builtin/first-look", json={
+                "name": "first-look", "trigger": "incident", "prompt": "x", "webhook_url": f"{HOOK}/findings", "webhook_key_label": "not a label!"})
+            ck("key label must be a label name", r.status_code == 400, r.text[:120])
+            r = await cx.put(f"{B}/api/agents/builtin/first-look", json={
+                "name": "first-look", "trigger": "incident", "prompt": "Take a first look.",
+                "webhook_url": f"{HOOK}/findings", "webhook_key_label": "msg"})
+
             # ── a gateway saved in Settings (TR-281): URL and token, per request, over the env ──
             g = (await cx.get(f"{B}/api/settings/gateway")).json()
             ck("gateway status: the env base URL shows as such", g["configured"] and g["source"] == "env:TARES_ANTHROPIC_BASE"
@@ -252,6 +286,19 @@ async def main():
                 rs = (await cx.get(f"{B}/api/agents/builtin/first-look/runs")).json()
                 return len(rs) >= 2 and rs[0]["status"] != "running"
             ck("a second run completed", await _until(_ran_again), "no second run")
+            # the write-back is posted after the run is marked ok; wait for its record
+            async def _delivered_run():
+                rs = (await cx.get(f"{B}/api/agents/builtin/first-look/runs")).json()
+                return bool(rs) and rs[0].get("delivery") is not None
+            ck("write-back delivered", await _until(_delivered_run), "no delivery recorded")
+            hooks_now = [h for h in _hooks if h[0] == "/findings"]
+            hb = hooks_now[-1][1] if hooks_now else {}
+            ck("write-back key is the label's value on the latest firing event",
+               hb.get("key", "").startswith("500 again"), str(hb.get("key")))
+            ck("write-back still carries the finding and the entity's trigger",
+               hb.get("finding") == FINDING and hb.get("trigger") == "incident", str(hb)[:200])
+            rs = (await cx.get(f"{B}/api/agents/builtin/first-look/runs")).json()
+            ck("run records the delivery", rs and rs[0].get("delivery") == "ok", str(rs[:1])[:200])
             ck("the run reached the gateway with the bearer token",
                len(_headers) > headers_before and _headers[-1].get("authorization") == "Bearer gw-tok"
                and "x-api-key" not in _headers[-1], str(_headers[-1:]))

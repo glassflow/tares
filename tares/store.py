@@ -295,6 +295,13 @@ _MIGRATIONS = [
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS cache_creation_input_tokens BIGINT",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS cache_read_input_tokens BIGINT",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS cost_usd DOUBLE",
+    # the write-back's outcome, so a run can say whether its finding reached the customer's
+    # endpoint: "ok", "http 4xx", "failed after 3 attempts: ...", NULL when no webhook
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS delivery TEXT",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS delivery_error TEXT",
+    # the label whose value the write-back reports as `key` (TR-285: Rius attributes reports by
+    # delivery id while the entity, the cooldown axis, is the service)
+    "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS webhook_key_label TEXT",
     # Which key paid for a ledger row ("env:ANTHROPIC_API_KEY" | "console") — the boundary a
     # hosted trial's enforcement counts against. Rows from before attribution stay NULL (unknown).
     "ALTER TABLE model_usage ADD COLUMN IF NOT EXISTS key_source TEXT",
@@ -945,31 +952,36 @@ class Store:
                              webhook_token: str | None = None,
                              mcp_servers: list[str] | None = None,
                              max_rounds: int | None = None,
-                             budget_usd: float | None = None) -> None:
+                             budget_usd: float | None = None,
+                             webhook_key_label: str | None = None) -> None:
         ts = now_utc()
         with self._lock:
             self.con.execute(
                 "INSERT INTO catalog_agents "
                 "(name, trigger, prompt, slack_webhook, model, slack_channel, "
-                "webhook_url, webhook_token, mcp_servers, max_rounds, budget_usd, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "webhook_url, webhook_token, mcp_servers, max_rounds, budget_usd, "
+                "webhook_key_label, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (name) DO UPDATE SET trigger = excluded.trigger, "
                 "prompt = excluded.prompt, slack_webhook = excluded.slack_webhook, "
                 "model = excluded.model, slack_channel = excluded.slack_channel, "
                 "webhook_url = excluded.webhook_url, webhook_token = excluded.webhook_token, "
                 "mcp_servers = excluded.mcp_servers, max_rounds = excluded.max_rounds, "
                 "budget_usd = excluded.budget_usd, "
+                "webhook_key_label = excluded.webhook_key_label, "
                 "updated_at = excluded.updated_at",
                 [name, trigger, prompt, slack_webhook or "", model or "",
                  slack_channel or "", webhook_url or "", webhook_token or "",
-                 json.dumps(mcp_servers or []), max_rounds, budget_usd, ts, ts],
+                 json.dumps(mcp_servers or []), max_rounds, budget_usd,
+                 webhook_key_label or "", ts, ts],
             )
 
     def list_catalog_agents(self) -> list[dict]:
         with self._lock:
             rows = self.con.execute(
                 "SELECT name, trigger, prompt, slack_webhook, model, slack_channel, "
-                "webhook_url, webhook_token, mcp_servers, updated_at, max_rounds, budget_usd, owned_by, customized "
+                "webhook_url, webhook_token, mcp_servers, updated_at, max_rounds, budget_usd, owned_by, customized, "
+                "webhook_key_label "
                 "FROM catalog_agents ORDER BY name"
             ).fetchall()
         return [
@@ -977,7 +989,8 @@ class Store:
              "model": r[4] or "", "slack_channel": r[5] or "",
              "webhook_url": r[6] or "", "webhook_token": r[7] or "",
              "mcp_servers": json.loads(r[8]) if r[8] else [], "updated_at": r[9],
-             "max_rounds": r[10], "budget_usd": r[11], "owned_by": r[12], "customized": bool(r[13])}
+             "max_rounds": r[10], "budget_usd": r[11], "owned_by": r[12], "customized": bool(r[13]),
+             "webhook_key_label": r[14] or ""}
             for r in rows
         ]
 
@@ -1045,7 +1058,7 @@ class Store:
         sql = ("SELECT id, agent, trigger, dispatch_id, key_value, status, rounds, tool_calls, "
                "started_at, duration_ms, finding, error, external_tools, max_rounds, "
                "model, input_tokens, output_tokens, cache_creation_input_tokens, "
-               "cache_read_input_tokens, cost_usd "
+               "cache_read_input_tokens, cost_usd, delivery, delivery_error "
                "FROM agent_runs ")
         where, params = [], []
         if agent:
@@ -1067,9 +1080,16 @@ class Store:
              "external_tools": json.loads(r[12]) if r[12] else [], "max_rounds": r[13],
              "model": r[14], "input_tokens": r[15], "output_tokens": r[16],
              "cache_creation_input_tokens": r[17], "cache_read_input_tokens": r[18],
-             "cost_usd": r[19]}
+             "cost_usd": r[19], "delivery": r[20], "delivery_error": r[21]}
             for r in rows
         ]
+
+    def set_run_delivery(self, run_id: str, delivery: str, error: str | None = None) -> None:
+        """The write-back's outcome for a run, recorded after the finding is stored: a failed
+        delivery never loses the finding, it only marks the run."""
+        with self._lock:
+            self.con.execute("UPDATE agent_runs SET delivery = ?, delivery_error = ? WHERE id = ?",
+                             [delivery, error, run_id])
 
     def agent_stats(self) -> dict[str, dict]:
         """Per-agent lifetime aggregates for the console, one grouped query. `finished` excludes

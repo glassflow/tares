@@ -245,6 +245,7 @@ export interface BuiltinAgent {
   model: string;               // "" = the instance default
   slack_channel: string;       // workspace-bot channel id, "" = none
   webhook_url: string;         // write-back target, "" = none
+  webhook_key_label?: string;  // the write-back reports this label's value as `key`; "" = the entity
   webhook_token_configured: boolean;   // the token itself is never sent to the client
   mcp_servers: string[];       // registry names this agent may use
   max_rounds: number | null;   // model rounds per run; null = the default for its shape
@@ -292,6 +293,9 @@ export interface AgentRun {
   cache_creation_input_tokens?: number | null;
   cache_read_input_tokens?: number | null;
   cost_usd?: number | null;
+  // the write-back's outcome: "ok", "http 4xx", "failed"; null when the agent has no webhook
+  delivery?: string | null;
+  delivery_error?: string | null;
 }
 
 // The cell's Anthropic spend meter (/api/usage/model): all-time totals plus a per-day tail,
