@@ -96,7 +96,21 @@ export default function ProjectShell({ s, id, reload, template }: {
   const myViews = (views ?? []).filter((x) => names("view").includes(x.name));
   const myTriggers = (triggers ?? []).filter((x) => names("trigger").includes(x.name));
   const triggerNames = new Set(myTriggers.map((t) => t.name));
-  const firings = (dispatches ?? []).filter((d) => triggerNames.has(d.trigger));
+  const allFirings = (dispatches ?? []).filter((d) => triggerNames.has(d.trigger));
+  // Filters on the Firings tab (TR-284): outcome, trigger, entity. Client-side over the loaded
+  // page; the pickers offer what is actually in the list, so an empty result means "none of
+  // these", never a typo.
+  const [firingStatus, setFiringStatus] = useState<"" | "delivered" | "failed" | "nobody">("");
+  const [firingTrigger, setFiringTrigger] = useState("");
+  const [firingEntity, setFiringEntity] = useState("");
+  const outcome = (d: typeof allFirings[number]) =>
+    d.subscribers === 0 ? "nobody" : d.delivered < d.subscribers ? "failed" : "delivered";
+  const firingEntities = [...new Set(allFirings.map((d) => d.key))].sort();
+  const firings = allFirings.filter((d) =>
+    (!firingStatus || outcome(d) === firingStatus)
+    && (!firingTrigger || d.trigger === firingTrigger)
+    && (!firingEntity || d.key === firingEntity));
+  const firingsFiltered = !!(firingStatus || firingTrigger || firingEntity);
   // Consecutive firings of the same trigger that reached nobody collapse into one row: dozens of
   // identical "0 of 0" lines say one thing — nobody is subscribed — so say it once, with a count.
   const firingRows: (typeof firings[number] & { repeats?: number })[] = [];
@@ -527,6 +541,27 @@ export default function ProjectShell({ s, id, reload, template }: {
       {tab === "firings" && (
         <>
           {dispatchesError && <ErrorState error={dispatchesError} what="the firings" />}
+          {allFirings.length > 0 && (
+            <div className="btnrow" style={{ marginBottom: 10 }}>
+              <Picker value={firingStatus} ariaLabel="outcome" style={{ width: 190 }}
+                      options={["", "delivered", "failed", "nobody"]}
+                      labels={{ "": "all outcomes", delivered: "delivered", failed: "not fully delivered", nobody: "nobody subscribed" }}
+                      onChange={(v) => setFiringStatus(v as typeof firingStatus)} />
+              <Picker value={firingTrigger} ariaLabel="trigger" style={{ width: 220 }}
+                      options={["", ...myTriggers.map((t) => t.name)]}
+                      labels={{ "": "all triggers", ...Object.fromEntries(myTriggers.map((t) => [t.name, t.name])) }}
+                      onChange={setFiringTrigger} />
+              <Picker value={firingEntity} ariaLabel="entity" style={{ width: 220 }}
+                      options={["", ...firingEntities]}
+                      labels={{ "": "all entities", ...Object.fromEntries(firingEntities.map((k) => [k, k])) }}
+                      onChange={setFiringEntity} />
+              {firingsFiltered && (
+                <span className="help">{firings.length} of {allFirings.length}{" "}
+                  <button type="button" className="linklike" onClick={() => { setFiringStatus(""); setFiringTrigger(""); setFiringEntity(""); }}>clear</button>
+                </span>
+              )}
+            </div>
+          )}
           {firings.length ? (
             <table>
               <thead><tr><th>when</th><th>trigger</th><th>entity</th><th>delivered to</th></tr></thead>
@@ -563,7 +598,9 @@ export default function ProjectShell({ s, id, reload, template }: {
                 })}
               </tbody>
             </table>
-          ) : !dispatchesError && <div className="empty">no firings yet across this project's triggers</div>}
+          ) : !dispatchesError && (
+            <div className="empty">{firingsFiltered ? "no firings match these filters" : "no firings yet across this project's triggers"}</div>
+          )}
         </>
       )}
 
