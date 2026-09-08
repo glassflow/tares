@@ -9,6 +9,7 @@ from __future__ import annotations
 import re as _re
 
 import json
+from urllib.parse import urlsplit
 
 from ..config import CatalogError
 from .prometheus_alerts import PrometheusAlertsConnector
@@ -242,10 +243,30 @@ def _coerce_labels(val) -> list:
     return out
 
 
+def _check_url(val: str) -> str:
+    """A `format: "url"` field: an http(s) URL with a host, so a source is never saved that
+    cannot make its first request. Trailing whitespace is dropped; nothing else is rewritten."""
+    v = val.strip()
+    parts = urlsplit(v)
+    if parts.scheme not in ("http", "https"):
+        raise CatalogError(f"url must start with http:// or https:// (got {v!r})")
+    if not parts.netloc or not parts.hostname:
+        raise CatalogError(f"url needs a host, e.g. https://api.example.com/path (got {v!r})")
+    if any(ch.isspace() for ch in v):
+        raise CatalogError("url must not contain spaces")
+    try:
+        parts.port   # a bad port raises here, not at poll time
+    except ValueError:
+        raise CatalogError(f"url has an invalid port (got {v!r})")
+    return v
+
+
 def _coerce(spec: dict, val):
     t = spec["type"]
     if t == "string":
         sval = str(val)
+        if spec.get("format") == "url":
+            return _check_url(sval)
         choices = spec.get("choices")
         if choices:
             # a fixed set: match without regard to case, store the canonical spelling
@@ -325,7 +346,9 @@ def _fields_from_schema(schema: dict) -> list:
                 # the value the connector uses when the field is left empty; the form shows it
                 **({"default": spec["default"]} if "default" in spec else {}),
                 # a fixed set of values: the form offers them as a dropdown, the save rejects others
-                **({"choices": spec["choices"]} if spec.get("choices") else {})}
+                **({"choices": spec["choices"]} if spec.get("choices") else {}),
+                # the words a person sees; the key stays the config name
+                **({"label": spec["label"]} if spec.get("label") else {})}
 
     fields = []
     for name, spec in schema.items():
@@ -338,10 +361,12 @@ def _fields_from_schema(schema: dict) -> list:
                            "item": [scalar(k, v) for k, v in spec.get("item", {}).items()]})
         elif spec["type"] == "object":
             fields.append({"name": name, "type": "json", "required": spec.get("required", False),
-                           "help": spec.get("help", "")})
+                           "help": spec.get("help", ""), "discover_input": spec.get("discover_input", False),
+                           **({"label": spec["label"]} if spec.get("label") else {})})
         elif spec["type"] == "map":
             fields.append({"name": name, "type": "map", "required": spec.get("required", False),
-                           "help": spec.get("help", ""), "discover_input": spec.get("discover_input", False)})
+                           "help": spec.get("help", ""), "discover_input": spec.get("discover_input", False),
+                           **({"label": spec["label"]} if spec.get("label") else {})})
         else:
             fields.append(scalar(name, spec))
     return fields

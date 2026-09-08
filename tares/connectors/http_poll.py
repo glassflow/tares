@@ -10,8 +10,8 @@ config:
   headers: {"Accept": "application/json"}   # extra request headers, not secret
   credential: Bearer xyz       # the one secret, sent as `credential_header: <credential>`
   credential_header: Authorization
-  items_path: data.items       # dotted path to the array of items; empty = the whole body is one
-                               # event, a top-level array = one event per element
+  payload_key: data.items      # the key holding the payload; empty for the entire JSON. A list
+                               # there is one event per entry
   event_type: reading          # fixed, or event_type_field: a field of the item
   text_template: "{city}: wind {current_weather.windspeed} km/h"   # dotted names work
   event_time_field: current_weather.time   # ISO-8601, else the poll time
@@ -172,10 +172,24 @@ def _find_items(body: dict, prefix: str = "", depth: int = 0) -> str | None:
     return None
 
 
-def _items(body, items_path: str) -> list:
-    target = _walk(body, items_path) if items_path else body
+def _trim(body, depth: int = 0):
+    """The reply as a sample: every list cut to its first entry (the rest are more of the same),
+    strings shortened, six levels deep at most. Small enough to show on the form."""
+    if depth > 6:
+        return "…"
+    if isinstance(body, dict):
+        return {k: _trim(v, depth + 1) for k, v in list(body.items())[:60]}
+    if isinstance(body, list):
+        return [_trim(body[0], depth + 1)] if body else []
+    if isinstance(body, str) and len(body) > 200:
+        return body[:200] + "…"
+    return body
+
+
+def _items(body, payload_key: str) -> list:
+    target = _walk(body, payload_key) if payload_key else body
     if target is None:
-        raise ValueError(f"nothing at items_path {items_path!r} in the response")
+        raise ValueError(f"nothing at payload_key {payload_key!r} in the response")
     if isinstance(target, list):
         return target[:MAX_ITEMS_PER_POLL]
     return [target]
@@ -184,39 +198,41 @@ def _items(body, items_path: str) -> list:
 class HttpPollConnector(Connector):
     MIN_POLL_SECONDS = MIN_POLL_SECONDS   # validate_source_dict reads it: no source polls faster
     CONFIG_SCHEMA = {
-        "url": {"type": "string", "required": True, "discover_input": True,
+        "url": {"type": "string", "required": True, "format": "url", "label": "URL", "discover_input": True,
                 "help": "the endpoint, query string included, e.g. "
                         "https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41"
                         "&current_weather=true"},
-        "method": {"type": "string", "default": "GET", "choices": ["GET", "POST"],
+        "method": {"type": "string", "default": "GET", "label": "method", "choices": ["GET", "POST"],
                    "discover_input": True, "help": "GET, or POST with a body"},
-        "body": {"type": "object", "discover_input": True,
+        "body": {"type": "object", "discover_input": True, "label": "request body",
                  "help": "POST only: the JSON object to send"},
-        "headers": {"type": "map", "discover_input": True,
+        "headers": {"type": "map", "discover_input": True, "label": "additional headers",
                     "help": "extra request headers, e.g. Accept: application/json or a version "
                             "header; the credential goes in the field below, not here"},
-        "credential": {"type": "string", "secret": True, "discover_input": True,
+        "credential": {"type": "string", "secret": True, "discover_input": True, "label": "credential",
                        "help": "what the API wants for auth, sent as one header: the whole "
                                "value, e.g. Bearer xyz for a token or abc123 for an API key. "
                                "Stored as a secret, never shown again. Leave empty for a "
                                "public API"},
         "credential_header": {"type": "string", "default": "Authorization", "discover_input": True,
+                              "label": "credential header",
                               "help": "the header the credential is sent in: Authorization for "
                                       "a bearer token, X-API-Key or similar when the API says so"},
-        "items_path": {"type": "string", "discover_input": True,
-                       "help": "dotted path to the array of items in the response, e.g. "
-                               "data.items; leave empty when the whole body is one event"},
-        "event_type": {"type": "string", "default": "api_reading",
+        "payload_key": {"type": "string", "label": "payload key",
+                        "help": "the key in the reply that holds the payload, e.g. data or "
+                                "data.items; empty for the entire JSON. A list there is one "
+                                "event per entry"},
+        "event_type": {"type": "string", "default": "api_reading", "label": "kind of event",
                        "help": "fixed event type"},
-        "event_type_field": {"type": "string",
+        "event_type_field": {"type": "string", "label": "kind of event, from a field",
                              "help": "field of the item to read the event type from"},
-        "text_template": {"type": "string",
+        "text_template": {"type": "string", "label": "event summary",
                           "help": "the line an agent reads, over the item's fields, e.g. "
                                   "'wind {current_weather.windspeed} km/h'; empty renders the item"},
-        "event_time_field": {"type": "string",
+        "event_time_field": {"type": "string", "label": "time of the event",
                              "help": "field holding the event's time (ISO-8601 or epoch); "
                                      "else the poll time"},
-        "id_field": {"type": "string",
+        "id_field": {"type": "string", "label": "deduplication key",
                      "help": "field that identifies an item, so one seen in recent polls is not "
                              "stored again: an id for a list API, the reading's own time field "
                              "for a single reading. Leave empty to store every poll"},
@@ -248,7 +264,7 @@ class HttpPollConnector(Connector):
             what = "rate limited by the API" if status == 429 else f"the API answered {status}"
             raise RateLimited(f"{what}; next try at {when}")
         self._backoff = 0.0
-        items = _items(body, c.get("items_path") or "")
+        items = _items(body, c.get("payload_key") or "")
         out = []
         seen = self._seen_ids() if c.get("id_field") else None
         new_seen: list[str] = []
@@ -317,12 +333,12 @@ class HttpPollConnector(Connector):
             body = await _fetch(config)
         except RateLimited as e:
             raise ValueError(f"the API answered {e.args[0]}; try again in a moment")
-        items_path = str(config.get("items_path") or "")
-        if not items_path and isinstance(body, dict):
-            items_path = _find_items(body) or ""
-        target = _walk(body, items_path) if items_path else body
+        payload_key = str(config.get("payload_key") or "")
+        if not payload_key and isinstance(body, dict):
+            payload_key = _find_items(body) or ""
+        target = _walk(body, payload_key) if payload_key else body
         if target is None:
-            raise ValueError(f"nothing at items_path {items_path!r} in the response")
+            raise ValueError(f"nothing at payload_key {payload_key!r} in the response")
         per_poll = len(target) if isinstance(target, list) else 1
         sample = [x for x in (target if isinstance(target, list) else [target])[:_SAMPLE_ITEMS]
                   if isinstance(x, dict)]
@@ -360,18 +376,16 @@ class HttpPollConnector(Connector):
                 # labels; long ones are messages and stay in the payload
                 if all(isinstance(v, str) and len(v) <= 64 for v in vals):
                     labels.append({"name": n.replace(".", "_"), "field": n})
-        # the first string label is the entity; a source with none keys by its own name
-        primary_set = False
-        for lab in labels:
-            if lab.get("type") != "number" and not primary_set:
-                lab["primary"] = True
-                primary_set = True
+        # no key is proposed: which field names the thing being watched is not knowable from
+        # one reply (a weather reading has no such field, a status list has several). The user
+        # picks it in the form, with the sample value beside each choice; with none picked the
+        # source keys by its own name.
         proposed = {"url": config["url"]}
         for k in ("method", "headers", "credential_header", "body"):
             if config.get(k) not in (None, "", {}):
                 proposed[k] = config[k]
-        if items_path:
-            proposed["items_path"] = items_path
+        if payload_key:
+            proposed["payload_key"] = payload_key
         if time_field:
             proposed["event_time_field"] = time_field
         if id_field and per_poll > 1:
@@ -381,13 +395,24 @@ class HttpPollConnector(Connector):
             # the same reading again and again, so the time is the id
             proposed["id_field"] = time_field
         proposed["labels"] = labels[:8]
+        # a starting line for the timeline: the first few plain values, named by their last
+        # path segment, so "windspeed=12.2 temperature=19.3" instead of the item's JSON
+        shown = [n for n in names if n != time_field and n != id_field
+                 and not isinstance(flat[0].get(n), bool)
+                 and isinstance(flat[0].get(n), (int, float, str))
+                 and len(str(flat[0].get(n))) <= 40][:3]
+        if shown:
+            proposed["text_template"] = " ".join(f"{n.rsplit('.', 1)[-1]}={{{n}}}" for n in shown)
         return {
             "connector": "http_poll",
             "summary": (f"{per_poll} item{'s' if per_poll != 1 else ''} per poll, "
                         f"{len(names)} field{'s' if len(names) != 1 else ''}"
-                        + (f", items at {items_path}" if items_path else "")),
+                        + (f", items at {payload_key}" if payload_key else "")),
             "sample_fields": names,
             "fields": fields,
+            "sample_item": sample[0],
+            "sample_reply": _trim(body),
+            "per_poll": per_poll,
             "proposed_config": proposed,
         }
 

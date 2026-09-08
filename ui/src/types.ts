@@ -32,6 +32,7 @@ export interface ConnectorField {
   discover_input?: boolean;  // Discover needs this field — shown above the Discover panel
   default?: unknown;         // what the connector uses when the field is empty; prefilled on a fresh source
   choices?: string[];        // a fixed set of values: rendered as a dropdown, anything else is refused on save
+  label?: string;            // the words shown for the field; the name stays the config key
   item?: ConnectorField[];   // for type "list": the sub-fields of each row
 }
 

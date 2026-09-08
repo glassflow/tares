@@ -46,7 +46,7 @@ def _client_kwargs(config: dict) -> dict:
 
 class LokiConnector(Connector):
     CONFIG_SCHEMA = {
-        "url": {"type": "string", "required": True,
+        "url": {"type": "string", "required": True, "format": "url",
                 "help": "Loki base URL, e.g. http://localhost:3100"},
         "query": {"type": "string", "required": True,
                   "help": 'LogQL stream selector, e.g. {service="api-server"}'},

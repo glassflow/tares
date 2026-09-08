@@ -1,4 +1,4 @@
-"""The http_poll connector (TR-276, TR-277, TR-278): request shape and auth, items_path, the
+"""The http_poll connector (TR-276, TR-277, TR-278): request shape and auth, payload_key, the
 mapping into envelopes, id_field dedupe with a bounded cursor, rate limiting and backoff,
 discover, and the poll floor plus secret redaction through the daemon.
 Run: .venv/bin/python tests/test_http_poll.py   (a stub HTTP server answers every request)
@@ -111,9 +111,9 @@ async def main():
     out2 = await c.poll()
     check("a reading is new on every poll", len(out2) == 1, str(len(out2)))
 
-    print("== items_path into a nested array, id_field dedupe ==")
+    print("== payload_key into a nested array, id_field dedupe ==")
     RESPONSES[:] = [(200, {}, FEED)]
-    f = connector({"url": f"{base}/status", "items_path": "data.items", "id_field": "id",
+    f = connector({"url": f"{base}/status", "payload_key": "data.items", "id_field": "id",
                    "event_type_field": "status", "event_time_field": "updated_at",
                    "text_template": "{service} is {status}",
                    "labels": [{"name": "service", "field": "service", "primary": True}]}, name="status")
@@ -153,11 +153,11 @@ async def main():
 
     print("== errors the user must see ==")
     RESPONSES[:] = [(200, {}, {"data": {}})]
-    bad = connector({"url": f"{base}/x", "items_path": "data.items"}, name="bad")
+    bad = connector({"url": f"{base}/x", "payload_key": "data.items"}, name="bad")
     try:
-        await bad.poll(); check("missing items_path raises", False)
+        await bad.poll(); check("missing payload_key raises", False)
     except ValueError as ex:
-        check("missing items_path raises", "items_path" in str(ex), str(ex))
+        check("missing payload_key raises", "payload_key" in str(ex), str(ex))
     RESPONSES[:] = [(404, {}, {"error": "nope"})]
     try:
         await bad.poll(); check("4xx raises with the status", False)
@@ -211,6 +211,17 @@ async def main():
     from tares.connectors import SPECS
     mf = next(f for f in SPECS["http_poll"]["fields"] if f["name"] == "method")
     check("form field carries the choices", mf.get("choices") == ["GET", "POST"], str(mf))
+    check("every http_poll field carries a plain label", all(f.get("label") for f in SPECS["http_poll"]["fields"] if f["name"] != "labels"),
+          str([f["name"] for f in SPECS["http_poll"]["fields"] if not f.get("label")]))
+
+    print("== url checked on save ==")
+    for bad, why in (("open-meteo.com/v1", "http"), ("ftp://x/y", "http"), ("https://", "host"),
+                     ("https://api.example.com/a b", "spaces"), ("https://api.example.com:99999/x", "port")):
+        try:
+            normalize_config("http_poll", {"url": bad}); check(f"refused: {bad}", False)
+        except CatalogError as ex:
+            check(f"refused: {bad}", why in str(ex), str(ex))
+    check("a good url with a query string passes", normalize_config("http_poll", {"url": " https://api.example.com/v1?x=1&y=2 "})["url"] == "https://api.example.com/v1?x=1&y=2")
 
     print("== poll floor ==")
     try:
@@ -238,18 +249,23 @@ async def main():
     check("nested fields listed with dotted names", "current_weather.windspeed" in d["sample_fields"], str(d["sample_fields"]))
     check("time field proposed", d["proposed_config"].get("event_time_field") == "current_weather.time", str(d["proposed_config"]))
     check("a single reading dedupes on its own time", d["proposed_config"].get("id_field") == "current_weather.time", str(d["proposed_config"]))
+    check("a starting line is proposed from the sample", "{" in d["proposed_config"].get("text_template", ""), str(d["proposed_config"]))
+    check("the sample item comes back for the preview", d["sample_item"] == WEATHER and d["per_poll"] == 1)
+    check("the sample reply is the whole body for one object", d["sample_reply"] == WEATHER)
     check("number fields proposed as number labels", any(
         l.get("field") == "current_weather.windspeed" and l.get("type") == "number" for l in d["proposed_config"]["labels"]), str(d["proposed_config"]["labels"]))
     RESPONSES[:] = [(200, {}, FEED)]
     d2 = await hp.HttpPollConnector.discover({"url": f"{base}/status"})
-    check("nested array found", d2["proposed_config"].get("items_path") == "data.items", str(d2["proposed_config"]))
+    check("nested array found", d2["proposed_config"].get("payload_key") == "data.items", str(d2["proposed_config"]))
     check("id field proposed for a list", d2["proposed_config"].get("id_field") == "id", str(d2["proposed_config"]))
-    check("string field with few values becomes the primary label", any(
-        l.get("primary") and l.get("field") in ("service", "status") for l in d2["proposed_config"]["labels"]), str(d2["proposed_config"]["labels"]))
+    check("string fields proposed as labels, none as the key", any(
+        l.get("field") in ("service", "status") for l in d2["proposed_config"]["labels"])
+        and not any(l.get("primary") for l in d2["proposed_config"]["labels"]), str(d2["proposed_config"]["labels"]))
     check("summary counts items", d2["summary"].startswith("2 items per poll"), d2["summary"])
+    check("the sample reply keeps the wrapper and one entry per list", d2["sample_reply"] == {"meta": {"page": 1}, "data": {"items": [FEED["data"]["items"][0]]}}, str(d2["sample_reply"]))
     RESPONSES[:] = [(200, {}, [{"n": 1}])]
     d3 = await hp.HttpPollConnector.discover({"url": f"{base}/arr"})
-    check("top-level array: no items_path", "items_path" not in d3["proposed_config"], str(d3["proposed_config"]))
+    check("top-level array: no payload_key", "payload_key" not in d3["proposed_config"], str(d3["proposed_config"]))
     try:
         await hp.HttpPollConnector.discover({"url": ""}); check("discover needs a url", False)
     except ValueError as ex:
