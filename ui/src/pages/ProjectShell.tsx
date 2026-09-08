@@ -829,6 +829,9 @@ function AgentSection({ name, focusDispatch, triggerInProject, onShowTrigger }: 
 }) {
   const [openRun, setOpenRun] = useState<string>();
   const [editing, setEditing] = useState(false);
+  // The configuration is folded by default: on a project page the runs are what changes and
+  // what a person came to see; the prompt alone pushed them below the fold (TR-286).
+  const [configOpen, setConfigOpen] = useState(false);
   const { data, error, reload } = usePolling(() => api.builtinAgents(), 10000);
   const { data: runs } = usePolling(() => api.builtinAgentRuns(name, 1), 10000);   // the latest, for the overview row
   const [err, setErr] = useState<string>();
@@ -868,7 +871,20 @@ function AgentSection({ name, focusDispatch, triggerInProject, onShowTrigger }: 
                    onSaved={() => { setEditing(false); reload(); }}
                    onCancel={() => setEditing(false)} />
       ) : (
-        <div className="panel" style={{ marginBottom: 12 }}>
+        <div className="opt-row" style={{ marginBottom: 12 }}>
+          <button type="button" className="opt-head" onClick={() => setConfigOpen((o) => !o)}>
+            <span className="opt-caret">{configOpen ? "▾" : "▸"}</span>
+            <span>
+              <span className="opt-title">Configuration</span>
+              <span className="opt-desc help">
+                wakes on <span className="mono">{agent.trigger}</span>
+                {" · "}{agent.model ? <span className="mono">{agent.model}</span> : "instance default model"}
+                {lastRun ? <> · last woken <TimeAgo ts={lastRun.started_at} /> for <span className="mono">{lastRun.key}</span></> : " · never woken"}
+              </span>
+            </span>
+            {agent.enabled ? <span className="badge ok">enabled</span> : <span className="badge">disabled</span>}
+          </button>
+          {configOpen && <div className="opt-body" style={{ paddingLeft: 12 }}>
           <table>
             <tbody>
               <tr><td className="help" style={{ width: 150 }}>status</td>
@@ -905,6 +921,7 @@ function AgentSection({ name, focusDispatch, triggerInProject, onShowTrigger }: 
                   <td><pre className="mono" style={{ whiteSpace: "pre-wrap", margin: 0, maxHeight: 180, overflow: "auto" }}>{agent.prompt}</pre></td></tr>
             </tbody>
           </table>
+          </div>}
         </div>
       )}
       <h3 style={{ margin: "12px 0 6px" }}>Runs</h3>
