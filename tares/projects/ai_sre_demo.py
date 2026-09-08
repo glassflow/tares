@@ -61,6 +61,8 @@ class AiSreDemo(Template):
     description = ("Watch a small demo system, correlate its metrics, logs and alerts on one timeline, "
                    "and let an agent write the first incident note when Prometheus fires.")
     tags = ("demo",)
+    sentence = ("show me an agent watching a small service: metrics, logs and alerts on one "
+                "timeline, and a first incident note when something breaks")
     guide = {"label": "Build an AI SRE guide", "url": "https://docs.glassflow.ai/tares/guides/ai-sre"}
 
     PARAMS = {

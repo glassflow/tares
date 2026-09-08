@@ -69,6 +69,8 @@ class ChallengerWorkflow(Template):
                    "keep the whole exchange on one session timeline, and get a session summary "
                    "with memory proposals when the session ends.")
     tags = ()
+    sentence = ("challenge Claude Code's plan and every commit on my laptop, and summarise "
+                "each session when it ends")
     guide = {"label": "Challenger workflow guide",
              "url": "https://docs.glassflow.ai/tares/guides/challenger-workflow"}
 

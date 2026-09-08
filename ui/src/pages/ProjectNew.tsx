@@ -1,15 +1,19 @@
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "../api";
 import { ErrorState, usePolling } from "../components/bits";
 import type { Template } from "../types";
 
-// The gallery behind "Create new" on /projects: one card per way to start a project. Templates
-// the console knows how to set up with a dedicated wizard; anything else the API lists still gets
-// a card, routed to the generic (params-driven) form.
-const WIZARDS: Record<string, string> = {
+// The template gallery, at /projects/new/templates: one card per template, the deterministic
+// path. Create new itself (/projects/new) is the landing screen (Landing.tsx), which links here
+// and, per template sentence, straight to the wizard. Templates the console sets up with a
+// dedicated wizard; anything else the API lists still gets a card, routed to the generic form.
+export const WIZARDS: Record<string, string> = {
   shared_code_context: "/projects/new/shared_code_context",
 };
+
+/** Where a template's step-by-step setup lives. */
+export const wizardPath = (key: string) => WIZARDS[key] ?? `/projects/new/${encodeURIComponent(key)}`;
 
 // What each template wires up, in the user's words. The daemon's describe() may carry mode-aware
 // facts (ai_sre_demo says different things against a hosted stack than against local docker);
@@ -27,7 +31,7 @@ const TEMPLATE_FACTS: Record<string, { you: string[]; tares: string[] }> = {
 
 function TemplateCard({ r }: { r: Template }) {
   const navigate = useNavigate();
-  const to = WIZARDS[r.key] ?? `/projects/new/${encodeURIComponent(r.key)}`;
+  const to = wizardPath(r.key);
   const facts = r.facts ?? TEMPLATE_FACTS[r.key];
   return (
     <div className="panel uc-card">
@@ -61,7 +65,7 @@ function TemplateCard({ r }: { r: Template }) {
   );
 }
 
-export default function ProjectNew() {
+export default function ProjectTemplates() {
   const navigate = useNavigate();
   const { data: rec, error: recError, reload: reloadRec } = usePolling(() => api.templates(), 60000);
   const templates = rec?.templates ?? [];
@@ -70,11 +74,11 @@ export default function ProjectNew() {
     <>
       <div className="pagehead">
         <div>
-          <h1>New project</h1>
+          <h1>Templates</h1>
           <p className="subtitle">
-            start from a Tares template: answer a few questions and Tares creates the objects
-            behind it, each visible and editable on its own page. Or assemble one from objects
-            you already have.
+            the step-by-step path: answer a few questions and Tares creates the objects behind it,
+            each visible and editable on its own page. Or assemble one from objects you already
+            have. To describe what you need in your own words instead, <Link to="/projects/new">create a project</Link>.
           </p>
         </div>
       </div>

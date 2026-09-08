@@ -52,11 +52,13 @@ function OptionRow({ title, desc, on, disabled, disabledHint, onToggle, children
 // lands on the entity's timeline; these rows only deliver it elsewhere too. The write-back URL and
 // its bearer token render as one connected control (.hook-group): they are one credential pair,
 // not two settings.
-export default function AgentForm({ initial, presetTrigger, triggers, presets, models,
-                                    defaultModel, slackWorkspace, onSaved, onCancel,
-                                    defaultMaxRounds = 6, defaultMaxRoundsWithMcp = 12,
+export default function AgentForm({ initial, prefill, deliveryKind, presetTrigger, triggers,
+                                    presets, models, defaultModel, slackWorkspace, onSaved,
+                                    onCancel, defaultMaxRounds = 6, defaultMaxRoundsWithMcp = 12,
                                     maxRoundsLimit = 24 }: {
   initial?: BuiltinAgent;              // absent = create
+  prefill?: boolean;                   // initial is a proposal for a NEW agent: create, editable name
+  deliveryKind?: "slack" | "webhook" | "none";   // prefill: which delivery row starts open (and on)
   presetTrigger?: string;              // create: trigger preselected (came from a trigger page)
   triggers: string[];
   presets: AgentPreset[];
@@ -69,7 +71,7 @@ export default function AgentForm({ initial, presetTrigger, triggers, presets, m
   onSaved: (name: string) => void;
   onCancel: () => void;
 }) {
-  const isNew = !initial;
+  const isNew = !initial || !!prefill;
   const [name, setName] = useState(initial?.name ?? "");
   const [trigger, setTrigger] = useState(initial?.trigger ?? presetTrigger ?? "");
   const [prompt, setPrompt] = useState(initial?.prompt ?? "");
@@ -77,11 +79,11 @@ export default function AgentForm({ initial, presetTrigger, triggers, presets, m
 
   // Delivery options: each is a toggle plus its fields. Off at save time means off, even if the
   // fields still hold text.
-  const [channelOn, setChannelOn] = useState(!!initial?.slack_channel);
+  const [channelOn, setChannelOn] = useState(!!initial?.slack_channel || (deliveryKind === "slack" && slackWorkspace));
   const [channel, setChannel] = useState(initial?.slack_channel ?? "");
   const [hookOn, setHookOn] = useState(!!initial?.slack_configured);
   const [slack, setSlack] = useState("");
-  const [writebackOn, setWritebackOn] = useState(!!initial?.webhook_url);
+  const [writebackOn, setWritebackOn] = useState(!!initial?.webhook_url || deliveryKind === "webhook");
   const [webhookUrl, setWebhookUrl] = useState(initial?.webhook_url ?? "");
   const [webhookToken, setWebhookToken] = useState("");
   const [mcpSel, setMcpSel] = useState<string[]>(initial?.mcp_servers ?? []);

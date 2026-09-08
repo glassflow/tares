@@ -10,13 +10,14 @@ import type { Trigger } from "../types";
 
 const AGGREGATES = ["max", "min", "sum", "avg", "count", "any"];
 
-export default function TriggerEditor({ initial, presetView, onSaved, onCancel }: {
+export default function TriggerEditor({ initial, prefill, presetView, onSaved, onCancel }: {
   initial?: Trigger;            // absent = create
+  prefill?: boolean;            // initial is a proposal for a NEW trigger: create, editable name
   presetView?: string;          // create mode: view preselected (e.g. from a view page)
   onSaved: (name: string) => void;
   onCancel: () => void;
 }) {
-  const isNew = !initial;
+  const isNew = !initial || !!prefill;
   const [t, setT] = useState<Trigger>(initial ?? {
     name: "", view: presetView ?? "",
     condition: { aggregate: "max", predicate: "> 1.0", window: "1m", field: "" },

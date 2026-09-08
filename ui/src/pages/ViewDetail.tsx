@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 
 import { api } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
+import Dependents from "../components/Dependents";
 import ProjectBadge from "../components/ProjectBadge";
 import ViewEditor from "../components/ViewEditor";
 import { ErrorState, TimeAgo, usePolling } from "../components/bits";
@@ -15,6 +16,7 @@ export default function ViewDetail() {
   const [params] = useSearchParams();
   const [editing, setEditing] = useState(params.get("edit") === "1");
   const [confirmDel, setConfirmDel] = useState(false);
+  const [cascade, setCascade] = useState(true);
   const [delErr, setDelErr] = useState<string>();
   const { data: views, error, reload } = usePolling(() => api.views(), 10000);
   // Error kept: this drives what the DELETE dialog says is at stake, and a failed load must not
@@ -117,21 +119,18 @@ export default function ViewDetail() {
       {confirmDel && (
         <ConfirmDialog
           title={`Delete view ${view.name}?`}
-          message={triggersError
-            // A failed load must never produce the calmer of the two messages — see TriggerDetail.
-            ? `Couldn’t check which triggers watch this view (${triggersError}); deleting may break more than is shown here. This can’t be undone.`
-            : watchers.length
-              ? `${watchers.length} trigger(s) watch this view and will stop working. Agents querying it will start failing.`
-              : "Agents querying this view will start failing. This can't be undone."}
+          message="Agents querying this view will start failing. This can't be undone."
           confirmLabel="Delete"
           danger
           onCancel={() => setConfirmDel(false)}
           onConfirm={async () => {
             setDelErr(undefined);
-            try { await api.deleteView(view.name); nav("/views"); }
+            try { await api.deleteView(view.name, cascade); nav("/views"); }
             catch (e) { setDelErr(String((e as Error).message ?? e)); setConfirmDel(false); }
           }}
-        />
+        >
+          <Dependents kind="view" name={view.name} cascade={cascade} onChange={(c) => setCascade(c)} />
+        </ConfirmDialog>
       )}
     </>
   );

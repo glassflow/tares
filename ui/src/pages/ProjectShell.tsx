@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "../api";
@@ -7,10 +7,11 @@ import TriggerEditor from "../components/TriggerEditor";
 import ViewEditor from "../components/ViewEditor";
 import { Combo, Picker, ErrorState, TimeAgo, usePolling } from "../components/bits";
 import AgentForm from "../components/AgentForm";
+import IngestEndpoint from "../components/IngestEndpoint";
 import InfoDialog, { HelpButton } from "../components/InfoDialog";
 import { SessionsPanel } from "../components/ChallengerSessions";
 import { RunsPanel } from "./AgentDetail";
-import type { ProjectSummary, Template, RecipeActionOption } from "../types";
+import type { ConnectorSpec, ProjectSummary, Template, RecipeActionOption, Source } from "../types";
 
 // The page for every project: what a project really is, on one page, driven by the live APIs
 // plus the template's summary. Setup (sources, views and triggers, the latter two editable in
@@ -28,6 +29,7 @@ export default function ProjectShell({ s, id, reload, template }: {
 }) {
   const navigate = useNavigate();
   const custom = s.template === "custom";
+
   const sourceCount = (s.objects ?? []).filter((o) => o.kind === "source" && !o.missing).length;
   const pausedSources = ((s.params as Record<string, unknown> | undefined)?.paused_sources as string[] | undefined) ?? [];
   // ?tab= deep links win; otherwise a project with sessions opens on them
@@ -45,12 +47,39 @@ export default function ProjectShell({ s, id, reload, template }: {
   const [openEvent, setOpenEvent] = useState<number>();
   const [actionError, setActionError] = useState<string>();
   const [confirmDel, setConfirmDel] = useState(false);
+  // Which of a custom project's objects go with it. The builder assembled them, so deleting the
+  // project is the one place to take them apart in one go; a pick pulls in what depends on it
+  // (a source brings its views, triggers and agents) and unpicking one lets go of what needed it.
+  const [delSel, setDelSel] = useState<Set<string>>(new Set());
+  const [delDeps, setDelDeps] = useState<Record<string, string[]>>();
+  useEffect(() => {
+    if (!confirmDel) return;
+    let live = true;
+    setDelSel(new Set(s.objects.filter((o) => o.kind !== "mcp_server").map((o) => `${o.kind}:${o.name}`)));
+    const objs = s.objects.filter((o) => o.kind !== "mcp_server");
+    Promise.all(objs.map(async (o) => {
+      if (o.kind === "agent") return [`${o.kind}:${o.name}`, [] as string[]] as const;
+      try {
+        const r = await api.dependents(o.kind as "source" | "view" | "trigger", o.name);
+        return [`${o.kind}:${o.name}`, r.dependents.map((d) => `${d.kind}:${d.name}`)] as const;
+      } catch { return [`${o.kind}:${o.name}`, [] as string[]] as const; }
+    })).then((rows) => { if (live) setDelDeps(Object.fromEntries(rows)); });
+    return () => { live = false; };
+  }, [confirmDel]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const delKeys = s.objects.filter((o) => o.kind !== "mcp_server").map((o) => `${o.kind}:${o.name}`);
+  const pick = (k: string, on: boolean) => setDelSel((cur) => {
+    const next = new Set(cur);
+    if (on) { next.add(k); for (const d of delDeps?.[k] ?? []) if (delKeys.includes(d)) next.add(d); }
+    else { next.delete(k); for (const [j, ds] of Object.entries(delDeps ?? {})) if (ds.includes(k)) next.delete(j); }
+    return next;
+  });
   const [purge, setPurge] = useState(false);
   const [confirmPause, setConfirmPause] = useState(false);
   const [pauseSources, setPauseSources] = useState(false);
 
   const names = (kind: string) => s.objects.filter((o) => o.kind === kind).map((o) => o.name);
   const { data: sources, reload: reloadSources } = usePolling(() => api.sources(), 10000);
+  const { data: specs } = usePolling(() => api.connectors(), 600000);
   const { data: views, reload: reloadViews } = usePolling(() => api.views(), 10000);
   const { data: triggers, reload: reloadTriggers } = usePolling(() => api.triggers(), 10000);
   const { data: dispatches, error: dispatchesError } = usePolling(() => api.dispatches(100), 10000);
@@ -321,19 +350,9 @@ export default function ProjectShell({ s, id, reload, template }: {
           <h2>Sources</h2>
           {mySources.length ? (
             <table>
-              <thead><tr><th>source</th><th>type</th><th>status</th><th className="num">events</th><th>last ingest</th></tr></thead>
+              <thead><tr><th style={{ width: 24 }}></th><th>source</th><th>type</th><th>status</th><th className="num">events</th><th>last ingest</th></tr></thead>
               <tbody>
-                {mySources.map((x) => (
-                  <tr key={x.name} className="clickable" onClick={() => navigate(`/sources/${encodeURIComponent(x.name)}`)}>
-                    <td className="mono">{x.name}</td>
-                    <td><span className="chip">{x.connector}</span></td>
-                    <td>{x.paused ? <span className="badge paused">paused</span>
-                      : x.health?.last_error ? <span className="badge error" title={x.health.last_error}>error</span>
-                      : <span className="badge ok">ok</span>}</td>
-                    <td className="num">{(x.health?.events_total ?? 0).toLocaleString()}</td>
-                    <td><TimeAgo ts={x.health?.last_ingest ?? null} /></td>
-                  </tr>
-                ))}
+                {mySources.map((x) => <SourceRow key={x.name} x={x} spec={specs?.[x.connector]} />)}
               </tbody>
             </table>
           ) : <p className="help">none in this project</p>}
@@ -502,7 +521,7 @@ export default function ProjectShell({ s, id, reload, template }: {
               })}
             </tbody>
           </table>
-        ) : <p className="help">nothing ingested yet across this project's sources</p>
+        ) : <div className="empty">nothing ingested yet across this project's sources</div>
       )}
 
       {tab === "firings" && (
@@ -544,7 +563,7 @@ export default function ProjectShell({ s, id, reload, template }: {
                 })}
               </tbody>
             </table>
-          ) : !dispatchesError && <p className="help">no firings yet across this project's triggers</p>}
+          ) : !dispatchesError && <div className="empty">no firings yet across this project's triggers</div>}
         </>
       )}
 
@@ -586,15 +605,37 @@ export default function ProjectShell({ s, id, reload, template }: {
       )}
       {confirmDel && (
         <ConfirmDialog title={`Delete project ${s.name}?`}
-          message={custom
-            ? "Removes the project. Its objects stay in place, no longer part of a project. Events already stored stay unless you purge them."
-            : "Deletes the sources, views, triggers and agents this project created. Events already stored stay unless you purge them."}
-          confirmLabel="Delete project" danger
+          message="Removes the project. The objects picked below go with it; anything unpicked stays in place, no longer part of a project. Events already stored stay unless you purge them."
+          confirmLabel={delSel.size ? `Delete project and ${delSel.size} object${delSel.size === 1 ? "" : "s"}` : "Delete project only"} danger
           onConfirm={async () => {
-            try { await api.deleteProject(id, purge); navigate("/projects", { replace: true }); }
+            const chosen = s.objects.filter((o) => delSel.has(`${o.kind}:${o.name}`)).map((o) => ({ kind: o.kind, name: o.name }));
+            try { await api.deleteProject(id, purge, chosen); navigate("/projects", { replace: true }); }
             catch (e) { setActionError(String((e as Error).message ?? e)); setConfirmDel(false); }
           }}
           onCancel={() => setConfirmDel(false)}>
+          {delKeys.length > 0 && (
+            <div style={{ margin: "10px 0 4px" }}>
+              <div className="btnrow" style={{ marginBottom: 6 }}>
+                <span className="lbl">its objects</span>
+                <button type="button" className="dim" onClick={() => setDelSel(new Set(delKeys))}>Select all</button>
+                <button type="button" className="dim" onClick={() => setDelSel(new Set())}>None</button>
+                {!delDeps && <span className="help">checking what depends on what…</span>}
+              </div>
+              {s.objects.filter((o) => o.kind !== "mcp_server").map((o) => {
+                const k = `${o.kind}:${o.name}`;
+                return (
+                  <label key={k} style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "2px 0", minWidth: 0 }}>
+                    <input type="checkbox" checked={delSel.has(k)} disabled={!delDeps} onChange={(e) => pick(k, e.target.checked)} />
+                    <span className="help" style={{ width: 56, flex: "0 0 auto" }}>{o.kind}</span>
+                    <span className="mono" style={{ minWidth: 0, wordBreak: "break-all" }}>{o.name}</span>
+                  </label>
+                );
+              })}
+              <p className="help" style={{ margin: "6px 0 0", whiteSpace: "normal" }}>
+                Picking a source also picks the views, triggers and agents that need it. Unpicked objects stay{custom ? "" : ", and the project no longer repairs them"}.
+              </p>
+            </div>
+          )}
           <label style={{ display: "block", marginTop: 8 }}>
             <input type="checkbox" checked={purge} onChange={(e) => setPurge(e.target.checked)} />{" "}
             {custom
@@ -609,6 +650,55 @@ export default function ProjectShell({ s, id, reload, template }: {
 
 // One view, as its own page shows it (key field, sources, filters, author, usage), with the same
 // in-place editor. "+ trigger" preselects this view on the trigger form.
+/** One source, folded: the row is the health line; opening it shows what a producer needs (the
+ *  ingest endpoint for a push source, the polled target for a poll one) with a Configure button
+ *  to the source page. A builder-made project is looked at here first, and a push source is
+ *  nothing until something posts to it, so the address has to be one click away, not one page. */
+function SourceRow({ x, spec }: { x: Source; spec?: ConnectorSpec }) {
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const push = spec?.mode === "push";
+  // the polled target in plain fields: non-secret string/number values the connector declares
+  const shown = (spec?.fields ?? [])
+    .filter((f) => !f.secret && (f.type === "string" || f.type === "number") && x.config?.[f.name] !== undefined && x.config?.[f.name] !== "")
+    .map((f) => ({ name: f.name, value: String(x.config[f.name]) }));
+  return (
+    <>
+      <tr className="clickable" onClick={() => setOpen((o) => !o)}>
+        <td className="dim">{open ? "▾" : "▸"}</td>
+        <td className="mono">{x.name}</td>
+        <td><span className="chip">{x.connector}</span></td>
+        <td>{x.paused ? <span className="badge paused">paused</span>
+          : x.health?.last_error ? <span className="badge error" title={x.health.last_error}>error</span>
+          : <span className="badge ok">ok</span>}</td>
+        <td className="num">{(x.health?.events_total ?? 0).toLocaleString()}</td>
+        <td><TimeAgo ts={x.health?.last_ingest ?? null} /></td>
+      </tr>
+      {open && (
+        <tr>
+          <td></td>
+          <td colSpan={5} style={{ paddingTop: 10, paddingBottom: 14 }}>
+            {push ? <IngestEndpoint source={x} /> : shown.length > 0 ? (
+              <table style={{ marginBottom: 10 }}>
+                <tbody>
+                  {shown.map((f) => (
+                    <tr key={f.name}><td className="help" style={{ width: 180 }}>{f.name}</td><td className="mono" style={{ wordBreak: "break-all" }}>{f.value}</td></tr>
+                  ))}
+                  <tr><td className="help">poll</td><td className="mono">{x.poll}</td></tr>
+                </tbody>
+              </table>
+            ) : <p className="help">polls every {x.poll}</p>}
+            {x.health?.last_error && <div className="alert error" style={{ marginBottom: 10 }}>{x.health.last_error}</div>}
+            <div className="btnrow">
+              <button className="primary" onClick={() => navigate(`/sources/${encodeURIComponent(x.name)}`)}>Configure</button>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
 function ViewPanel({ v, sourceNames, watchers, onSaved }: {
   v: import("../types").View; sourceNames: string[]; watchers: number; onSaved: () => void;
 }) {

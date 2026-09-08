@@ -46,6 +46,10 @@ class Template:
     tags: tuple = ()
     # An optional walkthrough the console links next to the description: {label, url}.
     guide: dict | None = None
+    # What a person would type to get this template, in the first person ("watch my checkout
+    # logs and tell me in Slack when payments fail"). The landing screen offers it as a starter;
+    # empty means the template is not offered there.
+    sentence: str = ""
     # Steps a user must do outside Tares before Start (start a stack, export a key), each
     # {title, text?, command?}; the wizard shows them above the Start button.
     SETUP: list = []
@@ -124,7 +128,8 @@ class Template:
     def describe(self) -> dict:
         return {"key": self.key, "title": self.title, "description": self.description,
                 "params": self.PARAMS, "tags": list(self.tags), "setup": list(self.SETUP),
-                "actions": list(self.ACTIONS), "guide": dict(self.guide) if self.guide else None}
+                "actions": list(self.ACTIONS), "guide": dict(self.guide) if self.guide else None,
+                "sentence": self.sentence}
 
 
 def _iso(v):

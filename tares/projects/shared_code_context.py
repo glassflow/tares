@@ -138,6 +138,8 @@ def _norm_repo(value) -> str:
 class SharedCodeContext(Template):
     key = "shared_code_context"
     title = "Shared code context"
+    sentence = ("watch my code repos and keep one shared context repo up to date, opening a "
+                "pull request when something changes")
     description = ("Keep one repository of shared context current: Tares watches commits across "
                    "your code repos and an agent updates the context repo when something changes.")
     guide = {"label": "Shared code context guide",

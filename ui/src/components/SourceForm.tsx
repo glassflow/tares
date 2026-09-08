@@ -48,6 +48,7 @@ interface Props {
   spec: ConnectorSpec;
   initial?: { name: string; type: string; poll: string; config: Record<string, unknown> };
   lockName?: boolean;
+  highlight?: string[];   // field names to mark as "yours to fill" (a builder proposal's `needs`)
   submitLabel: string;
   onSubmit: (body: {
     name: string; type: string; connector: string; poll: string; config: Record<string, unknown>;
@@ -56,7 +57,7 @@ interface Props {
 
 /** Form generated from the connector's spec (GET /api/connectors). string/number fields render
  *  as inputs, json fields as a code textarea. Test runs one poll server-side before saving. */
-export default function SourceForm({ connector, spec, initial, lockName, submitLabel, onSubmit }: Props) {
+export default function SourceForm({ connector, spec, initial, lockName, highlight, submitLabel, onSubmit }: Props) {
   const [name, setName] = useState(initial?.name ?? "");
   const type = initial?.type ?? "event_stream";  // ignored by the daemon; derived from connector
   const [poll, setPoll] = useState(initial?.poll ?? spec.poll ?? "5s");
@@ -593,10 +594,11 @@ export default function SourceForm({ connector, spec, initial, lockName, submitL
       return <ListFieldEditor key={f.name} field={f} rows={rows[f.name] ?? []}
                               onChange={(r) => setRows({ ...rows, [f.name]: r })} />;
     return (
-      <div className={"fld-row" + (jsonErrors[f.name] ? " invalid" : "")} key={f.name}>
+      <div className={"fld-row" + (jsonErrors[f.name] ? " invalid" : "") + (highlight?.includes(f.name) ? " needs" : "")} key={f.name}>
         <div className="fld-meta">
           <span className="lbl">{fieldLabel(f)}{f.required && <span className="req"> *</span>}
-            {fieldDetected(f) && <span className="badge ok" style={{ marginLeft: 8 }}>detected</span>}</span>
+            {fieldDetected(f) && <span className="badge ok" style={{ marginLeft: 8 }}>detected</span>}
+            {highlight?.includes(f.name) && <span className="badge" style={{ marginLeft: 8 }}>yours to fill</span>}</span>
           {fieldHelp(f)}
         </div>
         <div className="fld-ctrl">{fieldControl(f)}</div>

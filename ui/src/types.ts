@@ -443,6 +443,8 @@ export interface Template {
   // The card's you/Tares bullets, in the mode the daemon is running in (a hosted demo stack
   // says different things than a local docker one). Absent on older daemons.
   facts?: { you: string[]; tares: string[] };
+  // what a person would type to get this template, first person; the landing screen's starters
+  sentence?: string;
 }
 export interface McpServer {
   name: string; url: string; auth_header: string; auth_value_configured: boolean;

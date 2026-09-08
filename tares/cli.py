@@ -44,7 +44,11 @@ def run_daemon():
     host = os.getenv("TARES_HOST", "127.0.0.1")
     port = int(os.getenv("TARES_PORT", "8787"))
     _warn_if_exposed(host)
-    uvicorn.run(make_app(), host=host, port=port)
+    # Idle keep-alive must outlast whatever proxy sits in front (nginx ingress pools upstream
+    # connections for 60s). uvicorn's 5s default let nginx reuse a connection the daemon was
+    # closing at that very moment: "upstream prematurely closed connection", a 502 on any POST
+    # that landed ~5s after the previous response, which the step-by-step project builder did.
+    uvicorn.run(make_app(), host=host, port=port, timeout_keep_alive=75)
 
 
 def run_mcp():

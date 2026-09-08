@@ -87,6 +87,8 @@ async def main():
             keys = [x["key"] for x in r.json()["templates"]]
             check("test template listed with params", "test_demo" in keys and
                   any("apps" in x["params"] for x in r.json()["templates"]), r.text)
+            check("every template carries a sentence field (the landing screen's starters)",
+                  all("sentence" in x for x in r.json()["templates"]), r.text[:200])
 
             print("== create ==")
             r = await cx.post("/api/projects", json={"template": "nope", "params": {}})

@@ -10,13 +10,14 @@ import type { ConnectorSpec, View, ViewFilter } from "../types";
 
 const NUMERIC_OPS = new Set(["gt", "lt", "gte", "lte"]);
 
-export default function ViewEditor({ initial, sourceNames, onSaved, onCancel }: {
+export default function ViewEditor({ initial, prefill, sourceNames, onSaved, onCancel }: {
   initial?: View;                     // absent = create
+  prefill?: boolean;                  // initial is a proposal for a NEW view: create, editable name
   sourceNames: string[];
   onSaved: (name: string) => void;
   onCancel: () => void;
 }) {
-  const isNew = !initial;
+  const isNew = !initial || !!prefill;
   const [name, setName] = useState(initial?.name ?? "");
   const [keyField, setKeyField] = useState(initial?.key_field ?? "");
   const [sources, setSources] = useState<string[]>(initial?.sources ?? []);

@@ -2,10 +2,12 @@ import { memo, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { api, authHeader } from "../api";
+import { api } from "../api";
 import { TimeAgo } from "./bits";
 import { applyProposal, ProposalCard } from "./proposals";
 import type { DecisionMap, Proposal } from "./proposals";
+import { useAgentStream } from "./useAgentStream";
+import type { StreamEvent } from "./useAgentStream";
 
 type SessionMeta = { id: string; title: string; created_at: string; updated_at: string };
 
@@ -16,8 +18,11 @@ type SessionMeta = { id: string; title: string; created_at: string; updated_at: 
 // differed only by a system prompt, so the judgement it carried (what makes a good key, labels come
 // from real fields, watch for value variants) now applies to every proposal — see tares/agent.py.
 // The full-source sweep it ran is a starter prompt below.
+//
+// The wire itself (fetch, SSE parse, Stop) lives in useAgentStream, shared with the AI-guided
+// project builder; this component owns the transcript and how it renders.
 
-type ToolPart = {
+export type ToolPart = {
   type: "tool"; id: string; name: string; input: unknown;
   // filled in by the matching `tool_done` event
   ms?: number; ok?: boolean; preview?: string;
@@ -60,7 +65,7 @@ const textOf = (m: Msg, decisions?: DecisionMap) =>
       const st = decisions?.[p.proposal.id]?.status ?? "pending";
       const what = p.proposal.kind === "labels"
         ? `labels for source ${p.proposal.source}`
-        : p.proposal.kind === "view" ? `view ${p.proposal.name}` : `trigger ${p.proposal.name}`;
+        : `${p.proposal.kind} ${p.proposal.name}`;
       return `\n[proposal: ${what}; ${st}]\n`;
     }
     return "";
@@ -95,7 +100,7 @@ export default function AskChat({ history = false }: { history?: boolean }) {
   const [ready, setReady] = useState<boolean>();      // is a key configured on the server?
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
+  const { send: stream, stop, streaming: busy } = useAgentStream();
   const [decisions, setDecisions] = useState<DecisionMap>({});
   // Follow the tail only while the reader is at the tail. The old code called scrollTo() on every
   // streamed chunk unconditionally, so scrolling up to re-read something was undone by the next
@@ -106,7 +111,6 @@ export default function AskChat({ history = false }: { history?: boolean }) {
   // jump button needs to re-render, so only it gets state, and only when the value truly changes.
   const stick = useRef(true);
   const [showJump, setShowJump] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   const refreshKey = () => api.capabilities()
@@ -252,51 +256,14 @@ export default function AskChat({ history = false }: { history?: boolean }) {
     stick.current = true;
     const history: Msg[] = [...msgs, { role: "user", parts: [{ type: "text", text }] }];
     setMsgs([...history, { role: "assistant", parts: [] }]);
-    setBusy(true);
-    const ctl = new AbortController();
-    abortRef.current = ctl;
-    try {
-      const res = await fetch("/api/agent/chat", {
-        method: "POST",
-        signal: ctl.signal,
-        headers: { "content-type": "application/json", ...authHeader() },
-        body: JSON.stringify({ messages: history.map(wire) }),
-      });
-      if (!res.ok || !res.body) {
-        appendText(`⚠️ ${await res.text().catch(() => res.statusText)}`);
-        return;
-      }
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let idx;
-        while ((idx = buf.indexOf("\n\n")) >= 0) {
-          const chunk = buf.slice(0, idx); buf = buf.slice(idx + 2);
-          if (!chunk.startsWith("data: ")) continue;
-          const e = JSON.parse(chunk.slice(6));
-          if (e.type === "text") appendText(e.text);
-          else if (e.type === "tool") addTool(e.id, e.name, e.input);
-          else if (e.type === "tool_done") finishTool(e.id, { ms: e.ms, ok: e.ok, preview: e.preview });
-          else if (e.type === "proposal") {
-            const proposal = { id: e.id, kind: e.kind, ...e.payload } as Proposal;
-            mutLast((parts) => [...parts, { type: "proposal", proposal }]);
-          }
-          else if (e.type === "error") appendText(`\n\n⚠️ ${e.detail}`);
-        }
-      }
-    } catch (err) {
-      // An aborted run is the user pressing Stop, not a failure to report.
-      if ((err as Error).name !== "AbortError") {
-        appendText(`\n\n⚠️ ${String((err as Error).message ?? err)}`);
-      }
-    } finally {
-      abortRef.current = null;
-      setBusy(false);
-    }
+    const onEvent = (e: StreamEvent) => {
+      if (e.type === "text") appendText(e.text);
+      else if (e.type === "tool") addTool(e.id, e.name, e.input);
+      else if (e.type === "tool_done") finishTool(e.id, { ms: e.ms, ok: e.ok, preview: e.preview });
+      else if (e.type === "proposal") mutLast((parts) => [...parts, { type: "proposal", proposal: e.proposal }]);
+      else if (e.type === "error") appendText(`\n\n⚠️ ${e.detail}`);
+    };
+    await stream(history.map(wire), onEvent);
   }
 
   const decide = (id: string, status: "applied" | "skipped" | "error", detail?: string) => {
@@ -371,7 +338,7 @@ export default function AskChat({ history = false }: { history?: boolean }) {
         {/* One button, two jobs — the prototype's call, and right: Send and Stop are never both
             available, so two buttons is one more thing to read mid-answer. */}
         {busy
-          ? <button type="button" className="danger" onClick={() => abortRef.current?.abort()}>Stop</button>
+          ? <button type="button" className="danger" onClick={stop}>Stop</button>
           : <button className="primary" disabled={!input.trim()}>Send</button>}
         {!history && msgs.length > 0 && !busy && (
           <button type="button" className="dim" title="start a new conversation"
@@ -438,7 +405,7 @@ const Turn = memo(function Turn({ msg, decisions, apply, decide, thinking }: {
  *  took, and its input/output behind a click. Borrowed from the chat prototype, and worth it —
  *  a fold reading "2 steps" told you nothing while it was happening, so a read that takes four
  *  seconds looked exactly like a hung one. */
-function ToolRun({ tools }: { tools: ToolPart[] }) {
+export function ToolRun({ tools }: { tools: ToolPart[] }) {
   return (
     <div className="rail">
       {tools.map((t) => <ToolNode key={t.id} tool={t} />)}
@@ -477,7 +444,7 @@ const fmtMs = (ms: number) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)
 /** The key is stored on the SERVER, under Settings — the same one Slack and trigger-woken agents
  *  resolve. It used to live in this browser's localStorage and ride along as a header, so a key
  *  added here made Ask work while Slack still reported no key configured (NF-125). */
-function KeySetup({ onSaved }: { onSaved: () => void }) {
+export function KeySetup({ onSaved }: { onSaved: () => void }) {
   const [value, setValue] = useState("");
   const [err, setErr] = useState<string>();
   const [saving, setSaving] = useState(false);

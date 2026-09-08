@@ -256,7 +256,13 @@ class Engine:
         self._do_reload()
         return self.get(uid)
 
-    def delete(self, uid: str, purge_events: bool = False) -> dict:
+    def delete(self, uid: str, purge_events: bool = False,
+               delete_objects: list[tuple[str, str]] | None = None) -> dict:
+        """Remove the project. A template project takes its objects with it. A custom project
+        releases them, except the ones in `delete_objects` (kind, name), which go too: what the
+        builder assembled is the user's to delete from here, in one go. An object in the
+        selection whose dependents are not also selected is refused by name, so nothing is left
+        pointing at something that no longer exists."""
         inst = self._require(uid)
         objs = [PlannedObject(o["kind"], o["key"], {"name": o["name"]})
                 for o in self.store.list_project_objects(uid)]
@@ -268,21 +274,60 @@ class Engine:
             # purge only what is still this project's: a source deleted by hand and recreated
             # under another project keeps its events
             live = {(o["kind"], o["name"]) for o in self._live_objects(uid)}
+            chosen = {(k, n) for k, n in (delete_objects or [])}
+            mine = {(o.kind, o.name) for o in objs}
+            unknown = chosen - mine
+            if unknown:
+                raise ProjectError("not this project's objects: "
+                                   + ", ".join(f"{k}:{n}" for k, n in sorted(unknown)))
+            for k, n in sorted(chosen):
+                missing = [d for d in dependents(self.store, k, n)
+                           if (d["kind"], d["name"]) not in chosen]
+                if missing:
+                    raise ProjectError(f"{k} {n!r} is still used by "
+                                       + ", ".join(f"{d['kind']} {d['name']}" for d in missing)
+                                       + "; delete those too or keep it")
+            going = [o for o in objs if (o.kind, o.name) in chosen and (o.kind, o.name) in live]
             self._release(uid, objs)
-            purged = sum(self.store.purge_events(o.name) for o in objs
-                         if o.kind == "source" and ("source", o.name) in live) \
-                if purge_events else 0
+            purged = self._delete_objects(going, purge_events=purge_events)
+            purged += sum(self.store.purge_events(o.name) for o in objs
+                          if o.kind == "source" and ("source", o.name) in live
+                          and (o.kind, o.name) not in chosen) if purge_events else 0
             self.store.delete_project(uid)
             self._do_reload()
-            return {"ok": True, "deleted": [], "released": [f"{o.kind}:{o.name}" for o in objs],
+            return {"ok": True, "deleted": [f"{o.kind}:{o.name}" for o in going],
+                    "released": [f"{o.kind}:{o.name}" for o in objs if o not in going],
                     "purged_events": purged}
-        purged = self._delete_objects(objs, purge_events=purge_events)
+        # a template project takes everything it created unless the user unpicked some of it:
+        # those are released and stay behind, unowned (no repair for them any more)
+        if delete_objects is None:
+            going, kept = objs, []
+        else:
+            chosen = {(k, n) for k, n in delete_objects}
+            unknown = chosen - {(o.kind, o.name) for o in objs}
+            if unknown:
+                raise ProjectError("not this project's objects: "
+                                   + ", ".join(f"{k}:{n}" for k, n in sorted(unknown)))
+            for k, n in sorted(chosen):
+                missing = [d for d in dependents(self.store, k, n)
+                           if (d["kind"], d["name"]) not in chosen]
+                if missing:
+                    raise ProjectError(f"{k} {n!r} is still used by "
+                                       + ", ".join(f"{d['kind']} {d['name']}" for d in missing)
+                                       + "; delete those too or keep it")
+            going = [o for o in objs if (o.kind, o.name) in chosen]
+            kept = [o for o in objs if (o.kind, o.name) not in chosen]
+        if inst["status"] == "paused" and kept:
+            self.resume(uid)
+        self._release(uid, kept)
+        purged = self._delete_objects(going, purge_events=purge_events)
         # firings go with the events: a purged project leaves no history behind its triggers
         purged_firings = sum(self.store.purge_dispatches(o.name)
-                             for o in objs if o.kind == "trigger") if purge_events else 0
+                             for o in going if o.kind == "trigger") if purge_events else 0
         self.store.delete_project(uid)
         self._do_reload()
-        return {"ok": True, "deleted": [f"{o.kind}:{o.name}" for o in objs],
+        return {"ok": True, "deleted": [f"{o.kind}:{o.name}" for o in going],
+                "released": [f"{o.kind}:{o.name}" for o in kept],
                 "purged_events": purged, "purged_firings": purged_firings}
 
     async def detect(self, template_key: str) -> dict:
@@ -471,6 +516,40 @@ class Engine:
     def _do_reload(self) -> None:
         if self._reload is not None:
             self._reload()
+
+
+def dependents(store, kind: str, name: str) -> list[dict]:
+    """Everything that stops working if this object goes, in delete order: a source's views, those
+    views' triggers, those triggers' agents; a view's triggers and their agents; a trigger's
+    agents. Each entry is {kind, name}. Used by the delete dialogs to say what else goes, and by
+    the cascade deletes to take it along."""
+    views = store.list_catalog_views()
+    triggers = store.list_catalog_triggers()
+    agents = store.list_catalog_agents()
+    out: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(k, n):
+        if (k, n) not in seen:
+            seen.add((k, n))
+            out.append({"kind": k, "name": n})
+
+    view_names = [name] if kind == "view" else []
+    if kind == "source":
+        view_names = [v["name"] for v in views if name in (v.get("sources") or [])]
+    trigger_names = [name] if kind == "trigger" else []
+    if view_names:
+        trigger_names += [t["name"] for t in triggers if t.get("view") in view_names]
+    agent_names = [a["name"] for a in agents if a.get("trigger") in trigger_names]
+    for n in agent_names:
+        add("agent", n)
+    for n in trigger_names:
+        if kind != "trigger" or n != name:
+            add("trigger", n)
+    for n in view_names:
+        if kind != "view" or n != name:
+            add("view", n)
+    return out
 
 
 def _is_custom(template_key: str) -> bool:

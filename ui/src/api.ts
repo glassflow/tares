@@ -115,8 +115,13 @@ export const api = {
       "/api/sources", { method: "POST", body: JSON.stringify(body) }),
   updateSource: (name: string, body: object) =>
     request(`/api/sources/${name}`, { method: "PUT", body: JSON.stringify(body) }),
-  deleteSource: (name: string, purge: boolean) =>
-    request(`/api/sources/${name}?purge_events=${purge}`, { method: "DELETE" }),
+  deleteSource: (name: string, purge: boolean, cascade = false) =>
+    request<{ ok: boolean; purged_events: number; deleted: string[] }>(
+      `/api/sources/${encodeURIComponent(name)}?purge_events=${purge}&cascade=${cascade}`, { method: "DELETE" }),
+  // what else goes if an object is deleted, in delete order
+  dependents: (kind: "source" | "view" | "trigger", name: string) =>
+    request<{ dependents: { kind: ProjectObjectKind; name: string }[] }>(
+      `/api/catalog/dependents?kind=${kind}&name=${encodeURIComponent(name)}`),
   pauseSource: (name: string) => request(`/api/sources/${name}/pause`, { method: "POST" }),
   resumeSource: (name: string) => request(`/api/sources/${name}/resume`, { method: "POST" }),
   testSource: (body: object) =>
@@ -140,7 +145,8 @@ export const api = {
     request("/api/views", { method: "POST", body: JSON.stringify(body) }),
   updateView: (name: string, body: View) =>
     request(`/api/views/${name}`, { method: "PUT", body: JSON.stringify(body) }),
-  deleteView: (name: string) => request(`/api/views/${name}`, { method: "DELETE" }),
+  deleteView: (name: string, cascade = false) =>
+    request<{ ok: boolean; deleted: string[] }>(`/api/views/${encodeURIComponent(name)}?cascade=${cascade}`, { method: "DELETE" }),
 
   triggers: () => request<Trigger[]>("/api/triggers"),
   createTrigger: (body: Trigger) =>
@@ -285,9 +291,12 @@ export const api = {
                                       objects?: { kind: ProjectObjectKind; name: string }[] }) =>
     request<Project & { report?: ProjectUpdateReport }>(`/api/projects/${encodeURIComponent(id)}`,
       { method: "PUT", body: JSON.stringify(body) }),
-  deleteProject: (id: string, purgeEvents = false) =>
+  // `deleteObjects`: the project's objects to delete along with it; the rest are released and
+  // stay. Omit for the default (a template project takes everything, a custom one keeps everything).
+  deleteProject: (id: string, purgeEvents = false, deleteObjects?: { kind: ProjectObjectKind; name: string }[]) =>
     request<{ ok: boolean; deleted?: string[]; released?: string[]; purged_events?: number }>(
-      `/api/projects/${encodeURIComponent(id)}${purgeEvents ? "?purge_events=true" : ""}`,
+      `/api/projects/${encodeURIComponent(id)}?purge_events=${purgeEvents}`
+      + (deleteObjects === undefined ? "" : `&delete=${encodeURIComponent(deleteObjects.length ? deleteObjects.map((o) => `${o.kind}:${o.name}`).join(",") : "none")}`),
       { method: "DELETE" }),
   pauseProject: (id: string, sources = false) =>
     request<Project>(`/api/projects/${encodeURIComponent(id)}/pause`, { method: "POST", body: JSON.stringify({ sources }) }),
