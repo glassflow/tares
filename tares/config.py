@@ -5,6 +5,9 @@ Declares the sources (what to ingest and how), the views (named query shapes), a
 """
 from __future__ import annotations
 
+import os
+
+
 def reject_legacy_db(db_path: str) -> None:
     """Refuse to start if the database we are about to create sits next to a pre-1.0 one.
 
@@ -746,6 +749,11 @@ def validate_trigger_dict(t: dict, view_names: set) -> None:
 # The built-in source findings are written to. Named here (not in builtin_agents.py) because the
 # loop guard below is a catalog-validation concern and config must not import the runtime.
 FINDINGS_SOURCE = "findings"
+# Overridable so the end-to-end test can point at a stub instead of the real API.
+API_BASE = os.getenv(
+    "ANTHROPIC_BASE_URL",
+    os.getenv("TARES_ANTHROPIC_BASE", "https://api.anthropic.com"),
+).rstrip("/")
 
 _AGENT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 MAX_PROMPT_CHARS = 8000

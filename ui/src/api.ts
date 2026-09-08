@@ -100,7 +100,7 @@ export const api = {
   connectors: () => request<Record<string, ConnectorSpec>>("/api/connectors"),
   capabilities: () =>
     request<{ version?: string | null; discover_docker: boolean; agent_key_configured?: boolean;
-              slack_configured?: boolean }>("/api/capabilities"),
+              url_configured: boolean; slack_configured?: boolean }>("/api/capabilities"),
   keys: () => request<{ keys: ApiKey[]; enforced: boolean; scopes: string[] }>("/api/keys"),
   createKey: (name: string, scopes: string[]) =>
     request<{ id: string; name: string; scopes: string[]; secret: string }>(

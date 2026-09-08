@@ -27,7 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, model_validator
 
-from .config import (SLACK_URL_PREFIX, CatalogError, agent_url, export_db_to_yaml,
+from .config import (SLACK_URL_PREFIX, API_BASE, CatalogError, agent_url, export_db_to_yaml,
                      validate_mcp_server_dict,
                      import_yaml_to_db, slack_channel_from_url, slack_url,
                      validate_agent_dict, validate_slack_channel, validate_source_dict,
@@ -41,7 +41,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL,
                              MAX_ROUNDS_LIMIT as AGENT_MAX_ROUNDS_LIMIT,
                              MAX_ROUNDS_WITH_MCP as AGENT_MAX_ROUNDS_WITH_MCP,
                              PRESETS as AGENT_PRESETS, AgentRunner, effective_max_rounds,
-                             resolve_key as resolve_anthropic_key)
+                             resolve_anthropic_headers)
 from .runtime import Runtime
 from . import slack as slack_mod
 from . import slack_verify
@@ -75,7 +75,8 @@ LOGIN_URL = os.getenv("TARES_LOGIN_URL", "").strip()
 # self-host: no link. Public, non-secret, surfaced on /health next to login_url.
 WORKSPACE_URL = os.getenv("TARES_WORKSPACE_URL", "").strip()
 # The Anthropic key for the in-app Ask agent (and Tares agents) is resolved at request time via
-# resolve_anthropic_key(store): the console-stored key, else env ANTHROPIC_API_KEY.
+# resolve_anthropic_headers(store): Resolve headers from the console-stored key,
+# then ANTHROPIC_AUTH_TOKEN, then ANTHROPIC_API_KEY.
 # Never returned by any API — capabilities exposes only a boolean.
 # The Slack bot token behind the slack:// dispatch sink keeps the OPPOSITE order via
 # resolve_slack_token(store): env TARES_SLACK_BOT_TOKEN wins over the console-stored value
@@ -976,13 +977,15 @@ def make_app() -> FastAPI:
             ver = _pkg_version("tares")   # the installed release (release.sh bumps pyproject.toml)
         except Exception:
             ver = None
+        url_configured = API_BASE != "https://api.anthropic.com"
         return {
             "version": ver,
             "discover_docker": shutil.which("docker") is not None or os.path.exists("/var/run/docker.sock"),
             # the Ask assistant runs on the same resolved key as Tares agents (env ANTHROPIC_API_KEY
             # or the console-stored key) — so once a key is set anywhere, the Ask chat stops
             # prompting for a browser-pasted one.
-            "agent_key_configured": bool(resolve_anthropic_key(store)[0]),
+            "agent_key_configured": bool(resolve_anthropic_headers(store)[0]),
+            "url_configured": url_configured,
             # gates the "subscribe a Slack channel" affordance on a trigger — offering it with no
             # bot token configured only leads to a 400.
             "slack_configured": bool(resolve_slack_token(store)[0]),
@@ -1312,8 +1315,8 @@ def make_app() -> FastAPI:
         # `X-Anthropic-Key` header override, which the console filled from localStorage — so a key
         # added on the Ask page made Ask work while Slack and trigger-woken agents still reported
         # none configured, having no browser to read it from (NF-125).
-        key, key_origin = resolve_anthropic_key(store)
-        if not key:
+        headers, key_origin = resolve_anthropic_headers(store)
+        if not headers:
             _err(ValueError("add your Anthropic API key to use the assistant"), 400)
         body = await request.json()
         # the daemon's own token, so the agent's tool self-calls clear the auth middleware
@@ -1325,7 +1328,7 @@ def make_app() -> FastAPI:
         if mode == "build" and step not in BUILD_STEPS:
             _err(ValueError(f"build step must be one of {', '.join(BUILD_STEPS)}"), 400)
         return StreamingResponse(
-            run_agent(key, body.get("messages") or [],
+            run_agent(headers, body.get("messages") or [],
                       model=body.get("model"), self_headers=self_headers,
                       on_usage=lambda m, u: _record_ask_usage(m, u, key_source=key_origin),
                       tracer=tracing.tracer_for("ask"), mode=mode, step=step),
@@ -1700,7 +1703,7 @@ def make_app() -> FastAPI:
         """Tares agent definitions plus the state the UI needs to explain why one isn't running:
         no key configured is the common case on a fresh install and looks identical to "disabled"
         without this."""
-        key, origin = resolve_anthropic_key(store)
+        headers, origin = resolve_anthropic_headers(store)
         stats = store.agent_stats()
         zero = {"runs": 0, "ok": 0, "finished": 0, "avg_duration_ms": None,
                 "cost_usd": None, "input_tokens": 0, "output_tokens": 0, "uncosted_runs": 0}
@@ -1721,7 +1724,7 @@ def make_app() -> FastAPI:
                          "enabled": _agent_enabled(a["name"]), "updated_at": a.get("updated_at"),
                          "owned_by": a.get("owned_by"), "customized": bool(a.get("customized")),
                          "last_run": runs[0] if runs else None})
-        return {"agents": rows, "key_configured": bool(key), "key_source": origin,
+        return {"agents": rows, "key_configured": bool(headers), "key_source": origin,
                 "models": AGENT_MODELS, "default_model": AGENT_DEFAULT_MODEL,
                 "default_max_rounds": AGENT_MAX_ROUNDS,
                 "default_max_rounds_with_mcp": AGENT_MAX_ROUNDS_WITH_MCP,
@@ -1789,8 +1792,8 @@ def make_app() -> FastAPI:
         agent = store.get_catalog_agent(name)
         if agent is None:
             _err(KeyError(f"unknown agent {name!r}"), 404)
-        key, _ = resolve_anthropic_key(store)
-        if not key:
+        headers, _ = resolve_anthropic_headers(store)
+        if not headers:
             _err(ValueError("no Anthropic key configured; set ANTHROPIC_API_KEY or add one "
                             "under Settings before enabling an agent"))
         # enable = subscribe to the trigger (the same wiring an external agent has). Idempotent.
@@ -1849,8 +1852,8 @@ def make_app() -> FastAPI:
         """Never returns the key — only whether one is resolvable and where it came from. A key
         saved here takes over from the deployment's env key; `env_overrides` is kept for API
         compatibility and can now only be true when no key is stored."""
-        key, origin = resolve_anthropic_key(store)
-        return {"configured": bool(key), "source": origin,
+        headers, origin = resolve_anthropic_headers(store)
+        return {"configured": bool(headers), "source": origin,
                 "stored": bool(store.get_setting("anthropic_key")),
                 "env_overrides": origin.startswith("env:")}
 
@@ -1860,7 +1863,7 @@ def make_app() -> FastAPI:
         if not key:
             _err(ValueError("key is required (use DELETE to remove the stored key)"))
         store.set_setting("anthropic_key", key)
-        _, origin = resolve_anthropic_key(store)
+        _, origin = resolve_anthropic_headers(store)
         return {"ok": True, "source": origin}
 
     @app.delete("/api/settings/anthropic-key")
@@ -1868,7 +1871,7 @@ def make_app() -> FastAPI:
         """Removing the stored key falls back to the deployment's env key when one exists — on a
         hosted trial cell that is the trial key, until its operator removes it too."""
         store.set_setting("anthropic_key", None)
-        key, origin = resolve_anthropic_key(store)
+        key, origin = resolve_anthropic_headers(store)
         return {"ok": True, "configured": bool(key), "source": origin}
 
     # ── agent tracing: where runs are exported, and whether ──────────────────
@@ -2017,11 +2020,11 @@ def make_app() -> FastAPI:
         from .agent import run_agent
         text, error = "", None
         try:
-            key, key_origin = resolve_anthropic_key(store)
+            headers, key_origin = resolve_anthropic_headers(store)
             self_headers = {"Authorization": f"Bearer {AUTH_TOKEN}"} if AUTH_TOKEN else {}
             async def _run():
                 nonlocal text, error
-                async for chunk in run_agent(key, [{"role": "user", "content": question}],
+                async for chunk in run_agent(headers, [{"role": "user", "content": question}],
                                              self_headers=self_headers,
                                              on_usage=lambda m, u: _record_ask_usage(
                                                  m, u, key_source=key_origin),
@@ -2096,7 +2099,7 @@ def make_app() -> FastAPI:
             return slack_mod.build_error(
                 ":warning: that request carried no response_url; Tares has nowhere to reply",
                 thread_ts)
-        if not resolve_anthropic_key(store)[0]:
+        if not resolve_anthropic_headers(store)[0]:
             return slack_mod.build_error(
                 ":warning: no Anthropic API key is configured on this Tares instance; set "
                 "`ANTHROPIC_API_KEY` or add one under Settings in the console", thread_ts)

@@ -97,7 +97,8 @@ const scrollToEnd = () => {
 };
 
 export default function AskChat({ history = false }: { history?: boolean }) {
-  const [ready, setReady] = useState<boolean>();      // is a key configured on the server?
+  const [ready, setKeyReady] = useState<boolean>();      // is a key configured on the server?
+  const [urlReady, setUrlReady] = useState<boolean>();      // is an url configured on the server?
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const { send: stream, stop, streaming: busy } = useAgentStream();
@@ -114,7 +115,15 @@ export default function AskChat({ history = false }: { history?: boolean }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   const refreshKey = () => api.capabilities()
-    .then((c) => setReady(!!c.agent_key_configured)).catch(() => setReady(false));
+  .then((c) => {
+    setKeyReady(!!c.agent_key_configured);
+    setUrlReady(c.url_configured);
+  })
+  .catch(() => {
+    setKeyReady(false);
+    setUrlReady(false);
+  });
+
   useEffect(() => { refreshKey(); }, []);
 
   // ── server-side chat history ──────────────────────────────────────────────
@@ -225,7 +234,7 @@ export default function AskChat({ history = false }: { history?: boolean }) {
   }, [msgs]);
 
   if (ready === undefined) return <div className="dim">loading…</div>;
-  if (!ready) return <KeySetup onSaved={refreshKey} />;
+  if (!ready) return <KeySetup onSaved={refreshKey} urlConfigured={urlReady} />;
 
   const mutLast = (fn: (parts: Part[]) => Part[]) =>
     setMsgs((cur) => cur.map((m, i) => (i === cur.length - 1 ? { ...m, parts: fn(m.parts) } : m)));
@@ -444,7 +453,7 @@ const fmtMs = (ms: number) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)
 /** The key is stored on the SERVER, under Settings — the same one Slack and trigger-woken agents
  *  resolve. It used to live in this browser's localStorage and ride along as a header, so a key
  *  added here made Ask work while Slack still reported no key configured (NF-125). */
-export function KeySetup({ onSaved }: { onSaved: () => void }) {
+export function KeySetup({ onSaved, urlConfigured }: { onSaved: () => void, urlConfigured?: boolean | undefined }) {
   const [value, setValue] = useState("");
   const [err, setErr] = useState<string>();
   const [saving, setSaving] = useState(false);
@@ -458,13 +467,14 @@ export function KeySetup({ onSaved }: { onSaved: () => void }) {
 
   return (
     <div className="panel" style={{ maxWidth: 560 }}>
-      <h2 style={{ marginTop: 0 }}>Add your Anthropic API key</h2>
+      <h2 style={{ marginTop: 0 }}>Configure model access</h2>
       <p className="help" style={{ whiteSpace: "normal" }}>
         The assistant runs on your Tares daemon using this key. It is stored on this instance and
         used by everything that reasons over your data: this assistant, Tares agents woken by
         triggers, and <span className="mono">/tares ask</span> in Slack. You can change or remove it
-        later under <strong>Settings</strong>. Get one at{" "}
-        <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">console.anthropic.com</a>.
+        later under <strong>Settings</strong>. {!urlConfigured && (<>Get one at{" "}
+        <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">console.anthropic.com
+        </a>.</>)}
       </p>
       {err && <div className="alert error">{err}</div>}
       <form onSubmit={(e) => { e.preventDefault(); if (value.trim()) save(); }}>

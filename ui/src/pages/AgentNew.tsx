@@ -43,7 +43,7 @@ export default function AgentNew() {
       {err && <div className="alert error">{err}</div>}
       {!keyOk && (
         <div className="alert">
-          No Anthropic key configured; you can create the agent now, but it won't run until a key
+          Model access is not configured; you can create the agent now, but it won't run until a key
           is set under <Link to="/settings">Settings</Link>. It also starts disabled.
         </div>
       )}

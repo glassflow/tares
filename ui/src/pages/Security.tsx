@@ -311,12 +311,12 @@ function AnthropicKeyPanel() {
 
   return (
     <div className="panel">
-      <h2 style={{ marginTop: 0 }}>Anthropic key</h2>
+      <h2 style={{ marginTop: 0 }}>Model access</h2>
       <p className="help" style={{ marginTop: 0 }}>
         What <strong>Tares agents</strong> run on; their first look at an entity when a trigger
-        fires. Store one here (it takes precedence), or set <code>ANTHROPIC_API_KEY</code> in the
-        daemon's environment. It is never returned by the API and never included in a catalog
-        export.
+        fires. Store one here (it takes precedence),
+        or set <code>ANTHROPIC_API_KEY</code> or <code>ANTHROPIC_AUTH_TOKEN</code> in the daemon's environment.
+        It is never returned by the API and never included in a catalog export.
       </p>
 
       {err && <div className="alert error">{err}</div>}

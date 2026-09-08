@@ -14,6 +14,8 @@ import httpx
 
 from . import tracing as _tracing
 
+from .config import API_BASE
+
 DEFAULT_MODEL = os.getenv("TARES_AGENT_MODEL", "claude-sonnet-4-6")
 _SELF = f"http://127.0.0.1:{os.getenv('TARES_PORT', '8787')}"
 MAX_ROUNDS = 10
@@ -472,7 +474,7 @@ def _sse(obj: dict) -> str:
     return f"data: {json.dumps(obj)}\n\n"
 
 
-async def run_agent(api_key: str, messages: list,
+async def run_agent(anthropic_headers: dict, messages: list,
                     model: str | None = None, self_headers: dict | None = None,
                     on_usage=None, tracer=None, mode: str = "ask", step: str | None = None):
     """Async generator of SSE lines: the agent loop, streaming assistant text and tool activity.
@@ -488,12 +490,12 @@ async def run_agent(api_key: str, messages: list,
     proposal cards the turn may emit."""
     with _tracing.run_span(tracer, "ask", kind="CHAIN") as obs:
         obs.set_attribute("tares.instance", _tracing.instance_name())
-        async for line in _run_agent(api_key, messages, model, self_headers, on_usage, tracer,
+        async for line in _run_agent(anthropic_headers, messages, model, self_headers, on_usage, tracer,
                                      obs, mode, step):
             yield line
 
 
-async def _run_agent(api_key: str, messages: list, model, self_headers, on_usage, tracer,
+async def _run_agent(anthropic_headers: dict, messages: list, model, self_headers, on_usage, tracer,
                      obs: _tracing.Observation, mode: str = "ask", step: str | None = None):
     try:
         import anthropic
@@ -502,7 +504,7 @@ async def _run_agent(api_key: str, messages: list, model, self_headers, on_usage
                                                "(pip install tares[agent])"})
         return
 
-    client = anthropic.AsyncAnthropic(api_key=api_key)
+    client = anthropic.AsyncAnthropic(base_url=API_BASE, default_headers=anthropic_headers)
     convo = list(messages)
     last = convo[-1] if convo else None
     obs.set_input(last.get("content") if isinstance(last, dict) else last)
