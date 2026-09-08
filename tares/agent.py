@@ -14,7 +14,6 @@ import httpx
 
 from . import tracing as _tracing
 
-from .config import API_BASE
 
 DEFAULT_MODEL = os.getenv("TARES_AGENT_MODEL", "claude-sonnet-4-6")
 _SELF = f"http://127.0.0.1:{os.getenv('TARES_PORT', '8787')}"
@@ -476,7 +475,8 @@ def _sse(obj: dict) -> str:
 
 async def run_agent(anthropic_headers: dict, messages: list,
                     model: str | None = None, self_headers: dict | None = None,
-                    on_usage=None, tracer=None, mode: str = "ask", step: str | None = None):
+                    on_usage=None, tracer=None, mode: str = "ask", step: str | None = None,
+                    base_url: str | None = None):
     """Async generator of SSE lines: the agent loop, streaming assistant text and tool activity.
 
     `on_usage(model, usage_dict)` is called once per turn (after the loop, including on an error
@@ -487,16 +487,18 @@ async def run_agent(anthropic_headers: dict, messages: list,
     one tool span per tool call. None means no tracing.
 
     `mode` is "ask" or "build"; `step` names the build step (see BUILD_STEPS) and picks which
-    proposal cards the turn may emit."""
+    proposal cards the turn may emit. `base_url` is where the model calls go (a gateway, or
+    Anthropic when None); the caller resolves it per request, like the credential."""
     with _tracing.run_span(tracer, "ask", kind="CHAIN") as obs:
         obs.set_attribute("tares.instance", _tracing.instance_name())
         async for line in _run_agent(anthropic_headers, messages, model, self_headers, on_usage, tracer,
-                                     obs, mode, step):
+                                     obs, mode, step, base_url):
             yield line
 
 
 async def _run_agent(anthropic_headers: dict, messages: list, model, self_headers, on_usage, tracer,
-                     obs: _tracing.Observation, mode: str = "ask", step: str | None = None):
+                     obs: _tracing.Observation, mode: str = "ask", step: str | None = None,
+                     base_url: str | None = None):
     try:
         import anthropic
     except ImportError:
@@ -504,7 +506,8 @@ async def _run_agent(anthropic_headers: dict, messages: list, model, self_header
                                                "(pip install tares[agent])"})
         return
 
-    client = anthropic.AsyncAnthropic(base_url=API_BASE, default_headers=anthropic_headers)
+    client = anthropic.AsyncAnthropic(base_url=base_url or "https://api.anthropic.com",
+                                      default_headers=anthropic_headers)
     convo = list(messages)
     last = convo[-1] if convo else None
     obs.set_input(last.get("content") if isinstance(last, dict) else last)

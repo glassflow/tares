@@ -17,6 +17,7 @@ import secrets
 import shutil
 import traceback
 import uuid
+from urllib.parse import urlsplit
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -27,7 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, model_validator
 
-from .config import (SLACK_URL_PREFIX, API_BASE, CatalogError, agent_url, export_db_to_yaml,
+from .config import (SLACK_URL_PREFIX, CatalogError, agent_url, export_db_to_yaml,
                      validate_mcp_server_dict,
                      import_yaml_to_db, slack_channel_from_url, slack_url,
                      validate_agent_dict, validate_slack_channel, validate_source_dict,
@@ -41,7 +42,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL,
                              MAX_ROUNDS_LIMIT as AGENT_MAX_ROUNDS_LIMIT,
                              MAX_ROUNDS_WITH_MCP as AGENT_MAX_ROUNDS_WITH_MCP,
                              PRESETS as AGENT_PRESETS, AgentRunner, effective_max_rounds,
-                             resolve_anthropic_headers)
+                             resolve_anthropic_headers, resolve_api_base, DEFAULT_API_BASE)
 from .runtime import Runtime
 from . import slack as slack_mod
 from . import slack_verify
@@ -369,6 +370,11 @@ class TracingIn(BaseModel):
 
 class AnthropicKeyIn(BaseModel):
     key: str    # blank-to-keep is not offered here: the only edits are "set a new one" or DELETE
+
+
+class GatewayIn(BaseModel):
+    url: str
+    token: str = ""    # blank keeps the stored token; the URL alone can change
 
 
 class SlackTokenIn(BaseModel):
@@ -977,7 +983,7 @@ def make_app() -> FastAPI:
             ver = _pkg_version("tares")   # the installed release (release.sh bumps pyproject.toml)
         except Exception:
             ver = None
-        url_configured = API_BASE != "https://api.anthropic.com"
+        url_configured = resolve_api_base(store)[1] != ""
         return {
             "version": ver,
             "discover_docker": shutil.which("docker") is not None or os.path.exists("/var/run/docker.sock"),
@@ -1331,7 +1337,8 @@ def make_app() -> FastAPI:
             run_agent(headers, body.get("messages") or [],
                       model=body.get("model"), self_headers=self_headers,
                       on_usage=lambda m, u: _record_ask_usage(m, u, key_source=key_origin),
-                      tracer=tracing.tracer_for("ask"), mode=mode, step=step),
+                      tracer=tracing.tracer_for("ask"), mode=mode, step=step,
+                      base_url=resolve_api_base(store)[0]),
             media_type="text/event-stream")
 
     # ── MCP connections — external tool servers a Tares agent can opt into ─────
@@ -1874,6 +1881,40 @@ def make_app() -> FastAPI:
         key, origin = resolve_anthropic_headers(store)
         return {"ok": True, "configured": bool(key), "source": origin}
 
+    # ── model access through a gateway (TR-281): stored on the cell like the key ──────────
+    # Where model calls go, and the credential for it. Saved here they win over the environment,
+    # so a cloud customer with a mandated proxy configures it on their own cell and the platform
+    # key stops being used, the same as when they store their own key. The token is write-only.
+    def _gateway_status() -> dict:
+        url, origin = resolve_api_base(store)
+        return {"configured": origin != "", "url": url if origin else "", "source": origin,
+                "stored": bool(store.get_setting("gateway_url")),
+                "token_stored": bool(store.get_setting("gateway_token")),
+                "default_url": DEFAULT_API_BASE}
+
+    @app.get("/api/settings/gateway")
+    async def get_gateway():
+        return _gateway_status()
+
+    @app.put("/api/settings/gateway")
+    async def set_gateway(body: GatewayIn):
+        url = body.url.strip().rstrip("/")
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            _err(ValueError("gateway url must be an http(s) URL with a host, e.g. "
+                            "https://llm-gateway.internal"))
+        store.set_setting("gateway_url", url)
+        if body.token.strip():
+            store.set_setting("gateway_token", body.token.strip())
+        return {"ok": True, **_gateway_status()}
+
+    @app.delete("/api/settings/gateway")
+    async def clear_gateway():
+        """Back to the environment's gateway if the deployment set one, else Anthropic."""
+        store.set_setting("gateway_url", None)
+        store.set_setting("gateway_token", None)
+        return {"ok": True, **_gateway_status()}
+
     # ── agent tracing: where runs are exported, and whether ──────────────────
     # A console-stored value wins over the environment, like the Anthropic key. Secrets (the
     # key, the headers) are write-only: the API says whether one resolves and where from.
@@ -2026,6 +2067,7 @@ def make_app() -> FastAPI:
                 nonlocal text, error
                 async for chunk in run_agent(headers, [{"role": "user", "content": question}],
                                              self_headers=self_headers,
+                                             base_url=resolve_api_base(store)[0],
                                              on_usage=lambda m, u: _record_ask_usage(
                                                  m, u, key_source=key_origin),
                                              tracer=tracing.tracer_for("ask")):

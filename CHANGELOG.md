@@ -3,6 +3,19 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.28.0] - 2026-09-08
+
+### Added
+- Model access through an LLM gateway. Tares agents and Ask can talk to any server that speaks
+  the Anthropic Messages format (LiteLLM, Portkey, a proxy in front of Bedrock or Vertex).
+  From the environment with `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, the names Claude
+  Code uses, with `TARES_ANTHROPIC_BASE` still read as the old name; or from Settings, Model
+  access, stored on the instance and winning over the environment, so a cloud customer with a
+  mandated proxy configures it on their own cell. The gateway token is sent as a bearer header
+  and never returned; a stored key is sent as the Anthropic key header. The Settings tab is now
+  called Model access and leads with where model calls go. Thanks to KurochkaR for the
+  environment half.
+
 ## [1.27.0] - 2026-09-08
 
 ### Added

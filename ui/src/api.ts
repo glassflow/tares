@@ -182,6 +182,16 @@ export const api = {
   modelUsage: (days = 30) => request<ModelUsage>(`/api/usage/model?days=${days}`),
 
   // The Anthropic key Tares agents run on. Never returned — only whether one resolves and where.
+  gatewayStatus: () =>
+    request<{ configured: boolean; url: string; source: string; stored: boolean; token_stored: boolean;
+              default_url: string }>("/api/settings/gateway"),
+  setGateway: (url: string, token: string) =>
+    request<{ ok: boolean; configured: boolean; url: string; source: string; stored: boolean;
+              token_stored: boolean }>("/api/settings/gateway",
+      { method: "PUT", body: JSON.stringify({ url, token }) }),
+  clearGateway: () =>
+    request<{ ok: boolean; configured: boolean; source: string }>("/api/settings/gateway",
+      { method: "DELETE" }),
   anthropicKeyStatus: () =>
     request<{ configured: boolean; source: string; stored: boolean; env_overrides: boolean }>(
       "/api/settings/anthropic-key"),
