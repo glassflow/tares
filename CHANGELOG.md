@@ -3,6 +3,27 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.29.0] - 2026-09-08
+
+### Added
+- Storage is measured against the volume the database sits on when no `TARES_MAX_DB_SIZE` is
+  set, so a grown volume shows on the next mount with nothing to refresh; `/api/usage` says
+  which (`max_bytes_source`). At 95% of the limit (`TARES_INGEST_PAUSE_PCT`) ingest is refused
+  with 507 and poll connectors wait, with the reason on the source's health, `/health` and the
+  Overview, instead of the database filling its disk and dying. Reads, agents and the console
+  keep working; ingest resumes on its own once there is room.
+- A run records whether its finding reached the write-back webhook: delivered, an HTTP status,
+  or failed with the last error after the retries. The agent page shows it beside the run.
+- Agents can report a label's value as the write-back's `key` (`webhook_key_label`, "report as
+  key" on the form) instead of the entity, for a system that files reports by its own id.
+- Project page: the Firings tab filters by outcome, trigger and entity.
+
+### Changed
+- The `rius_rca` template keys by service: `service` is the primary label, `delivery_id` and
+  the new `rule` are labels, the trigger cools down for 5 minutes per service, and the callback
+  reports the delivery id as `key` through `webhook_key_label`.
+- Project page: an agent's configuration is one folded row, so its runs are in view.
+
 ## [1.28.0] - 2026-09-08
 
 ### Added
