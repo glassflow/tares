@@ -1,5 +1,6 @@
-"""Threat-intel connector - incremental poll against a local feed file, cursor behavior, and
-end-to-end ingestion through the daemon (same shape as tests/test_vercel.py, tests/test_postgres.py).
+"""Threat-intel connector: incremental poll against a local feed file, the fixed-size bookmark
+cursor, the hash fallback for feeds with no first_seen, and end-to-end ingestion through the
+daemon (same shape as tests/test_vercel.py, tests/test_postgres.py).
 """
 import asyncio
 import json
@@ -14,7 +15,7 @@ for _p in (os.environ["TARES_DB"], os.environ["TARES_DB"] + ".wal"):
     if os.path.exists(_p):
         os.remove(_p)
 
-from tares.config import SourceCfg, _source_from_dict
+from tares.config import SourceCfg
 from tares.connectors import full_schema
 from tares.connectors.threat_intel import ThreatIntelConnector
 
@@ -30,6 +31,7 @@ class FakeStore:
     def set_cursor(self, n, v): self.cur[n] = v
 
 
+# "type" is the feed's own field name; the connector normalizes it to "indicator_type" by default.
 FEED = [
     {"indicator": "185.220.101.7", "type": "ip", "threat_type": "credential_stuffing_proxy",
      "confidence": 92, "source": "sample-feed", "first_seen": "2026-08-11"},
@@ -38,6 +40,7 @@ FEED = [
 ]
 
 LABELS = [{"name": "indicator", "field": "indicator", "primary": True},
+          {"name": "indicator_type", "field": "indicator_type"},
           {"name": "threat_type", "field": "threat_type"}]
 
 
@@ -60,24 +63,57 @@ async def test_poll_and_cursor():
     envs = await conn.poll()
     ck("first poll emits one envelope per indicator", len(envs) == 2, len(envs))
     ck("keyed by indicator (primary label)", envs[0].key_value == "185.220.101.7", envs[0].key_value)
+    ck("labels include indicator_type", envs[0].labels.get("indicator_type") == "ip", str(envs[0].labels))
     ck("labels include threat_type", envs[0].labels.get("threat_type") == "credential_stuffing_proxy",
        str(envs[0].labels))
-    ck("event_type is ip_reputation", envs[0].event_type == "ip_reputation", envs[0].event_type)
+    ck("event_type reflects indicator_type, not a constant", envs[0].event_type == "ip", envs[0].event_type)
     ck("payload keeps original entry losslessly", envs[0].payload == FEED[0], str(envs[0].payload))
     ck("text mentions confidence", "confidence 92" in envs[0].text, envs[0].text)
+
+    # cursor after the first poll is a small fixed-size bookmark, not a growing seen-set
+    cursor = json.loads(store.cur["ti"])
+    ck("cursor is timestamp-bookmark mode", cursor["mode"] == "timestamp", cursor)
+    ck("cursor tracks the newest first_seen only", cursor["max_first_seen"] == "2026-08-11", cursor)
+    ck("bookmark's tie-break set holds only entries at that timestamp, not the whole feed",
+       cursor["at_max"] == ["185.220.101.7"], cursor)
 
     # second poll, same feed: nothing new
     envs2 = await conn.poll()
     ck("second poll against unchanged feed emits nothing", envs2 == [], len(envs2))
 
-    # third poll: one new indicator appended
+    # third poll: one indicator newer than the current bookmark appended
     write_feed(feed_path, FEED + [
         {"indicator": "89.248.165.74", "type": "ip", "threat_type": "botnet_c2",
-         "confidence": 88, "source": "sample-feed", "first_seen": "2026-06-02"},
+         "confidence": 88, "source": "sample-feed", "first_seen": "2026-08-12"},
     ])
     envs3 = await conn.poll()
-    ck("third poll emits only the new indicator", len(envs3) == 1, len(envs3))
+    ck("third poll emits only the newly-arrived indicator", len(envs3) == 1, len(envs3))
     ck("new indicator is the one appended", envs3[0].key_value == "89.248.165.74", envs3[0].key_value)
+
+    cursor3 = json.loads(store.cur["ti"])
+    ck("bookmark advances to the new newest first_seen", cursor3["max_first_seen"] == "2026-08-12", cursor3)
+    ck("cursor size stays bounded (still one entry, not a growing history)",
+       len(cursor3["at_max"]) == 1, cursor3)
+
+
+async def test_hash_fallback_when_no_first_seen():
+    feed_path = os.path.join(TMP, "ioc_feed_no_ts.json")
+    items = [{"indicator": "9.9.9.9", "type": "ip", "threat_type": "known_scanner", "confidence": 40}]
+    write_feed(feed_path, items)
+    store = FakeStore()
+    conn = ThreatIntelConnector(cfg({"feed_path": feed_path, "labels": LABELS}), store)
+
+    envs = await conn.poll()
+    ck("first poll (no first_seen in feed) still emits", len(envs) == 1, len(envs))
+    cursor = json.loads(store.cur["ti"])
+    ck("falls back to hash mode without first_seen", cursor["mode"] == "hash", cursor)
+
+    envs2 = await conn.poll()
+    ck("unchanged feed hash: second poll emits nothing", envs2 == [], len(envs2))
+
+    write_feed(feed_path, items + [{"indicator": "8.8.8.8", "type": "ip", "threat_type": "botnet_c2"}])
+    envs3 = await conn.poll()
+    ck("changed feed hash: re-emits (no timestamp to filter precisely)", len(envs3) == 2, len(envs3))
 
 
 async def test_field_map():
@@ -86,13 +122,15 @@ async def test_field_map():
                             "confidence": 50}])
     store = FakeStore()
     conn = ThreatIntelConnector(
-        cfg({"feed_path": feed_path, "field_map": {"indicator": "ioc", "type": "ioc_type"},
+        cfg({"feed_path": feed_path,
+             "field_map": {"indicator": "ioc", "indicator_type": "ioc_type"},
              "labels": LABELS}),
         store,
     )
     envs = await conn.poll()
     ck("field_map remaps non-standard field names", len(envs) == 1 and envs[0].key_value == "1.2.3.4",
        [e.key_value for e in envs])
+    ck("field_map applies to event_type too", envs[0].event_type == "ip", envs[0].event_type)
 
 
 async def test_missing_source():
@@ -113,8 +151,10 @@ def test_schema_registered():
 
 async def test_ingest_end_to_end():
     """Register a threat_intel source through the daemon's own API, poll it, and confirm the
-    envelope reaches the store and is readable on the entity's timeline."""
+    envelope reaches the store and is readable on the entity's timeline. Not wrapped in a
+    try/except: a broken daemon path must fail the test run, not print SKIP."""
     from tares.daemon import make_app
+    from tares.connectors import build_connector
     import httpx
 
     feed_path = os.path.join(TMP, "ioc_feed_e2e.json")
@@ -130,9 +170,8 @@ async def test_ingest_end_to_end():
         ck("source created via daemon API", r.status_code in (200, 201), r.text)
 
         # ingestion runs on the background poll loop (interval-driven, not a manual-trigger
-        # endpoint) - poll the connector directly against the daemon's own store, exactly as
+        # endpoint); poll the connector directly against the daemon's own store, exactly as
         # runtime._loop does, so this test doesn't depend on wall-clock timing.
-        from tares.connectors import build_connector
         store = app.state.store
         cfg_obj = app.state.runtime.catalog.sources["ti-e2e"]
         conn = build_connector(cfg_obj, store)
@@ -153,13 +192,11 @@ async def test_ingest_end_to_end():
 
 async def main():
     await test_poll_and_cursor()
+    await test_hash_fallback_when_no_first_seen()
     await test_field_map()
     await test_missing_source()
     test_schema_registered()
-    try:
-        await test_ingest_end_to_end()
-    except Exception as e:
-        print(f"  SKIP end-to-end (daemon API surface may differ): {e}")
+    await test_ingest_end_to_end()
     print(f"\n{P} passed, {F} failed")
     if F:
         raise SystemExit(1)
