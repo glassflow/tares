@@ -38,12 +38,14 @@ FINDING = "checkout is returning 500s since the 14:02 deploy; roll it back."
 
 # ── stub Anthropic: one tool_use round, then the conclusion ──────────────────
 _calls = []
+_headers = []   # the request headers per call: which credential reached the wire
 
 
 class Stub(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["content-length"])))
         _calls.append(body)
+        _headers.append({k.lower(): v for k, v in self.headers.items()})
         # First call: ask for a wider read (exercises the tool path). Second: conclude.
         if len(_calls) == 1:
             content = [{"type": "tool_use", "id": "tu_1", "name": "read",
@@ -228,6 +230,20 @@ async def main():
             ck("finding is on the entity's timeline", FINDING in rd["payload"], rd["payload"][:200])
             ck("findings source contributes to the read", "findings" in rd["sources"], str(rd["sources"]))
 
+            # ── a gateway saved in Settings (TR-281): URL and token, per request, over the env ──
+            g = (await cx.get(f"{B}/api/settings/gateway")).json()
+            ck("gateway status: the env base URL shows as such", g["configured"] and g["source"] == "env:TARES_ANTHROPIC_BASE"
+               and not g["stored"], str(g))
+            r = await cx.put(f"{B}/api/settings/gateway", json={"url": "not a url", "token": ""})
+            ck("gateway url is checked", r.status_code == 400, r.text[:120])
+            r = await cx.put(f"{B}/api/settings/gateway", json={"url": f"http://127.0.0.1:{STUB_PORT}/", "token": "gw-tok"})
+            ck("gateway saved", r.status_code == 200 and r.json()["source"] == "console" and r.json()["token_stored"], r.text[:200])
+            g = (await cx.get(f"{B}/api/settings/gateway")).json()
+            ck("gateway token never returned", "gw-tok" not in json.dumps(g), str(g))
+            k = (await cx.get(f"{B}/api/settings/anthropic-key")).json()
+            ck("the stored gateway token is the credential in use", k["source"] == "console:gateway", str(k))
+            headers_before = len(_headers)
+
             # ── the next run opens with the previous finding (a head start) ──
             await asyncio.sleep(1.2)   # past the trigger cooldown
             for i in range(3):
@@ -236,6 +252,13 @@ async def main():
                 rs = (await cx.get(f"{B}/api/agents/builtin/first-look/runs")).json()
                 return len(rs) >= 2 and rs[0]["status"] != "running"
             ck("a second run completed", await _until(_ran_again), "no second run")
+            ck("the run reached the gateway with the bearer token",
+               len(_headers) > headers_before and _headers[-1].get("authorization") == "Bearer gw-tok"
+               and "x-api-key" not in _headers[-1], str(_headers[-1:]))
+            r = await cx.delete(f"{B}/api/settings/gateway")
+            ck("clearing the gateway falls back to the env", r.status_code == 200 and r.json()["source"] == "env:TARES_ANTHROPIC_BASE", r.text[:200])
+            k = (await cx.get(f"{B}/api/settings/anthropic-key")).json()
+            ck("credential falls back to the env key", k["source"] == "env:ANTHROPIC_API_KEY", str(k))
             opening = str(_calls[-1]["messages"][0]["content"])
             ck("the second run opens with the first run's finding",
                "earlier run" in opening and FINDING in opening, opening[:300])

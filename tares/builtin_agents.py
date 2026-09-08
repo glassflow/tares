@@ -143,17 +143,42 @@ def prompt_hash(prompt: str) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12]
 
 
+DEFAULT_API_BASE = "https://api.anthropic.com"
+
+
+def resolve_api_base(store) -> tuple[str, str]:
+    """(base URL, where-it-came-from). Where model calls go: a gateway saved in the console
+    (TR-281), else the environment (`ANTHROPIC_BASE_URL`, or the old `TARES_ANTHROPIC_BASE`),
+    else Anthropic itself. Read per request, like the key, so a cell can switch to a gateway
+    without a restart and a cloud customer can do it from Settings."""
+    stored = (store.get_setting("gateway_url") or "").strip().rstrip("/")
+    if stored:
+        return stored, "console"
+    if API_BASE != DEFAULT_API_BASE:
+        which = "ANTHROPIC_BASE_URL" if os.getenv("ANTHROPIC_BASE_URL", "").strip() else "TARES_ANTHROPIC_BASE"
+        return API_BASE, f"env:{which}"
+    return DEFAULT_API_BASE, ""
+
+
 def resolve_anthropic_headers(store) -> tuple[dict[str, str], str]:
-    """(header, where-it-came-from). The console-stored key wins over the env `ANTHROPIC_API_KEY`:
-    the user's own key takes over from whatever the deployment shipped the moment they save one.
-    That order is load-bearing for hosted trials — an operator-provided key in the env must yield
-    to the customer's key instantly, so their spend lands on their key, not the trial's. Deleting
-    the stored key falls back to the env key (if the deployment still carries one)."""
+    """(header, where-it-came-from). The console-stored values win over the environment: the
+    user's own credential takes over from whatever the deployment shipped the moment they save
+    one. That order is load-bearing for hosted trials — an operator-provided key in the env must
+    yield to the customer's key instantly, so their spend lands on their key, not the trial's.
+    Deleting the stored value falls back to the env (if the deployment still carries one).
+
+    A gateway token saved in the console (Settings, TR-281) goes first, as a bearer header: it
+    exists only because the user set a gateway up on purpose. Then the stored key, as the
+    Anthropic key header, which is what a gateway expects from a plain key too."""
+    gateway_token = (store.get_setting("gateway_token") or "").strip()
     stored = (store.get_setting("anthropic_key") or "").strip()
     auth_token = os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip()
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     headers = {"anthropic-version": "2023-06-01",}
-    if stored:
+    if gateway_token:
+        headers["Authorization"] = f"Bearer {gateway_token}"
+        key_origin = "console:gateway"
+    elif stored:
         headers["x-api-key"] = stored
         key_origin = "console"
     elif auth_token:
@@ -359,6 +384,7 @@ class AgentRunner:
         started_at = now_utc()
         t0 = time.monotonic()
         headers, key_origin = resolve_anthropic_headers(self.store)
+        api_base, _ = resolve_api_base(self.store)
         if not headers:
             msg = "no Anthropic key: set ANTHROPIC_API_KEY before `tares up`, or add a key under Settings"
             self.store.finish_agent_run(run_id, "failed", error=msg)
@@ -385,7 +411,7 @@ class AgentRunner:
                  "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
         try:
             finding, rounds, tool_calls, external_used, exhausted, partial = await self._loop(
-                agent, trigger_name, key, payload, headers, usage, tracer, obs)
+                agent, trigger_name, key, payload, headers, usage, tracer, obs, api_base=api_base)
         finally:
             if usage["calls"]:
                 cost = cost_usd(model, usage["input_tokens"], usage["output_tokens"],
@@ -445,7 +471,7 @@ class AgentRunner:
     # ── the bounded model loop ────────────────────────────────────────────────
     async def _loop(self, agent: dict, trigger_name: str, key: str, payload: str,
                     headers: dict, usage: dict, tracer=None,
-                    obs: _tracing.Observation | None = None,
+                    obs: _tracing.Observation | None = None, api_base: str = DEFAULT_API_BASE,
                     ) -> tuple[str, int, int, list[str], bool, str]:
         # External tools: the agent's selected MCP servers, connected for the duration of this
         # run. A server that fails to connect is skipped (recorded below) — losing a tool server
@@ -458,11 +484,11 @@ class AgentRunner:
             for failure in toolbox.failures:
                 print(f"[agent {agent['name']}] mcp connect failed; {failure}")
             return await self._loop_with(agent, trigger_name, key, payload, headers, toolbox,
-                                         usage, tracer, obs)
+                                         usage, tracer, obs, api_base=api_base)
 
     async def _loop_with(self, agent: dict, trigger_name: str, key: str, payload: str,
                          headers: dict, toolbox, usage: dict, tracer=None,
-                         obs: _tracing.Observation | None = None,
+                         obs: _tracing.Observation | None = None, api_base: str = DEFAULT_API_BASE,
                          ) -> tuple[str, int, int, list[str], bool, str]:
         """Returns (finding, rounds, tool_calls, external_tools_used, exhausted, partial_text)."""
         tools = TOOL_DEFS + toolbox.tool_defs
@@ -499,7 +525,7 @@ class AgentRunner:
                 with _tracing.generation(tracer, body["model"], messages,
                                          {"max_tokens": MAX_TOKENS}) as gen:
                     r = await cx.post(
-                        f"{API_BASE}/v1/messages",
+                        f"{api_base}/v1/messages",
                         headers=headers,
                         json=body)
                     if r.status_code >= 400:
