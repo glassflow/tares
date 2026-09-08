@@ -149,7 +149,12 @@ def _parse_size(v: str | None) -> int | None:
     return n if n > 0 else None
 
 
+# The operator's explicit limit; None means "the volume the data directory sits on", which is
+# what a cell wants: a grown volume is reflected on the next mount, no chart value to refresh.
 MAX_DB_SIZE = _parse_size(os.getenv("TARES_MAX_DB_SIZE"))
+# Above this share of the limit ingest is refused (507) and polls pause, so the database never
+# fills its disk and dies (glassflow-web, 2026-09-08). Reads, findings and the console keep working.
+INGEST_PAUSE_PCT = float(os.getenv("TARES_INGEST_PAUSE_PCT", "95"))
 
 
 def _ui_dist() -> Path:
@@ -167,9 +172,38 @@ def _ui_dist() -> Path:
 
 UI_DIST = _ui_dist()
 
-# /health reports `degraded` at or above this share of TARES_MAX_DB_SIZE. On the 0-100 scale of
-# /api/usage's pct_used, so 90 means 90% — not 0.9. Unknown (no limit configured) is never degraded.
+# /health reports `degraded` at or above this share of the storage limit. On the 0-100 scale of
+# /api/usage's pct_used, so 90 means 90% — not 0.9. Unknown (no limit and no volume) is never degraded.
 DEGRADED_PCT = float(os.getenv("TARES_DEGRADED_PCT", "90"))
+
+
+def storage_limit(db_path: str) -> tuple[int | None, str]:
+    """(max_bytes, where it comes from): TARES_MAX_DB_SIZE when set ("env"), else the total size
+    of the volume the database sits on ("volume"). None only when neither is known."""
+    if MAX_DB_SIZE:
+        return MAX_DB_SIZE, "env"
+    try:
+        return shutil.disk_usage(os.path.dirname(os.path.abspath(db_path)) or ".").total, "volume"
+    except OSError:
+        return None, ""
+
+
+def storage_state(store, db_path: str) -> dict:
+    """How full this instance is against its limit, and whether ingest is paused because of it.
+    stat() calls only, so every probe and every ingest can afford it."""
+    limit, origin = storage_limit(db_path)
+    if not limit:
+        return {"max_bytes": None, "max_bytes_source": "", "pct_used": None, "paused": False, "detail": None}
+    pct = round(100 * store.disk_bytes() / limit, 2)
+    paused = pct >= INGEST_PAUSE_PCT
+    detail = None
+    if paused:
+        detail = (f"ingest paused: storage {pct}% full of the {limit} byte "
+                  f"{'limit' if origin == 'env' else 'volume'}; grow the volume or delete data")
+    elif pct >= DEGRADED_PCT:
+        detail = f"storage {pct}% full ({limit} byte {'limit' if origin == 'env' else 'volume'})"
+    return {"max_bytes": limit, "max_bytes_source": origin, "pct_used": pct, "paused": paused,
+            "detail": detail}
 
 # How long a `/tares ask` may think before Slack gets an apology instead of an answer. The user
 # is staring at a "…" in a channel, so this is deliberately much shorter than the agent's own
@@ -433,6 +467,8 @@ def make_app() -> FastAPI:
 
     dispatcher = Dispatcher(store)
     runtime = Runtime(store, dispatcher)
+    # poll connectors hold off while ingest is paused for storage (see storage_state)
+    runtime.storage_full = lambda: storage_state(store, DB_PATH)["detail"] if storage_state(store, DB_PATH)["paused"] else None
     # Projects: templates instantiated with params; they create and own ordinary catalog objects.
     projects = ProjectEngine(store, reload=runtime.reload_catalog, runtime=runtime)
     # Tares agents are the second kind of subscriber to a firing (the first is an external agent's
@@ -576,11 +612,11 @@ def make_app() -> FastAPI:
             store.ping()
         except Exception as e:
             status, detail = "down", f"database unavailable: {e}"
-        if status == "ok" and MAX_DB_SIZE:
-            pct = round(100 * store.disk_bytes() / MAX_DB_SIZE, 2)
-            if pct >= DEGRADED_PCT:
-                status = "degraded"
-                detail = f"storage {pct}% full ({MAX_DB_SIZE} byte limit)"
+        if status == "ok":
+            st = storage_state(store, DB_PATH)
+            pct = st["pct_used"]
+            if st["detail"]:
+                status, detail = "degraded", st["detail"]
         body = {"status": status, "auth_required": bool(AUTH_TOKEN),
                 "sources": [] if AUTH_TOKEN else list(runtime.catalog.sources),
                 "pct_used": pct, "version": _installed_version(),
@@ -859,8 +895,16 @@ def make_app() -> FastAPI:
         # Vercel (and similar) probe the endpoint before saving a drain — answer with the verify header.
         return JSONResponse({"ok": True}, headers=_verify_headers(request))
 
+    def _refuse_if_full() -> None:
+        """507 Insufficient Storage when the store is at the pause mark: the producer gets a plain
+        reason and can retry later; the database keeps working for everything else."""
+        st = storage_state(store, DB_PATH)
+        if st["paused"]:
+            raise HTTPException(status_code=507, detail=st["detail"])
+
     @app.post("/ingest/{token}", status_code=202)
     async def ingest(token: str, request: Request):
+        _refuse_if_full()
         body = await _parse_ingest_body(request)
         try:
             n = await runtime.ingest(token, body)
@@ -902,6 +946,7 @@ def make_app() -> FastAPI:
             _err(e)
 
     async def _otlp(signal: str, request: Request):
+        _refuse_if_full()
         try:
             body = await request.json()
         except Exception:
@@ -2457,8 +2502,9 @@ def make_app() -> FastAPI:
     @app.get("/api/usage")
     async def usage():
         """What this instance is using: db + WAL bytes, the volume they sit on, and event counts.
-        `max_bytes` is what the operator says this instance may grow to (TARES_MAX_DB_SIZE — a
-        hosted cell gets its PVC size); unset -> null, and nothing is enforced here either way.
+        `max_bytes` is the operator's TARES_MAX_DB_SIZE, else the volume the database sits on
+        (`max_bytes_source` says which); null only when neither is known. At INGEST_PAUSE_PCT of it
+        ingest is refused and polls pause (`ingest_paused`), so the disk never fills.
         `pct_used` is (db + wal) over max_bytes on a 0-100 scale, NOT a 0-1 fraction — so a
         "warn at 80%" consumer compares against 80, not 0.8. Null whenever max_bytes is null.
         Cheap by construction: file stats plus the maintained per-source counters, no table scan,
@@ -2469,10 +2515,10 @@ def make_app() -> FastAPI:
             disk_total, disk_free = du.total, du.free
         except OSError:
             disk_total = disk_free = None
-        used = u["db_bytes"] + u["wal_bytes"]
+        st = storage_state(store, DB_PATH)
         return {**u, "disk_total": disk_total, "disk_free": disk_free,
-                "max_bytes": MAX_DB_SIZE,
-                "pct_used": round(100 * used / MAX_DB_SIZE, 2) if MAX_DB_SIZE else None}
+                "max_bytes": st["max_bytes"], "max_bytes_source": st["max_bytes_source"],
+                "pct_used": st["pct_used"], "ingest_paused": st["paused"]}
 
     @app.get("/api/usage/model")
     async def usage_model(days: int = 30):

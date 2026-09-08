@@ -379,7 +379,9 @@ export interface SourceEvent {
 // GET /api/usage — what this instance is using on disk.
 // Three things the renderer must respect:
 //  · `pct_used` is 0-100, NOT a 0-1 fraction — "warn at 80%" compares against 80.
-//  · `pct_used` and `max_bytes` are null unless the operator set TARES_MAX_DB_SIZE (the Helm
+//  · `max_bytes` is TARES_MAX_DB_SIZE when set, else the volume the database sits on
+//    (`max_bytes_source` says which); null only when neither is known. At the pause mark ingest
+//    is refused and polls stop (`ingest_paused`). Older comment, still true for the null case: (the Helm
 //    chart does it for hosted cells), so a self-hosted install has no denominator at all: show
 //    absolute bytes and fall back to `disk_free` for headroom. Null is unknown, never 0.
 //  · `sources[].bytes` is always null — DuckDB keeps every source in one events table and cannot
@@ -390,7 +392,9 @@ export interface Usage {
   disk_total: number | null;
   disk_free: number | null;
   max_bytes: number | null;
+  max_bytes_source?: "env" | "volume" | "";
   pct_used: number | null;
+  ingest_paused?: boolean;
   events: number;
   sources: { name: string; events: number; bytes: number | null }[];
   agent_runs: number;
