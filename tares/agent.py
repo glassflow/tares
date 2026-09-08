@@ -424,7 +424,9 @@ part of the goal, say so in one sentence rather than forcing a poor match. One p
 card per source. Put in `config` only the non-secret values the user actually told you (a URL \
 they pasted, a container or repo name); every secret and every value you would have to guess goes \
 in `needs`. Check list_sources first: if a source already covers what the goal needs, say so and \
-propose only what is missing.
+propose only what is missing. A goal that reads a third-party or public API (weather, a status \
+page, a SaaS export) is an `http_poll` source with the URL in `config`, polled by Tares itself; \
+never propose a webhook plus a script the user would have to run.
 · WATCH: the sources are connected now. Propose the views and the triggers on them together: \
 labels first where a source needs them, then the view, then each trigger on that view. Ground \
 every key, filter and field in `source_fields` from real data, exactly as in the rules above. \

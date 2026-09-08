@@ -37,7 +37,7 @@ class PrometheusAlertsConnector(Connector):
     # Authoritative config schema (SPECS fields generated from it). Auth mirrors the Prometheus
     # connector — same endpoint, same credentials.
     CONFIG_SCHEMA = {
-        "url": {"type": "string", "required": True, "discover_input": True,
+        "url": {"type": "string", "required": True, "format": "url", "discover_input": True,
                 "help": "Prometheus base URL, e.g. http://localhost:9090"},
         "bearer_token": {"type": "string", "secret": True, "discover_input": True,
                          "help": "optional Authorization: Bearer token; for managed Prometheus or "

@@ -40,9 +40,9 @@ async def main():
     check("all connectors declare a CONFIG_SCHEMA", not unmigrated, f"missing: {unmigrated}")
     # a connector canonicalizes: terse defaults dropped, bool coerced, unknowns rejected
     a = normalize_config("prometheus_alerts",
-                         {"url": "u", "default_key": "unknown", "include_pending": "true"})
+                         {"url": "http://p:9090", "default_key": "unknown", "include_pending": "true"})
     check("prometheus_alerts: default_key==default dropped, bool kept",
-          a == {"url": "u", "include_pending": True}, str(a))
+          a == {"url": "http://p:9090", "include_pending": True}, str(a))
     try:
         normalize_config("docker_logs", {"container": "c", "bogus": 1})
         check("docker_logs rejects unknown key", False)
@@ -68,10 +68,10 @@ async def main():
 
     for bad, why in [
         ({"queries": [{"promql": "x"}]}, "missing required url"),
-        ({"url": "u"}, "missing required queries"),
-        ({"url": "u", "queries": [{"promql": "x"}], "bogus": 1}, "unknown top-level key"),
-        ({"url": "u", "queries": [{"promql": "x", "nope": 1}]}, "unknown key in a query"),
-        ({"url": "u", "queries": [{"event_type": "x"}]}, "query missing promql"),
+        ({"url": "http://p:9090"}, "missing required queries"),
+        ({"url": "http://p:9090", "queries": [{"promql": "x"}], "bogus": 1}, "unknown top-level key"),
+        ({"url": "http://p:9090", "queries": [{"promql": "x", "nope": 1}]}, "unknown key in a query"),
+        ({"url": "http://p:9090", "queries": [{"event_type": "x"}]}, "query missing promql"),
     ]:
         try:
             normalize_config("prometheus", bad)
@@ -135,7 +135,7 @@ async def main():
 
         print("== API rejects bad config (normalize enforces the schema) ==")
         r = await cx.post("/api/sources", json={"name": "bad", "connector": "prometheus",
-                                                "config": {"url": "u", "queries": [{"promql": "x"}], "junk": 1}})
+                                                "config": {"url": "http://p:9090", "queries": [{"promql": "x"}], "junk": 1}})
         check("unknown config key -> 400", r.status_code == 400, r.text)
         r = await cx.post("/api/sources", json={"name": "bad2", "connector": "prometheus",
                                                 "config": {"queries": [{"promql": "x"}]}})

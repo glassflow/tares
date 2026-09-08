@@ -94,7 +94,7 @@ ck("build prompt is the ask prompt plus the build section",
 for marker in ("ASK BEFORE YOU GUESS", "INSTALLED connectors", "`needs`", "source_fields",
                "One card per object", "propose NOTHING in that turn",
                "ask what the agent should do", "delivery.url", "TEMPLATES FIRST",
-               "never invent a name"):
+               "never invent a name", "`http_poll` source"):
     ck(f"build prompt says: {marker}", marker in build)
 
 

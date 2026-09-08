@@ -3,6 +3,31 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.27.0] - 2026-09-08
+
+### Added
+- `http_poll` connector: polls any JSON endpoint on a schedule and stores one event per item, for
+  the APIs no other connector covers (a weather service, a status page, a SaaS export, your own
+  API). GET or POST with a body, extra headers, one credential header stored as a secret, a
+  payload key into the reply, the webhook connector's mapping (event type, summary, event time)
+  and a deduplication key with a bounded cursor. Nested values are reachable by dotted name in
+  labels, the fields profile, view filters and trigger fields. A poll under 10 seconds is refused;
+  a 429 or 5xx backs the source off up to an hour, honouring Retry-After, and the source's health
+  says so. Discover fetches once and proposes the payload key, fields, labels, time and
+  deduplication fields and a summary line.
+- The source form for it reads in order: method, URL, credentials yes/no, additional headers as
+  key-value rows, body for POST. The mapping appears only after Discover, as decisions already
+  made with the sample value beside each, under a "What Tares fetched" panel showing the reply.
+- Connector schema features any connector can use: `choices` on a string field (a dropdown,
+  validated on save), a `map` type (key-value rows), `format: "url"` (checked on save; now on
+  Prometheus, Prometheus alerts and Loki too) and `label` for the words the form shows.
+- The builder proposes `http_poll` for goals that read a public or third-party API instead of a
+  webhook plus a script; the landing lights it up for api, endpoint and weather.
+
+### Changed
+- Test and save results on the source form sit above the buttons, not at the top of the page. A
+  required field the click found empty turns red and scrolls into view.
+
 ## [1.26.0] - 2026-09-07
 
 ### Added

@@ -557,7 +557,22 @@ label.field .help, div.field > .help { display: block; font-size: 12px; color: v
 .fld-meta .help { display: block; font-size: 12px; color: var(--ink-soft); margin: 0; line-height: 1.45; }
 .fld-ctrl { display: flex; flex-direction: column; }
 .fld-row.invalid input, .fld-row.invalid select, .fld-row.invalid textarea { border-color: var(--err); background: var(--err-soft); }
+.sample-reply { margin: 12px 0; }
+.json-tree { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; }
+.json-tree .json-tree { padding-left: 18px; border-left: 1px solid var(--line); margin-left: 4px; }
+.json-node > summary { cursor: pointer; list-style: none; }
+.json-node > summary::before { content: "▸ "; color: var(--ink-soft); }
+.json-node[open] > summary::before { content: "▾ "; }
+.json-leaf { padding-left: 14px; }
+.json-key { color: var(--accent-deep); }
+.json-scalar.string { color: var(--ok); }
+.json-scalar.number { color: var(--ink); }
+.kv-rows { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.kv-row { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(160px, 2fr) auto; gap: 6px; width: 100%; align-items: center; }
 .fld-row.invalid .help { color: var(--err); }
+/* a required field the last Create or Test found empty: red until it is filled */
+.fld-row.missing input, .fld-row.missing textarea, .field.missing input { border-color: var(--err); box-shadow: 0 0 0 2px var(--err-soft); }
+.fld-row.missing .lbl, .field.missing .lbl { color: var(--err); }
 /* a builder proposal's `needs`: the fields only the user can fill (a token, a URL) */
 .fld-row.needs input, .fld-row.needs select, .fld-row.needs textarea,
 label.field.needs input, label.field.needs textarea { border-color: var(--accent); background: var(--accent-soft); }
