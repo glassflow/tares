@@ -43,7 +43,9 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARESD_URL` | where `tares-mcp` finds the daemon |
 | `TARES_AUTH_TOKEN` | turns auth on; also the token `tares-mcp` presents |
 | `TARES_CATALOG` | a catalog file to import on first boot (only while the catalog is empty) |
-| `TARES_ANTHROPIC_KEY` | platform key for Tares agents and Ask; a key saved in the console wins |
+| `ANTHROPIC_API_KEY` | model key for Tares agents and Ask; a key saved in the console wins |
+| `ANTHROPIC_AUTH_TOKEN` | a bearer token instead of the key, for a gateway that wants `Authorization: Bearer`; beats the key when both are set |
+| `ANTHROPIC_BASE_URL` | an Anthropic-compatible gateway (LiteLLM, Portkey, a Bedrock or Vertex proxy) instead of api.anthropic.com; `TARES_ANTHROPIC_BASE` is the old name, still read |
 | `TARES_AGENT_MODEL` | model for Tares agents |
 | `TARES_MAX_DB_SIZE` | cap on the DuckDB file; `/api/usage` reports against it |
 | `TARES_SLACK_BOT_TOKEN`, `TARES_SLACK_SIGNING_SECRET` | the Slack surface |
