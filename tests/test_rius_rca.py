@@ -3,11 +3,12 @@
 Run: .venv/bin/python tests/test_rius_rca.py   (no external services needed)
 
 Asserts the five traps from the live hand-build (TR-223 comment) stay fixed: the ingest key is
-stamped by the source's primary label, the agent is born enabled with max_rounds 10 and the
+stamped by the source's primary label (the service), the agent is born enabled with max_rounds 10 and the
 callback configured, the text template carries the query identifiers, and the prompt permits
 live MCP access.
 """
 import asyncio
+import json
 import os
 import sys
 
@@ -88,8 +89,15 @@ async def main():
             srcs = {s["name"]: s for s in (await cx.get("/api/sources")).json()}
             src = srcs.get("rius_alerts") or {}
             labels = {l["name"]: l for l in (src.get("config") or {}).get("labels", [])}
-            check("primary label stamps the key",
-                  labels.get("delivery_id", {}).get("primary") is True, str(labels))
+            check("the service is the entity (primary label)",
+                  labels.get("service", {}).get("primary") is True
+                  and labels.get("delivery_id", {}).get("primary") is not True, str(labels))
+            check("rule and delivery id are labels", "rule" in labels and "delivery_id" in labels, str(labels))
+            views = {v["name"]: v for v in (await cx.get("/api/views")).json()}
+            check("view keyed by service", views.get("rius_alerts_view", {}).get("key_field") == "service",
+                  str(views.get("rius_alerts_view")))
+            trig = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}.get("rius_alert_fired", {})
+            check("one investigation per service per 5 minutes", trig.get("cooldown") == "5m", str(trig))
             tmpl = (src.get("config") or {}).get("text_template", "")
             check("text template carries the query identifiers",
                   all(k in tmpl for k in ("{delivery_id}", "{workspace_id}", "{service}",
@@ -110,7 +118,7 @@ async def main():
                   mcp["auth_value_configured"] is True and not mcp.get("auth_value"),
                   str(mcp)[:200])
 
-            print("== ingest stamps the delivery id as the key ==")
+            print("== ingest stamps the service as the key ==")
             body = {"delivery_id": "dlv-test-001", "alert_id": "al-1", "workspace_id": "ws-1",
                     "service": "canary-raw", "rule": "error rate > 25%",
                     "summary": "error rate 48% over 24h",
@@ -118,8 +126,11 @@ async def main():
             r = await cx.post(f"/ingest/{src['ingest_key']}", json=body)
             check("alert ingests -> 202", r.status_code == 202, r.text)
             ev = (await cx.get("/api/sources/rius_alerts/events", params={"limit": 1})).json()
-            check("stored key is the delivery id", ev and ev[0]["key"] == "dlv-test-001",
-                  str(ev)[:200])
+            check("stored key is the service", ev and ev[0]["key"] == "canary-raw", str(ev)[:200])
+            ents = (await cx.get("/api/entities", params={"label": "rule"})).json()
+            check("rule is a label on the event", "error rate > 25%" in json.dumps(ents), str(ents)[:200])
+            ents = (await cx.get("/api/entities", params={"label": "delivery_id"})).json()
+            check("delivery id is a label on the event", "dlv-test-001" in json.dumps(ents), str(ents)[:200])
             check("rendered line carries identifiers", ev and "dlv-test-001" in ev[0]["text"]
                   and "canary-raw" in ev[0]["text"], str(ev and ev[0]["text"]))
 
