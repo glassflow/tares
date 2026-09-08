@@ -47,7 +47,8 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `ANTHROPIC_AUTH_TOKEN` | a bearer token instead of the key, for a gateway that wants `Authorization: Bearer`; beats the key when both are set |
 | `ANTHROPIC_BASE_URL` | an Anthropic-compatible gateway (LiteLLM, Portkey, a Bedrock or Vertex proxy) instead of api.anthropic.com; `TARES_ANTHROPIC_BASE` is the old name, still read |
 | `TARES_AGENT_MODEL` | model for Tares agents |
-| `TARES_MAX_DB_SIZE` | cap on the DuckDB file; `/api/usage` reports against it |
+| `TARES_MAX_DB_SIZE` | storage limit `/api/usage` and `/health` measure against; unset = the volume the database sits on |
+| `TARES_INGEST_PAUSE_PCT` | share of the limit at which ingest is refused (507) and polls pause; default 95 |
 | `TARES_SLACK_BOT_TOKEN`, `TARES_SLACK_SIGNING_SECRET` | the Slack surface |
 | `TARES_SEED_PROJECT` | template of the project to seed on first boot (`TARES_SEED_USECASE` still read) |
 | `TARES_TRACING_ENABLED` | agent tracing on/off (a console setting wins over it) |
