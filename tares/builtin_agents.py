@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+from datetime import timedelta
 import os
 import time
 import uuid
@@ -29,7 +31,7 @@ import uuid
 import httpx
 
 from . import tracing as _tracing
-from .config import FINDINGS_SOURCE, API_BASE, agent_url
+from .config import FINDINGS_SOURCE, API_BASE, agent_url, parse_duration
 from .envelope import now_utc
 from .pricing import cost_usd
 from .slack import deep_link as _slack_deep_link
@@ -451,9 +453,12 @@ class AgentRunner:
         self.store.finish_agent_run(run_id, "ok", rounds=rounds, tool_calls=tool_calls,
                                     finding=finding, external_tools=external_used)
         if (agent.get("webhook_url") or "").strip():
-            await self._webhook(agent, {
+            delivery, derr = await self._webhook(agent, {
                 "event": "finding",
-                "agent": agent["name"], "trigger": trigger_name, "key": key,
+                "agent": agent["name"], "trigger": trigger_name,
+                # `key` is the entity, unless the agent names a label to report instead: Rius
+                # attributes reports by delivery id while the entity is the service (TR-285)
+                "key": self._callback_key(agent, trigger_name, key),
                 "finding": finding,
                 "run_id": run_id, "dispatch_id": dispatch_id,
                 "model": model,
@@ -466,7 +471,43 @@ class AgentRunner:
                 "duration_s": round(time.monotonic() - t0, 2),
                 "prompt_hash": prompt_hash(agent["prompt"]),
             })
+            self.store.set_run_delivery(run_id, delivery, derr)
         return "ok", None
+
+    def _callback_key(self, agent: dict, trigger_name: str, key: str) -> str:
+        """The `key` the write-back carries: the entity, or the value of `webhook_key_label` on
+        the most recent event that woke this run, when the agent names one. Falls back to the
+        entity when the label is not on the event, so a wrong name never drops the field."""
+        label = (agent.get("webhook_key_label") or "").strip()
+        if not label:
+            return key
+        try:
+            catalog = self.runtime.catalog
+            triggers = catalog.triggers
+            trig = (triggers.get(trigger_name) if isinstance(triggers, dict)
+                    else next((t for t in triggers if t.name == trigger_name), None))
+            views = catalog.views
+            view = None
+            if trig is not None:
+                view = (views.get(trig.view) if isinstance(views, dict)
+                        else next((v for v in views if v.name == trig.view), None))
+            if view is None:
+                return key
+            window = max(parse_duration(trig.condition.window or "15m"), 900.0)
+            since = now_utc() - timedelta(seconds=window)
+            rows = self.store.read_view_window(view.sources, key, since, cap=1,
+                                               filters=view.filters)
+            latest = max(rows, key=lambda r: r[0]) if rows else None
+            if latest is None:
+                return key
+            labels = latest[3]
+            if isinstance(labels, str):
+                labels = json.loads(labels or "{}")
+            value = (labels or {}).get(label)
+            return str(value) if value not in (None, "") else key
+        except Exception as e:  # noqa: BLE001 — never lose the write-back over the key lookup
+            print(f"[agent {agent['name']}] callback key from {label!r}: {type(e).__name__}: {e}")
+            return key
 
     # ── the bounded model loop ────────────────────────────────────────────────
     async def _loop(self, agent: dict, trigger_name: str, key: str, payload: str,
@@ -661,14 +702,17 @@ class AgentRunner:
         elif hook:
             await self._slack(agent["name"], hook, trigger_name, key, finding)
 
-    async def _webhook(self, agent: dict, body: dict, attempts: int = 3) -> None:
+    async def _webhook(self, agent: dict, body: dict, attempts: int = 3) -> tuple[str, str | None]:
         """POST the finding plus its run metadata to the agent's write-back webhook — the machine
         counterpart of the Slack post, for feeding findings into the customer's own automation.
 
         The body carries only what the customer may already read via the API: the finding, the
         run's shape (rounds, tool calls, duration), the model name and a hash of the prompt —
         never a key or token. Auth is an optional bearer token sent as a header; it is never
-        logged, and a delivery failing must never lose the finding (already stored)."""
+        logged, and a delivery failing must never lose the finding (already stored).
+
+        Returns (delivery, error) for the run: "ok"; "http <status>" for a client error, which
+        is not retried; "failed" with the last error after the retries."""
         url = agent["webhook_url"].strip()
         headers = {"content-type": "application/json"}
         token = (agent.get("webhook_token") or "").strip()
@@ -680,10 +724,10 @@ class AgentRunner:
                 try:
                     r = await cx.post(url, json=body, headers=headers)
                     if 200 <= r.status_code < 300:
-                        return
+                        return "ok", None
                     if r.status_code < 500:   # client error — won't self-heal, don't retry
                         print(f"[agent {agent['name']}] webhook: HTTP {r.status_code}")
-                        return
+                        return f"http {r.status_code}", r.text[:200]
                     err = f"HTTP {r.status_code}"
                 except Exception as e:        # transport failure — unreachable / timeout / DNS
                     err = f"{type(e).__name__}: {str(e)[:120]}"
@@ -691,6 +735,7 @@ class AgentRunner:
                     await asyncio.sleep(delay)
                     delay = min(delay * 2, 10)
         print(f"[agent {agent['name']}] webhook: giving up after {attempts} attempts ({err})")
+        return "failed", f"after {attempts} attempts: {err}"
 
     async def _slack_channel(self, agent_name: str, channel: str, trigger_name: str,
                              key: str, finding: str) -> None:

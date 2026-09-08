@@ -26,6 +26,13 @@ function statusBadge(r: AgentRun) {
   return <span className={`badge ${cls}`}>{r.status}</span>;
 }
 
+/** Whether the finding reached the write-back webhook; nothing when the agent has none. */
+function deliveryBadge(r: AgentRun) {
+  if (!r.delivery) return null;
+  if (r.delivery === "ok") return <span className="badge ok" title="the finding was delivered to the write-back webhook">delivered</span>;
+  return <span className="badge error" title={r.delivery_error ?? r.delivery}>not delivered: {r.delivery}</span>;
+}
+
 export default function AgentDetail() {
   // A dispatch page links here as ?dispatch=<id> (and a project as ?run=<id>): the Runs tab
   // opens with that run expanded, highlighted, and scrolled into view.
@@ -409,7 +416,7 @@ function RunRow({ r, open, focused, onToggle }: {
       <tr className="clickable" onClick={onToggle}
           style={focused ? { outline: "2px solid var(--accent)", outlineOffset: -2 } : undefined}
           ref={rowRef}>
-        <td>{statusBadge(r)}</td>
+        <td>{statusBadge(r)} {deliveryBadge(r)}</td>
         <td style={{ whiteSpace: "nowrap" }}><TimeAgo ts={r.started_at} /></td>
         <td className="mono">{r.key}</td>
         <td className="mono">{r.model ?? <span className="dim">—</span>}</td>
@@ -435,6 +442,7 @@ function RunRow({ r, open, focused, onToggle }: {
                   ? <><Link to={`/dispatches/${encodeURIComponent(r.dispatch_id)}`}>the firing</Link> that woke it</>
                   : "run without a firing (manual or bootstrap)"}
                 {r.tool_calls ? <> · {r.tool_calls} tool call{r.tool_calls === 1 ? "" : "s"}</> : null}
+                {r.delivery && r.delivery !== "ok" && <> · write-back {r.delivery}{r.delivery_error ? <>: <span className="mono">{r.delivery_error}</span></> : null}</>}
                 {cache > 0 && <> · cache: {fmtTokens(r.cache_creation_input_tokens)} written, {fmtTokens(r.cache_read_input_tokens)} read</>}
               </p>
               {(r.external_tools ?? []).length > 0 && (

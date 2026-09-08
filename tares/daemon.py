@@ -303,6 +303,7 @@ class AgentIn(BaseModel):
     slack_channel: str = ""      # workspace-bot channel; the primary notification path
     webhook_url: str = ""        # write-back: findings + run metadata POSTed here
     webhook_token: str = ""      # optional bearer for the write-back (secret; blank-to-keep)
+    webhook_key_label: str = ""  # the write-back reports this label's value as `key`; "" = the entity
     slack_webhook_clear: bool = False   # blank means keep (it is a secret), so clearing is explicit
     mcp_servers: list[str] = []  # registry names this agent may use
     max_rounds: int | None = None   # model rounds per run; None = default (6, or 12 with MCP servers)
@@ -1724,6 +1725,7 @@ def make_app() -> FastAPI:
                          "slack_channel": a.get("slack_channel") or "",
                          "webhook_url": a.get("webhook_url") or "",
                          "webhook_token_configured": bool(a.get("webhook_token")),
+                         "webhook_key_label": a.get("webhook_key_label") or "",
                          "mcp_servers": a.get("mcp_servers") or [],
                          "max_rounds": a.get("max_rounds"),
                          "budget_usd": a.get("budget_usd"),
@@ -1749,7 +1751,8 @@ def make_app() -> FastAPI:
         store.upsert_catalog_agent(body.name, body.trigger, body.prompt, body.slack_webhook,
                                    body.model, body.slack_channel,
                                    body.webhook_url, body.webhook_token, body.mcp_servers,
-                                   body.max_rounds, body.budget_usd)
+                                   body.max_rounds, body.budget_usd,
+                                   webhook_key_label=body.webhook_key_label)
         runtime.reload_catalog()
         return {"ok": True, "enabled": False,
                 "note": "agents start disabled; enable it to run on the next firing"}
@@ -1774,7 +1777,7 @@ def make_app() -> FastAPI:
         store.upsert_catalog_agent(name, body.trigger, body.prompt, hook,
                                    body.model, body.slack_channel,
                                    body.webhook_url, wtoken, body.mcp_servers, body.max_rounds,
-                                   body.budget_usd)
+                                   body.budget_usd, webhook_key_label=body.webhook_key_label)
         store.mark_customized("agent", name)
         # if the trigger changed while enabled, re-point the subscription so the agent fires on the
         # new trigger (the subscription, not the definition, is what the dispatcher reads).

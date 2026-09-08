@@ -140,6 +140,9 @@ class RiusRca(Template):
                  "prompt": p.get("prompt") or PROMPT,
                  "mcp_servers": [MCP],
                  "webhook_url": p["callback_url"], "webhook_token": p["callback_token"],
+                 # the entity is the service; the report is attributed by delivery id, so the
+                 # callback's `key` reports that label from the firing that woke the run
+                 "webhook_key_label": "delivery_id",
                  "max_rounds": p["max_rounds"], "enabled": True}
         if p.get("budget_usd") is not None:
             agent["budget_usd"] = p["budget_usd"]

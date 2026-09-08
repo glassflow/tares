@@ -110,6 +110,7 @@ async def main():
             check("callback wired", ag["webhook_url"] == PARAMS["callback_url"]
                   and ag["webhook_token_configured"] is True, str(ag.get("webhook_url")))
             check("mcp server attached", ag["mcp_servers"] == ["rius"], str(ag.get("mcp_servers")))
+            check("callback reports the delivery id as key", ag.get("webhook_key_label") == "delivery_id", str(ag.get("webhook_key_label")))
             check("prompt allows live access", "live access" in ag["prompt"]
                   and "no live access" not in ag["prompt"])
             mcp = {m["name"]: m for m in
