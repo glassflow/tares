@@ -406,6 +406,12 @@ class AgentRunner:
             self.store.finish_agent_run(run_id, "capped", error=msg)
             return "capped", msg
 
+        # BEFORE the loop: the write-back's key names the firing this run answers for, and only
+        # now is that unambiguous — the trigger has just fired on it. Resolved after the loop
+        # instead, it named whichever firing had arrived most recently by then, which for a burst
+        # inside one cooldown is a different alert from the one the agent wrote up (TR-294).
+        callback_key, callback_labels = self._callback_anchor(agent, trigger_name, key)
+
         # Usage accumulates in a mutable dict rather than the loop's return value, so a run that
         # dies mid-loop still records the tokens it already paid for (the finally below).
         model = agent.get("model") or MODEL
@@ -457,8 +463,12 @@ class AgentRunner:
                 "event": "finding",
                 "agent": agent["name"], "trigger": trigger_name,
                 # `key` is the entity, unless the agent names a label to report instead: Rius
-                # attributes reports by delivery id while the entity is the service (TR-285)
-                "key": self._callback_key(agent, trigger_name, key),
+                # attributes reports by delivery id while the entity is the service (TR-285).
+                # Both were resolved at run start — see _callback_anchor.
+                "key": callback_key,
+                # The firing's own labels, so a receiver can attribute the report on something
+                # other than `key` alone and reject a mismatch rather than mis-file it silently.
+                "labels": callback_labels,
                 "finding": finding,
                 "run_id": run_id, "dispatch_id": dispatch_id,
                 "model": model,
@@ -474,13 +484,22 @@ class AgentRunner:
             self.store.set_run_delivery(run_id, delivery, derr)
         return "ok", None
 
-    def _callback_key(self, agent: dict, trigger_name: str, key: str) -> str:
-        """The `key` the write-back carries: the entity, or the value of `webhook_key_label` on
-        the most recent event that woke this run, when the agent names one. Falls back to the
-        entity when the label is not on the event, so a wrong name never drops the field."""
+    def _callback_anchor(self, agent: dict, trigger_name: str, key: str) -> tuple[str, dict]:
+        """The firing this run answers for: the `key` the write-back reports, and that firing's
+        labels.
+
+        The key is the entity, or the value of `webhook_key_label` on the firing when the agent
+        names a label. MUST be called at run START: the trigger has just fired, so the newest
+        event in the window is the firing the run was woken by. Called after the model loop
+        instead, it named whichever firing had arrived most recently by then — for a burst inside
+        one cooldown, a different alert from the one the agent wrote up (TR-294).
+
+        Falls back to the entity and no labels when the label is on no event, so a wrong name
+        never drops the field.
+        """
         label = (agent.get("webhook_key_label") or "").strip()
         if not label:
-            return key
+            return key, {}
         try:
             catalog = self.runtime.catalog
             triggers = catalog.triggers
@@ -492,22 +511,24 @@ class AgentRunner:
                 view = (views.get(trig.view) if isinstance(views, dict)
                         else next((v for v in views if v.name == trig.view), None))
             if view is None:
-                return key
+                return key, {}
             window = max(parse_duration(trig.condition.window or "15m"), 900.0)
             since = now_utc() - timedelta(seconds=window)
             rows = self.store.read_view_window(view.sources, key, since, cap=1,
                                                filters=view.filters)
             latest = max(rows, key=lambda r: r[0]) if rows else None
             if latest is None:
-                return key
+                return key, {}
             labels = latest[3]
             if isinstance(labels, str):
                 labels = json.loads(labels or "{}")
-            value = (labels or {}).get(label)
-            return str(value) if value not in (None, "") else key
+            labels = labels or {}
+            value = labels.get(label)
+            return (str(value) if value not in (None, "") else key), labels
         except Exception as e:  # noqa: BLE001 — never lose the write-back over the key lookup
-            print(f"[agent {agent['name']}] callback key from {label!r}: {type(e).__name__}: {e}")
-            return key
+            print(f"[agent {agent['name']}] callback anchor from {label!r}: "
+                  f"{type(e).__name__}: {e}")
+            return key, {}
 
     # ── the bounded model loop ────────────────────────────────────────────────
     async def _loop(self, agent: dict, trigger_name: str, key: str, payload: str,
