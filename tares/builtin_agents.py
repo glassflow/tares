@@ -56,6 +56,10 @@ TOOL_TIMEOUT = 120        # per Anthropic request
 # the first surprise is the bill. Per-agent and per-day, counted from the run log.
 DAILY_RUN_CAP = int(os.getenv("TARES_AGENT_DAILY_CAP", "50"))
 MAX_BOOTSTRAP_KEYS = 50    # a project bootstraps at most this many entities in one go
+# How many events one write-back may fan out over. A burst of firings inside one cooldown is one
+# investigation reported to each of them, and this bounds that: read_view_window's default cap of
+# 12 would silently drop the rest of a larger burst.
+CALLBACK_KEY_CAP = 200
 
 def effective_max_rounds(agent: dict) -> int:
     """The round cap a run is held to: the agent's own setting when set, else the default for its
@@ -453,12 +457,9 @@ class AgentRunner:
         self.store.finish_agent_run(run_id, "ok", rounds=rounds, tool_calls=tool_calls,
                                     finding=finding, external_tools=external_used)
         if (agent.get("webhook_url") or "").strip():
-            delivery, derr = await self._webhook(agent, {
+            body = {
                 "event": "finding",
                 "agent": agent["name"], "trigger": trigger_name,
-                # `key` is the entity, unless the agent names a label to report instead: Rius
-                # attributes reports by delivery id while the entity is the service (TR-285)
-                "key": self._callback_key(agent, trigger_name, key),
                 "finding": finding,
                 "run_id": run_id, "dispatch_id": dispatch_id,
                 "model": model,
@@ -470,17 +471,52 @@ class AgentRunner:
                 "started_at": started_at.isoformat(), "finished_at": now_utc().isoformat(),
                 "duration_s": round(time.monotonic() - t0, 2),
                 "prompt_hash": prompt_hash(agent["prompt"]),
-            })
+            }
+            delivery, derr = await self._deliver_finding(agent, trigger_name, key, body)
             self.store.set_run_delivery(run_id, delivery, derr)
         return "ok", None
 
-    def _callback_key(self, agent: dict, trigger_name: str, key: str) -> str:
-        """The `key` the write-back carries: the entity, or the value of `webhook_key_label` on
-        the most recent event that woke this run, when the agent names one. Falls back to the
-        entity when the label is not on the event, so a wrong name never drops the field."""
+    async def _deliver_finding(self, agent: dict, trigger_name: str, key: str,
+                               body: dict) -> tuple[str, str | None]:
+        """POST one finding to the write-back, once per `key` the investigation covers.
+
+        `key` is the entity, unless the agent names a label to report instead: Rius attributes
+        reports by delivery id while the entity is the service (TR-285). One investigation covers
+        every firing in the window, so the finding is posted once per value — the shared run_id
+        is what marks those posts as one investigation rather than several.
+
+        A run has ONE delivery column, so the outcome reported is the first failure across the
+        fan-out, in the existing vocabulary; a later key failing must not overwrite it, and one
+        key failing must not stop the rest from being told.
+        """
+        delivery, derr = "ok", None
+        for cb_key in self._callback_keys(agent, trigger_name, key):
+            one, one_err = await self._webhook(agent, {**body, "key": cb_key})
+            if derr is None and (one_err is not None or one != "ok"):
+                delivery, derr = one, one_err
+        return delivery, derr
+
+    def _callback_keys(self, agent: dict, trigger_name: str, key: str) -> list[str]:
+        """The `key`s the write-back carries — one report per value, all sharing this run's id.
+
+        The entity, unless the agent names a `webhook_key_label`: then every distinct value that
+        label takes over the events this run answers for. A trigger fires on an aggregate over a
+        window, never on one event, so there is no single firing to attribute a finding to. One
+        value was reported before, which meant a burst inside one cooldown got a report keyed to
+        an arbitrary member of the burst — the newest, while the agent had usually written up the
+        oldest — leaving every other firing with no report at all.
+
+        The lookback is min(window, cooldown), the span no earlier firing of this trigger can
+        have covered, so a fan-out can never overwrite a previous run's report for the same
+        value. This is why there is no floor on the lookback: widening it past the cooldown would
+        reach back into events an earlier run already answered.
+
+        Falls back to the entity when the label is on no event, so a wrong name never drops the
+        field.
+        """
         label = (agent.get("webhook_key_label") or "").strip()
         if not label:
-            return key
+            return [key]
         try:
             catalog = self.runtime.catalog
             triggers = catalog.triggers
@@ -492,22 +528,25 @@ class AgentRunner:
                 view = (views.get(trig.view) if isinstance(views, dict)
                         else next((v for v in views if v.name == trig.view), None))
             if view is None:
-                return key
-            window = max(parse_duration(trig.condition.window or "15m"), 900.0)
-            since = now_utc() - timedelta(seconds=window)
-            rows = self.store.read_view_window(view.sources, key, since, cap=1,
+                return [key]
+            window = parse_duration(trig.condition.window or "15m")
+            cooldown = float(getattr(trig, "cooldown_seconds", 0) or 0)
+            since = now_utc() - timedelta(seconds=min(window, cooldown) if cooldown else window)
+            rows = self.store.read_view_window(view.sources, key, since, cap=CALLBACK_KEY_CAP,
                                                filters=view.filters)
-            latest = max(rows, key=lambda r: r[0]) if rows else None
-            if latest is None:
-                return key
-            labels = latest[3]
-            if isinstance(labels, str):
-                labels = json.loads(labels or "{}")
-            value = (labels or {}).get(label)
-            return str(value) if value not in (None, "") else key
+            values: list[str] = []
+            for row in sorted(rows, key=lambda r: r[0]):
+                labels = row[3]
+                if isinstance(labels, str):
+                    labels = json.loads(labels or "{}")
+                value = (labels or {}).get(label)
+                if value in (None, "") or str(value) in values:
+                    continue
+                values.append(str(value))
+            return values or [key]
         except Exception as e:  # noqa: BLE001 — never lose the write-back over the key lookup
-            print(f"[agent {agent['name']}] callback key from {label!r}: {type(e).__name__}: {e}")
-            return key
+            print(f"[agent {agent['name']}] callback keys from {label!r}: {type(e).__name__}: {e}")
+            return [key]
 
     # ── the bounded model loop ────────────────────────────────────────────────
     async def _loop(self, agent: dict, trigger_name: str, key: str, payload: str,

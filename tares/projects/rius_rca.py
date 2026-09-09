@@ -3,7 +3,8 @@
 One project per Rius workspace, created remotely by rius-cp via POST /api/projects against the
 workspace's dedicated cell. When an alert fires in Rius, its region POSTs the alert context to
 this project's source; the trigger wakes the agent; the agent investigates over the Rius MCP
-server and the write-back webhook POSTs the finding to Rius's callback, keyed by the delivery id.
+server and the write-back webhook POSTs the finding to Rius's callback, once per delivery id the
+investigation covers.
 
 Every knob here is the hand-built configuration proven on a live cell on 2026-09-01 (TR-223
 comment: run_7a954505c5c7 and friends — 4/4 green against staging Rius), with the five traps from
@@ -12,7 +13,10 @@ that session baked in:
      (TR-226/TR-228). The entity is the SERVICE (TR-285): a delivery id is new on every firing,
      so a cooldown keyed by it never held and one noisy service woke the agent on every alert;
      keyed by service, one investigation per service per 5 minutes, and the timeline the agent
-     reads is that service's history. The delivery id stays a label on every event;
+     reads is that service's history. The delivery id stays a label on every event, and the
+     write-back reports EVERY delivery id in the window it covers, not one of them: Rius stores a
+     report per delivery, so reporting a single id left the rest of a burst with no report and
+     could key the finding to a firing the agent never wrote about;
   2. the prompt names the Rius tool chain and demands tool-grounded claims — it must not carry
      the demo agents' "no live access" language, which makes an MCP-equipped agent refuse to
      query;
@@ -44,15 +48,23 @@ TEXT_TEMPLATE = ("{rule} on {service}: {summary} "
 # their tool names without waiting on a Tares release.
 PROMPT = """You are an SRE performing root-cause analysis for the Rius agent-observability platform.
 
-You are handed ONE alert firing from Rius. The firing payload carries identifiers, not bulk
+You are handed the recent alert firings for ONE service, newest last. There may be several: the
+entity is the service, so a burst of alerts is one investigation covering all of them, and your
+note is delivered back to every firing you were handed. Each line carries identifiers, not bulk
 evidence: the delivery id, the alert, the affected workspace and service, and the window.
+
+Write ONE note for the service and window. Do not present it as the analysis of a single alert
+or delivery id — several of the firings shown may be symptoms of the same cause, and the reader
+of any one of them sees this same note. Where the firings have different causes, say so and
+cover each.
 
 You DO have live access to Rius through the `rius` MCP server. Use it. Start from
 `agent_traces_summary` and `workspace_metrics_overview` for the window, narrow with
 `list_agent_traces` (status "Error"), then pull the specific failures with `get_agent_trace`,
 passing include_content=true when you need to see what a span actually said or returned.
 
-Produce a short incident note in markdown:
+Produce a short incident note in markdown, headed by the service and the window it covers, and
+listing the alerts it covers when there is more than one:
 1. **What is failing** and since when.
 2. **Most likely root cause**, tied to specific evidence you fetched (name the trace, the span,
    the error, the numbers).

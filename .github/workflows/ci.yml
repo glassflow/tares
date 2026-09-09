@@ -31,7 +31,7 @@ jobs:
       - name: Backend — install + tests
         run: |
           pip install -e .
-          for t in test_labels test_normalize test_auth test_api_keys test_pricing test_agents test_catalog_sync test_cli test_status test_usage test_slack test_slack_verify test_slack_ask test_degraded test_loki test_projects test_rius_rca test_ai_sre_demo test_seed test_session_flow test_challenger_workflow test_plugin_challenger test_tracing test_agent_runs_filter test_delete_cascade test_agent_build test_builder_flow test_http_poll; do
+          for t in test_labels test_normalize test_auth test_api_keys test_pricing test_agents test_catalog_sync test_cli test_status test_usage test_slack test_slack_verify test_slack_ask test_degraded test_loki test_projects test_rius_rca test_rca_fanout test_ai_sre_demo test_seed test_session_flow test_challenger_workflow test_plugin_challenger test_tracing test_agent_runs_filter test_delete_cascade test_agent_build test_builder_flow test_http_poll; do
             echo "== $t =="
             python "tests/$t.py"
           done
