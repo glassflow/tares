@@ -266,6 +266,19 @@ b, strong { font-weight: 600; }
   position: sticky;
   top: 0;
   height: 100vh;
+  /* Taller than the viewport on a laptop screen: scroll the sidebar itself rather than clip
+     Settings, Sign out and the version at the bottom (TR-291). */
+  overflow-y: auto;
+  min-height: 0;
+  box-sizing: border-box;
+}
+/* A short screen: tighter rows so the whole sidebar fits without scrolling in most cases. */
+@media (max-height: 820px) {
+  .sidebar { padding: 12px 14px; }
+  .sidebar .brand { margin-bottom: 18px; }
+  .navlink { padding: 5px 10px; }
+  .nav-group { margin-bottom: 4px; }
+  .sidebar .sep { margin: 4px 6px; }
 }
 .brand {
   font-size: 19px;
