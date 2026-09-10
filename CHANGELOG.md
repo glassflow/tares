@@ -3,6 +3,14 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.29.1] - 2026-09-10
+
+### Fixed
+- The write-back reported the wrong delivery id when more alerts for the same service arrived
+  while the agent was running. The `key` is now resolved when the run starts, so it names the
+  firing that woke the agent, and the body carries that firing's labels as `labels` so a receiver
+  can check the attribution instead of filing the report by `key` alone (TR-294).
+
 ## [1.29.0] - 2026-09-08
 
 ### Added
