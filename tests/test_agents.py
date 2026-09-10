@@ -16,6 +16,11 @@ def ck(l, c, d=""):
     global P, F; P += 1 if c else 0; F += 0 if c else 1
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
+def start_daemon(env):
+    proc = subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
+                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return proc
+
 SEED = "/tmp/agents_catalog.yaml"
 with open(SEED, "w") as fh:
     fh.write(
@@ -33,12 +38,27 @@ FINDING = "checkout is returning 500s since the 14:02 deploy; roll it back."
 
 # ── stub Anthropic: one tool_use round, then the conclusion ──────────────────
 _calls = []
+_headers = []   # the request headers per call: which credential reached the wire
+_hooks = []     # write-back bodies received by the fake customer endpoint
+
+
+class Hook(BaseHTTPRequestHandler):
+    """The customer's write-back endpoint: records the body; a path of /reject answers 401."""
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+        _hooks.append((self.path, body))
+        status = 401 if self.path == "/reject" else 200
+        self.send_response(status); self.send_header("content-length", "0"); self.end_headers()
+
+    def log_message(self, *a):
+        pass
 
 
 class Stub(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["content-length"])))
         _calls.append(body)
+        _headers.append({k.lower(): v for k, v in self.headers.items()})
         # First call: ask for a wider read (exercises the tool path). Second: conclude.
         if len(_calls) == 1:
             content = [{"type": "tool_use", "id": "tu_1", "name": "read",
@@ -85,21 +105,34 @@ async def main():
 
     stub = HTTPServer(("127.0.0.1", int(STUB_PORT)), Stub)
     threading.Thread(target=stub.serve_forever, daemon=True).start()
+    hook = HTTPServer(("127.0.0.1", 0), Hook)
+    threading.Thread(target=hook.serve_forever, daemon=True).start()
+    HOOK = f"http://127.0.0.1:{hook.server_port}"
 
     env = {**os.environ, "TARES_DB": DB, "TARES_CATALOG": SEED, "TARES_PORT": PORT,
-           "TARES_OTLP_GRPC_PORT": "off", "ANTHROPIC_API_KEY": "sk-test",
+           "TARES_OTLP_GRPC_PORT": "off", "ANTHROPIC_API_KEY": "sk-test","ANTHROPIC_AUTH_TOKEN": "test_token",
            "TARES_ANTHROPIC_BASE": f"http://127.0.0.1:{STUB_PORT}",
            "TARES_TRIGGER_DEBOUNCE_SECONDS": "0"}
-    proc = subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
-                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    proc = start_daemon(env)
     B = f"http://127.0.0.1:{PORT}"
     try:
         if not await _wait(f"{B}/health"):
             ck("daemon up", False); return
         async with httpx.AsyncClient(timeout=20) as cx:
+            # ── the token and key: env-provided, token WINS over the key ────────────────────────
+            k = (await cx.get(f"{B}/api/settings/anthropic-key")).json()
+            ck("key reported configured from env", k["configured"] and k["source"].startswith("env:ANTHROPIC_AUTH_TOKEN"), str(k))
+        proc.terminate()
+        proc.wait(timeout=5)
+        env.pop("ANTHROPIC_AUTH_TOKEN", None)
+        proc = start_daemon(env)
+
+        if not await _wait(f"{B}/health"):
+            ck("daemon up", False); return
+        async with httpx.AsyncClient(timeout=20) as cx:
             # ── the key: env-provided, never returned ────────────────────────
             k = (await cx.get(f"{B}/api/settings/anthropic-key")).json()
-            ck("key reported configured from env", k["configured"] and k["source"].startswith("env:"), str(k))
+            ck("key reported configured from env", k["configured"] and k["source"].startswith("env:ANTHROPIC_API_KEY"), str(k))
             ck("key value is never returned", "sk-test" not in json.dumps(k), str(k))
 
             # ── precedence: a stored key WINS over the env key (trial cells depend on it) ──
@@ -213,6 +246,38 @@ async def main():
             ck("finding is on the entity's timeline", FINDING in rd["payload"], rd["payload"][:200])
             ck("findings source contributes to the read", "findings" in rd["sources"], str(rd["sources"]))
 
+            # ── the write-back reports a label as `key` and records its delivery (TR-285) ──
+            r = await cx.put(f"{B}/api/sources/evt", json={"name": "evt", "connector": "webhook", "poll": "5s", "config": {
+                "labels": [{"name": "service", "field": "service", "primary": True},
+                           {"name": "msg", "field": "msg"}]}})
+            ck("source gains a msg label", r.status_code == 200, r.text[:200])
+            r = await cx.put(f"{B}/api/agents/builtin/first-look", json={
+                "name": "first-look", "trigger": "incident", "prompt": "Take a first look.",
+                "webhook_url": f"{HOOK}/findings", "webhook_key_label": "msg"})
+            ck("write-back with a key label saved", r.status_code == 200, r.text[:200])
+            ag = next(a for a in (await cx.get(f"{B}/api/agents/builtin")).json()["agents"] if a["name"] == "first-look")
+            ck("key label reported by the API", ag.get("webhook_key_label") == "msg", str(ag.get("webhook_key_label")))
+            r = await cx.put(f"{B}/api/agents/builtin/first-look", json={
+                "name": "first-look", "trigger": "incident", "prompt": "x", "webhook_url": f"{HOOK}/findings", "webhook_key_label": "not a label!"})
+            ck("key label must be a label name", r.status_code == 400, r.text[:120])
+            r = await cx.put(f"{B}/api/agents/builtin/first-look", json={
+                "name": "first-look", "trigger": "incident", "prompt": "Take a first look.",
+                "webhook_url": f"{HOOK}/findings", "webhook_key_label": "msg"})
+
+            # ── a gateway saved in Settings (TR-281): URL and token, per request, over the env ──
+            g = (await cx.get(f"{B}/api/settings/gateway")).json()
+            ck("gateway status: the env base URL shows as such", g["configured"] and g["source"] == "env:TARES_ANTHROPIC_BASE"
+               and not g["stored"], str(g))
+            r = await cx.put(f"{B}/api/settings/gateway", json={"url": "not a url", "token": ""})
+            ck("gateway url is checked", r.status_code == 400, r.text[:120])
+            r = await cx.put(f"{B}/api/settings/gateway", json={"url": f"http://127.0.0.1:{STUB_PORT}/", "token": "gw-tok"})
+            ck("gateway saved", r.status_code == 200 and r.json()["source"] == "console" and r.json()["token_stored"], r.text[:200])
+            g = (await cx.get(f"{B}/api/settings/gateway")).json()
+            ck("gateway token never returned", "gw-tok" not in json.dumps(g), str(g))
+            k = (await cx.get(f"{B}/api/settings/anthropic-key")).json()
+            ck("the stored gateway token is the credential in use", k["source"] == "console:gateway", str(k))
+            headers_before = len(_headers)
+
             # ── the next run opens with the previous finding (a head start) ──
             await asyncio.sleep(1.2)   # past the trigger cooldown
             for i in range(3):
@@ -221,6 +286,26 @@ async def main():
                 rs = (await cx.get(f"{B}/api/agents/builtin/first-look/runs")).json()
                 return len(rs) >= 2 and rs[0]["status"] != "running"
             ck("a second run completed", await _until(_ran_again), "no second run")
+            # the write-back is posted after the run is marked ok; wait for its record
+            async def _delivered_run():
+                rs = (await cx.get(f"{B}/api/agents/builtin/first-look/runs")).json()
+                return bool(rs) and rs[0].get("delivery") is not None
+            ck("write-back delivered", await _until(_delivered_run), "no delivery recorded")
+            hooks_now = [h for h in _hooks if h[0] == "/findings"]
+            hb = hooks_now[-1][1] if hooks_now else {}
+            ck("write-back key is the label's value on the latest firing event",
+               hb.get("key", "").startswith("500 again"), str(hb.get("key")))
+            ck("write-back still carries the finding and the entity's trigger",
+               hb.get("finding") == FINDING and hb.get("trigger") == "incident", str(hb)[:200])
+            rs = (await cx.get(f"{B}/api/agents/builtin/first-look/runs")).json()
+            ck("run records the delivery", rs and rs[0].get("delivery") == "ok", str(rs[:1])[:200])
+            ck("the run reached the gateway with the bearer token",
+               len(_headers) > headers_before and _headers[-1].get("authorization") == "Bearer gw-tok"
+               and "x-api-key" not in _headers[-1], str(_headers[-1:]))
+            r = await cx.delete(f"{B}/api/settings/gateway")
+            ck("clearing the gateway falls back to the env", r.status_code == 200 and r.json()["source"] == "env:TARES_ANTHROPIC_BASE", r.text[:200])
+            k = (await cx.get(f"{B}/api/settings/anthropic-key")).json()
+            ck("credential falls back to the env key", k["source"] == "env:ANTHROPIC_API_KEY", str(k))
             opening = str(_calls[-1]["messages"][0]["content"])
             ck("the second run opens with the first run's finding",
                "earlier run" in opening and FINDING in opening, opening[:300])
@@ -273,8 +358,7 @@ async def main():
         ck("orphan counts toward the cap while it is running", st.agent_runs_today("ghost") == 1)
         st.con.close()
 
-        proc = subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
-                                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = start_daemon(env)
         try:
             if not await _wait(f"{B}/health"):
                 ck("daemon back up", False)

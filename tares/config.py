@@ -5,6 +5,9 @@ Declares the sources (what to ingest and how), the views (named query shapes), a
 """
 from __future__ import annotations
 
+import os
+
+
 def reject_legacy_db(db_path: str) -> None:
     """Refuse to start if the database we are about to create sits next to a pre-1.0 one.
 
@@ -128,6 +131,7 @@ class AgentCfg:
     slack_channel: str = ""   # workspace-bot channel id; wins over slack_webhook when both set
     webhook_url: str = ""     # write-back: findings + run metadata POSTed here
     webhook_token: str = ""   # optional bearer token for the write-back (a secret)
+    webhook_key_label: str = ""   # the write-back reports this label's value as `key`, else the entity
     mcp_servers: list = dc_field(default_factory=list)   # registry names this agent may use
     max_rounds: int | None = None   # model rounds per run; None = default for the agent's shape
     budget_usd: float | None = None  # lifetime spend cap in USD; None = no budget
@@ -235,6 +239,7 @@ def _agent_from_dict(a: dict, enabled: bool = False) -> AgentCfg:
         slack_channel=a.get("slack_channel") or "",
         webhook_url=a.get("webhook_url") or "",
         webhook_token=a.get("webhook_token") or "",
+        webhook_key_label=a.get("webhook_key_label") or "",
         mcp_servers=list(a.get("mcp_servers") or []),
         max_rounds=(int(a["max_rounds"]) if a.get("max_rounds") not in (None, "") else None),
         budget_usd=(float(a["budget_usd"]) if a.get("budget_usd") not in (None, "") else None),
@@ -365,7 +370,8 @@ def import_catalog_dict(store, raw: dict, engine=None) -> dict:
                                    (int(a["max_rounds"]) if a.get("max_rounds") not in (None, "")
                                     else None),
                                    (float(a["budget_usd"]) if a.get("budget_usd") not in (None, "")
-                                    else None))
+                                    else None),
+                                   webhook_key_label=a.get("webhook_key_label"))
         # enabled ⟺ a subscription to the trigger. Reflect the document's state so an enabled agent
         # round-trips: add the internal subscription if enabled, remove it if not.
         url = agent_url(a["name"])
@@ -490,6 +496,7 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
          **({"model": a["model"]} if a.get("model") else {}),
          **({"slack_channel": a["slack_channel"]} if a.get("slack_channel") else {}),
          **({"webhook_url": a["webhook_url"]} if a.get("webhook_url") else {}),
+         **({"webhook_key_label": a["webhook_key_label"]} if a.get("webhook_key_label") else {}),
          **({"mcp_servers": a["mcp_servers"]} if a.get("mcp_servers") else {}),
          **({"max_rounds": a["max_rounds"]} if a.get("max_rounds") else {}),
          **({"budget_usd": a["budget_usd"]} if a.get("budget_usd") else {}),
@@ -673,6 +680,10 @@ def validate_source_dict(s: dict) -> None:
             f"source {s['name']!r}: unknown connector {s['connector']!r} "
             f"(available: {', '.join(sorted(REGISTRY))})")
     _check_duration(s.get("poll", "5s"), f"source {s['name']!r} poll")
+    floor = getattr(REGISTRY[s["connector"]], "MIN_POLL_SECONDS", None)
+    if floor and parse_duration(s.get("poll", "5s")) < floor:
+        raise CatalogError(f"source {s['name']!r}: {s['connector']} polls a third party API; "
+                           f"poll must be at least {floor}s")
     if not isinstance(s.get("config", {}) or {}, dict):
         raise CatalogError(f"source {s['name']!r}: config must be a mapping")
     _validate_labels(s)
@@ -742,6 +753,11 @@ def validate_trigger_dict(t: dict, view_names: set) -> None:
 # The built-in source findings are written to. Named here (not in builtin_agents.py) because the
 # loop guard below is a catalog-validation concern and config must not import the runtime.
 FINDINGS_SOURCE = "findings"
+# Overridable so the end-to-end test can point at a stub instead of the real API.
+API_BASE = os.getenv(
+    "ANTHROPIC_BASE_URL",
+    os.getenv("TARES_ANTHROPIC_BASE", "https://api.anthropic.com"),
+).rstrip("/")
 
 _AGENT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 MAX_PROMPT_CHARS = 8000
@@ -777,6 +793,9 @@ def validate_agent_dict(a: dict, trigger_names: set, triggers: dict | None = Non
     wurl = str(a.get("webhook_url") or "").strip()
     if wurl and not wurl.startswith("https://") and not wurl.startswith("http://"):
         raise CatalogError(f"agent {a['name']!r}: webhook_url must be an http(s) URL")
+    wkl = str(a.get("webhook_key_label") or "").strip()
+    if wkl and not re.fullmatch(r"[A-Za-z0-9_.-]+", wkl):
+        raise CatalogError(f"agent {a['name']!r}: webhook_key_label must be a label name")
     servers = a.get("mcp_servers") or []
     if not isinstance(servers, list) or not all(isinstance(x, str) for x in servers):
         raise CatalogError(f"agent {a['name']!r}: mcp_servers must be a list of server names")

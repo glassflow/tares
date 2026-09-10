@@ -85,6 +85,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   const [slack, setSlack] = useState("");
   const [writebackOn, setWritebackOn] = useState(!!initial?.webhook_url || deliveryKind === "webhook");
   const [webhookUrl, setWebhookUrl] = useState(initial?.webhook_url ?? "");
+  const [webhookKeyLabel, setWebhookKeyLabel] = useState(initial?.webhook_key_label ?? "");
   const [webhookToken, setWebhookToken] = useState("");
   const [mcpSel, setMcpSel] = useState<string[]>(initial?.mcp_servers ?? []);
   // "" = default (6 rounds, or 12 once the agent uses external MCP servers).
@@ -136,6 +137,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
       slack_webhook_clear: !hookOn,
       webhook_url: writebackOn ? webhookUrl.trim() : "",
       webhook_token: writebackOn ? webhookToken.trim() : "",
+      webhook_key_label: writebackOn ? webhookKeyLabel.trim() : "",
       mcp_servers: mcpSel,
       max_rounds: maxRounds.trim() ? Number(maxRounds) : null,
       budget_usd: budget.trim() ? Number(budget) : null,
@@ -274,6 +276,16 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
           <span className="help">
             finding + run metadata as JSON; the token is sent as a bearer header
           </span>
+          <label className="field" style={{ marginTop: 8 }}>
+            <span className="lbl">report as key</span>
+            <input type="text" className="mono" placeholder="the entity (default)"
+                   value={webhookKeyLabel} onChange={(e) => setWebhookKeyLabel(e.target.value)} />
+            <span className="help">
+              a label name; the POST's <span className="mono">key</span> becomes that label's value on
+              the firing that woke the run, for a system that files reports by its own id. Empty
+              reports the entity.
+            </span>
+          </label>
         </OptionRow>
       </div>
 

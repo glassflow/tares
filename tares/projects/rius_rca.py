@@ -8,8 +8,11 @@ server and the write-back webhook POSTs the finding to Rius's callback, keyed by
 Every knob here is the hand-built configuration proven on a live cell on 2026-09-01 (TR-223
 comment: run_7a954505c5c7 and friends — 4/4 green against staging Rius), with the five traps from
 that session baked in:
-  1. the KEY is stamped at ingest by the source's PRIMARY LABEL (delivery_id) — never rely on
-     view.key_field for it (TR-226/TR-228);
+  1. the KEY is stamped at ingest by the source's PRIMARY LABEL, never by view.key_field
+     (TR-226/TR-228). The entity is the SERVICE (TR-285): a delivery id is new on every firing,
+     so a cooldown keyed by it never held and one noisy service woke the agent on every alert;
+     keyed by service, one investigation per service per 5 minutes, and the timeline the agent
+     reads is that service's history. The delivery id stays a label on every event;
   2. the prompt names the Rius tool chain and demands tool-grounded claims — it must not carry
      the demo agents' "no live access" language, which makes an MCP-equipped agent refuse to
      query;
@@ -111,21 +114,24 @@ class RiusRca(Template):
                 "config": {
                     "event_type": "alert_firing",
                     "text_template": TEXT_TEMPLATE,
-                    # The primary label stamps the stored key at ingest — the axis the trigger
-                    # cools down per, and the `key` the callback carries back to Rius.
+                    # The primary label stamps the stored key at ingest, the axis the trigger
+                    # cools down per and the `key` the callback carries back to Rius.
                     "labels": [
-                        {"name": "delivery_id", "field": "delivery_id", "primary": True},
-                        {"name": "service", "field": "service"},
+                        {"name": "service", "field": "service", "primary": True},
+                        {"name": "delivery_id", "field": "delivery_id"},
                         {"name": "workspace_id", "field": "workspace_id"},
                         {"name": "alert_id", "field": "alert_id"},
+                        {"name": "rule", "field": "rule"},
                     ],
                 }}),
             PlannedObject("view", "view", {
-                "name": VIEW, "key_field": "delivery_id", "sources": [SOURCE]}),
+                "name": VIEW, "key_field": "service", "sources": [SOURCE]}),
+            # one investigation per service per 5 minutes: a service that keeps alerting does
+            # not wake the agent again until the cooldown is over (TR-285)
             PlannedObject("trigger", "trigger", {
                 "name": TRIGGER, "view": VIEW,
                 "condition": {"aggregate": "count", "predicate": "> 0", "window": "5m"},
-                "cooldown": "30s"}),
+                "cooldown": "5m"}),
             PlannedObject("mcp_server", "mcp", {
                 "name": MCP, "url": p["mcp_url"], "auth_header": "Authorization",
                 "auth_value": f"Bearer {p['mcp_token']}"}),
@@ -134,6 +140,9 @@ class RiusRca(Template):
                  "prompt": p.get("prompt") or PROMPT,
                  "mcp_servers": [MCP],
                  "webhook_url": p["callback_url"], "webhook_token": p["callback_token"],
+                 # the entity is the service; the report is attributed by delivery id, so the
+                 # callback's `key` reports that label from the firing that woke the run
+                 "webhook_key_label": "delivery_id",
                  "max_rounds": p["max_rounds"], "enabled": True}
         if p.get("budget_usd") is not None:
             agent["budget_usd"] = p["budget_usd"]

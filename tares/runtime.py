@@ -36,6 +36,10 @@ class SourceRuntime:
 class Runtime:
     def __init__(self, store, dispatcher):
         self.store = store
+        # Set by the daemon: returns a reason while ingest is paused for storage, else None.
+        # Poll connectors skip their fetch while it is set, so a full disk stops growth from
+        # every direction, not only the push endpoints.
+        self.storage_full = None
         self.dispatcher = dispatcher
         self.catalog: Catalog = catalog_from_db(store)
         self.sources: dict[str, SourceRuntime] = {}
@@ -95,6 +99,11 @@ class Runtime:
             h = rt.health
             h.last_poll_at = now_utc()
             h.polls += 1
+            reason = self.storage_full() if self.storage_full else None
+            if reason:
+                h.last_error, h.status = reason, "paused"
+                await asyncio.sleep(rt.cfg.poll_seconds)
+                continue
             try:
                 envelopes = await conn.poll()
                 self.store.append(envelopes)

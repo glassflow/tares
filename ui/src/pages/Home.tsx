@@ -212,11 +212,18 @@ function StoragePanel({ usage, error, reload, onDisk, pct }: {
 
       {u && (
         <>
-          {pct !== null && pct >= 80 && (
+          {u.ingest_paused ? (
+            <div className="alert error">
+              <strong>Ingest is paused: storage {pct}% full.</strong> Producers get 507 and poll
+              connectors wait, so the database never fills its disk. Reads, agents and the console
+              keep working. Grow the volume or delete a source's events; ingest resumes on its own
+              once there is room.
+            </div>
+          ) : pct !== null && pct >= 80 && (
             <div className="alert warn">
               <strong>Storage {pct}% full</strong> · {formatBytes(onDisk)} of the{" "}
-              {formatBytes(u.max_bytes)} limit for this instance. Ingest keeps working until it
-              runs out; free space or raise <code>TARES_MAX_DB_SIZE</code> before it does.
+              {formatBytes(u.max_bytes)} {u.max_bytes_source === "volume" ? "volume" : "limit"} for this
+              instance. At 95% ingest pauses; grow the volume or free space before it does.
             </div>
           )}
 
@@ -227,8 +234,9 @@ function StoragePanel({ usage, error, reload, onDisk, pct }: {
                       style={{ width: `${Math.min(100, Math.max(0, pct))}%` }} />
               </div>
               <p className="help" style={{ marginBottom: 0 }}>
-                <strong>{formatBytes(onDisk)}</strong> of {formatBytes(u.max_bytes)} used ({pct}%)
-                {u.disk_free != null && <> · {formatBytes(u.disk_free)} free on the volume</>}
+                <strong>{formatBytes(onDisk)}</strong> of {formatBytes(u.max_bytes)}
+                {u.max_bytes_source === "volume" ? " on the volume" : " limit"} used ({pct}%)
+                {u.max_bytes_source === "env" && u.disk_free != null && <> · {formatBytes(u.disk_free)} free on the volume</>}
               </p>
             </>
           ) : (

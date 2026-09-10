@@ -17,6 +17,7 @@ import secrets
 import shutil
 import traceback
 import uuid
+from urllib.parse import urlsplit
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -41,7 +42,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL,
                              MAX_ROUNDS_LIMIT as AGENT_MAX_ROUNDS_LIMIT,
                              MAX_ROUNDS_WITH_MCP as AGENT_MAX_ROUNDS_WITH_MCP,
                              PRESETS as AGENT_PRESETS, AgentRunner, effective_max_rounds,
-                             resolve_key as resolve_anthropic_key)
+                             resolve_anthropic_headers, resolve_api_base, DEFAULT_API_BASE)
 from .runtime import Runtime
 from . import slack as slack_mod
 from . import slack_verify
@@ -75,7 +76,8 @@ LOGIN_URL = os.getenv("TARES_LOGIN_URL", "").strip()
 # self-host: no link. Public, non-secret, surfaced on /health next to login_url.
 WORKSPACE_URL = os.getenv("TARES_WORKSPACE_URL", "").strip()
 # The Anthropic key for the in-app Ask agent (and Tares agents) is resolved at request time via
-# resolve_anthropic_key(store): the console-stored key, else env ANTHROPIC_API_KEY.
+# resolve_anthropic_headers(store): Resolve headers from the console-stored key,
+# then ANTHROPIC_AUTH_TOKEN, then ANTHROPIC_API_KEY.
 # Never returned by any API — capabilities exposes only a boolean.
 # The Slack bot token behind the slack:// dispatch sink keeps the OPPOSITE order via
 # resolve_slack_token(store): env TARES_SLACK_BOT_TOKEN wins over the console-stored value
@@ -147,7 +149,12 @@ def _parse_size(v: str | None) -> int | None:
     return n if n > 0 else None
 
 
+# The operator's explicit limit; None means "the volume the data directory sits on", which is
+# what a cell wants: a grown volume is reflected on the next mount, no chart value to refresh.
 MAX_DB_SIZE = _parse_size(os.getenv("TARES_MAX_DB_SIZE"))
+# Above this share of the limit ingest is refused (507) and polls pause, so the database never
+# fills its disk and dies (glassflow-web, 2026-09-08). Reads, findings and the console keep working.
+INGEST_PAUSE_PCT = float(os.getenv("TARES_INGEST_PAUSE_PCT", "95"))
 
 
 def _ui_dist() -> Path:
@@ -165,9 +172,38 @@ def _ui_dist() -> Path:
 
 UI_DIST = _ui_dist()
 
-# /health reports `degraded` at or above this share of TARES_MAX_DB_SIZE. On the 0-100 scale of
-# /api/usage's pct_used, so 90 means 90% — not 0.9. Unknown (no limit configured) is never degraded.
+# /health reports `degraded` at or above this share of the storage limit. On the 0-100 scale of
+# /api/usage's pct_used, so 90 means 90% — not 0.9. Unknown (no limit and no volume) is never degraded.
 DEGRADED_PCT = float(os.getenv("TARES_DEGRADED_PCT", "90"))
+
+
+def storage_limit(db_path: str) -> tuple[int | None, str]:
+    """(max_bytes, where it comes from): TARES_MAX_DB_SIZE when set ("env"), else the total size
+    of the volume the database sits on ("volume"). None only when neither is known."""
+    if MAX_DB_SIZE:
+        return MAX_DB_SIZE, "env"
+    try:
+        return shutil.disk_usage(os.path.dirname(os.path.abspath(db_path)) or ".").total, "volume"
+    except OSError:
+        return None, ""
+
+
+def storage_state(store, db_path: str) -> dict:
+    """How full this instance is against its limit, and whether ingest is paused because of it.
+    stat() calls only, so every probe and every ingest can afford it."""
+    limit, origin = storage_limit(db_path)
+    if not limit:
+        return {"max_bytes": None, "max_bytes_source": "", "pct_used": None, "paused": False, "detail": None}
+    pct = round(100 * store.disk_bytes() / limit, 2)
+    paused = pct >= INGEST_PAUSE_PCT
+    detail = None
+    if paused:
+        detail = (f"ingest paused: storage {pct}% full of the {limit} byte "
+                  f"{'limit' if origin == 'env' else 'volume'}; grow the volume or delete data")
+    elif pct >= DEGRADED_PCT:
+        detail = f"storage {pct}% full ({limit} byte {'limit' if origin == 'env' else 'volume'})"
+    return {"max_bytes": limit, "max_bytes_source": origin, "pct_used": pct, "paused": paused,
+            "detail": detail}
 
 # How long a `/tares ask` may think before Slack gets an apology instead of an answer. The user
 # is staring at a "…" in a channel, so this is deliberately much shorter than the agent's own
@@ -301,6 +337,7 @@ class AgentIn(BaseModel):
     slack_channel: str = ""      # workspace-bot channel; the primary notification path
     webhook_url: str = ""        # write-back: findings + run metadata POSTed here
     webhook_token: str = ""      # optional bearer for the write-back (secret; blank-to-keep)
+    webhook_key_label: str = ""  # the write-back reports this label's value as `key`; "" = the entity
     slack_webhook_clear: bool = False   # blank means keep (it is a secret), so clearing is explicit
     mcp_servers: list[str] = []  # registry names this agent may use
     max_rounds: int | None = None   # model rounds per run; None = default (6, or 12 with MCP servers)
@@ -370,6 +407,11 @@ class AnthropicKeyIn(BaseModel):
     key: str    # blank-to-keep is not offered here: the only edits are "set a new one" or DELETE
 
 
+class GatewayIn(BaseModel):
+    url: str
+    token: str = ""    # blank keeps the stored token; the URL alone can change
+
+
 class SlackTokenIn(BaseModel):
     token: str  # same contract as AnthropicKeyIn: set a new one, or DELETE to clear
 
@@ -425,6 +467,8 @@ def make_app() -> FastAPI:
 
     dispatcher = Dispatcher(store)
     runtime = Runtime(store, dispatcher)
+    # poll connectors hold off while ingest is paused for storage (see storage_state)
+    runtime.storage_full = lambda: storage_state(store, DB_PATH)["detail"] if storage_state(store, DB_PATH)["paused"] else None
     # Projects: templates instantiated with params; they create and own ordinary catalog objects.
     projects = ProjectEngine(store, reload=runtime.reload_catalog, runtime=runtime)
     # Tares agents are the second kind of subscriber to a firing (the first is an external agent's
@@ -568,11 +612,11 @@ def make_app() -> FastAPI:
             store.ping()
         except Exception as e:
             status, detail = "down", f"database unavailable: {e}"
-        if status == "ok" and MAX_DB_SIZE:
-            pct = round(100 * store.disk_bytes() / MAX_DB_SIZE, 2)
-            if pct >= DEGRADED_PCT:
-                status = "degraded"
-                detail = f"storage {pct}% full ({MAX_DB_SIZE} byte limit)"
+        if status == "ok":
+            st = storage_state(store, DB_PATH)
+            pct = st["pct_used"]
+            if st["detail"]:
+                status, detail = "degraded", st["detail"]
         body = {"status": status, "auth_required": bool(AUTH_TOKEN),
                 "sources": [] if AUTH_TOKEN else list(runtime.catalog.sources),
                 "pct_used": pct, "version": _installed_version(),
@@ -851,8 +895,16 @@ def make_app() -> FastAPI:
         # Vercel (and similar) probe the endpoint before saving a drain — answer with the verify header.
         return JSONResponse({"ok": True}, headers=_verify_headers(request))
 
+    def _refuse_if_full() -> None:
+        """507 Insufficient Storage when the store is at the pause mark: the producer gets a plain
+        reason and can retry later; the database keeps working for everything else."""
+        st = storage_state(store, DB_PATH)
+        if st["paused"]:
+            raise HTTPException(status_code=507, detail=st["detail"])
+
     @app.post("/ingest/{token}", status_code=202)
     async def ingest(token: str, request: Request):
+        _refuse_if_full()
         body = await _parse_ingest_body(request)
         try:
             n = await runtime.ingest(token, body)
@@ -894,6 +946,7 @@ def make_app() -> FastAPI:
             _err(e)
 
     async def _otlp(signal: str, request: Request):
+        _refuse_if_full()
         try:
             body = await request.json()
         except Exception:
@@ -976,13 +1029,15 @@ def make_app() -> FastAPI:
             ver = _pkg_version("tares")   # the installed release (release.sh bumps pyproject.toml)
         except Exception:
             ver = None
+        url_configured = resolve_api_base(store)[1] != ""
         return {
             "version": ver,
             "discover_docker": shutil.which("docker") is not None or os.path.exists("/var/run/docker.sock"),
             # the Ask assistant runs on the same resolved key as Tares agents (env ANTHROPIC_API_KEY
             # or the console-stored key) — so once a key is set anywhere, the Ask chat stops
             # prompting for a browser-pasted one.
-            "agent_key_configured": bool(resolve_anthropic_key(store)[0]),
+            "agent_key_configured": bool(resolve_anthropic_headers(store)[0]),
+            "url_configured": url_configured,
             # gates the "subscribe a Slack channel" affordance on a trigger — offering it with no
             # bot token configured only leads to a 400.
             "slack_configured": bool(resolve_slack_token(store)[0]),
@@ -1312,8 +1367,8 @@ def make_app() -> FastAPI:
         # `X-Anthropic-Key` header override, which the console filled from localStorage — so a key
         # added on the Ask page made Ask work while Slack and trigger-woken agents still reported
         # none configured, having no browser to read it from (NF-125).
-        key, key_origin = resolve_anthropic_key(store)
-        if not key:
+        headers, key_origin = resolve_anthropic_headers(store)
+        if not headers:
             _err(ValueError("add your Anthropic API key to use the assistant"), 400)
         body = await request.json()
         # the daemon's own token, so the agent's tool self-calls clear the auth middleware
@@ -1325,10 +1380,11 @@ def make_app() -> FastAPI:
         if mode == "build" and step not in BUILD_STEPS:
             _err(ValueError(f"build step must be one of {', '.join(BUILD_STEPS)}"), 400)
         return StreamingResponse(
-            run_agent(key, body.get("messages") or [],
+            run_agent(headers, body.get("messages") or [],
                       model=body.get("model"), self_headers=self_headers,
                       on_usage=lambda m, u: _record_ask_usage(m, u, key_source=key_origin),
-                      tracer=tracing.tracer_for("ask"), mode=mode, step=step),
+                      tracer=tracing.tracer_for("ask"), mode=mode, step=step,
+                      base_url=resolve_api_base(store)[0]),
             media_type="text/event-stream")
 
     # ── MCP connections — external tool servers a Tares agent can opt into ─────
@@ -1700,7 +1756,7 @@ def make_app() -> FastAPI:
         """Tares agent definitions plus the state the UI needs to explain why one isn't running:
         no key configured is the common case on a fresh install and looks identical to "disabled"
         without this."""
-        key, origin = resolve_anthropic_key(store)
+        headers, origin = resolve_anthropic_headers(store)
         stats = store.agent_stats()
         zero = {"runs": 0, "ok": 0, "finished": 0, "avg_duration_ms": None,
                 "cost_usd": None, "input_tokens": 0, "output_tokens": 0, "uncosted_runs": 0}
@@ -1714,6 +1770,7 @@ def make_app() -> FastAPI:
                          "slack_channel": a.get("slack_channel") or "",
                          "webhook_url": a.get("webhook_url") or "",
                          "webhook_token_configured": bool(a.get("webhook_token")),
+                         "webhook_key_label": a.get("webhook_key_label") or "",
                          "mcp_servers": a.get("mcp_servers") or [],
                          "max_rounds": a.get("max_rounds"),
                          "budget_usd": a.get("budget_usd"),
@@ -1721,7 +1778,7 @@ def make_app() -> FastAPI:
                          "enabled": _agent_enabled(a["name"]), "updated_at": a.get("updated_at"),
                          "owned_by": a.get("owned_by"), "customized": bool(a.get("customized")),
                          "last_run": runs[0] if runs else None})
-        return {"agents": rows, "key_configured": bool(key), "key_source": origin,
+        return {"agents": rows, "key_configured": bool(headers), "key_source": origin,
                 "models": AGENT_MODELS, "default_model": AGENT_DEFAULT_MODEL,
                 "default_max_rounds": AGENT_MAX_ROUNDS,
                 "default_max_rounds_with_mcp": AGENT_MAX_ROUNDS_WITH_MCP,
@@ -1739,7 +1796,8 @@ def make_app() -> FastAPI:
         store.upsert_catalog_agent(body.name, body.trigger, body.prompt, body.slack_webhook,
                                    body.model, body.slack_channel,
                                    body.webhook_url, body.webhook_token, body.mcp_servers,
-                                   body.max_rounds, body.budget_usd)
+                                   body.max_rounds, body.budget_usd,
+                                   webhook_key_label=body.webhook_key_label)
         runtime.reload_catalog()
         return {"ok": True, "enabled": False,
                 "note": "agents start disabled; enable it to run on the next firing"}
@@ -1764,7 +1822,7 @@ def make_app() -> FastAPI:
         store.upsert_catalog_agent(name, body.trigger, body.prompt, hook,
                                    body.model, body.slack_channel,
                                    body.webhook_url, wtoken, body.mcp_servers, body.max_rounds,
-                                   body.budget_usd)
+                                   body.budget_usd, webhook_key_label=body.webhook_key_label)
         store.mark_customized("agent", name)
         # if the trigger changed while enabled, re-point the subscription so the agent fires on the
         # new trigger (the subscription, not the definition, is what the dispatcher reads).
@@ -1789,8 +1847,8 @@ def make_app() -> FastAPI:
         agent = store.get_catalog_agent(name)
         if agent is None:
             _err(KeyError(f"unknown agent {name!r}"), 404)
-        key, _ = resolve_anthropic_key(store)
-        if not key:
+        headers, _ = resolve_anthropic_headers(store)
+        if not headers:
             _err(ValueError("no Anthropic key configured; set ANTHROPIC_API_KEY or add one "
                             "under Settings before enabling an agent"))
         # enable = subscribe to the trigger (the same wiring an external agent has). Idempotent.
@@ -1849,8 +1907,8 @@ def make_app() -> FastAPI:
         """Never returns the key — only whether one is resolvable and where it came from. A key
         saved here takes over from the deployment's env key; `env_overrides` is kept for API
         compatibility and can now only be true when no key is stored."""
-        key, origin = resolve_anthropic_key(store)
-        return {"configured": bool(key), "source": origin,
+        headers, origin = resolve_anthropic_headers(store)
+        return {"configured": bool(headers), "source": origin,
                 "stored": bool(store.get_setting("anthropic_key")),
                 "env_overrides": origin.startswith("env:")}
 
@@ -1860,7 +1918,7 @@ def make_app() -> FastAPI:
         if not key:
             _err(ValueError("key is required (use DELETE to remove the stored key)"))
         store.set_setting("anthropic_key", key)
-        _, origin = resolve_anthropic_key(store)
+        _, origin = resolve_anthropic_headers(store)
         return {"ok": True, "source": origin}
 
     @app.delete("/api/settings/anthropic-key")
@@ -1868,8 +1926,42 @@ def make_app() -> FastAPI:
         """Removing the stored key falls back to the deployment's env key when one exists — on a
         hosted trial cell that is the trial key, until its operator removes it too."""
         store.set_setting("anthropic_key", None)
-        key, origin = resolve_anthropic_key(store)
+        key, origin = resolve_anthropic_headers(store)
         return {"ok": True, "configured": bool(key), "source": origin}
+
+    # ── model access through a gateway (TR-281): stored on the cell like the key ──────────
+    # Where model calls go, and the credential for it. Saved here they win over the environment,
+    # so a cloud customer with a mandated proxy configures it on their own cell and the platform
+    # key stops being used, the same as when they store their own key. The token is write-only.
+    def _gateway_status() -> dict:
+        url, origin = resolve_api_base(store)
+        return {"configured": origin != "", "url": url if origin else "", "source": origin,
+                "stored": bool(store.get_setting("gateway_url")),
+                "token_stored": bool(store.get_setting("gateway_token")),
+                "default_url": DEFAULT_API_BASE}
+
+    @app.get("/api/settings/gateway")
+    async def get_gateway():
+        return _gateway_status()
+
+    @app.put("/api/settings/gateway")
+    async def set_gateway(body: GatewayIn):
+        url = body.url.strip().rstrip("/")
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            _err(ValueError("gateway url must be an http(s) URL with a host, e.g. "
+                            "https://llm-gateway.internal"))
+        store.set_setting("gateway_url", url)
+        if body.token.strip():
+            store.set_setting("gateway_token", body.token.strip())
+        return {"ok": True, **_gateway_status()}
+
+    @app.delete("/api/settings/gateway")
+    async def clear_gateway():
+        """Back to the environment's gateway if the deployment set one, else Anthropic."""
+        store.set_setting("gateway_url", None)
+        store.set_setting("gateway_token", None)
+        return {"ok": True, **_gateway_status()}
 
     # ── agent tracing: where runs are exported, and whether ──────────────────
     # A console-stored value wins over the environment, like the Anthropic key. Secrets (the
@@ -2017,12 +2109,13 @@ def make_app() -> FastAPI:
         from .agent import run_agent
         text, error = "", None
         try:
-            key, key_origin = resolve_anthropic_key(store)
+            headers, key_origin = resolve_anthropic_headers(store)
             self_headers = {"Authorization": f"Bearer {AUTH_TOKEN}"} if AUTH_TOKEN else {}
             async def _run():
                 nonlocal text, error
-                async for chunk in run_agent(key, [{"role": "user", "content": question}],
+                async for chunk in run_agent(headers, [{"role": "user", "content": question}],
                                              self_headers=self_headers,
+                                             base_url=resolve_api_base(store)[0],
                                              on_usage=lambda m, u: _record_ask_usage(
                                                  m, u, key_source=key_origin),
                                              tracer=tracing.tracer_for("ask")):
@@ -2096,7 +2189,7 @@ def make_app() -> FastAPI:
             return slack_mod.build_error(
                 ":warning: that request carried no response_url; Tares has nowhere to reply",
                 thread_ts)
-        if not resolve_anthropic_key(store)[0]:
+        if not resolve_anthropic_headers(store)[0]:
             return slack_mod.build_error(
                 ":warning: no Anthropic API key is configured on this Tares instance; set "
                 "`ANTHROPIC_API_KEY` or add one under Settings in the console", thread_ts)
@@ -2409,8 +2502,9 @@ def make_app() -> FastAPI:
     @app.get("/api/usage")
     async def usage():
         """What this instance is using: db + WAL bytes, the volume they sit on, and event counts.
-        `max_bytes` is what the operator says this instance may grow to (TARES_MAX_DB_SIZE — a
-        hosted cell gets its PVC size); unset -> null, and nothing is enforced here either way.
+        `max_bytes` is the operator's TARES_MAX_DB_SIZE, else the volume the database sits on
+        (`max_bytes_source` says which); null only when neither is known. At INGEST_PAUSE_PCT of it
+        ingest is refused and polls pause (`ingest_paused`), so the disk never fills.
         `pct_used` is (db + wal) over max_bytes on a 0-100 scale, NOT a 0-1 fraction — so a
         "warn at 80%" consumer compares against 80, not 0.8. Null whenever max_bytes is null.
         Cheap by construction: file stats plus the maintained per-source counters, no table scan,
@@ -2421,10 +2515,10 @@ def make_app() -> FastAPI:
             disk_total, disk_free = du.total, du.free
         except OSError:
             disk_total = disk_free = None
-        used = u["db_bytes"] + u["wal_bytes"]
+        st = storage_state(store, DB_PATH)
         return {**u, "disk_total": disk_total, "disk_free": disk_free,
-                "max_bytes": MAX_DB_SIZE,
-                "pct_used": round(100 * used / MAX_DB_SIZE, 2) if MAX_DB_SIZE else None}
+                "max_bytes": st["max_bytes"], "max_bytes_source": st["max_bytes_source"],
+                "pct_used": st["pct_used"], "ingest_paused": st["paused"]}
 
     @app.get("/api/usage/model")
     async def usage_model(days: int = 30):

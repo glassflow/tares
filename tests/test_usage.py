@@ -89,8 +89,11 @@ async def main():
             ck("db_bytes > 0", u["db_bytes"] > 0, str(u["db_bytes"]))
             ck("disk_total/disk_free are real",
                u["disk_total"] > 0 and 0 < u["disk_free"] <= u["disk_total"], str(u))
-            ck("no TARES_MAX_DB_SIZE -> max_bytes null", u["max_bytes"] is None, str(u["max_bytes"]))
-            ck("no TARES_MAX_DB_SIZE -> pct_used null", u["pct_used"] is None, str(u["pct_used"]))
+            ck("no TARES_MAX_DB_SIZE -> the volume is the limit",
+               u["max_bytes"] == u["disk_total"] and u["max_bytes_source"] == "volume", str(u))
+            ck("no TARES_MAX_DB_SIZE -> pct_used against the volume",
+               u["pct_used"] is not None and 0 <= u["pct_used"] < 100, str(u["pct_used"]))
+            ck("ingest not paused on a roomy volume", u["ingest_paused"] is False, str(u))
             ck("events total", u["events"] == 25, str(u["events"]))
             ck("per-source counts", {s["name"]: s["events"] for s in u["sources"]} == {"evt": 20, "evt2": 5},
                str(u["sources"]))
@@ -115,7 +118,28 @@ async def main():
     finally:
         proc.terminate(); proc.wait(timeout=10)
 
-    # ── limit configured + auth on ──
+    # ── a limit the data already exceeds: ingest refused, polls paused, health says why ──
+    proc = _boot(TARES_MAX_DB_SIZE="1Mi")
+    try:
+        if not await _wait(f"{B}/health"):
+            ck("daemon up (tiny limit)", False); return
+        async with httpx.AsyncClient() as cx:
+            h = (await cx.get(f"{B}/health")).json()
+            ck("health degraded with the pause reason", h["status"] == "degraded"
+               and "ingest paused" in (h.get("detail") or ""), str(h))
+            u = (await cx.get(f"{B}/api/usage")).json()
+            ck("usage reports ingest paused", u["ingest_paused"] is True and u["max_bytes_source"] == "env", str(u))
+            r = await cx.post(f"{B}/ingest/evt", json=[{"m": "one more"}])
+            ck("push ingest refused with 507", r.status_code == 507 and "ingest paused" in r.text, f"{r.status_code} {r.text[:120]}")
+            r = await cx.post(f"{B}/v1/logs", json={"resourceLogs": []}, headers={"x-tares-source": "evt"})
+            ck("OTLP ingest refused with 507 too", r.status_code == 507, str(r.status_code))
+            ck("reads still work", (await cx.get(f"{B}/api/sources")).status_code == 200)
+            u2 = (await cx.get(f"{B}/api/usage")).json()
+            ck("nothing was stored while paused", u2["events"] == 10025, str(u2["events"]))
+    finally:
+        proc.terminate(); proc.wait(timeout=10)
+
+    # ── limit configured + auth on; a limit with room lets ingest resume ──
     proc = _boot(TARES_AUTH_TOKEN=AUTH, TARES_MAX_DB_SIZE="1Gi")
     try:
         if not await _wait(f"{B}/health"):
@@ -135,6 +159,8 @@ async def main():
             ck("pct_used = (db+wal)/max as a percentage", u["pct_used"] == expect and u["pct_used"] > 0,
                f"{u['pct_used']} vs {expect}")
             ck("counts survived the restart", u["events"] == 10025, str(u["events"]))
+            ck("ingest resumes under a roomier limit", u["ingest_paused"] is False
+               and (await cx.post(f"{B}/ingest/evt", json=[{"m": "after"}], headers=H(ing_key))).status_code == 202)
     finally:
         proc.terminate(); proc.wait(timeout=10)
 

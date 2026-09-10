@@ -14,6 +14,7 @@ import httpx
 
 from . import tracing as _tracing
 
+
 DEFAULT_MODEL = os.getenv("TARES_AGENT_MODEL", "claude-sonnet-4-6")
 _SELF = f"http://127.0.0.1:{os.getenv('TARES_PORT', '8787')}"
 MAX_ROUNDS = 10
@@ -424,7 +425,9 @@ part of the goal, say so in one sentence rather than forcing a poor match. One p
 card per source. Put in `config` only the non-secret values the user actually told you (a URL \
 they pasted, a container or repo name); every secret and every value you would have to guess goes \
 in `needs`. Check list_sources first: if a source already covers what the goal needs, say so and \
-propose only what is missing.
+propose only what is missing. A goal that reads a third-party or public API (weather, a status \
+page, a SaaS export) is an `http_poll` source with the URL in `config`, polled by Tares itself; \
+never propose a webhook plus a script the user would have to run.
 · WATCH: the sources are connected now. Propose the views and the triggers on them together: \
 labels first where a source needs them, then the view, then each trigger on that view. Ground \
 every key, filter and field in `source_fields` from real data, exactly as in the rules above. \
@@ -470,9 +473,10 @@ def _sse(obj: dict) -> str:
     return f"data: {json.dumps(obj)}\n\n"
 
 
-async def run_agent(api_key: str, messages: list,
+async def run_agent(anthropic_headers: dict, messages: list,
                     model: str | None = None, self_headers: dict | None = None,
-                    on_usage=None, tracer=None, mode: str = "ask", step: str | None = None):
+                    on_usage=None, tracer=None, mode: str = "ask", step: str | None = None,
+                    base_url: str | None = None):
     """Async generator of SSE lines: the agent loop, streaming assistant text and tool activity.
 
     `on_usage(model, usage_dict)` is called once per turn (after the loop, including on an error
@@ -483,16 +487,18 @@ async def run_agent(api_key: str, messages: list,
     one tool span per tool call. None means no tracing.
 
     `mode` is "ask" or "build"; `step` names the build step (see BUILD_STEPS) and picks which
-    proposal cards the turn may emit."""
+    proposal cards the turn may emit. `base_url` is where the model calls go (a gateway, or
+    Anthropic when None); the caller resolves it per request, like the credential."""
     with _tracing.run_span(tracer, "ask", kind="CHAIN") as obs:
         obs.set_attribute("tares.instance", _tracing.instance_name())
-        async for line in _run_agent(api_key, messages, model, self_headers, on_usage, tracer,
-                                     obs, mode, step):
+        async for line in _run_agent(anthropic_headers, messages, model, self_headers, on_usage, tracer,
+                                     obs, mode, step, base_url):
             yield line
 
 
-async def _run_agent(api_key: str, messages: list, model, self_headers, on_usage, tracer,
-                     obs: _tracing.Observation, mode: str = "ask", step: str | None = None):
+async def _run_agent(anthropic_headers: dict, messages: list, model, self_headers, on_usage, tracer,
+                     obs: _tracing.Observation, mode: str = "ask", step: str | None = None,
+                     base_url: str | None = None):
     try:
         import anthropic
     except ImportError:
@@ -500,7 +506,8 @@ async def _run_agent(api_key: str, messages: list, model, self_headers, on_usage
                                                "(pip install tares[agent])"})
         return
 
-    client = anthropic.AsyncAnthropic(api_key=api_key)
+    client = anthropic.AsyncAnthropic(base_url=base_url or "https://api.anthropic.com",
+                                      default_headers=anthropic_headers)
     convo = list(messages)
     last = convo[-1] if convo else None
     obs.set_input(last.get("content") if isinstance(last, dict) else last)

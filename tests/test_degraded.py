@@ -64,8 +64,9 @@ async def main():
         ck("status is ok", h and h["status"] == "ok", h)
         # the keys AuthGate + the cloud login handoff + the control plane's uptime check depend on
         ck("keeps auth_required/sources", h and "auth_required" in h and "sources" in h, h)
-        ck("pct_used is null with no limit configured (unknown, NOT 0)",
-           h and h.get("pct_used") is None, h)
+        # no limit configured: the volume the database sits on is the denominator (TR-290)
+        ck("pct_used is measured against the volume with no limit configured",
+           h and h.get("pct_used") is not None and h["pct_used"] < 100, h)
     finally:
         proc.terminate(); proc.wait(timeout=10)
 

@@ -25,12 +25,14 @@ export interface Source {
 
 export interface ConnectorField {
   name: string;
-  type: "string" | "number" | "json" | "list" | "bool";
+  type: "string" | "number" | "json" | "map" | "list" | "bool";
   required: boolean;
   help: string;
   secret?: boolean;          // render as a password input (tokens, DSNs)
   discover_input?: boolean;  // Discover needs this field — shown above the Discover panel
   default?: unknown;         // what the connector uses when the field is empty; prefilled on a fresh source
+  choices?: string[];        // a fixed set of values: rendered as a dropdown, anything else is refused on save
+  label?: string;            // the words shown for the field; the name stays the config key
   item?: ConnectorField[];   // for type "list": the sub-fields of each row
 }
 
@@ -243,6 +245,7 @@ export interface BuiltinAgent {
   model: string;               // "" = the instance default
   slack_channel: string;       // workspace-bot channel id, "" = none
   webhook_url: string;         // write-back target, "" = none
+  webhook_key_label?: string;  // the write-back reports this label's value as `key`; "" = the entity
   webhook_token_configured: boolean;   // the token itself is never sent to the client
   mcp_servers: string[];       // registry names this agent may use
   max_rounds: number | null;   // model rounds per run; null = the default for its shape
@@ -290,6 +293,9 @@ export interface AgentRun {
   cache_creation_input_tokens?: number | null;
   cache_read_input_tokens?: number | null;
   cost_usd?: number | null;
+  // the write-back's outcome: "ok", "http 4xx", "failed"; null when the agent has no webhook
+  delivery?: string | null;
+  delivery_error?: string | null;
 }
 
 // The cell's Anthropic spend meter (/api/usage/model): all-time totals plus a per-day tail,
@@ -373,7 +379,9 @@ export interface SourceEvent {
 // GET /api/usage — what this instance is using on disk.
 // Three things the renderer must respect:
 //  · `pct_used` is 0-100, NOT a 0-1 fraction — "warn at 80%" compares against 80.
-//  · `pct_used` and `max_bytes` are null unless the operator set TARES_MAX_DB_SIZE (the Helm
+//  · `max_bytes` is TARES_MAX_DB_SIZE when set, else the volume the database sits on
+//    (`max_bytes_source` says which); null only when neither is known. At the pause mark ingest
+//    is refused and polls stop (`ingest_paused`). Older comment, still true for the null case: (the Helm
 //    chart does it for hosted cells), so a self-hosted install has no denominator at all: show
 //    absolute bytes and fall back to `disk_free` for headroom. Null is unknown, never 0.
 //  · `sources[].bytes` is always null — DuckDB keeps every source in one events table and cannot
@@ -384,7 +392,9 @@ export interface Usage {
   disk_total: number | null;
   disk_free: number | null;
   max_bytes: number | null;
+  max_bytes_source?: "env" | "volume" | "";
   pct_used: number | null;
+  ingest_paused?: boolean;
   events: number;
   sources: { name: string; events: number; bytes: number | null }[];
   agent_runs: number;

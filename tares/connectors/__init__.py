@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import re as _re
 
+import json
+from urllib.parse import urlsplit
+
 from ..config import CatalogError
 from .prometheus_alerts import PrometheusAlertsConnector
 from .alertmanager import AlertmanagerConnector
@@ -21,6 +24,7 @@ from .otlp import OtlpConnector
 from .postgres import PostgresConnector
 from .prometheus import PrometheusConnector
 from .finding import FindingConnector
+from .http_poll import HttpPollConnector
 from .reference import ReferenceConnector
 from .threat_intel import ThreatIntelConnector
 from .vercel import VercelConnector
@@ -42,6 +46,7 @@ REGISTRY = {
     "claude_code": ClaudeCodeConnector,
     "finding": FindingConnector,
     "threat_intel": ThreatIntelConnector,
+    "http_poll": HttpPollConnector,
 }
 
 # Connector metadata for the UI. The `fields` of each are GENERATED from the connector's
@@ -88,6 +93,12 @@ SPECS = {
                "description": "Push source for Vercel logs; point a Vercel log drain (JSON) at this "
                               "source's ingest endpoint; one event per log entry, keyed by project, "
                               "with environment + source labels."},
+    "http_poll": {"label": "HTTP API (poll)", "mode": "poll", "discover": True, "poll": "5m",
+                  "description": "Polls any JSON endpoint on a schedule and stores one event per "
+                                 "item: a weather service, a status page, a SaaS export, your own "
+                                 "API. Give it the URL and Discover reads the fields. Nested values "
+                                 "are reachable by dotted name, so a trigger can watch "
+                                 "current_weather.windspeed."},
     "postgres": {"label": "Postgres table", "mode": "poll", "discover": True, "poll": "30s",
                  "description": "Polls a table incrementally (cursor by an id or updated_at); one "
                                 "event per new/changed row, keyed by an entity column (tenant_id). "
@@ -240,10 +251,38 @@ def _coerce_labels(val) -> list:
     return out
 
 
+def _check_url(val: str) -> str:
+    """A `format: "url"` field: an http(s) URL with a host, so a source is never saved that
+    cannot make its first request. Trailing whitespace is dropped; nothing else is rewritten."""
+    v = val.strip()
+    parts = urlsplit(v)
+    if parts.scheme not in ("http", "https"):
+        raise CatalogError(f"url must start with http:// or https:// (got {v!r})")
+    if not parts.netloc or not parts.hostname:
+        raise CatalogError(f"url needs a host, e.g. https://api.example.com/path (got {v!r})")
+    if any(ch.isspace() for ch in v):
+        raise CatalogError("url must not contain spaces")
+    try:
+        parts.port   # a bad port raises here, not at poll time
+    except ValueError:
+        raise CatalogError(f"url has an invalid port (got {v!r})")
+    return v
+
+
 def _coerce(spec: dict, val):
     t = spec["type"]
     if t == "string":
-        return str(val)
+        sval = str(val)
+        if spec.get("format") == "url":
+            return _check_url(sval)
+        choices = spec.get("choices")
+        if choices:
+            # a fixed set: match without regard to case, store the canonical spelling
+            match = next((c for c in choices if c.lower() == sval.strip().lower()), None)
+            if match is None:
+                raise CatalogError(f"{sval!r} is not one of {', '.join(choices)}")
+            return match
+        return sval
     if t == "number":
         f = float(val)
         return int(f) if f.is_integer() else f
@@ -253,6 +292,16 @@ def _coerce(spec: dict, val):
         return _coerce_labels(val)
     if t == "list":
         return [_normalize_against(spec["item"], e, "list item") for e in val]
+    if t == "map":
+        # key-value rows in the form, an object in YAML and the API, JSON text from older clients
+        if isinstance(val, str):
+            try:
+                val = json.loads(val)
+            except ValueError:
+                raise CatalogError("expected an object of key-value pairs")
+        if not isinstance(val, dict):
+            raise CatalogError("expected an object of key-value pairs")
+        return {str(k).strip(): str(v) for k, v in val.items() if str(k).strip()}
     return val
 
 
@@ -303,7 +352,11 @@ def _fields_from_schema(schema: dict) -> list:
                 "help": spec.get("help", ""), "secret": spec.get("secret", False),
                 "discover_input": spec.get("discover_input", False),
                 # the value the connector uses when the field is left empty; the form shows it
-                **({"default": spec["default"]} if "default" in spec else {})}
+                **({"default": spec["default"]} if "default" in spec else {}),
+                # a fixed set of values: the form offers them as a dropdown, the save rejects others
+                **({"choices": spec["choices"]} if spec.get("choices") else {}),
+                # the words a person sees; the key stays the config name
+                **({"label": spec["label"]} if spec.get("label") else {})}
 
     fields = []
     for name, spec in schema.items():
@@ -316,7 +369,12 @@ def _fields_from_schema(schema: dict) -> list:
                            "item": [scalar(k, v) for k, v in spec.get("item", {}).items()]})
         elif spec["type"] == "object":
             fields.append({"name": name, "type": "json", "required": spec.get("required", False),
-                           "help": spec.get("help", "")})
+                           "help": spec.get("help", ""), "discover_input": spec.get("discover_input", False),
+                           **({"label": spec["label"]} if spec.get("label") else {})})
+        elif spec["type"] == "map":
+            fields.append({"name": name, "type": "map", "required": spec.get("required", False),
+                           "help": spec.get("help", ""), "discover_input": spec.get("discover_input", False),
+                           **({"label": spec["label"]} if spec.get("label") else {})})
         else:
             fields.append(scalar(name, spec))
     return fields

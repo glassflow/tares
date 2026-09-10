@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../api";
 import { Combo, Picker, ruleSummary } from "./bits";
@@ -26,6 +26,7 @@ const DISCOVER_HINT: Record<string, string> = {
   postgres: "enter the DSN above, then Discover; it lists the tables it can see; pick one and it proposes the cursor, entity key and labels from the columns",
   prometheus: "enter the URL (+ any auth) above, then Discover; it lists the metrics and labels so you can pick what to ingest (by name or by label). No PromQL to write.",
   prometheus_alerts: "enter the URL (+ any auth) above, then Discover; it lists the alerting rules Prometheus already has, and you ingest them as they fire (optionally filtered by severity).",
+  http_poll: "fill in the request above, then Discover; Tares calls the API once, finds the items in the reply and proposes the fields, labels, time and id from what came back.",
 };
 
 // Postgres form: plain-language field labels + grouping (main poll settings vs collapsed advanced),
@@ -81,7 +82,7 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
       // string), so the value the daemon would use is the value on screen
       if (cur === undefined || cur === null)
         v[f.name] = !initial && f.default != null && (f.type === "number" || f.type === "string") ? String(f.default) : "";
-      else if (f.type === "json") v[f.name] = JSON.stringify(cur, null, 2);
+      else if (f.type === "json" || f.type === "map") v[f.name] = JSON.stringify(cur, null, 2);
       else v[f.name] = String(cur);
     }
     return v;
@@ -110,6 +111,11 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
   // For an existing source, what the data actually carries beats the connector's static
   // `provides` list — merge the observed field profile into the labels editor's suggestions,
   // keeping coverage so the dropdown can show how many sampled events carry each field.
+  // http_poll: what Discover saw, so the mapping reads as decisions with the evidence beside them
+  const [apiSample, setApiSample] = useState<{ fields: { name: string; example: unknown }[];
+    sample_item: Record<string, unknown>; sample_reply: unknown; per_poll: number; payload_key?: string }>();
+  const [mapByHand, setMapByHand] = useState(false);
+  const [sampleOpen, setSampleOpen] = useState(false);
   const [observed, setObserved] = useState<{ sampled: number; fields: { name: string; coverage: number }[] }>();
   useEffect(() => {
     if (!initial?.name) return;
@@ -119,14 +125,18 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
       .catch(() => {});
   }, [initial?.name]);
   const coverage = new Map((observed?.fields ?? []).map((f) => [f.name, f.coverage]));
+  const sampleExample = new Map((apiSample?.fields ?? []).map((f) => [f.name, String(f.example)]));
   const labelFieldOpts = Array.from(new Set([
     ...(spec.provides ?? []).map((p) => p.name),
     ...(observed?.fields ?? []).map((f) => f.name),
+    ...(apiSample?.fields ?? []).map((f) => f.name),   // what Discover saw in the reply
   ])).sort((a, b) => (coverage.get(b) ?? -1) - (coverage.get(a) ?? -1) || a.localeCompare(b));
   const labelFieldHints = observed
     ? Object.fromEntries(labelFieldOpts
         .filter((n) => coverage.has(n))
         .map((n) => [n, `${coverage.get(n)} / ${observed.sampled} events`]))
+    : apiSample
+    ? Object.fromEntries(labelFieldOpts.filter((n) => sampleExample.has(n)).map((n) => [n, `e.g. ${sampleExample.get(n)}`]))
     : undefined;
   const [proposal, setProposal] = useState<DiscoverProposal>();
   const [colProposal, setColProposal] = useState<ColumnsProposal>();
@@ -205,7 +215,7 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
   const jsonErrors = useMemo(() => {
     const errs: Record<string, string> = {};
     for (const f of spec.fields) {
-      if (f.type === "json" && values[f.name]?.trim()) {
+      if ((f.type === "json" || f.type === "map") && values[f.name]?.trim()) {
         try { JSON.parse(values[f.name]); } catch (e) { errs[f.name] = "invalid JSON: " + ((e as Error).message ?? e); }
       }
     }
@@ -221,7 +231,7 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
           labels: Object.fromEntries(a.labels.filter(([k, v]) => k.trim() && v.trim())),
         }));
       if (!attachments.length) throw new Error("add at least one document");
-      if (!name.trim()) throw new Error("name is required");
+      if (!name.trim()) throw required("name");
       // declare the union of label names as real Tares labels, so the source's Labels panel shows
       // them and views can correlate on them (field maps to the payload label surfaced by label_context)
       const labelNames = [...new Set(refAttachments.flatMap(
@@ -260,25 +270,39 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
         continue;
       }
       if (!raw) {
-        if (f.required) throw new Error(`${f.name} is required`);
+        if (f.required) throw required(f.name);
         continue;
       }
-      if (f.type === "json") config[f.name] = JSON.parse(raw);
+      if (f.type === "json" || f.type === "map") config[f.name] = JSON.parse(raw);
       else if (f.type === "number") config[f.name] = Number(raw);
       else config[f.name] = raw;
     }
     const labels = labelRows.filter((r) => r.name.trim()).map(rowToSpec);
     if (labels.length) config.labels = labels;
-    if (!name.trim()) throw new Error("name is required");
+    if (!name.trim()) throw required("name");
     return { name: name.trim(), type, connector, poll: poll.trim() || spec.poll || "5s", config };
   };
 
+  // the field a required-check failed on: its row turns red until it is filled in
+  const [missing, setMissing] = useState<string>();
+  const required = (field: string) => {
+    const err = new Error(`${field} is required`) as Error & { field?: string };
+    err.field = field;
+    return err;
+  };
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
     setError(undefined);
-    try { await fn(); } catch (e) { setError(String((e as Error).message ?? e)); }
+    setMissing(undefined);
+    try { await fn(); } catch (e) {
+      setError(String((e as Error).message ?? e));
+      setMissing((e as { field?: string }).field);
+      // bring the field into view: the button was at the bottom, the field may be at the top
+      requestAnimationFrame(() => formRef.current?.querySelector(".missing")?.scrollIntoView({ behavior: "smooth", block: "center" }));
+    }
     setBusy(false);
   };
+  const formRef = useRef<HTMLFormElement>(null);
 
   // discover errors surface inside the Discover panel (the top-of-form alert can be scrolled
   // out of view on long forms — the user is looking at the button they just clicked)
@@ -301,7 +325,10 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
     const cfg: Record<string, unknown> = {};
     for (const f of spec.fields) {
       const raw = values[f.name]?.trim();
-      if (raw && f.type !== "json") cfg[f.name] = f.type === "number" ? Number(raw) : raw;
+      if (!raw) continue;
+      // structured inputs go to Discover too: an API behind a required header needs them
+      if (f.type === "json" || f.type === "map") { try { cfg[f.name] = JSON.parse(raw); } catch { /* shown as invalid */ } }
+      else cfg[f.name] = f.type === "number" ? Number(raw) : raw;
     }
     Object.assign(cfg, override);
     const p = await api.discoverSource(connector, cfg);
@@ -328,9 +355,15 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
     } else if (Array.isArray((p as { tables?: unknown[] }).tables)) {
       setTables((p as unknown as { tables: string[] }).tables);
     } else {
-      applyConfig((p as { proposed_config?: Record<string, unknown> }).proposed_config ?? {});
+      const pc = (p as { proposed_config?: Record<string, unknown> }).proposed_config ?? {};
+      applyConfig(pc);
       const summary = (p as { summary?: unknown }).summary;
       if (typeof summary === "string") setTest({ ok: true, note: summary });
+      if (connector === "http_poll") {
+        const ps = p as unknown as { fields?: { name: string; example: unknown }[]; sample_item?: Record<string, unknown>; sample_reply?: unknown; per_poll?: number };
+        setApiSample({ fields: ps.fields ?? [], sample_item: ps.sample_item ?? {}, sample_reply: ps.sample_reply ?? ps.sample_item ?? {}, per_poll: ps.per_poll ?? 1,
+                       payload_key: typeof pc.payload_key === "string" ? pc.payload_key : undefined });
+      }
     }
   };
 
@@ -388,7 +421,11 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
       const nv = { ...v };
       for (const f of spec.fields) {
         if (f.type === "list") continue;
-        if (c[f.name] != null) nv[f.name] = String(c[f.name]);
+        if (c[f.name] == null) continue;
+        // structured values keep their JSON form; String() of an object is "[object Object]"
+        nv[f.name] = (f.type === "json" || f.type === "map") && typeof c[f.name] === "object"
+          ? JSON.stringify(c[f.name], null, f.type === "json" ? 2 : 0)
+          : String(c[f.name]);
       }
       return nv;
     });
@@ -440,10 +477,23 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
         </select>
       );
     }
+    if (f.choices?.length) {
+      // the daemon refuses any other value, so the form only offers these; the same picker as
+      // the poll interval's unit, not the browser's own select
+      const cur = values[f.name] ?? "";
+      const opts = [...(!f.required && f.default == null ? [""] : []),
+                    ...(cur && !f.choices.includes(cur) ? [cur] : []), ...f.choices];
+      return <Picker value={cur} options={opts} labels={{ "": "none" }} ariaLabel={fieldLabel(f)}
+                     style={{ width: 160 }}
+                     onChange={(v) => setValues({ ...values, [f.name]: v })} />;
+    }
     if (f.type === "bool")
       return <input type="checkbox" checked={values[f.name] === "true"}
                     onChange={(e) => setValues({ ...values, [f.name]: e.target.checked ? "true" : "" })}
                     style={{ width: "auto" }} />;
+    if (f.type === "map")
+      return <KeyValueRows value={values[f.name] ?? ""} noun={f.name === "headers" ? "header" : "entry"}
+                           onChange={(v) => setValues({ ...values, [f.name]: v })} />;
     if (f.type === "json")
       return <textarea className="code" value={values[f.name]}
                        onChange={(e) => setValues({ ...values, [f.name]: e.target.value })} />;
@@ -467,6 +517,7 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
     ) : <span className="help">{jsonErrors[f.name] ?? f.help}</span>;
 
   const fieldLabel = (f: ConnectorField) =>
+    f.label ||
     (connector === "postgres" && PG_LABEL[f.name]) ||
     (connector === "prometheus" && PROM_LABEL[f.name]) || f.name;
   const fieldDetected = (f: ConnectorField) =>       // value came from Discover, not the user
@@ -594,7 +645,8 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
       return <ListFieldEditor key={f.name} field={f} rows={rows[f.name] ?? []}
                               onChange={(r) => setRows({ ...rows, [f.name]: r })} />;
     return (
-      <div className={"fld-row" + (jsonErrors[f.name] ? " invalid" : "") + (highlight?.includes(f.name) ? " needs" : "")} key={f.name}>
+      <div className={"fld-row" + (jsonErrors[f.name] ? " invalid" : "") + (highlight?.includes(f.name) ? " needs" : "")
+                      + (missing === f.name && !values[f.name]?.trim() ? " missing" : "")} key={f.name}>
         <div className="fld-meta">
           <span className="lbl">{fieldLabel(f)}{f.required && <span className="req"> *</span>}
             {fieldDetected(f) && <span className="badge ok" style={{ marginLeft: 8 }}>detected</span>}
@@ -603,6 +655,175 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
         </div>
         <div className="fld-ctrl">{fieldControl(f)}</div>
       </div>
+    );
+  };
+
+  // HTTP API: the request in the order a person thinks about it. How (method), where (url),
+  // who am I (a credential, only if the API wants one, as one header name and value), anything
+  // else the API wants (more headers), what to send (the body, POST only).
+  const [credOn, setCredOn] = useState<boolean>(() => !!initial?.config?.credential
+    || !!(initial?.config?.credential_header && initial.config.credential_header !== "Authorization"));
+  const renderHttpPollFields = (fields: ConnectorField[]) => {
+    const by = Object.fromEntries(fields.map((f) => [f.name, f]));
+    const credField = by.credential, headerField = by.credential_header;
+    const turnCredOff = () => {
+      setCredOn(false);
+      setValues({ ...values, credential: "", credential_header: "" });
+      if (credField && secretSet(credField)) setCleared({ ...cleared, credential: true });
+    };
+    return (
+      <>
+        {by.method && renderField(by.method)}
+        {by.url && renderField(by.url)}
+        {credField && headerField && (
+          <div className="fld-row">
+            <div className="fld-meta">
+              <span className="lbl">credentials</span>
+              <span className="help">does the API want a key or a token? It is sent as one request header, stored as a secret.</span>
+            </div>
+            <div className="fld-ctrl">
+              <Picker value={credOn ? "yes" : "no"} options={["no", "yes"]} style={{ width: 120 }} ariaLabel="credentials"
+                      onChange={(v) => (v === "yes" ? setCredOn(true) : turnCredOff())} />
+              {credOn && (
+                <div className="kv-row" style={{ marginTop: 8 }}>
+                  <input type="text" value={values.credential_header ?? ""} placeholder="Authorization" aria-label="credential header"
+                         onChange={(e) => setValues({ ...values, credential_header: e.target.value })} />
+                  <input type="password" autoComplete="off" value={values.credential ?? ""} aria-label="credential value"
+                         disabled={secretSet(credField) && cleared.credential}
+                         placeholder={secretSet(credField) ? "leave blank to keep" : "Bearer xyz, or the API key"}
+                         onChange={(e) => setValues({ ...values, credential: e.target.value })} />
+                  <span />
+                </div>
+              )}
+              {credOn && <span className="help" style={{ marginTop: 4 }}>header name, then the whole value: Authorization and Bearer xyz for a token, X-API-Key and the key when the API says so</span>}
+            </div>
+          </div>
+        )}
+        {by.headers && (
+          <div className="fld-row">
+            <div className="fld-meta">
+              <span className="lbl">additional headers</span>
+              <span className="help">anything else the API wants on every request, e.g. Accept: application/json</span>
+            </div>
+            <div className="fld-ctrl">
+              <KeyValueRows value={values.headers ?? ""} noun="header"
+                            onChange={(v) => setValues({ ...values, headers: v })} />
+            </div>
+          </div>
+        )}
+        {by.body && (values.method || "GET").toUpperCase() === "POST" && renderField(by.body)}
+        {fields.filter((f) => !["method", "url", "credential", "credential_header", "headers", "body"].includes(f.name)).map(renderField)}
+      </>
+    );
+  };
+
+  // HTTP API, after Discover: how a reply becomes events, as decisions already made from the
+  // sample, each with the value that justified it, editable in place. Before Discover there is
+  // nothing to decide on, so the section says so instead of showing blanks with internal names.
+  const renderHttpPollMapping = (fields: ConnectorField[]) => {
+    const mapping = new Set(["payload_key", "event_time_field", "id_field", "event_type", "event_type_field", "text_template"]);
+    const rest = fields.filter((f) => !mapping.has(f.name));
+    if (!apiSample && !mapByHand) {
+      return (
+        <>
+          <div className="fld-row">
+            <div className="fld-meta"><span className="lbl">what becomes an event</span></div>
+            <div className="fld-ctrl">
+              <span className="help">Run Discover above: Tares reads one real reply and fills this in from it.{" "}
+                <button type="button" className="linklike" onClick={() => setMapByHand(true)}>Set it by hand instead</button>
+              </span>
+            </div>
+          </div>
+          {rest.map(renderField)}
+        </>
+      );
+    }
+    if (!apiSample) return <>{fields.map(renderField)}</>;
+    const names = apiSample.fields.map((f) => f.name);
+    const example = (n: string) => { const f = apiSample.fields.find((x) => x.name === n); return f ? String(f.example) : ""; };
+    const labelsFor = (extra: Record<string, string>) => ({ ...extra, ...Object.fromEntries(names.map((n) => [n, n])) });
+    const items = values.payload_key?.trim();
+    const preview = renderTemplate(values.text_template ?? "", apiSample.sample_item);
+    const fixedType = !(values.event_type_field?.trim());
+    return (
+      <>
+        <div className="opt-row sample-reply">
+          <button type="button" className="opt-head" onClick={() => setSampleOpen((o) => !o)}>
+            <span className="opt-caret">{sampleOpen ? "▾" : "▸"}</span>
+            <span>
+              <span className="opt-title">What Tares fetched</span>
+              <span className="opt-desc help">one reply from the API, as it came back{apiSample.per_poll > 1 ? `; lists cut to their first entry, ${apiSample.per_poll} in the real reply` : ""}. The choices below are read from it.</span>
+            </span>
+            <span className="badge ok">{apiSample.fields.length} fields</span>
+          </button>
+          {sampleOpen && <div className="opt-body"><JsonTree value={apiSample.sample_reply} /></div>}
+        </div>
+        <div className="fld-row">
+          <div className="fld-meta">
+            <span className="lbl">payload key</span>
+            {items && <span className="help">Discover found a list at <span className="mono">{items}</span>, {apiSample.per_poll} entries, one event each</span>}
+          </div>
+          <div className="fld-ctrl">
+            <input type="text" value={values.payload_key ?? ""} placeholder="empty for the entire JSON" className="mono"
+                   onChange={(e) => setValues({ ...values, payload_key: e.target.value })} />
+            <span className="help" style={{ marginTop: 4 }}>the key in the reply that holds the payload, e.g. user or data.items; an object there is the event, a list is one event per entry</span>
+          </div>
+        </div>
+        <div className="fld-row">
+          <div className="fld-meta">
+            <span className="lbl">time of the event</span>
+            <span className="help">{values.event_time_field ? <>from the item: {example(values.event_time_field)}</> : "when Tares polled"}</span>
+          </div>
+          <div className="fld-ctrl">
+            <Picker value={values.event_time_field ?? ""} options={["", ...names]} labels={labelsFor({ "": "the poll time" })}
+                    ariaLabel="time of the event" onChange={(v) => setValues({ ...values, event_time_field: v })} />
+          </div>
+        </div>
+        <div className="fld-row">
+          <div className="fld-meta">
+            <span className="lbl">deduplication key</span>
+            {values.id_field && (
+              <span className="help">{values.id_field === values.event_time_field
+                ? "the reading's own time, so a reading is stored once however often Tares polls"
+                : `the entry's ${values.id_field.split(".").pop()}, so an entry already stored is not stored again`}</span>
+            )}
+          </div>
+          <div className="fld-ctrl">
+            <Picker value={values.id_field ?? ""} options={["", ...names]} labels={labelsFor({ "": "none, store every poll" })}
+                    ariaLabel="deduplication key" onChange={(v) => setValues({ ...values, id_field: v })} />
+            <span className="help" style={{ marginTop: 4 }}>a field whose value is the same for a reading already stored; those are skipped. Empty stores every poll</span>
+          </div>
+        </div>
+        <div className="fld-row">
+          <div className="fld-meta">
+            <span className="lbl">kind of event</span>
+            <span className="help">the word views filter on and triggers count by</span>
+          </div>
+          <div className="fld-ctrl">
+            <div className="kv-row">
+              <Picker value={values.event_type_field ?? ""} options={["", ...names]} labels={labelsFor({ "": "the same for every event" })}
+                      ariaLabel="kind of event" onChange={(v) => setValues({ ...values, event_type_field: v })} />
+              {fixedType
+                ? <input type="text" value={values.event_type ?? ""} placeholder="api_reading" aria-label="event type"
+                         onChange={(e) => setValues({ ...values, event_type: e.target.value })} />
+                : <span className="help">e.g. {example(values.event_type_field!)}</span>}
+              <span />
+            </div>
+          </div>
+        </div>
+        <div className="fld-row">
+          <div className="fld-meta">
+            <span className="lbl">event summary</span>
+            <span className="help">one line per event, with values from the payload in braces; empty stores the payload's JSON</span>
+          </div>
+          <div className="fld-ctrl">
+            <input type="text" value={values.text_template ?? ""} placeholder="wind {current_weather.windspeed} km/h" className="mono"
+                   onChange={(e) => setValues({ ...values, text_template: e.target.value })} />
+            <span className="help" style={{ marginTop: 4 }}>reads as: <span className="mono">{preview || JSON.stringify(apiSample.sample_item).slice(0, 120)}</span></span>
+          </div>
+        </div>
+        {rest.map(renderField)}
+      </>
     );
   };
 
@@ -658,18 +879,9 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
   };
 
   return (
-    <form onSubmit={(e) => { e.preventDefault(); run(async () => onSubmit(build())); }}>
-      {error && <div className="alert error">{error}</div>}
-      {test && (
-        <div className={`alert ${test.ok ? "ok" : "error"}`}>
-          {test.ok
-            ? <>connection ok; {test.note ?? `${test.events} event(s) on a test poll`}
-                {test.sample?.length ? <pre className="payload">{test.sample.join("\n")}</pre> : null}</>
-            : <>test failed: {test.error}</>}
-        </div>
-      )}
+    <form ref={formRef} onSubmit={(e) => { e.preventDefault(); run(async () => onSubmit(build())); }}>
 
-      <label className="field" style={{ maxWidth: 360 }}>
+      <label className={"field" + (missing === "name" && !name.trim() ? " missing" : "")} style={{ maxWidth: 360 }}>
         <span className="lbl">name <span className="req">*</span></span>
         <input type="text" value={name} disabled={lockName}
                placeholder={NAME_PLACEHOLDER[connector] ?? "e.g. metrics"}
@@ -717,7 +929,9 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
       ) : connector === "github" ? (
         renderGithubFields()
       ) : (
-        (spec.discover ? spec.fields.filter((f) => f.discover_input) : spec.fields).map(renderField)
+        connector === "http_poll"
+          ? renderHttpPollFields(spec.fields.filter((f) => f.discover_input))
+          : (spec.discover ? spec.fields.filter((f) => f.discover_input) : spec.fields).map(renderField)
       )}
 
       {spec.discover && !(connector === "postgres" && pgColumns?.length && !editConn)
@@ -819,13 +1033,16 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
         ? (metricsConfirmed ? renderPromFields(spec.fields.filter((f) => !f.discover_input)) : null)
         : connector === "prometheus_alerts"
         ? null   // include_pending + severities are set in the curation section
+        : connector === "http_poll"
+        ? renderHttpPollMapping(spec.fields.filter((f) => !f.discover_input))
         : spec.fields.filter((f) => !f.discover_input).map(renderField))}
 
       {connector !== "reference"
         && !(connector === "prometheus" && !metricsConfirmed)
         && !(connector === "prometheus_alerts" && !alertsConfirmed) && (
         <LabelsEditor rows={labelRows} onChange={setLabelRows} sourceName={initial?.name}
-                      fields={labelFieldOpts} fieldHints={labelFieldHints} />
+                      fields={labelFieldOpts} fieldHints={labelFieldHints}
+                      examples={apiSample ? Object.fromEntries(sampleExample) : undefined} />
       )}
 
       {labelsChanged && (
@@ -835,6 +1052,17 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
         </div>
       )}
 
+      {/* Outcomes sit with the buttons that cause them: a test result or a save error at the top
+          of a long form is off screen when the button was pressed at the bottom. */}
+      {error && <div className="alert error">{error}</div>}
+      {test && (
+        <div className={`alert ${test.ok ? "ok" : "error"}`}>
+          {test.ok
+            ? <>connection ok; {test.note ?? `${test.events} event(s) on a test poll`}
+                {test.sample?.length ? <pre className="payload">{test.sample.join("\n")}</pre> : null}</>
+            : <>test failed: {test.error}</>}
+        </div>
+      )}
       {!(connector === "prometheus" && !metricsConfirmed)
         && !(connector === "prometheus_alerts" && !alertsConfirmed) && (
         <div className="btnrow">
@@ -910,19 +1138,21 @@ function normTitle(row: LabelRow): string {
   return bits.length ? `${bits.join(", ")}. Click to edit.` : "No rules. Click to normalize values.";
 }
 
-function LabelsEditor({ rows, onChange, fields = [], fieldHints, sourceName }:
+function LabelsEditor({ rows, onChange, fields = [], fieldHints, sourceName, examples }:
   { rows: LabelRow[]; onChange: (r: LabelRow[]) => void; fields?: string[];
-    fieldHints?: Record<string, string>; sourceName?: string }) {
+    fieldHints?: Record<string, string>; sourceName?: string;
+    examples?: Record<string, string> }) {   // a sample value per field, from Discover
   const set = (i: number, patch: Partial<LabelRow>) =>
     onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   const makePrimary = (i: number) => onChange(rows.map((r, j) =>
     j === i ? { ...r, primary: true, type: "string" as const } : { ...r, primary: false }));
-  const remove = (i: number) => {
-    const next = rows.filter((_, j) => j !== i);
-    if (next.length && !next.some((r) => r.primary)) next[0].primary = true;  // keep one key
-    onChange(next);
-  };
-  const keyIndex = Math.max(0, rows.findIndex((r) => r.primary));
+  const remove = (i: number) => onChange(rows.filter((_, j) => j !== i));
+  // -1: no key picked; the source keys by its own name (the connector's fallback)
+  const keyIndex = rows.findIndex((r) => r.primary);
+  const keyRow = keyIndex >= 0 ? rows[keyIndex] : undefined;
+  const keyValue = keyRow
+    ? (keyRow.kind === "const" ? keyRow.value : examples?.[keyRow.value])
+    : undefined;
   return (
     <div className="field">
       {/* No blurb here. It used to explain const-vs-field and what the key is — both of which the
@@ -935,10 +1165,16 @@ function LabelsEditor({ rows, onChange, fields = [], fieldHints, sourceName }:
         <div className="key-picker">
           <span className="lbl" style={{ margin: 0 }}>entity key</span>
           <Picker value={String(keyIndex)} ariaLabel="entity key"
-                  options={rows.map((_, i) => String(i))}
-                  labels={Object.fromEntries(rows.map((r, i) =>
-                    [String(i), r.name || `(unnamed label ${i + 1})`]))}
+                  options={["-1", ...rows.map((_, i) => String(i))]}
+                  labels={{ "-1": sourceName ? `none, the source name (${sourceName})` : "none, the source name",
+                            ...Object.fromEntries(rows.map((r, i) =>
+                              [String(i), r.name || `(unnamed label ${i + 1})`])) }}
                   onChange={(v) => makePrimary(Number(v))} />
+          {keyRow && (
+            <span className="help" style={{ margin: 0 }}>
+              {keyValue ? <>e.g. <span className="mono">{keyValue}</span></> : "the thing each event is about"}
+            </span>
+          )}
         </div>
       )}
       {rows.length > 0 && (
@@ -1202,6 +1438,81 @@ function PatternRule({ row, onChange }:
         <span className="help">e.g. entering <span className="mono">.</span> turns{" "}
           <span className="mono">checkout.internal.eu</span> into <span className="mono">checkout</span></span>
       )}
+    </div>
+  );
+}
+
+/** A JSON value as a tree: each field of an object folds on its own, scalars inline, nested
+ *  objects and lists fold the same way one level down. For reading a reply, not editing it. */
+function JsonTree({ value, depth = 0 }: { value: unknown; depth?: number }) {
+  if (value === null || typeof value !== "object") {
+    return <span className={"json-scalar " + (typeof value)}>{JSON.stringify(value)}</span>;
+  }
+  const entries: [string, unknown][] = Array.isArray(value)
+    ? value.map((v, i) => [String(i), v] as [string, unknown])
+    : Object.entries(value as Record<string, unknown>);
+  if (entries.length === 0) return <span className="json-scalar">{Array.isArray(value) ? "[]" : "{}"}</span>;
+  return (
+    <div className="json-tree">
+      {entries.map(([k, v]) => {
+        const nested = v !== null && typeof v === "object" && Object.keys(v as object).length > 0;
+        return nested ? (
+          <details key={k} className="json-node" open={depth === 0}>
+            <summary><span className="json-key">{k}</span> <span className="help">{Array.isArray(v) ? `[${(v as unknown[]).length}]` : `{${Object.keys(v as object).length}}`}</span></summary>
+            <JsonTree value={v} depth={depth + 1} />
+          </details>
+        ) : (
+          <div key={k} className="json-leaf"><span className="json-key">{k}</span>: <JsonTree value={v} depth={depth + 1} /></div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The connector's text_template rendering, for the live preview: `{a.b}` reads into nested
+ *  objects; a missing field empties the line, as the daemon does. */
+function renderTemplate(template: string, item: Record<string, unknown>): string {
+  if (!template) return "";
+  let missing = false;
+  const out = template.replace(/\{([A-Za-z0-9_.]+)\}/g, (_, path: string) => {
+    let cur: unknown = item;
+    for (const part of path.split(".")) {
+      cur = cur && typeof cur === "object" ? (cur as Record<string, unknown>)[part] : undefined;
+    }
+    if (cur === undefined || cur === null) { missing = true; return ""; }
+    return String(cur);
+  });
+  return missing ? "" : out;
+}
+
+/** Key-value rows for a `map` field, kept in the form as the JSON text the save path already
+ *  reads. Empty keys are dropped on the way out, so a half-filled row costs nothing. */
+function KeyValueRows({ value, noun, onChange }: { value: string; noun: string; onChange: (v: string) => void }) {
+  const parsed = useMemo<[string, string][]>(() => {
+    try { const o = JSON.parse(value || "{}"); return typeof o === "object" && o ? Object.entries(o).map(([k, v]) => [k, String(v)]) : []; }
+    catch { return []; }
+  }, [value]);
+  // local rows so a key being typed is not dropped as an empty entry mid-keystroke
+  const [rows, setRows] = useState<[string, string][]>(parsed);
+  useEffect(() => { if (JSON.stringify(parsed) !== JSON.stringify(rows.filter(([k]) => k.trim()))) setRows(parsed); }, [parsed]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const emit = (next: [string, string][]) => {
+    setRows(next);
+    const kept = next.filter(([k]) => k.trim());
+    onChange(kept.length ? JSON.stringify(Object.fromEntries(kept)) : "");
+  };
+  return (
+    <div className="kv-rows">
+      {rows.map(([k, v], i) => (
+        <div className="kv-row" key={i}>
+          <input type="text" value={k} placeholder="name" aria-label={`${noun} name`}
+                 onChange={(e) => emit(rows.map((r, j) => (j === i ? [e.target.value, r[1]] : r)))} />
+          <input type="text" value={v} placeholder="value" aria-label={`${noun} value`}
+                 onChange={(e) => emit(rows.map((r, j) => (j === i ? [r[0], e.target.value] : r)))} />
+          <button type="button" className="dim" aria-label={`remove ${noun}`}
+                  onClick={() => emit(rows.filter((_, j) => j !== i))}>remove</button>
+        </div>
+      ))}
+      <button type="button" onClick={() => emit([...rows, ["", ""]])}>+ Add {noun}</button>
     </div>
   );
 }

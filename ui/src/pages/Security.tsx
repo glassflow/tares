@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { api, type TracingStatus } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { Close } from "../components/icons";
-import { TimeAgo } from "../components/bits";
+import { Picker, TimeAgo } from "../components/bits";
 import type { ApiKey, GithubCredential } from "../types";
 
 // Four distinct credential concepts, one box each:
@@ -16,7 +16,7 @@ import type { ApiKey, GithubCredential } from "../types";
 type SettingsTab = "access" | "anthropic" | "github" | "slack" | "observability";
 const TABS: { key: SettingsTab; label: string }[] = [
   { key: "access", label: "Access and API keys" },
-  { key: "anthropic", label: "Anthropic" },
+  { key: "anthropic", label: "Model access" },
   { key: "github", label: "GitHub" },
   { key: "slack", label: "Slack" },
   { key: "observability", label: "Observability" },
@@ -41,7 +41,7 @@ export default function Security() {
   return (
     <>
       <h1>Settings</h1>
-      <p className="subtitle">access mode, API keys, the instance credentials (Anthropic, GitHub, Slack) and agent tracing</p>
+      <p className="subtitle">access mode, API keys, model access, the instance credentials (GitHub, Slack) and agent tracing</p>
       {workspaceUrl && (
         <div className="alert" style={{ marginBottom: 14 }}>
           <strong>Users, the Slack app, plan and storage</strong> are managed in your workspace, not
@@ -289,6 +289,7 @@ function AccessPanel() {
 // so a deployment's config is never silently overridden by something typed in here months earlier.
 function AnthropicKeyPanel() {
   const [st, setSt] = useState<{ configured: boolean; source: string; stored: boolean; env_overrides: boolean }>();
+  const [mode, setMode] = useState<"direct" | "gateway">();
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
@@ -311,19 +312,25 @@ function AnthropicKeyPanel() {
 
   return (
     <div className="panel">
-      <h2 style={{ marginTop: 0 }}>Anthropic key</h2>
+      <h2 style={{ marginTop: 0 }}>Model access</h2>
       <p className="help" style={{ marginTop: 0 }}>
-        What <strong>Tares agents</strong> run on; their first look at an entity when a trigger
-        fires. Store one here (it takes precedence), or set <code>ANTHROPIC_API_KEY</code> in the
-        daemon's environment. It is never returned by the API and never included in a catalog
-        export.
+        What <strong>Tares agents</strong> and Ask run on. Anthropic directly with your API key, or
+        through a gateway your organisation runs. Values stored here win over the daemon's
+        environment (<code>ANTHROPIC_API_KEY</code>, <code>ANTHROPIC_AUTH_TOKEN</code>,{" "}
+        <code>ANTHROPIC_BASE_URL</code>); credentials are never returned by the API and never
+        included in a catalog export.
       </p>
+
+      <GatewaySection onChanged={load} mode={mode} setMode={setMode} />
 
       {err && <div className="alert error">{err}</div>}
       {msg && <p className="help">{msg}</p>}
 
       {!st ? <div className="muted">loading…</div> : (
         <>
+          <span className="lbl" style={{ display: "block", marginBottom: 4 }}>
+            {mode === "gateway" ? "Anthropic API key (optional: only if the gateway takes your key instead of a token)" : "Anthropic API key"}
+          </span>
           <p style={{ margin: "0 0 10px" }}>
             {st.configured
               ? <><span className="badge ok">configured</span>{" "}
@@ -349,6 +356,99 @@ function AnthropicKeyPanel() {
                 setBusy(false);
               }}>Clear stored</button>
             )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Where the model calls go (TR-281). Direct to Anthropic, or through a gateway that speaks the
+// Anthropic Messages format (LiteLLM, Portkey, a proxy in front of Bedrock or Vertex). Stored on
+// this instance like the key and winning over the environment, so a cloud customer with a
+// mandated proxy sets it here, on their own cell. The token is write-only.
+function GatewaySection({ onChanged, mode, setMode }: {
+  onChanged: () => void; mode: "direct" | "gateway" | undefined;
+  setMode: (m: "direct" | "gateway") => void;
+}) {
+  const [st, setSt] = useState<{ configured: boolean; url: string; source: string; stored: boolean;
+    token_stored: boolean; default_url: string }>();
+  const [url, setUrl] = useState("");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>();
+  const [msg, setMsg] = useState<string>();
+
+  const load = () => api.gatewayStatus().then((s) => {
+    setSt(s);
+    if (mode === undefined) setMode(s.configured ? "gateway" : "direct");
+    setUrl((u) => u || (s.stored ? s.url : ""));
+  }).catch((e) => setErr(String((e as Error).message ?? e)));
+  useEffect(() => { load(); }, []);
+
+  const save = async () => {
+    setBusy(true); setErr(undefined); setMsg(undefined);
+    try {
+      await api.setGateway(url.trim(), token.trim());
+      setToken("");
+      setMsg("✓ saved; model calls go through the gateway from the next call");
+      await load(); onChanged();
+    } catch (e) { setErr(String((e as Error).message ?? e)); }
+    setBusy(false);
+  };
+  const clear = async () => {
+    setBusy(true); setErr(undefined); setMsg(undefined);
+    try { await api.clearGateway(); setUrl(""); setMode("direct"); await load(); onChanged(); }
+    catch (e) { setErr(String((e as Error).message ?? e)); }
+    setBusy(false);
+  };
+
+  if (!st) return null;
+  const fromEnv = st.source.startsWith("env:");
+  return (
+    <div style={{ margin: "0 0 18px", maxWidth: 720 }}>
+      <div className="field" style={{ marginBottom: 8 }}>
+        <span className="lbl">where model calls go</span>
+        <Picker value={mode ?? "direct"} options={["direct", "gateway"]} style={{ width: 260 }}
+                labels={{ direct: "Anthropic directly", gateway: "through a gateway" }}
+                ariaLabel="where model calls go"
+                onChange={(v) => setMode(v as "direct" | "gateway")} />
+      </div>
+      {err && <div className="alert error">{err}</div>}
+      {msg && <p className="help">{msg}</p>}
+      {mode === "direct" && st.configured && (
+        <p className="help" style={{ margin: "0 0 8px" }}>
+          A gateway is in use{fromEnv ? <> from the environment (<span className="mono">{st.source}</span>)</> : ""}: <span className="mono">{st.url}</span>.
+          {st.stored
+            ? <> <button type="button" className="linklike" disabled={busy} onClick={clear}>Stop using it</button> and calls go {fromEnv ? "to the environment's gateway" : "to Anthropic directly"}.</>
+            : " It was set by the deployment; only its operator can change it."}
+        </p>
+      )}
+      {mode === "gateway" && (
+        <>
+          <p className="help" style={{ margin: "0 0 8px" }}>
+            A gateway serves the Anthropic Messages format and forwards to what you run behind it:
+            LiteLLM, Portkey, a proxy in front of Bedrock or Vertex. Tares sends a Claude model id;
+            what answers is the gateway's choice, and the spend meter prices runs at Claude rates.
+            {fromEnv && <> The deployment set <span className="mono">{st.url}</span>; a gateway saved here takes over.</>}
+          </p>
+          <label className="field">
+            <span className="lbl">gateway URL</span>
+            <input type="text" className="mono" placeholder="https://llm-gateway.internal"
+                   value={url} onChange={(e) => setUrl(e.target.value)} />
+          </label>
+          <label className="field">
+            <span className="lbl">gateway token</span>
+            <input type="password" className="mono" autoComplete="off"
+                   placeholder={st.token_stored ? "leave blank to keep the stored token" : "sent as Authorization: Bearer; leave empty if the gateway takes your key"}
+                   value={token} onChange={(e) => setToken(e.target.value)} />
+            <span className="help">
+              {st.token_stored ? "a token is stored and sent as a bearer header; it is never shown again" : "without a token, the key above is sent to the gateway as the Anthropic key header"}
+            </span>
+          </label>
+          <div className="btnrow">
+            <button className="primary" disabled={busy || !url.trim()} onClick={save}>Save gateway</button>
+            {st.stored && <button className="danger" disabled={busy} onClick={clear}>Stop using the gateway</button>}
           </div>
         </>
       )}

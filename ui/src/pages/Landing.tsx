@@ -26,7 +26,9 @@ const WORDS: [RegExp, string][] = [
   [/\b(github|repos?|repositor(y|ies)|commits?|pull requests?|prs?)\b/i, "github"],
   [/\b(vercel|next\.?js|deploys?|deployments?)\b/i, "vercel"],
   [/\b(otlp|opentelemetry|otel|traces?|spans?)\b/i, "otlp"],
-  [/\b(webhook|json|endpoint|payload|http post)\b/i, "webhook"],
+  [/\b(webhook|payload|http post)\b/i, "webhook"],
+  // an API the user reads, not one that calls them: polled, no script on their side
+  [/\b(api|apis|endpoint|json|weather|status page|rest)\b/i, "http_poll"],
   [/\b(claude code|claude)\b/i, "claude_code"],
 ];
 // Delivery words: not connectors, but the screen should still show it heard them.
