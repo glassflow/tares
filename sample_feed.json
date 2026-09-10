@@ -1,0 +1,42 @@
+[
+  {
+    "indicator": "185.220.101.7",
+    "type": "ip",
+    "threat_type": "credential_stuffing_proxy",
+    "confidence": 92,
+    "source": "sample-feed",
+    "first_seen": "2026-08-11"
+  },
+  {
+    "indicator": "45.155.205.12",
+    "type": "ip",
+    "threat_type": "known_scanner",
+    "confidence": 71,
+    "source": "sample-feed",
+    "first_seen": "2026-07-30"
+  },
+  {
+    "indicator": "89.248.165.74",
+    "type": "ip",
+    "threat_type": "botnet_c2",
+    "confidence": 88,
+    "source": "sample-feed",
+    "first_seen": "2026-06-02"
+  },
+  {
+    "indicator": "malicious-updates.example",
+    "type": "domain",
+    "threat_type": "phishing",
+    "confidence": 80,
+    "source": "sample-feed",
+    "first_seen": "2026-08-01"
+  },
+  {
+    "indicator": "44d88612fea8a8f36de82e1278abb02f",
+    "type": "hash",
+    "threat_type": "malware_dropper",
+    "confidence": 95,
+    "source": "sample-feed",
+    "first_seen": "2026-07-15"
+  }
+]
