@@ -148,8 +148,8 @@ def prompt_hash(prompt: str) -> str:
 
 # The credential and base URL resolvers moved to providers.py (TR-301); they are imported here
 # so callers and tests that patch them on this module keep working.
-from .providers import (DEFAULT_API_BASE, resolve_anthropic_headers, resolve_api_base,  # noqa: E402,F401
-                        resolve_provider)
+from .providers import (DEFAULT_API_BASE, default_model_for, resolve_anthropic_headers,  # noqa: E402,F401
+                        resolve_api_base, resolve_for_agent, resolve_provider)
 
 
 class AgentRunner:
@@ -342,7 +342,7 @@ class AgentRunner:
                           obs: _tracing.Observation) -> tuple[str, str | None]:
         started_at = now_utc()
         t0 = time.monotonic()
-        provider, key_origin = resolve_provider(self.store)
+        provider, key_origin, provider_id, provider_note = resolve_for_agent(self.store, agent)
         if provider is None:
             msg = ("no model provider configured: add one under Settings, or set "
                    "ANTHROPIC_API_KEY before `tares up`")
@@ -371,11 +371,19 @@ class AgentRunner:
 
         # Usage accumulates in a mutable dict rather than the loop's return value, so a run that
         # dies mid-loop still records the tokens it already paid for (the finally below).
-        model = agent.get("model") or MODEL
+        model = agent.get("model") or default_model_for(self.store, provider_id)
+        if not model:
+            msg = (f"provider {provider_id!r} lists no models yet; pick one for this agent under "
+                   "Configuration, or refresh the provider's models under Settings")
+            self.store.finish_agent_run(run_id, "failed", error=msg)
+            return "failed", msg
+        if provider_note:
+            print(f"[agent {agent['name']}] {provider_note}")
+        obs.set_attribute("tares.provider", provider_id)
         usage = empty_usage()
         try:
             finding, rounds, tool_calls, external_used, exhausted, partial = await self._loop(
-                agent, trigger_name, key, payload, provider, usage, tracer, obs)
+                agent, trigger_name, key, payload, provider, model, usage, tracer, obs)
         finally:
             if usage["calls"]:
                 cost = cost_usd(model, usage["input_tokens"], usage["output_tokens"],
@@ -383,7 +391,7 @@ class AgentRunner:
                                 usage["cache_read_input_tokens"])
                 self.store.record_run_usage(
                     run_id, model, usage["input_tokens"], usage["output_tokens"],
-                    usage["cache_creation_input_tokens"], usage["cache_read_input_tokens"], cost)
+                    usage["cache_creation_input_tokens"], usage["cache_read_input_tokens"], cost, provider=provider_id)
                 self.store.record_model_usage(
                     "agent", agent["name"], run_id, model, usage["calls"],
                     usage["input_tokens"], usage["output_tokens"],
@@ -488,7 +496,7 @@ class AgentRunner:
 
     # ── the bounded model loop ────────────────────────────────────────────────
     async def _loop(self, agent: dict, trigger_name: str, key: str, payload: str,
-                    provider: Provider, usage: dict, tracer=None,
+                    provider: Provider, model: str, usage: dict, tracer=None,
                     obs: _tracing.Observation | None = None,
                     ) -> tuple[str, int, int, list[str], bool, str]:
         # External tools: the agent's selected MCP servers, connected for the duration of this
@@ -502,11 +510,11 @@ class AgentRunner:
             for failure in toolbox.failures:
                 print(f"[agent {agent['name']}] mcp connect failed; {failure}")
             return await self._loop_with(agent, trigger_name, key, payload, provider, toolbox,
-                                         usage, tracer, obs)
+                                         usage, tracer, obs, model=model)
 
     async def _loop_with(self, agent: dict, trigger_name: str, key: str, payload: str,
                          provider: Provider, toolbox, usage: dict, tracer=None,
-                         obs: _tracing.Observation | None = None,
+                         obs: _tracing.Observation | None = None, model: str = "",
                          ) -> tuple[str, int, int, list[str], bool, str]:
         """Returns (finding, rounds, tool_calls, external_tools_used, exhausted, partial_text)."""
         tools = TOOL_DEFS + toolbox.tool_defs
@@ -531,7 +539,7 @@ class AgentRunner:
         last_text = ""
         if obs is not None:
             obs.set_input(messages[0]["content"])
-        model = agent.get("model") or MODEL
+        model = model or agent.get("model") or MODEL
 
         async def call(with_tools: bool):
             reply = await provider.complete(model=model, system=agent["prompt"], tools=tools,

@@ -7,7 +7,7 @@ import type {
   LabelFacet, ModelUsage, QueryLogEntry,
   McpServer, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
-  TimelineEventRow, Trigger, View, ModelProviders,
+  TimelineEventRow, Trigger, View, ModelProvider, ModelProviders,
 } from "./types";
 
 const TOKEN_KEY = "tares_token";
@@ -100,7 +100,8 @@ export const api = {
   connectors: () => request<Record<string, ConnectorSpec>>("/api/connectors"),
   capabilities: () =>
     request<{ version?: string | null; discover_docker: boolean; agent_key_configured?: boolean;
-              url_configured: boolean; slack_configured?: boolean }>("/api/capabilities"),
+              url_configured: boolean; slack_configured?: boolean;
+              default_provider?: { id: string; name: string; kind: string } | null }>("/api/capabilities"),
   keys: () => request<{ keys: ApiKey[]; enforced: boolean; scopes: string[] }>("/api/keys"),
   createKey: (name: string, scopes: string[]) =>
     request<{ id: string; name: string; scopes: string[]; secret: string }>(
@@ -160,13 +161,15 @@ export const api = {
   builtinAgents: () =>
     request<{ agents: BuiltinAgent[]; key_configured: boolean; key_source: string;
               models: string[]; default_model: string; slack_workspace: boolean;
+              providers: ModelProvider[]; default_provider: string | null;
+              default_models: Record<string, string>;   // per provider id, what "" resolves to
               default_max_rounds: number; default_max_rounds_with_mcp: number;
               max_rounds_limit: number;
               presets: AgentPreset[] }>("/api/agents/builtin"),
-  createBuiltinAgent: (body: { name: string; trigger: string; prompt: string; slack_webhook?: string; slack_webhook_clear?: boolean; model?: string; slack_channel?: string; webhook_url?: string; webhook_token?: string; mcp_servers?: string[]; max_rounds?: number | null; budget_usd?: number | null }) =>
+  createBuiltinAgent: (body: { name: string; trigger: string; prompt: string; slack_webhook?: string; slack_webhook_clear?: boolean; model?: string; provider?: string; slack_channel?: string; webhook_url?: string; webhook_token?: string; mcp_servers?: string[]; max_rounds?: number | null; budget_usd?: number | null }) =>
     request<{ ok: boolean; enabled: boolean }>("/api/agents/builtin",
       { method: "POST", body: JSON.stringify(body) }),
-  updateBuiltinAgent: (name: string, body: { name: string; trigger: string; prompt: string; slack_webhook?: string; slack_webhook_clear?: boolean; model?: string; slack_channel?: string; webhook_url?: string; webhook_token?: string; mcp_servers?: string[]; max_rounds?: number | null; budget_usd?: number | null }) =>
+  updateBuiltinAgent: (name: string, body: { name: string; trigger: string; prompt: string; slack_webhook?: string; slack_webhook_clear?: boolean; model?: string; provider?: string; slack_channel?: string; webhook_url?: string; webhook_token?: string; mcp_servers?: string[]; max_rounds?: number | null; budget_usd?: number | null }) =>
     request(`/api/agents/builtin/${name}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteBuiltinAgent: (name: string) => request(`/api/agents/builtin/${name}`, { method: "DELETE" }),
   enableBuiltinAgent: (name: string) => request(`/api/agents/builtin/${name}/enable`, { method: "POST" }),

@@ -242,7 +242,9 @@ export interface BuiltinAgent {
   prompt: string;
   enabled: boolean;
   slack_configured: boolean;   // the webhook URL itself is never sent to the client
-  model: string;               // "" = the instance default
+  model: string;               // "" = the provider's default model
+  provider: string;            // provider id from Settings; "" = the cell default
+  effective_provider?: string | null;   // what the next run resolves to (the default when the named one is gone)
   slack_channel: string;       // workspace-bot channel id, "" = none
   webhook_url: string;         // write-back target, "" = none
   webhook_key_label?: string;  // the write-back reports this label's value as `key`; "" = the entity
@@ -288,6 +290,7 @@ export interface AgentRun {
   error: string | null;
   // Model usage; null on runs from before cost tracking (unknown, not zero).
   model?: string | null;
+  provider?: string;           // the provider the run resolved to
   input_tokens?: number | null;
   output_tokens?: number | null;
   cache_creation_input_tokens?: number | null;

@@ -335,7 +335,8 @@ class AgentIn(BaseModel):
     trigger: str
     prompt: str
     slack_webhook: str = ""      # legacy per-agent notification path (blank-to-keep on update)
-    model: str = ""              # "" = the instance default (TARES_AGENT_MODEL)
+    model: str = ""              # "" = the provider's default model
+    provider: str = ""           # a provider id from Settings; "" = the cell default (TR-302)
     slack_channel: str = ""      # workspace-bot channel; the primary notification path
     webhook_url: str = ""        # write-back: findings + run metadata POSTed here
     webhook_token: str = ""      # optional bearer for the write-back (secret; blank-to-keep)
@@ -542,6 +543,7 @@ def make_app() -> FastAPI:
     app = FastAPI(title="taresd", lifespan=lifespan)
     app.state.store = store   # for in-process tests; DuckDB is single-writer, so no second Store
     app.state.runtime = runtime
+    app.state.agents = dispatcher.agents   # the Tares agent runner, for in-process tests
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                        allow_headers=["*"])
 
@@ -1050,6 +1052,10 @@ def make_app() -> FastAPI:
             # or the console-stored key) — so once a key is set anywhere, the Ask chat stops
             # prompting for a browser-pasted one.
             "agent_key_configured": resolve_provider(store)[0] is not None,
+            # Ask and the builder run on the cell default; the chat says which
+            "default_provider": next(({"id": p["id"], "name": p["name"], "kind": p["kind"]}
+                                      for p in providers_mod.list_providers(store)["providers"]
+                                      if p["default"]), None),
             "url_configured": url_configured,
             # gates the "subscribe a Slack channel" affordance on a trigger — offering it with no
             # bot token configured only leads to a 400.
@@ -1779,6 +1785,10 @@ def make_app() -> FastAPI:
                          "stats": stats.get(a["name"]) or zero,
                          "slack_configured": bool(a.get("slack_webhook")),
                          "model": a.get("model") or "",
+                         "provider": a.get("provider") or "",
+                         # what the next run resolves to, so the page can say "ran on the
+                         # default" when the named provider is gone
+                         "effective_provider": providers_mod.resolve_for_agent(store, a)[2],
                          "slack_channel": a.get("slack_channel") or "",
                          "webhook_url": a.get("webhook_url") or "",
                          "webhook_token_configured": bool(a.get("webhook_token")),
@@ -1790,8 +1800,12 @@ def make_app() -> FastAPI:
                          "enabled": _agent_enabled(a["name"]), "updated_at": a.get("updated_at"),
                          "owned_by": a.get("owned_by"), "customized": bool(a.get("customized")),
                          "last_run": runs[0] if runs else None})
+        plist = providers_mod.list_providers(store)
         return {"agents": rows, "key_configured": provider is not None, "key_source": origin,
                 "models": AGENT_MODELS, "default_model": AGENT_DEFAULT_MODEL,
+                "providers": plist["providers"], "default_provider": plist["default"],
+                "default_models": {p["id"]: providers_mod.default_model_for(store, p["id"])
+                                   for p in plist["providers"]},
                 "default_max_rounds": AGENT_MAX_ROUNDS,
                 "default_max_rounds_with_mcp": AGENT_MAX_ROUNDS_WITH_MCP,
                 "max_rounds_limit": AGENT_MAX_ROUNDS_LIMIT,
@@ -1809,7 +1823,8 @@ def make_app() -> FastAPI:
                                    body.model, body.slack_channel,
                                    body.webhook_url, body.webhook_token, body.mcp_servers,
                                    body.max_rounds, body.budget_usd,
-                                   webhook_key_label=body.webhook_key_label)
+                                   webhook_key_label=body.webhook_key_label,
+                                   provider=body.provider.strip())
         runtime.reload_catalog()
         return {"ok": True, "enabled": False,
                 "note": "agents start disabled; enable it to run on the next firing"}
@@ -1834,7 +1849,8 @@ def make_app() -> FastAPI:
         store.upsert_catalog_agent(name, body.trigger, body.prompt, hook,
                                    body.model, body.slack_channel,
                                    body.webhook_url, wtoken, body.mcp_servers, body.max_rounds,
-                                   body.budget_usd, webhook_key_label=body.webhook_key_label)
+                                   body.budget_usd, webhook_key_label=body.webhook_key_label,
+                                   provider=body.provider.strip())
         store.mark_customized("agent", name)
         # if the trigger changed while enabled, re-point the subscription so the agent fires on the
         # new trigger (the subscription, not the definition, is what the dispatcher reads).
@@ -1859,7 +1875,7 @@ def make_app() -> FastAPI:
         agent = store.get_catalog_agent(name)
         if agent is None:
             _err(KeyError(f"unknown agent {name!r}"), 404)
-        if resolve_provider(store)[0] is None:
+        if providers_mod.resolve_for_agent(store, agent)[0] is None:
             _err(ValueError("no model provider configured; add one under Settings, or set "
                             "ANTHROPIC_API_KEY, before enabling an agent"))
         # enable = subscribe to the trigger (the same wiring an external agent has). Idempotent.

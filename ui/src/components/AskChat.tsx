@@ -99,6 +99,7 @@ const scrollToEnd = () => {
 export default function AskChat({ history = false }: { history?: boolean }) {
   const [ready, setKeyReady] = useState<boolean>();      // is a key configured on the server?
   const [urlReady, setUrlReady] = useState<boolean>();      // is an url configured on the server?
+  const [providerName, setProviderName] = useState<string>();   // the cell default Ask answers on
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const { send: stream, stop, streaming: busy } = useAgentStream();
@@ -118,6 +119,7 @@ export default function AskChat({ history = false }: { history?: boolean }) {
   .then((c) => {
     setKeyReady(!!c.agent_key_configured);
     setUrlReady(c.url_configured);
+    setProviderName(c.default_provider?.name);
   })
   .catch(() => {
     setKeyReady(false);
@@ -346,6 +348,7 @@ export default function AskChat({ history = false }: { history?: boolean }) {
                   }} />
         {/* One button, two jobs — the prototype's call, and right: Send and Stop are never both
             available, so two buttons is one more thing to read mid-answer. */}
+        {providerName && !busy && <span className="help" style={{ alignSelf: "center", whiteSpace: "nowrap" }} title="the cell default provider; change it under Settings, Model providers">on {providerName}</span>}
         {busy
           ? <button type="button" className="danger" onClick={stop}>Stop</button>
           : <button className="primary" disabled={!input.trim()}>Send</button>}

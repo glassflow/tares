@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 
 import { api } from "../api";
 import type { SlackChannels } from "../api";
+import type { ModelProvider } from "../types";
 import { Combo, Picker } from "./bits";
 import type { AgentPreset, BuiltinAgent } from "../types";
 
@@ -55,7 +56,8 @@ function OptionRow({ title, desc, on, disabled, disabledHint, onToggle, children
 export default function AgentForm({ initial, prefill, deliveryKind, presetTrigger, triggers,
                                     presets, models, defaultModel, slackWorkspace, onSaved,
                                     onCancel, defaultMaxRounds = 6, defaultMaxRoundsWithMcp = 12,
-                                    maxRoundsLimit = 24 }: {
+                                    maxRoundsLimit = 24, providers = [], defaultProvider = null,
+                                    defaultModels = {} }: {
   initial?: BuiltinAgent;              // absent = create
   prefill?: boolean;                   // initial is a proposal for a NEW agent: create, editable name
   deliveryKind?: "slack" | "webhook" | "none";   // prefill: which delivery row starts open (and on)
@@ -64,6 +66,9 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   presets: AgentPreset[];
   models: string[];                    // curated choices; [0] is the instance default
   defaultModel: string;
+  providers?: ModelProvider[];         // the cell's providers (Settings); each lists its models
+  defaultProvider?: string | null;     // the cell default's id
+  defaultModels?: Record<string, string>;   // per provider id, the model "" resolves to
   slackWorkspace: boolean;             // a workspace bot token is configured
   defaultMaxRounds?: number;           // round cap when the agent has no external MCP servers
   defaultMaxRoundsWithMcp?: number;    // round cap once it does
@@ -76,6 +81,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   const [trigger, setTrigger] = useState(initial?.trigger ?? presetTrigger ?? "");
   const [prompt, setPrompt] = useState(initial?.prompt ?? "");
   const [model, setModel] = useState(initial?.model ?? "");
+  const [provider, setProvider] = useState(initial?.provider ?? "");
 
   // Delivery options: each is a toggle plus its fields. Off at save time means off, even if the
   // fields still hold text.
@@ -98,10 +104,23 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
 
-  // "" is a real option (follow the instance default), so the picker always has one more entry
-  // than the curated list, and the default reads as what it is rather than as a copy of a model.
-  const modelOptions = ["", ...models.filter((m) => m !== defaultModel)];
-  const modelLabels: Record<string, string> = { "": `${defaultModel} · instance default` };
+  // Provider first, then a model from that provider's list. "" is a real option on both (the cell
+  // default provider; that provider's default model), so each picker has one more entry than the
+  // list and the default reads as what it is rather than as a copy of a name.
+  const configured = providers.filter((p) => p.configured);
+  const defaultProv = providers.find((p) => p.id === defaultProvider);
+  const providerOptions = ["", ...configured.map((p) => p.id).filter((id) => id !== defaultProvider)];
+  const providerLabels: Record<string, string> = { "": defaultProv ? `${defaultProv.name} · cell default` : "cell default (none configured yet)" };
+  for (const p of configured) providerLabels[p.id] = p.name;
+  const missingProvider = !!provider && !configured.some((p) => p.id === provider);
+  const effectiveId = provider || defaultProvider || "";
+  const effective = providers.find((p) => p.id === effectiveId);
+  const providerModels = effective ? effective.models : models;
+  const effectiveDefaultModel = (effectiveId && defaultModels[effectiveId]) || defaultModel;
+  const modelOptions = ["", ...providerModels.filter((m) => m !== effectiveDefaultModel)];
+  if (model && !modelOptions.includes(model)) modelOptions.push(model);
+  const modelLabels: Record<string, string> = { "": effectiveDefaultModel ? `${effectiveDefaultModel} · ${effective ? effective.name : "instance"} default` : "pick a model (this provider lists none)" };
+  const pickProvider = (id: string) => { setProvider(id); setModel(""); };
 
   // The channel list comes from the workspace bot, exactly like the trigger page's picker: only
   // channels the bot is in are offered, because anything else fails at the first post.
@@ -131,7 +150,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   const save = async () => {
     setBusy(true); setErr(undefined);
     const body = {
-      name: name.trim(), trigger, prompt: prompt.trim(), model,
+      name: name.trim(), trigger, prompt: prompt.trim(), model, provider,
       slack_channel: channelOn ? channel : "",
       slack_webhook: hookOn ? slack.trim() : "",
       slack_webhook_clear: !hookOn,
@@ -194,10 +213,21 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
           ))}
         </div>
       )}
-      <div className="field">
-        <span className="lbl">model</span>
-        <Picker value={model} onChange={setModel} options={modelOptions} labels={modelLabels}
-                ariaLabel="model" />
+      <div className="row2">
+        <div className="field">
+          <span className="lbl">provider</span>
+          <Picker value={provider} onChange={pickProvider}
+                  options={missingProvider ? [...providerOptions, provider] : providerOptions}
+                  labels={missingProvider ? { ...providerLabels, [provider]: `${provider} · not configured` } : providerLabels}
+                  ariaLabel="provider" />
+          {missingProvider && <span className="help">this provider is not on this cell; runs use the default until you pick one. Add it under Settings, Model providers.</span>}
+          {configured.length === 0 && <span className="help">no provider configured yet; add one under Settings, Model providers.</span>}
+        </div>
+        <div className="field">
+          <span className="lbl">model</span>
+          <Picker value={model} onChange={setModel} options={modelOptions} labels={modelLabels}
+                  ariaLabel="model" />
+        </div>
       </div>
 
       <div className="field">

@@ -288,3 +288,41 @@ def set_default(store, provider_id: str) -> None:
     if not _configured(entry):
         raise ValueError(f"{entry.get('name') or provider_id} has no credential yet")
     store.set_setting(DEFAULT_SETTING, provider_id)
+
+
+# ── per agent (TR-302) ───────────────────────────────────────────────────────
+def entry(store, provider_id: str) -> dict | None:
+    return next((e for e in _entries(store) if e["id"] == provider_id), None)
+
+
+def default_model_for(store, provider_id: str | None) -> str:
+    """The model an agent runs on when it names none: TARES_AGENT_MODEL on Anthropic (and on the
+    cell default, when the variable is set on purpose), else the first model the provider lists.
+    Empty when a router lists nothing yet: the agent must then name one."""
+    from .builtin_agents import MODEL
+    pid = provider_id or default_id(store)
+    e = entry(store, pid) if pid else None
+    if e is None or e["kind"] == "anthropic":
+        return MODEL
+    if os.getenv("TARES_AGENT_MODEL", "").strip() and pid == default_id(store):
+        return MODEL
+    models = models_for(e)
+    return models[0] if models else ""
+
+
+def resolve_for_agent(store, agent: dict) -> tuple[Provider | None, str, str | None, str]:
+    """(provider, credential origin, provider id, note) for one agent. The agent's own provider
+    when it names one that is configured; else the cell default, with a note saying why, so a
+    template that names a provider this cell lacks still runs instead of failing (TR-302)."""
+    want = (agent.get("provider") or "").strip()
+    if want:
+        e = entry(store, want)
+        if e is not None and _configured(e):
+            return build(e), e.get("source") or "", want, ""
+        why = ("is not configured" if e is not None else "does not exist")
+    pid = default_id(store)
+    if not pid:
+        return None, "", None, ""
+    e = entry(store, pid)
+    note = f"provider {want!r} {why}; ran on the default ({pid})" if want else ""
+    return build(e), e.get("source") or "", pid, note

@@ -920,7 +920,7 @@ function AgentCard({ proposal: p, triggers, decision, decide, own }: CardCommon 
   const known = triggerNames.includes(p.trigger);
   const initial: BuiltinAgent = {
     name: p.name, trigger: known ? p.trigger : "", prompt: p.prompt, enabled: false, slack_configured: false,
-    model: p.model ?? "", slack_channel: "",
+    model: p.model ?? "", provider: "", slack_channel: "",
     webhook_url: p.delivery.kind === "webhook" ? (p.delivery.url ?? "") : "", webhook_token_configured: false,
     mcp_servers: [], max_rounds: p.max_rounds ?? null, budget_usd: p.budget_usd ?? null,
     effective_max_rounds: p.max_rounds ?? 6,
