@@ -179,6 +179,13 @@ function ModelSpendPanel({ usage, error, reload }: {
             {" · "}{fmtTokens(m.total.input_tokens)} tokens in, {fmtTokens(m.total.output_tokens)} out
             {uncosted > 0 && <> · {uncosted} call{uncosted === 1 ? "" : "s"} on an unpriced model, not in the total</>}
           </p>
+          {m.by_provider && Object.keys(m.by_provider).length > 1 && (
+            <p className="help" style={{ margin: "6px 0 0" }}>
+              by provider: {Object.entries(m.by_provider).map(([id, b], i) => (
+                <span key={id}>{i > 0 && " · "}<span className="mono">{id}</span> {fmtCost(b.cost_usd)} over {b.calls.toLocaleString()} call{b.calls === 1 ? "" : "s"}</span>
+              ))}
+            </p>
+          )}
         </>
       ))}
     </div>

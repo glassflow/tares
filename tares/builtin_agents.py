@@ -34,7 +34,7 @@ from . import tracing as _tracing
 from .config import FINDINGS_SOURCE, API_BASE, agent_url, parse_duration
 from .envelope import now_utc
 from .models import ModelError, Provider, add_usage, empty_usage, tool_message
-from .pricing import cost_usd
+from .pricing import price_usage
 from .slack import deep_link as _slack_deep_link
 from .views import resolve_query_full, resolve_read
 
@@ -386,9 +386,7 @@ class AgentRunner:
                 agent, trigger_name, key, payload, provider, model, usage, tracer, obs)
         finally:
             if usage["calls"]:
-                cost = cost_usd(model, usage["input_tokens"], usage["output_tokens"],
-                                usage["cache_creation_input_tokens"],
-                                usage["cache_read_input_tokens"])
+                cost = price_usage(provider.kind, model, usage)
                 self.store.record_run_usage(
                     run_id, model, usage["input_tokens"], usage["output_tokens"],
                     usage["cache_creation_input_tokens"], usage["cache_read_input_tokens"], cost, provider=provider_id)
@@ -396,7 +394,7 @@ class AgentRunner:
                     "agent", agent["name"], run_id, model, usage["calls"],
                     usage["input_tokens"], usage["output_tokens"],
                     usage["cache_creation_input_tokens"], usage["cache_read_input_tokens"], cost,
-                    key_source=key_origin)
+                    key_source=key_origin, provider=provider_id)
                 obs.set_attribute("tares.cost_usd", cost)
                 obs.set_attribute("tares.model_calls", usage["calls"])
         if exhausted:
@@ -438,9 +436,7 @@ class AgentRunner:
                 "model": model,
                 "rounds": rounds, "tool_calls": tool_calls,
                 "usage": {k: v for k, v in usage.items() if k != "calls"},
-                "cost_usd": cost_usd(model, usage["input_tokens"], usage["output_tokens"],
-                                     usage["cache_creation_input_tokens"],
-                                     usage["cache_read_input_tokens"]),
+                "cost_usd": price_usage(provider.kind, model, usage),
                 "started_at": started_at.isoformat(), "finished_at": now_utc().isoformat(),
                 "duration_s": round(time.monotonic() - t0, 2),
                 "prompt_hash": prompt_hash(agent["prompt"]),

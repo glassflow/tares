@@ -308,6 +308,7 @@ _MIGRATIONS = [
     # Which key paid for a ledger row ("env:ANTHROPIC_API_KEY" | "console") — the boundary a
     # hosted trial's enforcement counts against. Rows from before attribution stay NULL (unknown).
     "ALTER TABLE model_usage ADD COLUMN IF NOT EXISTS key_source TEXT",
+    "ALTER TABLE model_usage ADD COLUMN IF NOT EXISTS provider TEXT",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -1130,16 +1131,17 @@ class Store:
                            cache_creation_input_tokens: int = 0,
                            cache_read_input_tokens: int = 0,
                            cost_usd: float | None = None,
-                           key_source: str | None = None) -> None:
+                           key_source: str | None = None,
+                           provider: str | None = None) -> None:
         with self._lock:
             self.con.execute(
                 "INSERT INTO model_usage (id, ts, surface, agent, run_id, model, calls, "
                 "input_tokens, output_tokens, cache_creation_input_tokens, "
-                "cache_read_input_tokens, cost_usd, key_source) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "cache_read_input_tokens, cost_usd, key_source, provider) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 ["mu_" + uuid.uuid4().hex[:12], now_utc(), surface, agent, run_id, model,
                  calls, input_tokens, output_tokens, cache_creation_input_tokens,
-                 cache_read_input_tokens, cost_usd, key_source or None],
+                 cache_read_input_tokens, cost_usd, key_source or None, provider or None],
             )
 
     def model_usage_summary(self, days: int = 30) -> dict:
@@ -1167,6 +1169,10 @@ class Store:
             key_sources = self.con.execute(
                 f"SELECT coalesce(key_source, 'unknown'), {agg} FROM model_usage "
                 "GROUP BY 1").fetchall()
+            # Which provider served it: rows from before providers existed were all Anthropic.
+            providers = self.con.execute(
+                f"SELECT coalesce(provider, 'anthropic'), {agg} FROM model_usage "
+                "GROUP BY 1").fetchall()
             daily = self.con.execute(
                 f"SELECT CAST(ts AS DATE) AS day, {agg} FROM model_usage "
                 f"WHERE ts > now() - INTERVAL {int(days)} DAY "
@@ -1175,6 +1181,7 @@ class Store:
             "total": shape(total),
             "by_surface": {r[0]: shape(r[1:]) for r in surfaces},
             "by_key_source": {r[0]: shape(r[1:]) for r in key_sources},
+            "by_provider": {r[0]: shape(r[1:]) for r in providers},
             "days": [{"day": str(r[0]), **shape(r[1:])} for r in daily],
             "window_days": int(days),
         }

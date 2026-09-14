@@ -290,6 +290,9 @@ async def main():
                SEEN and SEEN[-1]["body"]["model"] == "llama-x" and SEEN[-1]["auth"] == "Bearer vk"
                and SEEN[-1]["body"]["messages"][0] == {"role": "system", "content": "investigate"}, str(SEEN[-1:])[:300])
             ck("usage recorded from the router's reply", run is not None and run["input_tokens"] == 11 and run["output_tokens"] == 7, str((run and run["input_tokens"], run and run["output_tokens"])))
+            ck("an unpriced router model records tokens with no cost", run is not None and run["cost_usd"] is None, str(run and run["cost_usd"]))
+            um = (await cx.get("/api/usage/model")).json()
+            ck("the spend meter splits by provider", "local-vllm" in um.get("by_provider", {}) and um["by_provider"]["local-vllm"]["uncosted_calls"] >= 1, str(um.get("by_provider")))
 
             doc = yaml.safe_load((await cx.get("/api/catalog/export")).text)
             ag = next((x for x in doc.get("agents", []) if x["name"] == "on-vllm"), None)

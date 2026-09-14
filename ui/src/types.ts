@@ -316,6 +316,7 @@ export interface ModelUsageBucket {
 export interface ModelUsage {
   total: ModelUsageBucket;
   by_surface: Record<string, ModelUsageBucket>;
+  by_provider?: Record<string, ModelUsageBucket>;   // provider id -> spend; rows before providers count as anthropic
   days: ({ day: string } & ModelUsageBucket)[];
   window_days: number;
 }

@@ -156,7 +156,8 @@ class AnthropicProvider(Provider):
     async def complete(self, *, model, system, tools, messages, max_tokens,
                        tools_allowed=True, tracer=None) -> ModelReply:
         body = self._body(model, system, tools, messages, max_tokens, tools_allowed)
-        with _tracing.generation(tracer, model, body["messages"], {"max_tokens": max_tokens}) as gen:
+        with _tracing.generation(tracer, model, body["messages"], {"max_tokens": max_tokens},
+                                 provider=self.kind) as gen:
             async with httpx.AsyncClient(timeout=self.timeout) as cx:
                 r = await cx.post(f"{self.base_url}/v1/messages", headers=self.headers, json=body)
             if r.status_code >= 400:
@@ -177,7 +178,8 @@ class AnthropicProvider(Provider):
                                    "(pip install tares[agent])")
         client = anthropic.AsyncAnthropic(base_url=self.base_url, default_headers=self.headers)
         wire = self.render(messages)
-        with _tracing.generation(tracer, model, wire, {"max_tokens": max_tokens}) as gen:
+        with _tracing.generation(tracer, model, wire, {"max_tokens": max_tokens},
+                                 provider=self.kind) as gen:
             async with client.messages.stream(model=model, max_tokens=max_tokens, system=system,
                                               tools=tools, messages=wire) as stream:
                 async for event in stream:
@@ -316,7 +318,8 @@ class OpenAIProvider(Provider):
     async def complete(self, *, model, system, tools, messages, max_tokens,
                        tools_allowed=True, tracer=None) -> ModelReply:
         body = self._body(model, system, tools, messages, max_tokens, tools_allowed, False)
-        with _tracing.generation(tracer, model, body["messages"], {"max_tokens": max_tokens}) as gen:
+        with _tracing.generation(tracer, model, body["messages"], {"max_tokens": max_tokens},
+                                 provider=self.kind) as gen:
             async with httpx.AsyncClient(timeout=self.timeout) as cx:
                 r = await cx.post(f"{self.base_url}/chat/completions", headers=self.headers,
                                   json=body)
@@ -331,7 +334,8 @@ class OpenAIProvider(Provider):
 
     async def stream(self, *, model, system, tools, messages, max_tokens, tracer=None):
         body = self._body(model, system, tools, messages, max_tokens, True, True)
-        with _tracing.generation(tracer, model, body["messages"], {"max_tokens": max_tokens}) as gen:
+        with _tracing.generation(tracer, model, body["messages"], {"max_tokens": max_tokens},
+                                 provider=self.kind) as gen:
             text_parts: list[str] = []
             calls: dict[int, dict] = {}       # index -> {id, name, arguments (str so far)}
             finish = resp_model = None

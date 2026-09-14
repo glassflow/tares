@@ -1365,19 +1365,19 @@ def make_app() -> FastAPI:
         return {"sampled": sampled, "fields": fields, "labels": labels}
 
     # ── in-app agent (the Ask view) — server-side chat loop over the read API ──
-    def _record_ask_usage(model: str, usage: dict, key_source: str = "") -> None:
+    def _record_ask_usage(model: str, usage: dict, key_source: str = "", kind: str = "anthropic",
+                          provider_id: str | None = None) -> None:
         """One ledger row per Ask turn (console chat or Slack /ask), so the cell's spend meter
         covers everything that talks to Anthropic, not just agent runs. `key_source` is the
         origin of the key that PAID for this turn, captured by the caller when it resolved the
         key — never re-resolved here, the stored key could have changed mid-turn."""
-        from .pricing import cost_usd
+        from .pricing import price_usage
         store.record_model_usage(
             "ask", "", "", model, usage["calls"],
             usage["input_tokens"], usage["output_tokens"],
             usage["cache_creation_input_tokens"], usage["cache_read_input_tokens"],
-            cost_usd(model, usage["input_tokens"], usage["output_tokens"],
-                     usage["cache_creation_input_tokens"], usage["cache_read_input_tokens"]),
-            key_source=key_source or None)
+            price_usage(kind, model, usage),
+            key_source=key_source or None, provider=provider_id)
 
     @app.post("/api/agent/chat")
     async def agent_chat(request: Request):
@@ -1389,6 +1389,7 @@ def make_app() -> FastAPI:
         provider, key_origin = resolve_provider(store)
         if provider is None:
             _err(ValueError("add a model provider under Settings to use the assistant"), 400)
+        default_pid = providers_mod.default_id(store)
         body = await request.json()
         # the daemon's own token, so the agent's tool self-calls clear the auth middleware
         self_headers = {"Authorization": f"Bearer {AUTH_TOKEN}"} if AUTH_TOKEN else {}
@@ -1401,7 +1402,9 @@ def make_app() -> FastAPI:
         return StreamingResponse(
             run_agent(provider, body.get("messages") or [],
                       model=body.get("model"), self_headers=self_headers,
-                      on_usage=lambda m, u: _record_ask_usage(m, u, key_source=key_origin),
+                      on_usage=lambda m, u: _record_ask_usage(m, u, key_source=key_origin,
+                                                              kind=provider.kind,
+                                                              provider_id=default_pid),
                       tracer=tracing.tracer_for("ask"), mode=mode, step=step),
             media_type="text/event-stream")
 
@@ -2192,13 +2195,15 @@ def make_app() -> FastAPI:
         text, error = "", None
         try:
             provider, key_origin = resolve_provider(store)
+            default_pid = providers_mod.default_id(store)
             self_headers = {"Authorization": f"Bearer {AUTH_TOKEN}"} if AUTH_TOKEN else {}
             async def _run():
                 nonlocal text, error
                 async for chunk in run_agent(provider, [{"role": "user", "content": question}],
                                              self_headers=self_headers,
                                              on_usage=lambda m, u: _record_ask_usage(
-                                                 m, u, key_source=key_origin),
+                                                 m, u, key_source=key_origin, kind=provider.kind,
+                                                 provider_id=default_pid),
                                              tracer=tracing.tracer_for("ask")):
                     for line in chunk.splitlines():
                         if not line.startswith("data: "):
