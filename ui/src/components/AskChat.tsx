@@ -99,6 +99,7 @@ const scrollToEnd = () => {
 export default function AskChat({ history = false }: { history?: boolean }) {
   const [ready, setKeyReady] = useState<boolean>();      // is a key configured on the server?
   const [urlReady, setUrlReady] = useState<boolean>();      // is an url configured on the server?
+  const [providerName, setProviderName] = useState<string>();   // the cell default Ask answers on
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const { send: stream, stop, streaming: busy } = useAgentStream();
@@ -118,6 +119,7 @@ export default function AskChat({ history = false }: { history?: boolean }) {
   .then((c) => {
     setKeyReady(!!c.agent_key_configured);
     setUrlReady(c.url_configured);
+    setProviderName(c.default_provider?.name);
   })
   .catch(() => {
     setKeyReady(false);
@@ -346,6 +348,7 @@ export default function AskChat({ history = false }: { history?: boolean }) {
                   }} />
         {/* One button, two jobs — the prototype's call, and right: Send and Stop are never both
             available, so two buttons is one more thing to read mid-answer. */}
+        {providerName && !busy && <span className="help" style={{ alignSelf: "center", whiteSpace: "nowrap" }} title="the cell default provider; change it under Settings, Model providers">on {providerName}</span>}
         {busy
           ? <button type="button" className="danger" onClick={stop}>Stop</button>
           : <button className="primary" disabled={!input.trim()}>Send</button>}
@@ -467,14 +470,15 @@ export function KeySetup({ onSaved, urlConfigured }: { onSaved: () => void, urlC
 
   return (
     <div className="panel" style={{ maxWidth: 560 }}>
-      <h2 style={{ marginTop: 0 }}>Configure model access</h2>
+      <h2 style={{ marginTop: 0 }}>Add a model provider</h2>
       <p className="help" style={{ whiteSpace: "normal" }}>
-        The assistant runs on your Tares daemon using this key. It is stored on this instance and
-        used by everything that reasons over your data: this assistant, Tares agents woken by
-        triggers, and <span className="mono">/tares ask</span> in Slack. You can change or remove it
-        later under <strong>Settings</strong>. {!urlConfigured && (<>Get one at{" "}
+        The assistant runs on your Tares daemon on a model provider. Paste an Anthropic API key
+        here to start on Claude; it is stored on this instance and used by everything that reasons
+        over your data: this assistant, Tares agents woken by triggers, and{" "}
+        <span className="mono">/tares ask</span> in Slack. {!urlConfigured && (<>Get one at{" "}
         <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">console.anthropic.com
-        </a>.</>)}
+        </a>.</>)} For OpenAI, or an OpenAI-compatible endpoint such as LiteLLM, OpenRouter or Ollama,
+        add the provider under <a href="/settings?tab=anthropic">Settings, Model providers</a>.
       </p>
       {err && <div className="alert error">{err}</div>}
       <form onSubmit={(e) => { e.preventDefault(); if (value.trim()) save(); }}>

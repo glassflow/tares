@@ -149,7 +149,7 @@ export default function ProjectNewGeneric() {
                 {done ? (
                   <p className="help" style={{ margin: "2px 0 0" }}>
                     {keyStep
-                      ? <>an Anthropic key is set{keyStatus?.source ? ` (${keyStatus.source})` : ""}; the agent can run. Change it under Settings.</>
+                      ? <>a model provider is set{keyStatus?.source ? ` (${keyStatus.source})` : ""}; the agent can run. Change it under Settings, Model providers.</>
                       : <>running: {Array.from(new Set(Object.values(detected?.found ?? {}).map((v) => v.split(" (")[0].split(" publishes")[0]))).join(", ")}; the fields below were filled from it</>}
                   </p>
                 ) : (

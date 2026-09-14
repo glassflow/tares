@@ -33,7 +33,8 @@ import httpx
 from . import tracing as _tracing
 from .config import FINDINGS_SOURCE, API_BASE, agent_url, parse_duration
 from .envelope import now_utc
-from .pricing import cost_usd
+from .models import ModelError, Provider, add_usage, empty_usage, tool_call_in_text, tool_message
+from .pricing import price_usage
 from .slack import deep_link as _slack_deep_link
 from .views import resolve_query_full, resolve_read
 
@@ -56,6 +57,16 @@ TOOL_TIMEOUT = 120        # per Anthropic request
 # the first surprise is the bill. Per-agent and per-day, counted from the run log.
 DAILY_RUN_CAP = int(os.getenv("TARES_AGENT_DAILY_CAP", "50"))
 MAX_BOOTSTRAP_KEYS = 50    # a project bootstraps at most this many entities in one go
+
+def _canonical_tool(name: str, tools: list) -> str | None:
+    """The declared tool a model's name refers to: exact, else case-insensitive and trimmed."""
+    raw = str(name or "")
+    names = [t["name"] for t in tools]
+    if raw in names:
+        return raw
+    folded = raw.strip().lower()
+    return next((n for n in names if n.lower() == folded), None)
+
 
 def effective_max_rounds(agent: dict) -> int:
     """The round cap a run is held to: the agent's own setting when set, else the default for its
@@ -145,54 +156,10 @@ def prompt_hash(prompt: str) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12]
 
 
-DEFAULT_API_BASE = "https://api.anthropic.com"
-
-
-def resolve_api_base(store) -> tuple[str, str]:
-    """(base URL, where-it-came-from). Where model calls go: a gateway saved in the console
-    (TR-281), else the environment (`ANTHROPIC_BASE_URL`, or the old `TARES_ANTHROPIC_BASE`),
-    else Anthropic itself. Read per request, like the key, so a cell can switch to a gateway
-    without a restart and a cloud customer can do it from Settings."""
-    stored = (store.get_setting("gateway_url") or "").strip().rstrip("/")
-    if stored:
-        return stored, "console"
-    if API_BASE != DEFAULT_API_BASE:
-        which = "ANTHROPIC_BASE_URL" if os.getenv("ANTHROPIC_BASE_URL", "").strip() else "TARES_ANTHROPIC_BASE"
-        return API_BASE, f"env:{which}"
-    return DEFAULT_API_BASE, ""
-
-
-def resolve_anthropic_headers(store) -> tuple[dict[str, str], str]:
-    """(header, where-it-came-from). The console-stored values win over the environment: the
-    user's own credential takes over from whatever the deployment shipped the moment they save
-    one. That order is load-bearing for hosted trials — an operator-provided key in the env must
-    yield to the customer's key instantly, so their spend lands on their key, not the trial's.
-    Deleting the stored value falls back to the env (if the deployment still carries one).
-
-    A gateway token saved in the console (Settings, TR-281) goes first, as a bearer header: it
-    exists only because the user set a gateway up on purpose. Then the stored key, as the
-    Anthropic key header, which is what a gateway expects from a plain key too."""
-    gateway_token = (store.get_setting("gateway_token") or "").strip()
-    stored = (store.get_setting("anthropic_key") or "").strip()
-    auth_token = os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip()
-    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    headers = {"anthropic-version": "2023-06-01",}
-    if gateway_token:
-        headers["Authorization"] = f"Bearer {gateway_token}"
-        key_origin = "console:gateway"
-    elif stored:
-        headers["x-api-key"] = stored
-        key_origin = "console"
-    elif auth_token:
-        headers["Authorization"] = f"Bearer {auth_token}"
-        key_origin = "env:ANTHROPIC_AUTH_TOKEN"
-    elif api_key:
-        headers["x-api-key"] = api_key
-        key_origin = "env:ANTHROPIC_API_KEY"
-    else:
-        return {}, ""
-
-    return headers, key_origin
+# The credential and base URL resolvers moved to providers.py (TR-301); they are imported here
+# so callers and tests that patch them on this module keep working.
+from .providers import (DEFAULT_API_BASE, default_model_for, resolve_anthropic_headers,  # noqa: E402,F401
+                        resolve_api_base, resolve_for_agent, resolve_provider)
 
 
 class AgentRunner:
@@ -385,10 +352,10 @@ class AgentRunner:
                           obs: _tracing.Observation) -> tuple[str, str | None]:
         started_at = now_utc()
         t0 = time.monotonic()
-        headers, key_origin = resolve_anthropic_headers(self.store)
-        api_base, _ = resolve_api_base(self.store)
-        if not headers:
-            msg = "no Anthropic key: set ANTHROPIC_API_KEY before `tares up`, or add a key under Settings"
+        provider, key_origin, provider_id, provider_note = resolve_for_agent(self.store, agent)
+        if provider is None:
+            msg = ("no model provider configured: add one under Settings, or set "
+                   "ANTHROPIC_API_KEY before `tares up`")
             self.store.finish_agent_run(run_id, "failed", error=msg)
             return "failed", msg
         # Count the runs BEFORE this one (its row is already inserted), so the cap fires at exactly
@@ -414,25 +381,30 @@ class AgentRunner:
 
         # Usage accumulates in a mutable dict rather than the loop's return value, so a run that
         # dies mid-loop still records the tokens it already paid for (the finally below).
-        model = agent.get("model") or MODEL
-        usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0,
-                 "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+        model = agent.get("model") or default_model_for(self.store, provider_id)
+        if not model:
+            msg = (f"provider {provider_id!r} lists no models yet; pick one for this agent under "
+                   "Configuration, or refresh the provider's models under Settings")
+            self.store.finish_agent_run(run_id, "failed", error=msg)
+            return "failed", msg
+        if provider_note:
+            print(f"[agent {agent['name']}] {provider_note}")
+        obs.set_attribute("tares.provider", provider_id)
+        usage = empty_usage()
         try:
             finding, rounds, tool_calls, external_used, exhausted, partial = await self._loop(
-                agent, trigger_name, key, payload, headers, usage, tracer, obs, api_base=api_base)
+                agent, trigger_name, key, payload, provider, model, usage, tracer, obs)
         finally:
             if usage["calls"]:
-                cost = cost_usd(model, usage["input_tokens"], usage["output_tokens"],
-                                usage["cache_creation_input_tokens"],
-                                usage["cache_read_input_tokens"])
+                cost = price_usage(provider.kind, model, usage)
                 self.store.record_run_usage(
                     run_id, model, usage["input_tokens"], usage["output_tokens"],
-                    usage["cache_creation_input_tokens"], usage["cache_read_input_tokens"], cost)
+                    usage["cache_creation_input_tokens"], usage["cache_read_input_tokens"], cost, provider=provider_id)
                 self.store.record_model_usage(
                     "agent", agent["name"], run_id, model, usage["calls"],
                     usage["input_tokens"], usage["output_tokens"],
                     usage["cache_creation_input_tokens"], usage["cache_read_input_tokens"], cost,
-                    key_source=key_origin)
+                    key_source=key_origin, provider=provider_id)
                 obs.set_attribute("tares.cost_usd", cost)
                 obs.set_attribute("tares.model_calls", usage["calls"])
         if exhausted:
@@ -448,6 +420,11 @@ class AgentRunner:
             return "exhausted", msg
         if not finding:
             msg = "the model returned no conclusion"
+            if tool_calls == 0:
+                # Most often a model that does not do tool calling, or a router alias pointing
+                # at one: say so, since the run otherwise looks like the prompt was at fault.
+                msg += ("; it called no tool either. Check that this model supports tool "
+                        "calling, or pick another one for this agent")
             self.store.finish_agent_run(run_id, "empty", rounds=rounds, tool_calls=tool_calls,
                                         error=msg, external_tools=external_used)
             return "empty", msg
@@ -474,9 +451,7 @@ class AgentRunner:
                 "model": model,
                 "rounds": rounds, "tool_calls": tool_calls,
                 "usage": {k: v for k, v in usage.items() if k != "calls"},
-                "cost_usd": cost_usd(model, usage["input_tokens"], usage["output_tokens"],
-                                     usage["cache_creation_input_tokens"],
-                                     usage["cache_read_input_tokens"]),
+                "cost_usd": price_usage(provider.kind, model, usage),
                 "started_at": started_at.isoformat(), "finished_at": now_utc().isoformat(),
                 "duration_s": round(time.monotonic() - t0, 2),
                 "prompt_hash": prompt_hash(agent["prompt"]),
@@ -532,8 +507,8 @@ class AgentRunner:
 
     # ── the bounded model loop ────────────────────────────────────────────────
     async def _loop(self, agent: dict, trigger_name: str, key: str, payload: str,
-                    headers: dict, usage: dict, tracer=None,
-                    obs: _tracing.Observation | None = None, api_base: str = DEFAULT_API_BASE,
+                    provider: Provider, model: str, usage: dict, tracer=None,
+                    obs: _tracing.Observation | None = None,
                     ) -> tuple[str, int, int, list[str], bool, str]:
         # External tools: the agent's selected MCP servers, connected for the duration of this
         # run. A server that fails to connect is skipped (recorded below) — losing a tool server
@@ -545,12 +520,12 @@ class AgentRunner:
         async with RemoteToolbox(servers) as toolbox:
             for failure in toolbox.failures:
                 print(f"[agent {agent['name']}] mcp connect failed; {failure}")
-            return await self._loop_with(agent, trigger_name, key, payload, headers, toolbox,
-                                         usage, tracer, obs, api_base=api_base)
+            return await self._loop_with(agent, trigger_name, key, payload, provider, toolbox,
+                                         usage, tracer, obs, model=model)
 
     async def _loop_with(self, agent: dict, trigger_name: str, key: str, payload: str,
-                         headers: dict, toolbox, usage: dict, tracer=None,
-                         obs: _tracing.Observation | None = None, api_base: str = DEFAULT_API_BASE,
+                         provider: Provider, toolbox, usage: dict, tracer=None,
+                         obs: _tracing.Observation | None = None, model: str = "",
                          ) -> tuple[str, int, int, list[str], bool, str]:
         """Returns (finding, rounds, tool_calls, external_tools_used, exhausted, partial_text)."""
         tools = TOOL_DEFS + toolbox.tool_defs
@@ -575,82 +550,75 @@ class AgentRunner:
         last_text = ""
         if obs is not None:
             obs.set_input(messages[0]["content"])
-        async with httpx.AsyncClient(timeout=TOOL_TIMEOUT) as cx:
-            async def call(with_tools: bool) -> dict:
-                # The tools stay declared on the final call (a conversation holding tool_use
-                # blocks must define them); tool_choice none is what disables them.
-                body = {"model": agent.get("model") or MODEL,
-                        "max_tokens": MAX_TOKENS, "system": agent["prompt"],
-                        "tools": tools, "messages": messages}
-                if not with_tools:
-                    body["tool_choice"] = {"type": "none"}
-                with _tracing.generation(tracer, body["model"], messages,
-                                         {"max_tokens": MAX_TOKENS}) as gen:
-                    r = await cx.post(
-                        f"{api_base}/v1/messages",
-                        headers=headers,
-                        json=body)
-                    if r.status_code >= 400:
-                        raise RuntimeError(f"anthropic {r.status_code}: {r.text[:300]}")
-                    msg = r.json()
-                    # Defensive get: stubs (tests) may answer without a usage block.
-                    u = msg.get("usage") or {}
-                    usage["calls"] += 1
-                    for field in ("input_tokens", "output_tokens",
-                                  "cache_creation_input_tokens", "cache_read_input_tokens"):
-                        usage[field] += int(u.get(field) or 0)
-                    gen.set_output(msg.get("content") or [])
-                    gen.set_usage(u)
-                    gen.set_response_model(msg.get("model"))
-                    gen.set_finish_reason(msg.get("stop_reason"))
-                return msg
+        model = model or agent.get("model") or MODEL
 
-            for rounds in range(1, max_rounds + 1):
-                msg = await call(True)
-                messages.append({"role": "assistant", "content": msg["content"]})
-                text = "\n".join(b.get("text", "") for b in msg["content"]
-                                 if b.get("type") == "text").strip()
-                if text:
-                    last_text = text
+        async def call(with_tools: bool):
+            reply = await provider.complete(model=model, system=agent["prompt"], tools=tools,
+                                            messages=messages, max_tokens=MAX_TOKENS,
+                                            tools_allowed=with_tools, tracer=tracer)
+            add_usage(usage, reply.usage)
+            return reply
 
-                uses = [b for b in msg["content"] if b.get("type") == "tool_use"]
-                if not uses:
-                    return text, rounds, tool_calls, external_used, False, ""
+        for rounds in range(1, max_rounds + 1):
+            reply = await call(True)
+            text = reply.text.strip()
+            calls = list(reply.tool_calls)
+            if not calls:
+                # A small model that wrote its tool call as JSON text instead of a real call:
+                # accepting that as the finding would file the model's own instructions to
+                # itself. Run the call it meant (TR-306). The assistant turn is then rebuilt from
+                # text plus the call, so the provider sees a real call to answer.
+                meant = tool_call_in_text(text, tools)
+                if meant is not None:
+                    meant.id = f"text_call_{rounds}"
+                    calls = [meant]
+                    messages.append({"role": "assistant", "content": "", "tool_calls": calls})
+            if not (calls and calls[0].id.startswith("text_call_")):
+                messages.append(reply.as_message())
+            if text and not (calls and calls[0].id.startswith("text_call_")):
+                last_text = text
 
-                results = []
-                for u in uses:
-                    tool_calls += 1
-                    name = str(u["name"])
-                    with _tracing.tool_span(tracer, name, u.get("input") or {}) as tobs:
-                        try:
-                            if toolbox.owns(name):
-                                external_used.append(name)
-                                out = await toolbox.call(name, u.get("input") or {})
-                            else:
-                                out = self._tool(agent["name"], name, u.get("input") or {})
-                        except Exception as e:   # a tool error is evidence, not a crash
-                            out = f"tool error: {type(e).__name__}: {e}"
-                            tobs.tool_error(out)
-                        else:
-                            tobs.set_output(out)
-                    results.append({"type": "tool_result", "tool_use_id": u["id"], "content": out})
-                messages.append({"role": "user", "content": results})
-
-            # Budget exhausted with tool calls still pending. Ask once more, tools disabled, for a
-            # conclusion from what it has (this is the +1 call). If it concludes, that is the
-            # finding; if not, the run is `exhausted` and the last text is kept as a partial note.
-            messages.append({"role": "user", "content": (
-                "You have used your round budget. Do not call any more tools. Conclude now from "
-                "the evidence you already have; if it is inconclusive, say what you found so far "
-                "and what you would look at next.")})
-            try:
-                msg = await call(False)
-            except RuntimeError:
-                return "", rounds, tool_calls, external_used, True, last_text
-            text = "\n".join(b.get("text", "") for b in msg["content"]
-                             if b.get("type") == "text").strip()
-            if text:
+            if not calls:
                 return text, rounds, tool_calls, external_used, False, ""
+
+            results = []
+            for tc in calls:
+                tool_calls += 1
+                # A small model slips on names (Read, READ, "query "); match the declared tool
+                # case-insensitively rather than fail the call over case (TR-306).
+                name = _canonical_tool(tc.name, tools)
+                with _tracing.tool_span(tracer, name, tc.arguments) as tobs:
+                    try:
+                        if name is None:
+                            raise ValueError(f"unknown tool {tc.name!r}; the tools are: "
+                                             + ", ".join(t["name"] for t in tools))
+                        if toolbox.owns(name):
+                            external_used.append(name)
+                            out = await toolbox.call(name, tc.arguments)
+                        else:
+                            out = self._tool(agent["name"], name, tc.arguments)
+                    except Exception as e:   # a tool error is evidence, not a crash
+                        out = f"tool error: {type(e).__name__}: {e}"
+                        tobs.tool_error(out)
+                    else:
+                        tobs.set_output(out)
+                results.append((tc.id, out))
+            messages.append(tool_message(results))
+
+        # Budget exhausted with tool calls still pending. Ask once more, tools disabled, for a
+        # conclusion from what it has (this is the +1 call). If it concludes, that is the
+        # finding; if not, the run is `exhausted` and the last text is kept as a partial note.
+        messages.append({"role": "user", "content": (
+            "You have used your round budget. Do not call any more tools. Conclude now from "
+            "the evidence you already have; if it is inconclusive, say what you found so far "
+            "and what you would look at next.")})
+        try:
+            reply = await call(False)
+        except ModelError:
+            return "", rounds, tool_calls, external_used, True, last_text
+        text = reply.text.strip()
+        if text:
+            return text, rounds, tool_calls, external_used, False, ""
         return "", rounds, tool_calls, external_used, True, last_text
 
     def _tool(self, agent_name: str, name: str, args: dict) -> str:

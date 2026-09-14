@@ -302,9 +302,13 @@ _MIGRATIONS = [
     # the label whose value the write-back reports as `key` (TR-285: Rius attributes reports by
     # delivery id while the entity, the cooldown axis, is the service)
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS webhook_key_label TEXT",
+    # TR-302: an agent names the provider it runs on ("" = the cell default); a run records which
+    "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS provider TEXT",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS provider TEXT",
     # Which key paid for a ledger row ("env:ANTHROPIC_API_KEY" | "console") — the boundary a
     # hosted trial's enforcement counts against. Rows from before attribution stay NULL (unknown).
     "ALTER TABLE model_usage ADD COLUMN IF NOT EXISTS key_source TEXT",
+    "ALTER TABLE model_usage ADD COLUMN IF NOT EXISTS provider TEXT",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -953,15 +957,16 @@ class Store:
                              mcp_servers: list[str] | None = None,
                              max_rounds: int | None = None,
                              budget_usd: float | None = None,
-                             webhook_key_label: str | None = None) -> None:
+                             webhook_key_label: str | None = None,
+                             provider: str | None = None) -> None:
         ts = now_utc()
         with self._lock:
             self.con.execute(
                 "INSERT INTO catalog_agents "
                 "(name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, max_rounds, budget_usd, "
-                "webhook_key_label, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "webhook_key_label, provider, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (name) DO UPDATE SET trigger = excluded.trigger, "
                 "prompt = excluded.prompt, slack_webhook = excluded.slack_webhook, "
                 "model = excluded.model, slack_channel = excluded.slack_channel, "
@@ -969,11 +974,12 @@ class Store:
                 "mcp_servers = excluded.mcp_servers, max_rounds = excluded.max_rounds, "
                 "budget_usd = excluded.budget_usd, "
                 "webhook_key_label = excluded.webhook_key_label, "
+                "provider = excluded.provider, "
                 "updated_at = excluded.updated_at",
                 [name, trigger, prompt, slack_webhook or "", model or "",
                  slack_channel or "", webhook_url or "", webhook_token or "",
                  json.dumps(mcp_servers or []), max_rounds, budget_usd,
-                 webhook_key_label or "", ts, ts],
+                 webhook_key_label or "", provider or "", ts, ts],
             )
 
     def list_catalog_agents(self) -> list[dict]:
@@ -981,7 +987,7 @@ class Store:
             rows = self.con.execute(
                 "SELECT name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, updated_at, max_rounds, budget_usd, owned_by, customized, "
-                "webhook_key_label "
+                "webhook_key_label, provider "
                 "FROM catalog_agents ORDER BY name"
             ).fetchall()
         return [
@@ -990,7 +996,7 @@ class Store:
              "webhook_url": r[6] or "", "webhook_token": r[7] or "",
              "mcp_servers": json.loads(r[8]) if r[8] else [], "updated_at": r[9],
              "max_rounds": r[10], "budget_usd": r[11], "owned_by": r[12], "customized": bool(r[13]),
-             "webhook_key_label": r[14] or ""}
+             "webhook_key_label": r[14] or "", "provider": r[15] or ""}
             for r in rows
         ]
 
@@ -1031,17 +1037,17 @@ class Store:
     def record_run_usage(self, run_id: str, model: str, input_tokens: int, output_tokens: int,
                          cache_creation_input_tokens: int = 0,
                          cache_read_input_tokens: int = 0,
-                         cost_usd: float | None = None) -> None:
+                         cost_usd: float | None = None, provider: str | None = None) -> None:
         """Stamp a run with what its model loop consumed. Separate from finish_agent_run on
         purpose: usage exists for every outcome (ok, empty, exhausted, and failed after burning
         tokens), so it is written by the loop's finally rather than each outcome path."""
         with self._lock:
             self.con.execute(
                 "UPDATE agent_runs SET model = ?, input_tokens = ?, output_tokens = ?, "
-                "cache_creation_input_tokens = ?, cache_read_input_tokens = ?, cost_usd = ? "
-                "WHERE id = ?",
+                "cache_creation_input_tokens = ?, cache_read_input_tokens = ?, cost_usd = ?, "
+                "provider = COALESCE(?, provider) WHERE id = ?",
                 [model, input_tokens, output_tokens, cache_creation_input_tokens,
-                 cache_read_input_tokens, cost_usd, run_id],
+                 cache_read_input_tokens, cost_usd, provider, run_id],
             )
 
     def count_agent_runs(self, agent: str) -> tuple[int, int]:
@@ -1058,7 +1064,7 @@ class Store:
         sql = ("SELECT id, agent, trigger, dispatch_id, key_value, status, rounds, tool_calls, "
                "started_at, duration_ms, finding, error, external_tools, max_rounds, "
                "model, input_tokens, output_tokens, cache_creation_input_tokens, "
-               "cache_read_input_tokens, cost_usd, delivery, delivery_error "
+               "cache_read_input_tokens, cost_usd, delivery, delivery_error, provider "
                "FROM agent_runs ")
         where, params = [], []
         if agent:
@@ -1080,7 +1086,8 @@ class Store:
              "external_tools": json.loads(r[12]) if r[12] else [], "max_rounds": r[13],
              "model": r[14], "input_tokens": r[15], "output_tokens": r[16],
              "cache_creation_input_tokens": r[17], "cache_read_input_tokens": r[18],
-             "cost_usd": r[19], "delivery": r[20], "delivery_error": r[21]}
+             "cost_usd": r[19], "delivery": r[20], "delivery_error": r[21],
+             "provider": r[22] or ""}
             for r in rows
         ]
 
@@ -1124,16 +1131,17 @@ class Store:
                            cache_creation_input_tokens: int = 0,
                            cache_read_input_tokens: int = 0,
                            cost_usd: float | None = None,
-                           key_source: str | None = None) -> None:
+                           key_source: str | None = None,
+                           provider: str | None = None) -> None:
         with self._lock:
             self.con.execute(
                 "INSERT INTO model_usage (id, ts, surface, agent, run_id, model, calls, "
                 "input_tokens, output_tokens, cache_creation_input_tokens, "
-                "cache_read_input_tokens, cost_usd, key_source) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "cache_read_input_tokens, cost_usd, key_source, provider) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 ["mu_" + uuid.uuid4().hex[:12], now_utc(), surface, agent, run_id, model,
                  calls, input_tokens, output_tokens, cache_creation_input_tokens,
-                 cache_read_input_tokens, cost_usd, key_source or None],
+                 cache_read_input_tokens, cost_usd, key_source or None, provider or None],
             )
 
     def model_usage_summary(self, days: int = 30) -> dict:
@@ -1161,6 +1169,10 @@ class Store:
             key_sources = self.con.execute(
                 f"SELECT coalesce(key_source, 'unknown'), {agg} FROM model_usage "
                 "GROUP BY 1").fetchall()
+            # Which provider served it: rows from before providers existed were all Anthropic.
+            providers = self.con.execute(
+                f"SELECT coalesce(provider, 'anthropic'), {agg} FROM model_usage "
+                "GROUP BY 1").fetchall()
             daily = self.con.execute(
                 f"SELECT CAST(ts AS DATE) AS day, {agg} FROM model_usage "
                 f"WHERE ts > now() - INTERVAL {int(days)} DAY "
@@ -1169,6 +1181,7 @@ class Store:
             "total": shape(total),
             "by_surface": {r[0]: shape(r[1:]) for r in surfaces},
             "by_key_source": {r[0]: shape(r[1:]) for r in key_sources},
+            "by_provider": {r[0]: shape(r[1:]) for r in providers},
             "days": [{"day": str(r[0]), **shape(r[1:])} for r in daily],
             "window_days": int(days),
         }

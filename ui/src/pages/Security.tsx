@@ -4,19 +4,19 @@ import { api, type TracingStatus } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { Close } from "../components/icons";
 import { Picker, TimeAgo } from "../components/bits";
-import type { ApiKey, GithubCredential } from "../types";
+import type { ApiKey, GithubCredential, ModelProvider, ModelProviders } from "../types";
 
 // Four distinct credential concepts, one box each:
 //   · Access     — is this instance open, or does it require a login? (tares up --auth)
 //   · API keys   — scoped, revocable, show-once credentials the operator mints for machines
-//   · Anthropic  — the model key Tares agents (and Ask) run on
+//   · Providers  — the model providers Tares agents (and Ask) run on
 //   · Slack      — the bot token behind slack:// trigger subscriptions (outbound), and the
 //                  signing secret that authenticates the /tares slash command (inbound)
 // The per-source ingest URL is an address, not a secret — it lives on the source page, not here.
 type SettingsTab = "access" | "anthropic" | "github" | "slack" | "observability";
 const TABS: { key: SettingsTab; label: string }[] = [
   { key: "access", label: "Access and API keys" },
-  { key: "anthropic", label: "Model access" },
+  { key: "anthropic", label: "Model providers" },
   { key: "github", label: "GitHub" },
   { key: "slack", label: "Slack" },
   { key: "observability", label: "Observability" },
@@ -41,7 +41,7 @@ export default function Security() {
   return (
     <>
       <h1>Settings</h1>
-      <p className="subtitle">access mode, API keys, model access, the instance credentials (GitHub, Slack) and agent tracing</p>
+      <p className="subtitle">access mode, API keys, model providers, the instance credentials (GitHub, Slack) and agent tracing</p>
       {workspaceUrl && (
         <div className="alert" style={{ marginBottom: 14 }}>
           <strong>Users, the Slack app, plan and storage</strong> are managed in your workspace, not
@@ -56,7 +56,7 @@ export default function Security() {
         ))}
       </div>
       {tab === "access" && <><AccessPanel /><ApiKeysPanel /></>}
-      {tab === "anthropic" && <AnthropicKeyPanel />}
+      {tab === "anthropic" && <ProvidersPanel />}
       {tab === "github" && <GithubPanel />}
       {tab === "slack" && <><SlackTokenPanel /><SlackSigningSecretPanel /></>}
       {tab === "observability" && <TracingPanel />}
@@ -284,173 +284,204 @@ function AccessPanel() {
   );
 }
 
-// The key Tares agents run on. Two ways in — the environment, or here — because plenty of local
-// users launch Tares from a desktop shortcut and have no shell to export into. Env always wins,
-// so a deployment's config is never silently overridden by something typed in here months earlier.
-function AnthropicKeyPanel() {
-  const [st, setSt] = useState<{ configured: boolean; source: string; stored: boolean; env_overrides: boolean }>();
-  const [mode, setMode] = useState<"direct" | "gateway">();
-  const [key, setKey] = useState("");
-  const [busy, setBusy] = useState(false);
+// The model providers a cell holds (TR-301): Anthropic, OpenAI, or any OpenAI-compatible
+// endpoint (LiteLLM, OpenRouter, Ollama, vLLM). One is the default, what Ask and the builder
+// use and what an agent without a provider of its own runs on. Credentials are write-only.
+// The Anthropic entry doubles as the old key + gateway settings, so a deployment that fills
+// those (a hosted trial cell, a compose file) shows up here unchanged.
+type ProviderKind = ModelProvider["kind"];
+const KIND_HELP: Record<ProviderKind, string> = {
+  anthropic: "Claude models with your Anthropic API key. Base URL only if calls go through a gateway that speaks the Anthropic format.",
+  openai: "GPT models with your OpenAI API key. Base URL only for Azure or a proxy.",
+  openai_compatible: "Anything that speaks OpenAI chat completions: LiteLLM, OpenRouter, Ollama, vLLM. The models it lists are what the picker offers.",
+};
+const PRESETS: { id: string; label: string; kind: ProviderKind; name: string; base_url: string; key: boolean }[] = [
+  { id: "anthropic", label: "Anthropic", kind: "anthropic", name: "Anthropic", base_url: "", key: true },
+  { id: "openai", label: "OpenAI", kind: "openai", name: "OpenAI", base_url: "", key: true },
+  { id: "litellm", label: "LiteLLM", kind: "openai_compatible", name: "LiteLLM", base_url: "http://localhost:4000/v1", key: true },
+  { id: "openrouter", label: "OpenRouter", kind: "openai_compatible", name: "OpenRouter", base_url: "https://openrouter.ai/api/v1", key: true },
+  { id: "ollama", label: "Ollama", kind: "openai_compatible", name: "Ollama", base_url: "http://localhost:11434/v1", key: false },
+  { id: "other", label: "Other OpenAI-compatible", kind: "openai_compatible", name: "", base_url: "", key: true },
+];
+
+function ProvidersPanel() {
+  const [data, setData] = useState<ModelProviders>();
   const [err, setErr] = useState<string>();
   const [msg, setMsg] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<{ id: string; preset: string; kind: ProviderKind; name: string; base_url: string; key: string }>();
+  const [confirmDelete, setConfirmDelete] = useState<ModelProvider>();
 
-  const load = () =>
-    api.anthropicKeyStatus().then(setSt).catch((e) => setErr(String((e as Error).message ?? e)));
+  const load = () => api.providers().then(setData).catch((e) => setErr(String((e as Error).message ?? e)));
   useEffect(() => { load(); }, []);
 
+  const startAdd = () => {
+    const p = PRESETS[0];
+    setEditing({ id: "new", preset: p.id, kind: p.kind, name: p.name, base_url: p.base_url, key: "" });
+    setMsg(undefined); setErr(undefined);
+  };
+  const startEdit = (p: ModelProvider) => {
+    const preset = p.kind === "openai_compatible" ? (PRESETS.find((x) => x.base_url && p.base_url.startsWith(x.base_url))?.id ?? "other") : p.kind;
+    setEditing({ id: p.id, preset, kind: p.kind, name: p.name, base_url: p.kind === "anthropic" && !p.gateway_stored && !p.base_source ? "" : p.base_url, key: "" });
+    setMsg(undefined); setErr(undefined);
+  };
+  const pickPreset = (id: string) => {
+    const p = PRESETS.find((x) => x.id === id)!;
+    setEditing((e) => e && { ...e, preset: id, kind: p.kind, name: p.name, base_url: p.base_url });
+  };
   const save = async () => {
+    if (!editing) return;
     setBusy(true); setErr(undefined); setMsg(undefined);
     try {
-      const r = await api.setAnthropicKey(key.trim());
-      setKey("");
-      setMsg(r.note ?? "✓ saved");
-      await load();
+      const r = await api.saveProvider(editing.id, { kind: editing.kind, name: editing.name, key: editing.key, base_url: editing.base_url });
+      setData(r); setEditing(undefined);
+      const saved = r.providers.find((p) => p.id === r.id);
+      setMsg(saved?.models_error
+        ? `✓ saved, but ${saved.models_problem || "the endpoint did not list its models"}. Agents can still name a model by hand.`
+        : saved?.discovers ? `✓ saved; ${saved.models.length} model${saved.models.length === 1 ? "" : "s"} listed by the endpoint` : "✓ saved; in use from the next call");
     } catch (e) { setErr(String((e as Error).message ?? e)); }
     setBusy(false);
   };
-
-  return (
-    <div className="panel">
-      <h2 style={{ marginTop: 0 }}>Model access</h2>
-      <p className="help" style={{ marginTop: 0 }}>
-        What <strong>Tares agents</strong> and Ask run on. Anthropic directly with your API key, or
-        through a gateway your organisation runs. Values stored here win over the daemon's
-        environment (<code>ANTHROPIC_API_KEY</code>, <code>ANTHROPIC_AUTH_TOKEN</code>,{" "}
-        <code>ANTHROPIC_BASE_URL</code>); credentials are never returned by the API and never
-        included in a catalog export.
-      </p>
-
-      <GatewaySection onChanged={load} mode={mode} setMode={setMode} />
-
-      {err && <div className="alert error">{err}</div>}
-      {msg && <p className="help">{msg}</p>}
-
-      {!st ? <div className="muted">loading…</div> : (
-        <>
-          <span className="lbl" style={{ display: "block", marginBottom: 4 }}>
-            {mode === "gateway" ? "Anthropic API key (optional: only if the gateway takes your key instead of a token)" : "Anthropic API key"}
-          </span>
-          <p style={{ margin: "0 0 10px" }}>
-            {st.configured
-              ? <><span className="badge ok">configured</span>{" "}
-                  <span className="help">from <span className="mono">{st.source}</span></span></>
-              : <><span className="badge error">not configured</span>{" "}
-                  <span className="help">agents cannot be enabled until one is set</span></>}
-          </p>
-          {st.source.startsWith("env:") && (
-            <p className="help" style={{ margin: "0 0 10px" }}>
-              The deployment's environment key is in use. Saving a key here replaces it: your key
-              takes over immediately, and removing it falls back to the environment key.
-            </p>
-          )}
-          <div className="btnrow" style={{ alignItems: "center", maxWidth: 720 }}>
-            <input type="password" className="mono" style={{ flex: 1 }} placeholder="sk-ant-…"
-                   value={key} onChange={(e) => setKey(e.target.value)} />
-            <button className="primary" disabled={busy || !key.trim()} onClick={save}>Save</button>
-            {st.stored && (
-              <button className="danger" disabled={busy} onClick={async () => {
-                setBusy(true);
-                try { await api.clearAnthropicKey(); await load(); }
-                catch (e) { setErr(String((e as Error).message ?? e)); }
-                setBusy(false);
-              }}>Clear stored</button>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// Where the model calls go (TR-281). Direct to Anthropic, or through a gateway that speaks the
-// Anthropic Messages format (LiteLLM, Portkey, a proxy in front of Bedrock or Vertex). Stored on
-// this instance like the key and winning over the environment, so a cloud customer with a
-// mandated proxy sets it here, on their own cell. The token is write-only.
-function GatewaySection({ onChanged, mode, setMode }: {
-  onChanged: () => void; mode: "direct" | "gateway" | undefined;
-  setMode: (m: "direct" | "gateway") => void;
-}) {
-  const [st, setSt] = useState<{ configured: boolean; url: string; source: string; stored: boolean;
-    token_stored: boolean; default_url: string }>();
-  const [url, setUrl] = useState("");
-  const [token, setToken] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string>();
-  const [msg, setMsg] = useState<string>();
-
-  const load = () => api.gatewayStatus().then((s) => {
-    setSt(s);
-    if (mode === undefined) setMode(s.configured ? "gateway" : "direct");
-    setUrl((u) => u || (s.stored ? s.url : ""));
-  }).catch((e) => setErr(String((e as Error).message ?? e)));
-  useEffect(() => { load(); }, []);
-
-  const save = async () => {
-    setBusy(true); setErr(undefined); setMsg(undefined);
-    try {
-      await api.setGateway(url.trim(), token.trim());
-      setToken("");
-      setMsg("✓ saved; model calls go through the gateway from the next call");
-      await load(); onChanged();
-    } catch (e) { setErr(String((e as Error).message ?? e)); }
-    setBusy(false);
+  const remove = async (id: string) => {
+    setBusy(true); setErr(undefined);
+    try { setData(await api.deleteProvider(id)); }
+    catch (e) { setErr(String((e as Error).message ?? e)); }
+    setBusy(false); setConfirmDelete(undefined);
   };
-  const clear = async () => {
-    setBusy(true); setErr(undefined); setMsg(undefined);
-    try { await api.clearGateway(); setUrl(""); setMode("direct"); await load(); onChanged(); }
+  const makeDefault = async (id: string) => {
+    setBusy(true); setErr(undefined);
+    try { setData(await api.setDefaultProvider(id)); }
     catch (e) { setErr(String((e as Error).message ?? e)); }
     setBusy(false);
   };
+  const refresh = async (id: string) => {
+    setBusy(true); setErr(undefined); setMsg(undefined);
+    try {
+      const r = await api.refreshProviderModels(id);
+      setData(r);
+      setMsg(r.error ? undefined : `✓ ${r.models.length} model${r.models.length === 1 ? "" : "s"} listed`);
+    } catch (e) { setErr(String((e as Error).message ?? e)); }
+    setBusy(false);
+  };
 
-  if (!st) return null;
-  const fromEnv = st.source.startsWith("env:");
+  const preset = editing && PRESETS.find((x) => x.id === editing.preset);
+  const existing = editing && data?.providers.find((p) => p.id === editing.id);
+  const isNew = editing?.id === "new";
+  const needsUrl = editing?.kind === "openai_compatible";
+  const canSave = !!editing && (!needsUrl || !!editing.base_url.trim()) && (editing.kind !== "openai_compatible" || !!editing.name.trim())
+    && (!!editing.key.trim() || !!existing?.configured || (editing.kind === "openai_compatible" && preset?.key === false));
+
   return (
-    <div style={{ margin: "0 0 18px", maxWidth: 720 }}>
-      <div className="field" style={{ marginBottom: 8 }}>
-        <span className="lbl">where model calls go</span>
-        <Picker value={mode ?? "direct"} options={["direct", "gateway"]} style={{ width: 260 }}
-                labels={{ direct: "Anthropic directly", gateway: "through a gateway" }}
-                ariaLabel="where model calls go"
-                onChange={(v) => setMode(v as "direct" | "gateway")} />
+    <div className="panel">
+      <div className="btnrow" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+        <h2 style={{ margin: 0 }}>Model providers</h2>
+        {!editing && <button className="primary" onClick={startAdd}>Add provider</button>}
       </div>
+      <p className="help">
+        What <strong>Tares agents</strong> and Ask run on. Add the providers you hold keys for; each
+        agent picks a provider and a model, and the <strong>default</strong> is what Ask and any agent
+        without its own choice use. Values saved here win over the daemon's environment
+        (<code>ANTHROPIC_API_KEY</code>, <code>OPENAI_API_KEY</code>, <code>TARES_MODEL_PROVIDER</code>);
+        credentials are never returned by the API and never included in a catalog export.
+      </p>
+
       {err && <div className="alert error">{err}</div>}
       {msg && <p className="help">{msg}</p>}
-      {mode === "direct" && st.configured && (
-        <p className="help" style={{ margin: "0 0 8px" }}>
-          A gateway is in use{fromEnv ? <> from the environment (<span className="mono">{st.source}</span>)</> : ""}: <span className="mono">{st.url}</span>.
-          {st.stored
-            ? <> <button type="button" className="linklike" disabled={busy} onClick={clear}>Stop using it</button> and calls go {fromEnv ? "to the environment's gateway" : "to Anthropic directly"}.</>
-            : " It was set by the deployment; only its operator can change it."}
-        </p>
-      )}
-      {mode === "gateway" && (
-        <>
-          <p className="help" style={{ margin: "0 0 8px" }}>
-            A gateway serves the Anthropic Messages format and forwards to what you run behind it:
-            LiteLLM, Portkey, a proxy in front of Bedrock or Vertex. Tares sends a Claude model id;
-            what answers is the gateway's choice, and the spend meter prices runs at Claude rates.
-            {fromEnv && <> The deployment set <span className="mono">{st.url}</span>; a gateway saved here takes over.</>}
-          </p>
+
+      {editing && (
+        <div className="panel" style={{ marginBottom: 12 }}>
+          {isNew && (
+            <div className="field">
+              <span className="lbl">provider</span>
+              <Picker value={editing.preset} options={PRESETS.map((p) => p.id)} style={{ width: 280 }}
+                      labels={Object.fromEntries(PRESETS.map((p) => [p.id, p.label]))}
+                      ariaLabel="provider" onChange={pickPreset} />
+              <span className="help">{KIND_HELP[editing.kind]}</span>
+            </div>
+          )}
+          {!isNew && <p className="help" style={{ marginTop: 0 }}><strong>{existing?.name}</strong>: {KIND_HELP[editing.kind]}</p>}
+          <div className="row2">
+            {editing.kind === "openai_compatible" && (
+              <label className="field">
+                <span className="lbl">name</span>
+                <input type="text" placeholder="e.g. LiteLLM" value={editing.name} disabled={!isNew}
+                       onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+                {isNew && <span className="help">agents refer to it by this name</span>}
+              </label>
+            )}
+            <label className="field">
+              <span className="lbl">API key {(!needsUrl || preset?.key !== false) ? "" : <span className="help">(optional)</span>}</span>
+              <input type="password" className="mono" autoComplete="new-password" value={editing.key}
+                     placeholder={existing?.configured ? "leave blank to keep the stored key" : editing.kind === "anthropic" ? "sk-ant-…" : editing.kind === "openai" ? "sk-…" : "the endpoint's key, if it wants one"}
+                     onChange={(e) => setEditing({ ...editing, key: e.target.value })} />
+              {existing?.source.startsWith("env:") && <span className="help">the environment's key ({existing.source}) is in use; a key saved here takes over</span>}
+              {existing?.gateway_token_stored && <span className="help">a gateway token is stored and sent as a bearer header</span>}
+            </label>
+          </div>
           <label className="field">
-            <span className="lbl">gateway URL</span>
-            <input type="text" className="mono" placeholder="https://llm-gateway.internal"
-                   value={url} onChange={(e) => setUrl(e.target.value)} />
-          </label>
-          <label className="field">
-            <span className="lbl">gateway token</span>
-            <input type="password" className="mono" autoComplete="off"
-                   placeholder={st.token_stored ? "leave blank to keep the stored token" : "sent as Authorization: Bearer; leave empty if the gateway takes your key"}
-                   value={token} onChange={(e) => setToken(e.target.value)} />
-            <span className="help">
-              {st.token_stored ? "a token is stored and sent as a bearer header; it is never shown again" : "without a token, the key above is sent to the gateway as the Anthropic key header"}
-            </span>
+            <span className="lbl">base URL {!needsUrl && <span className="help">(optional)</span>}</span>
+            <input type="text" className="mono" value={editing.base_url}
+                   placeholder={editing.kind === "anthropic" ? "https://api.anthropic.com, or a gateway that speaks the Anthropic format" : editing.kind === "openai" ? "https://api.openai.com/v1" : "http://localhost:4000/v1"}
+                   onChange={(e) => setEditing({ ...editing, base_url: e.target.value })} />
+            {editing.kind === "anthropic" && existing?.base_source?.startsWith("env:") && !editing.base_url && (
+              <span className="help">the deployment routes calls through <span className="mono">{existing.base_url}</span> ({existing.base_source}); a URL saved here takes over</span>
+            )}
           </label>
           <div className="btnrow">
-            <button className="primary" disabled={busy || !url.trim()} onClick={save}>Save gateway</button>
-            {st.stored && <button className="danger" disabled={busy} onClick={clear}>Stop using the gateway</button>}
+            <button className="primary" disabled={busy || !canSave} onClick={save}>Save</button>
+            <button onClick={() => { setEditing(undefined); setErr(undefined); }}>Cancel</button>
           </div>
-        </>
+        </div>
+      )}
+
+      {!data ? <div className="muted">loading…</div>
+        : data.providers.filter((p) => p.configured || p.stored).length === 0 && !editing ? (
+          <div className="empty">no model provider yet. Add one: agents cannot be enabled and Ask cannot answer until then.</div>
+        ) : (
+          <table>
+            <thead><tr><th>provider</th><th>kind</th><th>endpoint</th><th>status</th><th>models</th><th aria-label="actions" /></tr></thead>
+            <tbody>
+              {data.providers.filter((p) => p.configured || p.stored).map((p) => (
+                <tr key={p.id}>
+                  <td><strong>{p.name}</strong>
+                    {p.default && <span className="badge agent" style={{ marginLeft: 8 }}>default</span>}</td>
+                  <td className="help">{data.kinds.find((k) => k.id === p.kind)?.label ?? p.kind}</td>
+                  <td className="mono help">{p.base_url || (p.kind === "anthropic" ? "api.anthropic.com" : "")}</td>
+                  <td>
+                    {!p.configured
+                      ? <span className="badge error">no key</span>
+                      : p.models_problem?.startsWith("the endpoint rejected the key")
+                        ? <><span className="badge error">key rejected</span><span className="help"> by the endpoint; edit and save a valid key</span></>
+                        : <><span className="badge ok">configured</span>{p.source && <span className="help"> from <span className="mono">{p.source}</span></span>}</>}
+                  </td>
+                  <td>
+                    {p.models_error
+                      ? <span className="help" title={p.models_error}><span className="badge error">not listed</span> {p.models_problem}{p.models.length > 0 ? `; the picker offers ${p.models.length} ${p.discovers && p.models_at ? "from the last read" : "built in"}` : ""}</span>
+                      : <span className="help" title={p.models.slice(0, 40).join("\n")}>{p.models.length}{p.discovers ? " from the endpoint" : " built in"}</span>}
+                  </td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <div className="btnrow" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
+                      {p.discovers && p.configured && <button disabled={busy} onClick={() => refresh(p.id)} title="re-read the models this endpoint serves">Refresh models</button>}
+                      {!p.default && p.configured && <button disabled={busy} onClick={() => makeDefault(p.id)}>Make default</button>}
+                      <button disabled={busy} onClick={() => startEdit(p)}>Edit</button>
+                      {(p.stored || p.kind !== "anthropic") && <button className="danger" disabled={busy} onClick={() => setConfirmDelete(p)}>Remove</button>}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+      {confirmDelete && (
+        <ConfirmDialog
+          title={`Remove ${confirmDelete.name}?`}
+          message={confirmDelete.kind === "anthropic"
+            ? "The stored key and gateway are removed. If the deployment's environment carries a key, that one is used again."
+            : "Agents that name this provider fall back to the default until you point them elsewhere."}
+          confirmLabel="Remove" danger
+          onConfirm={() => remove(confirmDelete.id)}
+          onCancel={() => setConfirmDelete(undefined)} />
       )}
     </div>
   );

@@ -494,10 +494,11 @@ def run_span(tracer, name: str, *, kind: str = "AGENT", session: str | None = No
 
 @contextmanager
 def generation(tracer, model: str, messages: Any = None,
-               parameters: dict | None = None) -> Iterator[Generation]:
+               parameters: dict | None = None, provider: str = "anthropic") -> Iterator[Generation]:
     """One model call. Sets the request side up front; the caller records the response with
-    `set_output` / `set_usage` / `set_response_model` / `set_finish_reason`."""
-    attrs = {SPAN_KIND: "LLM", GEN_AI_OPERATION: "chat", GEN_AI_PROVIDER: "anthropic",
+    `set_output` / `set_usage` / `set_response_model` / `set_finish_reason`. `provider` is the
+    adapter's kind (anthropic, openai), what gen_ai.provider.name names (TR-305)."""
+    attrs = {SPAN_KIND: "LLM", GEN_AI_OPERATION: "chat", GEN_AI_PROVIDER: provider or "anthropic",
              GEN_AI_REQUEST_MODEL: model}
     for k, v in (parameters or {}).items():
         if v is not None:

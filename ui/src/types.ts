@@ -242,7 +242,9 @@ export interface BuiltinAgent {
   prompt: string;
   enabled: boolean;
   slack_configured: boolean;   // the webhook URL itself is never sent to the client
-  model: string;               // "" = the instance default
+  model: string;               // "" = the provider's default model
+  provider: string;            // provider id from Settings; "" = the cell default
+  effective_provider?: string | null;   // what the next run resolves to (the default when the named one is gone)
   slack_channel: string;       // workspace-bot channel id, "" = none
   webhook_url: string;         // write-back target, "" = none
   webhook_key_label?: string;  // the write-back reports this label's value as `key`; "" = the entity
@@ -288,6 +290,7 @@ export interface AgentRun {
   error: string | null;
   // Model usage; null on runs from before cost tracking (unknown, not zero).
   model?: string | null;
+  provider?: string;           // the provider the run resolved to
   input_tokens?: number | null;
   output_tokens?: number | null;
   cache_creation_input_tokens?: number | null;
@@ -313,6 +316,7 @@ export interface ModelUsageBucket {
 export interface ModelUsage {
   total: ModelUsageBucket;
   by_surface: Record<string, ModelUsageBucket>;
+  by_provider?: Record<string, ModelUsageBucket>;   // provider id -> spend; rows before providers count as anthropic
   days: ({ day: string } & ModelUsageBucket)[];
   window_days: number;
 }
@@ -516,3 +520,29 @@ export interface ChallengerSession {
   thread: ChallengeEvent[];
 }
 export interface ProjectUpdateReport { created: string[]; updated: string[]; kept: string[]; deleted: string[]; added?: string[]; released?: string[] }
+
+// A model provider the cell holds (Settings, Model providers). Credentials are never returned:
+// `configured` says one resolves, `source` where from (console, env:VAR, or empty).
+export interface ModelProvider {
+  id: string;                 // "anthropic", "openai", or the slug of an OpenAI-compatible entry
+  kind: "anthropic" | "openai" | "openai_compatible";
+  name: string;
+  base_url: string;
+  configured: boolean;
+  source: string;
+  stored: boolean;            // a credential is stored on the cell (vs the environment only)
+  default: boolean;
+  models: string[];           // what the picker offers for this provider
+  models_error?: string;      // why the last discovery failed (the last list is kept)
+  models_problem?: string;    // the one-line reading of models_error, for the row
+  models_at?: string;         // when the list was last read from the endpoint
+  discovers?: boolean;        // the endpoint lists its own models (everything but Anthropic)
+  base_source?: string;       // anthropic only: where the gateway URL came from
+  gateway_stored?: boolean;
+  gateway_token_stored?: boolean;
+}
+export interface ModelProviders {
+  providers: ModelProvider[];
+  default: string | null;
+  kinds: { id: ModelProvider["kind"]; label: string }[];
+}

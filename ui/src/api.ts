@@ -7,7 +7,7 @@ import type {
   LabelFacet, ModelUsage, QueryLogEntry,
   McpServer, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
-  TimelineEventRow, Trigger, View,
+  TimelineEventRow, Trigger, View, ModelProvider, ModelProviders,
 } from "./types";
 
 const TOKEN_KEY = "tares_token";
@@ -100,7 +100,8 @@ export const api = {
   connectors: () => request<Record<string, ConnectorSpec>>("/api/connectors"),
   capabilities: () =>
     request<{ version?: string | null; discover_docker: boolean; agent_key_configured?: boolean;
-              url_configured: boolean; slack_configured?: boolean }>("/api/capabilities"),
+              url_configured: boolean; slack_configured?: boolean;
+              default_provider?: { id: string; name: string; kind: string } | null }>("/api/capabilities"),
   keys: () => request<{ keys: ApiKey[]; enforced: boolean; scopes: string[] }>("/api/keys"),
   createKey: (name: string, scopes: string[]) =>
     request<{ id: string; name: string; scopes: string[]; secret: string }>(
@@ -160,13 +161,15 @@ export const api = {
   builtinAgents: () =>
     request<{ agents: BuiltinAgent[]; key_configured: boolean; key_source: string;
               models: string[]; default_model: string; slack_workspace: boolean;
+              providers: ModelProvider[]; default_provider: string | null;
+              default_models: Record<string, string>;   // per provider id, what "" resolves to
               default_max_rounds: number; default_max_rounds_with_mcp: number;
               max_rounds_limit: number;
               presets: AgentPreset[] }>("/api/agents/builtin"),
-  createBuiltinAgent: (body: { name: string; trigger: string; prompt: string; slack_webhook?: string; slack_webhook_clear?: boolean; model?: string; slack_channel?: string; webhook_url?: string; webhook_token?: string; mcp_servers?: string[]; max_rounds?: number | null; budget_usd?: number | null }) =>
+  createBuiltinAgent: (body: { name: string; trigger: string; prompt: string; slack_webhook?: string; slack_webhook_clear?: boolean; model?: string; provider?: string; slack_channel?: string; webhook_url?: string; webhook_token?: string; mcp_servers?: string[]; max_rounds?: number | null; budget_usd?: number | null }) =>
     request<{ ok: boolean; enabled: boolean }>("/api/agents/builtin",
       { method: "POST", body: JSON.stringify(body) }),
-  updateBuiltinAgent: (name: string, body: { name: string; trigger: string; prompt: string; slack_webhook?: string; slack_webhook_clear?: boolean; model?: string; slack_channel?: string; webhook_url?: string; webhook_token?: string; mcp_servers?: string[]; max_rounds?: number | null; budget_usd?: number | null }) =>
+  updateBuiltinAgent: (name: string, body: { name: string; trigger: string; prompt: string; slack_webhook?: string; slack_webhook_clear?: boolean; model?: string; provider?: string; slack_channel?: string; webhook_url?: string; webhook_token?: string; mcp_servers?: string[]; max_rounds?: number | null; budget_usd?: number | null }) =>
     request(`/api/agents/builtin/${name}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteBuiltinAgent: (name: string) => request(`/api/agents/builtin/${name}`, { method: "DELETE" }),
   enableBuiltinAgent: (name: string) => request(`/api/agents/builtin/${name}/enable`, { method: "POST" }),
@@ -192,6 +195,21 @@ export const api = {
   clearGateway: () =>
     request<{ ok: boolean; configured: boolean; source: string }>("/api/settings/gateway",
       { method: "DELETE" }),
+  // The model providers a cell holds (TR-301). Credentials are write-only; blank key keeps the
+  // stored one. `new` as the id creates an entry.
+  providers: () => request<ModelProviders>("/api/settings/providers"),
+  saveProvider: (id: string, body: { kind: string; name?: string; key?: string; base_url?: string }) =>
+    request<ModelProviders & { ok: boolean; id: string }>(`/api/settings/providers/${encodeURIComponent(id)}`,
+      { method: "PUT", body: JSON.stringify(body) }),
+  deleteProvider: (id: string) =>
+    request<ModelProviders & { ok: boolean }>(`/api/settings/providers/${encodeURIComponent(id)}`,
+      { method: "DELETE" }),
+  refreshProviderModels: (id: string) =>
+    request<ModelProviders & { ok: boolean; models: string[]; error: string }>(
+      `/api/settings/providers/${encodeURIComponent(id)}/models`, { method: "POST" }),
+  setDefaultProvider: (id: string) =>
+    request<ModelProviders & { ok: boolean }>("/api/settings/providers/default",
+      { method: "PUT", body: JSON.stringify({ id }) }),
   anthropicKeyStatus: () =>
     request<{ configured: boolean; source: string; stored: boolean; env_overrides: boolean }>(
       "/api/settings/anthropic-key"),
