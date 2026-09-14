@@ -3,7 +3,7 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.30.0] - 2026-09-14
 
 ### Added
 - Model providers. A cell holds a list of providers under Settings, Model providers: Anthropic,
