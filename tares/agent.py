@@ -13,7 +13,7 @@ import time
 import httpx
 
 from . import tracing as _tracing
-from .models import ModelUnavailable, Provider, add_usage, empty_usage, tool_message
+from .models import ModelUnavailable, Provider, add_usage, empty_usage, tool_call_in_text, tool_message
 
 
 DEFAULT_MODEL = os.getenv("TARES_AGENT_MODEL", "claude-sonnet-4-6")
@@ -516,12 +516,23 @@ async def _run_agent(provider: Provider, messages: list, model, self_headers, on
                     reply = item
             add_usage(usage, reply.usage)
             used_model = reply.model or used_model
-            convo.append(reply.as_message())
-            if not reply.tool_calls:
+            calls = list(reply.tool_calls)
+            if not calls:
+                # A small model that wrote its tool call as JSON text: run what it meant rather
+                # than leave the JSON standing as the answer (TR-306). The text already streamed
+                # to the chat; the answer continues once the tool has run.
+                meant = tool_call_in_text(reply.text, tools_for(mode, step))
+                if meant is not None:
+                    meant.id = f"text_call_{len(convo)}"
+                    calls = [meant]
+                    convo.append({"role": "assistant", "content": "", "tool_calls": calls})
+            if not calls or not calls[0].id.startswith("text_call_"):
+                convo.append(reply.as_message())
+            if not calls:
                 obs.set_output(reply.text)
                 break
             results: list[tuple[str, str]] = []
-            for tu in reply.tool_calls:
+            for tu in calls:
                 tu_input = tu.arguments
                 if tu.name in _PROPOSAL_KIND:
                     # no-op proposals are suppressed deterministically: re-proposing a source's
