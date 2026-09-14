@@ -532,6 +532,9 @@ export interface ModelProvider {
   stored: boolean;            // a credential is stored on the cell (vs the environment only)
   default: boolean;
   models: string[];           // what the picker offers for this provider
+  models_error?: string;      // why the last discovery failed (the last list is kept)
+  models_at?: string;         // when the list was last read from the endpoint
+  discovers?: boolean;        // the endpoint lists its own models (everything but Anthropic)
   base_source?: string;       // anthropic only: where the gateway URL came from
   gateway_stored?: boolean;
   gateway_token_stored?: boolean;

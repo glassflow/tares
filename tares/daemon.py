@@ -2017,7 +2017,25 @@ def make_app() -> FastAPI:
                                              body.kind.strip(), body.name, body.key, body.base_url)
         except ValueError as e:
             _err(e)
-        return {"ok": True, "id": pid, **providers_mod.list_providers(store)}
+        # An OpenAI-format endpoint lists its own models: ask it now, so the picker is filled the
+        # moment the entry is saved. A failure is recorded on the entry, not raised: the entry is
+        # saved either way, and the console shows why the list is empty.
+        discovery = None
+        if body.kind.strip() != "anthropic":
+            discovery = await providers_mod.refresh_models(store, pid)
+        return {"ok": True, "id": pid, "discovery": discovery, **providers_mod.list_providers(store)}
+
+    @app.post("/api/settings/providers/{provider_id}/models")
+    async def refresh_provider_models(provider_id: str):
+        """Re-read what the endpoint serves (the admin added a model, the key's allowance
+        changed). Anthropic's list ships with Tares."""
+        if provider_id == "anthropic":
+            _err(ValueError("the Anthropic model list ships with Tares"))
+        try:
+            result = await providers_mod.refresh_models(store, provider_id)
+        except KeyError as e:
+            _err(e, 404)
+        return {"ok": True, **result, **providers_mod.list_providers(store)}
 
     @app.delete("/api/settings/providers/{provider_id}")
     async def delete_provider(provider_id: str):

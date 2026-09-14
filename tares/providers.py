@@ -125,12 +125,16 @@ def _entries(store) -> list[dict]:
                 "gateway_stored": bool(store.get_setting("gateway_url")),
                 "gateway_token_stored": bool(store.get_setting("gateway_token"))})
     stored = _stored(store)
+    env = _openai_env()
     for e in stored:
+        if e["id"] == "openai" and not e.get("key") and env:
+            # a stored OpenAI row holding only a model list: the env key is still the credential
+            out.append({**e, "key": env["key"], "base_url": e.get("base_url") or env["base_url"],
+                        "source": env["source"], "stored": False})
+            continue
         out.append({**e, "source": "console" if e.get("key") else "", "stored": True})
-    if not any(e["id"] == "openai" for e in stored):
-        env = _openai_env()
-        if env:
-            out.append({**env, "stored": False})
+    if not any(e["id"] == "openai" for e in stored) and env:
+        out.append({**env, "stored": False})
     return out
 
 
@@ -163,7 +167,9 @@ def list_providers(store) -> dict:
                "base_url": e.get("base_url") or ("" if e["kind"] == "anthropic" else OPENAI_API_BASE),
                "configured": _configured(e), "source": e.get("source") or "",
                "stored": bool(e.get("stored")), "default": e["id"] == default,
-               "models": models_for(e)}
+               "models": models_for(e), "models_error": e.get("models_error") or "",
+               "models_at": e.get("models_at") or "",
+               "discovers": e["kind"] != "anthropic"}
         if e["kind"] == "anthropic":
             row["base_source"] = e.get("base_source") or ""
             row["gateway_stored"] = e.get("gateway_stored", False)
@@ -178,8 +184,16 @@ def models_for(entry: dict) -> list[str]:
         from .builtin_agents import AGENT_MODELS
         return list(AGENT_MODELS)
     if entry["kind"] == "openai":
-        return list(OPENAI_MODELS)
+        return list(entry.get("models") or OPENAI_MODELS)
     return list(entry.get("models") or [])
+
+
+def _headers(entry: dict) -> dict:
+    headers = {"Authorization": f"Bearer {entry['key']}"} if entry.get("key") else {}
+    if "openrouter.ai" in (entry.get("base_url") or ""):
+        # OpenRouter attributes traffic to an app by these; optional, and harmless elsewhere
+        headers.update({"HTTP-Referer": "https://tares.glassflow.ai", "X-Title": "Tares"})
+    return headers
 
 
 def build(entry: dict) -> Provider | None:
@@ -187,9 +201,66 @@ def build(entry: dict) -> Provider | None:
         return None
     if entry["kind"] == "anthropic":
         return AnthropicProvider(entry["base_url"], entry["headers"], timeout=TIMEOUT)
-    headers = {"Authorization": f"Bearer {entry['key']}"} if entry.get("key") else {}
-    return OpenAIProvider(entry.get("base_url") or OPENAI_API_BASE, headers, timeout=TIMEOUT,
-                          label=entry["id"])
+    return OpenAIProvider(entry.get("base_url") or OPENAI_API_BASE, _headers(entry),
+                          timeout=TIMEOUT, label=entry["id"])
+
+
+# ── model discovery (TR-303) ─────────────────────────────────────────────────
+MAX_MODELS = 500
+
+
+async def discover_models(entry: dict, timeout: float = 8.0) -> list[str]:
+    """What an OpenAI-format endpoint serves: `GET <base>/models`, the ids of `data`. LiteLLM
+    restricts the answer to what the key may use; OpenRouter, Ollama and vLLM list everything
+    they hold. Raises on any failure so the caller can show why."""
+    import httpx
+    base = (entry.get("base_url") or OPENAI_API_BASE).rstrip("/")
+    async with httpx.AsyncClient(timeout=timeout) as cx:
+        r = await cx.get(f"{base}/models", headers=_headers(entry))
+    if r.status_code >= 400:
+        raise ValueError(f"{base}/models answered {r.status_code}: {r.text[:200]}")
+    try:
+        data = r.json()
+    except ValueError:
+        raise ValueError(f"{base}/models did not answer with JSON")
+    rows = data.get("data") if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        raise ValueError(f"{base}/models answered without a model list")
+    ids = []
+    for row in rows:
+        mid = row.get("id") if isinstance(row, dict) else row
+        if isinstance(mid, str) and mid and mid not in ids:
+            ids.append(mid)
+    return sorted(ids)[:MAX_MODELS]
+
+
+async def refresh_models(store, provider_id: str) -> dict:
+    """Discover and store the model list of one OpenAI-format entry. A failure keeps the last
+    list and records the error on the entry, so the console can say what went wrong."""
+    entries = _stored(store)
+    current = next((e for e in entries if e["id"] == provider_id), None)
+    if current is None:
+        env = _openai_env() if provider_id == "openai" else None
+        if env is None:
+            raise KeyError(f"unknown provider {provider_id!r}")
+        # the env-seeded OpenAI entry has no stored row yet; store one without a key so the
+        # list has somewhere to live (the env key stays in use: a stored row with no key defers)
+        current = {"id": "openai", "kind": "openai", "name": "OpenAI", "key": "", "base_url": ""}
+        entries.append(current)
+    probe = {**current}
+    if current["id"] == "openai" and not current.get("key"):
+        env = _openai_env()
+        if env:
+            probe = {**probe, "key": env["key"], "base_url": current.get("base_url") or env["base_url"]}
+    try:
+        models = await discover_models(probe)
+        current["models"], current["models_error"] = models, ""
+    except Exception as e:  # noqa: BLE001 — the error is the result
+        current["models_error"] = f"{type(e).__name__}: {e}"[:300]
+    from datetime import datetime, timezone
+    current["models_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _save(store, entries)
+    return {"models": current.get("models") or [], "error": current.get("models_error") or ""}
 
 
 def resolve_provider(store, provider_id: str | None = None) -> tuple[Provider | None, str]:
@@ -263,7 +334,9 @@ def _save_entry(store, provider_id: str, kind: str, name: str, key: str, base_ur
              "name": name.strip() or (current or {}).get("name") or KIND_LABELS[kind],
              "key": key or (current or {}).get("key") or "",
              "base_url": base_url or (current or {}).get("base_url") or "",
-             "models": (current or {}).get("models") or []}
+             "models": (current or {}).get("models") or [],
+             "models_error": (current or {}).get("models_error") or "",
+             "models_at": (current or {}).get("models_at") or ""}
     entries = [e for e in entries if e["id"] != pid] + [entry]
     _save(store, entries)
     return pid

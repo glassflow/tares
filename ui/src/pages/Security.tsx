@@ -334,7 +334,11 @@ function ProvidersPanel() {
     setBusy(true); setErr(undefined); setMsg(undefined);
     try {
       const r = await api.saveProvider(editing.id, { kind: editing.kind, name: editing.name, key: editing.key, base_url: editing.base_url });
-      setData(r); setEditing(undefined); setMsg("✓ saved; in use from the next call");
+      setData(r); setEditing(undefined);
+      const saved = r.providers.find((p) => p.id === r.id);
+      setMsg(saved?.models_error
+        ? `✓ saved, but the endpoint did not list its models: ${saved.models_error}. Agents can still name a model by hand.`
+        : saved?.discovers ? `✓ saved; ${saved.models.length} model${saved.models.length === 1 ? "" : "s"} listed by the endpoint` : "✓ saved; in use from the next call");
     } catch (e) { setErr(String((e as Error).message ?? e)); }
     setBusy(false);
   };
@@ -348,6 +352,15 @@ function ProvidersPanel() {
     setBusy(true); setErr(undefined);
     try { setData(await api.setDefaultProvider(id)); }
     catch (e) { setErr(String((e as Error).message ?? e)); }
+    setBusy(false);
+  };
+  const refresh = async (id: string) => {
+    setBusy(true); setErr(undefined); setMsg(undefined);
+    try {
+      const r = await api.refreshProviderModels(id);
+      setData(r);
+      setMsg(r.error ? undefined : `✓ ${r.models.length} model${r.models.length === 1 ? "" : "s"} listed`);
+    } catch (e) { setErr(String((e as Error).message ?? e)); }
     setBusy(false);
   };
 
@@ -426,7 +439,7 @@ function ProvidersPanel() {
           <div className="empty">no model provider yet. Add one: agents cannot be enabled and Ask cannot answer until then.</div>
         ) : (
           <table>
-            <thead><tr><th>provider</th><th>kind</th><th>endpoint</th><th>status</th><th aria-label="actions" /></tr></thead>
+            <thead><tr><th>provider</th><th>kind</th><th>endpoint</th><th>status</th><th>models</th><th aria-label="actions" /></tr></thead>
             <tbody>
               {data.providers.filter((p) => p.configured || p.stored).map((p) => (
                 <tr key={p.id}>
@@ -439,8 +452,14 @@ function ProvidersPanel() {
                       ? <><span className="badge ok">configured</span>{p.source && <span className="help"> from <span className="mono">{p.source}</span></span>}</>
                       : <span className="badge error">no key</span>}
                   </td>
+                  <td>
+                    {p.models_error
+                      ? <span className="help" title={p.models_error}><span className="badge error">not listed</span> {p.models.length > 0 ? `${p.models.length} kept from last time` : "the endpoint did not answer"}</span>
+                      : <span className="help" title={p.models.slice(0, 40).join("\n")}>{p.models.length}{p.discovers ? " from the endpoint" : " built in"}</span>}
+                  </td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <div className="btnrow" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
+                      {p.discovers && p.configured && <button disabled={busy} onClick={() => refresh(p.id)} title="re-read the models this endpoint serves">Refresh models</button>}
                       {!p.default && p.configured && <button disabled={busy} onClick={() => makeDefault(p.id)}>Make default</button>}
                       <button disabled={busy} onClick={() => startEdit(p)}>Edit</button>
                       {(p.stored || p.kind !== "anthropic") && <button className="danger" disabled={busy} onClick={() => setConfirmDelete(p)}>Remove</button>}

@@ -191,13 +191,60 @@ async def main():
                     self.end_headers()
                     self.wfile.write(out)
 
+                def do_GET(self):
+                    if MODELS_STATUS[0] >= 400:
+                        out = b'{"error":"nope"}'
+                    else:
+                        out = _json.dumps({"object": "list", "data": [{"id": "llama-x"}, {"id": "mixtral"}, {"id": "llama-x"}]}).encode()
+                    MODELS_SEEN.append(self.headers.get("Authorization"))
+                    self.send_response(MODELS_STATUS[0])
+                    self.send_header("content-type", "application/json")
+                    self.send_header("content-length", str(len(out)))
+                    self.end_headers()
+                    self.wfile.write(out)
+
                 def log_message(self, *a):
                     pass
+            MODELS_STATUS = [200]
+            MODELS_SEEN: list = []
             chat = HTTPServer(("127.0.0.1", 0), ChatStub)
             threading.Thread(target=chat.serve_forever, daemon=True).start()
             r = await cx.put("/api/settings/providers/new", json={"kind": "openai_compatible", "name": "Local vLLM",
                                                                   "base_url": f"http://127.0.0.1:{chat.server_port}/v1", "key": "vk"})
             ck("a router entry to run on", r.status_code == 200 and by_id(r.json(), "local-vllm") is not None, r.text[:200])
+            print("== model discovery (TR-303) ==")
+            v = by_id(r.json(), "local-vllm")
+            ck("saving an OpenAI-format entry reads its models: deduplicated, sorted",
+               v["models"] == ["llama-x", "mixtral"] and v["models_error"] == "" and v["discovers"] and v["models_at"], str(v))
+            ck("discovery sent the entry's key", MODELS_SEEN and MODELS_SEEN[-1] == "Bearer vk", str(MODELS_SEEN))
+            ck("the save reports the discovery", r.json()["discovery"] == {"models": ["llama-x", "mixtral"], "error": ""}, str(r.json().get("discovery")))
+            ck("the default model for the router is the first listed", pv.default_model_for(store, "local-vllm") == "llama-x")
+            o = by_id(r.json(), "ollama")
+            ck("an endpoint that did not answer keeps an empty list and the error",
+               o["models"] == [] and o["models_error"] != "", str(o)[:200])
+            MODELS_STATUS[0] = 500
+            r = await cx.post("/api/settings/providers/local-vllm/models")
+            v = by_id(r.json(), "local-vllm")
+            ck("a failed refresh keeps the last list and records why",
+               r.status_code == 200 and r.json()["error"] and v["models"] == ["llama-x", "mixtral"] and "500" in v["models_error"], str(v)[:200])
+            MODELS_STATUS[0] = 200
+            r = await cx.post("/api/settings/providers/local-vllm/models")
+            ck("a refresh that works clears the error", r.status_code == 200 and by_id(r.json(), "local-vllm")["models_error"] == "")
+            r = await cx.post("/api/settings/providers/anthropic/models")
+            ck("Anthropic's list ships with Tares", r.status_code == 400)
+            r = await cx.post("/api/settings/providers/nope/models")
+            ck("unknown -> 404", r.status_code == 404)
+            ck("Anthropic is marked as not discovering", by_id((await cx.get("/api/settings/providers")).json(), "anthropic")["discovers"] is False)
+            os.environ["OPENAI_BASE_URL"] = f"http://127.0.0.1:{chat.server_port}/v1"
+            r = await cx.post("/api/settings/providers/openai/models")
+            o = by_id(r.json(), "openai")
+            ck("env-seeded OpenAI: models stored, key still from the env",
+               r.status_code == 200 and o["models"] == ["llama-x", "mixtral"] and o["source"] == "env:OPENAI_API_KEY" and not o["stored"], str(o)[:200])
+            ck("...and discovery used the env key", MODELS_SEEN[-1] == "Bearer sk-env", str(MODELS_SEEN[-1]))
+            os.environ.pop("OPENAI_BASE_URL")
+            ck("an OpenRouter URL adds the app headers",
+               pv._headers({"key": "k", "base_url": "https://openrouter.ai/api/v1"}).get("X-Title") == "Tares"
+               and "X-Title" not in pv._headers({"key": "k", "base_url": "http://x/v1"}))
             store.upsert_catalog_source("evt", "webhook", "webhook", "5s", {"labels": [{"name": "service", "field": "service", "primary": True}]})
             store.upsert_catalog_view("svc", "service", ["evt"])
             store.upsert_catalog_trigger("t1", "svc", {"field": "service", "aggregate": "count", "predicate": ">= 1", "window": "5m"}, {}, "5m")
@@ -219,12 +266,12 @@ async def main():
             ck("a missing provider resolves to the default", g["effective_provider"] == d["default_provider"] == "anthropic", str((g["effective_provider"], d["default_provider"])))
             ck("the listing offers the providers with per-provider default models",
                any(p["id"] == "local-vllm" for p in d["providers"]) and d["default_models"]["anthropic"].startswith("claude-")
-               and d["default_models"]["openai"] == pv.OPENAI_MODELS[0], str(d["default_models"]))
+               and d["default_models"]["local-vllm"] == "llama-x" and d["default_models"]["ollama"] == "", str(d["default_models"]))
             p, origin, pid, note = pv.resolve_for_agent(store, g)
             ck("resolve_for_agent: fallback with a note", isinstance(p, AnthropicProvider) and pid == "anthropic" and "not-here" in note and "does not exist" in note, note)
             p, origin, pid, note = pv.resolve_for_agent(store, a)
             ck("resolve_for_agent: the named provider, no note", isinstance(p, OpenAIProvider) and pid == "local-vllm" and note == "", note)
-            ck("default_model_for a router with no listed models is empty", pv.default_model_for(store, "local-vllm") == "")
+            ck("default_model_for a router with no listed models is empty", pv.default_model_for(store, "ollama") == "")
             r = await cx.post("/api/agents/builtin/on-vllm/enable")
             ck("an agent on a configured provider can be enabled", r.status_code == 200, r.text[:200])
 

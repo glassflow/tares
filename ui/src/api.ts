@@ -204,6 +204,9 @@ export const api = {
   deleteProvider: (id: string) =>
     request<ModelProviders & { ok: boolean }>(`/api/settings/providers/${encodeURIComponent(id)}`,
       { method: "DELETE" }),
+  refreshProviderModels: (id: string) =>
+    request<ModelProviders & { ok: boolean; models: string[]; error: string }>(
+      `/api/settings/providers/${encodeURIComponent(id)}/models`, { method: "POST" }),
   setDefaultProvider: (id: string) =>
     request<ModelProviders & { ok: boolean }>("/api/settings/providers/default",
       { method: "PUT", body: JSON.stringify({ id }) }),

@@ -225,8 +225,14 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
         </div>
         <div className="field">
           <span className="lbl">model</span>
-          <Picker value={model} onChange={setModel} options={modelOptions} labels={modelLabels}
-                  ariaLabel="model" />
+          {providerModels.length === 0 && effective
+            ? <>
+                <input type="text" className="mono" value={model} placeholder="the model id, as the endpoint names it"
+                       onChange={(e) => setModel(e.target.value)} />
+                <span className="help">{effective.name} listed no models; type the id, or refresh its list under Settings, Model providers.</span>
+              </>
+            : <Picker value={model} onChange={setModel} options={modelOptions} labels={modelLabels}
+                      ariaLabel="model" />}
         </div>
       </div>
 
