@@ -79,6 +79,52 @@ def add_usage(total: dict, usage: dict) -> None:
         total["cost_usd"] = float(total.get("cost_usd") or 0.0) + float(usage["cost_usd"])
 
 
+def tool_call_in_text(text: str, tools: list) -> ToolCall | None:
+    """A tool call a small model wrote as JSON in its text instead of as a real call: one object
+    with the tool's name and its arguments under `parameters`, `arguments` or `input`, alone or
+    embedded in prose. Returns it as a ToolCall so the loop can run it (TR-306). None otherwise."""
+    if not text or "{" not in text:
+        return None
+    names = {t["name"].lower(): t["name"] for t in tools}
+    candidates = []
+    stripped = text.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        candidates.append(stripped)
+    start = text.find("{")
+    while start != -1:
+        depth = 0
+        for i in range(start, len(text)):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    candidates.append(text[start:i + 1])
+                    break
+        start = text.find("{", start + 1)
+    for cand in candidates:
+        try:
+            obj = json.loads(cand)
+        except ValueError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        name = obj.get("name") or obj.get("tool") or obj.get("function")
+        if isinstance(name, dict):
+            name = name.get("name")
+        if not isinstance(name, str) or name.strip().lower() not in names:
+            continue
+        args = next((obj[k] for k in ("parameters", "arguments", "input", "args") if k in obj), {})
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except ValueError:
+                args = {"arguments": args}
+        return ToolCall(id="text_call", name=names[name.strip().lower()],
+                        arguments=args if isinstance(args, dict) else {"arguments": args})
+    return None
+
+
 def tool_message(results: list[tuple[str, str]]) -> dict:
     """The neutral message carrying tool results: (call id, output) pairs."""
     return {"role": "tool", "results": [{"id": i, "content": c} for i, c in results]}

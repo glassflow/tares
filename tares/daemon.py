@@ -1401,7 +1401,9 @@ def make_app() -> FastAPI:
             _err(ValueError(f"build step must be one of {', '.join(BUILD_STEPS)}"), 400)
         return StreamingResponse(
             run_agent(provider, body.get("messages") or [],
-                      model=body.get("model"), self_headers=self_headers,
+                      # the default provider's default model, not a Claude id on a router
+                      model=body.get("model") or providers_mod.default_model_for(store, default_pid),
+                      self_headers=self_headers,
                       on_usage=lambda m, u: _record_ask_usage(m, u, key_source=key_origin,
                                                               kind=provider.kind,
                                                               provider_id=default_pid),
@@ -2200,6 +2202,7 @@ def make_app() -> FastAPI:
             async def _run():
                 nonlocal text, error
                 async for chunk in run_agent(provider, [{"role": "user", "content": question}],
+                                             model=providers_mod.default_model_for(store, default_pid),
                                              self_headers=self_headers,
                                              on_usage=lambda m, u: _record_ask_usage(
                                                  m, u, key_source=key_origin, kind=provider.kind,

@@ -148,8 +148,8 @@ export default function AgentDetail() {
                   <td>
                     {agent.enabled ? <span className="badge ok">enabled</span> : <span className="badge">disabled</span>}
                     {!data.key_configured
-                      ? <span className="help"> · Model access is not configured: set ANTHROPIC_API_KEY before <span className="mono">tares up</span>, or add a key under <Link to="/settings?tab=anthropic">Settings</Link></span>
-                      : <span className="help"> · key from <span className="mono">{data.key_source}</span></span>}
+                      ? <span className="help"> · no model provider is configured: add one under <Link to="/settings?tab=anthropic">Settings, Model providers</Link>, or set ANTHROPIC_API_KEY before <span className="mono">tares up</span></span>
+                      : <span className="help"> · credential from <span className="mono">{data.key_source}</span></span>}
                   </td>
                 </tr>
                 <tr><td className="help">wakes on</td>

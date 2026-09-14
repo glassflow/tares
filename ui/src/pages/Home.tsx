@@ -129,7 +129,7 @@ export default function Home() {
   );
 }
 
-// What has this instance spent on its Anthropic key? — the whole-instance counterpart of the
+// What has this instance spent on its model providers? The whole-instance counterpart of the
 // per-agent cost cards. Covers everything that burns the key inside the cell (Tares agent runs
 // and Ask); external agents run on their own keys and are deliberately absent. The total is a
 // floor: runs from before cost tracking, and models without a known price, carry no cost —

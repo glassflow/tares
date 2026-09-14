@@ -114,7 +114,7 @@ async def main():
             ck("make default", r.status_code == 200 and r.json()["default"] == "anthropic", r.text[:200])
             r = await cx.put("/api/settings/providers/default", json={"id": "nope"})
             ck("unknown -> 404", r.status_code == 404, r.text[:200])
-            r = await cx.put("/api/settings/providers/new", json={"kind": "openai_compatible", "name": "Ollama", "base_url": "http://127.0.0.1:11434/v1"})
+            r = await cx.put("/api/settings/providers/new", json={"kind": "openai_compatible", "name": "Ollama", "base_url": "http://127.0.0.1:1/v1"})
             o = by_id(r.json(), "ollama")
             ck("a keyless endpoint (Ollama) counts as configured", r.status_code == 200 and o["configured"] and o["source"] == "", str(o))
             p, _ = pv.resolve_provider(store, "ollama")
@@ -183,7 +183,7 @@ async def main():
                     raw = self.rfile.read(int(self.headers.get("content-length") or 0))
                     SEEN.append({"body": _json.loads(raw), "auth": self.headers.get("Authorization")})
                     out = _json.dumps({"model": "llama-x", "choices": [{"finish_reason": "stop", "message": {
-                        "role": "assistant", "content": "Finding: the deploy at 09:00 did it."}}],
+                        "role": "assistant", "content": "" if EMPTY[0] else "Finding: the deploy at 09:00 did it."}}],
                         "usage": {"prompt_tokens": 11, "completion_tokens": 7}}).encode()
                     self.send_response(200)
                     self.send_header("content-type", "application/json")
@@ -206,6 +206,7 @@ async def main():
                 def log_message(self, *a):
                     pass
             MODELS_STATUS = [200]
+            EMPTY = [False]
             MODELS_SEEN: list = []
             chat = HTTPServer(("127.0.0.1", 0), ChatStub)
             threading.Thread(target=chat.serve_forever, daemon=True).start()
@@ -293,6 +294,19 @@ async def main():
             ck("an unpriced router model records tokens with no cost", run is not None and run["cost_usd"] is None, str(run and run["cost_usd"]))
             um = (await cx.get("/api/usage/model")).json()
             ck("the spend meter splits by provider", "local-vllm" in um.get("by_provider", {}) and um["by_provider"]["local-vllm"]["uncosted_calls"] >= 1, str(um.get("by_provider")))
+
+            # a model that answers with nothing at all: the run says what to check
+            EMPTY[0] = True
+            rid = runner.run_now("on-vllm", "t1", "billing-2", "the timeline")
+            run = None
+            for _ in range(100):
+                run = next((x for x in store.list_agent_runs("on-vllm") if x["id"] == rid), None)
+                if run and run["status"] not in (None, "running"):
+                    break
+                await asyncio.sleep(0.1)
+            EMPTY[0] = False
+            ck("no conclusion and no tool call -> an empty run that names tool calling as the thing to check",
+               run is not None and run["status"] == "empty" and "tool calling" in (run["error"] or ""), str(run and run["error"]))
 
             doc = yaml.safe_load((await cx.get("/api/catalog/export")).text)
             ag = next((x for x in doc.get("agents", []) if x["name"] == "on-vllm"), None)

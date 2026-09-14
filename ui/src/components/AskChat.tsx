@@ -470,14 +470,15 @@ export function KeySetup({ onSaved, urlConfigured }: { onSaved: () => void, urlC
 
   return (
     <div className="panel" style={{ maxWidth: 560 }}>
-      <h2 style={{ marginTop: 0 }}>Configure model access</h2>
+      <h2 style={{ marginTop: 0 }}>Add a model provider</h2>
       <p className="help" style={{ whiteSpace: "normal" }}>
-        The assistant runs on your Tares daemon using this key. It is stored on this instance and
-        used by everything that reasons over your data: this assistant, Tares agents woken by
-        triggers, and <span className="mono">/tares ask</span> in Slack. You can change or remove it
-        later under <strong>Settings</strong>. {!urlConfigured && (<>Get one at{" "}
+        The assistant runs on your Tares daemon on a model provider. Paste an Anthropic API key
+        here to start on Claude; it is stored on this instance and used by everything that reasons
+        over your data: this assistant, Tares agents woken by triggers, and{" "}
+        <span className="mono">/tares ask</span> in Slack. {!urlConfigured && (<>Get one at{" "}
         <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">console.anthropic.com
-        </a>.</>)}
+        </a>.</>)} For OpenAI, or an OpenAI-compatible endpoint such as LiteLLM, OpenRouter or Ollama,
+        add the provider under <a href="/settings?tab=anthropic">Settings, Model providers</a>.
       </p>
       {err && <div className="alert error">{err}</div>}
       <form onSubmit={(e) => { e.preventDefault(); if (value.trim()) save(); }}>

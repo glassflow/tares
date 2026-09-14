@@ -33,7 +33,7 @@ import httpx
 from . import tracing as _tracing
 from .config import FINDINGS_SOURCE, API_BASE, agent_url, parse_duration
 from .envelope import now_utc
-from .models import ModelError, Provider, add_usage, empty_usage, tool_message
+from .models import ModelError, Provider, add_usage, empty_usage, tool_call_in_text, tool_message
 from .pricing import price_usage
 from .slack import deep_link as _slack_deep_link
 from .views import resolve_query_full, resolve_read
@@ -57,6 +57,16 @@ TOOL_TIMEOUT = 120        # per Anthropic request
 # the first surprise is the bill. Per-agent and per-day, counted from the run log.
 DAILY_RUN_CAP = int(os.getenv("TARES_AGENT_DAILY_CAP", "50"))
 MAX_BOOTSTRAP_KEYS = 50    # a project bootstraps at most this many entities in one go
+
+def _canonical_tool(name: str, tools: list) -> str | None:
+    """The declared tool a model's name refers to: exact, else case-insensitive and trimmed."""
+    raw = str(name or "")
+    names = [t["name"] for t in tools]
+    if raw in names:
+        return raw
+    folded = raw.strip().lower()
+    return next((n for n in names if n.lower() == folded), None)
+
 
 def effective_max_rounds(agent: dict) -> int:
     """The round cap a run is held to: the agent's own setting when set, else the default for its
@@ -410,6 +420,11 @@ class AgentRunner:
             return "exhausted", msg
         if not finding:
             msg = "the model returned no conclusion"
+            if tool_calls == 0:
+                # Most often a model that does not do tool calling, or a router alias pointing
+                # at one: say so, since the run otherwise looks like the prompt was at fault.
+                msg += ("; it called no tool either. Check that this model supports tool "
+                        "calling, or pick another one for this agent")
             self.store.finish_agent_run(run_id, "empty", rounds=rounds, tool_calls=tool_calls,
                                         error=msg, external_tools=external_used)
             return "empty", msg
@@ -546,24 +561,42 @@ class AgentRunner:
 
         for rounds in range(1, max_rounds + 1):
             reply = await call(True)
-            messages.append(reply.as_message())
             text = reply.text.strip()
-            if text:
+            calls = list(reply.tool_calls)
+            if not calls:
+                # A small model that wrote its tool call as JSON text instead of a real call:
+                # accepting that as the finding would file the model's own instructions to
+                # itself. Run the call it meant (TR-306). The assistant turn is then rebuilt from
+                # text plus the call, so the provider sees a real call to answer.
+                meant = tool_call_in_text(text, tools)
+                if meant is not None:
+                    meant.id = f"text_call_{rounds}"
+                    calls = [meant]
+                    messages.append({"role": "assistant", "content": "", "tool_calls": calls})
+            if not (calls and calls[0].id.startswith("text_call_")):
+                messages.append(reply.as_message())
+            if text and not (calls and calls[0].id.startswith("text_call_")):
                 last_text = text
 
-            if not reply.tool_calls:
+            if not calls:
                 return text, rounds, tool_calls, external_used, False, ""
 
             results = []
-            for tc in reply.tool_calls:
+            for tc in calls:
                 tool_calls += 1
-                with _tracing.tool_span(tracer, tc.name, tc.arguments) as tobs:
+                # A small model slips on names (Read, READ, "query "); match the declared tool
+                # case-insensitively rather than fail the call over case (TR-306).
+                name = _canonical_tool(tc.name, tools)
+                with _tracing.tool_span(tracer, name, tc.arguments) as tobs:
                     try:
-                        if toolbox.owns(tc.name):
-                            external_used.append(tc.name)
-                            out = await toolbox.call(tc.name, tc.arguments)
+                        if name is None:
+                            raise ValueError(f"unknown tool {tc.name!r}; the tools are: "
+                                             + ", ".join(t["name"] for t in tools))
+                        if toolbox.owns(name):
+                            external_used.append(name)
+                            out = await toolbox.call(name, tc.arguments)
                         else:
-                            out = self._tool(agent["name"], tc.name, tc.arguments)
+                            out = self._tool(agent["name"], name, tc.arguments)
                     except Exception as e:   # a tool error is evidence, not a crash
                         out = f"tool error: {type(e).__name__}: {e}"
                         tobs.tool_error(out)

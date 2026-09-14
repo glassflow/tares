@@ -14,7 +14,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import tares.builtin_agents as ba
-from tares.models import ModelError, ModelReply, OpenAIProvider, ToolCall, empty_usage, tool_message
+from tares.models import (ModelError, ModelReply, OpenAIProvider, ToolCall, empty_usage,
+                          tool_call_in_text, tool_message)
 
 PASS = FAIL = 0
 
@@ -255,6 +256,44 @@ async def main():
                              "content": "evidence: latency spiked at 09:00"}, str(second[-2:]))
     check("usage summed over both calls",
           (usage["calls"], usage["input_tokens"], usage["output_tokens"]) == (2, 250, 30), str(usage))
+
+    print("== small-model slips: tool name case, unknown tools (TR-306) ==")
+    ANSWERS.append(completion(text=None, tool_calls=[
+        {"id": "c1", "type": "function", "function": {"name": "READ ", "arguments": '{"selector": {"service": "x"}}'}},
+        {"id": "c2", "type": "function", "function": {"name": "frobnicate", "arguments": "{}"}}],
+        finish="tool_calls"))
+    ANSWERS.append(completion(text="Finding."))
+    toolbox = Toolbox(); toolbox.calls = []
+    finding, rounds, tool_calls, external, exhausted, partial = await runner._loop_with(
+        agent, "latency_high", "billing", "the timeline", p, toolbox, empty_usage())
+    check("a mis-cased tool name still reaches the tool", toolbox.calls == [("read", {"selector": {"service": "x"}})], str(toolbox.calls))
+    second = CALLS[-1]["body"]["messages"]
+    unknown = next(m for m in second if m.get("role") == "tool" and m.get("tool_call_id") == "c2")
+    check("an unknown tool answers with the list of real tools, and the run goes on",
+          "unknown tool 'frobnicate'" in unknown["content"] and "read" in unknown["content"] and finding == "Finding.", str(unknown))
+
+    print("== a tool call written as JSON text (llama-style) is run, not filed as the finding ==")
+    check("bare JSON object", tool_call_in_text('{"name": "read", "parameters": {"selector": {"service": "a"}}}', TOOLS)
+          == ToolCall("text_call", "read", {"selector": {"service": "a"}}))
+    check("embedded in prose, arguments key", tool_call_in_text('I will call the tool now: {"name": "Read", "arguments": {"selector": {"service": "b"}}} and wait.', TOOLS)
+          == ToolCall("text_call", "read", {"selector": {"service": "b"}}))
+    check("function-shaped object", tool_call_in_text('{"function": {"name": "read"}, "input": {"x": 1}}', TOOLS)
+          == ToolCall("text_call", "read", {"x": 1}))
+    check("prose with braces that is not a call", tool_call_in_text('Latency {p99} rose; the cause is {"name": "nobody"}', TOOLS) is None)
+    check("a real finding with no JSON", tool_call_in_text("Root cause: the deploy.", TOOLS) is None)
+    check("string arguments are parsed", tool_call_in_text('{"name": "read", "arguments": "{\\"k\\": 2}"}', TOOLS).arguments == {"k": 2})
+    ANSWERS.append(completion(text='To narrow it down I will use the read tool.\n\n{"name": "read", "parameters": {"selector": {"service": "checkout"}}}'))
+    ANSWERS.append(completion(text="Finding: the 09:00 deploy."))
+    toolbox = Toolbox(); toolbox.calls = []
+    finding, rounds, tool_calls, external, exhausted, partial = await runner._loop_with(
+        agent, "latency_high", "billing", "the timeline", p, toolbox, empty_usage())
+    check("the meant call ran and the run concluded on the next round",
+          toolbox.calls == [("read", {"selector": {"service": "checkout"}})] and finding == "Finding: the 09:00 deploy." and rounds == 2 and tool_calls == 1,
+          f"{toolbox.calls} {finding!r} {rounds} {tool_calls}")
+    second = CALLS[-1]["body"]["messages"]
+    check("the replayed assistant turn carries a real tool call the tool message answers",
+          second[-2]["role"] == "assistant" and second[-2]["tool_calls"][0]["function"]["name"] == "read"
+          and second[-1]["role"] == "tool" and second[-1]["tool_call_id"] == second[-2]["tool_calls"][0]["id"], str(second[-2:]))
 
     srv.shutdown()
     print(f"\n{PASS} passed, {FAIL} failed")

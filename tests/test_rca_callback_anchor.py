@@ -123,7 +123,7 @@ def anchor(store, agent=AGENT):
 
 async def main():
     # The module resolves these from the store; the run path needs them non-empty to proceed.
-    ba.resolve_for_agent = lambda store, agent: (object(), "test", "anthropic", "")
+    ba.resolve_for_agent = lambda store, agent: (type("P", (), {"kind": "anthropic"})(), "test", "anthropic", "")
     ba.default_model_for = lambda store, provider_id: "claude-test"
 
     print("== THE REGRESSION: newer firings during the run must not move the key ==")
