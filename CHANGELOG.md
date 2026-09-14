@@ -3,7 +3,7 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.31.0] - 2026-09-14
 
 ### Added
 - `GET /metrics`: the daemon's own counters in the Prometheus text format, public like `/health`.
