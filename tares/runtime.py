@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from .config import Catalog, SourceCfg, catalog_from_db
 from .connectors import REGISTRY, SPECS, build_connector
 from .envelope import now_utc
+from . import metrics
 from .triggers import eval_triggers
 
 
@@ -92,6 +93,7 @@ class Runtime:
         rt = self.sources.pop(name, None)
         if rt and rt.task:
             rt.task.cancel()
+        metrics.source_gone(name)
 
     async def _loop(self, rt: SourceRuntime) -> None:
         conn = build_connector(rt.cfg, self.store)
@@ -102,6 +104,8 @@ class Runtime:
             reason = self.storage_full() if self.storage_full else None
             if reason:
                 h.last_error, h.status = reason, "paused"
+                metrics.poll(rt.cfg.name, "paused")
+                metrics.source_state(rt.cfg.name, "paused")
                 await asyncio.sleep(rt.cfg.poll_seconds)
                 continue
             try:
@@ -110,6 +114,9 @@ class Runtime:
                 h.events_since_start += len(envelopes)
                 h.last_ok_at = now_utc()
                 h.last_error, h.consecutive_errors, h.status = None, 0, "ok"
+                metrics.poll(rt.cfg.name, "ok")
+                metrics.source_state(rt.cfg.name, "ok")
+                metrics.events_ingested(rt.cfg.name, len(envelopes))
                 if envelopes:
                     await eval_triggers(self.store, self.catalog, self.dispatcher,
                                         affected_sources={rt.cfg.name},
@@ -121,6 +128,8 @@ class Runtime:
                 h.last_error = f"{type(e).__name__}: {detail}"
                 h.consecutive_errors += 1
                 h.status = "error"
+                metrics.poll(rt.cfg.name, "error")
+                metrics.source_state(rt.cfg.name, "error")
                 print(f"[connector {rt.cfg.name}] {h.last_error}")
             await asyncio.sleep(rt.cfg.poll_seconds)
 
@@ -182,6 +191,9 @@ class Runtime:
         if rt:
             rt.health.events_since_start += len(envelopes)
             rt.health.last_ok_at = now_utc()
+        metrics.events_ingested(source_name, len(envelopes))
+        if rt and rt.health.status == "push":
+            metrics.source_state(source_name, "push")
         if envelopes:
             await eval_triggers(self.store, self.catalog, self.dispatcher,
                                 affected_sources={source_name},

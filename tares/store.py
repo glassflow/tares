@@ -1143,6 +1143,8 @@ class Store:
                  calls, input_tokens, output_tokens, cache_creation_input_tokens,
                  cache_read_input_tokens, cost_usd, key_source or None, provider or None],
             )
+        from . import metrics
+        metrics.model_usage(provider, surface, calls, input_tokens, output_tokens, cost_usd)
 
     def model_usage_summary(self, days: int = 30) -> dict:
         """All-time totals plus a per-day tail over the ledger. The shape a credits poller needs:

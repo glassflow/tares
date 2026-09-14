@@ -3,6 +3,15 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `GET /metrics`: the daemon's own counters in the Prometheus text format, public like `/health`.
+  Events ingested and poll outcomes per source, source state, agent runs per outcome with their
+  duration, model calls, tokens and spend per provider, database size against its limit and
+  whether ingest is paused, trigger evaluation passes and their duration, and the event loop's
+  lag with a count of stalls. Counts only: no entity key or payload ever appears.
+
 ## [1.30.0] - 2026-09-14
 
 ### Added

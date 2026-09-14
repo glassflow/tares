@@ -29,6 +29,9 @@ dependencies = [
     # Base so the console switch works on `tares up`; the http exporter is pure Python.
     "opentelemetry-sdk>=1.24",
     "opentelemetry-exporter-otlp-proto-http>=1.24",
+    # /metrics (metrics.py): Prometheus text format for the daemon's own counters. Pure Python and
+    # small, so base: a fleet scrapes every cell without an extra to remember.
+    "prometheus-client>=0.20",
 ]
 
 [project.urls]
