@@ -2,6 +2,10 @@
 poll. This is the generic inbound path for GitHub/Vercel/custom webhooks: map fields out of the
 payload into the Envelope, keep the original lossless.
 
+A delivery sent with `X-Tares-Bypass-Cooldown: true` wakes this source's triggers even for a key
+inside its cooldown, for an on-demand run. It re-arms the cooldown on firing, and works for any
+push source, not only this connector; the route's API description has the contract.
+
 config:
   key: api-server              # fixed key, or
   key_field: service           # top-level payload field to read the key from (wins over `key`)

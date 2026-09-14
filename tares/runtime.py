@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from .config import Catalog, SourceCfg, catalog_from_db
 from .connectors import REGISTRY, SPECS, build_connector
 from .envelope import now_utc
-from .triggers import eval_triggers
+from .triggers import clear_cooldowns, eval_triggers
 
 
 @dataclass
@@ -175,14 +175,21 @@ class Runtime:
             raise ValueError(f"source {cfg.name!r} is paused")
         return cfg
 
-    async def _store_envelopes(self, source_name: str, envelopes: list) -> int:
-        """Append envelopes, update health, fire triggers — the common ingest tail."""
+    async def _store_envelopes(self, source_name: str, envelopes: list,
+                               bypass_cooldown: bool = False) -> int:
+        """Append envelopes, update health, fire triggers — the common ingest tail.
+        `bypass_cooldown` forgets the cooldown for the keys these envelopes fire under, so the
+        evaluation below fires for a key that is still cooling down."""
         self.store.append(envelopes)
         rt = self.sources.get(source_name)
         if rt:
             rt.health.events_since_start += len(envelopes)
             rt.health.last_ok_at = now_utc()
         if envelopes:
+            if bypass_cooldown:
+                # Synchronous, and no await between it and the evaluation: on the single event
+                # loop nothing else can consume the cleared state first.
+                clear_cooldowns(self.store, self.catalog, source_name, envelopes)
             await eval_triggers(self.store, self.catalog, self.dispatcher,
                                 affected_sources={source_name},
                                 eval_state=self._trigger_eval_at)
@@ -202,11 +209,12 @@ class Runtime:
                                          paused=cfg.paused, ingest_key=cfg.ingest_key)
         self.reload_catalog()
 
-    async def ingest(self, token: str, payload) -> int:
+    async def ingest(self, token: str, payload, bypass_cooldown: bool = False) -> int:
         cfg = self._push_cfg(token)   # token may be the ingest_key or the source name
         self._ensure_push_wins(cfg)   # first push flips a tail source to push mode (no double-ingest)
         conn = build_connector(cfg, self.store)
-        return await self._store_envelopes(cfg.name, conn.map_payload(payload))
+        return await self._store_envelopes(cfg.name, conn.map_payload(payload),
+                                           bypass_cooldown=bypass_cooldown)
 
     async def ingest_otlp(self, source_name: str, signal: str, body) -> int:
         cfg = self._push_cfg(source_name)

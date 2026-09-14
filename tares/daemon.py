@@ -110,6 +110,15 @@ def _bearer(auth: str | None) -> str:
     return auth[7:].strip() if auth and auth.lower().startswith("bearer ") else ""
 
 
+BYPASS_COOLDOWN_HEADER = "X-Tares-Bypass-Cooldown"
+
+
+def _bypass_cooldown(request: Request) -> bool:
+    """Whether this delivery is an on-demand one that must wake its triggers even inside their
+    cooldown. Anything but `1` or `true` (in any case) is an ordinary delivery."""
+    return request.headers.get(BYPASS_COOLDOWN_HEADER, "").strip().lower() in ("1", "true")
+
+
 SLACK_EVENTS_PATH = "/api/slack/events"
 
 
@@ -904,10 +913,19 @@ def make_app() -> FastAPI:
 
     @app.post("/ingest/{token}", status_code=202)
     async def ingest(token: str, request: Request):
+        """Push events into a source, as a JSON object, a JSON array or NDJSON.
+
+        `X-Tares-Bypass-Cooldown: true` (or `1`) marks the delivery on-demand: every trigger over
+        this source fires for the keys these events carry even when those keys are inside their
+        cooldown, for a person asking for this one analysis now. It is not a switch that turns the
+        cooldown off. The firing records its time as usual, so the next unmarked event for the key
+        waits the full cooldown again. The header carries no authority of its own: ingest still
+        needs a credential with the `ingest` scope.
+        """
         _refuse_if_full()
         body = await _parse_ingest_body(request)
         try:
-            n = await runtime.ingest(token, body)
+            n = await runtime.ingest(token, body, bypass_cooldown=_bypass_cooldown(request))
         except KeyError as e:
             _err(e, 404)
         except ValueError as e:
