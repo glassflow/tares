@@ -197,6 +197,7 @@ async def main():
                     else:
                         out = _json.dumps({"object": "list", "data": [{"id": "llama-x"}, {"id": "mixtral"}, {"id": "llama-x"}]}).encode()
                     MODELS_SEEN.append(self.headers.get("Authorization"))
+                    MODELS_KEYS.append(self.headers.get("x-api-key"))
                     self.send_response(MODELS_STATUS[0])
                     self.send_header("content-type", "application/json")
                     self.send_header("content-length", str(len(out)))
@@ -208,6 +209,7 @@ async def main():
             MODELS_STATUS = [200]
             EMPTY = [False]
             MODELS_SEEN: list = []
+            MODELS_KEYS: list = []
             chat = HTTPServer(("127.0.0.1", 0), ChatStub)
             threading.Thread(target=chat.serve_forever, daemon=True).start()
             r = await cx.put("/api/settings/providers/new", json={"kind": "openai_compatible", "name": "Local vLLM",
@@ -231,11 +233,28 @@ async def main():
             MODELS_STATUS[0] = 200
             r = await cx.post("/api/settings/providers/local-vllm/models")
             ck("a refresh that works clears the error", r.status_code == 200 and by_id(r.json(), "local-vllm")["models_error"] == "")
-            r = await cx.post("/api/settings/providers/anthropic/models")
-            ck("Anthropic's list ships with Tares", r.status_code == 400)
             r = await cx.post("/api/settings/providers/nope/models")
             ck("unknown -> 404", r.status_code == 404)
-            ck("Anthropic is marked as not discovering", by_id((await cx.get("/api/settings/providers")).json(), "anthropic")["discovers"] is False)
+            # Anthropic discovers too: its /v1/models, with the key header; the built-in list
+            # stands in while the endpoint cannot be read
+            a = by_id((await cx.get("/api/settings/providers")).json(), "anthropic")
+            ck("Anthropic offers the built-in list until read", a["discovers"] and a["models"][0].startswith("claude-") and a["models_at"] == "", str(a)[:200])
+            r = await cx.put("/api/settings/providers/anthropic", json={"kind": "anthropic", "key": "sk-ant-9", "base_url": f"http://127.0.0.1:{chat.server_port}"})
+            a = by_id(r.json(), "anthropic")
+            ck("saving the Anthropic entry reads its models from the (gateway) endpoint",
+               a["models"] == ["llama-x", "mixtral"] and a["models_error"] == "", str(a)[:200])
+            ck("...with the Anthropic key header, not a bearer", MODELS_SEEN[-1] is None and MODELS_KEYS[-1] == "sk-ant-9", str((MODELS_SEEN[-1], MODELS_KEYS[-1])))
+            MODELS_STATUS[0] = 500
+            r = await cx.post("/api/settings/providers/anthropic/models")
+            a = by_id(r.json(), "anthropic")
+            ck("a failed Anthropic refresh keeps the last list and records why", a["models"] == ["llama-x", "mixtral"] and "500" in a["models_error"], str(a)[:200])
+            MODELS_STATUS[0] = 200
+            await cx.put("/api/settings/providers/anthropic", json={"kind": "anthropic", "base_url": ""})
+            r = await cx.delete("/api/settings/providers/anthropic")
+            a = by_id(r.json(), "anthropic")
+            ck("removing Anthropic drops its discovered list too", a["models"][0].startswith("claude-") and a["models_at"] == "", str(a)[:200])
+            await cx.put("/api/settings/providers/anthropic", json={"kind": "anthropic", "key": "sk-ant-1"})
+            await cx.put("/api/settings/providers/default", json={"id": "anthropic"})
             os.environ["OPENAI_BASE_URL"] = f"http://127.0.0.1:{chat.server_port}/v1"
             r = await cx.post("/api/settings/providers/openai/models")
             o = by_id(r.json(), "openai")

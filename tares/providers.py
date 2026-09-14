@@ -127,6 +127,11 @@ def _entries(store) -> list[dict]:
     stored = _stored(store)
     env = _openai_env()
     for e in stored:
+        if e["id"] == "anthropic":
+            # the Anthropic credential lives in its own settings; this row only holds the
+            # model list the endpoint reported (TR-303)
+            out[0].update({k: e.get(k) for k in ("models", "models_error", "models_at") if k in e})
+            continue
         if e["id"] == "openai" and not e.get("key") and env:
             # a stored OpenAI row holding only a model list: the env key is still the credential
             out.append({**e, "key": env["key"], "base_url": e.get("base_url") or env["base_url"],
@@ -171,7 +176,7 @@ def list_providers(store) -> dict:
                # one line for the row; the full error stays in models_error
                "models_problem": _problem(e.get("models_error") or ""),
                "models_at": e.get("models_at") or "",
-               "discovers": e["kind"] != "anthropic"}
+               "discovers": True}
         if e["kind"] == "anthropic":
             row["base_source"] = e.get("base_source") or ""
             row["gateway_stored"] = e.get("gateway_stored", False)
@@ -184,7 +189,7 @@ def list_providers(store) -> dict:
 def models_for(entry: dict) -> list[str]:
     if entry["kind"] == "anthropic":
         from .builtin_agents import AGENT_MODELS
-        return list(AGENT_MODELS)
+        return list(entry.get("models") or AGENT_MODELS)
     if entry["kind"] == "openai":
         return list(entry.get("models") or OPENAI_MODELS)
     return list(entry.get("models") or [])
@@ -230,20 +235,25 @@ async def discover_models(entry: dict, timeout: float = 8.0) -> list[str]:
     restricts the answer to what the key may use; OpenRouter, Ollama and vLLM list everything
     they hold. Raises on any failure so the caller can show why."""
     import httpx
-    base = (entry.get("base_url") or OPENAI_API_BASE).rstrip("/")
+    if entry["kind"] == "anthropic":
+        base = (entry.get("base_url") or DEFAULT_API_BASE).rstrip("/")
+        url, headers = f"{base}/v1/models", dict(entry.get("headers") or {})
+    else:
+        base = (entry.get("base_url") or OPENAI_API_BASE).rstrip("/")
+        url, headers = f"{base}/models", _headers(entry)
     async with httpx.AsyncClient(timeout=timeout) as cx:
-        r = await cx.get(f"{base}/models", headers=_headers(entry))
+        r = await cx.get(url, headers=headers)
     if r.status_code in (401, 403):
         raise ValueError(f"the endpoint rejected the key ({r.status_code}): {r.text[:200]}")
     if r.status_code >= 400:
-        raise ValueError(f"{base}/models answered {r.status_code}: {r.text[:200]}")
+        raise ValueError(f"{url} answered {r.status_code}: {r.text[:200]}")
     try:
         data = r.json()
     except ValueError:
-        raise ValueError(f"{base}/models did not answer with JSON")
+        raise ValueError(f"{url} did not answer with JSON")
     rows = data.get("data") if isinstance(data, dict) else data
     if not isinstance(rows, list):
-        raise ValueError(f"{base}/models answered without a model list")
+        raise ValueError(f"{url} answered without a model list")
     ids = []
     for row in rows:
         mid = row.get("id") if isinstance(row, dict) else row
@@ -258,14 +268,23 @@ async def refresh_models(store, provider_id: str) -> dict:
     entries = _stored(store)
     current = next((e for e in entries if e["id"] == provider_id), None)
     if current is None:
-        env = _openai_env() if provider_id == "openai" else None
-        if env is None:
+        if provider_id == "anthropic":
+            # the credential lives in its own settings; this row holds only the model list
+            current = {"id": "anthropic", "kind": "anthropic", "name": "Anthropic"}
+        elif provider_id == "openai" and _openai_env():
+            # the env-seeded OpenAI entry has no stored row yet; store one without a key so the
+            # list has somewhere to live (the env key stays in use: a row with no key defers)
+            current = {"id": "openai", "kind": "openai", "name": "OpenAI", "key": "", "base_url": ""}
+        else:
             raise KeyError(f"unknown provider {provider_id!r}")
-        # the env-seeded OpenAI entry has no stored row yet; store one without a key so the
-        # list has somewhere to live (the env key stays in use: a stored row with no key defers)
-        current = {"id": "openai", "kind": "openai", "name": "OpenAI", "key": "", "base_url": ""}
         entries.append(current)
-    probe = {**current}
+    if provider_id == "anthropic":
+        live = entry(store, "anthropic") or {}
+        if not live.get("headers"):
+            raise ValueError("no Anthropic key configured yet")
+        probe = {"kind": "anthropic", "headers": live["headers"], "base_url": live.get("base_url")}
+    else:
+        probe = {**current}
     if current["id"] == "openai" and not current.get("key"):
         env = _openai_env()
         if env:
@@ -365,8 +384,7 @@ def delete_provider(store, provider_id: str) -> None:
         store.set_setting("anthropic_key", None)
         store.set_setting("gateway_url", None)
         store.set_setting("gateway_token", None)
-    else:
-        _save(store, [e for e in _stored(store) if e["id"] != provider_id])
+    _save(store, [e for e in _stored(store) if e["id"] != provider_id])
     if (store.get_setting(DEFAULT_SETTING) or "") == provider_id:
         store.set_setting(DEFAULT_SETTING, None)
 
