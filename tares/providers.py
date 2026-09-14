@@ -168,6 +168,8 @@ def list_providers(store) -> dict:
                "configured": _configured(e), "source": e.get("source") or "",
                "stored": bool(e.get("stored")), "default": e["id"] == default,
                "models": models_for(e), "models_error": e.get("models_error") or "",
+               # one line for the row; the full error stays in models_error
+               "models_problem": _problem(e.get("models_error") or ""),
                "models_at": e.get("models_at") or "",
                "discovers": e["kind"] != "anthropic"}
         if e["kind"] == "anthropic":
@@ -205,6 +207,20 @@ def build(entry: dict) -> Provider | None:
                           timeout=TIMEOUT, label=entry["id"])
 
 
+def _problem(error: str) -> str:
+    """The one-line reading of a discovery error for the provider row."""
+    if not error:
+        return ""
+    low = error.lower()
+    if "rejected the key" in low or " 401" in low or " 403" in low:
+        return "the endpoint rejected the key; check it and save again"
+    if "connect" in low or "refused" in low or "timed out" in low or "timeout" in low:
+        return "the endpoint did not answer; is it running and reachable from this daemon?"
+    if "404" in low:
+        return "no models endpoint at this base URL; check the URL ends with /v1"
+    return "the endpoint did not list its models"
+
+
 # ── model discovery (TR-303) ─────────────────────────────────────────────────
 MAX_MODELS = 500
 
@@ -217,6 +233,8 @@ async def discover_models(entry: dict, timeout: float = 8.0) -> list[str]:
     base = (entry.get("base_url") or OPENAI_API_BASE).rstrip("/")
     async with httpx.AsyncClient(timeout=timeout) as cx:
         r = await cx.get(f"{base}/models", headers=_headers(entry))
+    if r.status_code in (401, 403):
+        raise ValueError(f"the endpoint rejected the key ({r.status_code}): {r.text[:200]}")
     if r.status_code >= 400:
         raise ValueError(f"{base}/models answered {r.status_code}: {r.text[:200]}")
     try:

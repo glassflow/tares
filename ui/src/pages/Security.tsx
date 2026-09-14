@@ -337,7 +337,7 @@ function ProvidersPanel() {
       setData(r); setEditing(undefined);
       const saved = r.providers.find((p) => p.id === r.id);
       setMsg(saved?.models_error
-        ? `✓ saved, but the endpoint did not list its models: ${saved.models_error}. Agents can still name a model by hand.`
+        ? `✓ saved, but ${saved.models_problem || "the endpoint did not list its models"}. Agents can still name a model by hand.`
         : saved?.discovers ? `✓ saved; ${saved.models.length} model${saved.models.length === 1 ? "" : "s"} listed by the endpoint` : "✓ saved; in use from the next call");
     } catch (e) { setErr(String((e as Error).message ?? e)); }
     setBusy(false);
@@ -448,13 +448,15 @@ function ProvidersPanel() {
                   <td className="help">{data.kinds.find((k) => k.id === p.kind)?.label ?? p.kind}</td>
                   <td className="mono help">{p.base_url || (p.kind === "anthropic" ? "api.anthropic.com" : "")}</td>
                   <td>
-                    {p.configured
-                      ? <><span className="badge ok">configured</span>{p.source && <span className="help"> from <span className="mono">{p.source}</span></span>}</>
-                      : <span className="badge error">no key</span>}
+                    {!p.configured
+                      ? <span className="badge error">no key</span>
+                      : p.models_problem?.startsWith("the endpoint rejected the key")
+                        ? <><span className="badge error">key rejected</span><span className="help"> by the endpoint; edit and save a valid key</span></>
+                        : <><span className="badge ok">configured</span>{p.source && <span className="help"> from <span className="mono">{p.source}</span></span>}</>}
                   </td>
                   <td>
                     {p.models_error
-                      ? <span className="help" title={p.models_error}><span className="badge error">not listed</span> {p.models.length > 0 ? `${p.models.length} kept from last time` : "the endpoint did not answer"}</span>
+                      ? <span className="help" title={p.models_error}><span className="badge error">not listed</span> {p.models_problem}{p.models.length > 0 ? `; the picker offers ${p.models.length} ${p.discovers && p.models_at ? "from the last read" : "built in"}` : ""}</span>
                       : <span className="help" title={p.models.slice(0, 40).join("\n")}>{p.models.length}{p.discovers ? " from the endpoint" : " built in"}</span>}
                   </td>
                   <td style={{ whiteSpace: "nowrap" }}>
