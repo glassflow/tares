@@ -30,6 +30,7 @@ import uuid
 
 import httpx
 
+from . import metrics
 from . import tracing as _tracing
 from .config import FINDINGS_SOURCE, API_BASE, agent_url, parse_duration
 from .envelope import now_utc
@@ -229,14 +230,17 @@ class AgentRunner:
         marker = (agent_name, key)
         self._inflight.add(marker)
         async def go():
+            t0 = time.monotonic()
+            status = "failed"
             try:
-                await self._run(agent, trigger_name, key, payload, run_id, None)
+                status, _error = await self._run(agent, trigger_name, key, payload, run_id, None)
             except Exception as e:
                 detail = f"{type(e).__name__}: {str(e) or repr(e)}"
                 self.store.finish_agent_run(run_id, "failed", error=detail[:500])
                 print(f"[agent {agent_name}] {detail}")
             finally:
                 self._inflight.discard(marker)
+            metrics.agent_run(agent_name, status, time.monotonic() - t0)
 
         try:
             self._spawn(go)
@@ -312,6 +316,7 @@ class AgentRunner:
         run_id = "run_" + uuid.uuid4().hex[:12]
         self.store.start_agent_run(run_id, agent["name"], trigger_name, dispatch_id, key,
                                    prompt_hash(agent["prompt"]), effective_max_rounds(agent))
+        t0 = time.monotonic()
         try:
             status, error = await self._run(agent, trigger_name, key, payload, run_id,
                                             dispatch_id)
@@ -322,6 +327,7 @@ class AgentRunner:
             print(f"[agent {agent['name']}] {detail}")
         finally:
             self._inflight.discard(marker)
+        metrics.agent_run(agent["name"], status, time.monotonic() - t0)
         # resolve the delivery: ok when the agent concluded ('ok'); 'empty'/'capped' are not
         # failures (it ran and declined to conclude, or hit the cap) but aren't a delivered finding
         # either — mark ok=false with the reason so the firing row is honest without crying wolf.

@@ -25,7 +25,7 @@ from urllib.parse import parse_qs
 import httpx
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel, model_validator
 
 from .config import (SLACK_URL_PREFIX, CatalogError, agent_url, export_db_to_yaml,
@@ -44,6 +44,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL,
                              PRESETS as AGENT_PRESETS, AgentRunner, effective_max_rounds,
                              resolve_anthropic_headers, resolve_api_base, resolve_provider,
                              DEFAULT_API_BASE)
+from . import metrics as _metrics
 from . import providers as providers_mod
 from .runtime import Runtime
 from . import slack as slack_mod
@@ -119,7 +120,9 @@ def _public(method: str, path: str) -> bool:
     """Reachable without the auth token: CORS preflight, the health probe, ingest (own token), the
     Slack inbound endpoint (own signature), and the console SPA shell + static assets (any GET that
     isn't an API/data route)."""
-    if method == "OPTIONS" or path == "/health":
+    if method == "OPTIONS" or path in ("/health", "/metrics"):
+        # /metrics like /health: a scraper inside the cluster carries no token, and the body holds
+        # counts only, never an entity or a payload
         return True
     if _is_ingest(path):
         return True
@@ -520,6 +523,19 @@ def make_app() -> FastAPI:
     async def lifespan(_app):
         dispatcher.agents.attach_loop()
         runtime.start_all()
+        # the daemon's own counters (/metrics, TR-308): storage gauges read on scrape, the event
+        # loop watched by a one-second timer for the whole life of the process
+        _metrics.set_storage_probe(lambda: {**store.usage(), **{
+            k: v for k, v in storage_state(store, DB_PATH).items()
+            if k in ("max_bytes", "pct_used", "paused")}})
+        try:
+            from importlib.metadata import version as _pkg_version
+            _metrics.set_info(_pkg_version("tares"))
+        except Exception:
+            _metrics.set_info(None)
+        _metrics.prime(providers=[p["id"] for p in providers_mod.list_providers(store)["providers"]])
+        loop_stop = asyncio.Event()
+        loop_watch = asyncio.create_task(_metrics.watch_event_loop(loop_stop))
         print(f"taresd: {len(runtime.catalog.sources)} source(s); "
               f"console at / · agent API at /query · management API at /api")
         # optional OTLP gRPC receiver (:4317). Needs grpcio + opentelemetry-proto; off if absent.
@@ -535,6 +551,8 @@ def make_app() -> FastAPI:
             except Exception as e:   # never let the optional receiver block startup
                 print(f"taresd: OTLP gRPC failed to start: {e}")
         yield
+        loop_stop.set()
+        loop_watch.cancel()
         if grpc_server is not None:
             await grpc_server.stop(grace=2)
         runtime.shutdown()
@@ -614,6 +632,17 @@ def make_app() -> FastAPI:
         raise HTTPException(status_code=code, detail=str(e))
 
     # ── agent surface (unchanged contract; queries now logged) ───────────────
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics_endpoint():
+        """The daemon's own counters in the Prometheus text format (TR-308): events per source,
+        poll outcomes, source state, agent runs, model calls and spend by provider, storage against
+        its limit, trigger evaluation time, event loop lag. Public like /health; counts only."""
+        try:
+            body, ctype = _metrics.render()
+        except RuntimeError:
+            _err(KeyError("metrics need the prometheus-client package"), 404)
+        return Response(content=body, media_type=ctype)
+
     @app.get("/health")
     async def health():
         """Liveness that actually touches the store, so a wedged DuckDB can't read as healthy to a
