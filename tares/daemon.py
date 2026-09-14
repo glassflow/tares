@@ -533,6 +533,7 @@ def make_app() -> FastAPI:
             _metrics.set_info(_pkg_version("tares"))
         except Exception:
             _metrics.set_info(None)
+        _metrics.prime(providers=[p["id"] for p in providers_mod.list_providers(store)["providers"]])
         loop_stop = asyncio.Event()
         loop_watch = asyncio.create_task(_metrics.watch_event_loop(loop_stop))
         print(f"taresd: {len(runtime.catalog.sources)} source(s); "

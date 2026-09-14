@@ -113,6 +113,34 @@ def trigger_evaluation(seconds: float, fired: list) -> None:
             TRIGGER_FIRINGS.labels(trigger=name).inc()
 
 
+RUN_STATUSES = ("ok", "empty", "exhausted", "capped", "failed")
+
+
+def prime(sources=(), triggers=(), agents=(), providers=()) -> None:
+    """Create every counter's label set at zero before its first event. A counter that only
+    appears when something happens makes `increase()` miss that first event (Prometheus sees a
+    series that starts at 1); with the zero sample present, rates and increases are right from
+    the first run, the first firing, the first poll. Called on start and on every catalog reload."""
+    if not AVAILABLE:
+        return
+    for s in sources:
+        EVENTS.labels(source=s)
+        for o in ("ok", "error", "paused"):
+            POLLS.labels(source=s, outcome=o)
+    for t in triggers:
+        TRIGGER_FIRINGS.labels(trigger=t)
+    for a in agents:
+        for st in RUN_STATUSES:
+            AGENT_RUNS.labels(agent=a, status=st)
+    for p in providers:
+        MODEL_UNPRICED.labels(provider=p)
+        for surface in ("agent", "ask"):
+            MODEL_CALLS.labels(provider=p, surface=surface)
+            MODEL_SPEND.labels(provider=p, surface=surface)
+            for d in ("input", "output"):
+                MODEL_TOKENS.labels(provider=p, surface=surface, direction=d)
+
+
 def set_storage_probe(fn) -> None:
     """`fn()` returns {db_bytes, max_bytes, pct_used, paused, events}; read on every scrape, so the
     gauges cost nothing between scrapes."""

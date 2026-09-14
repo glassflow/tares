@@ -49,6 +49,7 @@ class Runtime:
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
     def start_all(self) -> None:
+        self._prime_metrics()
         for cfg in self.catalog.sources.values():
             self._start(cfg)
 
@@ -88,6 +89,15 @@ class Runtime:
             rt.health.consecutive_errors += 1
             rt.health.status = "error"
             print(f"[connector {rt.cfg.name}] {rt.health.last_error}")
+
+    def _prime_metrics(self) -> None:
+        """Every counter's label set at zero for what the catalog holds now (see metrics.prime)."""
+        try:
+            agents = [a["name"] for a in self.store.list_catalog_agents()]
+        except Exception:
+            agents = []
+        metrics.prime(sources=list(self.catalog.sources), triggers=[t.name for t in self.catalog.triggers],
+                      agents=agents)
 
     def _stop(self, name: str) -> None:
         rt = self.sources.pop(name, None)
@@ -139,6 +149,7 @@ class Runtime:
         new = catalog_from_db(self.store)
         old_sources = self.catalog.sources
         self.catalog = new
+        self._prime_metrics()
 
         for name in set(old_sources) - set(new.sources):
             self._stop(name)
