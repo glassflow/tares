@@ -33,6 +33,8 @@ import httpx
 from . import tracing as _tracing
 from .config import FINDINGS_SOURCE, API_BASE, agent_url, parse_duration
 from .envelope import now_utc
+from .models import (AnthropicProvider, ModelError, Provider, add_usage, empty_usage,
+                     tool_message)
 from .pricing import cost_usd
 from .slack import deep_link as _slack_deep_link
 from .views import resolve_query_full, resolve_read
@@ -193,6 +195,16 @@ def resolve_anthropic_headers(store) -> tuple[dict[str, str], str]:
         return {}, ""
 
     return headers, key_origin
+
+
+def resolve_provider(store) -> tuple[Provider | None, str]:
+    """(provider, where-its-credential-came-from). The one place a run or an Ask turn turns the
+    stored settings into a provider object; None when no credential is configured at all."""
+    headers, key_origin = resolve_anthropic_headers(store)
+    if not headers:
+        return None, key_origin
+    api_base, _ = resolve_api_base(store)
+    return AnthropicProvider(api_base, headers, timeout=TOOL_TIMEOUT), key_origin
 
 
 class AgentRunner:
@@ -385,9 +397,8 @@ class AgentRunner:
                           obs: _tracing.Observation) -> tuple[str, str | None]:
         started_at = now_utc()
         t0 = time.monotonic()
-        headers, key_origin = resolve_anthropic_headers(self.store)
-        api_base, _ = resolve_api_base(self.store)
-        if not headers:
+        provider, key_origin = resolve_provider(self.store)
+        if provider is None:
             msg = "no Anthropic key: set ANTHROPIC_API_KEY before `tares up`, or add a key under Settings"
             self.store.finish_agent_run(run_id, "failed", error=msg)
             return "failed", msg
@@ -415,11 +426,10 @@ class AgentRunner:
         # Usage accumulates in a mutable dict rather than the loop's return value, so a run that
         # dies mid-loop still records the tokens it already paid for (the finally below).
         model = agent.get("model") or MODEL
-        usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0,
-                 "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+        usage = empty_usage()
         try:
             finding, rounds, tool_calls, external_used, exhausted, partial = await self._loop(
-                agent, trigger_name, key, payload, headers, usage, tracer, obs, api_base=api_base)
+                agent, trigger_name, key, payload, provider, usage, tracer, obs)
         finally:
             if usage["calls"]:
                 cost = cost_usd(model, usage["input_tokens"], usage["output_tokens"],
@@ -532,8 +542,8 @@ class AgentRunner:
 
     # ── the bounded model loop ────────────────────────────────────────────────
     async def _loop(self, agent: dict, trigger_name: str, key: str, payload: str,
-                    headers: dict, usage: dict, tracer=None,
-                    obs: _tracing.Observation | None = None, api_base: str = DEFAULT_API_BASE,
+                    provider: Provider, usage: dict, tracer=None,
+                    obs: _tracing.Observation | None = None,
                     ) -> tuple[str, int, int, list[str], bool, str]:
         # External tools: the agent's selected MCP servers, connected for the duration of this
         # run. A server that fails to connect is skipped (recorded below) — losing a tool server
@@ -545,12 +555,12 @@ class AgentRunner:
         async with RemoteToolbox(servers) as toolbox:
             for failure in toolbox.failures:
                 print(f"[agent {agent['name']}] mcp connect failed; {failure}")
-            return await self._loop_with(agent, trigger_name, key, payload, headers, toolbox,
-                                         usage, tracer, obs, api_base=api_base)
+            return await self._loop_with(agent, trigger_name, key, payload, provider, toolbox,
+                                         usage, tracer, obs)
 
     async def _loop_with(self, agent: dict, trigger_name: str, key: str, payload: str,
-                         headers: dict, toolbox, usage: dict, tracer=None,
-                         obs: _tracing.Observation | None = None, api_base: str = DEFAULT_API_BASE,
+                         provider: Provider, toolbox, usage: dict, tracer=None,
+                         obs: _tracing.Observation | None = None,
                          ) -> tuple[str, int, int, list[str], bool, str]:
         """Returns (finding, rounds, tool_calls, external_tools_used, exhausted, partial_text)."""
         tools = TOOL_DEFS + toolbox.tool_defs
@@ -575,82 +585,57 @@ class AgentRunner:
         last_text = ""
         if obs is not None:
             obs.set_input(messages[0]["content"])
-        async with httpx.AsyncClient(timeout=TOOL_TIMEOUT) as cx:
-            async def call(with_tools: bool) -> dict:
-                # The tools stay declared on the final call (a conversation holding tool_use
-                # blocks must define them); tool_choice none is what disables them.
-                body = {"model": agent.get("model") or MODEL,
-                        "max_tokens": MAX_TOKENS, "system": agent["prompt"],
-                        "tools": tools, "messages": messages}
-                if not with_tools:
-                    body["tool_choice"] = {"type": "none"}
-                with _tracing.generation(tracer, body["model"], messages,
-                                         {"max_tokens": MAX_TOKENS}) as gen:
-                    r = await cx.post(
-                        f"{api_base}/v1/messages",
-                        headers=headers,
-                        json=body)
-                    if r.status_code >= 400:
-                        raise RuntimeError(f"anthropic {r.status_code}: {r.text[:300]}")
-                    msg = r.json()
-                    # Defensive get: stubs (tests) may answer without a usage block.
-                    u = msg.get("usage") or {}
-                    usage["calls"] += 1
-                    for field in ("input_tokens", "output_tokens",
-                                  "cache_creation_input_tokens", "cache_read_input_tokens"):
-                        usage[field] += int(u.get(field) or 0)
-                    gen.set_output(msg.get("content") or [])
-                    gen.set_usage(u)
-                    gen.set_response_model(msg.get("model"))
-                    gen.set_finish_reason(msg.get("stop_reason"))
-                return msg
+        model = agent.get("model") or MODEL
 
-            for rounds in range(1, max_rounds + 1):
-                msg = await call(True)
-                messages.append({"role": "assistant", "content": msg["content"]})
-                text = "\n".join(b.get("text", "") for b in msg["content"]
-                                 if b.get("type") == "text").strip()
-                if text:
-                    last_text = text
+        async def call(with_tools: bool):
+            reply = await provider.complete(model=model, system=agent["prompt"], tools=tools,
+                                            messages=messages, max_tokens=MAX_TOKENS,
+                                            tools_allowed=with_tools, tracer=tracer)
+            add_usage(usage, reply.usage)
+            return reply
 
-                uses = [b for b in msg["content"] if b.get("type") == "tool_use"]
-                if not uses:
-                    return text, rounds, tool_calls, external_used, False, ""
-
-                results = []
-                for u in uses:
-                    tool_calls += 1
-                    name = str(u["name"])
-                    with _tracing.tool_span(tracer, name, u.get("input") or {}) as tobs:
-                        try:
-                            if toolbox.owns(name):
-                                external_used.append(name)
-                                out = await toolbox.call(name, u.get("input") or {})
-                            else:
-                                out = self._tool(agent["name"], name, u.get("input") or {})
-                        except Exception as e:   # a tool error is evidence, not a crash
-                            out = f"tool error: {type(e).__name__}: {e}"
-                            tobs.tool_error(out)
-                        else:
-                            tobs.set_output(out)
-                    results.append({"type": "tool_result", "tool_use_id": u["id"], "content": out})
-                messages.append({"role": "user", "content": results})
-
-            # Budget exhausted with tool calls still pending. Ask once more, tools disabled, for a
-            # conclusion from what it has (this is the +1 call). If it concludes, that is the
-            # finding; if not, the run is `exhausted` and the last text is kept as a partial note.
-            messages.append({"role": "user", "content": (
-                "You have used your round budget. Do not call any more tools. Conclude now from "
-                "the evidence you already have; if it is inconclusive, say what you found so far "
-                "and what you would look at next.")})
-            try:
-                msg = await call(False)
-            except RuntimeError:
-                return "", rounds, tool_calls, external_used, True, last_text
-            text = "\n".join(b.get("text", "") for b in msg["content"]
-                             if b.get("type") == "text").strip()
+        for rounds in range(1, max_rounds + 1):
+            reply = await call(True)
+            messages.append(reply.as_message())
+            text = reply.text.strip()
             if text:
+                last_text = text
+
+            if not reply.tool_calls:
                 return text, rounds, tool_calls, external_used, False, ""
+
+            results = []
+            for tc in reply.tool_calls:
+                tool_calls += 1
+                with _tracing.tool_span(tracer, tc.name, tc.arguments) as tobs:
+                    try:
+                        if toolbox.owns(tc.name):
+                            external_used.append(tc.name)
+                            out = await toolbox.call(tc.name, tc.arguments)
+                        else:
+                            out = self._tool(agent["name"], tc.name, tc.arguments)
+                    except Exception as e:   # a tool error is evidence, not a crash
+                        out = f"tool error: {type(e).__name__}: {e}"
+                        tobs.tool_error(out)
+                    else:
+                        tobs.set_output(out)
+                results.append((tc.id, out))
+            messages.append(tool_message(results))
+
+        # Budget exhausted with tool calls still pending. Ask once more, tools disabled, for a
+        # conclusion from what it has (this is the +1 call). If it concludes, that is the
+        # finding; if not, the run is `exhausted` and the last text is kept as a partial note.
+        messages.append({"role": "user", "content": (
+            "You have used your round budget. Do not call any more tools. Conclude now from "
+            "the evidence you already have; if it is inconclusive, say what you found so far "
+            "and what you would look at next.")})
+        try:
+            reply = await call(False)
+        except ModelError:
+            return "", rounds, tool_calls, external_used, True, last_text
+        text = reply.text.strip()
+        if text:
+            return text, rounds, tool_calls, external_used, False, ""
         return "", rounds, tool_calls, external_used, True, last_text
 
     def _tool(self, agent_name: str, name: str, args: dict) -> str:

@@ -6,7 +6,8 @@ https://docs.glassflow.ai/tares; this file is about the repo itself.
 ## Layout
 
 - `tares/` the package: `daemon.py` (HTTP API + console), `cli.py` (`tares up`, `tares mcp`),
-  `store.py` (DuckDB), `connectors/`, `agent*.py` (Tares agents), `mcp*.py` (the MCP proxy),
+  `store.py` (DuckDB), `connectors/`, `agent*.py` (Tares agents), `models.py` (the model
+  provider adapter both agent loops call), `mcp*.py` (the MCP proxy),
   `projects/` (projects and the Tares templates they start from).
 - `ui/` the console, a Vite + React app. The daemon serves `ui/dist` and the wheel bundles it.
 - `tests/` plain scripts. `demo/` the demo stack. `skills/` the install skill agents use.

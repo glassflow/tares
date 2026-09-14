@@ -42,7 +42,8 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL,
                              MAX_ROUNDS_LIMIT as AGENT_MAX_ROUNDS_LIMIT,
                              MAX_ROUNDS_WITH_MCP as AGENT_MAX_ROUNDS_WITH_MCP,
                              PRESETS as AGENT_PRESETS, AgentRunner, effective_max_rounds,
-                             resolve_anthropic_headers, resolve_api_base, DEFAULT_API_BASE)
+                             resolve_anthropic_headers, resolve_api_base, resolve_provider,
+                             DEFAULT_API_BASE)
 from .runtime import Runtime
 from . import slack as slack_mod
 from . import slack_verify
@@ -1367,8 +1368,8 @@ def make_app() -> FastAPI:
         # `X-Anthropic-Key` header override, which the console filled from localStorage — so a key
         # added on the Ask page made Ask work while Slack and trigger-woken agents still reported
         # none configured, having no browser to read it from (NF-125).
-        headers, key_origin = resolve_anthropic_headers(store)
-        if not headers:
+        provider, key_origin = resolve_provider(store)
+        if provider is None:
             _err(ValueError("add your Anthropic API key to use the assistant"), 400)
         body = await request.json()
         # the daemon's own token, so the agent's tool self-calls clear the auth middleware
@@ -1380,11 +1381,10 @@ def make_app() -> FastAPI:
         if mode == "build" and step not in BUILD_STEPS:
             _err(ValueError(f"build step must be one of {', '.join(BUILD_STEPS)}"), 400)
         return StreamingResponse(
-            run_agent(headers, body.get("messages") or [],
+            run_agent(provider, body.get("messages") or [],
                       model=body.get("model"), self_headers=self_headers,
                       on_usage=lambda m, u: _record_ask_usage(m, u, key_source=key_origin),
-                      tracer=tracing.tracer_for("ask"), mode=mode, step=step,
-                      base_url=resolve_api_base(store)[0]),
+                      tracer=tracing.tracer_for("ask"), mode=mode, step=step),
             media_type="text/event-stream")
 
     # ── MCP connections — external tool servers a Tares agent can opt into ─────
@@ -2109,13 +2109,12 @@ def make_app() -> FastAPI:
         from .agent import run_agent
         text, error = "", None
         try:
-            headers, key_origin = resolve_anthropic_headers(store)
+            provider, key_origin = resolve_provider(store)
             self_headers = {"Authorization": f"Bearer {AUTH_TOKEN}"} if AUTH_TOKEN else {}
             async def _run():
                 nonlocal text, error
-                async for chunk in run_agent(headers, [{"role": "user", "content": question}],
+                async for chunk in run_agent(provider, [{"role": "user", "content": question}],
                                              self_headers=self_headers,
-                                             base_url=resolve_api_base(store)[0],
                                              on_usage=lambda m, u: _record_ask_usage(
                                                  m, u, key_source=key_origin),
                                              tracer=tracing.tracer_for("ask")):
