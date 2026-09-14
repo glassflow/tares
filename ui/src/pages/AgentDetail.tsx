@@ -470,7 +470,7 @@ function RunRow({ r, open, focused, onToggle }: {
                 : !exhaustedNote && (
                     <p className="help" style={{ margin: 0, whiteSpace: "normal" }}>
                       {r.status === "running" ? "investigating…"
-                        : r.error?.startsWith("no Anthropic key")
+                        : r.error?.startsWith("no model provider")
                           ? <>{r.error} (<Link to="/settings?tab=anthropic">Settings</Link>)</>
                           : (r.error ?? "no finding")}
                     </p>

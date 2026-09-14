@@ -516,3 +516,25 @@ export interface ChallengerSession {
   thread: ChallengeEvent[];
 }
 export interface ProjectUpdateReport { created: string[]; updated: string[]; kept: string[]; deleted: string[]; added?: string[]; released?: string[] }
+
+// A model provider the cell holds (Settings, Model providers). Credentials are never returned:
+// `configured` says one resolves, `source` where from (console, env:VAR, or empty).
+export interface ModelProvider {
+  id: string;                 // "anthropic", "openai", or the slug of an OpenAI-compatible entry
+  kind: "anthropic" | "openai" | "openai_compatible";
+  name: string;
+  base_url: string;
+  configured: boolean;
+  source: string;
+  stored: boolean;            // a credential is stored on the cell (vs the environment only)
+  default: boolean;
+  models: string[];           // what the picker offers for this provider
+  base_source?: string;       // anthropic only: where the gateway URL came from
+  gateway_stored?: boolean;
+  gateway_token_stored?: boolean;
+}
+export interface ModelProviders {
+  providers: ModelProvider[];
+  default: string | null;
+  kinds: { id: ModelProvider["kind"]; label: string }[];
+}

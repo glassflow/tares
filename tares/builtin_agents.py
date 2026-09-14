@@ -33,8 +33,7 @@ import httpx
 from . import tracing as _tracing
 from .config import FINDINGS_SOURCE, API_BASE, agent_url, parse_duration
 from .envelope import now_utc
-from .models import (AnthropicProvider, ModelError, Provider, add_usage, empty_usage,
-                     tool_message)
+from .models import ModelError, Provider, add_usage, empty_usage, tool_message
 from .pricing import cost_usd
 from .slack import deep_link as _slack_deep_link
 from .views import resolve_query_full, resolve_read
@@ -147,64 +146,10 @@ def prompt_hash(prompt: str) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12]
 
 
-DEFAULT_API_BASE = "https://api.anthropic.com"
-
-
-def resolve_api_base(store) -> tuple[str, str]:
-    """(base URL, where-it-came-from). Where model calls go: a gateway saved in the console
-    (TR-281), else the environment (`ANTHROPIC_BASE_URL`, or the old `TARES_ANTHROPIC_BASE`),
-    else Anthropic itself. Read per request, like the key, so a cell can switch to a gateway
-    without a restart and a cloud customer can do it from Settings."""
-    stored = (store.get_setting("gateway_url") or "").strip().rstrip("/")
-    if stored:
-        return stored, "console"
-    if API_BASE != DEFAULT_API_BASE:
-        which = "ANTHROPIC_BASE_URL" if os.getenv("ANTHROPIC_BASE_URL", "").strip() else "TARES_ANTHROPIC_BASE"
-        return API_BASE, f"env:{which}"
-    return DEFAULT_API_BASE, ""
-
-
-def resolve_anthropic_headers(store) -> tuple[dict[str, str], str]:
-    """(header, where-it-came-from). The console-stored values win over the environment: the
-    user's own credential takes over from whatever the deployment shipped the moment they save
-    one. That order is load-bearing for hosted trials — an operator-provided key in the env must
-    yield to the customer's key instantly, so their spend lands on their key, not the trial's.
-    Deleting the stored value falls back to the env (if the deployment still carries one).
-
-    A gateway token saved in the console (Settings, TR-281) goes first, as a bearer header: it
-    exists only because the user set a gateway up on purpose. Then the stored key, as the
-    Anthropic key header, which is what a gateway expects from a plain key too."""
-    gateway_token = (store.get_setting("gateway_token") or "").strip()
-    stored = (store.get_setting("anthropic_key") or "").strip()
-    auth_token = os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip()
-    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    headers = {"anthropic-version": "2023-06-01",}
-    if gateway_token:
-        headers["Authorization"] = f"Bearer {gateway_token}"
-        key_origin = "console:gateway"
-    elif stored:
-        headers["x-api-key"] = stored
-        key_origin = "console"
-    elif auth_token:
-        headers["Authorization"] = f"Bearer {auth_token}"
-        key_origin = "env:ANTHROPIC_AUTH_TOKEN"
-    elif api_key:
-        headers["x-api-key"] = api_key
-        key_origin = "env:ANTHROPIC_API_KEY"
-    else:
-        return {}, ""
-
-    return headers, key_origin
-
-
-def resolve_provider(store) -> tuple[Provider | None, str]:
-    """(provider, where-its-credential-came-from). The one place a run or an Ask turn turns the
-    stored settings into a provider object; None when no credential is configured at all."""
-    headers, key_origin = resolve_anthropic_headers(store)
-    if not headers:
-        return None, key_origin
-    api_base, _ = resolve_api_base(store)
-    return AnthropicProvider(api_base, headers, timeout=TOOL_TIMEOUT), key_origin
+# The credential and base URL resolvers moved to providers.py (TR-301); they are imported here
+# so callers and tests that patch them on this module keep working.
+from .providers import (DEFAULT_API_BASE, resolve_anthropic_headers, resolve_api_base,  # noqa: E402,F401
+                        resolve_provider)
 
 
 class AgentRunner:
@@ -399,7 +344,8 @@ class AgentRunner:
         t0 = time.monotonic()
         provider, key_origin = resolve_provider(self.store)
         if provider is None:
-            msg = "no Anthropic key: set ANTHROPIC_API_KEY before `tares up`, or add a key under Settings"
+            msg = ("no model provider configured: add one under Settings, or set "
+                   "ANTHROPIC_API_KEY before `tares up`")
             self.store.finish_agent_run(run_id, "failed", error=msg)
             return "failed", msg
         # Count the runs BEFORE this one (its row is already inserted), so the cap fires at exactly

@@ -123,8 +123,7 @@ def anchor(store, agent=AGENT):
 
 async def main():
     # The module resolves these from the store; the run path needs them non-empty to proceed.
-    ba.resolve_anthropic_headers = lambda store: ({"x-api-key": "test"}, "test")
-    ba.resolve_api_base = lambda store: ("https://api.invalid", "test")
+    ba.resolve_provider = lambda store, provider_id=None: (object(), "test")
 
     print("== THE REGRESSION: newer firings during the run must not move the key ==")
     # One firing when the run starts; three more land while the model loop is running, exactly as

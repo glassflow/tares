@@ -7,7 +7,7 @@ import type {
   LabelFacet, ModelUsage, QueryLogEntry,
   McpServer, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
-  TimelineEventRow, Trigger, View,
+  TimelineEventRow, Trigger, View, ModelProviders,
 } from "./types";
 
 const TOKEN_KEY = "tares_token";
@@ -192,6 +192,18 @@ export const api = {
   clearGateway: () =>
     request<{ ok: boolean; configured: boolean; source: string }>("/api/settings/gateway",
       { method: "DELETE" }),
+  // The model providers a cell holds (TR-301). Credentials are write-only; blank key keeps the
+  // stored one. `new` as the id creates an entry.
+  providers: () => request<ModelProviders>("/api/settings/providers"),
+  saveProvider: (id: string, body: { kind: string; name?: string; key?: string; base_url?: string }) =>
+    request<ModelProviders & { ok: boolean; id: string }>(`/api/settings/providers/${encodeURIComponent(id)}`,
+      { method: "PUT", body: JSON.stringify(body) }),
+  deleteProvider: (id: string) =>
+    request<ModelProviders & { ok: boolean }>(`/api/settings/providers/${encodeURIComponent(id)}`,
+      { method: "DELETE" }),
+  setDefaultProvider: (id: string) =>
+    request<ModelProviders & { ok: boolean }>("/api/settings/providers/default",
+      { method: "PUT", body: JSON.stringify({ id }) }),
   anthropicKeyStatus: () =>
     request<{ configured: boolean; source: string; stored: boolean; env_overrides: boolean }>(
       "/api/settings/anthropic-key"),

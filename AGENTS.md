@@ -47,7 +47,9 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `ANTHROPIC_API_KEY` | model key for Tares agents and Ask; a key saved in the console wins |
 | `ANTHROPIC_AUTH_TOKEN` | a bearer token instead of the key, for a gateway that wants `Authorization: Bearer`; beats the key when both are set |
 | `ANTHROPIC_BASE_URL` | an Anthropic-compatible gateway (LiteLLM, Portkey, a Bedrock or Vertex proxy) instead of api.anthropic.com; `TARES_ANTHROPIC_BASE` is the old name, still read |
-| `TARES_AGENT_MODEL` | model for Tares agents |
+| `OPENAI_API_KEY`, `OPENAI_BASE_URL` | seed an OpenAI provider entry; a provider saved in the console wins |
+| `TARES_MODEL_PROVIDER` | id of the default provider (`anthropic`, `openai`, or a saved endpoint's id) when none is chosen in the console |
+| `TARES_AGENT_MODEL` | model for Tares agents on the default provider |
 | `TARES_MAX_DB_SIZE` | storage limit `/api/usage` and `/health` measure against; unset = the volume the database sits on |
 | `TARES_INGEST_PAUSE_PCT` | share of the limit at which ingest is refused (507) and polls pause; default 95 |
 | `TARES_SLACK_BOT_TOKEN`, `TARES_SLACK_SIGNING_SECRET` | the Slack surface |
