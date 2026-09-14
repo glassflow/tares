@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import operator
 import os
+import time
 from datetime import timezone
 
 from .config import Catalog
@@ -77,6 +78,17 @@ def _schedule_catchup(name: str, delay: float, store, catalog, dispatcher, eval_
 
 async def eval_triggers(store, catalog: Catalog, dispatcher, affected_sources=None,
                         eval_state: dict | None = None, only: str | None = None) -> list:
+    """Timed and counted (tares_trigger_evaluation_seconds): the pass runs on the event loop, so
+    its duration is the daemon's stall (TR-308). The work is in _eval_triggers."""
+    from . import metrics
+    t0 = time.monotonic()
+    fired = await _eval_triggers(store, catalog, dispatcher, affected_sources, eval_state, only)
+    metrics.trigger_evaluation(time.monotonic() - t0, fired)
+    return fired
+
+
+async def _eval_triggers(store, catalog: Catalog, dispatcher, affected_sources=None,
+                         eval_state: dict | None = None, only: str | None = None) -> list:
     """Evaluate every trigger whose view touches an affected source. Returns [(trigger, key)] fired.
     `only` restricts the pass to one trigger (the debounce catch-up).
 

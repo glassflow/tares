@@ -217,7 +217,7 @@ def next_step(st: dict) -> str:
                 f"`claude mcp add --transport http tares {mcp}`. Docs: {DOCS}/agents")
     ag = st["agents"]
     if ag["enabled"] > 0 and ag["key_configured"] is False:
-        return ("Next: set ANTHROPIC_API_KEY before `tares up`, or add a key under Settings, "
+        return ("Next: set ANTHROPIC_API_KEY before `tares up`, or add a model provider under Settings, "
                 "so the enabled agents can run.")
     ent = st["entities"][0] if st["entities"] else "<entity>"
     return f"Ready. Ask your agent: what happened to {ent} in the last 15 minutes?"
@@ -264,7 +264,7 @@ def render(st: dict) -> str:
     else:
         key = "set" if a["key_configured"] else "missing"
         L.append(f"{'Tares agents:':<19}{a['enabled']} enabled"
-                 + (f", model {a['model']}" if a.get("model") else "") + f", Anthropic key: {key}")
+                 + (f", model {a['model']}" if a.get("model") else "") + f", model provider: {key}")
     m = st["mcp"]
     if m["running"] is None:
         L.append(f"{'MCP endpoint:':<19}not checked")

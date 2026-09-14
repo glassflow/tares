@@ -13,6 +13,7 @@ import time
 import httpx
 
 from . import tracing as _tracing
+from .models import ModelUnavailable, Provider, add_usage, empty_usage, tool_call_in_text, tool_message
 
 
 DEFAULT_MODEL = os.getenv("TARES_AGENT_MODEL", "claude-sonnet-4-6")
@@ -473,10 +474,9 @@ def _sse(obj: dict) -> str:
     return f"data: {json.dumps(obj)}\n\n"
 
 
-async def run_agent(anthropic_headers: dict, messages: list,
+async def run_agent(provider: Provider, messages: list,
                     model: str | None = None, self_headers: dict | None = None,
-                    on_usage=None, tracer=None, mode: str = "ask", step: str | None = None,
-                    base_url: str | None = None):
+                    on_usage=None, tracer=None, mode: str = "ask", step: str | None = None):
     """Async generator of SSE lines: the agent loop, streaming assistant text and tool activity.
 
     `on_usage(model, usage_dict)` is called once per turn (after the loop, including on an error
@@ -487,76 +487,63 @@ async def run_agent(anthropic_headers: dict, messages: list,
     one tool span per tool call. None means no tracing.
 
     `mode` is "ask" or "build"; `step` names the build step (see BUILD_STEPS) and picks which
-    proposal cards the turn may emit. `base_url` is where the model calls go (a gateway, or
-    Anthropic when None); the caller resolves it per request, like the credential."""
+    proposal cards the turn may emit. `provider` is where the model calls go (see models.py);
+    the caller resolves it per request, credential and base URL included."""
     with _tracing.run_span(tracer, "ask", kind="CHAIN") as obs:
         obs.set_attribute("tares.instance", _tracing.instance_name())
-        async for line in _run_agent(anthropic_headers, messages, model, self_headers, on_usage, tracer,
-                                     obs, mode, step, base_url):
+        async for line in _run_agent(provider, messages, model, self_headers, on_usage, tracer,
+                                     obs, mode, step):
             yield line
 
 
-async def _run_agent(anthropic_headers: dict, messages: list, model, self_headers, on_usage, tracer,
-                     obs: _tracing.Observation, mode: str = "ask", step: str | None = None,
-                     base_url: str | None = None):
-    try:
-        import anthropic
-    except ImportError:
-        yield _sse({"type": "error", "detail": "the agent needs the 'anthropic' package "
-                                               "(pip install tares[agent])"})
-        return
-
-    client = anthropic.AsyncAnthropic(base_url=base_url or "https://api.anthropic.com",
-                                      default_headers=anthropic_headers)
+async def _run_agent(provider: Provider, messages: list, model, self_headers, on_usage, tracer,
+                     obs: _tracing.Observation, mode: str = "ask", step: str | None = None):
     convo = list(messages)
     last = convo[-1] if convo else None
     obs.set_input(last.get("content") if isinstance(last, dict) else last)
     headers = self_headers or {}
     used_model = model or DEFAULT_MODEL
-    usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0,
-             "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+    usage = empty_usage()
     try:
         for _ in range(MAX_ROUNDS):
-            with _tracing.generation(tracer, model or DEFAULT_MODEL, convo,
-                                     {"max_tokens": 2048}) as gen:
-                async with client.messages.stream(
-                    model=model or DEFAULT_MODEL, max_tokens=2048,
-                    system=system_prompt(mode), tools=tools_for(mode, step), messages=convo,
-                ) as stream:
-                    async for event in stream:
-                        if event.type == "content_block_delta" and event.delta.type == "text_delta":
-                            gen.record_first_token()
-                            yield _sse({"type": "text", "text": event.delta.text})
-                    final = await stream.get_final_message()
-
-                usage["calls"] += 1
-                for field in ("input_tokens", "output_tokens",
-                              "cache_creation_input_tokens", "cache_read_input_tokens"):
-                    usage[field] += int(getattr(final.usage, field, 0) or 0)
-                used_model = final.model or used_model
-                gen.set_output(list(final.content))
-                gen.set_usage(final.usage)
-                gen.set_response_model(final.model)
-                gen.set_finish_reason(getattr(final, "stop_reason", None))
-            convo.append({"role": "assistant", "content": final.content})
-            tool_uses = [b for b in final.content if b.type == "tool_use"]
-            if not tool_uses:
-                text = "\n".join(b.text for b in final.content if b.type == "text")
-                obs.set_output(text)
+            reply = None
+            async for item in provider.stream(model=used_model, system=system_prompt(mode),
+                                              tools=tools_for(mode, step), messages=convo,
+                                              max_tokens=2048, tracer=tracer):
+                if isinstance(item, str):
+                    yield _sse({"type": "text", "text": item})
+                else:
+                    reply = item
+            add_usage(usage, reply.usage)
+            used_model = reply.model or used_model
+            calls = list(reply.tool_calls)
+            if not calls:
+                # A small model that wrote its tool call as JSON text: run what it meant rather
+                # than leave the JSON standing as the answer (TR-306). The text already streamed
+                # to the chat; the answer continues once the tool has run.
+                meant = tool_call_in_text(reply.text, tools_for(mode, step))
+                if meant is not None:
+                    meant.id = f"text_call_{len(convo)}"
+                    calls = [meant]
+                    convo.append({"role": "assistant", "content": "", "tool_calls": calls})
+            if not calls or not calls[0].id.startswith("text_call_"):
+                convo.append(reply.as_message())
+            if not calls:
+                obs.set_output(reply.text)
                 break
-            results = []
-            for tu in tool_uses:
+            results: list[tuple[str, str]] = []
+            for tu in calls:
+                tu_input = tu.arguments
                 if tu.name in _PROPOSAL_KIND:
                     # no-op proposals are suppressed deterministically: re-proposing a source's
                     # exact current label set produces no card (re-runs must converge, not nag)
                     if tu.name == "propose_labels":
-                        cur = await _current_labels(str(tu.input.get("source", "")), headers)
-                        if cur is not None and _canon_labels(cur) == _canon_labels(tu.input.get("labels")):
-                            results.append({"type": "tool_result", "tool_use_id": tu.id,
-                                            "content": "this source ALREADY has exactly this label "
+                        cur = await _current_labels(str(tu_input.get("source", "")), headers)
+                        if cur is not None and _canon_labels(cur) == _canon_labels(tu_input.get("labels")):
+                            results.append((tu.id, "this source ALREADY has exactly this label "
                                                        "set; no card was shown. Tell the user its "
                                                        "labels already look right; propose only "
-                                                       "changes."})
+                                                       "changes."))
                             continue
                     # An agent card names the trigger that wakes it, and the form submits that
                     # name as is: a made-up one is a 400 the user cannot get past (the weather
@@ -564,10 +551,9 @@ async def _run_agent(anthropic_headers: dict, messages: list, model, self_header
                     # here, with the real list, so the model corrects itself or says so.
                     if tu.name == "propose_agent":
                         have = await _trigger_names(headers)
-                        want = str(tu.input.get("trigger", ""))
+                        want = str(tu_input.get("trigger", ""))
                         if have is not None and want not in have:
-                            results.append({"type": "tool_result", "tool_use_id": tu.id,
-                                            "content": (f"no trigger named {want!r} exists, so no card "
+                            results.append((tu.id, (f"no trigger named {want!r} exists, so no card "
                                                         f"was shown. Triggers that exist: "
                                                         f"{', '.join(have)}. Propose again with one of "
                                                         "them.") if have else
@@ -575,22 +561,21 @@ async def _run_agent(anthropic_headers: dict, messages: list, model, self_header
                                                         "has no triggers at all, so no card was shown. "
                                                         "Tell the user the agent needs a trigger to "
                                                         "wake it, made on the Views and triggers step, "
-                                                        "and propose nothing.")})
+                                                        "and propose nothing.")))
                             continue
                     # a proposal is a card for the user, not a server-side action
                     kind = _PROPOSAL_KIND[tu.name]
-                    yield _sse({"type": "proposal", "kind": kind, "id": tu.id, "payload": tu.input})
-                    results.append({"type": "tool_result", "tool_use_id": tu.id,
-                                    "content": "proposal recorded; the user will review it as a "
-                                               "card and apply or skip it"})
+                    yield _sse({"type": "proposal", "kind": kind, "id": tu.id, "payload": tu_input})
+                    results.append((tu.id, "proposal recorded; the user will review it as a "
+                                               "card and apply or skip it"))
                     continue
                 # A start AND a finish. The console draws each call as a step that is visibly
                 # running and then resolves — without the second event it could only ever say
                 # "thinking…", and a read that takes four seconds looked identical to a hung one.
-                yield _sse({"type": "tool", "id": tu.id, "name": tu.name, "input": tu.input})
+                yield _sse({"type": "tool", "id": tu.id, "name": tu.name, "input": tu_input})
                 t0 = time.perf_counter()
-                with _tracing.tool_span(tracer, tu.name, tu.input) as tobs:
-                    ok, out = await _execute_tool(tu.name, tu.input, headers)
+                with _tracing.tool_span(tracer, tu.name, tu_input) as tobs:
+                    ok, out = await _execute_tool(tu.name, tu_input, headers)
                     if ok:
                         tobs.set_output(out)
                     else:
@@ -600,9 +585,11 @@ async def _run_agent(anthropic_headers: dict, messages: list, model, self_header
                             "ok": ok,
                             # enough to see WHAT came back without shipping a 20k payload twice
                             "preview": out[:400] + ("…" if len(out) > 400 else "")})
-                results.append({"type": "tool_result", "tool_use_id": tu.id, "content": out})
-            convo.append({"role": "user", "content": results})
+                results.append((tu.id, out))
+            convo.append(tool_message(results))
         yield _sse({"type": "done"})
+    except ModelUnavailable as e:
+        yield _sse({"type": "error", "detail": str(e)})
     except Exception as e:  # noqa: BLE001 — surface auth/rate/other errors to the chat
         obs.error(e)
         yield _sse({"type": "error", "detail": f"{type(e).__name__}: {e}"})

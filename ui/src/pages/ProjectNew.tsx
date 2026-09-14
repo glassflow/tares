@@ -20,7 +20,7 @@ export const wizardPath = (key: string) => WIZARDS[key] ?? `/projects/new/${enco
 // this map is the fallback for templates that don't, and for older daemons.
 const TEMPLATE_FACTS: Record<string, { you: string[]; tares: string[] }> = {
   ai_sre_demo: {
-    you: ["start the demo stack with docker compose", "give the agent an Anthropic key", "cause an incident from the project page"],
+    you: ["start the demo stack with docker compose", "give the agent a model provider", "cause an incident from the project page"],
     tares: ["three sources keyed by service: Prometheus metrics, the api-server's logs, the alerts Prometheus fires", "one timeline per service to explore", "a trigger that wakes the agent when an alert fires", "an agent that writes the first incident note back onto the timeline"],
   },
   shared_code_context: {

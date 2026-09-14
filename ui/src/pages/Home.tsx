@@ -129,7 +129,7 @@ export default function Home() {
   );
 }
 
-// What has this instance spent on its Anthropic key? — the whole-instance counterpart of the
+// What has this instance spent on its model providers? The whole-instance counterpart of the
 // per-agent cost cards. Covers everything that burns the key inside the cell (Tares agent runs
 // and Ask); external agents run on their own keys and are deliberately absent. The total is a
 // floor: runs from before cost tracking, and models without a known price, carry no cost —
@@ -179,6 +179,13 @@ function ModelSpendPanel({ usage, error, reload }: {
             {" · "}{fmtTokens(m.total.input_tokens)} tokens in, {fmtTokens(m.total.output_tokens)} out
             {uncosted > 0 && <> · {uncosted} call{uncosted === 1 ? "" : "s"} on an unpriced model, not in the total</>}
           </p>
+          {m.by_provider && Object.keys(m.by_provider).length > 1 && (
+            <p className="help" style={{ margin: "6px 0 0" }}>
+              by provider: {Object.entries(m.by_provider).map(([id, b], i) => (
+                <span key={id}>{i > 0 && " · "}<span className="mono">{id}</span> {fmtCost(b.cost_usd)} over {b.calls.toLocaleString()} call{b.calls === 1 ? "" : "s"}</span>
+              ))}
+            </p>
+          )}
         </>
       ))}
     </div>

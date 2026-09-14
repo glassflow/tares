@@ -3,6 +3,37 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.31.0] - 2026-09-14
+
+### Added
+- `GET /metrics`: the daemon's own counters in the Prometheus text format, public like `/health`.
+  Events ingested and poll outcomes per source, source state, agent runs per outcome with their
+  duration, model calls, tokens and spend per provider, database size against its limit and
+  whether ingest is paused, trigger evaluation passes and their duration, and the event loop's
+  lag with a count of stalls. Counts only: no entity key or payload ever appears.
+
+## [1.30.0] - 2026-09-14
+
+### Added
+- Model providers. A cell holds a list of providers under Settings, Model providers: Anthropic,
+  OpenAI, or any OpenAI-compatible endpoint (LiteLLM, OpenRouter, Ollama, vLLM). Each agent picks
+  a provider and a model; Ask and the builder run on the cell default. An endpoint lists its own
+  models on save, with a refresh, and an agent can name a model by hand when it lists none.
+  `OPENAI_API_KEY`, `OPENAI_BASE_URL` seed an OpenAI entry; `TARES_MODEL_PROVIDER` names the
+  default. The Anthropic key and gateway settings and their endpoints are unchanged, and a
+  provider named by a template or an import that the cell lacks runs on the default instead of
+  failing.
+- The spend meter prices OpenAI models, takes a router's own cost figure when it reports one
+  (OpenRouter, LiteLLM), splits spend by provider, and records tokens without a dollar figure for
+  a model it cannot price. Traces name the provider on every model span.
+- A run that ends with no conclusion and no tool call says to check that the model supports tool
+  calling. A tool name a model mis-cases still reaches the tool; an unknown one answers with the
+  list of real tools.
+
+### Changed
+- Console, CLI and README say "model provider" where they said "Anthropic key". A failed run's
+  error reads `ModelError: ...` where it read `RuntimeError: ...`.
+
 ## [1.29.1] - 2026-09-10
 
 ### Fixed

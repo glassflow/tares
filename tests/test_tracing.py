@@ -133,6 +133,12 @@ def part1():
     tool = by["read"]
     ck("tool span kind + name", tool.attributes.get("openinference.span.kind") == "TOOL"
        and tool.attributes.get("gen_ai.tool.name") == "read", str(tool.attributes))
+    # the provider attribute follows the adapter's kind (TR-305)
+    with T.generation(tracer, "gpt-x", [{"role": "user", "content": "hi"}], provider="openai") as gen:
+        gen.set_usage({"input_tokens": 1, "output_tokens": 1})
+    tr.flush()
+    oai = next(s for s in exporters[0].get_finished_spans() if s.name == "chat gpt-x")
+    ck("an OpenAI-format call is traced as provider openai", oai.attributes.get("gen_ai.provider.name") == "openai", str(oai.attributes))
     ck("tool input serialised", json.loads(tool.attributes["input.value"]) == {"selector": {"service": "checkout"}}, str(tool.attributes))
 
     # a failed tool call is flagged on its span, but does not fail the trace

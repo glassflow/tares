@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
 import AgentForm from "../components/AgentForm";
-import type { AgentPreset } from "../types";
+import type { ModelProvider, AgentPreset } from "../types";
 
 // Create a Tares agent. Reachable from the Agents section (trigger via dropdown) or from a
 // trigger's page ("Add a Tares agent" → ?trigger=<name>, preselected).
@@ -16,6 +16,9 @@ export default function AgentNew() {
   const [presets, setPresets] = useState<AgentPreset[]>([]);
   const [models, setModels] = useState<string[]>([]);
   const [defaultModel, setDefaultModel] = useState("");
+  const [providers, setProviders] = useState<ModelProvider[]>([]);
+  const [defaultProvider, setDefaultProvider] = useState<string | null>(null);
+  const [defaultModels, setDefaultModels] = useState<Record<string, string>>({});
   const [slackWorkspace, setSlackWorkspace] = useState(false);
   const [rounds, setRounds] = useState<{ d: number; m: number; l: number }>();
   const [keyOk, setKeyOk] = useState(true);
@@ -27,6 +30,8 @@ export default function AgentNew() {
     api.builtinAgents().then((d) => {
       setPresets(d.presets); setKeyOk(d.key_configured);
       setModels(d.models); setDefaultModel(d.default_model);
+      setProviders(d.providers ?? []); setDefaultProvider(d.default_provider ?? null);
+      setDefaultModels(d.default_models ?? {});
       setSlackWorkspace(d.slack_workspace);
       setRounds({ d: d.default_max_rounds, m: d.default_max_rounds_with_mcp, l: d.max_rounds_limit });
     }).catch(() => {});
@@ -61,6 +66,9 @@ export default function AgentNew() {
             presets={presets}
             models={models}
             defaultModel={defaultModel}
+            providers={providers}
+            defaultProvider={defaultProvider}
+            defaultModels={defaultModels}
             slackWorkspace={slackWorkspace}
             defaultMaxRounds={rounds?.d} defaultMaxRoundsWithMcp={rounds?.m}
             maxRoundsLimit={rounds?.l}

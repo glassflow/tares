@@ -25,7 +25,7 @@ from urllib.parse import parse_qs
 import httpx
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel, model_validator
 
 from .config import (SLACK_URL_PREFIX, CatalogError, agent_url, export_db_to_yaml,
@@ -42,7 +42,10 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL,
                              MAX_ROUNDS_LIMIT as AGENT_MAX_ROUNDS_LIMIT,
                              MAX_ROUNDS_WITH_MCP as AGENT_MAX_ROUNDS_WITH_MCP,
                              PRESETS as AGENT_PRESETS, AgentRunner, effective_max_rounds,
-                             resolve_anthropic_headers, resolve_api_base, DEFAULT_API_BASE)
+                             resolve_anthropic_headers, resolve_api_base, resolve_provider,
+                             DEFAULT_API_BASE)
+from . import metrics as _metrics
+from . import providers as providers_mod
 from .runtime import Runtime
 from . import slack as slack_mod
 from . import slack_verify
@@ -117,7 +120,9 @@ def _public(method: str, path: str) -> bool:
     """Reachable without the auth token: CORS preflight, the health probe, ingest (own token), the
     Slack inbound endpoint (own signature), and the console SPA shell + static assets (any GET that
     isn't an API/data route)."""
-    if method == "OPTIONS" or path == "/health":
+    if method == "OPTIONS" or path in ("/health", "/metrics"):
+        # /metrics like /health: a scraper inside the cluster carries no token, and the body holds
+        # counts only, never an entity or a payload
         return True
     if _is_ingest(path):
         return True
@@ -333,7 +338,8 @@ class AgentIn(BaseModel):
     trigger: str
     prompt: str
     slack_webhook: str = ""      # legacy per-agent notification path (blank-to-keep on update)
-    model: str = ""              # "" = the instance default (TARES_AGENT_MODEL)
+    model: str = ""              # "" = the provider's default model
+    provider: str = ""           # a provider id from Settings; "" = the cell default (TR-302)
     slack_channel: str = ""      # workspace-bot channel; the primary notification path
     webhook_url: str = ""        # write-back: findings + run metadata POSTed here
     webhook_token: str = ""      # optional bearer for the write-back (secret; blank-to-keep)
@@ -410,6 +416,17 @@ class AnthropicKeyIn(BaseModel):
 class GatewayIn(BaseModel):
     url: str
     token: str = ""    # blank keeps the stored token; the URL alone can change
+
+
+class ProviderIn(BaseModel):
+    kind: str                # anthropic | openai | openai_compatible
+    name: str = ""           # display name; names an OpenAI-compatible entry (its id is the slug)
+    key: str = ""            # blank keeps the stored credential
+    base_url: str = ""       # optional for anthropic/openai, required for openai_compatible
+
+
+class ProviderDefaultIn(BaseModel):
+    id: str
 
 
 class SlackTokenIn(BaseModel):
@@ -506,6 +523,19 @@ def make_app() -> FastAPI:
     async def lifespan(_app):
         dispatcher.agents.attach_loop()
         runtime.start_all()
+        # the daemon's own counters (/metrics, TR-308): storage gauges read on scrape, the event
+        # loop watched by a one-second timer for the whole life of the process
+        _metrics.set_storage_probe(lambda: {**store.usage(), **{
+            k: v for k, v in storage_state(store, DB_PATH).items()
+            if k in ("max_bytes", "pct_used", "paused")}})
+        try:
+            from importlib.metadata import version as _pkg_version
+            _metrics.set_info(_pkg_version("tares"))
+        except Exception:
+            _metrics.set_info(None)
+        _metrics.prime(providers=[p["id"] for p in providers_mod.list_providers(store)["providers"]])
+        loop_stop = asyncio.Event()
+        loop_watch = asyncio.create_task(_metrics.watch_event_loop(loop_stop))
         print(f"taresd: {len(runtime.catalog.sources)} source(s); "
               f"console at / · agent API at /query · management API at /api")
         # optional OTLP gRPC receiver (:4317). Needs grpcio + opentelemetry-proto; off if absent.
@@ -521,6 +551,8 @@ def make_app() -> FastAPI:
             except Exception as e:   # never let the optional receiver block startup
                 print(f"taresd: OTLP gRPC failed to start: {e}")
         yield
+        loop_stop.set()
+        loop_watch.cancel()
         if grpc_server is not None:
             await grpc_server.stop(grace=2)
         runtime.shutdown()
@@ -529,6 +561,7 @@ def make_app() -> FastAPI:
     app = FastAPI(title="taresd", lifespan=lifespan)
     app.state.store = store   # for in-process tests; DuckDB is single-writer, so no second Store
     app.state.runtime = runtime
+    app.state.agents = dispatcher.agents   # the Tares agent runner, for in-process tests
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                        allow_headers=["*"])
 
@@ -599,6 +632,17 @@ def make_app() -> FastAPI:
         raise HTTPException(status_code=code, detail=str(e))
 
     # ── agent surface (unchanged contract; queries now logged) ───────────────
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics_endpoint():
+        """The daemon's own counters in the Prometheus text format (TR-308): events per source,
+        poll outcomes, source state, agent runs, model calls and spend by provider, storage against
+        its limit, trigger evaluation time, event loop lag. Public like /health; counts only."""
+        try:
+            body, ctype = _metrics.render()
+        except RuntimeError:
+            _err(KeyError("metrics need the prometheus-client package"), 404)
+        return Response(content=body, media_type=ctype)
+
     @app.get("/health")
     async def health():
         """Liveness that actually touches the store, so a wedged DuckDB can't read as healthy to a
@@ -1036,7 +1080,11 @@ def make_app() -> FastAPI:
             # the Ask assistant runs on the same resolved key as Tares agents (env ANTHROPIC_API_KEY
             # or the console-stored key) — so once a key is set anywhere, the Ask chat stops
             # prompting for a browser-pasted one.
-            "agent_key_configured": bool(resolve_anthropic_headers(store)[0]),
+            "agent_key_configured": resolve_provider(store)[0] is not None,
+            # Ask and the builder run on the cell default; the chat says which
+            "default_provider": next(({"id": p["id"], "name": p["name"], "kind": p["kind"]}
+                                      for p in providers_mod.list_providers(store)["providers"]
+                                      if p["default"]), None),
             "url_configured": url_configured,
             # gates the "subscribe a Slack channel" affordance on a trigger — offering it with no
             # bot token configured only leads to a 400.
@@ -1346,19 +1394,19 @@ def make_app() -> FastAPI:
         return {"sampled": sampled, "fields": fields, "labels": labels}
 
     # ── in-app agent (the Ask view) — server-side chat loop over the read API ──
-    def _record_ask_usage(model: str, usage: dict, key_source: str = "") -> None:
+    def _record_ask_usage(model: str, usage: dict, key_source: str = "", kind: str = "anthropic",
+                          provider_id: str | None = None) -> None:
         """One ledger row per Ask turn (console chat or Slack /ask), so the cell's spend meter
         covers everything that talks to Anthropic, not just agent runs. `key_source` is the
         origin of the key that PAID for this turn, captured by the caller when it resolved the
         key — never re-resolved here, the stored key could have changed mid-turn."""
-        from .pricing import cost_usd
+        from .pricing import price_usage
         store.record_model_usage(
             "ask", "", "", model, usage["calls"],
             usage["input_tokens"], usage["output_tokens"],
             usage["cache_creation_input_tokens"], usage["cache_read_input_tokens"],
-            cost_usd(model, usage["input_tokens"], usage["output_tokens"],
-                     usage["cache_creation_input_tokens"], usage["cache_read_input_tokens"]),
-            key_source=key_source or None)
+            price_usage(kind, model, usage),
+            key_source=key_source or None, provider=provider_id)
 
     @app.post("/api/agent/chat")
     async def agent_chat(request: Request):
@@ -1367,9 +1415,10 @@ def make_app() -> FastAPI:
         # `X-Anthropic-Key` header override, which the console filled from localStorage — so a key
         # added on the Ask page made Ask work while Slack and trigger-woken agents still reported
         # none configured, having no browser to read it from (NF-125).
-        headers, key_origin = resolve_anthropic_headers(store)
-        if not headers:
-            _err(ValueError("add your Anthropic API key to use the assistant"), 400)
+        provider, key_origin = resolve_provider(store)
+        if provider is None:
+            _err(ValueError("add a model provider under Settings to use the assistant"), 400)
+        default_pid = providers_mod.default_id(store)
         body = await request.json()
         # the daemon's own token, so the agent's tool self-calls clear the auth middleware
         self_headers = {"Authorization": f"Bearer {AUTH_TOKEN}"} if AUTH_TOKEN else {}
@@ -1380,11 +1429,14 @@ def make_app() -> FastAPI:
         if mode == "build" and step not in BUILD_STEPS:
             _err(ValueError(f"build step must be one of {', '.join(BUILD_STEPS)}"), 400)
         return StreamingResponse(
-            run_agent(headers, body.get("messages") or [],
-                      model=body.get("model"), self_headers=self_headers,
-                      on_usage=lambda m, u: _record_ask_usage(m, u, key_source=key_origin),
-                      tracer=tracing.tracer_for("ask"), mode=mode, step=step,
-                      base_url=resolve_api_base(store)[0]),
+            run_agent(provider, body.get("messages") or [],
+                      # the default provider's default model, not a Claude id on a router
+                      model=body.get("model") or providers_mod.default_model_for(store, default_pid),
+                      self_headers=self_headers,
+                      on_usage=lambda m, u: _record_ask_usage(m, u, key_source=key_origin,
+                                                              kind=provider.kind,
+                                                              provider_id=default_pid),
+                      tracer=tracing.tracer_for("ask"), mode=mode, step=step),
             media_type="text/event-stream")
 
     # ── MCP connections — external tool servers a Tares agent can opt into ─────
@@ -1756,7 +1808,7 @@ def make_app() -> FastAPI:
         """Tares agent definitions plus the state the UI needs to explain why one isn't running:
         no key configured is the common case on a fresh install and looks identical to "disabled"
         without this."""
-        headers, origin = resolve_anthropic_headers(store)
+        provider, origin = resolve_provider(store)
         stats = store.agent_stats()
         zero = {"runs": 0, "ok": 0, "finished": 0, "avg_duration_ms": None,
                 "cost_usd": None, "input_tokens": 0, "output_tokens": 0, "uncosted_runs": 0}
@@ -1767,6 +1819,10 @@ def make_app() -> FastAPI:
                          "stats": stats.get(a["name"]) or zero,
                          "slack_configured": bool(a.get("slack_webhook")),
                          "model": a.get("model") or "",
+                         "provider": a.get("provider") or "",
+                         # what the next run resolves to, so the page can say "ran on the
+                         # default" when the named provider is gone
+                         "effective_provider": providers_mod.resolve_for_agent(store, a)[2],
                          "slack_channel": a.get("slack_channel") or "",
                          "webhook_url": a.get("webhook_url") or "",
                          "webhook_token_configured": bool(a.get("webhook_token")),
@@ -1778,8 +1834,12 @@ def make_app() -> FastAPI:
                          "enabled": _agent_enabled(a["name"]), "updated_at": a.get("updated_at"),
                          "owned_by": a.get("owned_by"), "customized": bool(a.get("customized")),
                          "last_run": runs[0] if runs else None})
-        return {"agents": rows, "key_configured": bool(headers), "key_source": origin,
+        plist = providers_mod.list_providers(store)
+        return {"agents": rows, "key_configured": provider is not None, "key_source": origin,
                 "models": AGENT_MODELS, "default_model": AGENT_DEFAULT_MODEL,
+                "providers": plist["providers"], "default_provider": plist["default"],
+                "default_models": {p["id"]: providers_mod.default_model_for(store, p["id"])
+                                   for p in plist["providers"]},
                 "default_max_rounds": AGENT_MAX_ROUNDS,
                 "default_max_rounds_with_mcp": AGENT_MAX_ROUNDS_WITH_MCP,
                 "max_rounds_limit": AGENT_MAX_ROUNDS_LIMIT,
@@ -1797,7 +1857,8 @@ def make_app() -> FastAPI:
                                    body.model, body.slack_channel,
                                    body.webhook_url, body.webhook_token, body.mcp_servers,
                                    body.max_rounds, body.budget_usd,
-                                   webhook_key_label=body.webhook_key_label)
+                                   webhook_key_label=body.webhook_key_label,
+                                   provider=body.provider.strip())
         runtime.reload_catalog()
         return {"ok": True, "enabled": False,
                 "note": "agents start disabled; enable it to run on the next firing"}
@@ -1822,7 +1883,8 @@ def make_app() -> FastAPI:
         store.upsert_catalog_agent(name, body.trigger, body.prompt, hook,
                                    body.model, body.slack_channel,
                                    body.webhook_url, wtoken, body.mcp_servers, body.max_rounds,
-                                   body.budget_usd, webhook_key_label=body.webhook_key_label)
+                                   body.budget_usd, webhook_key_label=body.webhook_key_label,
+                                   provider=body.provider.strip())
         store.mark_customized("agent", name)
         # if the trigger changed while enabled, re-point the subscription so the agent fires on the
         # new trigger (the subscription, not the definition, is what the dispatcher reads).
@@ -1847,10 +1909,9 @@ def make_app() -> FastAPI:
         agent = store.get_catalog_agent(name)
         if agent is None:
             _err(KeyError(f"unknown agent {name!r}"), 404)
-        headers, _ = resolve_anthropic_headers(store)
-        if not headers:
-            _err(ValueError("no Anthropic key configured; set ANTHROPIC_API_KEY or add one "
-                            "under Settings before enabling an agent"))
+        if providers_mod.resolve_for_agent(store, agent)[0] is None:
+            _err(ValueError("no model provider configured; add one under Settings, or set "
+                            "ANTHROPIC_API_KEY, before enabling an agent"))
         # enable = subscribe to the trigger (the same wiring an external agent has). Idempotent.
         if not _agent_enabled(name):
             store.add_subscription("sub_" + uuid.uuid4().hex[:8], agent["trigger"],
@@ -1962,6 +2023,62 @@ def make_app() -> FastAPI:
         store.set_setting("gateway_url", None)
         store.set_setting("gateway_token", None)
         return {"ok": True, **_gateway_status()}
+
+    # ── model providers (TR-301): the list a cell holds, one of them the default ──────────
+    # The Anthropic entry is the key + gateway settings above under another door; OpenAI and
+    # OpenAI-compatible entries (LiteLLM, OpenRouter, Ollama, vLLM) live in one JSON setting.
+    # Credentials are write-only: the listing says configured-or-not and where from.
+    @app.get("/api/settings/providers")
+    async def get_providers():
+        return providers_mod.list_providers(store)
+
+    @app.put("/api/settings/providers/default")
+    async def set_default_provider(body: ProviderDefaultIn):
+        try:
+            providers_mod.set_default(store, body.id.strip())
+        except KeyError as e:
+            _err(e, 404)
+        except ValueError as e:
+            _err(e)
+        return {"ok": True, **providers_mod.list_providers(store)}
+
+    @app.put("/api/settings/providers/{provider_id}")
+    async def save_provider(provider_id: str, body: ProviderIn):
+        """`new` as the id creates an entry (its id is the kind, or the slug of the name for an
+        OpenAI-compatible endpoint)."""
+        try:
+            pid = providers_mod.save_provider(store, "" if provider_id == "new" else provider_id,
+                                             body.kind.strip(), body.name, body.key, body.base_url)
+        except ValueError as e:
+            _err(e)
+        # The endpoint lists its own models: ask it now, so the picker is filled the moment the
+        # entry is saved. A failure is recorded on the entry, not raised: the entry is saved
+        # either way, the built-in list stands in, and the console shows why.
+        try:
+            discovery = await providers_mod.refresh_models(store, pid)
+        except ValueError as e:   # no credential to ask with yet
+            discovery = {"models": [], "error": str(e)}
+        return {"ok": True, "id": pid, "discovery": discovery, **providers_mod.list_providers(store)}
+
+    @app.post("/api/settings/providers/{provider_id}/models")
+    async def refresh_provider_models(provider_id: str):
+        """Re-read what the endpoint serves (the admin added a model, the key's allowance
+        changed, a newer Claude model). The built-in list stands in while it cannot be read."""
+        try:
+            result = await providers_mod.refresh_models(store, provider_id)
+        except KeyError as e:
+            _err(e, 404)
+        except ValueError as e:
+            _err(e)
+        return {"ok": True, **result, **providers_mod.list_providers(store)}
+
+    @app.delete("/api/settings/providers/{provider_id}")
+    async def delete_provider(provider_id: str):
+        known = {p["id"] for p in providers_mod.list_providers(store)["providers"]}
+        if provider_id not in known:
+            _err(KeyError(f"unknown provider {provider_id!r}"), 404)
+        providers_mod.delete_provider(store, provider_id)
+        return {"ok": True, **providers_mod.list_providers(store)}
 
     # ── agent tracing: where runs are exported, and whether ──────────────────
     # A console-stored value wins over the environment, like the Anthropic key. Secrets (the
@@ -2109,15 +2226,17 @@ def make_app() -> FastAPI:
         from .agent import run_agent
         text, error = "", None
         try:
-            headers, key_origin = resolve_anthropic_headers(store)
+            provider, key_origin = resolve_provider(store)
+            default_pid = providers_mod.default_id(store)
             self_headers = {"Authorization": f"Bearer {AUTH_TOKEN}"} if AUTH_TOKEN else {}
             async def _run():
                 nonlocal text, error
-                async for chunk in run_agent(headers, [{"role": "user", "content": question}],
+                async for chunk in run_agent(provider, [{"role": "user", "content": question}],
+                                             model=providers_mod.default_model_for(store, default_pid),
                                              self_headers=self_headers,
-                                             base_url=resolve_api_base(store)[0],
                                              on_usage=lambda m, u: _record_ask_usage(
-                                                 m, u, key_source=key_origin),
+                                                 m, u, key_source=key_origin, kind=provider.kind,
+                                                 provider_id=default_pid),
                                              tracer=tracing.tracer_for("ask")):
                     for line in chunk.splitlines():
                         if not line.startswith("data: "):
@@ -2189,10 +2308,10 @@ def make_app() -> FastAPI:
             return slack_mod.build_error(
                 ":warning: that request carried no response_url; Tares has nowhere to reply",
                 thread_ts)
-        if not resolve_anthropic_headers(store)[0]:
+        if resolve_provider(store)[0] is None:
             return slack_mod.build_error(
-                ":warning: no Anthropic API key is configured on this Tares instance; set "
-                "`ANTHROPIC_API_KEY` or add one under Settings in the console", thread_ts)
+                ":warning: no model provider is configured on this Tares instance; add one "
+                "under Settings in the console, or set `ANTHROPIC_API_KEY`", thread_ts)
         if not runtime.catalog.sources:
             return slack_mod.build_error(
                 ":warning: this Tares instance has no sources configured yet, so there is "
