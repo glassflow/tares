@@ -811,6 +811,13 @@ class Store:
                 [trigger, key, ts],
             )
 
+    def clear_fired(self, trigger: str, key: str) -> None:
+        """Forget one key's last firing, so the next evaluation is not in cooldown for it. The
+        firing that follows writes a fresh `set_fired`, which re-arms the cooldown as usual."""
+        with self._lock:
+            self.con.execute(
+                "DELETE FROM trigger_state WHERE trigger = ? AND key_value = ?", [trigger, key])
+
     # ── catalog (DB-backed; YAML is import/export) ────────────────────────────
     def catalog_empty(self) -> bool:
         with self._lock:

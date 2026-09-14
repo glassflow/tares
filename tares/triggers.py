@@ -38,6 +38,58 @@ def _aware(dt):
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+def _group_by(condition) -> list:
+    """The condition's grouping labels as a list. `["key_value"]` is the legacy single-key form."""
+    g = condition.group_by or ["key_value"]
+    return [g] if isinstance(g, str) else list(g)
+
+
+def _fire_key(group_by: list, values: list) -> str | None:
+    """The cooldown/dispatch key for one group: the key itself under legacy `key_value` grouping,
+    else a stable `label=value, ...` rendering. `values` is one value per `group_by` name, in
+    order. None when a component is missing — a row without every grouping label is not an entity,
+    and store.aggregate drops it. Shared with the ingest bypass so the two derive the same key."""
+    if any(v is None for v in values):
+        return None
+    if group_by == ["key_value"]:
+        return str(values[0])
+    return ", ".join(f"{k}={v}" for k, v in zip(group_by, values))
+
+
+def _envelope_fire_key(group_by: list, env) -> str | None:
+    """The key `env` would fire under. Reads the same two places store.aggregate groups by: the
+    stamped `key_value` column, or a named label."""
+    return _fire_key(group_by, [env.key_value if name == "key_value" else env.labels.get(name)
+                                for name in group_by])
+
+
+def clear_cooldowns(store, catalog: Catalog, source: str, envelopes: list) -> list:
+    """Drop the cooldown state for the keys `envelopes` would fire under, on every trigger whose
+    view reads `source`. Returns the [(trigger, key)] cleared.
+
+    The ingest path calls this for a delivery marked X-Tares-Bypass-Cooldown, so the evaluation
+    that follows it fires for a key that is still cooling down (Rius asking for one alert's
+    analysis on demand). It does not switch the cooldown off: that firing writes its usual
+    `set_fired`, so the next unmarked event for the key waits the full interval again.
+
+    Two deliberate imprecisions, both erring towards clearing: a view `filters` clause that would
+    exclude the event is not applied, and a label whose value is not a string is rendered by
+    Python rather than by the store's JSON extraction."""
+    cleared = []
+    for trig in catalog.triggers:
+        if getattr(trig, "paused", False):
+            continue
+        view = catalog.views.get(trig.view)
+        if view is None or source not in view.sources:
+            continue
+        group_by = _group_by(trig.condition)
+        for key in sorted({k for e in envelopes
+                           if (k := _envelope_fire_key(group_by, e)) is not None}):
+            store.clear_fired(trig.name, key)
+            cleared.append((trig.name, key))
+    return cleared
+
+
 _catchups: dict = {}   # trigger name -> pending asyncio task for a debounced re-evaluation
 
 
@@ -109,7 +161,7 @@ async def eval_triggers(store, catalog: Catalog, dispatcher, affected_sources=No
                 continue
             eval_state[trig.name] = now
 
-        group_by = c.group_by or ["key_value"]
+        group_by = _group_by(c)
         legacy = group_by == ["key_value"]
         since = now_utc() - parse_window(c.window)
         per_group = store.aggregate(view.sources, c.field, c.aggregate, since,
@@ -126,11 +178,10 @@ async def eval_triggers(store, catalog: Catalog, dispatcher, affected_sources=No
             # `grp` is a tuple (one element per group_by label). The group identifies the entity
             # that fired: legacy key_value grouping selects context by key; label grouping selects
             # by a {label: value} `where`. The cooldown / dispatch key is a stable string.
-            if legacy:
-                fire_key, where = grp[0], None
-            else:
-                where = dict(zip(group_by, grp))
-                fire_key = ", ".join(f"{k}={v}" for k, v in where.items())
+            where = None if legacy else dict(zip(group_by, grp))
+            fire_key = _fire_key(group_by, list(grp))
+            if fire_key is None:
+                continue
 
             last = store.last_fired(trig.name, fire_key)
             if last and (now_utc() - _aware(last)).total_seconds() < trig.cooldown_seconds:

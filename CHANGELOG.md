@@ -3,6 +3,17 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- On-demand firings on the ingest path. A delivery to `POST /ingest/{token}` carrying
+  `X-Tares-Bypass-Cooldown: true` (or `1`) wakes every trigger over that source for the keys the
+  delivery carries, even for a key inside its cooldown, so a person can ask for one analysis now
+  instead of waiting the interval out. It is not a switch that turns the cooldown off: the firing
+  records its time as usual, so the next unmarked event for that key waits the full cooldown
+  again. The header carries no authority of its own, ingest still needs the `ingest` scope, and it
+  works for any push source with no change to a project or its template (RIUS-687).
+
 ## [1.29.1] - 2026-09-10
 
 ### Fixed
