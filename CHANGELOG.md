@@ -3,7 +3,7 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.33.0] - 2026-09-15
 
 ### Fixed
 - A provider the deployment hands the cell (`TARES_PLATFORM_PROVIDER_URL`) and an OpenAI key
