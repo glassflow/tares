@@ -167,6 +167,39 @@ async def main():
             o = by_id(r.json(), "openai")
             ck("removing the stored key falls back to the env key", o["configured"] and o["source"] == "env:OPENAI_API_KEY", str(o))
 
+            print("== the platform's entry (a hosted trial cell, TR-310) ==")
+            os.environ["TARES_PLATFORM_PROVIDER_URL"] = f"http://127.0.0.1:1/v1/"
+            os.environ["TARES_PLATFORM_PROVIDER_KEY"] = "sk-virtual"
+            os.environ["TARES_PLATFORM_PROVIDER_NAME"] = "Tares Cloud"
+            store.set_setting(pv.DEFAULT_SETTING, None)
+            d = (await cx.get("/api/settings/providers")).json()
+            pl = by_id(d, "platform")
+            ck("seeded from the env as an OpenAI-compatible entry, named by the platform",
+               pl and pl["kind"] == "openai_compatible" and pl["name"] == "Tares Cloud" and pl["configured"]
+               and pl["source"] == "env:TARES_PLATFORM_PROVIDER_URL" and not pl["stored"] and pl["base_url"] == "http://127.0.0.1:1/v1", str(pl))
+            ck("it is the default ahead of Anthropic when nothing else was chosen", d["default"] == "platform", str(d["default"]))
+            p, origin = pv.resolve_provider(store)
+            ck("resolves with the virtual key as a bearer", isinstance(p, OpenAIProvider) and p.headers == {"Authorization": "Bearer sk-virtual"} and p.label == "platform", str(p.__dict__))
+            r = await cx.put("/api/settings/providers/default", json={"id": "anthropic"})
+            ck("a console choice still wins over it", r.json()["default"] == "anthropic")
+            store.set_setting(pv.DEFAULT_SETTING, None)
+            os.environ["TARES_MODEL_PROVIDER"] = "anthropic"
+            ck("...and so does TARES_MODEL_PROVIDER", (await cx.get("/api/settings/providers")).json()["default"] == "anthropic")
+            os.environ.pop("TARES_MODEL_PROVIDER")
+            r = await cx.put("/api/settings/providers/platform", json={"kind": "openai_compatible", "key": "x"})
+            ck("cannot be edited from the console", r.status_code == 400 and "deployment" in r.text, r.text[:200])
+            r = await cx.put("/api/settings/providers/new", json={"kind": "openai_compatible", "name": "Platform", "key": "x", "base_url": "http://127.0.0.1:1/v1"})
+            ck("its id cannot be taken by a new entry", r.status_code == 400, r.text[:200])
+            r = await cx.delete("/api/settings/providers/platform")
+            ck("cannot be removed from the console", r.status_code == 400, r.text[:200])
+            r = await cx.post("/api/settings/providers/platform/models")
+            pl = by_id(r.json(), "platform")
+            ck("a refresh stores its model list without a credential in the store",
+               r.status_code == 200 and pl["models_error"] != "" and not any(e.get("key") for e in pv._stored(store) if e["id"] == "platform"), str(pl)[:200])
+            for v in ("TARES_PLATFORM_PROVIDER_URL", "TARES_PLATFORM_PROVIDER_KEY", "TARES_PLATFORM_PROVIDER_NAME"):
+                os.environ.pop(v)
+            ck("gone from the listing when the env is gone", by_id((await cx.get("/api/settings/providers")).json(), "platform") is None)
+
             print("== the builtin agents listing ==")
             d = (await cx.get("/api/agents/builtin")).json()
             ck("key_configured reflects the default provider", d["key_configured"] is True and d["key_source"] == "env:ANTHROPIC_API_KEY", str((d["key_configured"], d["key_source"])))

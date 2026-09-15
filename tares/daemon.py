@@ -2077,7 +2077,10 @@ def make_app() -> FastAPI:
         known = {p["id"] for p in providers_mod.list_providers(store)["providers"]}
         if provider_id not in known:
             _err(KeyError(f"unknown provider {provider_id!r}"), 404)
-        providers_mod.delete_provider(store, provider_id)
+        try:
+            providers_mod.delete_provider(store, provider_id)
+        except ValueError as e:
+            _err(e)
         return {"ok": True, **providers_mod.list_providers(store)}
 
     # ── agent tracing: where runs are exported, and whether ──────────────────
