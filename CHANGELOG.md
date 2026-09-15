@@ -3,7 +3,7 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.32.0] - 2026-09-15
 
 ### Added
 - A deployment can hand a cell a model provider: `TARES_PLATFORM_PROVIDER_URL`, `_KEY` and `_NAME`
