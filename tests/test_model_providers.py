@@ -295,6 +295,18 @@ async def main():
                r.status_code == 200 and o["models"] == ["llama-x", "mixtral"] and o["source"] == "env:OPENAI_API_KEY" and not o["stored"], str(o)[:200])
             ck("...and discovery used the env key", MODELS_SEEN[-1] == "Bearer sk-env", str(MODELS_SEEN[-1]))
             os.environ.pop("OPENAI_BASE_URL")
+            # startup discovery: an entry the environment seeded gets its list without a click
+            os.environ["TARES_PLATFORM_PROVIDER_URL"] = f"http://127.0.0.1:{chat.server_port}/v1"
+            os.environ["TARES_PLATFORM_PROVIDER_KEY"] = "sk-virtual"
+            store.set_setting(pv.SETTING, _json.dumps([e for e in pv._stored(store) if e["id"] != "platform"]) or None)
+            await pv.discover_env_entries(store)
+            pl = by_id((await cx.get("/api/settings/providers")).json(), "platform")
+            ck("startup discovery filled the platform entry's list", pl["models"] == ["llama-x", "mixtral"] and pl["models_error"] == "", str(pl)[:200])
+            ck("...through the platform key", MODELS_SEEN[-1] == "Bearer sk-virtual", str(MODELS_SEEN[-1]))
+            n = len(MODELS_SEEN)
+            await pv.discover_env_entries(store)
+            ck("...and does not re-read an entry already read", len(MODELS_SEEN) == n)
+            os.environ.pop("TARES_PLATFORM_PROVIDER_URL"); os.environ.pop("TARES_PLATFORM_PROVIDER_KEY")
             ck("an OpenRouter URL adds the app headers",
                pv._headers({"key": "k", "base_url": "https://openrouter.ai/api/v1"}).get("X-Title") == "Tares"
                and "X-Title" not in pv._headers({"key": "k", "base_url": "http://x/v1"}))
