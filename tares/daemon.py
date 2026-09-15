@@ -534,6 +534,8 @@ def make_app() -> FastAPI:
         except Exception:
             _metrics.set_info(None)
         _metrics.prime(providers=[p["id"] for p in providers_mod.list_providers(store)["providers"]])
+        # providers the environment handed the cell list their models now, not on a click
+        asyncio.create_task(providers_mod.discover_env_entries(store))
         loop_stop = asyncio.Event()
         loop_watch = asyncio.create_task(_metrics.watch_event_loop(loop_stop))
         print(f"taresd: {len(runtime.catalog.sources)} source(s); "

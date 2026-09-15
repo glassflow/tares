@@ -3,6 +3,13 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- A provider the deployment hands the cell (`TARES_PLATFORM_PROVIDER_URL`) and an OpenAI key
+  from the environment now list their models at daemon start. Before, the picker stayed empty
+  until someone pressed refresh under Settings, since an environment entry has no save moment.
+
 ## [1.32.0] - 2026-09-15
 
 ### Added

@@ -437,6 +437,24 @@ def set_default(store, provider_id: str) -> None:
     store.set_setting(DEFAULT_SETTING, provider_id)
 
 
+async def discover_env_entries(store) -> None:
+    """At daemon start: read the model list of every provider the environment seeded that has
+    not been read yet (the platform's entry, an OpenAI key from the env). A console-saved entry
+    is read when it is saved; an environment one has no such moment, and without this the picker
+    stays empty until someone presses refresh. Failures are recorded on the entry, never raised."""
+    for e in _entries(store):
+        if e.get("stored") or e["kind"] == "anthropic" or e.get("models_at"):
+            continue
+        if not _configured(e):
+            continue
+        try:
+            result = await refresh_models(store, e["id"])
+            print(f"taresd: provider {e['id']!r} lists {len(result['models'])} model(s)"
+                  + (f"; {result['error']}" if result.get("error") else ""))
+        except Exception as exc:  # noqa: BLE001 — startup must never fail over a model list
+            print(f"taresd: provider {e['id']!r} model discovery failed: {exc}")
+
+
 # ── per agent (TR-302) ───────────────────────────────────────────────────────
 def entry(store, provider_id: str) -> dict | None:
     return next((e for e in _entries(store) if e["id"] == provider_id), None)
