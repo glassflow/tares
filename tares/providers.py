@@ -114,6 +114,22 @@ def _openai_env() -> dict | None:
             "source": "env:OPENAI_API_KEY"}
 
 
+PLATFORM_ID = "platform"
+
+
+def _platform_env() -> dict | None:
+    """The provider the platform hands a hosted cell: an OpenAI-compatible endpoint (Tares Cloud's
+    LiteLLM) reached with a per-cell key that carries the trial budget. Seeded from the
+    environment, like the OpenAI entry; named by the platform so the console says whose it is."""
+    url = os.getenv("TARES_PLATFORM_PROVIDER_URL", "").strip().rstrip("/")
+    if not url:
+        return None
+    return {"id": PLATFORM_ID, "kind": "openai_compatible",
+            "name": os.getenv("TARES_PLATFORM_PROVIDER_NAME", "").strip() or "Platform",
+            "key": os.getenv("TARES_PLATFORM_PROVIDER_KEY", "").strip(), "base_url": url,
+            "source": "env:TARES_PLATFORM_PROVIDER_URL"}
+
+
 def _entries(store) -> list[dict]:
     """Every entry with its credential, for building providers. Not for returning."""
     out = []
@@ -126,6 +142,7 @@ def _entries(store) -> list[dict]:
                 "gateway_token_stored": bool(store.get_setting("gateway_token"))})
     stored = _stored(store)
     env = _openai_env()
+    platform = _platform_env()
     for e in stored:
         if e["id"] == "anthropic":
             # the Anthropic credential lives in its own settings; this row only holds the
@@ -137,9 +154,18 @@ def _entries(store) -> list[dict]:
             out.append({**e, "key": env["key"], "base_url": e.get("base_url") or env["base_url"],
                         "source": env["source"], "stored": False})
             continue
+        if e["id"] == PLATFORM_ID:
+            # the platform entry is the environment's; a stored row holds only its model list,
+            # and means nothing once the deployment stops handing the cell a provider
+            if platform:
+                out.append({**platform, **{k: e.get(k) for k in ("models", "models_error", "models_at") if k in e},
+                            "stored": False})
+            continue
         out.append({**e, "source": "console" if e.get("key") else "", "stored": True})
     if not any(e["id"] == "openai" for e in stored) and env:
         out.append({**env, "stored": False})
+    if platform and not any(e["id"] == PLATFORM_ID for e in stored):
+        out.append({**platform, "stored": False})
     return out
 
 
@@ -155,8 +181,10 @@ def default_id(store, entries: list[dict] | None = None) -> str | None:
     ok = {e["id"] for e in entries if _configured(e)}
     if not ok:
         return None
+    # a console choice, then the environment's, then the platform's entry when the platform gave
+    # the cell one (a hosted trial: the cell was born to run on it), then Anthropic
     for cand in ((store.get_setting(DEFAULT_SETTING) or "").strip(),
-                 os.getenv("TARES_MODEL_PROVIDER", "").strip(), "anthropic"):
+                 os.getenv("TARES_MODEL_PROVIDER", "").strip(), PLATFORM_ID, "anthropic"):
         if cand in ok:
             return cand
     return next(e["id"] for e in entries if e["id"] in ok)
@@ -275,6 +303,8 @@ async def refresh_models(store, provider_id: str) -> dict:
             # the env-seeded OpenAI entry has no stored row yet; store one without a key so the
             # list has somewhere to live (the env key stays in use: a row with no key defers)
             current = {"id": "openai", "kind": "openai", "name": "OpenAI", "key": "", "base_url": ""}
+        elif provider_id == PLATFORM_ID and _platform_env():
+            current = {"id": PLATFORM_ID, "kind": "openai_compatible", "key": "", "base_url": ""}
         else:
             raise KeyError(f"unknown provider {provider_id!r}")
         entries.append(current)
@@ -289,6 +319,10 @@ async def refresh_models(store, provider_id: str) -> dict:
         env = _openai_env()
         if env:
             probe = {**probe, "key": env["key"], "base_url": current.get("base_url") or env["base_url"]}
+    if current["id"] == PLATFORM_ID:
+        platform = _platform_env()
+        if platform:
+            probe = {**probe, "kind": "openai_compatible", "key": platform["key"], "base_url": platform["base_url"]}
     try:
         models = await discover_models(probe)
         current["models"], current["models_error"] = models, ""
@@ -339,6 +373,8 @@ def save_provider(store, provider_id: str, kind: str, name: str = "", key: str =
 
 
 def _save_entry(store, provider_id: str, kind: str, name: str, key: str, base_url: str) -> str:
+    if provider_id == PLATFORM_ID or (not provider_id and slug(name) == PLATFORM_ID):
+        raise ValueError("the platform's entry is set by the deployment; add your own provider instead")
     if provider_id == "anthropic" and kind != "anthropic":
         raise ValueError("the Anthropic entry keeps its kind; add a new entry instead")
     if provider_id == "openai" and kind != "openai":
@@ -380,6 +416,8 @@ def _save_entry(store, provider_id: str, kind: str, name: str, key: str, base_ur
 
 
 def delete_provider(store, provider_id: str) -> None:
+    if provider_id == PLATFORM_ID and _platform_env():
+        raise ValueError("the platform's entry is set by the deployment and cannot be removed here")
     if provider_id == "anthropic":
         store.set_setting("anthropic_key", None)
         store.set_setting("gateway_url", None)

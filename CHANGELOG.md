@@ -3,6 +3,15 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- A deployment can hand a cell a model provider: `TARES_PLATFORM_PROVIDER_URL`, `_KEY` and `_NAME`
+  seed an OpenAI-compatible entry that is the default until the user picks another or saves a key
+  of their own. It lists the models its key may use, prices runs from the endpoint's own cost
+  figure, and cannot be edited or removed from the console. Tares Cloud uses it to run a trial cell
+  through its LiteLLM with a per-cell budget that covers Claude and GPT models alike.
+
 ## [1.31.0] - 2026-09-14
 
 ### Added
