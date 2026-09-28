@@ -3,6 +3,17 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- A Tares agent can end a run on purpose with the `conclude` tool: `no_op` when there is nothing to
+  hand on (the run is a success with no finding, no Slack post and no write-back), or `finding`
+  with a `verdict` and the entity the finding is about. The verdict is a label on the finding, so a
+  view can select one agent's findings with one verdict, and another agent's trigger can wake on
+  them. The tool is offered only to an agent whose prompt names it; every other agent behaves as
+  before. The runs table shows a no-op run as "no finding" and a finding's verdict next to its
+  status.
+
 ## [1.34.0] - 2026-09-28
 
 ### Added
