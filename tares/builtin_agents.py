@@ -66,8 +66,9 @@ DAILY_CAP_MAX = 10000
 def daily_cap(store) -> tuple[int, str]:
     """(runs per agent per day, where it came from: console | env | default). Read at each run,
     so a change in the console applies to the next run. A bad stored or env value is skipped."""
-    for raw, source in (((store.get_setting(DAILY_CAP_SETTING) if store is not None else None)
-                         or "", "console"), (os.getenv(DAILY_CAP_ENV, ""), "env")):
+    get = getattr(store, "get_setting", None)
+    for raw, source in (((get(DAILY_CAP_SETTING) if get else None) or "", "console"),
+                        (os.getenv(DAILY_CAP_ENV, ""), "env")):
         try:
             n = int(str(raw).strip())
         except ValueError:
