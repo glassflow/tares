@@ -302,6 +302,9 @@ export interface AgentRun {
   // the write-back's outcome: "ok", "http 4xx", "failed"; null when the agent has no webhook
   delivery?: string | null;
   delivery_error?: string | null;
+  // how the run ended on purpose (TR-318): "no_op" left no finding; null on older runs
+  outcome?: "finding" | "no_op" | null;
+  verdict?: string | null;
 }
 
 // The cell's Anthropic spend meter (/api/usage/model): all-time totals plus a per-day tail,
