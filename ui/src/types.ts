@@ -219,6 +219,9 @@ export interface TriggerCondition {
   window: string;
   field?: string | null;
   group_by?: string[];
+  // a schedule instead of a condition (TR-320): fire every interval, summarized by these labels
+  every?: string;
+  summary_by?: string[];
 }
 
 export interface Trigger {
@@ -299,6 +302,17 @@ export interface AgentRun {
   // the write-back's outcome: "ok", "http 4xx", "failed"; null when the agent has no webhook
   delivery?: string | null;
   delivery_error?: string | null;
+  // how the run ended on purpose (TR-318): "no_op" left no finding; null on older runs
+  outcome?: "finding" | "no_op" | null;
+  verdict?: string | null;
+  // what the run produced (TR-220), read off its tool calls and deliveries; [] when nothing
+  results?: RunResult[];
+}
+
+export interface RunResult {
+  kind: "pr" | "commit" | "slack" | "email" | "webhook" | "custom";
+  label: string;
+  url?: string;
 }
 
 // The cell's Anthropic spend meter (/api/usage/model): all-time totals plus a per-day tail,

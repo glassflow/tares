@@ -103,6 +103,10 @@ class Condition:
     window: str             # "1m", "5m"
     field: str | None = None
     group_by: list = dc_field(default_factory=lambda: ["key_value"])
+    # A schedule instead of a condition (TR-320): fire once every `every` seconds for the whole
+    # view, handing over a summary of the window counted per `summary_by` label.
+    every: float | None = None
+    summary_by: list = dc_field(default_factory=list)
 
 
 @dataclass
@@ -218,14 +222,21 @@ def _view_from_dict(v: dict) -> ViewCfg:
     )
 
 
+def _condition_from_dict(c: dict) -> Condition:
+    if c.get("every"):
+        # a schedule: the aggregate fields get the values that read sensibly anywhere they are
+        # consulted (a count over the interval), but the clock, not them, decides the firing
+        return Condition(aggregate="count", predicate="> 0", window=str(c["every"]),
+                         every=parse_duration(c["every"]),
+                         summary_by=[str(x) for x in (c.get("summary_by") or [])])
+    return Condition(aggregate=c["aggregate"], predicate=c["predicate"], window=c["window"],
+                     field=c.get("field"), group_by=c.get("group_by", ["key_value"]))
+
+
 def _trigger_from_dict(t: dict) -> TriggerCfg:
-    c = t["condition"]
     return TriggerCfg(
         name=t["name"], view=t["view"],
-        condition=Condition(
-            aggregate=c["aggregate"], predicate=c["predicate"], window=c["window"],
-            field=c.get("field"), group_by=c.get("group_by", ["key_value"]),
-        ),
+        condition=_condition_from_dict(t["condition"]),
         emit=t.get("emit", {}) or {},
         cooldown_seconds=parse_duration(t.get("cooldown", "5m")),
         paused=bool(t.get("paused", False)),
@@ -550,6 +561,8 @@ class CatalogError(ValueError):
 
 
 _AGGREGATES = {"count", "sum", "avg", "max", "min", "any"}
+SCHEDULE_MIN_SECONDS = 60.0
+SCHEDULE_MAX_SUMMARY_LABELS = 5
 _PREDICATE_SYMS = (">=", "<=", "==", ">", "<")
 
 
@@ -731,6 +744,17 @@ def validate_trigger_dict(t: dict, view_names: set) -> None:
     if t["view"] not in view_names:
         raise CatalogError(f"trigger {t['name']!r}: unknown view {t['view']!r}")
     c = t["condition"]
+    if c.get("every"):
+        _check_duration(c["every"], f"trigger {t['name']!r} every")
+        if parse_duration(c["every"]) < SCHEDULE_MIN_SECONDS:
+            raise CatalogError(f"trigger {t['name']!r}: every must be at least "
+                               f"{int(SCHEDULE_MIN_SECONDS)}s")
+        by = c.get("summary_by") or []
+        if not isinstance(by, list) or len(by) > SCHEDULE_MAX_SUMMARY_LABELS or not all(
+                isinstance(x, str) and re.match(r"^[A-Za-z0-9_.]+$", x) for x in by):
+            raise CatalogError(f"trigger {t['name']!r}: summary_by must be a list of up to "
+                               f"{SCHEDULE_MAX_SUMMARY_LABELS} label names")
+        return
     if c.get("aggregate") not in _AGGREGATES:
         raise CatalogError(
             f"trigger {t['name']!r}: aggregate must be one of {sorted(_AGGREGATES)}")
@@ -836,13 +860,20 @@ def validate_agent_dict(a: dict, trigger_names: set, triggers: dict | None = Non
                                "(or empty for no budget)")
 
     # Loop guard: a Tares agent writes a finding into the `findings` source. If its trigger
-    # watches a view containing that source, the finding re-fires the trigger, which runs the agent
-    # again — forever. Reject at definition time; there is no valid form of this.
+    # watches a view containing that source, its own finding re-fires the trigger, which runs the
+    # agent again, forever. The one valid form is a handoff (TR-322): the view keeps only ANOTHER
+    # agent's findings (`agent` eq that agent), so this agent's own findings never match. A chain
+    # that loops back through two agents is bounded by their cooldowns, daily cap and budgets;
+    # a depth limit is later work.
     if triggers is not None and views is not None:
         trig = triggers.get(a["trigger"])
         view = views.get(trig.get("view")) if trig else None
         if view and FINDINGS_SOURCE in (view.get("sources") or []):
-            raise CatalogError(
-                f"agent {a['name']!r}: trigger {a['trigger']!r} watches view "
-                f"{trig['view']!r}, which includes the {FINDINGS_SOURCE!r} source; an agent "
-                f"cannot be woken by findings (it would fire itself forever)")
+            others = {str(f.get("value")) for f in (view.get("filters") or [])
+                      if f.get("field") == "agent" and f.get("op") == "eq"}
+            if not others or a["name"] in others:
+                raise CatalogError(
+                    f"agent {a['name']!r}: trigger {a['trigger']!r} watches view "
+                    f"{trig['view']!r}, which includes the {FINDINGS_SOURCE!r} source; an agent "
+                    f"can be woken by findings only through a view filtered to another agent's "
+                    f"findings (agent eq <name>), or it would fire itself forever")

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { TriggerCondition } from "../types";
 
 export function StatusBadge({ status }: { status: string | undefined }) {
   const s = status ?? "starting";
@@ -211,4 +212,14 @@ export function Combo({ value, onChange, options, placeholder, style, className,
       )}
     </div>
   );
+}
+
+
+/** A trigger's condition in one line: the schedule, or the aggregate it watches. */
+export function conditionText(c: TriggerCondition): string {
+  if (c.every) {
+    const by = (c.summary_by ?? []).length ? `, counted by ${c.summary_by!.join(", ")}` : "";
+    return `every ${c.every}${by}`;
+  }
+  return `${c.aggregate}(${c.field || "*"}) ${c.predicate} over ${c.window}`;
 }

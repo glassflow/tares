@@ -18,12 +18,42 @@ import type { AgentRun, BuiltinAgent } from "../types";
 type Tab = "overview" | "runs" | "configuration";
 
 function statusBadge(r: AgentRun) {
-  if (r.status === "ok") return <span className="badge ok">ok</span>;
+  // a run that concluded with nothing to hand on: a success, but quiet
+  if (r.status === "ok" && r.outcome === "no_op")
+    return <span className="badge" title="concluded with nothing to report; no finding was recorded">no finding</span>;
+  if (r.status === "ok")
+    return <>
+      <span className="badge ok">ok</span>
+      {r.verdict && <> <span className="chip mono" title="the verdict the agent recorded on its finding">{r.verdict}</span></>}
+    </>;
   if (r.status === "running") return <span className="badge starting">running</span>;
   // "empty"/"capped"/"exhausted" ran and declined to conclude, hit the daily cap, or ran out of
   // rounds. Not failures.
   const cls = r.status === "failed" ? "error" : "";
   return <span className={`badge ${cls}`}>{r.status}</span>;
+}
+
+/** What a run produced (TR-220), one chip per result, linked when there is somewhere to go.
+ *  `limit` keeps the row short; the expanded run lists them all. */
+function ResultChips({ r, limit }: { r: AgentRun; limit?: number }) {
+  const all = r.results ?? [];
+  if (!all.length) return null;
+  const shown = limit ? all.slice(0, limit) : all;
+  const title: Record<string, string> = {
+    pr: "a pull request this run opened", commit: "a commit this run pushed",
+    slack: "a Slack message this run posted", email: "an email this run sent",
+    webhook: "the write-back this run delivered", custom: "reported by the agent",
+  };
+  return <>
+    {shown.map((x, i) => (
+      <span key={i} className="chip mono" title={title[x.kind]} style={{ marginLeft: 4 }}>
+        {x.url
+          ? <a href={x.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{x.label}</a>
+          : x.label}
+      </span>
+    ))}
+    {limit && all.length > limit && <span className="help"> +{all.length - limit}</span>}
+  </>;
 }
 
 /** Whether the finding reached the write-back webhook; nothing when the agent has none. */
@@ -433,7 +463,7 @@ function RunRow({ r, open, focused, onToggle }: {
       <tr className="clickable" onClick={onToggle}
           style={focused ? { outline: "2px solid var(--accent)", outlineOffset: -2 } : undefined}
           ref={rowRef}>
-        <td>{statusBadge(r)} {deliveryBadge(r)}</td>
+        <td>{statusBadge(r)} {deliveryBadge(r)}<ResultChips r={r} limit={2} /></td>
         <td style={{ whiteSpace: "nowrap" }}><TimeAgo ts={r.started_at} /></td>
         <td className="mono">{r.key}</td>
         <td className="mono">{r.model ? <>{r.provider && r.provider !== "anthropic" && <span className="help">{r.provider} / </span>}{r.model}</> : <span className="dim">—</span>}</td>
@@ -462,6 +492,11 @@ function RunRow({ r, open, focused, onToggle }: {
                 {r.delivery && r.delivery !== "ok" && <> · write-back {r.delivery}{r.delivery_error ? <>: <span className="mono">{r.delivery_error}</span></> : null}</>}
                 {cache > 0 && <> · cache: {fmtTokens(r.cache_creation_input_tokens)} written, {fmtTokens(r.cache_read_input_tokens)} read</>}
               </p>
+              {(r.results ?? []).length > 0 && (
+                <p style={{ margin: "0 0 8px" }}>
+                  <span className="help">produced:</span><ResultChips r={r} />
+                </p>
+              )}
               {(r.external_tools ?? []).length > 0 && (
                 <p style={{ margin: "0 0 8px" }}>
                   {[...new Set(r.external_tools)].map((t) => (
@@ -479,6 +514,11 @@ function RunRow({ r, open, focused, onToggle }: {
                   </button>
                   {rerunErr && <span className="help" style={{ color: "var(--err)" }}>{rerunErr}</span>}
                 </div>
+              )}
+              {r.outcome === "no_op" && (
+                <p className="help" style={{ margin: "0 0 8px", whiteSpace: "normal" }}>
+                  Nothing to report, so no finding was recorded. The agent's reason:
+                </p>
               )}
               {r.finding
                 ? <div className="md">

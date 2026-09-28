@@ -551,6 +551,9 @@ def make_app() -> FastAPI:
         asyncio.create_task(providers_mod.discover_env_entries(store))
         loop_stop = asyncio.Event()
         loop_watch = asyncio.create_task(_metrics.watch_event_loop(loop_stop))
+        # the clock for schedule triggers (TR-320)
+        from . import schedule as _schedule
+        schedule_task = asyncio.create_task(_schedule.run(runtime, loop_stop))
         print(f"taresd: {len(runtime.catalog.sources)} source(s); "
               f"console at / · agent API at /query · management API at /api")
         # optional OTLP gRPC receiver (:4317). Needs grpcio + opentelemetry-proto; off if absent.
@@ -568,6 +571,7 @@ def make_app() -> FastAPI:
         yield
         loop_stop.set()
         loop_watch.cancel()
+        schedule_task.cancel()
         if grpc_server is not None:
             await grpc_server.stop(grace=2)
         runtime.shutdown()

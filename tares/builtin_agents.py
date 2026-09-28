@@ -31,6 +31,7 @@ import uuid
 import httpx
 
 from . import metrics
+from . import results as _results
 from . import tracing as _tracing
 from .config import FINDINGS_SOURCE, API_BASE, agent_url, parse_duration
 from .envelope import now_utc
@@ -142,6 +143,55 @@ PRESETS = {
             "recorded on this entity's timeline."
         ),
     },
+    # The first level of a watch-then-escalate chain (TR-321): on a schedule trigger, cheap and
+    # quiet unless something needs a closer look. Its `investigate` findings wake the second.
+    "triage": {
+        "label": "Triage (on a schedule)",
+        "prompt": (
+            "You watch a system on a schedule. Every few minutes you are handed a summary of one "
+            "view's last window: for each label, the count per value now against the window "
+            "before, and a few recent lines. Most windows are normal. Your job is to say so "
+            "quickly, or to flag the one entity that needs a closer look.\n\n"
+            "Rule first: consider only values that grew at least 3x and by at least 50 events "
+            "since the window before, or that are new with at least 50 events. Ignore routine "
+            "noise such as uptime probes and health checks, and values that only went down or "
+            "are gone. If nothing meets the rule, the window is normal.\n\n"
+            "Then judgment: among the values that meet the rule, decide whether one looks like a "
+            "problem (errors, 4xx or 5xx codes, failures, a sudden new source of traffic). If you "
+            "need more detail, call stats with a `where` or a different label, or read a few "
+            "lines; keep it to one or two calls.\n\n"
+            "Always end with the conclude tool:\n"
+            "- outcome no_op, with a one-line reason, when nothing needs a closer look;\n"
+            "- outcome finding with verdict investigate when something does: key is the entity "
+            "that looks off, label is the entity label the summary names (for example service), "
+            "and summary names the numbers that moved (now, before, change) and why it looks "
+            "like a problem.\n"
+            "Name the entity, not the symptom. If what moved is a status code or another "
+            "attribute, find which entity carries it (stats by the entity label with a `where` on "
+            "that attribute, for example by service where code=404) and name that entity.\n"
+            "Flag at most one entity per run, the most serious one."
+        ),
+    },
+    # The second level (TR-322): woken by a triage finding marked investigate, it is handed that
+    # finding, not the logs, so it fetches its own evidence.
+    "rca-from-triage": {
+        "label": "Root cause after triage",
+        "prompt": (
+            "You are an SRE doing root-cause analysis. A triage agent flagged the entity you were "
+            "woken for as worth a closer look; you are handed its finding (the numbers that moved "
+            "and why), not the logs. Fetch the evidence yourself: read the entity's timeline over "
+            "the last hour, use stats to see which labels moved and since when, and use any other "
+            "tools you have (an MCP server for traces, for example).\n\n"
+            "Establish what is failing and since when, what changed just before it started, and "
+            "the most likely cause, grounded in what the tools returned. If the evidence shows it "
+            "is not a real problem, or it is already over, say so.\n\n"
+            "Always end with the conclude tool: outcome finding; verdict rca, or resolved if it "
+            "was noise or is already over; key and label exactly as in the triage finding (its "
+            "label is shown on the finding's line, for example service=checkout or "
+            "path=/docs/x); summary is a short incident note: 1) what is failing and since when, "
+            "2) the most likely cause with the evidence, 3) the suggested next action."
+        ),
+    },
 }
 
 TOOL_DEFS = [
@@ -157,6 +207,22 @@ TOOL_DEFS = [
             "required": ["selector"]},
     },
     {
+        "name": "stats",
+        "description": "Count events per value of one label through a saved view, for the last "
+                       "`window` and the window of the same length before it, largest change "
+                       "first. Use it to see the shape of a busy stream (which services, status "
+                       "codes or paths moved) instead of reading lines.",
+        "input_schema": {"type": "object", "properties": {
+            "view": {"type": "string"},
+            "by": {"type": "string", "description": "the label to count per, e.g. service, "
+                                                    "nginx_status_code, path"},
+            "where": {"type": "object", "description": "{label: value} to narrow first, e.g. "
+                                                       "{\"status_code_text\": \"404\"}"},
+            "window": {"type": "string", "default": "30m"},
+            "top": {"type": "integer", "description": "rows to return (max 50)", "default": 20}},
+            "required": ["view", "by"]},
+    },
+    {
         "name": "query",
         "description": "Read a timeline through a saved view (narrower than `read`: only that "
                        "view's sources and filters). Select the entity by `key` or by `where`.",
@@ -168,6 +234,55 @@ TOOL_DEFS = [
             "required": ["view"]},
     },
 ]
+
+
+# the counting table lives in stats.py so the schedule trigger (TR-320) hands over the same one
+from .stats import STATS_MAX_TOP, stats_table  # noqa: E402,F401
+
+
+# How a run ends on purpose (TR-318). Offered only to an agent whose prompt names it, so an
+# existing agent never meets it: a model there choosing `no_op` on its own would silently drop
+# a finding someone waits for (a write-back, a Slack post). Without it, the last text is the
+# finding, as before.
+CONCLUDE = "conclude"
+CONCLUDE_DEF = {
+    "name": CONCLUDE,
+    "description": ("End the run. outcome `no_op`: nothing to hand on, no finding is recorded "
+                    "(say why in `summary`). outcome `finding`: `summary` is recorded as the "
+                    "finding, with `verdict` as a label, on `key` (default: the entity you were "
+                    "woken for). Call it once, as your last step."),
+    "input_schema": {"type": "object", "properties": {
+        "outcome": {"type": "string", "enum": ["finding", "no_op"]},
+        "summary": {"type": "string", "description": "the finding, or why there is none"},
+        "verdict": {"type": "string", "description": "one word from your instructions, "
+                                                     "e.g. investigate, resolved"},
+        "key": {"type": "string", "description": "the entity the finding is about"},
+        "label": {"type": "string", "description": "the label `key` is a value of, e.g. "
+                                                   "service, path; default: the woken entity's"},
+        "produced": {"type": "array", "items": {"type": "string"},
+                     "description": "anything you produced that Tares cannot see from your "
+                                    "tool calls, one short line each; usually leave empty"}},
+        "required": ["outcome", "summary"]},
+}
+
+
+def offers_conclude(agent: dict) -> bool:
+    return CONCLUDE in (agent.get("prompt") or "")
+
+
+def parse_conclude(args: dict) -> tuple[dict | None, str | None]:
+    """The `conclude` call as an outcome, or the error the model gets back to try again."""
+    outcome = str(args.get("outcome") or "").strip().lower()
+    summary = str(args.get("summary") or "").strip()
+    if outcome not in ("finding", "no_op"):
+        return None, "outcome must be finding or no_op"
+    if outcome == "finding" and not summary:
+        return None, "a finding needs a summary"
+    return {"outcome": outcome, "summary": summary,
+            "verdict": str(args.get("verdict") or "").strip().lower() or None,
+            "key": str(args.get("key") or "").strip() or None,
+            "label": str(args.get("label") or "").strip() or None,
+            "produced": args.get("produced") or []}, None
 
 
 def prompt_hash(prompt: str) -> str:
@@ -369,8 +484,15 @@ class AgentRunner:
             # may not show resource attributes; on the root span it is always in reach.
             obs.set_attribute("tares.instance", _tracing.instance_name())
             obs.set_attribute("tares.agent", agent["name"])
-            status, error = await self._run_traced(agent, trigger_name, key, payload, run_id,
-                                                   dispatch_id, tracer, obs, anchor)
+            # what the run produced (TR-220), filled as evidence arrives and stored however it ends
+            results: list = []
+            try:
+                status, error = await self._run_traced(agent, trigger_name, key, payload, run_id,
+                                                       dispatch_id, tracer, obs, anchor, results)
+            finally:
+                if results:
+                    self.store.set_run_results(run_id, _results.merge(results))
+                    obs.set_attribute("tares.results", len(_results.merge(results)))
             obs.set_attribute("tares.status", status)
             if status == "failed" and error:
                 obs.error(error)
@@ -393,7 +515,9 @@ class AgentRunner:
     async def _run_traced(self, agent: dict, trigger_name: str, key: str, payload: str,
                           run_id: str, dispatch_id: str | None, tracer,
                           obs: _tracing.Observation,
-                          anchor: tuple[str, dict] | None = None) -> tuple[str, str | None]:
+                          anchor: tuple[str, dict] | None = None,
+                          results: list | None = None) -> tuple[str, str | None]:
+        results = [] if results is None else results
         started_at = now_utc()
         t0 = time.monotonic()
         provider, key_origin, provider_id, provider_note = resolve_for_agent(self.store, agent)
@@ -441,9 +565,11 @@ class AgentRunner:
             print(f"[agent {agent['name']}] {provider_note}")
         obs.set_attribute("tares.provider", provider_id)
         usage = empty_usage()
+        concluded: dict = {}   # filled by a `conclude` call (TR-318)
         try:
             finding, rounds, tool_calls, external_used, exhausted, partial = await self._loop(
-                agent, trigger_name, key, payload, provider, model, usage, tracer, obs)
+                agent, trigger_name, key, payload, provider, model, usage, tracer, obs,
+                concluded=concluded, produced=results)
         finally:
             if usage["calls"]:
                 cost = price_usage(provider.kind, model, usage)
@@ -468,6 +594,16 @@ class AgentRunner:
                                         tool_calls=tool_calls, finding=partial or None,
                                         error=msg, external_tools=external_used)
             return "exhausted", msg
+        results.extend(_results.custom_results(concluded.get("produced")))
+        if concluded.get("outcome") == "no_op":
+            # A quiet success: nothing to hand on, so no finding, no Slack post, no write-back.
+            # The reason stays on the run for whoever reads the runs table.
+            obs.set_attribute("tares.outcome", "no_op")
+            obs.set_output(concluded["summary"])
+            self.store.finish_agent_run(run_id, "ok", rounds=rounds, tool_calls=tool_calls,
+                                        finding=concluded["summary"] or None,
+                                        external_tools=external_used, outcome="no_op")
+            return "ok", None
         if not finding:
             msg = "the model returned no conclusion"
             if tool_calls == 0:
@@ -479,12 +615,18 @@ class AgentRunner:
                                         error=msg, external_tools=external_used)
             return "empty", msg
 
+        verdict = concluded.get("verdict")
         obs.set_output(finding)
         obs.set_attribute("tares.rounds", rounds)
         obs.set_attribute("tares.tool_calls", tool_calls)
-        await self._record(agent, trigger_name, key, finding)
+        obs.set_attribute("tares.outcome", "finding")
+        obs.set_attribute("tares.verdict", verdict)
+        results.extend(await self._record(agent, trigger_name, concluded.get("key") or key,
+                                          finding, verdict=verdict,
+                                          label=concluded.get("label")) or [])
         self.store.finish_agent_run(run_id, "ok", rounds=rounds, tool_calls=tool_calls,
-                                    finding=finding, external_tools=external_used)
+                                    finding=finding, external_tools=external_used,
+                                    outcome="finding", verdict=verdict)
         if (agent.get("webhook_url") or "").strip():
             delivery, derr = await self._webhook(agent, {
                 "event": "finding",
@@ -507,6 +649,8 @@ class AgentRunner:
                 "prompt_hash": prompt_hash(agent["prompt"]),
             })
             self.store.set_run_delivery(run_id, delivery, derr)
+            if delivery == "ok":
+                results.append(_results.webhook_result(agent["webhook_url"]))
         return "ok", None
 
     def _callback_anchor(self, agent: dict, trigger_name: str, key: str) -> tuple[str, dict]:
@@ -558,7 +702,8 @@ class AgentRunner:
     # ── the bounded model loop ────────────────────────────────────────────────
     async def _loop(self, agent: dict, trigger_name: str, key: str, payload: str,
                     provider: Provider, model: str, usage: dict, tracer=None,
-                    obs: _tracing.Observation | None = None,
+                    obs: _tracing.Observation | None = None, concluded: dict | None = None,
+                    produced: list | None = None,
                     ) -> tuple[str, int, int, list[str], bool, str]:
         # External tools: the agent's selected MCP servers, connected for the duration of this
         # run. A server that fails to connect is skipped (recorded below) — losing a tool server
@@ -571,14 +716,18 @@ class AgentRunner:
             for failure in toolbox.failures:
                 print(f"[agent {agent['name']}] mcp connect failed; {failure}")
             return await self._loop_with(agent, trigger_name, key, payload, provider, toolbox,
-                                         usage, tracer, obs, model=model)
+                                         usage, tracer, obs, model=model, concluded=concluded,
+                                         produced=produced)
 
     async def _loop_with(self, agent: dict, trigger_name: str, key: str, payload: str,
                          provider: Provider, toolbox, usage: dict, tracer=None,
                          obs: _tracing.Observation | None = None, model: str = "",
+                         concluded: dict | None = None, produced: list | None = None,
                          ) -> tuple[str, int, int, list[str], bool, str]:
-        """Returns (finding, rounds, tool_calls, external_tools_used, exhausted, partial_text)."""
-        tools = TOOL_DEFS + toolbox.tool_defs
+        """Returns (finding, rounds, tool_calls, external_tools_used, exhausted, partial_text).
+        A `conclude` call ends the loop at the end of its round and fills `concluded`."""
+        concluded = {} if concluded is None else concluded
+        tools = TOOL_DEFS + ([CONCLUDE_DEF] if offers_conclude(agent) else []) + toolbox.tool_defs
         max_rounds = effective_max_rounds(agent)
         external_used: list[str] = []
         # The agent's own last conclusion for this entity, so a run builds on the previous one
@@ -587,12 +736,16 @@ class AgentRunner:
         prior = self.store.last_finding(FINDINGS_SOURCE, agent["name"], key)
         prior_block = (f'Your finding from an earlier run on "{key}":\n\n{prior[:4000]}\n\n'
                        if prior else "")
+        opening = (
+            f'The schedule "{trigger_name}" ticked for view "{key}". The summary of its last '
+            f"window:\n\n{payload}\n\n" if self._is_scheduled(trigger_name) else
+            f'The condition "{trigger_name}" tripped for "{key}".\n\n'
+            f"{prior_block}"
+            f"The correlated timeline at that moment:\n\n{payload}\n\n")
         messages = [{
             "role": "user",
             "content": (
-                f'The condition "{trigger_name}" tripped for "{key}".\n\n'
-                f"{prior_block}"
-                f"The correlated timeline at that moment:\n\n{payload}\n\n"
+                f"{opening}"
                 f"Take a first look, per your instructions. You already hold the evidence above; "
                 f"read again only if you need a wider window or a different entity."),
         }]
@@ -642,9 +795,21 @@ class AgentRunner:
                         if name is None:
                             raise ValueError(f"unknown tool {tc.name!r}; the tools are: "
                                              + ", ".join(t["name"] for t in tools))
-                        if toolbox.owns(name):
+                        if name == CONCLUDE:
+                            outcome, err = parse_conclude(tc.arguments or {})
+                            if err:
+                                raise ValueError(err)
+                            if not concluded:
+                                concluded.update(outcome)
+                            out = f"concluded: {outcome['outcome']}"
+                        elif toolbox.owns(name):
                             external_used.append(name)
                             out = await toolbox.call(name, tc.arguments)
+                            # a pull request, a commit, a Slack post: read off the call (TR-220)
+                            if produced is not None:
+                                made = _results.from_tool_call(name, tc.arguments, out)
+                                if made:
+                                    produced.append(made)
                         else:
                             out = self._tool(agent["name"], name, tc.arguments)
                     except Exception as e:   # a tool error is evidence, not a crash
@@ -654,6 +819,8 @@ class AgentRunner:
                         tobs.set_output(out)
                 results.append((tc.id, out))
             messages.append(tool_message(results))
+            if concluded:
+                return concluded["summary"], rounds, tool_calls, external_used, False, ""
 
         # Budget exhausted with tool calls still pending. Ask once more, tools disabled, for a
         # conclusion from what it has (this is the +1 call). If it concludes, that is the
@@ -670,6 +837,15 @@ class AgentRunner:
         if text:
             return text, rounds, tool_calls, external_used, False, ""
         return "", rounds, tool_calls, external_used, True, last_text
+
+    def _is_scheduled(self, trigger_name: str) -> bool:
+        """Whether the run was woken by a schedule trigger (TR-320), which ticks for a view
+        rather than trips for an entity."""
+        try:
+            trig = next((t for t in self.runtime.catalog.triggers if t.name == trigger_name), None)
+            return bool(trig is not None and getattr(trig.condition, "every", None))
+        except Exception:
+            return False
 
     def _tool(self, agent_name: str, name: str, args: dict) -> str:
         """The two reads, in-process. No HTTP hop and no credential: a Tares agent IS Tares, so
@@ -696,6 +872,19 @@ class AgentRunner:
             self.store.log_query("q_" + uuid.uuid4().hex[:12], view, str(key or where or ""),
                                  window, nrows, f"agent:{agent_name}")
             return payload
+        if name == "stats":
+            view = str(args.get("view") or "")
+            if view not in catalog.views:
+                raise KeyError(f"unknown view {view!r} (available: {', '.join(catalog.views)})")
+            by = str(args.get("by") or "").strip()
+            if not by:
+                raise ValueError('stats needs `by`, the label to count per, e.g. "service"')
+            window = str(args.get("window") or "30m")
+            out = stats_table(self.store, catalog.views[view], by, window,
+                              where=args.get("where") or None, top=args.get("top") or 20)
+            self.store.log_query("s_" + uuid.uuid4().hex[:12], view, f"by {by}",
+                                 window, 0, f"agent:{agent_name}")
+            return out
         raise ValueError(f"unknown tool {name!r}")
 
     # ── the finding: an event, plus an optional Slack copy ────────────────────
@@ -717,7 +906,9 @@ class AgentRunner:
                     return spec.get("name")
         return None
 
-    async def _record(self, agent: dict, trigger_name: str, key: str, finding: str) -> None:
+    async def _record(self, agent: dict, trigger_name: str, key: str, finding: str,
+                      verdict: str | None = None, label: str | None = None) -> list:
+        """Record the finding, then notify. Returns the notifications delivered, as results."""
         if FINDINGS_SOURCE not in self.runtime.catalog.sources:
             # provisioned on the first finding, like the memory source — a fresh install has no
             # reason to carry an empty one. No `labels` config: the runner stamps them per event.
@@ -725,11 +916,17 @@ class AgentRunner:
             self.runtime.reload_catalog()
             print(f"taresd: auto-provisioned findings source {FINDINGS_SOURCE!r}")
 
-        label = self._entity_label(trigger_name)
+        # `label` is the axis a concluded key belongs to when the agent names one; else the
+        # woken entity's, so the finding carries the SAME axis as the evidence it was drawn from.
+        label = label or self._entity_label(trigger_name)
+        labels = {label: key} if label else {}
+        if verdict:
+            labels["verdict"] = verdict
         await self.runtime.ingest(FINDINGS_SOURCE, {
             "key": key, "finding": finding, "agent": agent["name"], "trigger": trigger_name,
             "prompt_hash": prompt_hash(agent["prompt"]),
-            "labels": {label: key} if label else {},
+            **({"verdict": verdict} if verdict else {}),
+            "labels": labels,
         })
         # Notification: the workspace bot posting to a channel is the primary path (one token,
         # picked from a list, no credential per agent); the per-agent incoming webhook stays as
@@ -737,9 +934,12 @@ class AgentRunner:
         channel = (agent.get("slack_channel") or "").strip()
         hook = agent.get("slack_webhook")
         if channel:
-            await self._slack_channel(agent["name"], channel, trigger_name, key, finding)
+            if await self._slack_channel(agent["name"], channel, trigger_name, key, finding):
+                return [{"kind": "slack", "label": f"Slack {channel}"}]
         elif hook:
-            await self._slack(agent["name"], hook, trigger_name, key, finding)
+            if await self._slack(agent["name"], hook, trigger_name, key, finding):
+                return [{"kind": "slack", "label": "Slack webhook"}]
+        return []
 
     async def _webhook(self, agent: dict, body: dict, attempts: int = 3) -> tuple[str, str | None]:
         """POST the finding plus its run metadata to the agent's write-back webhook — the machine
@@ -777,7 +977,7 @@ class AgentRunner:
         return "failed", f"after {attempts} attempts: {err}"
 
     async def _slack_channel(self, agent_name: str, channel: str, trigger_name: str,
-                             key: str, finding: str) -> None:
+                             key: str, finding: str) -> bool:
         """Post the finding through the workspace bot (`chat.postMessage`). Same message shape as
         the webhook path — the full finding, standing alone — but the credential is the one bot
         token the instance already holds, and the target is a channel picked from a list.
@@ -788,7 +988,7 @@ class AgentRunner:
         token, _origin = _slack_mod.resolve_token(self.store)
         if not token:
             print(f"[agent {agent_name}] slack: no bot token configured, channel post skipped")
-            return
+            return False
         msg = _slack_mod.build_finding_message(agent_name, trigger_name, key, finding,
                                                _slack_deep_link(key))
         try:
@@ -803,11 +1003,13 @@ class AgentRunner:
                 ok, error, _retry = _slack_mod.classify(r.status_code, data)
                 if not ok:
                     print(f"[agent {agent_name}] slack: {error}")
+                return ok
         except Exception as e:   # notification failing must never lose the finding
             print(f"[agent {agent_name}] slack: {type(e).__name__}: {e}")
+            return False
 
     async def _slack(self, agent_name: str, hook: str, trigger_name: str, key: str,
-                     finding: str) -> None:
+                     finding: str) -> bool:
         """Slack carries the FULL finding, not a pointer. A local install has no reachable URL, and
         a link to 127.0.0.1 is worse than no link — so the message must stand alone. The text is the
         stored finding verbatim; a summary here would become a second, divergent record.
@@ -828,5 +1030,7 @@ class AgentRunner:
                 r = await cx.post(hook, json=msg)
                 if r.status_code >= 300:
                     print(f"[agent {agent_name}] slack: HTTP {r.status_code} {r.text[:120]}")
+                return r.status_code < 300
         except Exception as e:   # notification failing must never lose the finding
             print(f"[agent {agent_name}] slack: {type(e).__name__}: {e}")
+            return False

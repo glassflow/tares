@@ -305,6 +305,11 @@ _MIGRATIONS = [
     # TR-302: an agent names the provider it runs on ("" = the cell default); a run records which
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS provider TEXT",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS provider TEXT",
+    # TR-318: how a run ended on purpose ("finding" | "no_op"; NULL before) and the verdict label
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS outcome TEXT",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS verdict TEXT",
+    # TR-220: what the run produced, [{kind, label, url?}], read off its tool calls and deliveries
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS results JSON",
     # Which key paid for a ledger row ("env:ANTHROPIC_API_KEY" | "console") — the boundary a
     # hosted trial's enforcement counts against. Rows from before attribution stay NULL (unknown).
     "ALTER TABLE model_usage ADD COLUMN IF NOT EXISTS key_source TEXT",
@@ -732,12 +737,12 @@ class Store:
 
     def aggregate(self, sources: list[str], field: str | None, agg: str, since: datetime,
                   filters: list | None = None, where: dict | None = None,
-                  group_by="key_value") -> dict:
+                  group_by="key_value", until: datetime | None = None) -> dict:
         """{group: value} for an aggregate over `field` in the window, grouped by one or more
         labels. `group_by` is a label name (scalar keys, key_value by default) or a list of
         names (tuple keys — a trigger grouping per (env, app)). NULL group values are dropped
         (a row lacking a grouping label isn't a real entity); NULL field values are ignored by
-        the aggregate."""
+        the aggregate. `until` closes the window (exclusive), for comparing with an earlier one."""
         names = [group_by] if isinstance(group_by, str) else list(group_by)
         gexprs = [_label_expr(n) for n in names]
         ph = ", ".join(["?"] * len(sources))
@@ -762,9 +767,10 @@ class Store:
         with self._lock:
             rows = self.con.execute(
                 f"SELECT {sel_g}, {aggexpr} FROM events "
-                f"WHERE source IN ({ph}) AND event_time >= ?{fsql}{wsql} "
+                f"WHERE source IN ({ph}) AND event_time >= ?"
+                f"{' AND event_time < ?' if until is not None else ''}{fsql}{wsql} "
                 f"GROUP BY {grp_g} HAVING {having}",
-                [*sources, since, *fparams, *wparams],
+                [*sources, since, *([until] if until is not None else []), *fparams, *wparams],
             ).fetchall()
         out = {}
         for r in rows:
@@ -1030,15 +1036,17 @@ class Store:
 
     def finish_agent_run(self, run_id: str, status: str, rounds: int = 0, tool_calls: int = 0,
                          finding: str | None = None, error: str | None = None,
-                         external_tools: list[str] | None = None) -> None:
+                         external_tools: list[str] | None = None, outcome: str | None = None,
+                         verdict: str | None = None) -> None:
         with self._lock:
             self.con.execute(
                 "UPDATE agent_runs SET status = ?, rounds = ?, tool_calls = ?, finding = ?, "
-                "error = ?, external_tools = ?, finished_at = ?, "
+                "error = ?, external_tools = ?, outcome = ?, verdict = ?, finished_at = ?, "
                 "duration_ms = CAST(date_diff('millisecond', started_at, ?) AS INTEGER) "
                 "WHERE id = ?",
                 [status, rounds, tool_calls, finding, error,
-                 json.dumps(external_tools or []), now_utc(), now_utc(), run_id],
+                 json.dumps(external_tools or []), outcome, verdict, now_utc(), now_utc(),
+                 run_id],
             )
 
     def record_run_usage(self, run_id: str, model: str, input_tokens: int, output_tokens: int,
@@ -1071,7 +1079,8 @@ class Store:
         sql = ("SELECT id, agent, trigger, dispatch_id, key_value, status, rounds, tool_calls, "
                "started_at, duration_ms, finding, error, external_tools, max_rounds, "
                "model, input_tokens, output_tokens, cache_creation_input_tokens, "
-               "cache_read_input_tokens, cost_usd, delivery, delivery_error, provider "
+               "cache_read_input_tokens, cost_usd, delivery, delivery_error, provider, "
+               "outcome, verdict, results "
                "FROM agent_runs ")
         where, params = [], []
         if agent:
@@ -1094,9 +1103,16 @@ class Store:
              "model": r[14], "input_tokens": r[15], "output_tokens": r[16],
              "cache_creation_input_tokens": r[17], "cache_read_input_tokens": r[18],
              "cost_usd": r[19], "delivery": r[20], "delivery_error": r[21],
-             "provider": r[22] or ""}
+             "provider": r[22] or "", "outcome": r[23], "verdict": r[24],
+             "results": json.loads(r[25]) if r[25] else []}
             for r in rows
         ]
+
+    def set_run_results(self, run_id: str, results: list) -> None:
+        """What the run produced (TR-220), stamped when it ends."""
+        with self._lock:
+            self.con.execute("UPDATE agent_runs SET results = ? WHERE id = ?",
+                             [json.dumps(results), run_id])
 
     def set_run_delivery(self, run_id: str, delivery: str, error: str | None = None) -> None:
         """The write-back's outcome for a run, recorded after the finding is stored: a failed

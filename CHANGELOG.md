@@ -6,6 +6,36 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Runs record what they produced: a pull request opened, a commit pushed, a Slack message posted,
+  a write-back delivered. Each is read off the run's own tool calls and deliveries, so an agent
+  cannot claim work it did not do, and shows as a chip in the runs table (on agent and project
+  pages), linked where there is a URL. An agent that ends with `conclude` can add `produced` lines
+  for anything Tares cannot see.
+- Watch, then escalate: two prompt presets for a two-agent chain. `triage` runs on a schedule
+  trigger, reads the window's counts and ends with `no_op` or a finding marked `investigate` on the
+  entity that looks off (only values up at least 3x and by at least 50 events are considered).
+  `rca-from-triage` is woken by those findings, fetches its own evidence and writes a root-cause
+  note on the same entity.
+- An agent can now be woken by findings through a view filtered to another agent's findings
+  (`agent eq <name>`), which is how one agent hands off to the next. A view over all findings, or
+  over the agent's own, is still refused, since the agent would wake itself forever.
+- Schedule triggers: a trigger can fire every N minutes on a view instead of on a condition
+  (`condition: {every: "10m", summary_by: [service, status_code]}`, or "on a schedule" in the
+  console). It fires once per interval for the whole view, even when nothing happened, and hands
+  the agent it wakes a summary of the window: per label, the counts against the window before,
+  plus a few recent lines. Pausing works as for any trigger, and a restart does not fire a tick
+  twice. Condition triggers are unchanged.
+- Tares agents have a `stats` tool: counts per value of one label through a view, for the last
+  window against the window of the same length before it, largest change first, capped to the top
+  rows. An agent can see which services, status codes or paths moved on a busy stream without
+  reading lines, where `read` and `query` return only the most recent events per source.
+- A Tares agent can end a run on purpose with the `conclude` tool: `no_op` when there is nothing to
+  hand on (the run is a success with no finding, no Slack post and no write-back), or `finding`
+  with a `verdict` and the entity the finding is about. The verdict is a label on the finding, so a
+  view can select one agent's findings with one verdict, and another agent's trigger can wake on
+  them. The tool is offered only to an agent whose prompt names it; every other agent behaves as
+  before. The runs table shows a no-op run as "no finding" and a finding's verdict next to its
+  status.
 - Runs per agent per day is a console setting (Settings, Agents). A value saved there replaces
   `TARES_AGENT_DAILY_CAP`; clearing it goes back to the environment value, then to 50. It applies
   from the next run, with no restart, and a capped run's message says where to raise it.
