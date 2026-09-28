@@ -305,6 +305,9 @@ _MIGRATIONS = [
     # TR-302: an agent names the provider it runs on ("" = the cell default); a run records which
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS provider TEXT",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS provider TEXT",
+    # TR-318: how a run ended on purpose ("finding" | "no_op"; NULL before) and the verdict label
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS outcome TEXT",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS verdict TEXT",
     # Which key paid for a ledger row ("env:ANTHROPIC_API_KEY" | "console") — the boundary a
     # hosted trial's enforcement counts against. Rows from before attribution stay NULL (unknown).
     "ALTER TABLE model_usage ADD COLUMN IF NOT EXISTS key_source TEXT",
@@ -1030,15 +1033,17 @@ class Store:
 
     def finish_agent_run(self, run_id: str, status: str, rounds: int = 0, tool_calls: int = 0,
                          finding: str | None = None, error: str | None = None,
-                         external_tools: list[str] | None = None) -> None:
+                         external_tools: list[str] | None = None, outcome: str | None = None,
+                         verdict: str | None = None) -> None:
         with self._lock:
             self.con.execute(
                 "UPDATE agent_runs SET status = ?, rounds = ?, tool_calls = ?, finding = ?, "
-                "error = ?, external_tools = ?, finished_at = ?, "
+                "error = ?, external_tools = ?, outcome = ?, verdict = ?, finished_at = ?, "
                 "duration_ms = CAST(date_diff('millisecond', started_at, ?) AS INTEGER) "
                 "WHERE id = ?",
                 [status, rounds, tool_calls, finding, error,
-                 json.dumps(external_tools or []), now_utc(), now_utc(), run_id],
+                 json.dumps(external_tools or []), outcome, verdict, now_utc(), now_utc(),
+                 run_id],
             )
 
     def record_run_usage(self, run_id: str, model: str, input_tokens: int, output_tokens: int,
@@ -1071,7 +1076,8 @@ class Store:
         sql = ("SELECT id, agent, trigger, dispatch_id, key_value, status, rounds, tool_calls, "
                "started_at, duration_ms, finding, error, external_tools, max_rounds, "
                "model, input_tokens, output_tokens, cache_creation_input_tokens, "
-               "cache_read_input_tokens, cost_usd, delivery, delivery_error, provider "
+               "cache_read_input_tokens, cost_usd, delivery, delivery_error, provider, "
+               "outcome, verdict "
                "FROM agent_runs ")
         where, params = [], []
         if agent:
@@ -1094,7 +1100,7 @@ class Store:
              "model": r[14], "input_tokens": r[15], "output_tokens": r[16],
              "cache_creation_input_tokens": r[17], "cache_read_input_tokens": r[18],
              "cost_usd": r[19], "delivery": r[20], "delivery_error": r[21],
-             "provider": r[22] or ""}
+             "provider": r[22] or "", "outcome": r[23], "verdict": r[24]}
             for r in rows
         ]
 
