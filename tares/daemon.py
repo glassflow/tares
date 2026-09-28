@@ -410,6 +410,10 @@ class AskSessionIn(BaseModel):
     state: str             # opaque JSON blob owned by the console (messages + decisions)
 
 
+class AgentLimitsIn(BaseModel):
+    daily_cap: int | str | None = None   # "" or null clears the console value
+
+
 class TracingIn(BaseModel):
     enabled: bool | None = None
     provider: str | None = None
@@ -2114,6 +2118,34 @@ def make_app() -> FastAPI:
     # ── agent tracing: where runs are exported, and whether ──────────────────
     # A console-stored value wins over the environment, like the Anthropic key. Secrets (the
     # key, the headers) are write-only: the API says whether one resolves and where from.
+    # ── agent limits (TR-325): runs per agent per day, console first, then the environment ──
+    def _agent_limits() -> dict:
+        from .builtin_agents import DAILY_CAP_ENV, DAILY_RUN_CAP, daily_cap
+        cap, source = daily_cap(store)
+        return {"daily_cap": cap, "daily_cap_source": source, "default": DAILY_RUN_CAP,
+                "env": DAILY_CAP_ENV}
+
+    @app.get("/api/settings/agents")
+    async def get_agent_limits():
+        return _agent_limits()
+
+    @app.put("/api/settings/agents")
+    async def set_agent_limits(body: AgentLimitsIn):
+        from .builtin_agents import DAILY_CAP_MAX, DAILY_CAP_SETTING
+        raw = body.daily_cap
+        if raw is None or str(raw).strip() == "":
+            store.set_setting(DAILY_CAP_SETTING, None)
+        else:
+            try:
+                n = int(str(raw).strip())
+            except ValueError:
+                n = 0
+            if not 1 <= n <= DAILY_CAP_MAX:
+                _err(ValueError(f"runs per agent per day must be a whole number from 1 to "
+                                f"{DAILY_CAP_MAX}"))
+            store.set_setting(DAILY_CAP_SETTING, str(n))
+        return {"ok": True, **_agent_limits()}
+
     @app.get("/api/settings/tracing")
     async def get_tracing():
         return tracing_status(store)

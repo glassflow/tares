@@ -36,6 +36,9 @@ the project follows [Semantic Versioning](https://semver.org/).
   them. The tool is offered only to an agent whose prompt names it; every other agent behaves as
   before. The runs table shows a no-op run as "no finding" and a finding's verdict next to its
   status.
+- Runs per agent per day is a console setting (Settings, Agents). A value saved there replaces
+  `TARES_AGENT_DAILY_CAP`; clearing it goes back to the environment value, then to 50. It applies
+  from the next run, with no restart, and a capped run's message says where to raise it.
 
 ## [1.34.0] - 2026-09-28
 

@@ -57,7 +57,26 @@ MAX_TOKENS = 2048         # per model call
 TOOL_TIMEOUT = 120        # per Anthropic request
 # Cost ceiling. A trigger in a hot loop can fire far more often than anyone expects; without a cap
 # the first surprise is the bill. Per-agent and per-day, counted from the run log.
-DAILY_RUN_CAP = int(os.getenv("TARES_AGENT_DAILY_CAP", "50"))
+# Runs per agent per day (TR-325): the console setting, else TARES_AGENT_DAILY_CAP, else this.
+DAILY_RUN_CAP = 50
+DAILY_CAP_SETTING = "agent_daily_cap"
+DAILY_CAP_ENV = "TARES_AGENT_DAILY_CAP"
+DAILY_CAP_MAX = 10000
+
+
+def daily_cap(store) -> tuple[int, str]:
+    """(runs per agent per day, where it came from: console | env | default). Read at each run,
+    so a change in the console applies to the next run. A bad stored or env value is skipped."""
+    get = getattr(store, "get_setting", None)
+    for raw, source in (((get(DAILY_CAP_SETTING) if get else None) or "", "console"),
+                        (os.getenv(DAILY_CAP_ENV, ""), "env")):
+        try:
+            n = int(str(raw).strip())
+        except ValueError:
+            continue
+        if 1 <= n <= DAILY_CAP_MAX:
+            return n, source
+    return DAILY_RUN_CAP, "default"
 MAX_BOOTSTRAP_KEYS = 50    # a project bootstraps at most this many entities in one go
 
 def _canonical_tool(name: str, tools: list) -> str | None:
@@ -509,9 +528,11 @@ class AgentRunner:
             obs.set_attribute(_tracing.SKIPPED_REASON, "no_provider")
             return "failed", msg
         # Count the runs BEFORE this one (its row is already inserted), so the cap fires at exactly
-        # DAILY_RUN_CAP runs rather than one over it.
-        if self.store.agent_runs_today(agent["name"], exclude_run_id=run_id) >= DAILY_RUN_CAP:
-            msg = f"cap of {DAILY_RUN_CAP} runs in the last 24h reached for this agent"
+        # daily-cap runs rather than one over it.
+        cap, _source = daily_cap(self.store)
+        if self.store.agent_runs_today(agent["name"], exclude_run_id=run_id) >= cap:
+            msg = (f"cap of {cap} runs in the last 24h reached for this agent; "
+                   f"raise it under Settings, Agents")
             self.store.finish_agent_run(run_id, "capped", error=msg)
             obs.set_attribute(_tracing.SKIPPED_REASON, "daily_run_cap")
             return "capped", msg
