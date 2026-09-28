@@ -860,13 +860,20 @@ def validate_agent_dict(a: dict, trigger_names: set, triggers: dict | None = Non
                                "(or empty for no budget)")
 
     # Loop guard: a Tares agent writes a finding into the `findings` source. If its trigger
-    # watches a view containing that source, the finding re-fires the trigger, which runs the agent
-    # again — forever. Reject at definition time; there is no valid form of this.
+    # watches a view containing that source, its own finding re-fires the trigger, which runs the
+    # agent again, forever. The one valid form is a handoff (TR-322): the view keeps only ANOTHER
+    # agent's findings (`agent` eq that agent), so this agent's own findings never match. A chain
+    # that loops back through two agents is bounded by their cooldowns, daily cap and budgets;
+    # a depth limit is later work.
     if triggers is not None and views is not None:
         trig = triggers.get(a["trigger"])
         view = views.get(trig.get("view")) if trig else None
         if view and FINDINGS_SOURCE in (view.get("sources") or []):
-            raise CatalogError(
-                f"agent {a['name']!r}: trigger {a['trigger']!r} watches view "
-                f"{trig['view']!r}, which includes the {FINDINGS_SOURCE!r} source; an agent "
-                f"cannot be woken by findings (it would fire itself forever)")
+            others = {str(f.get("value")) for f in (view.get("filters") or [])
+                      if f.get("field") == "agent" and f.get("op") == "eq"}
+            if not others or a["name"] in others:
+                raise CatalogError(
+                    f"agent {a['name']!r}: trigger {a['trigger']!r} watches view "
+                    f"{trig['view']!r}, which includes the {FINDINGS_SOURCE!r} source; an agent "
+                    f"can be woken by findings only through a view filtered to another agent's "
+                    f"findings (agent eq <name>), or it would fire itself forever")

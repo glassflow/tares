@@ -123,6 +123,52 @@ PRESETS = {
             "recorded on this entity's timeline."
         ),
     },
+    # The first level of a watch-then-escalate chain (TR-321): on a schedule trigger, cheap and
+    # quiet unless something needs a closer look. Its `investigate` findings wake the second.
+    "triage": {
+        "label": "Triage (on a schedule)",
+        "prompt": (
+            "You watch a system on a schedule. Every few minutes you are handed a summary of one "
+            "view's last window: for each label, the count per value now against the window "
+            "before, and a few recent lines. Most windows are normal. Your job is to say so "
+            "quickly, or to flag the one entity that needs a closer look.\n\n"
+            "Rule first: consider only values that grew at least 3x and by at least 50 events "
+            "since the window before, or that are new with at least 50 events. Ignore routine "
+            "noise such as uptime probes and health checks, and values that only went down or "
+            "are gone. If nothing meets the rule, the window is normal.\n\n"
+            "Then judgment: among the values that meet the rule, decide whether one looks like a "
+            "problem (errors, 4xx or 5xx codes, failures, a sudden new source of traffic). If you "
+            "need more detail, call stats with a `where` or a different label, or read a few "
+            "lines; keep it to one or two calls.\n\n"
+            "Always end with the conclude tool:\n"
+            "- outcome no_op, with a one-line reason, when nothing needs a closer look;\n"
+            "- outcome finding with verdict investigate when something does: key is the value "
+            "that looks off, label is the label it is a value of (for example service or path), "
+            "and summary names the numbers that moved (now, before, change) and why it looks "
+            "like a problem.\n"
+            "Flag at most one entity per run, the most serious one."
+        ),
+    },
+    # The second level (TR-322): woken by a triage finding marked investigate, it is handed that
+    # finding, not the logs, so it fetches its own evidence.
+    "rca-from-triage": {
+        "label": "Root cause after triage",
+        "prompt": (
+            "You are an SRE doing root-cause analysis. A triage agent flagged the entity you were "
+            "woken for as worth a closer look; you are handed its finding (the numbers that moved "
+            "and why), not the logs. Fetch the evidence yourself: read the entity's timeline over "
+            "the last hour, use stats to see which labels moved and since when, and use any other "
+            "tools you have (an MCP server for traces, for example).\n\n"
+            "Establish what is failing and since when, what changed just before it started, and "
+            "the most likely cause, grounded in what the tools returned. If the evidence shows it "
+            "is not a real problem, or it is already over, say so.\n\n"
+            "Always end with the conclude tool: outcome finding; verdict rca, or resolved if it "
+            "was noise or is already over; key and label exactly as in the triage finding (its "
+            "label is shown on the finding's line, for example service=checkout or "
+            "path=/docs/x); summary is a short incident note: 1) what is failing and since when, "
+            "2) the most likely cause with the evidence, 3) the suggested next action."
+        ),
+    },
 }
 
 TOOL_DEFS = [
@@ -646,12 +692,16 @@ class AgentRunner:
         prior = self.store.last_finding(FINDINGS_SOURCE, agent["name"], key)
         prior_block = (f'Your finding from an earlier run on "{key}":\n\n{prior[:4000]}\n\n'
                        if prior else "")
+        opening = (
+            f'The schedule "{trigger_name}" ticked for view "{key}". The summary of its last '
+            f"window:\n\n{payload}\n\n" if self._is_scheduled(trigger_name) else
+            f'The condition "{trigger_name}" tripped for "{key}".\n\n'
+            f"{prior_block}"
+            f"The correlated timeline at that moment:\n\n{payload}\n\n")
         messages = [{
             "role": "user",
             "content": (
-                f'The condition "{trigger_name}" tripped for "{key}".\n\n'
-                f"{prior_block}"
-                f"The correlated timeline at that moment:\n\n{payload}\n\n"
+                f"{opening}"
                 f"Take a first look, per your instructions. You already hold the evidence above; "
                 f"read again only if you need a wider window or a different entity."),
         }]
@@ -738,6 +788,15 @@ class AgentRunner:
         if text:
             return text, rounds, tool_calls, external_used, False, ""
         return "", rounds, tool_calls, external_used, True, last_text
+
+    def _is_scheduled(self, trigger_name: str) -> bool:
+        """Whether the run was woken by a schedule trigger (TR-320), which ticks for a view
+        rather than trips for an entity."""
+        try:
+            trig = next((t for t in self.runtime.catalog.triggers if t.name == trigger_name), None)
+            return bool(trig is not None and getattr(trig.condition, "every", None))
+        except Exception:
+            return False
 
     def _tool(self, agent_name: str, name: str, args: dict) -> str:
         """The two reads, in-process. No HTTP hop and no credential: a Tares agent IS Tares, so
