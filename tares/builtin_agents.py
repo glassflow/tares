@@ -337,15 +337,21 @@ class AgentRunner:
     async def _run(self, agent: dict, trigger_name: str, key: str, payload: str,
                    run_id: str, dispatch_id: str | None = None) -> tuple[str, str | None]:
         tracer = self.tracing.tracer_for(agent["name"])
-        with _tracing.run_span(tracer, agent["name"], session=key, attributes={
+        # Resolved before the span opens: the firing's delivery id is the session (TR-317).
+        anchor = self._callback_anchor(agent, trigger_name, key)
+        with _tracing.run_span(tracer, agent["name"],
+                               session=self._session_id(agent, anchor, dispatch_id, run_id),
+                               agent=agent["name"], attributes={
                 "tares.run_id": run_id, "tares.dispatch_id": dispatch_id or "",
-                "tares.trigger": trigger_name, "tares.key": key}) as obs:
+                "tares.trigger": trigger_name, "tares.key": key,
+                **{f"tares.label.{k}": str(v) for k, v in anchor[1].items()
+                   if v not in (None, "")}}) as obs:
             # The instance is on the resource (service.name) too, but a backend's span view
             # may not show resource attributes; on the root span it is always in reach.
             obs.set_attribute("tares.instance", _tracing.instance_name())
             obs.set_attribute("tares.agent", agent["name"])
             status, error = await self._run_traced(agent, trigger_name, key, payload, run_id,
-                                                   dispatch_id, tracer, obs)
+                                                   dispatch_id, tracer, obs, anchor)
             obs.set_attribute("tares.status", status)
             if status == "failed" and error:
                 obs.error(error)
@@ -353,9 +359,22 @@ class AgentRunner:
                 obs.set_attribute("tares.note", error)
             return status, error
 
+    @staticmethod
+    def _session_id(agent: dict, anchor: tuple[str, dict], dispatch_id: str | None,
+                    run_id: str) -> str:
+        """session.id of a run: one run, one session (TR-317). The firing's delivery id when the
+        agent reports one (`webhook_key_label`, the id Rius files the report under), else the
+        trigger dispatch that woke it, else the run itself (a rerun or bootstrap run). Not the
+        entity key: that would make one session of every run an agent ever made on a service."""
+        label = (agent.get("webhook_key_label") or "").strip()
+        if label and anchor[1].get(label) not in (None, ""):
+            return str(anchor[1][label])
+        return dispatch_id or run_id
+
     async def _run_traced(self, agent: dict, trigger_name: str, key: str, payload: str,
                           run_id: str, dispatch_id: str | None, tracer,
-                          obs: _tracing.Observation) -> tuple[str, str | None]:
+                          obs: _tracing.Observation,
+                          anchor: tuple[str, dict] | None = None) -> tuple[str, str | None]:
         started_at = now_utc()
         t0 = time.monotonic()
         provider, key_origin, provider_id, provider_note = resolve_for_agent(self.store, agent)
@@ -363,12 +382,14 @@ class AgentRunner:
             msg = ("no model provider configured: add one under Settings, or set "
                    "ANTHROPIC_API_KEY before `tares up`")
             self.store.finish_agent_run(run_id, "failed", error=msg)
+            obs.set_attribute(_tracing.SKIPPED_REASON, "no_provider")
             return "failed", msg
         # Count the runs BEFORE this one (its row is already inserted), so the cap fires at exactly
         # DAILY_RUN_CAP runs rather than one over it.
         if self.store.agent_runs_today(agent["name"], exclude_run_id=run_id) >= DAILY_RUN_CAP:
             msg = f"cap of {DAILY_RUN_CAP} runs in the last 24h reached for this agent"
             self.store.finish_agent_run(run_id, "capped", error=msg)
+            obs.set_attribute(_tracing.SKIPPED_REASON, "daily_run_cap")
             return "capped", msg
         # The agent's own budget, when set: lifetime spend from the run log. Checked before any
         # model call, so a capped run costs nothing; the message says where to raise it.
@@ -377,13 +398,14 @@ class AgentRunner:
             msg = (f"budget of ${float(budget):.2f} for this agent reached; "
                    f"raise or clear it under Configuration, Advanced")
             self.store.finish_agent_run(run_id, "capped", error=msg)
+            obs.set_attribute(_tracing.SKIPPED_REASON, "budget")
             return "capped", msg
 
         # BEFORE the loop: the write-back's key names the firing this run answers for, and only
         # now is that unambiguous — the trigger has just fired on it. Resolved after the loop
         # instead, it named whichever firing had arrived most recently by then, which for a burst
         # inside one cooldown is a different alert from the one the agent wrote up (TR-294).
-        callback_key, callback_labels = self._callback_anchor(agent, trigger_name, key)
+        callback_key, callback_labels = anchor or self._callback_anchor(agent, trigger_name, key)
 
         # Usage accumulates in a mutable dict rather than the loop's return value, so a run that
         # dies mid-loop still records the tokens it already paid for (the finally below).
@@ -392,6 +414,7 @@ class AgentRunner:
             msg = (f"provider {provider_id!r} lists no models yet; pick one for this agent under "
                    "Configuration, or refresh the provider's models under Settings")
             self.store.finish_agent_run(run_id, "failed", error=msg)
+            obs.set_attribute(_tracing.SKIPPED_REASON, "no_model")
             return "failed", msg
         if provider_note:
             print(f"[agent {agent['name']}] {provider_note}")
@@ -593,7 +616,7 @@ class AgentRunner:
                 # A small model slips on names (Read, READ, "query "); match the declared tool
                 # case-insensitively rather than fail the call over case (TR-306).
                 name = _canonical_tool(tc.name, tools)
-                with _tracing.tool_span(tracer, name, tc.arguments) as tobs:
+                with _tracing.tool_span(tracer, name, tc.arguments, call_id=tc.id) as tobs:
                     try:
                         if name is None:
                             raise ValueError(f"unknown tool {tc.name!r}; the tools are: "

@@ -3,6 +3,20 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- Agent traces follow the GenAI conventions more closely. Every span of a run carries
+  `gen_ai.agent.name` and `gen_ai.agent.version`, so one agent reads as one agent across instances.
+  `session.id` is now one run: the firing's delivery id when the agent reports one, else the
+  trigger dispatch, else the run. Before, it was the entity key, which made one session of every
+  run an agent ever made on that entity.
+- LLM spans carry `gen_ai.tool.definitions`. Tool spans carry `gen_ai.tool.call.id`,
+  `gen_ai.tool.call.arguments` and, when the call failed, `error.type`. The root span carries the
+  waking firing's labels as `tares.label.<name>`.
+- A run that stops before calling the model (no provider, no model, daily cap, budget) says why on
+  its root span in `tares.run.skipped_reason`.
+
 ## [1.33.0] - 2026-09-15
 
 ### Fixed
