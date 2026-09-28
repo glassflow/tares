@@ -142,10 +142,13 @@ PRESETS = {
             "lines; keep it to one or two calls.\n\n"
             "Always end with the conclude tool:\n"
             "- outcome no_op, with a one-line reason, when nothing needs a closer look;\n"
-            "- outcome finding with verdict investigate when something does: key is the value "
-            "that looks off, label is the label it is a value of (for example service or path), "
+            "- outcome finding with verdict investigate when something does: key is the entity "
+            "that looks off, label is the entity label the summary names (for example service), "
             "and summary names the numbers that moved (now, before, change) and why it looks "
             "like a problem.\n"
+            "Name the entity, not the symptom. If what moved is a status code or another "
+            "attribute, find which entity carries it (stats by the entity label with a `where` on "
+            "that attribute, for example by service where code=404) and name that entity.\n"
             "Flag at most one entity per run, the most serious one."
         ),
     },
