@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { Search } from "../components/icons";
-import { EmptyState, ErrorState, Picker, TimeAgo, usePolling } from "../components/bits";
+import { EmptyState, ErrorState, Picker, TimeAgo, conditionText, usePolling } from "../components/bits";
 import type { Trigger, View } from "../types";
 
 // Views and Triggers are two acts of "serve to agents": a view is a saved read; a trigger wakes
@@ -271,7 +271,7 @@ function TriggersSection({ triggers, viewNames, dispatches, roster, slackChannel
                   </td>
                   <td className="mono"><Link to={`/views/${encodeURIComponent(t.view)}`}>{t.view}</Link></td>
                   <td className="mono">
-                    {t.condition.aggregate}({t.condition.field ?? "*"}) {t.condition.predicate} over {t.condition.window}
+                    {conditionText(t.condition)}
                   </td>
                   <td className="mono">{t.cooldown}</td>
                   <td style={{ whiteSpace: "nowrap" }}><TimeAgo ts={lastFired(t.name)} /></td>

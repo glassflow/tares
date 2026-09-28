@@ -6,6 +6,12 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Schedule triggers: a trigger can fire every N minutes on a view instead of on a condition
+  (`condition: {every: "10m", summary_by: [service, status_code]}`, or "on a schedule" in the
+  console). It fires once per interval for the whole view, even when nothing happened, and hands
+  the agent it wakes a summary of the window: per label, the counts against the window before,
+  plus a few recent lines. Pausing works as for any trigger, and a restart does not fire a tick
+  twice. Condition triggers are unchanged.
 - Tares agents have a `stats` tool: counts per value of one label through a view, for the last
   window against the window of the same length before it, largest change first, capped to the top
   rows. An agent can see which services, status codes or paths moved on a busy stream without

@@ -6,7 +6,7 @@ import type { AgentInfo, DispatchDetail } from "../types";
 import ConfirmDialog from "../components/ConfirmDialog";
 import ProjectBadge from "../components/ProjectBadge";
 import TriggerEditor from "../components/TriggerEditor";
-import { ErrorState, Picker, TimeAgo, usePolling } from "../components/bits";
+import { ErrorState, Picker, TimeAgo, conditionText, usePolling } from "../components/bits";
 
 // The home of one trigger: condition, where it delivers (wire more here), recent firings.
 // Read-only by default; Edit swaps in the editor in place (?edit=1 opens it directly).
@@ -126,8 +126,7 @@ export default function TriggerDetail() {
               )}
               <tr><td className="help" style={{ width: 150 }}>condition</td>
                   <td className="mono">
-                    {trigger.condition.aggregate}({trigger.condition.field || "*"}){" "}
-                    {trigger.condition.predicate} over {trigger.condition.window}
+                    {conditionText(trigger.condition)}
                   </td></tr>
               <tr><td className="help">context window</td>
                   <td className="mono">{String(trigger.emit?.context_window ?? "15m")}</td></tr>

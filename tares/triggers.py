@@ -78,7 +78,8 @@ def clear_cooldowns(store, catalog: Catalog, source: str, envelopes: list) -> li
     Python rather than by the store's JSON extraction."""
     cleared = []
     for trig in catalog.triggers:
-        if getattr(trig, "paused", False):
+        # a schedule trigger has no cooldown per key to clear: its clock decides (TR-320)
+        if getattr(trig, "paused", False) or getattr(trig.condition, "every", None):
             continue
         view = catalog.views.get(trig.view)
         if view is None or source not in view.sources:
@@ -151,8 +152,9 @@ async def _eval_triggers(store, catalog: Catalog, dispatcher, affected_sources=N
     for trig in catalog.triggers:
         if only is not None and trig.name != only:
             continue
-        # A paused trigger is inert: not evaluated, never fires, until resumed.
-        if getattr(trig, "paused", False):
+        # A paused trigger is inert: not evaluated, never fires, until resumed. A schedule
+        # trigger fires on the clock in schedule.py, never on ingest (TR-320).
+        if getattr(trig, "paused", False) or getattr(trig.condition, "every", None):
             continue
         view = catalog.views[trig.view]
         if affected_sources and not (set(view.sources) & set(affected_sources)):

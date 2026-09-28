@@ -6,7 +6,7 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import Dependents from "../components/Dependents";
 import ProjectBadge from "../components/ProjectBadge";
 import ViewEditor from "../components/ViewEditor";
-import { ErrorState, TimeAgo, usePolling } from "../components/bits";
+import { ErrorState, TimeAgo, conditionText, usePolling } from "../components/bits";
 
 // The home of one view: read-only by default (definition, usage, watching triggers), with
 // in-place editing via the Edit button (?edit=1 opens it directly, e.g. from the list).
@@ -107,7 +107,7 @@ export default function ViewDetail() {
               <tr key={t.name}>
                 <td className="mono"><Link to={`/triggers/${encodeURIComponent(t.name)}`}>{t.name}</Link></td>
                 <td className="mono">
-                  {t.condition.aggregate}({t.condition.field ?? "*"}) {t.condition.predicate} over {t.condition.window}
+                  {conditionText(t.condition)}
                 </td>
                 <td className="mono">{t.cooldown}</td>
               </tr>
