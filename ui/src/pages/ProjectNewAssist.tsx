@@ -104,6 +104,9 @@ export default function ProjectNewAssist() {
   const [history, setHistory] = useState<WireMessage[]>([]);
   const [refine, setRefine] = useState("");
   const { send, stop, streaming } = useAgentStream();
+  // one build, one session in the traces (TR-298): every step's turns carry it
+  const buildId = useRef(typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID() : `build-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const chatEnd = useRef<HTMLDivElement>(null);
   // a decided card folds to one line; "show" opens it again, and revealing from the chat too
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -197,7 +200,7 @@ export default function ProjectNewAssist() {
         if (last && last.type === "text") last.text += e.text; else collected.push({ type: "text", text: e.text });
       } else if (e.type === "proposal") collected.push({ type: "proposal", proposal: e.proposal });
     };
-    await send(messages, onEvent, { mode: "build", step: stepKey });
+    await send(messages, onEvent, { mode: "build", step: stepKey, session: buildId.current });
     // the assistant's reply on the wire carries the proposals as pending; their decisions are
     // folded in when the next turn is framed (see framing below)
     setHistory([...messages, { role: "assistant", content: wireText({ parts: collected }, {}) }]);
