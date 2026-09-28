@@ -1412,7 +1412,7 @@ def make_app() -> FastAPI:
 
     @app.post("/api/agent/chat")
     async def agent_chat(request: Request):
-        from .agent import BUILD_STEPS, run_agent
+        from .agent import BUILD_STEPS, run_agent, traced_name
         # ONE key for the whole instance: env, else the console-stored one. There used to be an
         # `X-Anthropic-Key` header override, which the console filled from localStorage — so a key
         # added on the Ask page made Ask work while Slack and trigger-woken agents still reported
@@ -1430,6 +1430,9 @@ def make_app() -> FastAPI:
         step = str(body.get("step") or "") or None
         if mode == "build" and step not in BUILD_STEPS:
             _err(ValueError(f"build step must be one of {', '.join(BUILD_STEPS)}"), 400)
+        # the console's id for one conversation (one project build), the turns' session.id
+        session = body.get("session")
+        session = (session.strip()[:128] or None) if isinstance(session, str) else None
         return StreamingResponse(
             run_agent(provider, body.get("messages") or [],
                       # the default provider's default model, not a Claude id on a router
@@ -1438,7 +1441,8 @@ def make_app() -> FastAPI:
                       on_usage=lambda m, u: _record_ask_usage(m, u, key_source=key_origin,
                                                               kind=provider.kind,
                                                               provider_id=default_pid),
-                      tracer=tracing.tracer_for("ask"), mode=mode, step=step),
+                      tracer=tracing.tracer_for(traced_name(mode)), mode=mode, step=step,
+                      session=session),
             media_type="text/event-stream")
 
     # ── MCP connections — external tool servers a Tares agent can opt into ─────

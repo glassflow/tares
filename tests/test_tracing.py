@@ -393,6 +393,32 @@ async def part2():
             ck("tool span has the payload as output", bool(tools) and "checkout" in (_attr(tools[0], "output.value") or ""))
             ck("children share the root trace", all(sp.trace_id == root.trace_id for _s, sp in spans))
 
+            # ── the project builder traces as its own agent, one session per build (TR-298) ──
+            for step in ("sources", "watch"):
+                r = await cx.post(f"{B}/api/agent/chat", json={
+                    "messages": [{"role": "user", "content": f"build {step}"}],
+                    "mode": "build", "step": step, "session": "build-123"})
+                await r.aread()
+            r = await cx.post(f"{B}/api/agent/chat", json={
+                "messages": [{"role": "user", "content": "a question"}]})
+            await r.aread()
+            async def _built():
+                names = [sp.name for _s, sp in _spans()]
+                return names.count("project-builder") >= 2 and "ask" in names
+            ck("builder and Ask turns exported", await _until(_built), str([sp.name for _s, sp in _spans()]))
+            spans = _spans()
+            builds = [(svc, sp) for svc, sp in spans if sp.name == "project-builder"]
+            ck("builder: service.name <instance>/project-builder",
+               all(svc == "local/project-builder" for svc, _sp in builds), str([s for s, _ in builds]))
+            ck("builder: agent name, one session for the build, the step",
+               all(_attr(sp, "gen_ai.agent.name") == "project-builder"
+                   and _attr(sp, "session.id") == "build-123" for _s, sp in builds)
+               and {_attr(sp, "tares.build_step") for _s, sp in builds} == {"sources", "watch"},
+               str([(_attr(sp, "session.id"), _attr(sp, "tares.build_step")) for _s, sp in builds]))
+            ask = next((sp for svc, sp in spans if sp.name == "ask"), None)
+            ck("Ask keeps its name and has no session", ask is not None
+               and _attr(ask, "gen_ai.agent.name") == "ask" and _attr(ask, "session.id") is None)
+
             # ── switch off through the API; the next run exports nothing ────
             r = await cx.put(f"{B}/api/settings/tracing", json={"enabled": False})
             ck("PUT enabled=false -> off", r.status_code == 200 and not r.json()["enabled"]

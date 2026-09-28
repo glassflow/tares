@@ -470,13 +470,24 @@ def tools_for(mode: str = "ask", step: str | None = None) -> list:
     return TOOLS + PROPOSAL_TOOLS
 
 
+# What a turn is called in traces: service.name, the root span and gen_ai.agent.name. The
+# builder is the same loop as Ask, but a separate agent to whoever reads the traces (TR-298).
+ASK_AGENT = "ask"
+BUILDER_AGENT = "project-builder"
+
+
+def traced_name(mode: str) -> str:
+    return BUILDER_AGENT if mode == "build" else ASK_AGENT
+
+
 def _sse(obj: dict) -> str:
     return f"data: {json.dumps(obj)}\n\n"
 
 
 async def run_agent(provider: Provider, messages: list,
                     model: str | None = None, self_headers: dict | None = None,
-                    on_usage=None, tracer=None, mode: str = "ask", step: str | None = None):
+                    on_usage=None, tracer=None, mode: str = "ask", step: str | None = None,
+                    session: str | None = None):
     """Async generator of SSE lines: the agent loop, streaming assistant text and tool activity.
 
     `on_usage(model, usage_dict)` is called once per turn (after the loop, including on an error
@@ -488,8 +499,13 @@ async def run_agent(provider: Provider, messages: list,
 
     `mode` is "ask" or "build"; `step` names the build step (see BUILD_STEPS) and picks which
     proposal cards the turn may emit. `provider` is where the model calls go (see models.py);
-    the caller resolves it per request, credential and base URL included."""
-    with _tracing.run_span(tracer, "ask", kind="CHAIN") as obs:
+    the caller resolves it per request, credential and base URL included.
+
+    `session` is the caller's id for a conversation (the builder sends one per project build), so
+    its turns group as one session in the traces; None leaves each turn on its own."""
+    name = traced_name(mode)
+    with _tracing.run_span(tracer, name, kind="CHAIN", session=session, agent=name,
+                           attributes={"tares.build_step": step}) as obs:
         obs.set_attribute("tares.instance", _tracing.instance_name())
         async for line in _run_agent(provider, messages, model, self_headers, on_usage, tracer,
                                      obs, mode, step):

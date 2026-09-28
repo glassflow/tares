@@ -14,6 +14,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 - LLM spans carry `gen_ai.tool.definitions`. Tool spans carry `gen_ai.tool.call.id`,
   `gen_ai.tool.call.arguments` and, when the call failed, `error.type`. The root span carries the
   waking firing's labels as `tares.label.<name>`.
+- The AI-guided project builder traces as its own agent, `project-builder`, instead of `ask`: its
+  own `service.name`, root span and `gen_ai.agent.name`, with the step in `tares.build_step`. All
+  turns of one build share a `session.id`, sent by the console.
 - A run that stops before calling the model (no provider, no model, daily cap, budget) says why on
   its root span in `tares.run.skipped_reason`.
 
