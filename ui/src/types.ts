@@ -305,6 +305,14 @@ export interface AgentRun {
   // how the run ended on purpose (TR-318): "no_op" left no finding; null on older runs
   outcome?: "finding" | "no_op" | null;
   verdict?: string | null;
+  // what the run produced (TR-220), read off its tool calls and deliveries; [] when nothing
+  results?: RunResult[];
+}
+
+export interface RunResult {
+  kind: "pr" | "commit" | "slack" | "email" | "webhook" | "custom";
+  label: string;
+  url?: string;
 }
 
 // The cell's Anthropic spend meter (/api/usage/model): all-time totals plus a per-day tail,

@@ -308,6 +308,8 @@ _MIGRATIONS = [
     # TR-318: how a run ended on purpose ("finding" | "no_op"; NULL before) and the verdict label
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS outcome TEXT",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS verdict TEXT",
+    # TR-220: what the run produced, [{kind, label, url?}], read off its tool calls and deliveries
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS results JSON",
     # Which key paid for a ledger row ("env:ANTHROPIC_API_KEY" | "console") — the boundary a
     # hosted trial's enforcement counts against. Rows from before attribution stay NULL (unknown).
     "ALTER TABLE model_usage ADD COLUMN IF NOT EXISTS key_source TEXT",
@@ -1078,7 +1080,7 @@ class Store:
                "started_at, duration_ms, finding, error, external_tools, max_rounds, "
                "model, input_tokens, output_tokens, cache_creation_input_tokens, "
                "cache_read_input_tokens, cost_usd, delivery, delivery_error, provider, "
-               "outcome, verdict "
+               "outcome, verdict, results "
                "FROM agent_runs ")
         where, params = [], []
         if agent:
@@ -1101,9 +1103,16 @@ class Store:
              "model": r[14], "input_tokens": r[15], "output_tokens": r[16],
              "cache_creation_input_tokens": r[17], "cache_read_input_tokens": r[18],
              "cost_usd": r[19], "delivery": r[20], "delivery_error": r[21],
-             "provider": r[22] or "", "outcome": r[23], "verdict": r[24]}
+             "provider": r[22] or "", "outcome": r[23], "verdict": r[24],
+             "results": json.loads(r[25]) if r[25] else []}
             for r in rows
         ]
+
+    def set_run_results(self, run_id: str, results: list) -> None:
+        """What the run produced (TR-220), stamped when it ends."""
+        with self._lock:
+            self.con.execute("UPDATE agent_runs SET results = ? WHERE id = ?",
+                             [json.dumps(results), run_id])
 
     def set_run_delivery(self, run_id: str, delivery: str, error: str | None = None) -> None:
         """The write-back's outcome for a run, recorded after the finding is stored: a failed

@@ -31,6 +31,7 @@ import uuid
 import httpx
 
 from . import metrics
+from . import results as _results
 from . import tracing as _tracing
 from .config import FINDINGS_SOURCE, API_BASE, agent_url, parse_duration
 from .envelope import now_utc
@@ -238,7 +239,10 @@ CONCLUDE_DEF = {
                                                      "e.g. investigate, resolved"},
         "key": {"type": "string", "description": "the entity the finding is about"},
         "label": {"type": "string", "description": "the label `key` is a value of, e.g. "
-                                                   "service, path; default: the woken entity's"}},
+                                                   "service, path; default: the woken entity's"},
+        "produced": {"type": "array", "items": {"type": "string"},
+                     "description": "anything you produced that Tares cannot see from your "
+                                    "tool calls, one short line each; usually leave empty"}},
         "required": ["outcome", "summary"]},
 }
 
@@ -258,7 +262,8 @@ def parse_conclude(args: dict) -> tuple[dict | None, str | None]:
     return {"outcome": outcome, "summary": summary,
             "verdict": str(args.get("verdict") or "").strip().lower() or None,
             "key": str(args.get("key") or "").strip() or None,
-            "label": str(args.get("label") or "").strip() or None}, None
+            "label": str(args.get("label") or "").strip() or None,
+            "produced": args.get("produced") or []}, None
 
 
 def prompt_hash(prompt: str) -> str:
@@ -460,8 +465,15 @@ class AgentRunner:
             # may not show resource attributes; on the root span it is always in reach.
             obs.set_attribute("tares.instance", _tracing.instance_name())
             obs.set_attribute("tares.agent", agent["name"])
-            status, error = await self._run_traced(agent, trigger_name, key, payload, run_id,
-                                                   dispatch_id, tracer, obs, anchor)
+            # what the run produced (TR-220), filled as evidence arrives and stored however it ends
+            results: list = []
+            try:
+                status, error = await self._run_traced(agent, trigger_name, key, payload, run_id,
+                                                       dispatch_id, tracer, obs, anchor, results)
+            finally:
+                if results:
+                    self.store.set_run_results(run_id, _results.merge(results))
+                    obs.set_attribute("tares.results", len(_results.merge(results)))
             obs.set_attribute("tares.status", status)
             if status == "failed" and error:
                 obs.error(error)
@@ -484,7 +496,9 @@ class AgentRunner:
     async def _run_traced(self, agent: dict, trigger_name: str, key: str, payload: str,
                           run_id: str, dispatch_id: str | None, tracer,
                           obs: _tracing.Observation,
-                          anchor: tuple[str, dict] | None = None) -> tuple[str, str | None]:
+                          anchor: tuple[str, dict] | None = None,
+                          results: list | None = None) -> tuple[str, str | None]:
+        results = [] if results is None else results
         started_at = now_utc()
         t0 = time.monotonic()
         provider, key_origin, provider_id, provider_note = resolve_for_agent(self.store, agent)
@@ -534,7 +548,7 @@ class AgentRunner:
         try:
             finding, rounds, tool_calls, external_used, exhausted, partial = await self._loop(
                 agent, trigger_name, key, payload, provider, model, usage, tracer, obs,
-                concluded=concluded)
+                concluded=concluded, produced=results)
         finally:
             if usage["calls"]:
                 cost = price_usage(provider.kind, model, usage)
@@ -559,6 +573,7 @@ class AgentRunner:
                                         tool_calls=tool_calls, finding=partial or None,
                                         error=msg, external_tools=external_used)
             return "exhausted", msg
+        results.extend(_results.custom_results(concluded.get("produced")))
         if concluded.get("outcome") == "no_op":
             # A quiet success: nothing to hand on, so no finding, no Slack post, no write-back.
             # The reason stays on the run for whoever reads the runs table.
@@ -585,8 +600,9 @@ class AgentRunner:
         obs.set_attribute("tares.tool_calls", tool_calls)
         obs.set_attribute("tares.outcome", "finding")
         obs.set_attribute("tares.verdict", verdict)
-        await self._record(agent, trigger_name, concluded.get("key") or key, finding,
-                           verdict=verdict, label=concluded.get("label"))
+        results.extend(await self._record(agent, trigger_name, concluded.get("key") or key,
+                                          finding, verdict=verdict,
+                                          label=concluded.get("label")) or [])
         self.store.finish_agent_run(run_id, "ok", rounds=rounds, tool_calls=tool_calls,
                                     finding=finding, external_tools=external_used,
                                     outcome="finding", verdict=verdict)
@@ -612,6 +628,8 @@ class AgentRunner:
                 "prompt_hash": prompt_hash(agent["prompt"]),
             })
             self.store.set_run_delivery(run_id, delivery, derr)
+            if delivery == "ok":
+                results.append(_results.webhook_result(agent["webhook_url"]))
         return "ok", None
 
     def _callback_anchor(self, agent: dict, trigger_name: str, key: str) -> tuple[str, dict]:
@@ -664,6 +682,7 @@ class AgentRunner:
     async def _loop(self, agent: dict, trigger_name: str, key: str, payload: str,
                     provider: Provider, model: str, usage: dict, tracer=None,
                     obs: _tracing.Observation | None = None, concluded: dict | None = None,
+                    produced: list | None = None,
                     ) -> tuple[str, int, int, list[str], bool, str]:
         # External tools: the agent's selected MCP servers, connected for the duration of this
         # run. A server that fails to connect is skipped (recorded below) — losing a tool server
@@ -676,12 +695,13 @@ class AgentRunner:
             for failure in toolbox.failures:
                 print(f"[agent {agent['name']}] mcp connect failed; {failure}")
             return await self._loop_with(agent, trigger_name, key, payload, provider, toolbox,
-                                         usage, tracer, obs, model=model, concluded=concluded)
+                                         usage, tracer, obs, model=model, concluded=concluded,
+                                         produced=produced)
 
     async def _loop_with(self, agent: dict, trigger_name: str, key: str, payload: str,
                          provider: Provider, toolbox, usage: dict, tracer=None,
                          obs: _tracing.Observation | None = None, model: str = "",
-                         concluded: dict | None = None,
+                         concluded: dict | None = None, produced: list | None = None,
                          ) -> tuple[str, int, int, list[str], bool, str]:
         """Returns (finding, rounds, tool_calls, external_tools_used, exhausted, partial_text).
         A `conclude` call ends the loop at the end of its round and fills `concluded`."""
@@ -764,6 +784,11 @@ class AgentRunner:
                         elif toolbox.owns(name):
                             external_used.append(name)
                             out = await toolbox.call(name, tc.arguments)
+                            # a pull request, a commit, a Slack post: read off the call (TR-220)
+                            if produced is not None:
+                                made = _results.from_tool_call(name, tc.arguments, out)
+                                if made:
+                                    produced.append(made)
                         else:
                             out = self._tool(agent["name"], name, tc.arguments)
                     except Exception as e:   # a tool error is evidence, not a crash
@@ -861,7 +886,8 @@ class AgentRunner:
         return None
 
     async def _record(self, agent: dict, trigger_name: str, key: str, finding: str,
-                      verdict: str | None = None, label: str | None = None) -> None:
+                      verdict: str | None = None, label: str | None = None) -> list:
+        """Record the finding, then notify. Returns the notifications delivered, as results."""
         if FINDINGS_SOURCE not in self.runtime.catalog.sources:
             # provisioned on the first finding, like the memory source — a fresh install has no
             # reason to carry an empty one. No `labels` config: the runner stamps them per event.
@@ -887,9 +913,12 @@ class AgentRunner:
         channel = (agent.get("slack_channel") or "").strip()
         hook = agent.get("slack_webhook")
         if channel:
-            await self._slack_channel(agent["name"], channel, trigger_name, key, finding)
+            if await self._slack_channel(agent["name"], channel, trigger_name, key, finding):
+                return [{"kind": "slack", "label": f"Slack {channel}"}]
         elif hook:
-            await self._slack(agent["name"], hook, trigger_name, key, finding)
+            if await self._slack(agent["name"], hook, trigger_name, key, finding):
+                return [{"kind": "slack", "label": "Slack webhook"}]
+        return []
 
     async def _webhook(self, agent: dict, body: dict, attempts: int = 3) -> tuple[str, str | None]:
         """POST the finding plus its run metadata to the agent's write-back webhook — the machine
@@ -927,7 +956,7 @@ class AgentRunner:
         return "failed", f"after {attempts} attempts: {err}"
 
     async def _slack_channel(self, agent_name: str, channel: str, trigger_name: str,
-                             key: str, finding: str) -> None:
+                             key: str, finding: str) -> bool:
         """Post the finding through the workspace bot (`chat.postMessage`). Same message shape as
         the webhook path — the full finding, standing alone — but the credential is the one bot
         token the instance already holds, and the target is a channel picked from a list.
@@ -938,7 +967,7 @@ class AgentRunner:
         token, _origin = _slack_mod.resolve_token(self.store)
         if not token:
             print(f"[agent {agent_name}] slack: no bot token configured, channel post skipped")
-            return
+            return False
         msg = _slack_mod.build_finding_message(agent_name, trigger_name, key, finding,
                                                _slack_deep_link(key))
         try:
@@ -953,11 +982,13 @@ class AgentRunner:
                 ok, error, _retry = _slack_mod.classify(r.status_code, data)
                 if not ok:
                     print(f"[agent {agent_name}] slack: {error}")
+                return ok
         except Exception as e:   # notification failing must never lose the finding
             print(f"[agent {agent_name}] slack: {type(e).__name__}: {e}")
+            return False
 
     async def _slack(self, agent_name: str, hook: str, trigger_name: str, key: str,
-                     finding: str) -> None:
+                     finding: str) -> bool:
         """Slack carries the FULL finding, not a pointer. A local install has no reachable URL, and
         a link to 127.0.0.1 is worse than no link — so the message must stand alone. The text is the
         stored finding verbatim; a summary here would become a second, divergent record.
@@ -978,5 +1009,7 @@ class AgentRunner:
                 r = await cx.post(hook, json=msg)
                 if r.status_code >= 300:
                     print(f"[agent {agent_name}] slack: HTTP {r.status_code} {r.text[:120]}")
+                return r.status_code < 300
         except Exception as e:   # notification failing must never lose the finding
             print(f"[agent {agent_name}] slack: {type(e).__name__}: {e}")
+            return False
