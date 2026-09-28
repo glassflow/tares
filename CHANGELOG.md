@@ -3,7 +3,7 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.35.0] - 2026-09-28
 
 ### Added
 - Runs record what they produced: a pull request opened, a commit pushed, a Slack message posted,
