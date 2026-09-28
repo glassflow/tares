@@ -18,7 +18,14 @@ import type { AgentRun, BuiltinAgent } from "../types";
 type Tab = "overview" | "runs" | "configuration";
 
 function statusBadge(r: AgentRun) {
-  if (r.status === "ok") return <span className="badge ok">ok</span>;
+  // a run that concluded with nothing to hand on: a success, but quiet
+  if (r.status === "ok" && r.outcome === "no_op")
+    return <span className="badge" title="concluded with nothing to report; no finding was recorded">no finding</span>;
+  if (r.status === "ok")
+    return <>
+      <span className="badge ok">ok</span>
+      {r.verdict && <> <span className="chip mono" title="the verdict the agent recorded on its finding">{r.verdict}</span></>}
+    </>;
   if (r.status === "running") return <span className="badge starting">running</span>;
   // "empty"/"capped"/"exhausted" ran and declined to conclude, hit the daily cap, or ran out of
   // rounds. Not failures.
@@ -479,6 +486,11 @@ function RunRow({ r, open, focused, onToggle }: {
                   </button>
                   {rerunErr && <span className="help" style={{ color: "var(--err)" }}>{rerunErr}</span>}
                 </div>
+              )}
+              {r.outcome === "no_op" && (
+                <p className="help" style={{ margin: "0 0 8px", whiteSpace: "normal" }}>
+                  Nothing to report, so no finding was recorded. The agent's reason:
+                </p>
               )}
               {r.finding
                 ? <div className="md">

@@ -171,6 +171,47 @@ TOOL_DEFS = [
 from .stats import STATS_MAX_TOP, stats_table  # noqa: E402,F401
 
 
+# How a run ends on purpose (TR-318). Offered only to an agent whose prompt names it, so an
+# existing agent never meets it: a model there choosing `no_op` on its own would silently drop
+# a finding someone waits for (a write-back, a Slack post). Without it, the last text is the
+# finding, as before.
+CONCLUDE = "conclude"
+CONCLUDE_DEF = {
+    "name": CONCLUDE,
+    "description": ("End the run. outcome `no_op`: nothing to hand on, no finding is recorded "
+                    "(say why in `summary`). outcome `finding`: `summary` is recorded as the "
+                    "finding, with `verdict` as a label, on `key` (default: the entity you were "
+                    "woken for). Call it once, as your last step."),
+    "input_schema": {"type": "object", "properties": {
+        "outcome": {"type": "string", "enum": ["finding", "no_op"]},
+        "summary": {"type": "string", "description": "the finding, or why there is none"},
+        "verdict": {"type": "string", "description": "one word from your instructions, "
+                                                     "e.g. investigate, resolved"},
+        "key": {"type": "string", "description": "the entity the finding is about"},
+        "label": {"type": "string", "description": "the label `key` is a value of, e.g. "
+                                                   "service, path; default: the woken entity's"}},
+        "required": ["outcome", "summary"]},
+}
+
+
+def offers_conclude(agent: dict) -> bool:
+    return CONCLUDE in (agent.get("prompt") or "")
+
+
+def parse_conclude(args: dict) -> tuple[dict | None, str | None]:
+    """The `conclude` call as an outcome, or the error the model gets back to try again."""
+    outcome = str(args.get("outcome") or "").strip().lower()
+    summary = str(args.get("summary") or "").strip()
+    if outcome not in ("finding", "no_op"):
+        return None, "outcome must be finding or no_op"
+    if outcome == "finding" and not summary:
+        return None, "a finding needs a summary"
+    return {"outcome": outcome, "summary": summary,
+            "verdict": str(args.get("verdict") or "").strip().lower() or None,
+            "key": str(args.get("key") or "").strip() or None,
+            "label": str(args.get("label") or "").strip() or None}, None
+
+
 def prompt_hash(prompt: str) -> str:
     """Short, stable id for the prompt that produced a finding. Without it, editing a prompt makes
     every earlier finding unattributable to the wording that caused it."""
@@ -440,9 +481,11 @@ class AgentRunner:
             print(f"[agent {agent['name']}] {provider_note}")
         obs.set_attribute("tares.provider", provider_id)
         usage = empty_usage()
+        concluded: dict = {}   # filled by a `conclude` call (TR-318)
         try:
             finding, rounds, tool_calls, external_used, exhausted, partial = await self._loop(
-                agent, trigger_name, key, payload, provider, model, usage, tracer, obs)
+                agent, trigger_name, key, payload, provider, model, usage, tracer, obs,
+                concluded=concluded)
         finally:
             if usage["calls"]:
                 cost = price_usage(provider.kind, model, usage)
@@ -467,6 +510,15 @@ class AgentRunner:
                                         tool_calls=tool_calls, finding=partial or None,
                                         error=msg, external_tools=external_used)
             return "exhausted", msg
+        if concluded.get("outcome") == "no_op":
+            # A quiet success: nothing to hand on, so no finding, no Slack post, no write-back.
+            # The reason stays on the run for whoever reads the runs table.
+            obs.set_attribute("tares.outcome", "no_op")
+            obs.set_output(concluded["summary"])
+            self.store.finish_agent_run(run_id, "ok", rounds=rounds, tool_calls=tool_calls,
+                                        finding=concluded["summary"] or None,
+                                        external_tools=external_used, outcome="no_op")
+            return "ok", None
         if not finding:
             msg = "the model returned no conclusion"
             if tool_calls == 0:
@@ -478,12 +530,17 @@ class AgentRunner:
                                         error=msg, external_tools=external_used)
             return "empty", msg
 
+        verdict = concluded.get("verdict")
         obs.set_output(finding)
         obs.set_attribute("tares.rounds", rounds)
         obs.set_attribute("tares.tool_calls", tool_calls)
-        await self._record(agent, trigger_name, key, finding)
+        obs.set_attribute("tares.outcome", "finding")
+        obs.set_attribute("tares.verdict", verdict)
+        await self._record(agent, trigger_name, concluded.get("key") or key, finding,
+                           verdict=verdict, label=concluded.get("label"))
         self.store.finish_agent_run(run_id, "ok", rounds=rounds, tool_calls=tool_calls,
-                                    finding=finding, external_tools=external_used)
+                                    finding=finding, external_tools=external_used,
+                                    outcome="finding", verdict=verdict)
         if (agent.get("webhook_url") or "").strip():
             delivery, derr = await self._webhook(agent, {
                 "event": "finding",
@@ -557,7 +614,7 @@ class AgentRunner:
     # ── the bounded model loop ────────────────────────────────────────────────
     async def _loop(self, agent: dict, trigger_name: str, key: str, payload: str,
                     provider: Provider, model: str, usage: dict, tracer=None,
-                    obs: _tracing.Observation | None = None,
+                    obs: _tracing.Observation | None = None, concluded: dict | None = None,
                     ) -> tuple[str, int, int, list[str], bool, str]:
         # External tools: the agent's selected MCP servers, connected for the duration of this
         # run. A server that fails to connect is skipped (recorded below) — losing a tool server
@@ -570,14 +627,17 @@ class AgentRunner:
             for failure in toolbox.failures:
                 print(f"[agent {agent['name']}] mcp connect failed; {failure}")
             return await self._loop_with(agent, trigger_name, key, payload, provider, toolbox,
-                                         usage, tracer, obs, model=model)
+                                         usage, tracer, obs, model=model, concluded=concluded)
 
     async def _loop_with(self, agent: dict, trigger_name: str, key: str, payload: str,
                          provider: Provider, toolbox, usage: dict, tracer=None,
                          obs: _tracing.Observation | None = None, model: str = "",
+                         concluded: dict | None = None,
                          ) -> tuple[str, int, int, list[str], bool, str]:
-        """Returns (finding, rounds, tool_calls, external_tools_used, exhausted, partial_text)."""
-        tools = TOOL_DEFS + toolbox.tool_defs
+        """Returns (finding, rounds, tool_calls, external_tools_used, exhausted, partial_text).
+        A `conclude` call ends the loop at the end of its round and fills `concluded`."""
+        concluded = {} if concluded is None else concluded
+        tools = TOOL_DEFS + ([CONCLUDE_DEF] if offers_conclude(agent) else []) + toolbox.tool_defs
         max_rounds = effective_max_rounds(agent)
         external_used: list[str] = []
         # The agent's own last conclusion for this entity, so a run builds on the previous one
@@ -641,7 +701,14 @@ class AgentRunner:
                         if name is None:
                             raise ValueError(f"unknown tool {tc.name!r}; the tools are: "
                                              + ", ".join(t["name"] for t in tools))
-                        if toolbox.owns(name):
+                        if name == CONCLUDE:
+                            outcome, err = parse_conclude(tc.arguments or {})
+                            if err:
+                                raise ValueError(err)
+                            if not concluded:
+                                concluded.update(outcome)
+                            out = f"concluded: {outcome['outcome']}"
+                        elif toolbox.owns(name):
                             external_used.append(name)
                             out = await toolbox.call(name, tc.arguments)
                         else:
@@ -653,6 +720,8 @@ class AgentRunner:
                         tobs.set_output(out)
                 results.append((tc.id, out))
             messages.append(tool_message(results))
+            if concluded:
+                return concluded["summary"], rounds, tool_calls, external_used, False, ""
 
         # Budget exhausted with tool calls still pending. Ask once more, tools disabled, for a
         # conclusion from what it has (this is the +1 call). If it concludes, that is the
@@ -729,7 +798,8 @@ class AgentRunner:
                     return spec.get("name")
         return None
 
-    async def _record(self, agent: dict, trigger_name: str, key: str, finding: str) -> None:
+    async def _record(self, agent: dict, trigger_name: str, key: str, finding: str,
+                      verdict: str | None = None, label: str | None = None) -> None:
         if FINDINGS_SOURCE not in self.runtime.catalog.sources:
             # provisioned on the first finding, like the memory source — a fresh install has no
             # reason to carry an empty one. No `labels` config: the runner stamps them per event.
@@ -737,11 +807,17 @@ class AgentRunner:
             self.runtime.reload_catalog()
             print(f"taresd: auto-provisioned findings source {FINDINGS_SOURCE!r}")
 
-        label = self._entity_label(trigger_name)
+        # `label` is the axis a concluded key belongs to when the agent names one; else the
+        # woken entity's, so the finding carries the SAME axis as the evidence it was drawn from.
+        label = label or self._entity_label(trigger_name)
+        labels = {label: key} if label else {}
+        if verdict:
+            labels["verdict"] = verdict
         await self.runtime.ingest(FINDINGS_SOURCE, {
             "key": key, "finding": finding, "agent": agent["name"], "trigger": trigger_name,
             "prompt_hash": prompt_hash(agent["prompt"]),
-            "labels": {label: key} if label else {},
+            **({"verdict": verdict} if verdict else {}),
+            "labels": labels,
         })
         # Notification: the workspace bot posting to a channel is the primary path (one token,
         # picked from a list, no credential per agent); the per-agent incoming webhook stays as
