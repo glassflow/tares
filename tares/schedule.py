@@ -42,8 +42,10 @@ def summary(store, catalog, trig) -> str:
     every = trig.condition.every
     window = f"{int(every)}s" if every % 60 else f"{int(every // 60)}m"
     labels = trig.condition.summary_by or [view.key_field or "key_value"]
+    entity = view.key_field or "key_value"
     out = [f"=== scheduled look at view {view.name} · every {window} · "
-           f"this window against the one before ===", ""]
+           f"this window against the one before ===",
+           f"the entities in this view are values of `{entity}`; other labels describe them", ""]
     for label in labels:
         out.append(stats_table(store, view, label, window))
         out.append("")
