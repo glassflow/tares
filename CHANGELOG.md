@@ -6,6 +6,19 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Runs record what they produced: a pull request opened, a commit pushed, a Slack message posted,
+  a write-back delivered. Each is read off the run's own tool calls and deliveries, so an agent
+  cannot claim work it did not do, and shows as a chip in the runs table (on agent and project
+  pages), linked where there is a URL. An agent that ends with `conclude` can add `produced` lines
+  for anything Tares cannot see.
+- Watch, then escalate: two prompt presets for a two-agent chain. `triage` runs on a schedule
+  trigger, reads the window's counts and ends with `no_op` or a finding marked `investigate` on the
+  entity that looks off (only values up at least 3x and by at least 50 events are considered).
+  `rca-from-triage` is woken by those findings, fetches its own evidence and writes a root-cause
+  note on the same entity.
+- An agent can now be woken by findings through a view filtered to another agent's findings
+  (`agent eq <name>`), which is how one agent hands off to the next. A view over all findings, or
+  over the agent's own, is still refused, since the agent would wake itself forever.
 - Schedule triggers: a trigger can fire every N minutes on a view instead of on a condition
   (`condition: {every: "10m", summary_by: [service, status_code]}`, or "on a schedule" in the
   console). It fires once per interval for the whole view, even when nothing happened, and hands
