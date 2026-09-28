@@ -732,12 +732,12 @@ class Store:
 
     def aggregate(self, sources: list[str], field: str | None, agg: str, since: datetime,
                   filters: list | None = None, where: dict | None = None,
-                  group_by="key_value") -> dict:
+                  group_by="key_value", until: datetime | None = None) -> dict:
         """{group: value} for an aggregate over `field` in the window, grouped by one or more
         labels. `group_by` is a label name (scalar keys, key_value by default) or a list of
         names (tuple keys — a trigger grouping per (env, app)). NULL group values are dropped
         (a row lacking a grouping label isn't a real entity); NULL field values are ignored by
-        the aggregate."""
+        the aggregate. `until` closes the window (exclusive), for comparing with an earlier one."""
         names = [group_by] if isinstance(group_by, str) else list(group_by)
         gexprs = [_label_expr(n) for n in names]
         ph = ", ".join(["?"] * len(sources))
@@ -762,9 +762,10 @@ class Store:
         with self._lock:
             rows = self.con.execute(
                 f"SELECT {sel_g}, {aggexpr} FROM events "
-                f"WHERE source IN ({ph}) AND event_time >= ?{fsql}{wsql} "
+                f"WHERE source IN ({ph}) AND event_time >= ?"
+                f"{' AND event_time < ?' if until is not None else ''}{fsql}{wsql} "
                 f"GROUP BY {grp_g} HAVING {having}",
-                [*sources, since, *fparams, *wparams],
+                [*sources, since, *([until] if until is not None else []), *fparams, *wparams],
             ).fetchall()
         out = {}
         for r in rows:

@@ -3,6 +3,14 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Tares agents have a `stats` tool: counts per value of one label through a view, for the last
+  window against the window of the same length before it, largest change first, capped to the top
+  rows. An agent can see which services, status codes or paths moved on a busy stream without
+  reading lines, where `read` and `query` return only the most recent events per source.
+
 ## [1.34.0] - 2026-09-28
 
 ### Added

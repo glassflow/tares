@@ -138,6 +138,22 @@ TOOL_DEFS = [
             "required": ["selector"]},
     },
     {
+        "name": "stats",
+        "description": "Count events per value of one label through a saved view, for the last "
+                       "`window` and the window of the same length before it, largest change "
+                       "first. Use it to see the shape of a busy stream (which services, status "
+                       "codes or paths moved) instead of reading lines.",
+        "input_schema": {"type": "object", "properties": {
+            "view": {"type": "string"},
+            "by": {"type": "string", "description": "the label to count per, e.g. service, "
+                                                    "nginx_status_code, path"},
+            "where": {"type": "object", "description": "{label: value} to narrow first, e.g. "
+                                                       "{\"status_code_text\": \"404\"}"},
+            "window": {"type": "string", "default": "30m"},
+            "top": {"type": "integer", "description": "rows to return (max 50)", "default": 20}},
+            "required": ["view", "by"]},
+    },
+    {
         "name": "query",
         "description": "Read a timeline through a saved view (narrower than `read`: only that "
                        "view's sources and filters). Select the entity by `key` or by `where`.",
@@ -149,6 +165,51 @@ TOOL_DEFS = [
             "required": ["view"]},
     },
 ]
+
+
+STATS_MAX_TOP = 50
+
+
+def stats_table(store, view, by: str, window: str, where: dict | None = None,
+                top=20) -> str:
+    """Counts per value of `by` over the view, now against the window before, as a few lines
+    whatever the volume (TR-319). Largest absolute change first; a value only in one window
+    reads as new or gone."""
+    span = parse_duration(window)
+    if span <= 0:
+        raise ValueError(f"bad window {window!r}")
+    top = max(1, min(int(top), STATS_MAX_TOP))
+    now = now_utc()
+    start = now - timedelta(seconds=span)
+    before_start = start - timedelta(seconds=span)
+    cur = store.aggregate(view.sources, None, "count", start, filters=view.filters,
+                          where=where, group_by=by)
+    prev = store.aggregate(view.sources, None, "count", before_start, filters=view.filters,
+                           where=where, group_by=by, until=start)
+    def change(c: int, p: int) -> str:
+        if p == 0:
+            return "new" if c else "none"
+        if c == 0:
+            return "gone"
+        return f"{c - p:+d} (x{c / p:.1f})"
+
+    rows = []
+    for value in set(cur) | set(prev):
+        c, p = int(cur.get(value, 0)), int(prev.get(value, 0))
+        rows.append((abs(c - p), str(value), c, p, change(c, p)))
+    rows.sort(key=lambda r: (-r[0], r[1]))
+    sel = f" where {', '.join(f'{k}={v}' for k, v in where.items())}" if where else ""
+    lines = [f"stats: view={view.name} by={by}{sel} window={window} "
+             f"(now: last {window}, before: the {window} before that)",
+             f"{by} | now | before | change"]
+    lines += [f"{v} | {c} | {p} | {ch}" for _d, v, c, p, ch in rows[:top]]
+    if len(rows) > top:
+        lines.append(f"... {len(rows) - top} more values")
+    tc, tp = sum(int(x) for x in cur.values()), sum(int(x) for x in prev.values())
+    lines.append(f"total | {tc} | {tp} | {change(tc, tp)}")
+    if not rows:
+        lines.append(f"no events with a {by!r} label in either window")
+    return "\n".join(lines)
 
 
 def prompt_hash(prompt: str) -> str:
@@ -675,6 +736,19 @@ class AgentRunner:
             self.store.log_query("q_" + uuid.uuid4().hex[:12], view, str(key or where or ""),
                                  window, nrows, f"agent:{agent_name}")
             return payload
+        if name == "stats":
+            view = str(args.get("view") or "")
+            if view not in catalog.views:
+                raise KeyError(f"unknown view {view!r} (available: {', '.join(catalog.views)})")
+            by = str(args.get("by") or "").strip()
+            if not by:
+                raise ValueError('stats needs `by`, the label to count per, e.g. "service"')
+            window = str(args.get("window") or "30m")
+            out = stats_table(self.store, catalog.views[view], by, window,
+                              where=args.get("where") or None, top=args.get("top") or 20)
+            self.store.log_query("s_" + uuid.uuid4().hex[:12], view, f"by {by}",
+                                 window, 0, f"agent:{agent_name}")
+            return out
         raise ValueError(f"unknown tool {name!r}")
 
     # ── the finding: an event, plus an optional Slack copy ────────────────────
