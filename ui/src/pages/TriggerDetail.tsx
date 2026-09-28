@@ -131,7 +131,7 @@ export default function TriggerDetail() {
               <tr><td className="help">context window</td>
                   <td className="mono">{String(trigger.emit?.context_window ?? "15m")}</td></tr>
               <tr><td className="help">cooldown</td>
-                  <td className="mono">{trigger.cooldown}</td></tr>
+                  <td className="mono">{trigger.condition.every ? "none (fires on its schedule)" : trigger.cooldown}</td></tr>
             </tbody>
           </table>
         </div>

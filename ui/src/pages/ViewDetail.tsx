@@ -109,7 +109,7 @@ export default function ViewDetail() {
                 <td className="mono">
                   {conditionText(t.condition)}
                 </td>
-                <td className="mono">{t.cooldown}</td>
+                <td className="mono">{t.condition.every ? "—" : t.cooldown}</td>
               </tr>
             ))}
           </tbody>

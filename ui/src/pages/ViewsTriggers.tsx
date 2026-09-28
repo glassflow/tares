@@ -273,7 +273,7 @@ function TriggersSection({ triggers, viewNames, dispatches, roster, slackChannel
                   <td className="mono">
                     {conditionText(t.condition)}
                   </td>
-                  <td className="mono">{t.cooldown}</td>
+                  <td className="mono">{t.condition.every ? "—" : t.cooldown}</td>
                   <td style={{ whiteSpace: "nowrap" }}><TimeAgo ts={lastFired(t.name)} /></td>
                   <td><SubscriberCell t={t} /></td>
                   <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>

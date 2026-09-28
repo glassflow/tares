@@ -847,7 +847,7 @@ function TriggerPanel({ t, viewInProject, lastFired, onSaved }: {
                 <td className="mono">{String(t.emit?.context_window ?? "15m")}
                     <span className="help"> · timeline the woken agent receives</span></td></tr>
             <tr><td className="help">cooldown</td>
-                <td className="mono">{t.cooldown}<span className="help"> · minimum gap between firings per entity</span></td></tr>
+                <td className="mono">{t.condition.every ? "none (fires on its schedule)" : <>{t.cooldown}<span className="help"> · minimum gap between firings per entity</span></>}</td></tr>
             <tr><td className="help">last fired</td>
                 <td>{lastFired ? <TimeAgo ts={lastFired} /> : <span className="dim">never</span>}</td></tr>
           </tbody>
