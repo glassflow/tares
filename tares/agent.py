@@ -574,7 +574,7 @@ async def _run_agent(provider: Provider, messages: list, model, self_headers, on
                 # "thinking…", and a read that takes four seconds looked identical to a hung one.
                 yield _sse({"type": "tool", "id": tu.id, "name": tu.name, "input": tu_input})
                 t0 = time.perf_counter()
-                with _tracing.tool_span(tracer, tu.name, tu_input) as tobs:
+                with _tracing.tool_span(tracer, tu.name, tu_input, call_id=tu.id) as tobs:
                     ok, out = await _execute_tool(tu.name, tu_input, headers)
                     if ok:
                         tobs.set_output(out)

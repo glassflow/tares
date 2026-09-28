@@ -164,6 +164,16 @@ async def main():
           anchor(store)[0] == "d-newest", str(anchor(store)[0]))
     check("delivery recorded on the run", store.delivery == ("ok", None), str(store.delivery))
 
+    print("== session.id: one run, one session (TR-317) ==")
+    sid = ba.AgentRunner._session_id
+    check("the firing's delivery id when the agent reports one",
+          sid(AGENT, ("d-woke", {"delivery_id": "d-woke"}), "disp_1", "run_1") == "d-woke")
+    check("the dispatch when the label is missing on the firing",
+          sid(AGENT, ("billing-svc", {}), "disp_1", "run_1") == "disp_1")
+    check("the run when there is no dispatch (rerun, bootstrap)",
+          sid({"name": "a"}, ("svc", {}), None, "run_1") == "run_1")
+    check("never the entity key", sid({"name": "a"}, ("svc", {}), "disp_1", "run_1") != "svc")
+
     print("== the anchor itself ==")
     store = Store([(9, {"delivery_id": "old"}), (2, {"delivery_id": "new", "alert_id": "a2"})])
     key, labels = anchor(store)
