@@ -220,6 +220,12 @@ export const api = {
     request<{ ok: boolean; configured: boolean }>("/api/settings/anthropic-key",
       { method: "DELETE" }),
 
+  // Runs per agent per day (TR-325): the console value, else the environment, else the default.
+  agentLimits: () => request<AgentLimits>("/api/settings/agents"),
+  setAgentLimits: (body: { daily_cap: number | string | null }) =>
+    request<AgentLimits & { ok: boolean }>("/api/settings/agents",
+      { method: "PUT", body: JSON.stringify(body) }),
+
   // Agent tracing: where runs are exported and whether. Secrets are write-only; the status says
   // what resolves and where from (console vs environment).
   tracingStatus: () => request<TracingStatus>("/api/settings/tracing"),
@@ -412,6 +418,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ yaml, mode }),
     }),
+};
+
+export type AgentLimits = {
+  daily_cap: number;
+  daily_cap_source: "console" | "env" | "default";
+  default: number;
+  env: string;
 };
 
 export type TracingStatus = {

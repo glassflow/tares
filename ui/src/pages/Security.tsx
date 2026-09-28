@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { api, type TracingStatus } from "../api";
+import { api, type AgentLimits, type TracingStatus } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { Close } from "../components/icons";
 import { Picker, TimeAgo } from "../components/bits";
@@ -13,10 +13,11 @@ import type { ApiKey, GithubCredential, ModelProvider, ModelProviders } from "..
 //   · Slack      — the bot token behind slack:// trigger subscriptions (outbound), and the
 //                  signing secret that authenticates the /tares slash command (inbound)
 // The per-source ingest URL is an address, not a secret — it lives on the source page, not here.
-type SettingsTab = "access" | "anthropic" | "github" | "slack" | "observability";
+type SettingsTab = "access" | "anthropic" | "agents" | "github" | "slack" | "observability";
 const TABS: { key: SettingsTab; label: string }[] = [
   { key: "access", label: "Access and API keys" },
   { key: "anthropic", label: "Model providers" },
+  { key: "agents", label: "Agents" },
   { key: "github", label: "GitHub" },
   { key: "slack", label: "Slack" },
   { key: "observability", label: "Observability" },
@@ -41,7 +42,7 @@ export default function Security() {
   return (
     <>
       <h1>Settings</h1>
-      <p className="subtitle">access mode, API keys, model providers, the instance credentials (GitHub, Slack) and agent tracing</p>
+      <p className="subtitle">access mode, API keys, model providers, agent limits, the instance credentials (GitHub, Slack) and agent tracing</p>
       {workspaceUrl && (
         <div className="alert" style={{ marginBottom: 14 }}>
           <strong>Users, the Slack app, plan and storage</strong> are managed in your workspace, not
@@ -57,6 +58,7 @@ export default function Security() {
       </div>
       {tab === "access" && <><AccessPanel /><ApiKeysPanel /></>}
       {tab === "anthropic" && <ProvidersPanel />}
+      {tab === "agents" && <AgentLimitsPanel />}
       {tab === "github" && <GithubPanel />}
       {tab === "slack" && <><SlackTokenPanel /><SlackSigningSecretPanel /></>}
       {tab === "observability" && <TracingPanel />}
@@ -491,6 +493,65 @@ function ProvidersPanel() {
 // preset (a key is enough); any OTLP/HTTP endpoint works. Same precedence as the Anthropic key:
 // a value saved here wins over the environment, so a cloud cell shows "from env" everywhere and
 // the switch is the one live control. The key and headers are write-only.
+// Runs per agent per day (TR-325). A guard against a runaway trigger, not a bill: spend is bounded
+// by each agent's budget. Saved here it replaces the deployment's value; cleared, that comes back.
+function AgentLimitsPanel() {
+  const [st, setSt] = useState<AgentLimits>();
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>();
+  const [msg, setMsg] = useState<string>();
+
+  const load = () => api.agentLimits()
+    .then((s) => { setSt(s); setValue(String(s.daily_cap)); })
+    .catch((e) => setErr(String((e as Error).message ?? e)));
+  useEffect(() => { load(); }, []);
+
+  const save = async (daily_cap: string | null, done: string) => {
+    setBusy(true); setErr(undefined); setMsg(undefined);
+    try { await api.setAgentLimits({ daily_cap }); setMsg(done); await load(); }
+    catch (e) { setErr(String((e as Error).message ?? e)); }
+    setBusy(false);
+  };
+
+  if (!st) return <div className="panel"><h2 style={{ marginTop: 0 }}>Agent limits</h2>
+    {err ? <div className="alert error">{err}</div> : <div className="muted">loading…</div>}</div>;
+
+  const from = st.daily_cap_source === "console" ? "saved here"
+    : st.daily_cap_source === "env" ? `from ${st.env}` : "the default";
+
+  return (
+    <div className="panel">
+      <h2 style={{ marginTop: 0 }}>Agent limits</h2>
+      <p className="help" style={{ marginTop: 0 }}>
+        How many times each Tares agent may run in 24 hours. When an agent reaches it, further
+        firings are recorded as capped and cost nothing until the window moves on. An agent on a
+        schedule every 10 minutes runs 144 times a day. Spend is bounded separately by each
+        agent's budget.
+      </p>
+      {err && <div className="alert error">{err}</div>}
+      {msg && <p className="help">{msg}</p>}
+      <div className="row2">
+        <label className="field">
+          <span className="lbl">runs per agent per day</span>
+          <input type="number" min={1} max={10000} value={value} disabled={busy}
+                 onChange={(e) => setValue(e.target.value)} />
+          <span className="help">now {st.daily_cap}, {from}</span>
+        </label>
+      </div>
+      <div className="btnrow">
+        <button className="primary" disabled={busy || value.trim() === String(st.daily_cap)}
+                onClick={() => save(value.trim(), "✓ saved; applies from the next run")}>Save</button>
+        {st.daily_cap_source === "console" && (
+          <button disabled={busy} onClick={() => save(null, "✓ cleared")}>
+            Use the deployment's value or the default
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TracingPanel() {
   const [st, setSt] = useState<TracingStatus>();
   const [provider, setProvider] = useState<string>();
