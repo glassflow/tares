@@ -6,6 +6,10 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Tares agents have a `stats` tool: counts per value of one label through a view, for the last
+  window against the window of the same length before it, largest change first, capped to the top
+  rows. An agent can see which services, status codes or paths moved on a busy stream without
+  reading lines, where `read` and `query` return only the most recent events per source.
 - A Tares agent can end a run on purpose with the `conclude` tool: `no_op` when there is nothing to
   hand on (the run is a success with no finding, no Slack post and no write-back), or `finding`
   with a `verdict` and the entity the finding is about. The verdict is a label on the finding, so a
