@@ -3,7 +3,7 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.34.0] - 2026-09-28
 
 ### Added
 - On-demand firings on the ingest path. A delivery to `POST /ingest/{token}` carrying
