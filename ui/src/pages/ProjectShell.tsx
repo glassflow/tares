@@ -5,13 +5,13 @@ import { api } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
 import TriggerEditor from "../components/TriggerEditor";
 import ViewEditor from "../components/ViewEditor";
-import { Combo, Picker, ErrorState, TimeAgo, usePolling } from "../components/bits";
+import { Combo, Picker, ErrorState, TimeAgo, conditionText, usePolling } from "../components/bits";
 import AgentForm from "../components/AgentForm";
 import IngestEndpoint from "../components/IngestEndpoint";
 import InfoDialog, { HelpButton } from "../components/InfoDialog";
 import { SessionsPanel } from "../components/ChallengerSessions";
 import { RunsPanel } from "./AgentDetail";
-import type { ConnectorSpec, ProjectSummary, Template, RecipeActionOption, Source } from "../types";
+import type { ConnectorSpec, ProjectSummary, Template, RecipeActionOption, Source, TriggerCondition } from "../types";
 
 // The page for every project: what a project really is, on one page, driven by the live APIs
 // plus the template's summary. Setup (sources, views and triggers, the latter two editable in
@@ -21,8 +21,7 @@ import type { ConnectorSpec, ProjectSummary, Template, RecipeActionOption, Sourc
 // content arrives as data (actions, facts, panels, cards), never as template-specific markup.
 
 
-const fmtCond = (t: { condition: { aggregate: string; field?: string | null; predicate: string; window: string } }) =>
-  `${t.condition.aggregate}(${t.condition.field || "*"}) ${t.condition.predicate} over ${t.condition.window}`;
+const fmtCond = (t: { condition: TriggerCondition }) => conditionText(t.condition);
 
 export default function ProjectShell({ s, id, reload, template }: {
   s: ProjectSummary; id: string; reload: () => void; template?: Template;
@@ -848,7 +847,7 @@ function TriggerPanel({ t, viewInProject, lastFired, onSaved }: {
                 <td className="mono">{String(t.emit?.context_window ?? "15m")}
                     <span className="help"> · timeline the woken agent receives</span></td></tr>
             <tr><td className="help">cooldown</td>
-                <td className="mono">{t.cooldown}<span className="help"> · minimum gap between firings per entity</span></td></tr>
+                <td className="mono">{t.condition.every ? "none (fires on its schedule)" : <>{t.cooldown}<span className="help"> · minimum gap between firings per entity</span></>}</td></tr>
             <tr><td className="help">last fired</td>
                 <td>{lastFired ? <TimeAgo ts={lastFired} /> : <span className="dim">never</span>}</td></tr>
           </tbody>

@@ -219,6 +219,9 @@ export interface TriggerCondition {
   window: string;
   field?: string | null;
   group_by?: string[];
+  // a schedule instead of a condition (TR-320): fire every interval, summarized by these labels
+  every?: string;
+  summary_by?: string[];
 }
 
 export interface Trigger {

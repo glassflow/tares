@@ -59,8 +59,8 @@ export default function TriggerEditor({ initial, prefill, presetView, onSaved, o
     setBusy(true);
     setError(undefined);
     try {
-      if (isNew) await api.createTrigger(t);
-      else await api.updateTrigger(initial!.name, t);
+      if (isNew) await api.createTrigger(toSave());
+      else await api.updateTrigger(initial!.name, toSave());
       onSaved(t.name);
     } catch (e) { setError(String((e as Error).message ?? e)); }
     setBusy(false);
@@ -68,6 +68,24 @@ export default function TriggerEditor({ initial, prefill, presetView, onSaved, o
 
   const cond = (patch: Partial<Trigger["condition"]>) =>
     setT({ ...t, condition: { ...t.condition, ...patch } });
+
+  // "on a schedule" fires every interval for the whole view (TR-320); the condition fields then
+  // mean nothing, so the saved condition carries only the schedule
+  const scheduled = !!t.condition.every;
+  const [summaryText, setSummaryText] = useState((t.condition.summary_by ?? []).join(", "));
+  const setMode = (m: string) => {
+    if (m === "schedule") setT({ ...t, condition: { ...t.condition, every: t.condition.every || "10m" } });
+    else {
+      const { every: _e, summary_by: _s, ...rest } = t.condition;
+      setT({ ...t, condition: { ...rest, aggregate: rest.aggregate || "max",
+                                predicate: rest.predicate || "> 1.0", window: rest.window || "1m" } });
+    }
+  };
+  const toSave = (): Trigger => scheduled
+    ? { ...t, condition: { every: t.condition.every, aggregate: "count", predicate: "> 0",
+                           window: t.condition.every!,
+                           summary_by: summaryText.split(",").map((x) => x.trim()).filter(Boolean) } }
+    : t;
 
   return (
     <div className="panel">
@@ -85,6 +103,34 @@ export default function TriggerEditor({ initial, prefill, presetView, onSaved, o
                  onChange={(v) => setT({ ...t, view: v })} />
         </div>
       </div>
+      <div className="row2">
+        <div className="field">
+          <span className="lbl">fires</span>
+          <Picker value={scheduled ? "schedule" : "condition"} options={["condition", "schedule"]}
+                  labels={{ condition: "when a condition holds", schedule: "on a schedule" }}
+                  ariaLabel="fires" onChange={setMode} />
+          <span className="help">
+            {scheduled
+              ? "once every interval for the whole view, whether or not anything happened; the agent gets counts for the window"
+              : "for each entity whose events match the condition, at most once per cooldown"}
+          </span>
+        </div>
+      </div>
+      {scheduled ? (
+        <div className="row2">
+          <label className="field">
+            <span className="lbl">run every</span>
+            <input type="text" value={t.condition.every ?? ""} onChange={(e) => cond({ every: e.target.value })} />
+            <span className="help">e.g. 10m; at least 1m</span>
+          </label>
+          <label className="field">
+            <span className="lbl">count by</span>
+            <input type="text" value={summaryText} placeholder="e.g. service, status_code"
+                   onChange={(e) => setSummaryText(e.target.value)} />
+            <span className="help">labels the agent gets counts for, this window against the last; empty = the view's key</span>
+          </label>
+        </div>
+      ) : (<>
       <div className="row2">
         <div className="field">
           <span className="lbl">aggregate</span>
@@ -130,6 +176,7 @@ export default function TriggerEditor({ initial, prefill, presetView, onSaved, o
           <span className="help">minimum gap between firings per entity</span>
         </label>
       </div>
+      </>)}
       <div className="btnrow">
         <button className="primary" onClick={save} disabled={busy || !t.name.trim() || !t.view.trim()}>
           {isNew ? "Create trigger" : "Save changes"}
