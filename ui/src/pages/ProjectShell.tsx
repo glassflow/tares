@@ -926,7 +926,7 @@ function AgentSection({ name, focusDispatch, triggerInProject, onShowTrigger }: 
             <tbody>
               <tr><td className="help" style={{ width: 150 }}>status</td>
                   <td>{agent.enabled ? <span className="badge ok">enabled</span> : <span className="badge">disabled</span>}
-                      {!data.key_configured && <span className="help"> · no Anthropic key; add one under Settings</span>}</td></tr>
+                      {!data.key_configured && <span className="help"> · no model provider; add one under Settings</span>}</td></tr>
               <tr><td className="help">wakes on</td>
                   <td>{triggerInProject.includes(agent.trigger)
                         // the trigger card is on the Setup tab of this page; go there, not away

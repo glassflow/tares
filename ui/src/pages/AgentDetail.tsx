@@ -148,8 +148,8 @@ export default function AgentDetail() {
                   <td>
                     {agent.enabled ? <span className="badge ok">enabled</span> : <span className="badge">disabled</span>}
                     {!data.key_configured
-                      ? <span className="help"> · Model access is not configured: set ANTHROPIC_API_KEY before <span className="mono">tares up</span>, or add a key under <Link to="/settings?tab=anthropic">Settings</Link></span>
-                      : <span className="help"> · key from <span className="mono">{data.key_source}</span></span>}
+                      ? <span className="help"> · no model provider is configured: add one under <Link to="/settings?tab=anthropic">Settings, Model providers</Link>, or set ANTHROPIC_API_KEY before <span className="mono">tares up</span></span>
+                      : <span className="help"> · credential from <span className="mono">{data.key_source}</span></span>}
                   </td>
                 </tr>
                 <tr><td className="help">wakes on</td>
@@ -163,9 +163,16 @@ export default function AgentDetail() {
                       ? <><TimeAgo ts={lastRun.started_at} /> for <span className="mono">{lastRun.key}</span>
                           {lastRun.dispatch_id && <> · <Link to={`/dispatches/${encodeURIComponent(lastRun.dispatch_id)}`}>the firing</Link></>}</>
                       : <span className="dim">never</span>}</td></tr>
+                <tr><td className="help">provider</td>
+                    <td>{(() => {
+                      const eff = data.providers?.find((p) => p.id === (agent.effective_provider ?? data.default_provider));
+                      return <><span className="mono">{eff ? eff.name : (agent.effective_provider ?? "none")}</span>
+                        {!agent.provider && <span className="help"> · cell default</span>}
+                        {agent.provider && agent.provider !== agent.effective_provider && <span className="help"> · <span className="mono">{agent.provider}</span> is not configured on this cell, runs use the default</span>}</>;
+                    })()}</td></tr>
                 <tr><td className="help">model</td>
-                    <td><span className="mono">{agent.model || data.default_model}</span>
-                        {!agent.model && <span className="help"> · instance default</span>}</td></tr>
+                    <td><span className="mono">{agent.model || data.default_models?.[agent.effective_provider ?? ""] || data.default_model}</span>
+                        {!agent.model && <span className="help"> · provider default</span>}</td></tr>
                 <tr><td className="help">tokens used</td>
                     <td>{stats && (stats.input_tokens || stats.output_tokens)
                       ? <><span className="mono">{fmtTokens(stats.input_tokens)}</span> in
@@ -212,6 +219,9 @@ export default function AgentDetail() {
             presets={data.presets}
             models={data.models}
             defaultModel={data.default_model}
+            providers={data.providers}
+            defaultProvider={data.default_provider}
+            defaultModels={data.default_models}
             slackWorkspace={data.slack_workspace}
             defaultMaxRounds={data.default_max_rounds}
             defaultMaxRoundsWithMcp={data.default_max_rounds_with_mcp}
@@ -225,9 +235,16 @@ export default function AgentDetail() {
               <tbody>
                 <tr><td className="help" style={{ width: 150 }}>trigger</td>
                     <td><Link to={`/triggers/${encodeURIComponent(agent.trigger)}`} className="mono">{agent.trigger}</Link></td></tr>
+                <tr><td className="help">provider</td>
+                    <td>{(() => {
+                      const eff = data.providers?.find((p) => p.id === (agent.effective_provider ?? data.default_provider));
+                      return <><span className="mono">{eff ? eff.name : (agent.effective_provider ?? "none")}</span>
+                        {!agent.provider && <span className="help"> · cell default</span>}
+                        {agent.provider && agent.provider !== agent.effective_provider && <span className="help"> · <span className="mono">{agent.provider}</span> is not configured on this cell, runs use the default</span>}</>;
+                    })()}</td></tr>
                 <tr><td className="help">model</td>
-                    <td><span className="mono">{agent.model || data.default_model}</span>
-                        {!agent.model && <span className="help"> · instance default</span>}</td></tr>
+                    <td><span className="mono">{agent.model || data.default_models?.[agent.effective_provider ?? ""] || data.default_model}</span>
+                        {!agent.model && <span className="help"> · provider default</span>}</td></tr>
                 <tr><td className="help">max rounds</td>
                     <td><span className="mono">{agent.effective_max_rounds}</span>
                         {!agent.max_rounds && <span className="help"> · default{agent.mcp_servers.length ? " for an agent with external MCP servers" : ""}</span>}</td></tr>
@@ -419,7 +436,7 @@ function RunRow({ r, open, focused, onToggle }: {
         <td>{statusBadge(r)} {deliveryBadge(r)}</td>
         <td style={{ whiteSpace: "nowrap" }}><TimeAgo ts={r.started_at} /></td>
         <td className="mono">{r.key}</td>
-        <td className="mono">{r.model ?? <span className="dim">—</span>}</td>
+        <td className="mono">{r.model ? <>{r.provider && r.provider !== "anthropic" && <span className="help">{r.provider} / </span>}{r.model}</> : <span className="dim">—</span>}</td>
         <td className="num">{r.rounds}{r.max_rounds ? <span className="dim">/{r.max_rounds}</span> : null}</td>
         <td className="num" style={{ whiteSpace: "nowrap" }}
             title={hasTokens ? `${(r.input_tokens ?? 0).toLocaleString()} in · ${(r.output_tokens ?? 0).toLocaleString()} out` : "this run predates usage tracking"}>
@@ -470,7 +487,7 @@ function RunRow({ r, open, focused, onToggle }: {
                 : !exhaustedNote && (
                     <p className="help" style={{ margin: 0, whiteSpace: "normal" }}>
                       {r.status === "running" ? "investigating…"
-                        : r.error?.startsWith("no Anthropic key")
+                        : r.error?.startsWith("no model provider")
                           ? <>{r.error} (<Link to="/settings?tab=anthropic">Settings</Link>)</>
                           : (r.error ?? "no finding")}
                     </p>

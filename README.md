@@ -114,7 +114,7 @@ Then ask your agent:
 
 > Use tares: what happened to api-server in the last 15 minutes?
 
-The agent calls `read` and gets the incident correlated: the `HighErrorRate` alert Prometheus fired, the 5xx request logs, and the error-rate spike in one time-ordered response. It has nothing to stitch together across systems. (The `incident` trigger fires too, and the catalog ships a Tares agent that wakes on it and writes its diagnosis back as a **finding** on the timeline. Set `ANTHROPIC_API_KEY` first, or see [`demo/`](demo/). `./inject.sh clear` rolls the fault back.)
+The agent calls `read` and gets the incident correlated: the `HighErrorRate` alert Prometheus fired, the 5xx request logs, and the error-rate spike in one time-ordered response. It has nothing to stitch together across systems. (The `incident` trigger fires too, and the catalog ships a Tares agent that wakes on it and writes its diagnosis back as a **finding** on the timeline. Set `ANTHROPIC_API_KEY` first (or add any model provider under Settings), or see [`demo/`](demo/). `./inject.sh clear` rolls the fault back.)
 
 A built-in agent on a real incident. The prompt is the whole configuration, and the finding it writes is a structured incident note on the service's timeline:
 
@@ -139,7 +139,7 @@ Sources bring events in, views join them per entity, triggers watch the views, a
 
 **Does my data leave my machine?** No. One local DuckDB file. The only outbound traffic is what the agents you configure send to their model provider.
 
-**Do I need an Anthropic key?** Only for the built-in Tares agents and Ask. MCP reads need none.
+**Do I need a model key?** Only for the built-in Tares agents and Ask, and any provider works: Anthropic, OpenAI, or an OpenAI-compatible endpoint such as LiteLLM, OpenRouter, Ollama or vLLM. MCP reads need none.
 
 **Is it read-only?** By default. Registering external MCP servers moves that boundary per agent, deliberately.
 

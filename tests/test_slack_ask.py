@@ -349,8 +349,8 @@ async def main():
             r = await slash(cx, "ask what happened to checkout-svc")
             ck("a signed slash command is reachable with auth on (no bearer token)",
                r.status_code == 200, f"{r.status_code} {r.text[:200]}")
-            ck("no Anthropic key -> a readable message, not silence",
-               "Anthropic" in r.text and "warning" in r.text, r.text[:300])
+            ck("no model provider -> a readable message, not silence",
+               "no model provider" in r.text and "warning" in r.text, r.text[:300])
             ck("...and the model was never called", not MODEL_CALLS, str(MODEL_CALLS)[:200])
 
             body = command_body("ask anything")

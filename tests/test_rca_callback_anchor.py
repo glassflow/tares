@@ -123,8 +123,8 @@ def anchor(store, agent=AGENT):
 
 async def main():
     # The module resolves these from the store; the run path needs them non-empty to proceed.
-    ba.resolve_anthropic_headers = lambda store: ({"x-api-key": "test"}, "test")
-    ba.resolve_api_base = lambda store: ("https://api.invalid", "test")
+    ba.resolve_for_agent = lambda store, agent: (type("P", (), {"kind": "anthropic"})(), "test", "anthropic", "")
+    ba.default_model_for = lambda store, provider_id: "claude-test"
 
     print("== THE REGRESSION: newer firings during the run must not move the key ==")
     # One firing when the run starts; three more land while the model loop is running, exactly as
@@ -163,6 +163,16 @@ async def main():
     check("newer firings were in fact present by write-back time",
           anchor(store)[0] == "d-newest", str(anchor(store)[0]))
     check("delivery recorded on the run", store.delivery == ("ok", None), str(store.delivery))
+
+    print("== session.id: one run, one session (TR-317) ==")
+    sid = ba.AgentRunner._session_id
+    check("the firing's delivery id when the agent reports one",
+          sid(AGENT, ("d-woke", {"delivery_id": "d-woke"}), "disp_1", "run_1") == "d-woke")
+    check("the dispatch when the label is missing on the firing",
+          sid(AGENT, ("billing-svc", {}), "disp_1", "run_1") == "disp_1")
+    check("the run when there is no dispatch (rerun, bootstrap)",
+          sid({"name": "a"}, ("svc", {}), None, "run_1") == "run_1")
+    check("never the entity key", sid({"name": "a"}, ("svc", {}), "disp_1", "run_1") != "svc")
 
     print("== the anchor itself ==")
     store = Store([(9, {"delivery_id": "old"}), (2, {"delivery_id": "new", "alert_id": "a2"})])

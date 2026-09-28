@@ -36,8 +36,8 @@ export default function Agents() {
 
       {data && !data.key_configured && (
         <div className="alert">
-          Model access is not configured: set ANTHROPIC_API_KEY before <span className="mono">tares up</span>, or add a
-          key under <Link to="/settings?tab=anthropic">Settings</Link>. Agents can be created but not enabled until then.
+          No model provider is configured: add one under <Link to="/settings?tab=anthropic">Settings, Model providers</Link>,
+          or set ANTHROPIC_API_KEY before <span className="mono">tares up</span>. Agents can be created but not enabled until then.
         </div>
       )}
 

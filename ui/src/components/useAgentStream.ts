@@ -22,6 +22,8 @@ export type StreamEvent =
 export type SendOptions = {
   mode?: "ask" | "build";
   step?: "sources" | "watch" | "agent";
+  /** One id per conversation, so its turns group as one session in the traces. */
+  session?: string;
 };
 
 /** A non-200 reply as one readable line. The daemon answers with JSON `{detail}`; anything
@@ -57,6 +59,7 @@ export function useAgentStream() {
       const body: Record<string, unknown> = { messages };
       if (opts.mode) body.mode = opts.mode;
       if (opts.step) body.step = opts.step;
+      if (opts.session) body.session = opts.session;
       const res = await fetch("/api/agent/chat", {
         method: "POST",
         signal: ctl.signal,

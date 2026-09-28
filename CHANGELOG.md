@@ -14,6 +14,68 @@ the project follows [Semantic Versioning](https://semver.org/).
   again. The header carries no authority of its own, ingest still needs the `ingest` scope, and it
   works for any push source with no change to a project or its template (RIUS-687).
 
+### Changed
+- Agent traces follow the GenAI conventions more closely. Every span of a run carries
+  `gen_ai.agent.name` and `gen_ai.agent.version`, so one agent reads as one agent across instances.
+  `session.id` is now one run: the firing's delivery id when the agent reports one, else the
+  trigger dispatch, else the run. Before, it was the entity key, which made one session of every
+  run an agent ever made on that entity.
+- LLM spans carry `gen_ai.tool.definitions`. Tool spans carry `gen_ai.tool.call.id`,
+  `gen_ai.tool.call.arguments` and, when the call failed, `error.type`. The root span carries the
+  waking firing's labels as `tares.label.<name>`.
+- The AI-guided project builder traces as its own agent, `project-builder`, instead of `ask`: its
+  own `service.name`, root span and `gen_ai.agent.name`, with the step in `tares.build_step`. All
+  turns of one build share a `session.id`, sent by the console.
+- A run that stops before calling the model (no provider, no model, daily cap, budget) says why on
+  its root span in `tares.run.skipped_reason`.
+
+## [1.33.0] - 2026-09-15
+
+### Fixed
+- A provider the deployment hands the cell (`TARES_PLATFORM_PROVIDER_URL`) and an OpenAI key
+  from the environment now list their models at daemon start. Before, the picker stayed empty
+  until someone pressed refresh under Settings, since an environment entry has no save moment.
+
+## [1.32.0] - 2026-09-15
+
+### Added
+- A deployment can hand a cell a model provider: `TARES_PLATFORM_PROVIDER_URL`, `_KEY` and `_NAME`
+  seed an OpenAI-compatible entry that is the default until the user picks another or saves a key
+  of their own. It lists the models its key may use, prices runs from the endpoint's own cost
+  figure, and cannot be edited or removed from the console. Tares Cloud uses it to run a trial cell
+  through its LiteLLM with a per-cell budget that covers Claude and GPT models alike.
+
+## [1.31.0] - 2026-09-14
+
+### Added
+- `GET /metrics`: the daemon's own counters in the Prometheus text format, public like `/health`.
+  Events ingested and poll outcomes per source, source state, agent runs per outcome with their
+  duration, model calls, tokens and spend per provider, database size against its limit and
+  whether ingest is paused, trigger evaluation passes and their duration, and the event loop's
+  lag with a count of stalls. Counts only: no entity key or payload ever appears.
+
+## [1.30.0] - 2026-09-14
+
+### Added
+- Model providers. A cell holds a list of providers under Settings, Model providers: Anthropic,
+  OpenAI, or any OpenAI-compatible endpoint (LiteLLM, OpenRouter, Ollama, vLLM). Each agent picks
+  a provider and a model; Ask and the builder run on the cell default. An endpoint lists its own
+  models on save, with a refresh, and an agent can name a model by hand when it lists none.
+  `OPENAI_API_KEY`, `OPENAI_BASE_URL` seed an OpenAI entry; `TARES_MODEL_PROVIDER` names the
+  default. The Anthropic key and gateway settings and their endpoints are unchanged, and a
+  provider named by a template or an import that the cell lacks runs on the default instead of
+  failing.
+- The spend meter prices OpenAI models, takes a router's own cost figure when it reports one
+  (OpenRouter, LiteLLM), splits spend by provider, and records tokens without a dollar figure for
+  a model it cannot price. Traces name the provider on every model span.
+- A run that ends with no conclusion and no tool call says to check that the model supports tool
+  calling. A tool name a model mis-cases still reaches the tool; an unknown one answers with the
+  list of real tools.
+
+### Changed
+- Console, CLI and README say "model provider" where they said "Anthropic key". A failed run's
+  error reads `ModelError: ...` where it read `RuntimeError: ...`.
+
 ## [1.29.1] - 2026-09-10
 
 ### Fixed

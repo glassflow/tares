@@ -127,7 +127,8 @@ class AgentCfg:
     trigger: str
     prompt: str
     slack_webhook: str = ""
-    model: str = ""           # "" = follow the instance default (TARES_AGENT_MODEL)
+    model: str = ""           # "" = the provider's default model (TARES_AGENT_MODEL on Anthropic)
+    provider: str = ""        # a provider id from Settings; "" = the cell default (TR-302)
     slack_channel: str = ""   # workspace-bot channel id; wins over slack_webhook when both set
     webhook_url: str = ""     # write-back: findings + run metadata POSTed here
     webhook_token: str = ""   # optional bearer token for the write-back (a secret)
@@ -236,6 +237,7 @@ def _agent_from_dict(a: dict, enabled: bool = False) -> AgentCfg:
         name=a["name"], trigger=a["trigger"], prompt=a["prompt"],
         slack_webhook=a.get("slack_webhook") or "",
         model=a.get("model") or "",
+        provider=a.get("provider") or "",
         slack_channel=a.get("slack_channel") or "",
         webhook_url=a.get("webhook_url") or "",
         webhook_token=a.get("webhook_token") or "",
@@ -371,7 +373,8 @@ def import_catalog_dict(store, raw: dict, engine=None) -> dict:
                                     else None),
                                    (float(a["budget_usd"]) if a.get("budget_usd") not in (None, "")
                                     else None),
-                                   webhook_key_label=a.get("webhook_key_label"))
+                                   webhook_key_label=a.get("webhook_key_label"),
+                                   provider=a.get("provider"))
         # enabled ⟺ a subscription to the trigger. Reflect the document's state so an enabled agent
         # round-trips: add the internal subscription if enabled, remove it if not.
         url = agent_url(a["name"])
@@ -494,6 +497,7 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
     agent_out = [
         {"name": a["name"], "trigger": a["trigger"], "prompt": a["prompt"],
          **({"model": a["model"]} if a.get("model") else {}),
+         **({"provider": a["provider"]} if a.get("provider") else {}),
          **({"slack_channel": a["slack_channel"]} if a.get("slack_channel") else {}),
          **({"webhook_url": a["webhook_url"]} if a.get("webhook_url") else {}),
          **({"webhook_key_label": a["webhook_key_label"]} if a.get("webhook_key_label") else {}),
@@ -781,11 +785,19 @@ def validate_agent_dict(a: dict, trigger_names: set, triggers: dict | None = Non
     if hook and not hook.startswith("https://"):
         raise CatalogError(f"agent {a['name']!r}: slack_webhook must be an https URL")
     model = str(a.get("model") or "").strip()
+    provider = str(a.get("provider") or "").strip()
+    if provider and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", provider):
+        raise CatalogError(f"agent {a['name']!r}: provider must be a provider id from Settings "
+                           "(letters, digits, dashes), or empty for the cell default")
     # Loose on purpose: the console offers a curated list, but YAML/API users may name a model
-    # newer than this build knows. The API rejects a wrong name at run time either way.
-    if model and not re.fullmatch(r"claude-[a-z0-9.\-]+", model):
-        raise CatalogError(f"agent {a['name']!r}: model must be a claude model id (or empty "
-                           "for the instance default)")
+    # newer than this build knows. The API rejects a wrong name at run time either way. A model
+    # on a non-Anthropic provider is whatever that provider calls it.
+    if model and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/\-]*", model):
+        raise CatalogError(f"agent {a['name']!r}: model must be a model id (or empty for the "
+                           "provider's default)")
+    if model and provider == "anthropic" and not model.startswith("claude-"):
+        raise CatalogError(f"agent {a['name']!r}: model {model!r} is not a Claude model; name the "
+                           "provider it belongs to (`provider`) or pick a claude model id")
     channel = str(a.get("slack_channel") or "").strip()
     if channel and not re.fullmatch(r"[A-Z][A-Z0-9]{4,}", channel):
         raise CatalogError(f"agent {a['name']!r}: slack_channel must be a Slack channel ID "
