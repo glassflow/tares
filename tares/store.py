@@ -619,7 +619,19 @@ class Store:
     def _lineage_upgrade(self) -> None:
         """Runs and firings from before lineage have no project: take it from the agent's or the
         trigger's owner when that still exists (a run of a deleted agent stays unplaced). Then the
-        indexes the project timeline reads through. Idempotent: only NULL rows are touched."""
+        indexes the project timeline reads through. Idempotent: only NULL rows are touched, and
+        the backfill runs once per database (a settings marker), not on every start."""
+        done = self.con.execute("SELECT 1 FROM settings WHERE key = 'lineage_backfilled'").fetchone()
+        if not done:
+            self._lineage_backfill()
+        for stmt in ("CREATE INDEX IF NOT EXISTS ix_agent_runs_dispatch ON agent_runs(dispatch_id)",
+                     "CREATE INDEX IF NOT EXISTS ix_agent_runs_parent ON agent_runs(parent_run_id)",
+                     "CREATE INDEX IF NOT EXISTS ix_agent_runs_project ON agent_runs(project, started_at)",
+                     "CREATE INDEX IF NOT EXISTS ix_dispatch_log_project ON dispatch_log(project, fired_at)",
+                     "CREATE INDEX IF NOT EXISTS ix_dispatch_log_parent ON dispatch_log(parent_run_id)"):
+            self.con.execute(stmt)
+
+    def _lineage_backfill(self) -> None:
         self.con.execute(
             "UPDATE agent_runs SET project = a.owned_by FROM catalog_agents a "
             "WHERE agent_runs.project IS NULL AND a.name = agent_runs.agent "
@@ -628,12 +640,8 @@ class Store:
             "UPDATE dispatch_log SET project = t.owned_by FROM catalog_triggers t "
             "WHERE dispatch_log.project IS NULL AND t.name = dispatch_log.trigger "
             "AND t.owned_by IS NOT NULL")
-        for stmt in ("CREATE INDEX IF NOT EXISTS ix_agent_runs_dispatch ON agent_runs(dispatch_id)",
-                     "CREATE INDEX IF NOT EXISTS ix_agent_runs_parent ON agent_runs(parent_run_id)",
-                     "CREATE INDEX IF NOT EXISTS ix_agent_runs_project ON agent_runs(project, started_at)",
-                     "CREATE INDEX IF NOT EXISTS ix_dispatch_log_project ON dispatch_log(project, fired_at)",
-                     "CREATE INDEX IF NOT EXISTS ix_dispatch_log_parent ON dispatch_log(parent_run_id)"):
-            self.con.execute(stmt)
+        self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
+                         "('lineage_backfilled', '1', ?) ON CONFLICT (key) DO NOTHING", [now_utc()])
 
     def ping(self) -> None:
         """Cheapest possible liveness probe for /health — proves the connection still answers.
