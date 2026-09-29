@@ -199,9 +199,17 @@ it can change things.
 
 
 # ── plain text ───────────────────────────────────────────────────────────────
+_PLACEHOLDER = re.compile(r"^\s*(<[^<>]*>|\[[^\[\]]*\]|unknown|todo|tbd|n/?a|your[-_][a-z0-9_-]*|xxx+)\s*$",
+                          re.IGNORECASE)
+
+
 def scrub(obj):
-    """Every string in `obj` without em dashes: " — " and "—" become a comma."""
+    """Every string in `obj` without em dashes: " — " and "—" become a comma. A placeholder the
+    model wrote for a value it does not know ("<UNKNOWN>", "your-loki-url") becomes empty, so the
+    person is asked for it instead of Tares trying it."""
     if isinstance(obj, str):
+        if _PLACEHOLDER.match(obj):
+            return ""
         return re.sub(r"\s*—\s*", ", ", obj)
     if isinstance(obj, list):
         return [scrub(x) for x in obj]
@@ -457,6 +465,8 @@ _ERR_PREFIX = re.compile(r"^(?:source|trigger|agent|skill)(?: name)? '[^']*'"
 def _plain(e) -> str:
     """A catalog validator's message without its "trigger 'x':" prefix, as a sentence."""
     t = _ERR_PREFIX.sub("", str(e).strip()) or str(e).strip() or type(e).__name__
+    if re.search(r"must start with http:// or https://", t, re.IGNORECASE):
+        return "Add its address; it starts with http:// or https://."
     t = _cap(t)
     return t if t.endswith((".", "?", "!", ")")) else t + "."
 

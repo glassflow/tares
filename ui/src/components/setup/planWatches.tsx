@@ -79,6 +79,7 @@ function SourceEditor({ watch, cell, taken, onSave, onCancel }: {
   const [mode, setMode] = useState<"existing" | "new">(
     watch ? (watch.existing ? "existing" : "new") : "existing");
   const [pick, setPick] = useState(watch?.existing ? watch.name : "");
+  const [filter, setFilter] = useState("");
   const [conn, setConn] = useState(watch && !watch.existing ? watch.connector : "");
   const [key] = useState(() => watch?.key ?? newKey("w", []));
   const spec = conn ? specs?.[conn] : undefined;
@@ -111,7 +112,14 @@ function SourceEditor({ watch, cell, taken, onSave, onCancel }: {
         : (
           <fieldset className="su-pick-list">
             <legend className="lbl">Which source</legend>
-            {candidates.map((s) => (
+            {candidates.length > 8 && (
+              <input type="search" className="su-filter" aria-label="Filter the sources"
+                     placeholder="Filter by name or kind" value={filter}
+                     onChange={(e) => setFilter(e.target.value)} />
+            )}
+            {candidates.filter((s) => !filter.trim()
+              || `${s.name} ${specs?.[s.connector]?.label ?? s.connector}`.toLowerCase()
+                   .includes(filter.trim().toLowerCase())).map((s) => (
               <Choice key={s.name} name={`su-pick-${key}`} checked={pick === s.name} onChange={() => setPick(s.name)}
                       title={<span className="mono">{s.name}</span>}>
                 {specs?.[s.connector]?.label ?? s.connector}, {sourceState(s)}

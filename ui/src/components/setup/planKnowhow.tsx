@@ -161,9 +161,15 @@ function CopySkill({ ctx, onCopy, onDone }: { ctx: CardCtx; onCopy: (sk: Sk) => 
 }
 
 /** "check recent deploys" -> "To check recent deploys." */
+/** The reason as a sentence: "check recent deploys" -> "To check recent deploys."; a reason
+ *  that is already a sentence ("Knowing which deploys went out helps") is kept as it is. */
 function whyText(why: string): string {
-  const w = why.trim().replace(/^to\s+/i, "").replace(/\.$/, "");
-  return w ? `To ${w[0].toLowerCase()}${w.slice(1)}.` : "";
+  const w = why.trim().replace(/\.$/, "");
+  if (!w) return "";
+  if (/^to\s/i.test(w)) return `${w[0].toUpperCase()}${w.slice(1)}.`;
+  // a bare verb phrase reads as a purpose; anything else is shown as written
+  const verb = /^(check|see|find|look|read|compare|correlate|fetch|get|search|query|open|page|post|list)\b/i.test(w);
+  return verb ? `To ${w[0].toLowerCase()}${w.slice(1)}.` : `${w[0].toUpperCase()}${w.slice(1)}.`;
 }
 
 export function ToolsSection({ ctx }: { ctx: CardCtx }) {
