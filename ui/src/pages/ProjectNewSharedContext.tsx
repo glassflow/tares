@@ -8,7 +8,7 @@ import type { GithubCredential, Template, Project } from "../types";
 
 // The shared code context wizard: pick the GitHub repos that are the sources of context, pick
 // the repo the agent maintains, choose when it runs, click Start. Four steps, then Tares creates
-// one commits source per repo, a view keyed by repo, a trigger, the GitHub MCP server the agent
+// one commits source per repo, a trigger keyed by repo, the GitHub MCP server the agent
 // writes through, and the agent itself. Also serves Edit: with ?edit=<id> the same steps come up
 // filled from the instance's params and Start becomes Save.
 
@@ -194,7 +194,6 @@ export default function ProjectNewSharedContext() {
   const preview = [
     ...sources.map((s) => ({ kind: "source", name: `ctx_${slug}_${slugOf(s.repo, 48)}`,
                               note: `commits on ${s.repo}${s.branch ? ` (${s.branch})` : ""}` })),
-    { kind: "view", name: `ctx_${slug}_repo_activity`, note: "one timeline per repo" },
     { kind: "trigger", name: `ctx_${slug}_changes`, note: "fires when commits land, once per repo per 5 minutes" },
     { kind: "mcp server", name: `ctx_${slug}_github`, note: `GitHub's hosted MCP with credential ${credential || "?"}; the agent writes to ${contextRepo || "the context repo"} through it` },
     { kind: "agent", name: `ctx_${slug}_maintainer`, note: `reads each diff, updates the pages under ${contextPath.trim() || "/"} in ${contextRepo || "the context repo"}, ${writeMode === "pull_request" ? "opens a pull request" : "commits to the branch"}` },

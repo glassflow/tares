@@ -5,7 +5,7 @@ import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { api, auth } from "./api";
 import CommandPalette from "./components/CommandPalette";
 import {
-  Activity, Bolt, Book, Chat, ChevronRight, Database, Filter, GitHub, Grid, Lock, Moon,
+  Activity, Bolt, Chat, ChevronRight, Database, Filter, GitHub, Grid, Lock, Moon,
   Settings, SignOut, Sun, Terminal, Zap,
 } from "./components/icons";
 import { applyTheme, currentTheme, type Theme } from "./theme";
@@ -24,7 +24,7 @@ type NavItem = {
 
 // Two named groups. Projects are the product, so they sit at the top with Overview and Ask;
 // everything a project is made of is one flat Catalog group ordered along the pipeline
-// (sources feed views, views wake triggers, triggers run agents, agents leave firings).
+// (sources feed triggers, triggers run agents, agents leave firings).
 // The old Data / Automate split was mechanism vocabulary and is gone.
 const NAV_GROUPS: { section: string; items: NavItem[] }[] = [
   { section: "", items: [
@@ -34,7 +34,6 @@ const NAV_GROUPS: { section: string; items: NavItem[] }[] = [
   ] },
   { section: "Catalog", items: [
     { to: "/sources", label: "Sources", icon: Database },
-    { to: "/views", label: "Views", icon: Book },
     { to: "/triggers", label: "Triggers", icon: Bolt },
     { to: "/agents", label: "Tares agents", icon: Chat },
     { to: "/firings", label: "Firings", icon: Filter },
@@ -50,7 +49,6 @@ const NAV_GROUPS: { section: string; items: NavItem[] }[] = [
 const SECTION_LABEL: Record<string, string> = {
   sources: "Sources",
   explore: "Explore",
-  views: "Views",
   triggers: "Triggers",
   agents: "Tares agents",
   firings: "Firings",

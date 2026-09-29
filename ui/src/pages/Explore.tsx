@@ -3,19 +3,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { Close, Search } from "../components/icons";
 import { Picker, usePolling } from "../components/bits";
-import type { LabelFacet, TimelineEventRow, View } from "../types";
+import type { LabelFacet, TimelineEventRow } from "../types";
 
 // Explore — the hero, selector-first. Pick an entity on the left to start a selector, optionally
 // narrow it with more label=value constraints (strict AND), and read everything matching across
-// ALL sources as one correlated timeline — no view required (the Layer-1 `read` primitive). A view
-// is an optional lens that narrows the same read. The Human/Agent toggle shows the readable
-// timeline or the exact payload an agent receives over MCP.
+// ALL sources as one correlated timeline (the `read` primitive). Picking a project narrows the
+// same read to that project's sources. The Timeline/Agent toggle shows the readable timeline or
+// the exact payload an agent receives over MCP.
 
 const WINDOWS = ["1h", "24h", "7d", "30d"];
-const RAW = "";  // lens sentinel: "All sources (raw)"; the /read primitive, no view
+const ALL = "";  // scope sentinel: every source
 
 // One label=value term of the conjunction. The first term carries display metadata (event count,
-// the axis's declared sources) so we can label the header and offer relevant view lenses.
+// the axis's declared sources) so we can label the header.
 type Term = { label: string; value: string; events?: number; sources?: string[] };
 
 /** The wire selector: label names as the store expects them (the unnamed primary axis is key_value). */
@@ -25,21 +25,13 @@ function toSelector(terms: Term[]): Record<string, string> {
   return out;
 }
 
-/** Views usable as a lens for this axis: matching key_field first, then broadest (most sources). */
-function lensesFor(axis: string, sources: string[], views: View[]): View[] {
-  return views
-    .filter((v) => v.key_field === axis || v.sources.some((s) => sources.includes(s)))
-    .sort((a, b) =>
-      Number(b.key_field === axis) - Number(a.key_field === axis) || b.sources.length - a.sources.length);
-}
-
 export default function Explore() {
   const { data: entities, error } = usePolling(() => api.entities(), 15000);
-  const { data: views, reload: reloadViews } = usePolling(() => api.views(), 30000);
+  const { data: projects } = usePolling(() => api.projects(), 30000);
 
   const [q, setQ] = useState("");
   const [terms, setTerms] = useState<Term[]>([]);
-  const [lens, setLens] = useState(RAW);
+  const [scope, setScope] = useState(ALL);
   const [window_, setWindow] = useState("1h");
   const [mode, setMode] = useState<"human" | "agent">("human");
   const [payload, setPayload] = useState<string>();
@@ -48,7 +40,6 @@ export default function Explore() {
   const [loading, setLoading] = useState(false);
   const [qerror, setQerror] = useState<string>();
   const [copied, setCopied] = useState(false);
-  const [saving, setSaving] = useState(false);
 
   // Facets with values: primary (key) axes first, then the richest axis first so the group that
   // holds the default landing entity sits at the top of the picker (visible, highlighted).
@@ -77,26 +68,20 @@ export default function Explore() {
 
   const primary = terms[0];
   const selector = useMemo(() => toSelector(terms), [terms]);
-  const lensViews = useMemo(
-    () => (primary ? lensesFor(primary.label, primary.sources ?? [], views ?? []) : []),
-    [primary, views],
-  );
-  const effectiveLens = lens && lensViews.some((v) => v.name === lens) ? lens : RAW;
-  const lensView = lensViews.find((v) => v.name === effectiveLens);
+  const projectList = projects?.projects ?? [];
+  const effectiveScope = scope && projectList.some((p) => p.id === scope) ? scope : ALL;
 
-  // (Re)run the read whenever the selector, lens or window changes; refresh on an interval so the
-  // timeline feels live. Lens RAW → the /read primitive across all sources; a view → /query.
+  // (Re)run the read whenever the selector, scope or window changes; refresh on an interval so the
+  // timeline feels live.
   useEffect(() => {
     if (!terms.length) { setPayload(undefined); setRows(undefined); return; }
     let live = true;
     const run = (spinner: boolean) => {
       if (document.hidden) return;
       if (spinner) setLoading(true);
-      const p = effectiveLens === RAW
-        ? api.read(selector, window_).then((r) => { if (live) setReadSources(r.sources); return r; })
-        : api.runQueryWhere(effectiveLens, selector, window_)
-            .then((r) => { if (live) setReadSources(lensView?.sources ?? []); return r; });
-      p.then((r) => { if (live) { setPayload(r.payload); setRows(r.rows ?? []); setQerror(undefined); } })
+      api.read(selector, window_, effectiveScope ? { project: effectiveScope } : undefined)
+        .then((r) => { if (live) setReadSources(r.sources); return r; })
+        .then((r) => { if (live) { setPayload(r.payload); setRows(r.rows ?? []); setQerror(undefined); } })
         .catch((e) => { if (live) { setQerror(String((e as Error).message ?? e)); setPayload(undefined); setRows(undefined); } })
         .finally(() => { if (live) setLoading(false); });
     };
@@ -107,12 +92,11 @@ export default function Explore() {
     const onVisible = () => { if (!document.hidden) run(true); };
     document.addEventListener("visibilitychange", onVisible);
     return () => { live = false; clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
-  }, [selector, effectiveLens, window_]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selector, effectiveScope, window_]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const needle = q.trim().toLowerCase();
   const pick = (f: LabelFacet, value: string, events: number) => {
     setTerms([{ label: f.label, value, events, sources: f.sources }]);
-    setLens(RAW);
     setMode("human");
   };
   const addTerm = (label: string, value: string) => setTerms((t) => [...t, { label, value }]);
@@ -156,10 +140,10 @@ export default function Explore() {
   const primaryNodes = facets.filter((f) => f.primary).map(renderFacet).filter(Boolean);
   const secondaryNodes = facets.filter((f) => !f.primary).map(renderFacet).filter(Boolean);
 
-  const shownSources = effectiveLens === RAW ? readSources : (lensView?.sources ?? []);
-  const emptyHint = effectiveLens === RAW
+  const shownSources = readSources;
+  const emptyHint = effectiveScope === ALL
     ? "no events match this selector in the last " + window_ + "; widen the window or remove a filter."
-    : "this view's sources don't carry this selector; switch to All sources (raw) to read every source.";
+    : "this project's sources hold nothing for this selector; switch to All sources to read every source.";
 
   return (
     <>
@@ -214,8 +198,8 @@ export default function Explore() {
                     </span>
                   </div>
                   <div className="seg">
-                    <button className={mode === "human" ? "active" : ""} onClick={() => setMode("human")}>Human view</button>
-                    <button className={mode === "agent" ? "active" : ""} onClick={() => setMode("agent")}>Agent view</button>
+                    <button className={mode === "human" ? "active" : ""} onClick={() => setMode("human")}>Timeline</button>
+                    <button className={mode === "agent" ? "active" : ""} onClick={() => setMode("agent")}>What the agent gets</button>
                   </div>
                 </div>
 
@@ -235,14 +219,15 @@ export default function Explore() {
                 <div className="tl-controls">
                   {/* A div, not a label — as the `window` control beside it already is. Picker
                       renders a <button>, which IS labelable, so a wrapping <label> forwards clicks
-                      on the word "lens" into opening the menu. */}
+                      on the word into opening the menu. */}
                   <div className="tl-ctl">
-                    <span className="lbl">lens</span>
+                    <span className="lbl">read from</span>
                     {/* Picker, not a native <select>: the OS draws a <select>'s open menu and won't
                         let us theme it, so it lands as a light box in the dark console. */}
-                    <Picker value={effectiveLens} onChange={setLens} ariaLabel="lens"
-                            options={[RAW, ...lensViews.map((v) => v.name)]}
-                            labels={{ [RAW]: "All sources (raw)" }} />
+                    <Picker value={effectiveScope} onChange={setScope} ariaLabel="read from"
+                            options={[ALL, ...projectList.map((p) => p.id)]}
+                            labels={{ [ALL]: "All sources",
+                                      ...Object.fromEntries(projectList.map((p) => [p.id, `Project ${p.name}`])) }} />
                   </div>
                   <div className="tl-ctl">
                     <span className="lbl">window</span>
@@ -259,10 +244,6 @@ export default function Explore() {
                   )}
                   <span className="grow" />
                   {loading && <span className="help">reading…</span>}
-                  <button onClick={() => setSaving(true)} disabled={shownSources.length === 0}
-                          title="save these sources as a reusable view you can attach triggers to">
-                    Save as view
-                  </button>
                 </div>
 
                 {qerror && <div className="alert error">{qerror}</div>}
@@ -271,7 +252,7 @@ export default function Explore() {
                   <div className="panel" style={{ marginTop: 12 }}>
                     <div className="tl-agent-head">
                       <span className="help" style={{ margin: 0 }}>
-                        exactly what the agent receives over MCP · {effectiveLens === RAW ? "read" : effectiveLens} · {window_}
+                        exactly what the agent receives over MCP · read · {window_}
                       </span>
                       <button className="copybtn" onClick={copy}>{copied ? "copied" : "copy"}</button>
                     </div>
@@ -286,16 +267,6 @@ export default function Explore() {
             )}
           </section>
         </div>
-      )}
-
-      {saving && primary && (
-        <SaveViewSheet
-          defaultName={`${primary.value}_view`.replace(/[^a-zA-Z0-9_]+/g, "_")}
-          keyField={primary.label === "key" ? "key_value" : primary.label}
-          sources={shownSources}
-          onClose={() => setSaving(false)}
-          onSaved={(name) => { setSaving(false); reloadViews(); setLens(name); }}
-        />
       )}
     </>
   );
@@ -382,66 +353,5 @@ function TimelineTable({ rows, loading, emptyHint }:
         })}
       </tbody>
     </table>
-  );
-}
-
-/** Turn the current exploration into a reusable view (its narrowed source set), which triggers
- *  can then attach to. The selector stays a runtime read; the view saves the source scope. */
-function SaveViewSheet({ defaultName, keyField, sources, onClose, onSaved }: {
-  defaultName: string; keyField: string; sources: string[];
-  onClose: () => void; onSaved: (name: string) => void;
-}) {
-  const [name, setName] = useState(defaultName);
-  const [err, setErr] = useState<string>();
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  const save = async () => {
-    setErr(undefined);
-    try {
-      await api.createView({ name, key_field: keyField, sources, filters: [] });
-      onSaved(name);
-    } catch (e) { setErr(String((e as Error).message ?? e)); }
-  };
-
-  return (
-    <>
-      <div className="sheet-overlay" onClick={onClose} />
-      <aside className="sheet" role="dialog" aria-label="Save as view">
-        <div className="sheet-head">
-          <div className="sheet-title"><h2>Save as view</h2>
-            <span className="subtitle" style={{ margin: 0 }}>a reusable, trigger-able read over these sources</span>
-          </div>
-          <button className="sheet-close" onClick={onClose} aria-label="Close"><Close /></button>
-        </div>
-        <div className="sheet-body">
-          {err && <div className="alert error">{err}</div>}
-          <label className="field">
-            <span className="lbl">name</span>
-            <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
-          </label>
-          <label className="field">
-            <span className="lbl">key field</span>
-            <input type="text" value={keyField} disabled />
-            <span className="help">what the entity key means, for reference</span>
-          </label>
-          <div className="field">
-            <span className="lbl">sources</span>
-            <div className="tl-sources">
-              {sources.length ? sources.map((s) => <span className="chip" key={s}>{s}</span>)
-                : <span className="help">no contributing sources</span>}
-            </div>
-          </div>
-        </div>
-        <div className="sheet-foot">
-          <button className="primary" onClick={save} disabled={!name || !sources.length}>Create view</button>
-          <button onClick={onClose}>Cancel</button>
-        </div>
-      </aside>
-    </>
   );
 }

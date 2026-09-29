@@ -95,7 +95,7 @@ export default function ProjectTemplates() {
             <div className="uc-card-main">
               <div className="uc-card-title">From existing objects</div>
               <p className="help uc-card-desc">
-                Assemble a project from sources, views, triggers, agents and MCP servers you already have.
+                Assemble a project from sources, triggers, agents and MCP servers you already have.
                 Nothing is created; the project page shows their runs and firings.
               </p>
             </div>

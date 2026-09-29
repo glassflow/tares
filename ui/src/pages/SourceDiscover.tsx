@@ -123,7 +123,7 @@ export default function SourceDiscover() {
                     <span className="help">
                       created {created} of {Object.keys(results).length}
                       {failed ? `, ${failed} failed; fix and retry` : ""} ·{" "}
-                      <a href="#" onClick={(e) => { e.preventDefault(); nav("/sources"); }}>view sources</a>
+                      <a href="#" onClick={(e) => { e.preventDefault(); nav("/sources"); }}>see sources</a>
                     </span>
                   )}
                 </>

@@ -4,8 +4,8 @@ import { api } from "../api";
 import { ErrorState, TimeAgo, usePolling } from "../components/bits";
 import type { Project } from "../types";
 
-// Projects are the opinionated entry point: a named set of sources, views, triggers and agents
-// with one page. This page lists them; Create new (/projects/new) holds the template gallery.
+// Projects are the unit: a named set of sources, triggers, agents and MCP servers with one page.
+// The Default project holds whatever was made outside another project. This page lists them; Create new (/projects/new) holds the template gallery.
 
 function statusClass(s: Project["status"]) {
   return s === "active" ? "ok" : s === "paused" ? "paused" : "error";
@@ -27,8 +27,8 @@ export default function Projects() {
         <div>
           <h1>Projects</h1>
           <p className="subtitle">
-            what you set up and look after in Tares: a named set of sources, views, triggers and
-            agents with one page.
+            what you set up and look after in Tares: a named set of sources, triggers and agents
+            with one page. The Default project holds whatever was made outside another one.
           </p>
         </div>
         <span className="btnrow">
@@ -60,7 +60,8 @@ export default function Projects() {
               const missing = u.objects.filter((o) => o.missing).length;
               return (
                 <tr key={u.id}>
-                  <td><Link to={`/projects/${encodeURIComponent(u.id)}`}><strong>{u.name}</strong></Link></td>
+                  <td><Link to={`/projects/${encodeURIComponent(u.id)}`}><strong>{u.name}</strong></Link>
+                    {u.default && <span className="chip" style={{ marginLeft: 8 }}>default</span>}</td>
                   <td>{u.template_title}</td>
                   <td>
                     <span className={`badge ${statusClass(u.status)}`}>{u.status}</span>

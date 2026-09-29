@@ -32,7 +32,7 @@ export function usePolling<T>(fn: () => Promise<T>, intervalMs = 5000): {
   useEffect(() => {
     let live = true;
     // The FIRST load always runs, even in a hidden tab: skipping it leaves data undefined, which
-    // every page renders as its empty state — a background tab would claim you have no views.
+    // every page renders as its empty state — a background tab would claim you have no sources.
     // Only the polling refreshes pause while hidden.
     const load = (force = false) => {
       if (document.hidden && !force) return;
@@ -49,12 +49,12 @@ export function usePolling<T>(fn: () => Promise<T>, intervalMs = 5000): {
 }
 
 /** A failed load, said out loud. The rule: a fetch that failed is NEVER rendered as an empty
- *  state — "no views" and "the daemon couldn't answer" are different facts, and telling the user
+ *  state — "no sources" and "the daemon couldn't answer" are different facts, and telling the user
  *  the first when the second is true sends them off to fix nothing. Pair with usePolling's
  *  `error` (which keeps the last good `data`, so this sits above stale rows). */
 export function ErrorState({ error, what, onRetry }: {
   error: string;
-  what?: string;          // what failed to load, e.g. "views"; omit for the generic wording
+  what?: string;          // what failed to load, e.g. "sources"; omit for the generic wording
   onRetry?: () => void;   // usually usePolling's reload
 }) {
   return (

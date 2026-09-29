@@ -833,9 +833,9 @@ function SlackSigningSecretPanel() {
 // Scope semantics (docs/design/api-keys.md): read = consume (queries, catalog reads, an agent's
 // own derive/subscribe) · ingest = contribute events · admin = configure the instance.
 const SCOPE_HELP: Record<string, string> = {
-  read: "consume: queries, timelines, catalog; agents' own views & subscriptions",
+  read: "consume: reads, timelines, catalog; agents' own subscriptions",
   ingest: "contribute: POST events to /ingest and /v1/*, write memories",
-  admin: "configure: sources/views/triggers, credentials, keys (implies the rest)",
+  admin: "configure: sources, triggers, projects, credentials, keys (implies the rest)",
 };
 
 function ApiKeysPanel() {

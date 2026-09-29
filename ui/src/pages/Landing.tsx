@@ -10,7 +10,7 @@ import type { ConnectorSpec, Project, Template } from "../types";
 //
 // It is a conversation that has not started yet, not a form. As the user types, the screen
 // answers: the connectors they name light up under the box. Nothing here asks the user to know
-// a source from a view. Three doors, one builder: describe it, paste your last incident, or
+// a source from a trigger. Three doors, one builder: describe it, paste your last incident, or
 // start the demo. Templates live behind the sentences; the gallery stays one click away under
 // Projects for people who already know what they want.
 

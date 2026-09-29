@@ -16,8 +16,6 @@ import DispatchDetail from "./pages/DispatchDetail";
 import Explore from "./pages/Explore";
 import SourceClaudeCode from "./pages/SourceClaudeCode";
 import SourceDetail from "./pages/SourceDetail";
-import ViewDetail from "./pages/ViewDetail";
-import ViewNew from "./pages/ViewNew";
 import TriggerDetail from "./pages/TriggerDetail";
 import TriggerNew from "./pages/TriggerNew";
 import SourceDiscover from "./pages/SourceDiscover";
@@ -26,7 +24,7 @@ import Security from "./pages/Security";
 import Home from "./pages/Home";
 import McpServers from "./pages/McpServers";
 import Sources from "./pages/Sources";
-import { TriggersPage, ViewsPage } from "./pages/ViewsTriggers";
+import TriggersPage from "./pages/Triggers";
 import Projects from "./pages/Projects";
 import ProjectTemplates from "./pages/ProjectNew";
 import { ProjectNewPage } from "./pages/Landing";
@@ -80,9 +78,6 @@ const router = createBrowserRouter([
       { path: "sources/:name", element: <SourceDetail /> },
       { path: "organize", element: <Navigate to="/ask" replace /> },
       { path: "explore", element: <Explore /> },
-      { path: "views", element: <ViewsPage /> },
-      { path: "views/new", element: <ViewNew /> },
-      { path: "views/:name", element: <ViewDetail /> },
       { path: "triggers", element: <TriggersPage /> },
       { path: "triggers/new", element: <TriggerNew /> },
       { path: "triggers/:name", element: <TriggerDetail /> },
@@ -104,7 +99,7 @@ const router = createBrowserRouter([
       { path: "settings", element: <Security /> },
       // legacy paths → new homes (bookmarks, the old Entities/Activity/Catalog nav). Catalog
       // dissolved: source schema/freshness now lives on the source detail; the agent's-eye read
-      // is Explore's Agent-view toggle.
+      // is Explore's "What the agent gets" toggle.
       { path: "entities", element: <Navigate to="/explore" replace /> },
       // These two meant "the source list" when `/` was the source list — they still do.
       { path: "catalog", element: <Navigate to="/sources" replace /> },

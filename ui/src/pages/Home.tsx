@@ -34,7 +34,8 @@ export default function Home() {
   const { data: rec } = usePolling(() => api.templates(), 60000);
   const [skipped, setSkipped] = useState(skipLanding);
 
-  const own = uc?.projects.filter((p) => p.template !== "ai_sre_demo") ?? [];
+  // the Default project is always there and is not one the user made
+  const own = uc?.projects.filter((p) => p.template !== "ai_sre_demo" && !p.default) ?? [];
   // ?landing previews the screen on a cell that already has projects
   const preview = new URLSearchParams(window.location.search).has("landing");
   if (uc && ((own.length === 0 && !skipped) || preview)) {
@@ -116,13 +117,13 @@ export default function Home() {
         <div className="empty">
           Nothing to watch yet.{" "}
           <Link to="/projects/new">Create a project</Link>: describe what you need and Tares sets
-          up the sources, views, triggers and agent with you. Or <Link to="/sources/new">add a source</Link> on its own.
+          up the sources, triggers and agent with you. Or <Link to="/sources/new">add a source</Link> on its own.
         </div>
       )}
       {sources && sources.length > 0 && own.length === 0 && (
         <div className="empty">
           Data is coming in, but nothing watches it yet.{" "}
-          <Link to="/projects/new">Create a project</Link> to add views, triggers and an agent on top.
+          <Link to="/projects/new">Create a project</Link> to add triggers and an agent on top.
         </div>
       )}
     </>
