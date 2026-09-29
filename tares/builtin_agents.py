@@ -984,9 +984,9 @@ class AgentRunner:
     async def _slack_channel(self, agent_name: str, channel: str, trigger_name: str,
                              key: str, finding: str, meta: dict | None = None) -> bool:
         """Post the finding through the workspace bot (`chat.postMessage`): the entity, a grid of
-        fields, an excerpt and buttons in the channel, and the full note as a reply in that
-        message's thread, so a channel of findings stays scannable (TR-275). A note short enough to
-        be its own excerpt is posted whole, with no thread. The credential is the one bot token the
+        fields, the note and buttons in the channel (TR-275). A note too long for one message
+        block gets an excerpt in the channel and the full note as a reply in the message's thread,
+        so it cannot fill the channel; a shorter one is posted whole, with no thread. The credential is the one bot token the
         instance holds, and the target is a channel picked from a list.
 
         One attempt, verdict from `slack.classify` (Slack answers HTTP 200 with ok:false), failure

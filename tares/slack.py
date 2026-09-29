@@ -506,10 +506,11 @@ def build_finding_message(agent_name: str, trigger: str, key: str, finding: str,
     """Block Kit body for a Tares agent's finding (TR-275): the entity as the header, a grid of
     fields, a short excerpt of the note, and buttons into Tares.
 
-    The note itself goes in the message's thread (`build_finding_thread`), so a channel of findings
-    stays scannable: a one-paragraph root cause used to arrive as a wall of text and a long incident
-    note filled the screen. `full_note=True` puts the whole note inline instead, for the incoming-
-    webhook path, which cannot post into a thread. `text` is the notification fallback."""
+    A note that fits in one message block is posted whole (`full_note=True`), and Slack folds it
+    behind "Show more". A longer one, like a multi-section incident note, gets an excerpt here and
+    the full note in the message's thread (`build_finding_thread`), so it cannot fill the channel.
+    The incoming-webhook path cannot thread, so it always posts the note whole. `text` is the
+    notification fallback."""
     # the entity is the header, so the fields say who wrote the note and why
     fields = [("Agent", agent_name), ("Trigger", f"`{trigger}`"), ("Verdict", verdict),
               ("Model", model)]
@@ -531,9 +532,10 @@ def build_finding_message(agent_name: str, trigger: str, key: str, finding: str,
 
 
 def needs_thread(finding: str) -> bool:
-    """Whether the channel message would leave part of the note out: then the full note goes in
-    the thread. A note short enough to be its own excerpt is posted whole."""
-    return excerpt(finding).strip() != to_mrkdwn(finding or "").strip()
+    """Whether the note is too long for one message block: then the channel gets an excerpt and
+    the full note goes in the thread. A note that fits in one block is posted whole, and Slack's
+    own "Show more" folds it; a thread there only repeated what the channel already showed."""
+    return len(_sections(finding)) > 1
 
 
 def build_finding_thread(finding: str) -> list[dict]:

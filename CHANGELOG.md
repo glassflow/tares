@@ -3,6 +3,19 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- A Tares finding in Slack is posted whole when it fits in one message block; Slack folds it
+  behind "Show more". Only a note longer than that gets an excerpt in the channel and the full
+  note in the thread. In 1.36.0 any note longer than its excerpt was threaded, so a one-paragraph
+  root cause appeared twice.
+
+### Fixed
+- Clicking a button on a Tares message in Slack no longer shows "This app is not configured to
+  handle interactive responses". `/api/slack/events` acknowledges the click, so a Slack app
+  pointed at a cell can enable Interactivity with that same URL as its Request URL.
+
 ## [1.36.0] - 2026-09-29
 
 ### Changed

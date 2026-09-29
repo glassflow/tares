@@ -2362,6 +2362,12 @@ def make_app() -> FastAPI:
             return {"ok": True}
 
         form = {k: v[0] for k, v in parse_qs(raw.decode("utf-8", "replace")).items()}
+        if "payload" in form:
+            # An interaction: someone clicked a button on a message Tares posted (View in Tares,
+            # Open timeline, TR-275). Those buttons are links, so the browser already went where
+            # they point; there is nothing to do but ACK. Without a 200 here Slack puts a warning
+            # triangle next to the button.
+            return Response(status_code=200)
         response_url = (form.get("response_url") or "").strip()
         thread_ts = (form.get("thread_ts") or "").strip() or None
         question, problem = slack_mod.parse_command(form.get("text", ""))

@@ -443,8 +443,9 @@ async def main():
     ck("buttons open the run and the entity's timeline",
        urls == ["https://cell.example.com/agents/rca?tab=runs&run=run_1",
                 "https://cell.example.com/explore?key=ingress-nginx"], str(urls))
-    ck("a long note goes in the thread", _s.needs_thread(note))
-    ck("a short note is posted whole", not _s.needs_thread("Traffic is normal."))
+    ck("a note that fits in one block is posted whole, no thread", not _s.needs_thread(note)
+       and not _s.needs_thread("Traffic is normal."))
+    ck("a note longer than one block goes in the thread", _s.needs_thread(note * 8))
     th = "\n".join(b["text"]["text"] for b in _s.build_finding_thread(note))
     ck("a wide table becomes one line per row, not a code block",
        "•  *Immediate*: No service action required" in th and "```" not in th, th)
