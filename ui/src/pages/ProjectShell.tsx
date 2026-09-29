@@ -9,14 +9,15 @@ import AgentForm from "../components/AgentForm";
 import IngestEndpoint from "../components/IngestEndpoint";
 import InfoDialog, { HelpButton } from "../components/InfoDialog";
 import { SessionsPanel } from "../components/ChallengerSessions";
+import ProjectActivity from "../components/ProjectActivity";
 import { RunsPanel } from "./AgentDetail";
 import { ServerForm } from "./McpServers";
 import type { ConnectorSpec, ProjectSummary, Template, RecipeActionOption, Source, Trigger, TriggerCondition } from "../types";
 
 // The page for every project: what a project really is, on one page, driven by the live APIs
 // plus the template's summary. Setup (its sources, triggers, agents and MCP servers, all added and
-// edited in place, plus whatever the template declares as panels), Events, Firings (every dispatch across
-// the project's triggers, with who it went to), Agents (runs and configuration inline, exactly
+// edited in place, plus whatever the template declares as panels), Events, Activity (one thread per
+// firing or unprompted run, with everything it led to), Agents (runs and configuration inline, exactly
 // like the agent's own page), and Sessions when the template reports them. Template-specific
 // content arrives as data (actions, facts, panels, cards), never as template-specific markup.
 
@@ -32,9 +33,10 @@ export default function ProjectShell({ s, id, reload, template }: {
   const sourceCount = (s.objects ?? []).filter((o) => o.kind === "source" && !o.missing).length;
   const pausedSources = ((s.params as Record<string, unknown> | undefined)?.paused_sources as string[] | undefined) ?? [];
   // ?tab= deep links win; otherwise a project with sessions opens on them
-  const [tab, setTab] = useState<"setup" | "events" | "firings" | "agents" | "sessions">(() => {
+  const [tab, setTab] = useState<"setup" | "events" | "activity" | "agents" | "sessions">(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
-    if (t === "setup" || t === "events" || t === "firings" || t === "agents" || (t === "sessions" && s.sessions)) return t;
+    if (t === "firings") return "activity";   // the tab's old name, in links made before
+    if (t === "setup" || t === "events" || t === "activity" || t === "agents" || (t === "sessions" && s.sessions)) return t;
     return s.sessions ? "sessions" : "setup";
   });
   const [busyKey, setBusyKey] = useState<string>();
@@ -60,7 +62,7 @@ export default function ProjectShell({ s, id, reload, template }: {
   const { data: agentsData, reload: reloadAgents } = usePolling(() => api.builtinAgents(), 15000);
   const { data: mcp, reload: reloadMcp } = usePolling(() => api.mcpServers(), 30000);
   const { data: projects } = usePolling(() => api.projects(), 30000);
-  const { data: dispatches, error: dispatchesError } = usePolling(() => api.dispatches(100), 10000);
+  const { data: dispatches } = usePolling(() => api.dispatches(100), 10000);
   const { data: roster, reload: reloadRoster } = usePolling(() => api.agents(), 15000);
   const { data: slack } = usePolling(() => api.slackChannels(), 60000);
   // the cheap read: the newest stored rows per source, merged on the client; no filtering, no
@@ -98,32 +100,8 @@ export default function ProjectShell({ s, id, reload, template }: {
     setTimeout(() => document.getElementById("add-agent")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
   };
   const triggerNames = new Set(myTriggers.map((t) => t.name));
+  // the Setup tab's trigger cards say when each last fired
   const allFirings = (dispatches ?? []).filter((d) => triggerNames.has(d.trigger));
-  // Filters on the Firings tab (TR-284): outcome, trigger, entity. Client-side over the loaded
-  // page; the pickers offer what is actually in the list, so an empty result means "none of
-  // these", never a typo.
-  const [firingStatus, setFiringStatus] = useState<"" | "delivered" | "failed" | "nobody">("");
-  const [firingTrigger, setFiringTrigger] = useState("");
-  const [firingEntity, setFiringEntity] = useState("");
-  const outcome = (d: typeof allFirings[number]) =>
-    d.subscribers === 0 ? "nobody" : d.delivered < d.subscribers ? "failed" : "delivered";
-  const firingEntities = [...new Set(allFirings.map((d) => d.key))].sort();
-  const firings = allFirings.filter((d) =>
-    (!firingStatus || outcome(d) === firingStatus)
-    && (!firingTrigger || d.trigger === firingTrigger)
-    && (!firingEntity || d.key === firingEntity));
-  const firingsFiltered = !!(firingStatus || firingTrigger || firingEntity);
-  // Consecutive firings of the same trigger that reached nobody collapse into one row: dozens of
-  // identical "0 of 0" lines say one thing — nobody is subscribed — so say it once, with a count.
-  const firingRows: (typeof firings[number] & { repeats?: number })[] = [];
-  for (const d of firings) {
-    const prev = firingRows[firingRows.length - 1];
-    if (prev && prev.trigger === d.trigger && prev.subscribers === 0 && d.subscribers === 0) {
-      prev.repeats = (prev.repeats ?? 1) + 1;
-    } else {
-      firingRows.push({ ...d });
-    }
-  }
 
   // Who a trigger delivers to, from the roster (kind + subscribed triggers). The slack id is
   // resolved to a channel name when the bot still sees it, like the trigger page does.
@@ -132,7 +110,6 @@ export default function ProjectShell({ s, id, reload, template }: {
     const hit = (slack?.channels ?? []).find((c) => c.id === cid);
     return hit ? (hit.is_private ? `🔒 ${hit.name}` : `#${hit.name}`) : raw;
   };
-  const subscribers = (trigger: string) => (roster?.agents ?? []).filter((a) => a.triggers.includes(trigger));
 
   // subscriber management for the project's triggers (Slack, webhooks; Tares agents wire via
   // their own creation flow). One row per subscription, so remove is exact.
@@ -184,7 +161,6 @@ export default function ProjectShell({ s, id, reload, template }: {
   };
   const missing = s.objects.filter((o) => o.missing);
 
-  const openInAgents = (dispatchId: string) => { setFocusDispatch(dispatchId); setTab("agents"); };
   // a project agent's home is the Agents tab of this page; switch there and scroll to it
   const openAgentTab = (name: string) => {
     setFocusDispatch(undefined); setTab("agents");
@@ -328,7 +304,7 @@ export default function ProjectShell({ s, id, reload, template }: {
         {s.sessions && <button className={tab === "sessions" ? "active" : ""} onClick={() => setTab("sessions")}>Sessions</button>}
         <button className={tab === "setup" ? "active" : ""} onClick={() => setTab("setup")}>Setup</button>
         <button className={tab === "events" ? "active" : ""} onClick={() => setTab("events")}>Events</button>
-        <button className={tab === "firings" ? "active" : ""} onClick={() => setTab("firings")}>Firings</button>
+        <button className={tab === "activity" ? "active" : ""} onClick={() => setTab("activity")}>Activity</button>
         <button className={tab === "agents" ? "active" : ""} onClick={() => { setFocusDispatch(undefined); setTab("agents"); }}>Agents</button>
       </div>
 
@@ -408,7 +384,7 @@ export default function ProjectShell({ s, id, reload, template }: {
           )}
           {myTriggers.map((t) => (
             <TriggerPanel key={t.name} t={t}
-                          lastFired={firings.find((d) => d.trigger === t.name)?.fired_at ?? null}
+                          lastFired={allFirings.find((d) => d.trigger === t.name)?.fired_at ?? null}
                           onAddAgent={() => openAddAgent(t.name)}
                           onSaved={() => { reloadTriggers(); reload(); reloadSources(); }} />
           ))}
@@ -606,70 +582,9 @@ export default function ProjectShell({ s, id, reload, template }: {
         ) : <div className="empty">nothing ingested yet across this project's sources</div>
       )}
 
-      {tab === "firings" && (
-        <>
-          {dispatchesError && <ErrorState error={dispatchesError} what="the firings" />}
-          {allFirings.length > 0 && (
-            <div className="btnrow" style={{ marginBottom: 10 }}>
-              <Picker value={firingStatus} ariaLabel="outcome" style={{ width: 190 }}
-                      options={["", "delivered", "failed", "nobody"]}
-                      labels={{ "": "all outcomes", delivered: "delivered", failed: "not fully delivered", nobody: "nobody subscribed" }}
-                      onChange={(v) => setFiringStatus(v as typeof firingStatus)} />
-              <Picker value={firingTrigger} ariaLabel="trigger" style={{ width: 220 }}
-                      options={["", ...myTriggers.map((t) => t.name)]}
-                      labels={{ "": "all triggers", ...Object.fromEntries(myTriggers.map((t) => [t.name, t.name])) }}
-                      onChange={setFiringTrigger} />
-              <Picker value={firingEntity} ariaLabel="entity" style={{ width: 220 }}
-                      options={["", ...firingEntities]}
-                      labels={{ "": "all entities", ...Object.fromEntries(firingEntities.map((k) => [k, k])) }}
-                      onChange={setFiringEntity} />
-              {firingsFiltered && (
-                <span className="help">{firings.length} of {allFirings.length}{" "}
-                  <button type="button" className="linklike" onClick={() => { setFiringStatus(""); setFiringTrigger(""); setFiringEntity(""); }}>clear</button>
-                </span>
-              )}
-            </div>
-          )}
-          {firings.length ? (
-            <table>
-              <thead><tr><th>when</th><th>trigger</th><th>entity</th><th>delivered to</th></tr></thead>
-              <tbody>
-                {firingRows.map((d) => {
-                  const subs = subscribers(d.trigger);
-                  const partial = d.subscribers > 0 && d.delivered < d.subscribers;
-                  return (
-                    <tr key={d.dispatch_id}>
-                      <td style={{ whiteSpace: "nowrap" }}>
-                        <Link to={`/dispatches/${encodeURIComponent(d.dispatch_id)}`} title="the firing's detail page">
-                          <TimeAgo ts={d.fired_at} /></Link></td>
-                      <td>{triggerNames.has(d.trigger)
-                        ? <a href={`#trigger-${d.trigger}`} className="mono" title="the trigger, on the Setup tab"
-                             onClick={(e) => { e.preventDefault(); showTrigger(d.trigger); }}>{d.trigger}</a>
-                        : <span className="mono">{d.trigger}</span>}</td>
-                      <td className="mono">{d.key}</td>
-                      <td>{d.subscribers === 0
-                        ? <><span className="badge error">nobody subscribed</span>
-                            {(d.repeats ?? 1) > 1 && <span className="help"> · {d.repeats} firings like this</span>}</>
-                        : subs.length === 0
-                        ? <span className={`badge ${partial ? "error" : "ok"}`}>{d.delivered} of {d.subscribers}</span>
-                        : subs.map((a) => a.kind === "tares"
-                            ? <a key={a.name} href="#agents" className="chip mono"
-                                 onClick={(e) => { e.preventDefault(); openInAgents(d.dispatch_id); }}
-                                 title={partial ? (d.error ?? "not every delivery succeeded") : "delivered · open this firing's run below"}
-                                 style={{ marginRight: 4, color: partial ? "var(--err)" : "var(--ok, #2e7d43)" }}>{a.name}</a>
-                            : <span key={a.name} className="chip"
-                                    title={partial ? (d.error ?? "not every delivery succeeded") : "delivered"}
-                                    style={{ marginRight: 4, color: partial ? "var(--err)" : "var(--ok, #2e7d43)" }}>
-                                {a.kind === "slack" ? channelLabel(a.name) : a.name}</span>)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          ) : !dispatchesError && (
-            <div className="empty">{firingsFiltered ? "no firings match these filters" : "no firings yet across this project's triggers"}</div>
-          )}
-        </>
+      {tab === "activity" && (
+        <ProjectActivity id={id} triggers={myTriggers.map((t) => t.name)} agents={agentNames}
+                         onShowTrigger={showTrigger} />
       )}
 
       {tab === "agents" && (
@@ -903,8 +818,7 @@ function TriggerPanel({ t, lastFired, onSaved, onAddAgent }: {
 }
 
 // One agent, inline and whole: the overview rows and runs from its own page, the configuration
-// table beneath, and in-place editing with the same form. A firing row on the Firings tab lands
-// here with that firing's run open.
+// table beneath, and in-place editing with the same form. `focusDispatch` opens that firing's run.
 function AgentSection({ name, focusDispatch, triggerInProject, onShowTrigger }: {
   name: string; focusDispatch?: string; triggerInProject: string[]; onShowTrigger: (t: string) => void;
 }) {
