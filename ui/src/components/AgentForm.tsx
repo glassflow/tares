@@ -120,6 +120,8 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
     setHandoffs((cur) => cur.map((h, j) => (j === i ? { ...h, ...patch } : h)));
   const handoffBad = (h: Handoff) => !VERDICT_RE.test(h.verdict.trim().toLowerCase()) || !h.agent
     || (!!h.cooldown.trim() && !DURATION_RE.test(h.cooldown.trim()));
+  const handoffKey = (h: Handoff) => `${h.verdict.trim().toLowerCase()}\u0000${h.agent}`;
+  const handoffDup = handoffs.some((h, i) => handoffs.findIndex((o) => handoffKey(o) === handoffKey(h)) !== i);
 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
@@ -394,6 +396,11 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
             each handoff needs a one-word verdict, an agent, and a cooldown such as 30m or 2h
           </span>
         )}
+        {handoffDup && (
+          <span className="help" style={{ display: "block", marginTop: 4 }}>
+            the same verdict and agent appear twice; keep one
+          </span>
+        )}
       </div>
 
       <div className="field">
@@ -424,7 +431,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
                 disabled={busy || !name.trim() || !trigger.trim() || !prompt.trim()
                           || (writebackOn && !webhookUrl.trim())
                           || (channelOn && !channel)
-                          || handoffs.some(handoffBad)
+                          || handoffs.some(handoffBad) || handoffDup
                           || (!!maxRounds.trim() && (Number(maxRounds) < 1
                               || Number(maxRounds) > maxRoundsLimit
                               || !Number.isInteger(Number(maxRounds))))}>
