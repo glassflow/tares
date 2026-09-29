@@ -1,6 +1,6 @@
 """The Envelope — the one record shape that travels through the system.
 
-A connector produces Envelopes; the store persists them; views render them; triggers evaluate over
+A connector produces Envelopes; the store persists them; reads render them; triggers evaluate over
 them. Collapsed from the design doc's Bronze record + Silver event into a single shape: `labels` are the
 extracted axes (string, or number for aggregation), `payload` keeps the original (lossless).
 """

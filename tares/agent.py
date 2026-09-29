@@ -30,15 +30,15 @@ TOOLS = [
      "description": "List the connector types and their config/fields/mode.",
      "input_schema": {"type": "object", "properties": {}}},
     {"name": "catalog",
-     "description": "List all sources, views and triggers (handles) in the catalog.",
+     "description": "List all sources, triggers and projects (handles) in the catalog.",
      "input_schema": {"type": "object", "properties": {}}},
     {"name": "describe",
      "description": "Describe one catalog entry in full: schema (event types + inferred typed "
                     "fields), the entities it carries (label -> values, the key flagged), freshness, "
-                    "sample events, and lineage. Handles look like source:<name>, view:<name>, "
+                    "sample events, and lineage. Handles look like source:<name> or "
                     "trigger:<name>. The richest way to understand a source's data.",
      "input_schema": {"type": "object", "properties": {
-         "handle": {"type": "string", "description": "e.g. source:logs, view:timeline"}},
+         "handle": {"type": "string", "description": "e.g. source:logs, trigger:error_spike"}},
          "required": ["handle"]}},
     {"name": "source_fields",
      "description": "Profile a source's normalized fields from real data: each field's coverage "
@@ -75,14 +75,16 @@ TOOLS = [
      "input_schema": {"type": "object", "properties": {
          "key": {"type": "string", "description": "the template key from list_templates"}},
          "required": ["key"]}},
-    {"name": "query",
-     "description": "Pull one correlated, time-ordered timeline for an entity from a view. Select "
-                    "the entity by `key` or by `where` ({label: value}). Needs an existing view "
-                    "(see catalog).",
+    {"name": "read",
+     "description": "Pull one correlated, time-ordered timeline for an entity across sources. "
+                    "The selector is a {label: value} map (strict AND). Narrow it to a project's "
+                    "sources with `project` (an id from list_projects) or to named `sources`.",
      "input_schema": {"type": "object", "properties": {
-         "view": {"type": "string"}, "key": {"type": "string"},
-         "where": {"type": "object"}, "window": {"type": "string", "default": "15m"}},
-         "required": ["view"]}},
+         "selector": {"type": "object", "description": "{label: value}, e.g. {\"service\": \"api\"}"},
+         "window": {"type": "string", "default": "15m"},
+         "project": {"type": "string"},
+         "sources": {"type": "array", "items": {"type": "string"}}},
+         "required": ["selector"]}},
 ]
 
 
@@ -116,21 +118,25 @@ PROPOSAL_TOOLS = [
              "required": ["name"]}},
          "reasoning": {"type": "string"}},
          "required": ["source", "labels", "reasoning"]}},
-    {"name": "propose_view",
-     "description": "Propose a view correlating one or more sources into a single per-entity "
-                    "timeline, as a card the user will review. key_field must be a label the "
-                    "chosen sources share (after any proposed labels are applied). Explain in "
-                    "`reasoning` what one read of this view returns and why it's useful.",
+    {"name": "propose_trigger",
+     "description": "Propose a trigger: a condition Tares evaluates continuously over one or more "
+                    "sources; when it trips, subscribed agents are woken with the correlated "
+                    "timeline. Use when the user's goal involves alerting or autonomous "
+                    "debugging. The sources must exist or be proposed in this conversation; "
+                    "`field` must be a numeric label events in those sources carry (check "
+                    "source_fields). key_field is the entity label the sources share (after any "
+                    "proposed labels are applied). Explain the condition in plain terms in "
+                    "`reasoning`.",
      "input_schema": {"type": "object", "properties": {
          "name": {"type": "string"},
-         "key_field": {"type": "string"},
          "sources": {"type": "array", "items": {"type": "string"}},
+         "key_field": {"type": "string"},
          # Left as a bare {"type": "object"} the model had to guess the shape, and guessed wrong
-         # twice in a row on the same view — a flat {"service": "x"}, then "==" for the operator.
+         # twice in a row on the same filter: a flat {"service": "x"}, then "==" for the operator.
          # The schema is the only place a guess can be prevented; prose in the prompt is not.
          "filters": {"type": "array",
-                     "description": "Optional. Restricts which events the view carries. Each entry "
-                                    "is an object with exactly field, op and value.",
+                     "description": "Optional. Restricts which events the trigger counts and hands "
+                                    "over. Each entry is an object with exactly field, op and value.",
                      "items": {"type": "object", "properties": {
                          "field": {"type": "string",
                                    "description": "a label the chosen sources expose, or one of the "
@@ -143,18 +149,7 @@ PROPOSAL_TOOLS = [
                                 "match events whose field parses as a number."},
                          "value": {"type": ["string", "number"]}},
                          "required": ["field", "op", "value"]}},
-         "reasoning": {"type": "string"}},
-         "required": ["name", "key_field", "sources", "reasoning"]}},
-    {"name": "propose_trigger",
-     "description": "Propose a trigger; a condition Tares evaluates continuously over a view; "
-                    "when it trips, subscribed agents are woken with the correlated timeline. Use "
-                    "when the user's goal involves alerting or autonomous debugging. The view must "
-                    "exist or be proposed in this conversation; `field` must be a numeric field "
-                    "events in that view carry (check source_fields). Explain the condition in "
-                    "plain terms in `reasoning`.",
-     "input_schema": {"type": "object", "properties": {
-         "name": {"type": "string"},
-         "view": {"type": "string"},
+
          "condition": {"type": "object", "properties": {
              "aggregate": {"type": "string", "enum": ["any", "avg", "count", "max", "min", "sum"]},
              "field": {"type": "string", "description": "numeric field to aggregate (omit for count)"},
@@ -166,7 +161,7 @@ PROPOSAL_TOOLS = [
              "context_window": {"type": "string", "description": "how much timeline the woken agent gets, e.g. 15m"}}},
          "cooldown": {"type": "string", "description": "minimum gap between firings per entity, e.g. 5m"},
          "reasoning": {"type": "string"}},
-         "required": ["name", "view", "condition", "reasoning"]}},
+         "required": ["name", "sources", "condition", "reasoning"]}},
 ]
 _PROPOSAL_NAMES = {t["name"] for t in PROPOSAL_TOOLS}   # the Ask set; build mode adds more below
 
@@ -237,18 +232,18 @@ BUILD_PROPOSAL_TOOLS = [
          "required": ["name", "trigger", "prompt", "delivery", "reasoning"]}},
 ]
 _ALL_PROPOSALS = {t["name"]: t for t in PROPOSAL_TOOLS + BUILD_PROPOSAL_TOOLS}
-_PROPOSAL_KIND = {"propose_labels": "labels", "propose_view": "view", "propose_trigger": "trigger",
+_PROPOSAL_KIND = {"propose_labels": "labels", "propose_trigger": "trigger",
                   "propose_source": "source", "propose_agent": "agent",
                   "propose_project": "project"}
 
 # Which proposal tools each build step gets. The step-scoped toolset is what makes an out-of-order
-# proposal impossible: a views turn cannot emit a trigger card because the tool is not there.
+# proposal impossible: a sources turn cannot emit a trigger card because the tool is not there.
 BUILD_STEPS = {
     # a whole project from a template is proposed on the first step, in place of its parts
     "sources": ["propose_source", "propose_project"],
-    # views and triggers are one step: a view exists to be watched, and the user thinks about
+    # labels and triggers are one step: a label exists to be watched, and the user thinks about
     # "what should fire" as one question, not two pages
-    "watch": ["propose_view", "propose_labels", "propose_trigger"],
+    "watch": ["propose_labels", "propose_trigger"],
     "agent": ["propose_agent"],
 }
 
@@ -317,13 +312,14 @@ async def _execute_tool(name: str, args: dict, headers: dict) -> tuple[bool, str
             r = await cx.get("/api/projects")
         elif name == "detect_template":
             r = await cx.post(f"/api/projects/templates/{args.get('key', '')}/detect")
-        elif name == "query":
-            body = {"view": args.get("view"), "window": args.get("window", "15m"), "client": "in-app-agent"}
-            if args.get("key"):
-                body["key"] = args["key"]
-            if args.get("where"):
-                body["where"] = args["where"]
-            r = await cx.post("/query", json=body)
+        elif name == "read":
+            body = {"selector": args.get("selector") or {}, "window": args.get("window", "15m"),
+                    "client": "in-app-agent"}
+            if args.get("project"):
+                body["project"] = args["project"]
+            if args.get("sources"):
+                body["sources"] = args["sources"]
+            r = await cx.post("/read", json=body)
         else:
             return False, json.dumps({"error": f"unknown tool {name!r}"})
     text = r.text
@@ -333,7 +329,9 @@ async def _execute_tool(name: str, args: dict, headers: dict) -> tuple[bool, str
 _SYSTEM_BASE = """You are Tares's in-app data assistant. Tares is a data plane for AI agents: \
 connectors ingest events from sources (logs, metrics, deploys, Vercel/GitHub/Postgres/OTLP, …). \
 Every event has a key, named labels (correlation axes; one is the primary key), typed fields, and a \
-text line. Entities are label values. Views correlate sources for a key; triggers watch views.
+text line. Entities are label values. A trigger watches one or more sources (narrowed by \
+filters) for a condition and wakes agents; triggers, agents and the sources they read are grouped \
+in projects.
 
 You help the user with their OWN ingested data; both to UNDERSTAND it (what's ingesting, the shape \
 and entities of each source, coverage) and to DEBUG problems (a source not ingesting, an empty or \
@@ -344,8 +342,8 @@ then verify it (health, field coverage, recent events, freshness). Be concrete: 
 field coverage, entity values, counts. Prefer `describe` and `source_fields` to understand a source. \
 Keep answers tight and useful; use small tables or lists where they help. If a tool errors, say so.
 
-When the user wants the catalog changed; labels on a source, a view, a trigger; do not just \
-describe it: call propose_labels / propose_view / propose_trigger. Each proposal appears to the \
+When the user wants the catalog changed; labels on a source, a trigger; do not just \
+describe it: call propose_labels / propose_trigger. Each proposal appears to the \
 user as a card they apply or skip; you never change the catalog directly. Ground every proposal \
 in evidence from the read tools.
 
@@ -363,27 +361,27 @@ actually showed for that source; anything else extracts nothing. A label reads a
 regex to clean messy values rather than guessing at a tidy field that isn't there.
 · FIRST check a source's existing labels (list_sources shows config.labels). If they already match \
 what you would propose, say so in text and do NOT call propose_labels. Otherwise call it ONCE with \
-the COMPLETE label set; the proposal replaces, it does not append. Same for views: don't propose \
-a duplicate of one that already covers it.
+the COMPLETE label set; the proposal replaces, it does not append. Same for triggers: don't \
+propose a duplicate of one that already covers it.
 · Watch top values for VARIANTS of one entity (checkout / checkout-svc / checkout-service). \
 Correlation needs values to agree literally, so propose normalization on the label: \
 `pattern`/`replace` for whole families, `map` for irregular aliases (pattern runs first, map \
 applies to its result). This is often the highest-value fix available.
-· Views key and filter on LABELS only; never a raw field. A view's `key_field` and filters must be \
-a label the chosen sources EXPOSE. To correlate on something that isn't a label yet, promote it \
-first, then build the view. When sources share nothing but belong together, propose const labels \
-(same name and value) on each and key by that.
-· A view FILTER is always {"field": …, "op": …, "value": …}; three keys, never a flat \
+· Triggers key and filter on LABELS only; never a raw field. A trigger's `key_field` and filters \
+must be a label the chosen sources EXPOSE. To correlate on something that isn't a label yet, \
+promote it first, then build the trigger. When sources share nothing but belong together, propose \
+const labels (same name and value) on each and key by that.
+· A trigger FILTER is always {"field": …, "op": …, "value": …}; three keys, never a flat \
 {"service": "checkout"} pair; and `op` is a NAME from eq / neq / contains / gt / gte / lt / lte. \
 Symbols are not operators here: write "eq", not "==". `field` may also be one of the built-in \
 columns event_type, source, text, key_value. Example: to keep only ingress-nginx events, \
-{"field": "service", "op": "eq", "value": "ingress-nginx"}. A view that needs no restriction takes \
-no filters at all; don't invent one.
+{"field": "service", "op": "eq", "value": "ingress-nginx"}. A trigger that needs no restriction \
+takes no filters at all; don't invent one.
 · To match a label across sources, ADD a new label; there is no rename, and a source's label set \
 is declared whole. If source B should join A on `service`, propose a NEW label named `service` on \
 B reading B's matching field, keep B's other labels, and normalize B's values so they agree \
 literally with A's.
-· A trigger needs a numeric field the view's events actually carry, an aggregate and predicate, a \
+· A trigger needs a numeric field its sources' events actually carry, an aggregate and predicate, a \
 detection window, and a cooldown. Say what it would have fired on recently, in the data you just \
 read; a trigger that would fire constantly, or never, is not worth proposing.
 
@@ -429,15 +427,15 @@ in `needs`. Check list_sources first: if a source already covers what the goal n
 propose only what is missing. A goal that reads a third-party or public API (weather, a status \
 page, a SaaS export) is an `http_poll` source with the URL in `config`, polled by Tares itself; \
 never propose a webhook plus a script the user would have to run.
-· WATCH: the sources are connected now. Propose the views and the triggers on them together: \
-labels first where a source needs them, then the view, then each trigger on that view. Ground \
+· WATCH: the sources are connected now. Propose the triggers over them: labels first where a \
+source needs them, then each trigger naming the sources it watches. Ground \
 every key, filter and field in `source_fields` from real data, exactly as in the rules above. \
 If no events have arrived yet, say so and ask the user to send some first, or propose from the \
 source's configured fields and say the thresholds are theirs to confirm. Ask about thresholds, \
 windows and which conditions matter before proposing them unless the user already said.
 · AGENT: one propose_agent card. Its `trigger` is one of the triggers the console lists as \
 created; never invent a name. If it lists none, say the agent needs a trigger to wake it and \
-that the Views and triggers step is where to make one; propose nothing. The prompt is the \
+that the Triggers step is where to make one; propose nothing. The prompt is the \
 substance, and it is the user's: before you write it, ask what the agent should do when the trigger fires (what to look at, what a useful \
 finding says, what it should recommend or decide, any thresholds or vocabulary they use), unless \
 the goal already says. Write the prompt from their answer, in their terms. For delivery, pick \
@@ -576,7 +574,7 @@ async def _run_agent(provider: Provider, messages: list, model, self_headers, on
                                                        (f"no trigger named {want!r} exists; this cell "
                                                         "has no triggers at all, so no card was shown. "
                                                         "Tell the user the agent needs a trigger to "
-                                                        "wake it, made on the Views and triggers step, "
+                                                        "wake it, made on the Triggers step, "
                                                         "and propose nothing.")))
                             continue
                     # a proposal is a card for the user, not a server-side action

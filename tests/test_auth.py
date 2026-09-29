@@ -54,8 +54,8 @@ async def main():
             ck("API with X-Tares-Token -> 200", (await cx.get(f"{B}/api/sources", headers={"X-Tares-Token": TOKEN})).status_code == 200)
             ck("API with wrong token -> 401", (await cx.get(f"{B}/api/connectors", headers={"Authorization": "Bearer nope"})).status_code == 401)
 
-            ck("POST /query without token -> 401", (await cx.post(f"{B}/query", json={"view": "x"})).status_code == 401)
-            ck("POST /query with token -> not 401", (await cx.post(f"{B}/query", json={"view": "x"}, headers=auth)).status_code != 401)
+            ck("POST /read without token -> 401", (await cx.post(f"{B}/read", json={"selector": {"a": "b"}})).status_code == 401)
+            ck("POST /read with token -> not 401", (await cx.post(f"{B}/read", json={"selector": {"a": "b"}}, headers=auth)).status_code != 401)
             ck("catalog export protected", (await cx.get(f"{B}/api/catalog/export")).status_code == 401)
 
             # a secured instance gates ingest too: with any root token configured, anonymous

@@ -7,7 +7,7 @@ works against any reachable Loki — a customer's own, Grafana Cloud, or a hoste
 Ingests all matched lines by default (lossless; reads/triggers decide what's interesting).
 Optional match/drop regex filters narrow it, same semantics as docker_logs. Lines get the same
 format-agnostic derived fields (level, http method/status, JSON scalars) as docker_logs, so a
-view over either source sees the same shape.
+trigger over either source sees the same shape.
 
 Cursor is the last-seen entry timestamp in nanoseconds (Loki's native unit); the next poll asks
 from cursor+1 so the boundary entry is never re-ingested.

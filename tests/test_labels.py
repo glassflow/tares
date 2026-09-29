@@ -72,23 +72,29 @@ async def main():
                                    ("prod", "api", "500 on /pay"), ("staging", "ui", "deploy ok")]:
                 await cx.post("/ingest/logs", json={"env": env, "app": app_, "msg": msg})
 
-            await cx.post("/api/views", json={"name": "suite", "sources": ["logs"]})  # no key_field
+            print("== views are gone ==")
+            r = await cx.post("/api/views", json={"name": "suite", "sources": ["logs"]})
+            check("POST /api/views -> 404 (views were removed)", r.status_code == 404, r.text)
+            r = await cx.post("/query", json={"view": "suite", "where": {"env": "prod"}})
+            check("POST /query -> 404 (views were removed)", r.status_code == 404, r.text)
 
-            print("== query by label (where) ==")
-            r = await cx.post("/query", json={"view": "suite", "where": {"env": "prod"}, "window": "15m"})
+            print("== read by label (where), narrowed to one source ==")
+            r = await cx.post("/read", json={"sources": ["logs"], "selector": {"env": "prod"},
+                                             "window": "15m"})
             p = r.json()["payload"]
             check("where env=prod returns all prod apps",
                   "pool exhausted" in p and "500 on /pay" in p, p)
             check("where env=prod excludes staging", "deploy ok" not in p, p)
-            r = await cx.post("/query", json={"view": "suite", "where": {"env": "prod", "app": "ui"}})
+            r = await cx.post("/read", json={"sources": ["logs"],
+                                             "selector": {"env": "prod", "app": "ui"}})
             p = r.json()["payload"]
             check("intersection env=prod,app=ui", "pool exhausted" in p and "500 on /pay" not in p, p)
-            r = await cx.post("/query", json={"view": "suite", "where": {"tier": "frontend"}})
+            r = await cx.post("/read", json={"sources": ["logs"], "selector": {"tier": "frontend"}})
             check("const label tier=frontend matches everything",
                   r.json()["payload"].count("[logs]") == 4, r.json()["payload"])
-            r = await cx.post("/query", json={"view": "suite", "key": "ui"})
-            check("legacy key= (key_value) still works", "pool exhausted" in r.json()["payload"])
-            r = await cx.post("/query", json={"view": "suite", "window": "15m"})
+            r = await cx.post("/read", json={"sources": ["logs"], "selector": {"key_value": "ui"}})
+            check("legacy key (key_value) still selects", "pool exhausted" in r.json()["payload"])
+            r = await cx.post("/read", json={"sources": ["logs"], "window": "15m"})
             check("no selector -> 400", r.status_code == 400)
 
             print("== entities surface ==")
@@ -107,7 +113,7 @@ async def main():
 
             print("== label-grouped trigger ==")
             await cx.post("/api/triggers", json={
-                "name": "per_env_app", "view": "suite",
+                "name": "per_env_app", "sources": ["logs"],
                 "condition": {"aggregate": "count", "predicate": "> 1", "window": "5m",
                               "group_by": ["env", "app"]},
                 "emit": {"kind": "noisy"}, "cooldown": "1s"})
@@ -121,7 +127,7 @@ async def main():
 
             print("== legacy single-key trigger still works ==")
             await cx.post("/api/triggers", json={
-                "name": "legacy_key", "view": "suite",
+                "name": "legacy_key", "sources": ["logs"],
                 "condition": {"aggregate": "count", "predicate": "> 0", "window": "5m",
                               "group_by": ["key_value"]},
                 "emit": {"kind": "k"}, "cooldown": "1s"})
@@ -159,8 +165,8 @@ async def main():
                   any(l["name"] == "tier" for l in src["config"]["labels"]), str(src["config"]))
             check("type still derived after import", src["type"] == "event_stream")
 
-            print("== raw read across sources (no view) ==")
-            # A second source so we can prove /read unions across sources with NO view defined —
+            print("== raw read across sources ==")
+            # A second source so we can prove /read unions across sources with nothing defined —
             # the Layer-1 primitive. `logs` carries env/app/tier; `metrics2` carries app/region.
             await cx.post("/api/sources", json={
                 "connector": "webhook", "name": "metrics2",
@@ -174,7 +180,7 @@ async def main():
 
             r = await cx.post("/read", json={"selector": {"app": "ui"}, "window": "15m"})
             body = r.json()
-            check("read (no view) unions every source carrying app=ui",
+            check("read unions every source carrying app=ui",
                   set(body["sources"]) == {"logs", "metrics2"}, str(body.get("sources")))
             check("read reports count and merges the metrics2 line",
                   body["count"] > 0 and "cpu high" in body["payload"], body["payload"][:300])

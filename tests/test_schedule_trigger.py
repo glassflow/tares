@@ -1,4 +1,4 @@
-"""Schedule triggers (TR-320): a trigger with `every` fires once per interval for the whole view,
+"""Schedule triggers (TR-320): a trigger with `every` fires once per interval for all its sources,
 handing over a summary of the window; condition triggers are unchanged.
 
 Runs the clock's `tick` directly against a real store and catalog, with a dispatcher that records
@@ -55,25 +55,28 @@ def rejects(t):
 
 async def main():
     print("== validation ==")
-    ok = {"name": "watch", "view": "logs", "condition": {"every": "10m", "summary_by": ["service"]}}
+    ok = {"name": "watch", "sources": ["logs"], "condition": {"every": "10m", "summary_by": ["service"]}}
     try:
         validate_trigger_dict(ok, {"logs"})
         check("a schedule condition validates without aggregate or predicate", True)
     except CatalogError as e:
         check("a schedule condition validates without aggregate or predicate", False, str(e))
     check("every under a minute is rejected",
-          rejects({"name": "w", "view": "logs", "condition": {"every": "30s"}}))
+          rejects({"name": "w", "sources": ["logs"], "condition": {"every": "30s"}}))
     check("a bad summary label is rejected",
-          rejects({"name": "w", "view": "logs", "condition": {"every": "5m", "summary_by": ["a b"]}}))
+          rejects({"name": "w", "sources": ["logs"], "condition": {"every": "5m", "summary_by": ["a b"]}}))
     check("condition triggers still need an aggregate",
-          rejects({"name": "w", "view": "logs", "condition": {"predicate": "> 0", "window": "1m"}}))
+          rejects({"name": "w", "sources": ["logs"], "condition": {"predicate": "> 0", "window": "1m"}}))
+    check("a trigger naming a view is rejected",
+          rejects({"name": "w", "view": "logs", "condition": {"every": "10m"}}))
+    check("a trigger over an unknown source is rejected",
+          rejects({"name": "w", "sources": ["nope"], "condition": {"every": "10m"}}))
 
     store = Store(os.path.join(tempfile.mkdtemp(), "t.duckdb"))
     store.upsert_catalog_source("logs", "application_log", "webhook", "5s", {})
-    store.upsert_catalog_view("logs", "service", ["logs"])
-    store.upsert_catalog_trigger("watch", "logs", {"every": "10m", "summary_by": ["service", "code"]},
-                                 {}, "5m")
-    store.upsert_catalog_trigger("spike", "logs",
+    store.upsert_catalog_trigger("watch", ["logs"], {"every": "10m", "summary_by": ["service", "code"]},
+                                 {}, "5m", key_field="service")
+    store.upsert_catalog_trigger("spike", ["logs"],
                                  {"aggregate": "count", "predicate": "> 0", "window": "5m"}, {}, "5m")
     store.append([ev(3, service="ui", code="404") for _ in range(30)]
                  + [ev(4, service="api", code="200") for _ in range(5)]
@@ -89,7 +92,8 @@ async def main():
     fired = await schedule.tick(store, catalog, d, now=t0)
     check("the first tick fires the schedule trigger only", fired == ["watch"], str(fired))
     name, key, payload = d.fired[0]
-    check("one firing for the whole view, keyed by the view", key == "logs", key)
+    check("one firing for the whole trigger, keyed by the trigger", key == "watch", key)
+    check("the summary names the entity label", "values of `service`" in payload, payload[:300])
     check("the summary counts per service", "service | now | before | change" in payload
           and "ui | 30 | 2 |" in payload, payload)
     check("and per status code", "code | now | before | change" in payload and "404 | 30 | 2 |" in payload, payload)
@@ -113,12 +117,11 @@ async def main():
     check("resumed, it fires on the next tick", fired == ["watch"], str(fired))
 
     print("== a quiet window still fires ==")
-    store.upsert_catalog_view("empty", "service", ["nothing"])
-    store.upsert_catalog_trigger("quiet", "empty", {"every": "5m"}, {}, "5m")
+    store.upsert_catalog_trigger("quiet", ["nothing"], {"every": "5m"}, {}, "5m")
     d2 = Dispatcher()
     fired = await schedule.tick(store, catalog_from_db(store), d2, now=t0)
     quiet = [p for n, _k, p in d2.fired if n == "quiet"]
-    check("a view with no events still gets its tick", len(quiet) == 1, str(fired))
+    check("a trigger with no events still gets its tick", len(quiet) == 1, str(fired))
     check("and says the window was empty", bool(quiet) and "(no events in this window)" in quiet[0], quiet[0] if quiet else "")
 
     print("== condition triggers are unchanged ==")

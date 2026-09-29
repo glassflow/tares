@@ -100,7 +100,7 @@ async def main():
             check("create -> 201", r.status_code == 201, r.text[:300])
             inst = r.json(); uid = inst["id"]
             kinds = sorted(o["kind"] for o in inst["objects"])
-            check("five objects", kinds == ["agent", "mcp_server", "source", "trigger", "view"],
+            check("four objects, no view", kinds == ["agent", "mcp_server", "source", "trigger"],
                   str(kinds))
 
             print("== the five traps stay fixed ==")
@@ -111,10 +111,10 @@ async def main():
                   labels.get("service", {}).get("primary") is True
                   and labels.get("delivery_id", {}).get("primary") is not True, str(labels))
             check("rule and delivery id are labels", "rule" in labels and "delivery_id" in labels, str(labels))
-            views = {v["name"]: v for v in (await cx.get("/api/views")).json()}
-            check("view keyed by service", views.get("rius_alerts_view", {}).get("key_field") == "service",
-                  str(views.get("rius_alerts_view")))
             trig = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}.get("rius_alert_fired", {})
+            check("trigger reads the alerts source, keyed by service",
+                  trig.get("sources") == ["rius_alerts"] and trig.get("key_field") == "service"
+                  and trig.get("project") == uid, str(trig))
             check("one investigation per service per 5 minutes", trig.get("cooldown") == "5m", str(trig))
             tmpl = (src.get("config") or {}).get("text_template", "")
             check("text template carries the query identifiers",
@@ -193,7 +193,7 @@ async def main():
                   and rows.get("reports go to") == PARAMS["callback_url"], str(rows))
 
             print("== delete releases nothing weird ==")
-            r = await cx.delete(f"/api/projects/{uid}", params={"purge": "true"})
+            r = await cx.delete(f"/api/projects/{uid}", params={"purge": "true", "delete_sources": "rius_alerts"})
             check("delete -> 200", r.status_code == 200, r.text[:200])
             names = {s["name"] for s in (await cx.get("/api/sources")).json()}
             check("source gone", "rius_alerts" not in names, str(names))

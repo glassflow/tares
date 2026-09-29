@@ -94,12 +94,12 @@ async def main():
         ck("status is not ok", h and h["status"] != "ok", h)
         ck("names the problem", h and BAD_DB in (h.get("detail") or ""), h)
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{PORT}") as cx:
-            r = await cx.get("/api/views", timeout=5)
-            ck("/api/views is 503, not a bare 500", r.status_code == 503, r.status_code)
+            r = await cx.get("/api/triggers", timeout=5)
+            ck("/api/triggers is 503, not a bare 500", r.status_code == 503, r.status_code)
             ck("…with a reason the console can render",
                "unavailable" in (r.json().get("detail") or ""), r.text)
-            r = await cx.post("/query", json={"view": "x", "key": "y"}, timeout=5)
-            ck("/query is 503", r.status_code == 503, r.status_code)
+            r = await cx.post("/read", json={"selector": {"service": "y"}}, timeout=5)
+            ck("/read is 503", r.status_code == 503, r.status_code)
             r = await cx.post("/ingest/evt", json={}, timeout=5)
             ck("ingest is 503 (a producer learns the write was refused)", r.status_code == 503,
                r.status_code)

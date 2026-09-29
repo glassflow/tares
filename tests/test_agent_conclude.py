@@ -182,12 +182,12 @@ async def main():
          "labels": {"service": "ingress-nginx"}},
     ]))
     since = now_utc() - timedelta(minutes=5)
-    rows = store.read_view_window(["findings"], None, since, filters=[
+    rows = store.read_window(["findings"], None, since, filters=[
         {"field": "agent", "op": "eq", "value": "watcher"},
         {"field": "verdict", "op": "eq", "value": "investigate"}])
     check("filter agent=watcher, verdict=investigate selects the watcher's finding only",
           len(rows) == 1 and rows[0][2] == "404s up", str(rows))
-    rows = store.read_view_window(["findings"], "glassflow-argus-ui", since)
+    rows = store.read_window(["findings"], "glassflow-argus-ui", since)
     check("the finding is on the named entity's timeline", len(rows) == 1, str(rows))
 
 

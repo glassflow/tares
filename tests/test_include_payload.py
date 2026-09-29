@@ -1,7 +1,7 @@
-"""include_payload: read/query serve a one-line summary `text` by default, but return the full
+"""include_payload: /read serves a one-line summary `text` by default, but returns the full
 lossless stored record as `raw` on each row when asked. Proves the read path can hand agents the
-complete event (not just the truncated summary) — for both /read and /query (over a view) — while
-the default stays lean. Uses claude_code because its `text` is a deliberately lossy summary (a
+complete event (not just the truncated summary), across all sources and narrowed to named ones,
+while the default stays lean. Uses claude_code because its `text` is a deliberately lossy summary (a
 tool_use renders as `→ Bash({first 80 chars…})`) while the raw record keeps the full input.
 """
 import asyncio, json, os, subprocess, sys
@@ -72,15 +72,15 @@ async def main():
                raw and raw["message"]["content"][0]["input"]["command"] == LONG_CMD)
             ck("summary text still present alongside raw", row.get("text", "").startswith("→ Bash"))
 
-            # ── /query over a view: same behaviour ───────────────────────────────
-            await cx.post(f"{B}/api/views", json={"name": "cc", "sources": ["claude_code"]})
-            r = await cx.post(f"{B}/query", json={"view": "cc", "where": {"session": "sess-raw"},
-                                                  "window": "1h"})
-            ck("query (default) has no raw", "raw" not in r.json()["rows"][0], str(r.json()["rows"][0]))
-            r = await cx.post(f"{B}/query", json={"view": "cc", "where": {"session": "sess-raw"},
-                                                  "window": "1h", "include_payload": True})
+            # ── /read narrowed to named sources: same behaviour ─────────────────
+            r = await cx.post(f"{B}/read", json={"sources": ["claude_code"],
+                                                 "selector": {"session": "sess-raw"}, "window": "1h"})
+            ck("narrowed read (default) has no raw", "raw" not in r.json()["rows"][0], str(r.json()["rows"][0]))
+            r = await cx.post(f"{B}/read", json={"sources": ["claude_code"],
+                                                 "selector": {"session": "sess-raw"},
+                                                 "window": "1h", "include_payload": True})
             qraw = r.json()["rows"][0].get("raw")
-            ck("query include_payload carries lossless raw",
+            ck("narrowed read include_payload carries lossless raw",
                isinstance(qraw, dict) and qraw["message"]["content"][0]["input"]["command"] == LONG_CMD,
                str(r.json()["rows"][0])[:200])
     finally:

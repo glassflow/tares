@@ -4,7 +4,7 @@ Run: PYTHONPATH=. .venv/bin/python tests/test_shared_code_context.py   (no netwo
 is served through httpx's MockTransport for every AsyncClient the daemon opens)
 
 Covers: describe() output, validate() rules, deterministic plan and names, create through
-POST /api/projects producing exactly the planned objects (sources with credential, view, trigger,
+POST /api/projects producing exactly the planned objects (sources with credential, trigger,
 MCP server with headers + credential ref, enabled agent with max_rounds and the rendered prompt),
 update adding and removing a repo, summary shape, commit payloads carrying the changed files with
 truncation, and the bootstrap hook scheduling runs.
@@ -157,11 +157,11 @@ async def main():
     check("plan is deterministic",
           [(o.kind, o.key, o.spec) for o in plan1] == [(o.kind, o.key, o.spec) for o in plan2])
     kinds = [o.kind for o in plan1]
-    check("plan has 2 sources, view, trigger, mcp, agent",
-          kinds == ["source", "source", "view", "trigger", "mcp_server", "agent"], str(kinds))
+    check("plan has 2 sources, trigger, mcp, agent",
+          kinds == ["source", "source", "trigger", "mcp_server", "agent"], str(kinds))
     names = {o.key: o.name for o in plan1}
     check("names prefixed ctx_<slug>_",
-          names["view"] == "ctx_acme_context_repo_activity" and names["agent"] == "ctx_acme_context_maintainer"
+          names["trigger"] == "ctx_acme_context_changes" and names["agent"] == "ctx_acme_context_maintainer"
           and names["source:acme/app"] == "ctx_acme_context_acme_app", json.dumps(names))
     src = next(o for o in plan1 if o.key == "source:acme/app").spec
     check("source uses the credential, keyed by repo, poll 60s",
@@ -170,8 +170,11 @@ async def main():
     trig = next(o for o in plan1 if o.kind == "trigger").spec
     check("trigger counts commits per repo with 5m cooldown and 30m context",
           trig["condition"] == {"aggregate": "count", "predicate": "> 0", "window": "5m", "group_by": ["key_value"]}
-          and trig["cooldown"] == "5m" and trig["emit"]["attach_view"] is True
+          and trig["cooldown"] == "5m" and "attach_view" not in trig["emit"]
           and trig["emit"]["context_window"] == "30m", json.dumps(trig))
+    check("trigger reads every source repo, keyed by repo",
+          trig["sources"] == ["ctx_acme_context_acme_app", "ctx_acme_context_acme_lib"]
+          and trig["key_field"] == "repo" and "view" not in trig, json.dumps(trig))
     mcp = next(o for o in plan1 if o.kind == "mcp_server").spec
     check("mcp server: GitHub hosted, credential ref, toolsets header",
           mcp["url"] == "https://api.githubcopilot.com/mcp/" and mcp["auth_value"] == "credential:github/gh"
@@ -217,8 +220,8 @@ async def main():
             check("create -> 201", r.status_code == 201, r.text)
             inst = r.json()
             uid = inst["id"]
-            check("instance active with 6 objects, none missing",
-                  inst["status"] == "active" and len(inst["objects"]) == 6
+            check("instance active with 5 objects, none missing",
+                  inst["status"] == "active" and len(inst["objects"]) == 5
                   and not any(o["missing"] for o in inst["objects"]), json.dumps(inst)[:400])
 
             r = await cx.get("/api/sources")
@@ -257,9 +260,8 @@ async def main():
             check("connector fetched files per commit",
                   any(p == "/repos/acme/app/commits/bbb2222bbb" for p, _ in STATE["calls"]))
 
-            r = await cx.post("/query", json={"view": "ctx_acme_context_repo_activity",
-                                              "key": "acme/app", "window": "24h",
-                                              "include_payload": True})
+            r = await cx.post("/read", json={"project": uid, "selector": {"repo": "acme/app"},
+                                             "window": "24h", "include_payload": True})
             rows = r.json().get("rows") or r.json().get("events") or []
             payloads = {x.get("raw", {}).get("sha"): x.get("raw", {}) for x in rows if isinstance(x, dict)}
             big = payloads.get("bbb2222bbb") or {}
@@ -290,9 +292,9 @@ async def main():
             names_now = {x["name"] for x in r.json()}
             check("sources reflect the new list",
                   "ctx_acme_context_acme_app" not in names_now and "ctx_acme_context_acme_context2" in names_now)
-            r = await cx.get("/api/views")
-            v = next(x for x in r.json() if x["name"] == "ctx_acme_context_repo_activity")
-            check("view sources follow", set(v["sources"]) == {"ctx_acme_context_acme_lib", "ctx_acme_context_acme_context2"}, json.dumps(v))
+            r = await cx.get("/api/triggers")
+            v = next(x for x in r.json() if x["name"] == "ctx_acme_context_changes")
+            check("trigger sources follow", set(v["sources"]) == {"ctx_acme_context_acme_lib", "ctx_acme_context_acme_context2"}, json.dumps(v))
 
             print("== bootstrap hook ==")
             from tares.builtin_agents import AgentRunner
@@ -303,8 +305,7 @@ async def main():
             runner = runtime.dispatcher.agents
             before = len(app.state.store.list_agent_runs("ctx_acme_context_maintainer", limit=50))
             runner.bootstrap("ctx_acme_context_maintainer", "ctx_acme_context_changes",
-                             "ctx_acme_context_repo_activity", ["acme/lib", "acme/nothing"],
-                             window="7d", delay_s=0)
+                             ["acme/lib", "acme/nothing"], window="7d", delay_s=0)
             for _ in range(40):
                 await asyncio.sleep(0.25)
                 runs = app.state.store.list_agent_runs("ctx_acme_context_maintainer", limit=50)
@@ -320,7 +321,8 @@ async def main():
                   json.dumps(log)[:300])
 
             print("== delete ==")
-            r = await cx.delete(f"/api/projects/{uid}?purge_events=true")
+            srcs = ",".join(o["name"] for o in (await cx.get(f"/api/projects/{uid}")).json()["objects"] if o["kind"] == "source")
+            r = await cx.delete(f"/api/projects/{uid}?purge_events=true&delete_sources={srcs}")
             check("delete -> 200", r.status_code == 200, r.text)
             r = await cx.get("/api/sources")
             check("owned sources gone", not any(x["name"].startswith("ctx_acme_context_") for x in r.json()))

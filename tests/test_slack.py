@@ -38,9 +38,8 @@ with open(SEED, "w") as fh:
         "sources:\n  - name: evt\n    connector: webhook\n    poll: 5s\n"
         "    config:\n      labels:\n        - name: service\n          field: service\n"
         "          primary: true\n"
-        "views:\n  - name: svc\n    key_field: service\n    sources: [evt]\n"
         # short cooldown: the same entity has to be able to fire again for each failure mode below
-        "triggers:\n  - name: incident\n    view: svc\n    cooldown: 1s\n"
+        "triggers:\n  - name: incident\n    sources: [evt]\n    key_field: service\n    cooldown: 1s\n"
         "    condition:\n      aggregate: count\n      predicate: '>= 2'\n      window: 1m\n")
 
 DB, PORT, STUB_PORT = "/tmp/slack.duckdb", "8810", "8811"

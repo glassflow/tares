@@ -69,8 +69,8 @@ or set one in the console → Settings); without a key it stays enabled but each
 - **Explore** — pick the `api-server` entity and watch metrics, logs, and the alerts Prometheus
   fires merge into one time-ordered timeline. Flip **Agent view** to see the exact read an agent
   gets over MCP.
-- **Views / Triggers** — `service_timeline` is the saved read; the `incident` trigger watches it and
-  fires when Prometheus fires an alert, pushing the whole correlated timeline to a subscribed agent.
+- **Triggers**: the `incident` trigger watches the three demo sources together and fires when
+  Prometheus fires an alert, pushing the whole correlated timeline to a subscribed agent.
 
 Prometheus owns alerting here (the demo ships three rules — `HighErrorRate`, `HighLatency`,
 `DependencyDown`); Tares ingests the fired alerts (`prometheus_alerts`), correlates them, and wakes

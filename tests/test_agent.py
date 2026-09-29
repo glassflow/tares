@@ -15,8 +15,10 @@ def ck(l, c, d=""):
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
 names = {t["name"] for t in agent.TOOLS}
-ck("tools cover the read surface", {"list_sources", "describe", "source_fields", "entities", "query"} <= names, str(names))
-ck("agent can author views (create_view)", "create_view" in names, str(names))
+ck("tools cover the read surface", {"list_sources", "describe", "source_fields", "entities", "read"} <= names, str(names))
+proposals = {t["name"] for t in agent.PROPOSAL_TOOLS}
+ck("no view tools remain (query, create_view, propose_view)",
+   not ({"query", "create_view", "propose_view"} & (names | proposals)), str(names | proposals))
 ck("every tool has a schema", all("input_schema" in t for t in agent.TOOLS))
 ck("one adaptive system prompt covers understand + debug",
    "UNDERSTAND" in agent.system_prompt() and "DEBUG" in agent.system_prompt())

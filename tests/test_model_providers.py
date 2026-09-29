@@ -311,8 +311,7 @@ async def main():
                pv._headers({"key": "k", "base_url": "https://openrouter.ai/api/v1"}).get("X-Title") == "Tares"
                and "X-Title" not in pv._headers({"key": "k", "base_url": "http://x/v1"}))
             store.upsert_catalog_source("evt", "webhook", "webhook", "5s", {"labels": [{"name": "service", "field": "service", "primary": True}]})
-            store.upsert_catalog_view("svc", "service", ["evt"])
-            store.upsert_catalog_trigger("t1", "svc", {"field": "service", "aggregate": "count", "predicate": ">= 1", "window": "5m"}, {}, "5m")
+            store.upsert_catalog_trigger("t1", ["evt"], {"field": "service", "aggregate": "count", "predicate": ">= 1", "window": "5m"}, {}, "5m")
             app.state.runtime.reload_catalog()
 
             body = {"name": "on-vllm", "trigger": "t1", "prompt": "investigate", "provider": "local-vllm", "model": "llama-x"}

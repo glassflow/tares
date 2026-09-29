@@ -79,7 +79,7 @@ SPECS = {
                                "into the envelope."},
     "memory": {"label": "Agent memory", "mode": "push",
                "description": "The agent's own observations, written back via the `remember` MCP tool "
-                              "(or POST /remember). Joinable into views like any other source."},
+                              "(or POST /remember). Readable by triggers and agents like any other source."},
     "otlp": {"label": "OpenTelemetry (OTLP)", "mode": "push",
              "description": "Receives OTLP/HTTP logs, traces and metrics at POST /v1/{logs,traces,"
                             "metrics}. One source ingests every service; resource attributes "
@@ -118,7 +118,7 @@ SPECS = {
 
 # A source's signal type is a property of its connector, not something the user authors. Mostly
 # descriptive — EXCEPT "reference", which the read path treats specially (always surfaced, never
-# time-windowed; see store.read_view_window).
+# time-windowed; see store.read_window).
 _SOURCE_TYPES = {"docker_logs": "application_log", "loki": "application_log",
                  "memory": "agent_memory",
                  "otlp": "application_log", "vercel": "application_log",

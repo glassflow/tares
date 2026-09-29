@@ -1,6 +1,6 @@
 """Push dispatch — deliver a fired trigger to its subscribers, with retry/backoff.
 
-The dispatch body carries the rendered view payload, so the agent boots already holding the
+The dispatch body carries the rendered trigger payload, so the agent boots already holding the
 correlated timeline (zero reads to begin). At-least-once; subscribers dedupe on `dispatch_id`.
 
 Three kinds of subscriber, ONE mechanism: an external agent's webhook (POST), a Tares agent

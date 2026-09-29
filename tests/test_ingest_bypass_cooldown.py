@@ -28,7 +28,7 @@ os.environ["TARES_TRIGGER_DEBOUNCE_SECONDS"] = "0"
 
 import httpx
 
-SOURCE, VIEW, TRIGGER = "alerts", "alerts_view", "alert_fired"
+SOURCE, TRIGGER = "alerts", "alert_fired"
 SERVICE = "checkout"
 PASS = FAIL = 0
 
@@ -54,7 +54,7 @@ def fresh_app(db: str, auth_token: str = ""):
 
 
 async def build_catalog(cx, headers=None):
-    """A webhook source keyed by service, a view over it, a trigger with a 5 minute cooldown."""
+    """A webhook source keyed by service, a trigger over it with a 5 minute cooldown."""
     h = headers or {}
     r = await cx.post("/api/sources", headers=h, json={
         "name": SOURCE, "connector": "webhook", "poll": "5s",
@@ -63,11 +63,8 @@ async def build_catalog(cx, headers=None):
                               {"name": "rule", "field": "rule"},
                               {"name": "delivery_id", "field": "delivery_id"}]}})
     assert r.status_code < 300, r.text
-    r = await cx.post("/api/views", headers=h,
-                      json={"name": VIEW, "key_field": "service", "sources": [SOURCE]})
-    assert r.status_code < 300, r.text
     r = await cx.post("/api/triggers", headers=h, json={
-        "name": TRIGGER, "view": VIEW, "cooldown": "5m",
+        "name": TRIGGER, "sources": [SOURCE], "key_field": "service", "cooldown": "5m",
         "condition": {"aggregate": "count", "predicate": "> 0", "window": "5m"}})
     assert r.status_code < 300, r.text
     srcs = {s["name"]: s for s in (await cx.get("/api/sources", headers=h)).json()}
@@ -149,7 +146,7 @@ async def phase_group_by():
             store = app.state.store
             key = await build_catalog(cx)
             r = await cx.post("/api/triggers", json={
-                "name": grouped, "view": VIEW, "cooldown": "5m",
+                "name": grouped, "sources": [SOURCE], "cooldown": "5m",
                 "condition": {"aggregate": "count", "predicate": "> 0", "window": "5m",
                               "group_by": ["service", "rule"]}})
             assert r.status_code < 300, r.text

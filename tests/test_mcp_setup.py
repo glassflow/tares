@@ -1,5 +1,5 @@
 """Agent-driven source setup over MCP — exercises the MCP tools against a real taresd:
-list_connectors -> create_source -> (data flows) -> list_sources -> derive -> query.
+list_connectors -> create_source -> (data flows) -> list_sources -> create_trigger -> read.
 """
 import asyncio, os, signal, subprocess, sys, time
 
@@ -63,10 +63,20 @@ async def main():
     desc = _json.loads(await m.catalog_describe("source:evt"))
     ck("catalog_describe shows the app label axis", "app" in desc.get("labels", {}), str(list(desc.get("labels", {}))))
 
-    # the agent derives a view over its new source and reads it back
-    _json.loads(await m.derive(["evt"], "app", "evt_view"))
-    payload = await m.query("evt_view", where={"app": "checkout"})
-    ck("query the agent-created source via MCP", "boom" in payload and "ok" not in payload.split("boom")[0], payload[:120])
+    # the agent puts a trigger over its new source and reads the source back
+    res = _json.loads(await m.create_trigger(
+        "evt_errors", ["evt"], {"aggregate": "count", "predicate": "> 5", "window": "1m"},
+        key_field="app"))
+    ck("create_trigger over the source -> ok, in the default project",
+       res.get("ok") is True and res.get("project"), str(res))
+    res = _json.loads(await m.update_trigger(
+        "evt_errors", ["evt"], {"aggregate": "count", "predicate": "> 9", "window": "1m"},
+        filters=[{"field": "app", "op": "eq", "value": "checkout"}], key_field="app"))
+    ck("update_trigger -> ok", res.get("ok") is True, str(res))
+    ck("the MCP surface has no view tools",
+       not any(hasattr(m, n) for n in ("query", "derive", "update_view")))
+    payload = await m.read({"app": "checkout"}, sources=["evt"])
+    ck("read the agent-created source via MCP", "boom" in payload and "ok" not in payload.split("boom")[0], payload[:120])
 
     # discovery over MCP (best-effort live github)
     try:

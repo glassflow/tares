@@ -1,7 +1,7 @@
 """Load and type the catalog YAML — the MVP stand-in for the design doc's Catalog Service.
 
-Declares the sources (what to ingest and how), the views (named query shapes), and the triggers
-(conditions that fire a push). Coral-style declarative config, not a service.
+Declares the sources (what to ingest and how), the triggers (conditions over sources that fire a
+push) and the agents they wake. Coral-style declarative config, not a service.
 """
 from __future__ import annotations
 
@@ -88,15 +88,6 @@ class SourceCfg:
 
 
 @dataclass
-class ViewCfg:
-    name: str
-    key_field: str
-    sources: list
-    filters: list = dc_field(default_factory=list)   # [{field, op, value}] applied on read + trigger eval
-    created_by: str = "human"                        # "human" | "agent:<client>" (design doc §6.5)
-
-
-@dataclass
 class Condition:
     aggregate: str          # count | sum | avg | max | min | any
     predicate: str          # "> 1.0", ">= 100", "== 0"
@@ -104,19 +95,24 @@ class Condition:
     field: str | None = None
     group_by: list = dc_field(default_factory=lambda: ["key_value"])
     # A schedule instead of a condition (TR-320): fire once every `every` seconds for the whole
-    # view, handing over a summary of the window counted per `summary_by` label.
+    # trigger, handing over a summary of the window counted per `summary_by` label.
     every: float | None = None
     summary_by: list = dc_field(default_factory=list)
 
 
 @dataclass
 class TriggerCfg:
+    """A condition over a set of sources. The trigger names the sources it watches and the
+    filters that narrow them itself; there is no separate named query shape to point at."""
     name: str
-    view: str
+    sources: list
     condition: Condition
+    filters: list = dc_field(default_factory=list)   # [{field, op, value}] applied on eval + payload
+    key_field: str = ""       # the entity label; "" = the primary label of the first source
     emit: dict = dc_field(default_factory=dict)
     cooldown_seconds: float = 300.0
     paused: bool = False
+    project: str | None = None
 
 
 @dataclass
@@ -199,9 +195,31 @@ def validate_slack_channel(channel: str) -> str:
 @dataclass
 class Catalog:
     sources: dict   # name -> SourceCfg
-    views: dict     # name -> ViewCfg
     triggers: list  # [TriggerCfg]
     agents: list = dc_field(default_factory=list)   # [AgentCfg]
+
+
+def primary_label(src) -> str | None:
+    """The label a source marks primary (its entity key), for a SourceCfg or a catalog row."""
+    cfg = src.config if hasattr(src, "config") else (src or {}).get("config")
+    for spec in (cfg.get("labels") or []) if isinstance(cfg, dict) else []:
+        if isinstance(spec, dict) and spec.get("primary"):
+            return spec.get("name")
+    return None
+
+
+def trigger_entity_label(trig, sources: dict) -> str | None:
+    """Which label names the entity a trigger fires for: its own key_field, else the primary label
+    of its first source that declares one. `sources` maps name to SourceCfg (or a catalog row)."""
+    key_field = trig.key_field if hasattr(trig, "key_field") else (trig or {}).get("key_field")
+    if key_field:
+        return key_field
+    names = trig.sources if hasattr(trig, "sources") else (trig or {}).get("sources") or []
+    for name in names:
+        label = primary_label(sources.get(name)) if sources.get(name) is not None else None
+        if label:
+            return label
+    return None
 
 
 def _source_from_dict(s: dict) -> SourceCfg:
@@ -212,14 +230,6 @@ def _source_from_dict(s: dict) -> SourceCfg:
         name=s["name"], type=source_type_for(s["connector"]), connector=s["connector"],
         poll_seconds=parse_duration(poll), config=s.get("config", {}) or {},
         poll=poll, paused=bool(s.get("paused", False)), ingest_key=s.get("ingest_key") or "",
-    )
-
-
-def _view_from_dict(v: dict) -> ViewCfg:
-    return ViewCfg(
-        name=v["name"], key_field=v["key_field"], sources=v["sources"],
-        filters=v.get("filters", []) or [],
-        created_by=v.get("created_by") or "human",
     )
 
 
@@ -236,11 +246,14 @@ def _condition_from_dict(c: dict) -> Condition:
 
 def _trigger_from_dict(t: dict) -> TriggerCfg:
     return TriggerCfg(
-        name=t["name"], view=t["view"],
+        name=t["name"], sources=list(t.get("sources") or []),
         condition=_condition_from_dict(t["condition"]),
+        filters=list(t.get("filters") or []),
+        key_field=t.get("key_field") or "",
         emit=t.get("emit", {}) or {},
         cooldown_seconds=parse_duration(t.get("cooldown", "5m")),
         paused=bool(t.get("paused", False)),
+        project=t.get("project") or t.get("owned_by") or None,
     )
 
 
@@ -263,17 +276,54 @@ def _agent_from_dict(a: dict, enabled: bool = False) -> AgentCfg:
 
 
 def load_catalog(path) -> Catalog:
-    raw = yaml.safe_load(Path(path).read_text())
+    raw = fold_legacy_views(yaml.safe_load(Path(path).read_text()) or {})
 
     sources = {s["name"]: _source_from_dict(s) for s in raw.get("sources", [])}
-
-    views = {v["name"]: _view_from_dict(v) for v in raw.get("views", [])}
 
     triggers = [_trigger_from_dict(t) for t in raw.get("triggers", [])]
 
     agents = [_agent_from_dict(a) for a in raw.get("agents", []) or []]
 
-    return Catalog(sources=sources, views=views, triggers=triggers, agents=agents)
+    return Catalog(sources=sources, triggers=triggers, agents=agents)
+
+
+VIEWS_REMOVED = "views were removed: give the trigger `sources` (and `filters`)"
+
+
+def fold_legacy_views(raw: dict) -> dict:
+    """A catalog written while views existed names a view on each trigger and declares the views in a
+    `views:` section. Fold each view's sources, filters and key_field onto the triggers that name
+    it and drop the section, so an old export still imports. A custom project's `view` objects are
+    dropped with it. Returns a new dict; the input is left alone."""
+    views = {v["name"]: v for v in (raw.get("views") or []) if isinstance(v, dict) and v.get("name")}
+    out = {k: v for k, v in raw.items() if k != "views"}
+    triggers = []
+    for t in raw.get("triggers") or []:
+        if isinstance(t, dict) and t.get("view") and not t.get("sources"):
+            v = views.get(t["view"])
+            if v is None:
+                raise CatalogError(f"trigger {t.get('name')!r}: names view {t['view']!r}, which "
+                                   "this catalog does not declare; " + VIEWS_REMOVED)
+            t = {**{k: x for k, x in t.items() if k != "view"},
+                 "sources": list(v.get("sources") or []),
+                 **({"filters": list(v["filters"])} if v.get("filters") else {}),
+                 **({"key_field": v["key_field"]} if v.get("key_field") else {})}
+        elif isinstance(t, dict) and "view" in t:
+            t = {k: x for k, x in t.items() if k != "view"}
+        if isinstance(t, dict) and isinstance(t.get("emit"), dict) and "attach_view" in t["emit"]:
+            # never read: the payload always carries the timeline
+            t = {**t, "emit": {k: x for k, x in t["emit"].items() if k != "attach_view"}}
+        triggers.append(t)
+    if "triggers" in raw:
+        out["triggers"] = triggers
+    for section in ("projects", "usecases"):
+        if raw.get(section):
+            out[section] = [
+                {**u, "objects": [o for o in u["objects"]
+                                  if not (isinstance(o, dict) and o.get("kind") == "view")]}
+                if isinstance(u, dict) and isinstance(u.get("objects"), list) else u
+                for u in raw[section]]
+    return out
 
 
 # ── DB-backed catalog (the YAML above becomes import/export) ─────────────────
@@ -284,20 +334,14 @@ def catalog_from_db(store) -> Catalog:
     for s in store.list_catalog_sources():
         sources[s["name"]] = _source_from_dict(s)
 
-    views = {v["name"]: _view_from_dict(v) for v in store.list_catalog_views()}
-
-    triggers = []
-    for t in store.list_catalog_triggers():
-        triggers.append(_trigger_from_dict(
-            {"name": t["name"], "view": t["view"], "condition": t["condition"],
-             "emit": t["emit"], "cooldown": t["cooldown"], "paused": t.get("paused", False)}))
+    triggers = [_trigger_from_dict(t) for t in store.list_catalog_triggers()]
 
     # enabled is derived: an agent is enabled exactly when it has a subscription to its trigger.
     enabled_urls = {s["url"] for s in store.all_subscriptions()}
     agents = [_agent_from_dict(a, enabled=agent_url(a["name"]) in enabled_urls)
               for a in store.list_catalog_agents()]
 
-    return Catalog(sources=sources, views=views, triggers=triggers, agents=agents)
+    return Catalog(sources=sources, triggers=triggers, agents=agents)
 
 
 def validate_mcp_server_dict(m: dict) -> None:
@@ -329,11 +373,14 @@ def import_yaml_to_db(store, text: str, engine=None) -> dict:
     return import_catalog_dict(store, yaml.safe_load(text) or {}, engine=engine)
 
 
-def import_catalog_dict(store, raw: dict, engine=None) -> dict:
+def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> dict:
     """The dict form of import_yaml_to_db; also what the project engine applies a plan through,
-    so a project's objects go through exactly the validation and writes a catalog import does."""
+    so a project's objects go through exactly the validation and writes a catalog import does.
+
+    `assign`: place the imported objects in projects (the object's `project`, else the default
+    project). The engine passes False: it owns what it applies and places it itself."""
+    raw = fold_legacy_views(raw or {})
     sources = raw.get("sources", []) or []
-    views = raw.get("views", []) or []
     triggers = raw.get("triggers", []) or []
     agents = raw.get("agents", []) or []
     mcp_servers = raw.get("mcp_servers", []) or []
@@ -341,24 +388,38 @@ def import_catalog_dict(store, raw: dict, engine=None) -> dict:
         validate_mcp_server_dict(m)
 
     # validate the whole document before writing anything. Names already in the store count as
-    # known (a merge import may add a view over existing sources).
+    # known (a merge import may add a trigger over existing sources).
     names = {s["name"] for s in sources} | {s["name"] for s in store.list_catalog_sources()}
     for s in sources:
         validate_source_dict(s)
-    for v in views:
-        validate_view_dict(v, names)
-    view_names = {v["name"] for v in views} | {v["name"] for v in store.list_catalog_views()}
     for t in triggers:
-        validate_trigger_dict(t, view_names)
+        validate_trigger_dict(t, names)
     trigger_names = {t["name"] for t in triggers} | {t["name"] for t in store.list_catalog_triggers()}
-    all_views = {v["name"]: v for v in store.list_catalog_views()}
-    all_views.update({v["name"]: v for v in views})
     all_triggers = {t["name"]: t for t in store.list_catalog_triggers()}
     all_triggers.update({t["name"]: t for t in triggers})
     server_names = ({m["name"] for m in mcp_servers}
                     | {m["name"] for m in store.list_mcp_servers()})
     for a in agents:
-        validate_agent_dict(a, trigger_names, all_triggers, all_views, server_names)
+        validate_agent_dict(a, trigger_names, all_triggers, server_names)
+
+    # projects: {template, name, params}. `usecases:` with `recipe:` is the pre-1.14 form, read
+    # until two releases after 1.14
+    if raw.get("projects") and raw.get("usecases"):
+        raise CatalogError("this catalog has both a projects: and a usecases: section; keep one "
+                           "(usecases: is the old name of projects:)")
+    projects = raw.get("projects") or raw.get("usecases") or []
+    if projects and engine is None:
+        raise CatalogError("this catalog declares projects but no engine was given to apply them")
+    declared = {str(u.get("name") or "") for u in projects}
+    if assign:
+        # a project reference must name a project that exists or that this document declares:
+        # a typo would otherwise drop the object silently into the default project
+        for kind, objs in (("source", sources), ("trigger", triggers), ("agent", agents),
+                           ("mcp_server", mcp_servers)):
+            for o in objs:
+                for ref in _project_refs(o):
+                    if _resolve_project(store, ref) is None and ref not in declared:
+                        raise CatalogError(f"{kind} {o['name']!r}: unknown project {ref!r}")
 
     from .connectors import normalize_config, source_type_for
     for s in sources:
@@ -366,14 +427,11 @@ def import_catalog_dict(store, raw: dict, engine=None) -> dict:
             s["name"], source_type_for(s["connector"]), s["connector"], str(s.get("poll", "5s")),
             normalize_config(s["connector"], s.get("config", {}) or {}),
             bool(s.get("paused", False)), ingest_key=s.get("ingest_key"))
-    for v in views:
-        store.upsert_catalog_view(v["name"], v["key_field"], v["sources"],
-                                  v.get("filters", []) or [],
-                                  v.get("created_by") or "human")
     for t in triggers:
         store.upsert_catalog_trigger(
-            t["name"], t["view"], t["condition"], t.get("emit", {}) or {},
-            str(t.get("cooldown", "5m")))
+            t["name"], list(t["sources"]), t["condition"], t.get("emit", {}) or {},
+            str(t.get("cooldown", "5m")), filters=list(t.get("filters") or []),
+            key_field=t.get("key_field") or "")
         # upsert doesn't touch paused (it's toggled separately); reflect the document's state so a
         # paused trigger round-trips. Sources carry paused through upsert_catalog_source already.
         store.set_trigger_paused(t["name"], bool(t.get("paused", False)))
@@ -409,21 +467,22 @@ def import_catalog_dict(store, raw: dict, engine=None) -> dict:
                                 m.get("auth_header"), auth_value,
                                 {str(k): str(v) for k, v in (m.get("headers") or {}).items()})
 
-    # projects: {template, name, params}. Created (or, by name, updated) through the engine so
-    # they own their objects like a console-created instance would.
-    # `usecases:` with `recipe:` is the pre-1.14 form, read until two releases after 1.14
-    if raw.get("projects") and raw.get("usecases"):
-        raise CatalogError("this catalog has both a projects: and a usecases: section; keep one "
-                           "(usecases: is the old name of projects:)")
-    projects = raw.get("projects") or raw.get("usecases") or []
-    if projects and engine is None:
-        raise CatalogError("this catalog declares projects but no engine was given to apply them")
+    placed = set()
+    if assign:
+        # objects naming a project that already exists go there before the projects below are
+        # applied, so a template re-plan finds them where the document put them
+        placed = _place_imported(store, sources, triggers, agents, mcp_servers, only_existing=True)
+
+    # Projects are created (or, by name, updated) through the engine so they own their objects
+    # like a console-created instance would.
     for u in projects:
         if not u.get("template") and u.get("recipe"):
             u = {**u, "template": u["recipe"]}
         for field in ("template", "name"):
             if not u.get(field):
                 raise CatalogError(f"project is missing required field {field!r}")
+        if u.get("template") == "default":
+            continue   # every cell has its own default project; its objects carry `project`
         params = dict(u.get("params") or {})
         if u.get("template") == "custom" and "objects" in u:
             # a hand-assembled project: `objects: [{kind, name}]` is its whole configuration
@@ -434,28 +493,91 @@ def import_catalog_dict(store, raw: dict, engine=None) -> dict:
         else:
             engine.update(existing["id"], params)
 
-    return {"sources": len(sources), "views": len(views), "triggers": len(triggers),
+    if assign:
+        _place_imported(store, sources, triggers, agents, mcp_servers, only_existing=False,
+                        skip=placed)
+        # everything the document left without a project lands in the default project, and a
+        # trigger's sources join its project (the same pass the store runs at every start)
+        store.normalize_projects()
+
+    return {"sources": len(sources), "triggers": len(triggers),
             "agents": len(agents), "mcp_servers": len(mcp_servers), "projects": len(projects),
             "names": {"sources": [s["name"] for s in sources],
-                      "views": [v["name"] for v in views],
                       "triggers": [t["name"] for t in triggers],
                       "agents": [a["name"] for a in agents],
                       "mcp_servers": [m["name"] for m in mcp_servers],
                       "projects": [u["name"] for u in projects]}}
 
 
+DEFAULT_PROJECT_NAME = "Default"
+
+
+def _project_refs(o: dict) -> list[str]:
+    """The project names or ids an imported object points at: `project` for a trigger, agent or
+    MCP server, `projects` (memberships) for a source."""
+    out = []
+    if o.get("project"):
+        out.append(str(o["project"]))
+    for ref in o.get("projects") or []:
+        if ref:
+            out.append(str(ref))
+    return out
+
+
+def _resolve_project(store, ref: str) -> str | None:
+    """A project id from an id or a name. The default project answers to its name on every cell,
+    so an export from one cell names the right project on another."""
+    if not ref:
+        return None
+    if ref == DEFAULT_PROJECT_NAME:
+        return store.default_project_id()
+    if store.get_project(ref) is not None:
+        return ref
+    p = store.get_project_by_name(ref)
+    return p["id"] if p else None
+
+
+def _place_imported(store, sources, triggers, agents, mcp_servers, only_existing: bool,
+                    skip: set | None = None) -> set:
+    """Put each imported object that names a project into it. Returns the (kind, name) placed."""
+    placed = set()
+    skip = skip or set()
+    for kind, objs in (("source", sources), ("trigger", triggers), ("agent", agents),
+                       ("mcp_server", mcp_servers)):
+        for o in objs:
+            if (kind, o["name"]) in skip:
+                continue
+            for ref in _project_refs(o):
+                uid = _resolve_project(store, ref)
+                if uid is None:
+                    if only_existing:
+                        continue
+                    raise CatalogError(f"{kind} {o['name']!r}: unknown project {ref!r}")
+                store.put_in_project(kind, o["name"], uid)
+                placed.add((kind, o["name"]))
+    return placed
+
+
 def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool = False) -> str:
     """Serialize the catalog to portable YAML.
 
     `sources`: optional allow-list of source names to include (None = all). A partial export stays
-    self-consistent — a view is kept only if ALL its sources are included, and a trigger only if its
-    view is kept — so it re-imports cleanly.
+    self-consistent: a trigger is kept only if ALL its sources are included, and an agent only if
+    its trigger is kept, so it re-imports cleanly.
+
+    Projects are named, not referenced by id, so the file imports into another cell: `project` on
+    a trigger, agent and MCP server, `projects` (memberships) on a source.
 
     `include_secrets`: when False (default), connector secrets (github `token`, postgres `dsn`) are
     OMITTED — the export is safe to share/commit, and the operator re-enters them on the target
     (the source form's blank-to-keep handles this). When True, real secret values are emitted."""
     from .connectors import secret_field_names
     want = set(sources) if sources is not None else None
+    project_names = {p["id"]: p["name"] for p in store.list_projects()}
+    members = store.source_memberships()
+
+    def _pname(uid):
+        return project_names.get(uid) if uid else None
 
     src_out, kept_sources = [], set()
     for s in store.list_catalog_sources():
@@ -467,26 +589,27 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
             secrets = secret_field_names(s["connector"])
             if secrets:
                 config = {k: v for k, v in config.items() if k not in secrets}
+        in_projects = [n for n in (_pname(u) for u in members.get(s["name"], [])) if n]
         src_out.append({"name": s["name"], "connector": s["connector"],  # type is derived
                         "poll": s["poll"], "config": config,
-                        **({"paused": True} if s.get("paused") else {})})
+                        **({"paused": True} if s.get("paused") else {}),
+                        **({"projects": in_projects} if in_projects else {})})
 
-    view_out, kept_views = [], set()
-    for v in store.list_catalog_views():
-        if want is not None and not set(v["sources"]).issubset(kept_sources):
+    trig_out = []
+    for t in store.list_catalog_triggers():
+        if want is not None and not set(t["sources"]).issubset(kept_sources):
             continue
-        kept_views.add(v["name"])
-        view_out.append({"name": v["name"], "key_field": v["key_field"], "sources": v["sources"],
-                         **({"filters": v["filters"]} if v.get("filters") else {}),
-                         **({"created_by": v["created_by"]} if v.get("created_by", "human") != "human" else {})})
-
-    trig_out = [
-        {"name": t["name"], "view": t["view"], "condition": t["condition"],
-         "emit": t["emit"], "cooldown": t["cooldown"],
-         **({"paused": True} if t.get("paused") else {})}
-        for t in store.list_catalog_triggers()
-        if want is None or t["view"] in kept_views
-    ]
+        if not t["sources"]:
+            # left by the upgrade when its view was already gone: it could not be imported
+            continue
+        trig_out.append({"name": t["name"],
+                         **({"project": _pname(t.get("owned_by"))}
+                            if _pname(t.get("owned_by")) else {}),
+                         "sources": t["sources"],
+                         **({"filters": t["filters"]} if t.get("filters") else {}),
+                         **({"key_field": t["key_field"]} if t.get("key_field") else {}),
+                         "condition": t["condition"], "emit": t["emit"], "cooldown": t["cooldown"],
+                         **({"paused": True} if t.get("paused") else {})})
     kept_triggers = {t["name"] for t in trig_out}
 
     # A Tares agent follows its trigger. Its Slack webhook URL is a credential (anyone holding it
@@ -499,7 +622,9 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
     # A `credential:github/<name>` reference is not a secret (the token lives in the credential),
     # so it is exported either way; extra headers are plain configuration.
     mcp_out = [
-        {"name": m["name"], "url": m["url"],
+        {"name": m["name"],
+         **({"project": _pname(m.get("owned_by"))} if _pname(m.get("owned_by")) else {}),
+         "url": m["url"],
          **({"auth_header": m["auth_header"]} if m.get("auth_header") else {}),
          **({"auth_value": m["auth_value"]}
             if m.get("auth_value") and (include_secrets
@@ -510,7 +635,9 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
     ]
 
     agent_out = [
-        {"name": a["name"], "trigger": a["trigger"], "prompt": a["prompt"],
+        {"name": a["name"],
+         **({"project": _pname(a.get("owned_by"))} if _pname(a.get("owned_by")) else {}),
+         "trigger": a["trigger"], "prompt": a["prompt"],
          **({"model": a["model"]} if a.get("model") else {}),
          **({"provider": a["provider"]} if a.get("provider") else {}),
          **({"slack_channel": a["slack_channel"]} if a.get("slack_channel") else {}),
@@ -529,7 +656,7 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
         if a["trigger"] in kept_triggers
     ]
 
-    doc = {"sources": src_out, "views": view_out, "triggers": trig_out}
+    doc = {"sources": src_out, "triggers": trig_out}
     if agent_out:
         doc["agents"] = agent_out
     if mcp_out:
@@ -537,21 +664,24 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
     # Projects: template + name + params. Their objects are already in the sections above (they are
     # ordinary objects); on import the engine re-plans over them and re-claims ownership. Params
     # may hold references to credentials but never credential values, so this is safe to share.
+    # The default project is every cell's own; its objects say `project: Default` above.
     uc_out = []
     owner = {"source": {x["name"]: x.get("owned_by") for x in store.list_catalog_sources()},
-             "view": {x["name"]: x.get("owned_by") for x in store.list_catalog_views()},
              "trigger": {x["name"]: x.get("owned_by") for x in store.list_catalog_triggers()},
              "agent": {x["name"]: x.get("owned_by") for x in store.list_catalog_agents()},
              "mcp_server": {x["name"]: x.get("owned_by") for x in store.list_mcp_servers()}}
     for u in store.list_projects():
+        if u["template"] == "default":
+            continue
         if u["template"] == "custom":
             # only objects that are in the sections above and still this project's: one deleted
-            # by hand (or recreated under another project) would make the file fail to import
+            # by hand (or recreated under another project) would make the file fail to import.
+            # A source is shared, so membership, not its creator, says whether it is still here.
             objs = [o for o in (u["params"].get("objects") or [])
                     if o.get("name") in owner.get(o.get("kind"), {})
-                    and owner[o["kind"]][o["name"]] in (None, u["id"])]
-            if objs:   # a project with nothing left to list is not worth a failing import
-                uc_out.append({"template": "custom", "name": u["name"], "objects": objs})
+                    and (u["id"] in members.get(o["name"], []) if o.get("kind") == "source"
+                         else owner[o["kind"]][o["name"]] in (None, u["id"]))]
+            uc_out.append({"template": "custom", "name": u["name"], "objects": objs})
         else:
             uc_out.append({"template": u["template"], "name": u["name"], "params": u["params"]})
     if uc_out and want is None:
@@ -715,39 +845,45 @@ _FILTER_OPS = {"eq", "neq", "contains", "gt", "lt", "gte", "lte"}
 _FILTER_FIELD_RE = re.compile(r"^[A-Za-z0-9_.]+$")   # dots: raw payload fields (OTLP et al.)
 
 
-def validate_view_dict(v: dict, source_names: set) -> None:
-    # key_field is optional now — labels make a single primary key non-essential; a view just
-    # correlates its sources, and the query picks which label(s) to slice by.
-    for field in ("name", "sources"):
-        if not v.get(field):
-            raise CatalogError(f"view is missing required field {field!r}")
-    unknown = set(v["sources"]) - source_names
-    if unknown:
-        raise CatalogError(f"view {v['name']!r}: unknown sources {sorted(unknown)}")
-    for f in v.get("filters", []) or []:
+def validate_filters(filters, owner: str) -> None:
+    """The {field, op, value} filters a trigger narrows its sources with. `owner` prefixes the
+    error ("trigger 'x'")."""
+    if not isinstance(filters or [], list):
+        raise CatalogError(f"{owner}: filters must be a list of {{field, op, value}}")
+    for f in filters or []:
         if not isinstance(f, dict) or not all(k in f for k in ("field", "op", "value")):
             raise CatalogError(
-                f"view {v['name']!r}: each filter needs field, op and value (got {f!r})")
+                f"{owner}: each filter needs field, op and value (got {f!r})")
         if not _FILTER_FIELD_RE.match(str(f["field"])):
             raise CatalogError(
-                f"view {v['name']!r}: filter field {f['field']!r} must be alphanumeric/_/.")
+                f"{owner}: filter field {f['field']!r} must be alphanumeric/_/.")
         if f["op"] not in _FILTER_OPS:
             raise CatalogError(
-                f"view {v['name']!r}: filter op must be one of {sorted(_FILTER_OPS)}")
+                f"{owner}: filter op must be one of {sorted(_FILTER_OPS)}")
         if f["op"] in ("gt", "lt", "gte", "lte"):
             try:
                 float(f["value"])
             except (TypeError, ValueError):
                 raise CatalogError(
-                    f"view {v['name']!r}: filter op {f['op']!r} needs a numeric value")
+                    f"{owner}: filter op {f['op']!r} needs a numeric value")
 
 
-def validate_trigger_dict(t: dict, view_names: set) -> None:
-    for field in ("name", "view", "condition"):
+def validate_trigger_dict(t: dict, source_names: set) -> None:
+    if "view" in t and t.get("view") not in (None, ""):
+        raise CatalogError(VIEWS_REMOVED)
+    for field in ("name", "condition"):
         if not t.get(field):
             raise CatalogError(f"trigger is missing required field {field!r}")
-    if t["view"] not in view_names:
-        raise CatalogError(f"trigger {t['name']!r}: unknown view {t['view']!r}")
+    srcs = t.get("sources")
+    if not isinstance(srcs, list) or not srcs or not all(isinstance(x, str) and x for x in srcs):
+        raise CatalogError(f"trigger {t['name']!r}: sources must name at least one source")
+    unknown = set(srcs) - set(source_names)
+    if unknown:
+        raise CatalogError(f"trigger {t['name']!r}: unknown sources {sorted(unknown)}")
+    validate_filters(t.get("filters"), f"trigger {t['name']!r}")
+    kf = t.get("key_field") or ""
+    if kf and not re.fullmatch(r"[A-Za-z0-9_.]+", str(kf)):
+        raise CatalogError(f"trigger {t['name']!r}: key_field must be a label name")
     c = t["condition"]
     if c.get("every"):
         _check_duration(c["every"], f"trigger {t['name']!r} every")
@@ -798,7 +934,6 @@ MAX_AGENT_ROUNDS = 24   # upper bound for a per-agent max_rounds (see builtin_ag
 
 
 def validate_agent_dict(a: dict, trigger_names: set, triggers: dict | None = None,
-                        views: dict | None = None,
                         mcp_server_names: set | None = None) -> None:
     for field in ("name", "trigger", "prompt"):
         if not str(a.get(field) or "").strip():
@@ -874,20 +1009,19 @@ def validate_agent_dict(a: dict, trigger_names: set, triggers: dict | None = Non
                                "(or empty for the instance-wide cap)")
 
     # Loop guard: a Tares agent writes a finding into the `findings` source. If its trigger
-    # watches a view containing that source, its own finding re-fires the trigger, which runs the
-    # agent again, forever. The one valid form is a handoff (TR-322): the view keeps only ANOTHER
-    # agent's findings (`agent` eq that agent), so this agent's own findings never match. A chain
-    # that loops back through two agents is bounded by their cooldowns, daily cap and budgets;
-    # a depth limit is later work.
-    if triggers is not None and views is not None:
+    # watches that source, its own finding re-fires the trigger, which runs the agent again,
+    # forever. The one valid form is a handoff (TR-322): the trigger keeps only ANOTHER agent's
+    # findings (`agent` eq that agent), so this agent's own findings never match. A chain that
+    # loops back through two agents is bounded by their cooldowns, daily cap and budgets; a depth
+    # limit is later work.
+    if triggers is not None:
         trig = triggers.get(a["trigger"])
-        view = views.get(trig.get("view")) if trig else None
-        if view and FINDINGS_SOURCE in (view.get("sources") or []):
-            others = {str(f.get("value")) for f in (view.get("filters") or [])
+        if trig and FINDINGS_SOURCE in (trig.get("sources") or []):
+            others = {str(f.get("value")) for f in (trig.get("filters") or [])
                       if f.get("field") == "agent" and f.get("op") == "eq"}
             if not others or a["name"] in others:
                 raise CatalogError(
-                    f"agent {a['name']!r}: trigger {a['trigger']!r} watches view "
-                    f"{trig['view']!r}, which includes the {FINDINGS_SOURCE!r} source; an agent "
-                    f"can be woken by findings only through a view filtered to another agent's "
-                    f"findings (agent eq <name>), or it would fire itself forever")
+                    f"agent {a['name']!r}: trigger {a['trigger']!r} watches the "
+                    f"{FINDINGS_SOURCE!r} source; an agent can be woken by findings only through "
+                    f"a trigger filtered to another agent's findings (agent eq <name>), or it "
+                    f"would fire itself forever")

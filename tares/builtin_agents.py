@@ -3,8 +3,8 @@
 A Tares agent is a prompt attached to a trigger. It's a real agent (it reasons with an LLM),
 configured inside Tares rather than connected over a webhook. When its trigger fires it's handed
 the same correlated timeline the dispatch carries, may read a wider window or another entity, and
-writes ONE finding back into Tares (plus an optional Slack post). Today it has exactly two tools,
-`query` and `read`, both routed through Tares's own read path — it cannot reach anything else.
+writes ONE finding back into Tares (plus an optional Slack post). Its own tools are two reads,
+`read` and `stats` over its project's sources, both routed through Tares's own read path.
 
 That closed tool set is the current boundary: a Tares agent reads and concludes, it does not act
 on the customer's world (restarting, deploying, ticketing) — that's the customer's own agent's job.
@@ -33,11 +33,12 @@ import httpx
 from . import metrics
 from . import results as _results
 from . import tracing as _tracing
-from .config import FINDINGS_SOURCE, API_BASE, agent_url, parse_duration
+from .config import (FINDINGS_SOURCE, API_BASE, agent_url, parse_duration,
+                     trigger_entity_label)
 from .envelope import now_utc
 from .models import ModelError, Provider, add_usage, empty_usage, tool_call_in_text, tool_message
 from .pricing import price_usage
-from .views import resolve_query_full, resolve_read
+from .reads import resolve_read, resolve_sources_full
 
 MODEL = os.getenv("TARES_AGENT_MODEL", "claude-sonnet-4-6")
 # The model choices the console offers per agent. The instance default (TARES_AGENT_MODEL) is
@@ -45,7 +46,7 @@ MODEL = os.getenv("TARES_AGENT_MODEL", "claude-sonnet-4-6")
 # instance default moves every agent that never chose one.
 AGENT_MODELS = list(dict.fromkeys(
     [MODEL, "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"]))
-# Model-call rounds per run. The default is sized for read timeline + a query or two + a finding;
+# Model-call rounds per run. The default is sized for read timeline + a read or two + a finding;
 # an agent that also reaches external MCP servers (a diff, a file, a write) needs more, so its
 # default is higher. Either can be overridden per agent (`max_rounds`, 1..24). One extra tools-off
 # call is made when the budget runs out, so the real ceiling is max_rounds + 1 model calls.
@@ -156,8 +157,9 @@ PRESETS = {
     "triage": {
         "label": "Triage (on a schedule)",
         "prompt": (
-            "You watch a system on a schedule. Every few minutes you are handed a summary of one "
-            "view's last window: for each label, the count per value now against the window "
+            "You watch a system on a schedule. Every few minutes you are handed a summary of "
+            "the last window of the sources you watch: for each label, the count per value now "
+            "against the window "
             "before, and a few recent lines. Most windows are normal. Your job is to say so "
             "quickly, or to flag the one entity that needs a closer look.\n\n"
             "Rule first: consider only values that grew at least 3x and by at least 50 events "
@@ -207,41 +209,35 @@ PRESETS = {
 TOOL_DEFS = [
     {
         "name": "read",
-        "description": "Read one correlated, time-ordered timeline for an entity across ALL "
-                       "sources. The selector is a {label: value} map (strict AND), e.g. "
-                       "{\"service\": \"checkout\"}. Use this to widen the window or look at a "
-                       "different entity than the one you were woken for.",
+        "description": "Read one correlated, time-ordered timeline for an entity across the "
+                       "sources of your project (or the `sources` you name). The selector is a "
+                       "{label: value} map (strict AND), e.g. {\"service\": \"checkout\"}. Use "
+                       "this to widen the window or look at a different entity than the one you "
+                       "were woken for.",
         "input_schema": {"type": "object", "properties": {
             "selector": {"type": "object", "description": "{label: value}, e.g. {\"service\": \"api\"}"},
-            "window": {"type": "string", "description": "e.g. 15m, 1h, 24h", "default": "1h"}},
+            "window": {"type": "string", "description": "e.g. 15m, 1h, 24h", "default": "1h"},
+            "sources": {"type": "array", "items": {"type": "string"},
+                        "description": "optional: read only these sources"}},
             "required": ["selector"]},
     },
     {
         "name": "stats",
-        "description": "Count events per value of one label through a saved view, for the last "
-                       "`window` and the window of the same length before it, largest change "
-                       "first. Use it to see the shape of a busy stream (which services, status "
-                       "codes or paths moved) instead of reading lines.",
+        "description": "Count events per value of one label across the sources of your project "
+                       "(or the `sources` you name), for the last `window` and the window of the "
+                       "same length before it, largest change first. Use it to see the shape of "
+                       "a busy stream (which services, status codes or paths moved) instead of "
+                       "reading lines.",
         "input_schema": {"type": "object", "properties": {
-            "view": {"type": "string"},
             "by": {"type": "string", "description": "the label to count per, e.g. service, "
                                                     "nginx_status_code, path"},
             "where": {"type": "object", "description": "{label: value} to narrow first, e.g. "
                                                        "{\"status_code_text\": \"404\"}"},
             "window": {"type": "string", "default": "30m"},
-            "top": {"type": "integer", "description": "rows to return (max 50)", "default": 20}},
-            "required": ["view", "by"]},
-    },
-    {
-        "name": "query",
-        "description": "Read a timeline through a saved view (narrower than `read`: only that "
-                       "view's sources and filters). Select the entity by `key` or by `where`.",
-        "input_schema": {"type": "object", "properties": {
-            "view": {"type": "string"},
-            "key": {"type": "string"},
-            "where": {"type": "object"},
-            "window": {"type": "string", "default": "1h"}},
-            "required": ["view"]},
+            "top": {"type": "integer", "description": "rows to return (max 50)", "default": 20},
+            "sources": {"type": "array", "items": {"type": "string"},
+                        "description": "optional: count only these sources"}},
+            "required": ["by"]},
     },
 ]
 
@@ -415,10 +411,10 @@ class AgentRunner:
             return
         start()
 
-    def bootstrap(self, agent_name: str, trigger_name: str, view_name: str, keys: list[str],
+    def bootstrap(self, agent_name: str, trigger_name: str, keys: list[str],
                   window: str = "7d", limit: int = 20, delay_s: float = 90.0,
                   concurrency: int = 10) -> None:
-        """Schedule one run per key over a wide window of the view, a little later (the sources
+        """Schedule one run per key over a wide window of the trigger's sources, a little later (the sources
         behind a fresh project need their first poll before there is anything to read). Keys whose
         timeline is empty at that point are skipped, so an idle repo costs nothing. Runs go through
         run_now, so the daily cap and dedupe apply."""
@@ -430,10 +426,12 @@ class AgentRunner:
             async def one(key: str):
                 async with sem:
                     catalog = self.runtime.catalog
-                    if view_name not in catalog.views:
+                    trig = next((t for t in catalog.triggers if t.name == trigger_name), None)
+                    if trig is None:
                         return
-                    payload, count, _rows = resolve_query_full(self.store, catalog, view_name,
-                                                               key=key, window=window)
+                    payload, count, _rows = resolve_sources_full(
+                        self.store, trig.sources, trig.name, key=key, window=window,
+                        filters=trig.filters)
                     if not count:
                         print(f"[agent {agent_name}] bootstrap: no events for {key} yet, skipped")
                         return
@@ -685,17 +683,12 @@ class AgentRunner:
             triggers = catalog.triggers
             trig = (triggers.get(trigger_name) if isinstance(triggers, dict)
                     else next((t for t in triggers if t.name == trigger_name), None))
-            views = catalog.views
-            view = None
-            if trig is not None:
-                view = (views.get(trig.view) if isinstance(views, dict)
-                        else next((v for v in views if v.name == trig.view), None))
-            if view is None:
+            if trig is None or not trig.sources:
                 return key, {}
             window = max(parse_duration(trig.condition.window or "15m"), 900.0)
             since = now_utc() - timedelta(seconds=window)
-            rows = self.store.read_view_window(view.sources, key, since, cap=1,
-                                               filters=view.filters)
+            rows = self.store.read_window(trig.sources, key, since, cap=1,
+                                          filters=trig.filters)
             latest = max(rows, key=lambda r: r[0]) if rows else None
             if latest is None:
                 return key, {}
@@ -748,7 +741,7 @@ class AgentRunner:
         prior_block = (f'Your finding from an earlier run on "{key}":\n\n{prior[:4000]}\n\n'
                        if prior else "")
         opening = (
-            f'The schedule "{trigger_name}" ticked for view "{key}". The summary of its last '
+            f'The schedule "{trigger_name}" ticked. The summary of its last '
             f"window:\n\n{payload}\n\n" if self._is_scheduled(trigger_name) else
             f'The condition "{trigger_name}" tripped for "{key}".\n\n'
             f"{prior_block}"
@@ -798,7 +791,7 @@ class AgentRunner:
             results = []
             for tc in calls:
                 tool_calls += 1
-                # A small model slips on names (Read, READ, "query "); match the declared tool
+                # A small model slips on names (Read, READ, "read "); match the declared tool
                 # case-insensitively rather than fail the call over case (TR-306).
                 name = _canonical_tool(tc.name, tools)
                 with _tracing.tool_span(tracer, name, tc.arguments, call_id=tc.id) as tobs:
@@ -850,13 +843,33 @@ class AgentRunner:
         return "", rounds, tool_calls, external_used, True, last_text
 
     def _is_scheduled(self, trigger_name: str) -> bool:
-        """Whether the run was woken by a schedule trigger (TR-320), which ticks for a view
-        rather than trips for an entity."""
+        """Whether the run was woken by a schedule trigger (TR-320), which ticks for all its
+        sources rather than trips for an entity."""
         try:
             trig = next((t for t in self.runtime.catalog.triggers if t.name == trigger_name), None)
             return bool(trig is not None and getattr(trig.condition, "every", None))
         except Exception:
             return False
+
+    def _tool_sources(self, agent_name: str, args: dict) -> list[str]:
+        """What a read or stats call covers: the `sources` the model named, else the sources of
+        the agent's project. An agent sees its project, not the whole cell (an agent with no
+        project on record, which only a hand-edited store has, falls back to every source)."""
+        catalog = self.runtime.catalog
+        named = args.get("sources")
+        if named:
+            if not isinstance(named, list) or not all(isinstance(x, str) for x in named):
+                raise ValueError("sources must be a list of source names")
+            unknown = sorted(set(named) - set(catalog.sources))
+            if unknown:
+                raise KeyError(f"unknown sources {unknown} (available: "
+                               f"{', '.join(sorted(catalog.sources))})")
+            return list(named)
+        agent = self.store.get_catalog_agent(agent_name) or {}
+        uid = agent.get("owned_by")
+        if not uid:
+            return sorted(catalog.sources)
+        return [s for s in self.store.project_sources(uid) if s in catalog.sources]
 
     def _tool(self, agent_name: str, name: str, args: dict) -> str:
         """The two reads, in-process. No HTTP hop and no credential: a Tares agent IS Tares, so
@@ -867,55 +880,35 @@ class AgentRunner:
             selector = args.get("selector") or {}
             if not isinstance(selector, dict) or not selector:
                 raise ValueError('read needs a selector, e.g. {"service": "checkout"}')
-            payload, nrows, _sources, _rows = resolve_read(self.store, catalog, selector, window)
+            payload, nrows, _sources, _rows = resolve_read(
+                self.store, catalog, selector, window,
+                sources=self._tool_sources(agent_name, args))
             self.store.log_query("r_" + uuid.uuid4().hex[:12], "(read)",
                                  ", ".join(f"{k}={v}" for k, v in selector.items()),
                                  window, nrows, f"agent:{agent_name}")
             return payload
-        if name == "query":
-            view = str(args.get("view") or "")
-            if view not in catalog.views:
-                raise KeyError(f"unknown view {view!r} (available: {', '.join(catalog.views)})")
-            key = args.get("key")
-            where = args.get("where") or None
-            payload, nrows, _rows = resolve_query_full(self.store, catalog, view, key, window,
-                                                       where=where)
-            self.store.log_query("q_" + uuid.uuid4().hex[:12], view, str(key or where or ""),
-                                 window, nrows, f"agent:{agent_name}")
-            return payload
         if name == "stats":
-            view = str(args.get("view") or "")
-            if view not in catalog.views:
-                raise KeyError(f"unknown view {view!r} (available: {', '.join(catalog.views)})")
             by = str(args.get("by") or "").strip()
             if not by:
                 raise ValueError('stats needs `by`, the label to count per, e.g. "service"')
             window = str(args.get("window") or "30m")
-            out = stats_table(self.store, catalog.views[view], by, window,
+            out = stats_table(self.store, self._tool_sources(agent_name, args), by, window,
                               where=args.get("where") or None, top=args.get("top") or 20)
-            self.store.log_query("s_" + uuid.uuid4().hex[:12], view, f"by {by}",
+            self.store.log_query("s_" + uuid.uuid4().hex[:12], "(stats)", f"by {by}",
                                  window, 0, f"agent:{agent_name}")
             return out
         raise ValueError(f"unknown tool {name!r}")
 
     # ── the finding: an event, plus an optional Slack copy ────────────────────
     def _entity_label(self, trigger_name: str) -> str | None:
-        """Which label the firing entity was identified by — the key field of the trigger's view,
-        else the primary label of one of that view's sources. The finding must be stamped with the
-        same axis as its evidence, or a label-native `read` for the entity won't return it."""
+        """Which label the firing entity was identified by: the trigger's key_field, else the
+        primary label of one of its sources. The finding must be stamped with the same axis as
+        its evidence, or a label-native `read` for the entity won't return it."""
         catalog = self.runtime.catalog
         trig = next((t for t in catalog.triggers if t.name == trigger_name), None)
-        view = catalog.views.get(trig.view) if trig else None
-        if view is None:
+        if trig is None:
             return None
-        if view.key_field:
-            return view.key_field
-        for src_name in view.sources:
-            src = catalog.sources.get(src_name)
-            for spec in (src.config.get("labels") or []) if src else []:
-                if spec.get("primary"):
-                    return spec.get("name")
-        return None
+        return trigger_entity_label(trig, catalog.sources)
 
     async def _record(self, agent: dict, trigger_name: str, key: str, finding: str,
                       verdict: str | None = None, label: str | None = None,

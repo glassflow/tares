@@ -3,7 +3,7 @@ the local HTTP API (agent surface + management API) and the built-in console UI.
 
 The catalog lives in the store (DB-backed). On first boot with an empty catalog, the YAML file at
 TARES_CATALOG is imported once; from then on YAML is an import/export format, and all source/
-view/trigger management happens over /api (or the UI at /).
+trigger/agent/project management happens over /api (or the UI at /).
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from .config import (SLACK_URL_PREFIX, CatalogError, agent_url, export_db_to_yam
                      validate_mcp_server_dict,
                      import_yaml_to_db, slack_channel_from_url, slack_url,
                      validate_agent_dict, validate_slack_channel, validate_source_dict,
-                     validate_trigger_dict, validate_view_dict, _source_from_dict)
+                     validate_trigger_dict, VIEWS_REMOVED, _source_from_dict)
 from .connectors import (SPECS, normalize_config, redact_config, restore_secrets,
                          source_type_for)
 from .dispatch import Dispatcher
@@ -53,7 +53,7 @@ from .slack import SETTING_KEY as SLACK_TOKEN_SETTING, resolve_token as resolve_
 from .tracing import PROVIDERS as tracing_providers, status as tracing_status
 from .store import Store, StoreUnavailable
 from .projects import Engine as ProjectEngine, ProjectError
-from .views import resolve_query_full, resolve_read
+from .reads import resolve_read
 
 CATALOG_PATH = os.getenv("TARES_CATALOG", "catalog.yaml")
 # Renamed in 1.0 along with everything else. An install that upgrades without moving its file is
@@ -278,20 +278,13 @@ def _degraded_app(reason: str) -> FastAPI:
     return app
 
 
-class QueryReq(BaseModel):
-    view: str
-    key: str | None = None       # legacy primary key_value; optional when `where` is given
-    where: dict = {}             # {label: value} on any named label — the label-native selector
-    window: str = "15m"
-    client: str = "http"   # http | mcp | ui — tags the query in the activity log
-    include_payload: bool = False  # also return the raw lossless record as `raw` on each row
-
-
 class ReadReq(BaseModel):
     selector: dict = {}          # {label: value, ...} — strict-AND conjunction; must be non-empty
     window: str = "15m"
     client: str = "http"   # http | mcp | ui — tags the read in the activity log
     include_payload: bool = False  # also return the raw lossless record as `raw` on each row
+    project: str = ""            # read only this project's sources
+    sources: list[str] = []      # read only these sources (within the project when both given)
 
 
 class SubReq(BaseModel):
@@ -309,21 +302,7 @@ class SourceIn(BaseModel):
     connector: str
     poll: str = "5s"
     config: dict = {}
-
-
-class ViewIn(BaseModel):
-    name: str = ""               # required on create; PUT fills it from the path (TR-226)
-    key_field: str = ""          # optional: what the primary key means; labels make it non-essential
-    sources: list[str]
-    filters: list[dict] = []
-
-
-class DeriveReq(BaseModel):
-    sources: list[str]
-    key_field: str
-    name: str | None = None      # auto-generated if absent
-    filters: list[dict] = []     # [{field, op, value}] — the doc's `predicate` param
-    client: str = "mcp"          # who proposed it; lands in created_by as agent:<client>
+    project: str = ""       # the project the new source joins; "" = the default project
 
 
 class RememberReq(BaseModel):
@@ -336,10 +315,14 @@ class RememberReq(BaseModel):
 
 class TriggerIn(BaseModel):
     name: str
-    view: str
+    project: str = ""            # "" = the default project on create, unchanged on update
+    sources: list[str] = []      # the sources the trigger watches (at least one)
+    filters: list[dict] = []     # [{field, op, value}] narrowing them
+    key_field: str = ""          # the entity label; "" = the first source's primary label
     condition: dict
     emit: dict = {}
     cooldown: str = "5m"
+    view: str | None = None      # only to refuse it by name: views were removed
 
 
 class AgentIn(BaseModel):
@@ -357,6 +340,7 @@ class AgentIn(BaseModel):
     mcp_servers: list[str] = []  # registry names this agent may use
     max_rounds: int | None = None   # model rounds per run; None = default (6, or 12 with MCP servers)
     budget_usd: float | None = None  # lifetime spend cap in USD; None = no budget
+    project: str = ""            # "" = the default project on create, unchanged on update
 
 
 class ImportReq(BaseModel):
@@ -396,6 +380,7 @@ class McpServerIn(BaseModel):
     auth_value: str = ""         # the credential (secret; blank-to-keep on update), or
                                  # `credential:github/<name>` to use a stored GitHub credential
     headers: dict[str, str] = {}  # extra non-secret headers sent on every request
+    project: str = ""            # "" = the default project on create, unchanged on update
 
 
 class GithubCredentialIn(BaseModel):
@@ -492,7 +477,7 @@ def make_app() -> FastAPI:
         store.migrate_claude_code_repo_label()   # an old catalog file may still say `project`
         how = "synced" if CATALOG_SYNC else "imported"
         print(f"taresd: {how} {CATALOG_PATH} into catalog "
-              f"({counts['sources']} sources, {counts['views']} views, {counts['triggers']} triggers"
+              f"({counts['sources']} sources, {counts['triggers']} triggers"
               f"{', ' + str(counts['projects']) + ' projects' if counts.get('projects') else ''})")
 
     dispatcher = Dispatcher(store)
@@ -555,7 +540,7 @@ def make_app() -> FastAPI:
         from . import schedule as _schedule
         schedule_task = asyncio.create_task(_schedule.run(runtime, loop_stop))
         print(f"taresd: {len(runtime.catalog.sources)} source(s); "
-              f"console at / · agent API at /query · management API at /api")
+              f"console at / · agent API at /read · management API at /api")
         # optional OTLP gRPC receiver (:4317). Needs grpcio + opentelemetry-proto; off if absent.
         grpc_server = None
         port = os.getenv("TARES_OTLP_GRPC_PORT", "4317")
@@ -585,7 +570,7 @@ def make_app() -> FastAPI:
                        allow_headers=["*"])
 
     # ── auth: scoped credentials ──────────────────────────────────────────────
-    # Three scopes — read (consume: queries, catalog reads, derive/subscribe), ingest (contribute:
+    # Three scopes — read (consume: reads, catalog reads, subscribe), ingest (contribute:
     # /ingest, /v1/*, remember), admin (configure: catalog CRUD, discover, credentials, keys).
     # Credentials: the env AUTH_TOKEN is the implicit root (admin, non-revocable), plus revocable
     # scoped keys in the api_keys table (docs/design/api-keys.md).
@@ -594,7 +579,7 @@ def make_app() -> FastAPI:
     def _required_scope(method: str, path: str) -> str | None:
         """None = public. 'any' = any valid credential. Reads of credentials and all catalog
         mutation are admin; a trigger changes what the daemon computes for everyone, so trigger
-        CRUD is admin too — but derive/subscribe stay read: they expose nothing a reader couldn't
+        CRUD is admin too — but subscribe stays read: it exposes nothing a reader couldn't
         pull and forward, they only persist that reader's own delivery."""
         if method == "POST" and (_is_ingest(path) or path == "/remember"):
             return "ingest"   # before _public(): ingest paths are "public" only in the sense of
@@ -608,7 +593,7 @@ def make_app() -> FastAPI:
         if (path in _ADMIN_PATHS or path.startswith("/api/keys")
                 or path.startswith("/api/discover") or path.startswith("/api/settings")):
             return "admin"
-        if method != "GET" and (path.startswith("/api/sources") or path.startswith("/api/views")
+        if method != "GET" and (path.startswith("/api/sources")
                                 or path.startswith("/api/triggers")
                                 or path.startswith("/api/agents")):
             return "admin"
@@ -693,33 +678,51 @@ def make_app() -> FastAPI:
             body["workspace_url"] = WORKSPACE_URL
         return body
 
-    @app.post("/query")
-    async def query(req: QueryReq):
-        if req.view not in runtime.catalog.views:
-            _err(KeyError(f"unknown view {req.view!r}"), 404)
-        if not req.key and not req.where:
-            _err(ValueError("query needs a key or a where selector"))
-        payload, nrows, rows = resolve_query_full(store, runtime.catalog, req.view, req.key,
-                                                  req.window, where=req.where or None,
-                                                  include_payload=req.include_payload)
-        log_key = req.key if req.key else ", ".join(f"{k}={v}" for k, v in req.where.items())
-        store.log_query("q_" + uuid.uuid4().hex[:12], req.view, log_key, req.window,
-                        nrows, req.client)
-        return {"payload": payload, "rows": rows}
+    def _resolve_project(ref: str, default: bool = True) -> str | None:
+        """A project id from an id or a name; "" is the default project (or None when `default`
+        is off, for an update that leaves the project alone). Unknown answers 400."""
+        ref = (ref or "").strip()
+        if not ref:
+            return store.default_project_id() if default else None
+        if store.get_project(ref) is not None:
+            return ref
+        p = store.get_project_by_name(ref)
+        if p is None:
+            _err(ValueError(f"unknown project {ref!r}"), 400)
+        return p["id"]
 
     @app.post("/read")
     async def read(req: ReadReq):
-        """Raw label-native read across ALL sources — no view. The selector is a {label: value}
-        conjunction (strict AND). This is the Layer-1 primitive: read any entity on the fly, then
-        derive() a view once you know which sources matter."""
+        """Raw label-native read. The selector is a {label: value} conjunction (strict AND). By
+        default it reads every source; `project` narrows it to that project's sources and
+        `sources` to the ones named (both: the named ones within the project)."""
         if not req.selector:
             _err(ValueError('read needs a selector, e.g. {"project": "frontend"}'))
+        names = None
+        if req.project:
+            uid = _resolve_project(req.project)
+            names = store.project_sources(uid)
+        if req.sources:
+            unknown = sorted(set(req.sources) - set(runtime.catalog.sources))
+            if unknown:
+                _err(KeyError(f"unknown sources {unknown}"), 404)
+            names = [s for s in req.sources if names is None or s in names]
         payload, nrows, sources, rows = resolve_read(store, runtime.catalog, req.selector, req.window,
-                                                     include_payload=req.include_payload)
+                                                     include_payload=req.include_payload,
+                                                     sources=names)
         log_key = ", ".join(f"{k}={v}" for k, v in req.selector.items())
         store.log_query("r_" + uuid.uuid4().hex[:12], "(read)", log_key, req.window,
                         nrows, req.client)
         return {"payload": payload, "count": nrows, "sources": sources, "rows": rows}
+
+    # Views were removed: a trigger names its own sources. The old routes answer 404 with the
+    # reason instead of the generic "unknown path", so an old client learns what changed.
+    def _views_removed():
+        _err(KeyError(VIEWS_REMOVED), 404)
+
+    for _gone in ("/query", "/derive", "/api/views", "/api/views/{name}"):
+        app.add_api_route(_gone, _views_removed, methods=["GET", "POST", "PUT", "DELETE"],
+                          include_in_schema=False)
 
     @app.post("/subscribe")
     async def subscribe(req: SubReq, request: Request):
@@ -751,24 +754,23 @@ def make_app() -> FastAPI:
 
     @app.get("/catalog")
     async def catalog_list():
+        members = store.source_memberships()
         return {
-            "sources": [{"name": s.name, "type": s.type} for s in runtime.catalog.sources.values()],
-            "views": [{"name": v.name, "key_field": v.key_field, "sources": v.sources,
-                       "created_by": v.created_by}
-                      for v in runtime.catalog.views.values()],
-            "triggers": [{"name": t.name, "view": t.view} for t in runtime.catalog.triggers],
+            "sources": [{"name": s.name, "type": s.type, "projects": members.get(s.name, [])}
+                        for s in runtime.catalog.sources.values()],
+            "triggers": [{"name": t.name, "project": t.project, "sources": t.sources,
+                          "key_field": t.key_field} for t in runtime.catalog.triggers],
+            "projects": [{"id": p["id"], "name": p["name"], "template": p["template"]}
+                         for p in store.list_projects()],
         }
 
     # ── catalog.describe — the discovery surface (design doc §4 MCP surface) ──
     def _lineage_edges() -> list[dict]:
         edges = []
-        for v in runtime.catalog.views.values():
-            for s in v.sources:
-                edges.append({"from": f"source:{s}", "to": f"view:{v.name}",
-                              "transform": "correlate"})
         for t in runtime.catalog.triggers:
-            edges.append({"from": f"view:{t.view}", "to": f"trigger:{t.name}",
-                          "transform": "condition"})
+            for s in t.sources:
+                edges.append({"from": f"source:{s}", "to": f"trigger:{t.name}",
+                              "transform": "condition"})
         return edges
 
     def _lag_seconds(ts) -> float | None:
@@ -811,8 +813,10 @@ def make_app() -> FastAPI:
     @app.get("/catalog/{handle}")
     async def catalog_describe(handle: str):
         kind, _, name = handle.partition(":")
-        if not name or kind not in ("source", "view", "trigger"):
-            _err(ValueError("handle must be source:<name>, view:<name> or trigger:<name>"))
+        if kind == "view":
+            _err(KeyError(VIEWS_REMOVED), 404)
+        if not name or kind not in ("source", "trigger"):
+            _err(ValueError("handle must be source:<name> or trigger:<name>"))
         edges = [e for e in _lineage_edges() if handle in (e["from"], e["to"])]
 
         if kind == "source":
@@ -839,21 +843,6 @@ def make_app() -> FastAPI:
                               "status": health.get("status")},
                 "lineage": edges,
                 "sample": store.recent_events(source=name, limit=3),
-            }
-
-        if kind == "view":
-            entry = next((v for v in store.list_catalog_views() if v["name"] == name), None)
-            if entry is None:
-                _err(KeyError(f"unknown view {name!r}"), 404)
-            totals = {s["source"]: s for s in store.event_stats()}
-            last = max((t["last_ingest"] for s in entry["sources"]
-                        if (t := totals.get(s))), default=None)
-            return {
-                "handle": handle, "kind": "view",
-                "entry": {**entry, "usage": store.view_usage().get(name)},
-                "schema": {s: store.source_schema(s) for s in entry["sources"]},
-                "freshness": {"last_event_time": last, "lag_seconds": _lag_seconds(last)},
-                "lineage": edges,
             }
 
         entry = next((t for t in store.list_catalog_triggers() if t["name"] == name), None)
@@ -892,25 +881,6 @@ def make_app() -> FastAPI:
                 _err(KeyError(f"unknown label {label!r} (have {sorted(facets)})"), 404)
             return entry(label, facets[label], min(limit, 500))
         return {"labels": [entry(ln, f, min(limit, 50)) for ln, f in facets.items()]}
-
-    # ── derive — agent-proposed views (virtual; the authorship layer) ─────────
-    @app.post("/derive", status_code=201)
-    async def derive(req: DeriveReq):
-        name = req.name or "agent_view_" + uuid.uuid4().hex[:6]
-        if name in runtime.catalog.views:
-            _err(ValueError(f"view {name!r} already exists; derived views must not "
-                            f"collide with existing entries"), 409)
-        try:
-            validate_view_dict({"name": name, "key_field": req.key_field,
-                                "sources": req.sources, "filters": req.filters},
-                               set(runtime.catalog.sources))
-        except CatalogError as e:
-            _err(e)
-        store.upsert_catalog_view(name, req.key_field, req.sources, req.filters,
-                                  created_by=f"agent:{req.client}")
-        runtime.reload_catalog()
-        return {"handle": f"view:{name}", "name": name, "status": "active",
-                "note": "virtual view; query it by name like any other view"}
 
     # ── remember — the agent writes its own memory back (closes the loop) ─────
     @app.post("/remember", status_code=202)
@@ -990,7 +960,7 @@ def make_app() -> FastAPI:
     _seed_lock = asyncio.Lock()
 
     async def _seed_challenger(token: str, body) -> None:
-        """The first marked session creates the challenger_workflow project (view, trigger,
+        """The first marked session creates the challenger_workflow project (trigger,
         summarizer). Best effort: an ingest never fails because of it."""
         from .projects.challenger_workflow import ensure_instance, has_challenger_line
         if not has_challenger_line(body):
@@ -1215,7 +1185,9 @@ def make_app() -> FastAPI:
     @app.get("/api/sources")
     async def list_sources():
         health = runtime.health_snapshot()
+        members = store.source_memberships()
         return [{**s, "config": redact_config(s["connector"], s["config"]),
+                 "projects": members.get(s["name"], []),
                  "health": health.get(s["name"])} for s in store.list_catalog_sources()]
 
     @app.get("/api/sources/{name}")
@@ -1223,6 +1195,7 @@ def make_app() -> FastAPI:
         for s in store.list_catalog_sources():
             if s["name"] == name:
                 return {**s, "config": redact_config(s["connector"], s["config"]),
+                        "projects": store.source_memberships().get(name, []),
                         "health": runtime.health_snapshot().get(name)}
         _err(KeyError(f"unknown source {name!r}"), 404)
 
@@ -1230,6 +1203,7 @@ def make_app() -> FastAPI:
     async def create_source(body: SourceIn):
         if body.name in runtime.catalog.sources:
             _err(ValueError(f"source {body.name!r} already exists"), 409)
+        uid = _resolve_project(body.project)
         try:
             validate_source_dict(body.model_dump())
             config = normalize_config(body.connector, body.config)
@@ -1237,6 +1211,7 @@ def make_app() -> FastAPI:
             _err(e)
         store.upsert_catalog_source(body.name, source_type_for(body.connector), body.connector,
                                     body.poll, config)
+        store.put_in_project("source", body.name, uid, creator=True)
         runtime.reload_catalog()
         cfg = runtime.catalog.sources.get(body.name)
         return {"ok": True, "name": body.name, "ingest_key": cfg.ingest_key if cfg else None}
@@ -1266,13 +1241,13 @@ def make_app() -> FastAPI:
         # store.backfill_labels for the building block), never something that runs inline on an edit.
         return {"ok": True, "relabeled": False}
 
-    # What else goes if an object is deleted, in delete order (agents, triggers, views). The
+    # What else goes if an object is deleted, in delete order (agents, then triggers). The
     # delete dialogs show it and offer to take it along; the cascade deletes use the same list.
     @app.get("/api/catalog/dependents")
     async def catalog_dependents(kind: str, name: str):
         from .projects.engine import dependents
-        if kind not in ("source", "view", "trigger"):
-            _err(ValueError("kind must be source, view or trigger"), 400)
+        if kind not in ("source", "trigger"):
+            _err(ValueError("kind must be source or trigger"), 400)
         return {"dependents": dependents(store, kind, name)}
 
     def _delete_dependents(kind: str, name: str) -> list[str]:
@@ -1285,22 +1260,21 @@ def make_app() -> FastAPI:
             elif d["kind"] == "trigger":
                 store.delete_catalog_trigger(d["name"])
                 store.remove_subscriptions_by_trigger(d["name"])
-            elif d["kind"] == "view":
-                store.delete_catalog_view(d["name"])
             gone.append(f"{d['kind']}:{d['name']}")
         return gone
 
     @app.delete("/api/sources/{name}")
     async def delete_source(name: str, purge_events: bool = False, cascade: bool = False):
-        """`cascade` takes the views on this source, their triggers and those triggers' agents
-        with it; without it a source that something depends on is refused by name."""
+        """`cascade` takes the triggers that read this source and those triggers' agents with
+        it; without it a source that something depends on is refused by name."""
         if name not in {s["name"] for s in store.list_catalog_sources()}:
             _err(KeyError(f"unknown source {name!r}"), 404)
-        referencing = [v.name for v in runtime.catalog.views.values() if name in v.sources]
+        referencing = [t.name for t in runtime.catalog.triggers if name in t.sources]
         gone: list[str] = []
         if referencing and not cascade:
-            _err(ValueError(f"source {name!r} is used by views {referencing}; "
-                            f"delete them too (cascade) or remove it from those views first"), 409)
+            _err(ValueError(f"source {name!r} is used by triggers {referencing}; "
+                            f"delete them too (cascade) or remove it from those triggers first"),
+                 409)
         if cascade:
             gone = _delete_dependents("source", name)
         store.delete_catalog_source(name)
@@ -1450,7 +1424,7 @@ def make_app() -> FastAPI:
         body = await request.json()
         # the daemon's own token, so the agent's tool self-calls clear the auth middleware
         self_headers = {"Authorization": f"Bearer {AUTH_TOKEN}"} if AUTH_TOKEN else {}
-        # mode "build" + step (sources|views|triggers|agent) is the AI-guided project builder:
+        # mode "build" + step (sources|watch|agent) is the AI-guided project builder:
         # same loop, same endpoint, a step-scoped toolset (tares/agent.py, TR-242)
         mode = "build" if body.get("mode") == "build" else "ask"
         step = str(body.get("step") or "") or None
@@ -1482,6 +1456,7 @@ def make_app() -> FastAPI:
                 # a credential reference is not a secret: the console can show which one is used
                 "auth_credential": credential_name(ref) if ref else "",
                 "headers": m.get("headers") or {}, "updated_at": m["updated_at"],
+                "project": m.get("owned_by"),
                 "owned_by": m.get("owned_by"), "customized": bool(m.get("customized"))}
 
     def _clean_headers(headers: dict | None) -> dict:
@@ -1503,13 +1478,15 @@ def make_app() -> FastAPI:
     async def create_mcp_server(body: McpServerIn):
         if store.get_mcp_server(body.name) is not None:
             _err(ValueError(f"mcp server {body.name!r} already exists"), 409)
+        uid = _resolve_project(body.project)
         try:
             validate_mcp_server_dict(body.model_dump())
         except CatalogError as e:
             _err(e)
         store.upsert_mcp_server(body.name, body.url.strip(), body.auth_header.strip(),
                                 _check_credential_ref(body.auth_value), _clean_headers(body.headers))
-        return {"ok": True}
+        store.put_in_project("mcp_server", body.name, uid)
+        return {"ok": True, "project": uid}
 
     def _check_credential_ref(value: str) -> str:
         """`credential:github/<name>` must name a stored credential; anything else passes through
@@ -1532,10 +1509,20 @@ def make_app() -> FastAPI:
         except CatalogError as e:
             _err(e)
         value = body.auth_value or existing.get("auth_value", "")   # blank-to-keep
+        uid = _resolve_project(body.project, default=False)
+        if uid and uid != existing.get("owned_by"):
+            # the agents that use it are in its project; moving it away would strand them
+            users = [a["name"] for a in store.list_catalog_agents()
+                     if name in (a.get("mcp_servers") or []) and a.get("owned_by") != uid]
+            if users:
+                _err(ValueError(f"MCP server {name!r} is used by agents {users} of its current "
+                                "project; move or change them first"), 400)
         store.upsert_mcp_server(name, body.url.strip(), body.auth_header.strip(),
                                 _check_credential_ref(value), _clean_headers(body.headers))
         store.mark_customized("mcp_server", name)
-        return {"ok": True}
+        if uid:
+            store.put_in_project("mcp_server", name, uid)
+        return {"ok": True, "project": uid or existing.get("owned_by")}
 
     @app.delete("/api/mcp-servers/{name}")
     async def delete_mcp_server(name: str):
@@ -1704,91 +1691,81 @@ def make_app() -> FastAPI:
         return [{"name": t.name, "description": (t.description or "").strip()}
                 for t in await mcp_srv.list_tools()]
 
-    # ── management API: views ─────────────────────────────────────────────────
-    @app.get("/api/views")
-    async def list_views():
-        usage = store.view_usage()
-        return [{**v, "usage": usage.get(v["name"])} for v in store.list_catalog_views()]
-
-    @app.post("/api/views", status_code=201)
-    async def create_view(body: ViewIn):
-        if not body.name:
-            _err(ValueError("name is required"), 400)
-        if body.name in runtime.catalog.views:
-            _err(ValueError(f"view {body.name!r} already exists"), 409)
-        try:
-            validate_view_dict(body.model_dump(), set(runtime.catalog.sources))
-        except CatalogError as e:
-            _err(e)
-        store.upsert_catalog_view(body.name, body.key_field, body.sources, body.filters)
-        runtime.reload_catalog()
-        return {"ok": True}
-
-    @app.put("/api/views/{name}")
-    async def update_view(name: str, body: ViewIn):
-        if name not in runtime.catalog.views:
-            _err(KeyError(f"unknown view {name!r}"), 404)
-        # the path names the view; a body name is optional and only checked for a rename attempt
-        if body.name and body.name != name:
-            _err(ValueError("renaming a view is not supported; delete and recreate"), 400)
-        try:
-            validate_view_dict({**body.model_dump(), "name": name},
-                               set(runtime.catalog.sources))
-        except CatalogError as e:
-            _err(e)
-        store.upsert_catalog_view(name, body.key_field, body.sources, body.filters,
-                                  created_by=runtime.catalog.views[name].created_by)
-        store.mark_customized("view", name)
-        runtime.reload_catalog()
-        return {"ok": True}
-
-    @app.delete("/api/views/{name}")
-    async def delete_view(name: str, cascade: bool = False):
-        """`cascade` takes the triggers on this view and their agents with it."""
-        if name not in runtime.catalog.views:
-            _err(KeyError(f"unknown view {name!r}"), 404)
-        referencing = [t.name for t in runtime.catalog.triggers if t.view == name]
-        gone: list[str] = []
-        if referencing and not cascade:
-            _err(ValueError(f"view {name!r} is used by triggers {referencing}; "
-                            f"delete them too (cascade) or delete those triggers first"), 409)
-        if cascade:
-            gone = _delete_dependents("view", name)
-        store.delete_catalog_view(name)
-        runtime.reload_catalog()
-        return {"ok": True, "deleted": gone}
-
     # ── management API: triggers ──────────────────────────────────────────────
+    # A trigger watches `sources` (narrowed by `filters`) and belongs to exactly one project; the
+    # sources it reads are members of that project (a trigger call adds the ones that are not).
+    def _trigger_row(t: dict) -> dict:
+        return {"name": t["name"], "project": t.get("owned_by"), "sources": t["sources"],
+                "filters": t["filters"], "key_field": t["key_field"],
+                "condition": t["condition"], "emit": t["emit"], "cooldown": t["cooldown"],
+                "paused": t["paused"], "owned_by": t.get("owned_by"),
+                "customized": t["customized"]}
+
     @app.get("/api/triggers")
     async def list_triggers():
-        return store.list_catalog_triggers()
+        return [_trigger_row(t) for t in store.list_catalog_triggers()]
+
+    def _check_trigger(body: TriggerIn, name: str) -> dict:
+        if body.view not in (None, ""):
+            _err(ValueError(VIEWS_REMOVED), 400)
+        raw = {**body.model_dump(exclude={"view", "project"}), "name": name}
+        try:
+            validate_trigger_dict(raw, set(runtime.catalog.sources))
+        except CatalogError as e:
+            _err(e)
+        return raw
+
+    def _place_trigger(name: str, uid: str, sources: list[str]) -> None:
+        """Put the trigger in `uid`, with its sources as members. Its agents come along, since an
+        agent is always in its trigger's project; one that uses an MCP server from elsewhere
+        stops the move (400), naming both."""
+        current = next((t for t in store.list_catalog_triggers() if t["name"] == name), None)
+        moving = current is not None and current.get("owned_by") not in (None, uid)
+        agents = [a for a in store.list_catalog_agents() if a["trigger"] == name]
+        if moving:
+            servers = {m["name"]: m.get("owned_by") for m in store.list_mcp_servers()}
+            for a in agents:
+                for srv in a.get("mcp_servers") or []:
+                    if servers.get(srv) not in (None, uid):
+                        _err(ValueError(f"agent {a['name']!r} on this trigger uses MCP server "
+                                        f"{srv!r} from another project; move it first"), 400)
+        store.put_in_project("trigger", name, uid)
+        for src in sources:
+            store.put_in_project("source", src, uid)
+        if moving:
+            for a in agents:
+                store.put_in_project("agent", a["name"], uid)
 
     @app.post("/api/triggers", status_code=201)
     async def create_trigger(body: TriggerIn):
         if body.name in {t.name for t in runtime.catalog.triggers}:
             _err(ValueError(f"trigger {body.name!r} already exists"), 409)
-        try:
-            validate_trigger_dict(body.model_dump(), set(runtime.catalog.views))
-        except CatalogError as e:
-            _err(e)
-        store.upsert_catalog_trigger(body.name, body.view, body.condition, body.emit, body.cooldown)
+        raw = _check_trigger(body, body.name)
+        uid = _resolve_project(body.project)
+        store.upsert_catalog_trigger(body.name, raw["sources"], body.condition, body.emit,
+                                     body.cooldown, filters=raw.get("filters") or [],
+                                     key_field=raw.get("key_field") or "")
+        _place_trigger(body.name, uid, raw["sources"])
         runtime.reload_catalog()
-        return {"ok": True}
+        return {"ok": True, "project": uid}
 
     @app.put("/api/triggers/{name}")
     async def update_trigger(name: str, body: TriggerIn):
-        if name not in {t.name for t in runtime.catalog.triggers}:
+        current = next((t for t in store.list_catalog_triggers() if t["name"] == name), None)
+        if current is None:
             _err(KeyError(f"unknown trigger {name!r}"), 404)
         if body.name != name:
             _err(ValueError("renaming a trigger is not supported; delete and recreate"), 400)
-        try:
-            validate_trigger_dict(body.model_dump(), set(runtime.catalog.views))
-        except CatalogError as e:
-            _err(e)
-        store.upsert_catalog_trigger(name, body.view, body.condition, body.emit, body.cooldown)
+        raw = _check_trigger(body, name)
+        uid = _resolve_project(body.project, default=False) or current.get("owned_by") \
+            or store.default_project_id()
+        store.upsert_catalog_trigger(name, raw["sources"], body.condition, body.emit,
+                                     body.cooldown, filters=raw.get("filters") or [],
+                                     key_field=raw.get("key_field") or "")
         store.mark_customized("trigger", name)
+        _place_trigger(name, uid, raw["sources"])
         runtime.reload_catalog()
-        return {"ok": True}
+        return {"ok": True, "project": uid}
 
     @app.delete("/api/triggers/{name}")
     async def delete_trigger(name: str):
@@ -1822,17 +1799,25 @@ def make_app() -> FastAPI:
     def _agent_enabled(name: str) -> bool:
         return store.subscription_by_url(agent_url(name)) is not None
 
-    def _agent_payload(body: AgentIn) -> dict:
+    def _agent_payload(body: AgentIn, uid: str, name: str = "") -> dict:
         """Validate against the live catalog, including the loop guard (an agent may not be woken by
-        the findings source it writes into)."""
+        the findings source it writes into) and the project rule: an agent's trigger and MCP
+        servers are in the agent's own project."""
         triggers = {t["name"]: t for t in store.list_catalog_triggers()}
-        views = {v["name"]: v for v in store.list_catalog_views()}
-        raw = body.model_dump()
+        servers = {m["name"]: m for m in store.list_mcp_servers()}
+        raw = {**body.model_dump(exclude={"project"}), **({"name": name} if name else {})}
         try:
-            validate_agent_dict(raw, set(triggers), triggers, views,
-                                {m["name"] for m in store.list_mcp_servers()})
+            validate_agent_dict(raw, set(triggers), triggers, set(servers))
         except CatalogError as e:
             _err(e)
+        trig = triggers[body.trigger]
+        if trig.get("owned_by") != uid:
+            _err(ValueError(f"trigger {body.trigger!r} is in another project; an agent runs on a "
+                            "trigger of its own project"), 400)
+        for srv in body.mcp_servers:
+            if servers[srv].get("owned_by") != uid:
+                _err(ValueError(f"MCP server {srv!r} is in another project; an agent uses the MCP "
+                                "servers of its own project"), 400)
         return raw
 
     @app.get("/api/agents/builtin")
@@ -1865,6 +1850,7 @@ def make_app() -> FastAPI:
                          "daily_cap": a.get("daily_cap"),
                          "effective_max_rounds": effective_max_rounds(a),
                          "enabled": _agent_enabled(a["name"]), "updated_at": a.get("updated_at"),
+                         "project": a.get("owned_by"),
                          "owned_by": a.get("owned_by"), "customized": bool(a.get("customized")),
                          "last_run": runs[0] if runs else None})
         plist = providers_mod.list_providers(store)
@@ -1885,15 +1871,17 @@ def make_app() -> FastAPI:
             _err(ValueError("name is required"), 400)
         if store.get_catalog_agent(body.name) is not None:
             _err(ValueError(f"agent {body.name!r} already exists"), 409)
-        _agent_payload(body)
+        uid = _resolve_project(body.project)
+        _agent_payload(body, uid)
         store.upsert_catalog_agent(body.name, body.trigger, body.prompt, body.slack_webhook,
                                    body.model, body.slack_channel,
                                    body.webhook_url, body.webhook_token, body.mcp_servers,
                                    body.max_rounds, body.budget_usd,
                                    webhook_key_label=body.webhook_key_label,
                                    provider=body.provider.strip())
+        store.put_in_project("agent", body.name, uid)
         runtime.reload_catalog()
-        return {"ok": True, "enabled": False,
+        return {"ok": True, "enabled": False, "project": uid,
                 "note": "agents start disabled; enable it to run on the next firing"}
 
     @app.put("/api/agents/builtin/{name}")
@@ -1904,7 +1892,9 @@ def make_app() -> FastAPI:
         # the path names the agent; a body name is optional and only checked for a rename attempt
         if body.name and body.name != name:
             _err(ValueError("renaming an agent is not supported; delete and recreate"), 400)
-        _agent_payload(body)
+        uid = _resolve_project(body.project, default=False) or existing.get("owned_by") \
+            or store.default_project_id()
+        _agent_payload(body, uid, name)
         # blank-to-keep for the webhook, matching the connector-secret convention: the UI never
         # receives the stored URL back, so an unedited form must not wipe it.
         hook = "" if body.slack_webhook_clear else (body.slack_webhook or existing.get("slack_webhook", ""))
@@ -1921,6 +1911,7 @@ def make_app() -> FastAPI:
                                    # the form has no daily cap field; keep what a project set
                                    daily_cap=existing.get("daily_cap"))
         store.mark_customized("agent", name)
+        store.put_in_project("agent", name, uid)
         # if the trigger changed while enabled, re-point the subscription so the agent fires on the
         # new trigger (the subscription, not the definition, is what the dispatcher reads).
         if body.trigger != existing["trigger"] and _agent_enabled(name):
@@ -2576,20 +2567,32 @@ def make_app() -> FastAPI:
             _uc_err(e)
 
     @app.delete("/api/projects/{uid}")
-    async def delete_project(uid: str, purge_events: bool = False, delete: str = ""):
-        """`delete` names the objects to delete along with the project, as `kind:name,...`;
-        the rest are released and stay. `none` keeps them all. Absent: a template project takes
-        everything it created, a custom project keeps everything (the pre-pick behaviours)."""
-        chosen = None if delete == "" else []
-        if delete == "none":
-            delete = ""
-        for item in filter(None, (x.strip() for x in delete.split(","))):
-            kind, _, name = item.partition(":")
-            if not name:
-                _err(ValueError(f"delete entries look like kind:name, got {item!r}"), 400)
-            chosen.append((kind, name))
+    async def delete_project(uid: str, purge_events: bool = False, delete_sources: str = ""):
+        """Deletes the project's triggers, agents and MCP servers. `delete_sources=a,b` also
+        deletes those of its sources that no other project uses (the others are kept and listed
+        in `kept`); every other source stays, in the default project if in no other."""
+        chosen = [x.strip() for x in delete_sources.split(",") if x.strip()]
         try:
-            return projects.delete(uid, purge_events=purge_events, delete_objects=chosen)
+            return projects.delete(uid, purge_events=purge_events, delete_sources=chosen)
+        except Exception as e:
+            _uc_err(e)
+
+    @app.post("/api/projects/{uid}/sources")
+    async def add_project_source(uid: str, body: dict = Body(...)):
+        """Add an existing source to a project (sources are shared between projects)."""
+        name = str((body or {}).get("name") or "").strip()
+        if not name:
+            _err(ValueError("name is required"), 400)
+        try:
+            return projects.add_source(uid, name)
+        except Exception as e:
+            _uc_err(e)
+
+    @app.delete("/api/projects/{uid}/sources/{name}")
+    async def remove_project_source(uid: str, name: str):
+        """Take a source out of a project; refused while a trigger of the project reads it."""
+        try:
+            return projects.remove_source(uid, name)
         except Exception as e:
             _uc_err(e)
 
@@ -2669,7 +2672,7 @@ def make_app() -> FastAPI:
     @app.get("/api/catalog/export")
     async def catalog_export(sources: str | None = None, include_secrets: bool = False):
         """Catalog YAML. Defaults (no params, as the agent/MCP call it): all sources, secrets
-        OMITTED. `sources=a,b` limits to a subset (views/triggers filtered to stay consistent);
+        OMITTED. `sources=a,b` limits to a subset (triggers and agents filtered to stay consistent);
         `include_secrets=true` emits real connector secrets (admin-gated route)."""
         src = [s for s in sources.split(",") if s] if sources else None
         return PlainTextResponse(export_db_to_yaml(store, src, include_secrets),

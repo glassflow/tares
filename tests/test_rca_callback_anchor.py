@@ -39,21 +39,16 @@ class Condition:
 
 class Trigger:
     name = "rius_alert_fired"
-    view = "rius_alerts_view"
-    condition = Condition()
-    cooldown_seconds = 300.0
-
-
-class View:
-    name = "rius_alerts_view"
     sources = ["rius_alerts"]
     filters = None
+    key_field = "service"
+    condition = Condition()
+    cooldown_seconds = 300.0
 
 
 class Runtime:
     class catalog:
         triggers = [Trigger()]
-        views = [View()]
 
 
 class Store:
@@ -65,8 +60,8 @@ class Store:
         self.finished = []
         self.delivery = None
 
-    def read_view_window(self, sources, key, since, cap=12, filters=None, where=None,
-                         include_payload=False):
+    def read_window(self, sources, key, since, cap=12, filters=None, where=None,
+                    include_payload=False):
         rows = []
         for age, labels in self.events:
             at = now_utc() - timedelta(seconds=age)
@@ -197,15 +192,17 @@ async def main():
     r = runner(Store([(1, {"delivery_id": "d"})]))
     r.runtime = Runtime()
 
-    class NoViews:
-        triggers = [Trigger()]
-        views = []
-    r.runtime.catalog = NoViews
-    check("a trigger whose view is gone -> the entity",
+    class NoSources(Trigger):
+        sources = []   # what the upgrade leaves on a trigger whose view was already gone
+
+    class Folded:
+        triggers = [NoSources()]
+    r.runtime.catalog = Folded
+    check("a trigger with no sources -> the entity",
           r._callback_anchor(AGENT, "rius_alert_fired", "billing-svc") == ("billing-svc", {}))
 
     class Boom(Store):
-        def read_view_window(self, *a, **k):
+        def read_window(self, *a, **k):
             raise RuntimeError("duckdb is unhappy")
     check("a store that raises -> the entity, write-back preserved",
           anchor(Boom([])) == ("billing-svc", {}))
