@@ -6,7 +6,7 @@ import remarkGfm from "remark-gfm";
 import { api } from "../../api";
 import { ErrorState, TimeAgo, usePolling } from "../bits";
 import type {
-  OutlineWatch, ProjectHealth, ProjectOutline, ProjectResult, ProjectResults,
+  OutlineWatch, ProjectHealth, ProjectOutline, ProjectResult, ProjectResults, ProjectSetup,
 } from "../../types";
 import { VLink, viewFrom, type Ctx, type View } from "./common";
 
@@ -55,6 +55,8 @@ function headlineOf(r: ProjectResult): string {
 }
 
 function ResultBadge({ r }: { r: ProjectResult }) {
+  // a practice result is not a real finding: its kind would claim something needs doing
+  if (r.practice) return <span className="gf-badge practice">Practice</span>;
   if (r.handled) return <span className="gf-badge handled">Handled</span>;
   return r.kind === "action"
     ? <span className="gf-badge action">Needs action</span>
@@ -179,6 +181,35 @@ function HealthBanner({ ctx, health, onResume }: { ctx: Ctx; health: ProjectHeal
   );
 }
 
+/** A project set up goal first that stopped before the end: the way back to the step it stored.
+ *  Template projects have no stored setup; the call fails or says done, and nothing shows. */
+function FinishSetup({ id }: { id: string }) {
+  const [setup, setSetup] = useState<ProjectSetup>();
+  useEffect(() => {
+    let live = true;
+    api.projectSetup(id).then((r) => { if (live) setSetup(r); }).catch(() => {});
+    return () => { live = false; };
+  }, [id]);
+  if (!setup || !setup.step || setup.step === "done") return null;
+  const own = setup.plan?.who === "own";
+  const message = setup.step === "try"
+    ? "Run a practice spike to see a result before a real one."
+    : own ? "Connect your agent so it is woken when this project needs it."
+    : "Connect your data so the agents have something to look at.";
+  return (
+    <div className="gf-health gf-finish" role="status">
+      <div className="gf-health-row">
+        <span className="gf-health-dot" aria-hidden="true" />
+        <span className="gf-health-title">Finish setting up.</span>
+        <span className="gf-health-msg">{message}</span>
+        <Link className="btn gf-fix" to={`/projects/${encodeURIComponent(id)}/setup`}>
+          {setup.step === "try" ? "Try it" : "Connect it"}
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 function Today({ today }: { today: ProjectResults["today"] }) {
   return (
     <p className="gf-today">
@@ -189,7 +220,7 @@ function Today({ today }: { today: ProjectResults["today"] }) {
   );
 }
 
-function ResultCard({ r, onOpen }: { r: ProjectResult; onOpen: () => void }) {
+export function ResultCard({ r, onOpen }: { r: ProjectResult; onOpen: () => void }) {
   return (
     <li>
       <button type="button" className={`gf-card${r.handled ? " handled" : ""}`} onClick={onOpen}>
@@ -288,6 +319,7 @@ export function Overview({ ctx, actions, onResume }: { ctx: Ctx; actions: React.
         </div>
       </div>
 
+      <FinishSetup id={ctx.id} />
       {health && <HealthBanner ctx={ctx} health={health} onResume={onResume} />}
       {!health && healthError && (
         <p className="help" style={{ margin: 0 }}>Could not check whether this project is working: {healthError}</p>
