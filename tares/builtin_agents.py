@@ -824,7 +824,8 @@ class AgentRunner:
         obs.set_attribute("tares.tool_calls", tool_calls)
         obs.set_attribute("tares.outcome", "finding")
         obs.set_attribute("tares.verdict", verdict)
-        if (self.store.get_agent_run(run_id) or {}).get("practice"):
+        get_run = getattr(self.store, "get_agent_run", None)   # test doubles may not have it
+        if get_run and (get_run(run_id) or {}).get("practice"):
             # a practice run (the guided setup's "Try it") stays inside Tares: its finding is
             # recorded, but no Slack post and no write-back webhook, whatever the agent has set
             agent = {**agent, "slack_channel": "", "slack_webhook": None, "webhook_url": ""}
