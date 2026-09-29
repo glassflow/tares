@@ -44,9 +44,9 @@ function NewSetup() {
       )}
       {step === "plan" && plan && (
         <PlanStep plan={plan} setPlan={setPlan} base={base} setBase={setBase}
-                  onBack={() => { setGoal(plan.goal || goal); setStep("goal"); }}
-                  onApplied={({ project, connect }) => navigate(`/projects/${encodeURIComponent(project.id)}/setup`,
-                    { replace: true, state: { connect, plan } })} />
+                  onBack={() => { setGoal(plan.goal || goal); setWho(plan.who); setStep("goal"); }}
+                  onApplied={(r) => navigate(`/projects/${encodeURIComponent(r.project.id)}/setup`,
+                    { replace: true, state: { connect: r.connect, plan: r.plan ?? plan } })} />
       )}
     </div>
   );

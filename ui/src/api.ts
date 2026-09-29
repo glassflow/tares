@@ -5,7 +5,7 @@ import type {
   AgentPreset, AgentRun, BuiltinAgent, Handoff,
   GithubCredential,
   LabelFacet, ModelUsage, QueryLogEntry,
-  McpServer, Plan, ProjectSetup, SetupConnect, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
+  McpServer, Plan, ProjectSetup, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults,
   Skill, SkillSummary,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
@@ -401,8 +401,11 @@ export const api = {
     request<{ plan: Plan }>("/api/setup/plan", { method: "POST", body: JSON.stringify(body) }),
   adjustSetup: (plan: Plan, instruction: string) =>
     request<{ plan: Plan }>("/api/setup/adjust", { method: "POST", body: JSON.stringify({ plan, instruction }) }),
+  checkSetup: (plan: Plan) =>
+    request<{ plan: Plan; problems: SetupProblem[] }>("/api/setup/check",
+      { method: "POST", body: JSON.stringify({ plan }) }),
   applySetup: (plan: Plan) =>
-    request<{ project: Project; connect: SetupConnect }>("/api/setup/apply",
+    request<{ project: Project; plan: Plan; connect: SetupConnect }>("/api/setup/apply",
       { method: "POST", body: JSON.stringify({ plan }) }),
   projectSetup: (id: string) =>
     request<ProjectSetup>(`/api/projects/${encodeURIComponent(id)}/setup`),

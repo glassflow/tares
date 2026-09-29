@@ -661,22 +661,32 @@ export interface PlanWatch {
   name: string;
   connector: string;
   config?: Record<string, unknown>;
+  poll?: string;                // a polled source's interval
   sentence: string;
   needs: "send" | "credential" | "none";
   sample: Record<string, unknown> | null;
 }
 export interface PlanKnob { id: string; label: string; value: number; min: number; max: number }
+export interface PlanCondition {
+  aggregate?: "count" | "avg" | "sum" | "max" | "min" | "any";
+  field?: string | null;
+  predicate?: string;           // "> 5"
+  window?: string;              // "5m"
+  every?: string;               // a schedule instead: "60m"
+}
 export interface PlanWake {
-  key: string; name: string; sources: string[]; filters: unknown[];
-  key_field: string | null; condition: Record<string, unknown>;
+  key: string; name: string; sources: string[]; filters: TriggerFilter[];
+  key_field: string | null; condition: PlanCondition;
   cooldown: string | null; window: string | null;
   sentence: string;
+  cooldown_sentence?: string | null;
   knobs: PlanKnob[];
 }
 export interface PlanAgent {
   key: string; name: string;
   trigger: string | null; on_trigger: boolean;
   prompt: string; model: string | null;
+  provider?: string | null;     // a provider id from Settings; empty = the cell default
   handoffs: { verdict: string; agent: string; cooldown?: string | null }[];
   mcp_servers: string[];
   sentence: string;
@@ -684,7 +694,10 @@ export interface PlanAgent {
   enabled: boolean;
 }
 export interface PlanOwnAgent { name: string; wake: "webhook" | "poll"; sentence: string }
-export interface PlanTool { key: string; name: string; url: string; why: string; can_act: boolean; enabled: boolean }
+export interface PlanTool {
+  key: string; name: string; url: string; why: string; can_act: boolean; enabled: boolean;
+  existing?: boolean;           // an MCP server already on the cell, used as it is
+}
 export interface PlanSkill { key: string; name: string; description: string; body: string; enabled: boolean }
 export interface Plan {
   goal: string;
@@ -699,6 +712,10 @@ export interface Plan {
   skills: PlanSkill[];
   notes: string[];
 }
+// POST /api/setup/check -> problems: what stops the plan from applying, per item. where:
+// "watches.<key>", "wakes.<key>", "agents.<key>", "tools.<key>", "skills.<key>", "own_agent",
+// a section ("watches", "wakes", "agents") or "plan"
+export interface SetupProblem { where: string; message: string }
 export type SetupStep = "connect" | "try" | "done";
 
 // POST /api/setup/apply -> connect: what only the user can do next

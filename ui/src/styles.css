@@ -1724,6 +1724,52 @@ pre.payload {
 .su-progress li { padding: 0 0 10px 18px; overflow-wrap: anywhere; }
 .su-progress li:last-child { padding-bottom: 0; }
 
+/* the Plan step, edited in place: a card opens its item into an editor and spans the row */
+.main ol.su-cards > .su-card.editing { grid-column: 1 / -1; }
+.su-item-actions { display: flex; gap: 14px; flex-wrap: wrap; }
+.main ul.su-problems { list-style: none; margin: 0; padding: 8px 12px; border-left: 3px solid var(--err); background: var(--err-soft); color: var(--ink); display: flex; flex-direction: column; gap: 4px; font-size: 13px; overflow-wrap: anywhere; align-self: stretch; }
+.su-editor { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: 14px 0 4px; border-top: 1px solid var(--line); }
+.su-card > .su-editor:first-of-type { border-top: 0; padding-top: 0; }
+.su-editor .field, .su-editor label.field, .su-editor div.field { margin-bottom: 0; }
+.su-editor input[type="text"], .su-editor input[type="url"], .su-editor textarea { width: 100%; }
+.su-editor fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.su-editor legend { padding: 0; margin-bottom: 6px; }
+.su-h3 { margin: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.su-h3:focus { outline: none; }
+.su-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.su-choices > legend { grid-column: 1 / -1; }
+.su-choice { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; min-width: 0; }
+.su-choice.on { border-color: var(--accent); background: var(--accent-soft); }
+.su-choice.off { opacity: 0.55; cursor: default; }
+.su-choice input { margin-top: 4px; accent-color: var(--accent); flex: 0 0 auto; }
+.su-choice > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.su-choice:focus-within { outline: 2px solid var(--accent); outline-offset: -1px; }
+.su-pick-list { display: flex; flex-direction: column; gap: 6px; }
+.su-connectors { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 6px; }
+.su-connectors > legend { grid-column: 1 / -1; }
+.su-check { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; overflow-wrap: anywhere; }
+.su-check input { margin-top: 4px; accent-color: var(--accent); flex: 0 0 auto; }
+.su-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.su-row > .field { flex: 1 1 200px; min-width: 0; }
+.su-row > .su-num-field { flex: 0 1 140px; }
+.su-num-field input { width: 100%; max-width: 12ch; font-variant-numeric: tabular-nums; }
+.su-filters { display: flex; flex-direction: column; gap: 8px; }
+.su-filter { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; padding: 8px 10px; border: 1px solid var(--line); background: var(--th-bg); }
+.su-filter > * { min-width: 0; }
+.su-filter .su-filter-field { flex: 1 1 160px; }
+.su-filter .su-filter-value { flex: 1 1 140px; display: flex; flex-direction: column; gap: 2px; }
+.su-filter .picker { min-width: 120px; }
+.su-filter > div { display: flex; flex-direction: column; gap: 2px; }
+.su-filter input { width: 100%; }
+.su-who-mini { border: 0; margin: 0; padding: 0; display: flex; gap: 6px 14px; flex-wrap: wrap; font-size: 13px; }
+.su-who-mini label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; color: var(--ink-soft); }
+.su-who-mini label.on { color: var(--ink); font-weight: 600; }
+.su-who-mini input { accent-color: var(--accent); margin: 0; }
+.main ul.su-copy-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.su-copy-list li { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); background: var(--panel); min-width: 0; }
+.su-source-form { min-width: 0; }
+.su-source-form .panel { margin: 0; }
+
 @media (max-width: 720px) {
   .su-title { font-size: 24px; }
   .su-box { padding: 14px 16px; }
