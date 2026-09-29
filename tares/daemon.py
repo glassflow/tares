@@ -584,14 +584,16 @@ def make_app() -> FastAPI:
     # Credentials: the env AUTH_TOKEN is the implicit root (admin, non-revocable), plus revocable
     # scoped keys in the api_keys table (docs/design/api-keys.md).
     _ADMIN_PATHS = ("/api/catalog/export", "/api/catalog/import", "/api/agent/chat")
+    # the only writes a read key may make: reads that take a body, and a reader's own delivery.
+    # Every other write, including a route added later, needs admin.
+    _READ_WRITES = ("/read", "/subscribe", "/unsubscribe", "/api/labels/preview")
     # a project's skills: what its agents are told to do, so writing one is a catalog write
     _SKILLS_PATH = re.compile(r"^/api/projects/[^/]+/skills(/|$)")
 
     def _required_scope(method: str, path: str) -> str | None:
-        """None = public. 'any' = any valid credential. Reads of credentials and all catalog
-        mutation are admin; a trigger changes what the daemon computes for everyone, so trigger
-        CRUD is admin too — but subscribe stays read: it exposes nothing a reader couldn't
-        pull and forward, they only persist that reader's own delivery."""
+        """None = public. 'any' = any valid credential. Reads of credentials and every write are
+        admin, except the few in _READ_WRITES: a read with a body, and subscribe, which exposes
+        nothing a reader couldn't pull and forward; it only persists that reader's own delivery."""
         if method == "POST" and (_is_ingest(path) or path == "/remember"):
             return "ingest"   # before _public(): ingest paths are "public" only in the sense of
                               # not needing the auth token — they have their own scope
@@ -618,6 +620,10 @@ def make_app() -> FastAPI:
             if (rest.startswith("/keys") or rest.startswith("/subscribe")
                     or rest == "/external-agents"):
                 return "admin"
+            if method == "POST" and rest == "/stats":
+                return "read"
+        if method not in ("GET", "HEAD") and path not in _READ_WRITES:
+            return "admin"
         return "read"
 
     # ── project keys (TR-335): what a key that belongs to one project may do ──

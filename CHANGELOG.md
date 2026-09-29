@@ -103,6 +103,10 @@ the project follows [Semantic Versioning](https://semver.org/).
   The Activity tab marks an external agent's finding as recorded from outside Tares.
 
 ### Changed
+- Every write needs the admin scope, except `/read`, `/subscribe`, `/unsubscribe`, a project's
+  `stats`, the label preview (a read key), recording a finding (the findings scope) and ingest.
+  A read key could create and delete projects, add MCP servers and GitHub credentials, and pause
+  or repair projects; those now answer 403. A route added later needs admin unless listed.
 - A firing's webhook body carries `project` (the trigger's project id) and `run_ids` (the Tares
   agent runs the same firing started).
 - `POST /read` with `project` also reads the shared findings and memory sources, only the rows

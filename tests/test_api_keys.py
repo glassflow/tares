@@ -81,6 +81,15 @@ async def main():
             ck("read key: create source denied -> 403",
                (await cx.post(f"{B}/api/sources", json={"name": "n", "connector": "webhook", "config": {}},
                               headers=H(read_key))).status_code == 403)
+            # every write outside a short read list is admin (the read scope used to reach these)
+            for m, path, body in (("POST", "/api/projects", {"template": "custom", "name": "x", "objects": []}),
+                                  ("DELETE", "/api/projects/uc_nope", None),
+                                  ("POST", "/api/mcp-servers", {"name": "m", "url": "http://x"}),
+                                  ("POST", "/api/integrations/github", {"name": "g", "token": "t"}),
+                                  ("PUT", "/api/ask/sessions/s1", {}),
+                                  ("POST", "/api/projects/templates/custom/detect", {})):
+                r = await cx.request(m, f"{B}{path}", json=body, headers=H(read_key))
+                ck(f"read key: {m} {path} -> 403", r.status_code == 403, f"{r.status_code} {r.text[:120]}")
             ck("read key: cannot ingest -> 403 (authenticated, lacks ingest scope)",
                (await cx.post(f"{B}/ingest/evt", json={"m": 1}, headers=H(read_key))).status_code == 403)
             ck("read key: /read narrowed to sources ok",
