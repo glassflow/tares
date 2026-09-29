@@ -343,20 +343,28 @@ class AgentRunner:
 
     # ── entry point (called by the dispatcher, once per internal subscription) ─
     def deliver(self, agent_name: str, subscription_id: str, trigger_name: str, key: str,
-                payload: str, dispatch_id: str, woken_by: str = "trigger") -> None:
+                payload: str, dispatch_id: str, woken_by: str = "trigger") -> str | None:
         """Wake a Tares agent for one firing. Logs a pending delivery immediately, then runs the
-        agent in the background. Never raises and never blocks — a run must not break the dispatch."""
+        agent in the background. Never raises and never blocks — a run must not break the dispatch.
+        Returns the id the run will have (the webhook body of the same firing names it), or None
+        when no run starts: no such agent, or it is already running for this key."""
         agent = self.store.get_catalog_agent(agent_name)
         if agent is None:   # subscription outlived its definition (shouldn't happen) — nothing to run
             self.store.log_delivery(dispatch_id, subscription_id, agent_url(agent_name), False,
                                     "no such agent")
-            return
+            return None
         # pending delivery: the firing already "reached" the agent; whether it concludes is async.
         self.store.log_delivery(dispatch_id, subscription_id, agent_url(agent_name), None)
+        if (agent["name"], key) in self._inflight:   # at-least-once dedupe
+            self.store.update_delivery(dispatch_id, subscription_id, True,
+                                       "deduped (already running)")
+            return None
+        run_id = "run_" + uuid.uuid4().hex[:12]
         task = asyncio.create_task(self._guarded(agent, subscription_id, trigger_name, key,
-                                                 payload, dispatch_id, woken_by))
+                                                 payload, dispatch_id, woken_by, run_id=run_id))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        return run_id
 
     # ── manual and bootstrap runs (no firing behind them) ────────────────────
     def run_now(self, agent_name: str, trigger_name: str, key: str, payload: str,
@@ -455,13 +463,14 @@ class AgentRunner:
         task.add_done_callback(self._tasks.discard)
 
     async def _guarded(self, agent: dict, subscription_id: str, trigger_name: str, key: str,
-                       payload: str, dispatch_id: str, woken_by: str = "trigger") -> None:
+                       payload: str, dispatch_id: str, woken_by: str = "trigger",
+                       run_id: str | None = None) -> None:
         marker = (agent["name"], key)
         if marker in self._inflight:   # at-least-once dedupe
             self.store.update_delivery(dispatch_id, subscription_id, True, "deduped (already running)")
             return
         self._inflight.add(marker)
-        run_id = "run_" + uuid.uuid4().hex[:12]
+        run_id = run_id or "run_" + uuid.uuid4().hex[:12]
         self.store.start_agent_run(run_id, agent["name"], trigger_name, dispatch_id, key,
                                    prompt_hash(agent["prompt"]), effective_max_rounds(agent),
                                    woken_by=woken_by, project=agent.get("owned_by"))
@@ -943,6 +952,46 @@ class AgentRunner:
             return None
         return trigger_entity_label(trig, catalog.sources)
 
+    async def _ingest_finding(self, agent_name: str, trigger_name: str, key: str, finding: str,
+                              prompt_hash_: str, verdict: str | None = None,
+                              label: str | None = None, run_id: str | None = None,
+                              dispatch_id: str | None = None, project: str | None = None) -> None:
+        """Store one finding as an event of the findings source. `project` is the project it was
+        recorded in: a project's reads of the shared findings source see only its own."""
+        if FINDINGS_SOURCE not in self.runtime.catalog.sources:
+            # provisioned on the first finding, like the memory source — a fresh install has no
+            # reason to carry an empty one. No `labels` config: the runner stamps them per event.
+            self.store.upsert_catalog_source(FINDINGS_SOURCE, "finding", "finding", "5s", {})
+            self.runtime.reload_catalog()
+            print(f"taresd: auto-provisioned findings source {FINDINGS_SOURCE!r}")
+        labels = {label: key} if label else {}
+        if verdict:
+            labels["verdict"] = verdict
+        lineage = {k: v for k, v in (("run_id", run_id), ("dispatch_id", dispatch_id)) if v}
+        labels.update(lineage)
+        await self.runtime.ingest(FINDINGS_SOURCE, {
+            "key": key, "finding": finding, "agent": agent_name, "trigger": trigger_name,
+            "prompt_hash": prompt_hash_,
+            **({"verdict": verdict} if verdict else {}),
+            **lineage,
+            **({"project": project} if project else {}),
+            "labels": labels,
+        })
+
+    async def record_external(self, project: str, agent_label: str, key: str, finding: str,
+                              verdict: str | None = None, label: str | None = None) -> str:
+        """An external agent's finding (TR-336): a run of kind external in the project, ended
+        with this finding, plus the finding event every read and findings trigger sees, exactly
+        like a Tares agent's. Returns the run id."""
+        run_id = "run_" + uuid.uuid4().hex[:12]
+        self.store.start_agent_run(run_id, agent_label, "", "", key, "", None,
+                                   woken_by="external", project=project)
+        await self._ingest_finding(agent_label, "", key, finding, "", verdict=verdict,
+                                   label=label, run_id=run_id, project=project)
+        self.store.finish_agent_run(run_id, "ok", finding=finding, outcome="finding",
+                                    verdict=verdict)
+        return run_id
+
     async def _record(self, agent: dict, trigger_name: str, key: str, finding: str,
                       verdict: str | None = None, label: str | None = None,
                       run_id: str | None = None, model: str | None = None,
@@ -950,28 +999,13 @@ class AgentRunner:
         """Record the finding, then notify. Returns the notifications delivered, as results.
         The finding names the run and the firing it came from, in its payload and its labels, so
         a firing it trips later can be traced back to this run (TR-330)."""
-        if FINDINGS_SOURCE not in self.runtime.catalog.sources:
-            # provisioned on the first finding, like the memory source — a fresh install has no
-            # reason to carry an empty one. No `labels` config: the runner stamps them per event.
-            self.store.upsert_catalog_source(FINDINGS_SOURCE, "finding", "finding", "5s", {})
-            self.runtime.reload_catalog()
-            print(f"taresd: auto-provisioned findings source {FINDINGS_SOURCE!r}")
-
         # `label` is the axis a concluded key belongs to when the agent names one; else the
         # woken entity's, so the finding carries the SAME axis as the evidence it was drawn from.
         label = label or self._entity_label(trigger_name)
-        labels = {label: key} if label else {}
-        if verdict:
-            labels["verdict"] = verdict
-        lineage = {k: v for k, v in (("run_id", run_id), ("dispatch_id", dispatch_id)) if v}
-        labels.update(lineage)
-        await self.runtime.ingest(FINDINGS_SOURCE, {
-            "key": key, "finding": finding, "agent": agent["name"], "trigger": trigger_name,
-            "prompt_hash": prompt_hash(agent["prompt"]),
-            **({"verdict": verdict} if verdict else {}),
-            **lineage,
-            "labels": labels,
-        })
+        await self._ingest_finding(agent["name"], trigger_name, key, finding,
+                                   prompt_hash(agent["prompt"]), verdict=verdict, label=label,
+                                   run_id=run_id, dispatch_id=dispatch_id,
+                                   project=agent.get("owned_by"))
         # Notification: the workspace bot posting to a channel is the primary path (one token,
         # picked from a list, no credential per agent); the per-agent incoming webhook stays as
         # the secondary/legacy path. An agent uses one — channel wins when both are set.

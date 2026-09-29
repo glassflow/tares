@@ -603,7 +603,61 @@ def make_app() -> FastAPI:
                                 or path.startswith("/api/agents")
                                 or _SKILLS_PATH.match(path)):
             return "admin"
+        m = _PROJECT_PATH.match(path)
+        if m:
+            rest = m.group(2) or ""
+            if method == "POST" and rest == "/findings":
+                return "findings"   # recording one; admin implies it, a plain read key does not
+            # a project's keys, and who is subscribed to it with which URL: credentials
+            if (rest.startswith("/keys") or rest.startswith("/subscribe")
+                    or rest == "/external-agents"):
+                return "admin"
         return "read"
+
+    # ── project keys (TR-335): what a key that belongs to one project may do ──
+    # An allowlist, not a denylist: a route that is not named here answers 403 for a project key,
+    # so a route added later is closed to project keys until someone decides otherwise. Each entry
+    # is the scope the key needs; the handlers narrow what the allowed routes return to the key's
+    # project (request.state.project_key).
+    _PROJECT_PATH = re.compile(r"^/api/projects/([^/]+)(/.*)?$")
+    _PK_ROUTES = {("GET", "/api/whoami"): "any", ("POST", "/read"): "read",
+                  ("GET", "/catalog"): "read", ("GET", "/api/projects"): "read"}
+    _PK_PROJECT_ROUTES = [   # (method, the path after /api/projects/<its id>, scope)
+        ("GET", re.compile(r"^$"), "read"),
+        ("GET", re.compile(r"^/timeline$"), "read"),
+        ("GET", re.compile(r"^/skills$"), "read"),
+        ("GET", re.compile(r"^/skills/[^/]+$"), "read"),
+        ("GET", re.compile(r"^/findings$"), "read"),
+        ("POST", re.compile(r"^/findings$"), "findings"),
+        ("POST", re.compile(r"^/stats$"), "read"),
+        ("POST", re.compile(r"^/subscribe$"), "read"),
+        ("DELETE", re.compile(r"^/subscribe/[^/]+$"), "read"),
+    ]
+
+    def _project_key_scope(method: str, path: str, project: str) -> str | None:
+        """The scope a project key needs for this request, or None when a project key may not
+        make it at all (any other route, or another project's)."""
+        if (method, path) in _PK_ROUTES:
+            return _PK_ROUTES[(method, path)]
+        if method == "GET" and path.startswith("/catalog/"):
+            return "read"   # the handler allows only the project's own sources and triggers
+        m = _PROJECT_PATH.match(path)
+        if m and m.group(1) == project:
+            rest = m.group(2) or ""
+            for meth, pattern, scope in _PK_PROJECT_ROUTES:
+                if meth == method and pattern.match(rest):
+                    return scope
+        return None
+
+    def _project_key_denied(project: str) -> str:
+        p = store.get_project(project)
+        return (f"this key only reads project {p['name'] if p else project} and records "
+                "findings in it")
+
+    def _pk(request: Request) -> str | None:
+        """The project of the request's project key, or None for any other credential (and on an
+        open instance, where no key is checked)."""
+        return getattr(request.state, "project_key", None)
 
     def _resolve_credential(request) -> tuple[set, dict] | tuple[None, None]:
         """Token from the request -> (scopes, identity), or (None, None) if unknown/absent."""
@@ -617,7 +671,10 @@ def make_app() -> FastAPI:
             last = key.get("last_used_at")
             if last is None or (now_utc() - last).total_seconds() > 60:   # throttle write churn
                 store.touch_api_key(key["id"])
-            return set(key["scopes"]), {"id": f"key:{key['id']}", "name": key["name"]}
+            ident = {"id": f"key:{key['id']}", "name": key["name"]}
+            if key.get("project"):
+                ident["project"] = key["project"]
+            return set(key["scopes"]), ident
         return None, None
 
     # Auth off (no token) → no middleware, the instance is fully open (local default). Auth on →
@@ -631,7 +688,14 @@ def make_app() -> FastAPI:
                 scopes, ident = _resolve_credential(request)
                 if not scopes:
                     return JSONResponse({"detail": "authentication required"}, status_code=401)
-                if required != "any" and required not in scopes and "admin" not in scopes:
+                if ident.get("project"):
+                    # a project key: only the allowlisted routes, only its own project
+                    need = _project_key_scope(request.method, request.url.path, ident["project"])
+                    if need is None or (need != "any" and need not in scopes):
+                        return JSONResponse({"detail": _project_key_denied(ident["project"])},
+                                            status_code=403)
+                    request.state.project_key = ident["project"]
+                elif required != "any" and required not in scopes and "admin" not in scopes:
                     return JSONResponse({"detail": f"this credential lacks the {required!r} scope"},
                                         status_code=403)
                 request.state.credential = ident
@@ -697,25 +761,56 @@ def make_app() -> FastAPI:
             _err(ValueError(f"unknown project {ref!r}"), 400)
         return p["id"]
 
+    _SHARED_CONNECTORS = ("finding", "memory")
+
+    def _project_view(uid: str) -> tuple[list[str], dict]:
+        """What a project reads: its member sources plus the shared findings and memory sources,
+        and the row scope that narrows those shared ones to the project's own rows (findings of
+        its agents and findings recorded in it)."""
+        shared = sorted(n for n, c in runtime.catalog.sources.items()
+                        if c.connector in _SHARED_CONNECTORS)
+        members = [s for s in store.project_sources(uid) if s in runtime.catalog.sources]
+        agents = [a["name"] for a in store.list_catalog_agents() if a.get("owned_by") == uid]
+        return (sorted(set(members) | set(shared)),
+                {"sources": shared, "project": uid, "agents": agents})
+
+    def _key_project(request: Request, ref: str) -> str | None:
+        """The project a read is narrowed to: a project key's own (naming another answers 403),
+        else the one named, else None."""
+        pk = _pk(request)
+        if pk:
+            p = store.get_project(pk) or {}
+            if ref and ref.strip() not in (pk, p.get("name")):
+                _err(PermissionError(_project_key_denied(pk)), 403)
+            return pk
+        return _resolve_project(ref) if ref else None
+
     @app.post("/read")
-    async def read(req: ReadReq):
+    async def read(req: ReadReq, request: Request):
         """Raw label-native read. The selector is a {label: value} conjunction (strict AND). By
-        default it reads every source; `project` narrows it to that project's sources and
-        `sources` to the ones named (both: the named ones within the project)."""
+        default it reads every source; `project` narrows it to that project's sources (the
+        shared findings and memory sources included, with only the project's own rows) and
+        `sources` to the ones named (both: the named ones within the project). A project key
+        always reads its own project."""
         if not req.selector:
             _err(ValueError('read needs a selector, e.g. {"project": "frontend"}'))
-        names = None
-        if req.project:
-            uid = _resolve_project(req.project)
-            names = store.project_sources(uid)
+        names, scope = None, None
+        uid = _key_project(request, req.project)
+        if uid:
+            names, scope = _project_view(uid)
         if req.sources:
+            if _pk(request):
+                # a project key learns nothing about sources outside its project, not even
+                # whether they exist
+                if set(req.sources) - set(names or []):
+                    _err(PermissionError(_project_key_denied(uid)), 403)
             unknown = sorted(set(req.sources) - set(runtime.catalog.sources))
             if unknown:
                 _err(KeyError(f"unknown sources {unknown}"), 404)
             names = [s for s in req.sources if names is None or s in names]
         payload, nrows, sources, rows = resolve_read(store, runtime.catalog, req.selector, req.window,
                                                      include_payload=req.include_payload,
-                                                     sources=names)
+                                                     sources=names, scope=scope)
         log_key = ", ".join(f"{k}={v}" for k, v in req.selector.items())
         store.log_query("r_" + uuid.uuid4().hex[:12], "(read)", log_key, req.window,
                         nrows, req.client)
@@ -759,8 +854,20 @@ def make_app() -> FastAPI:
         return {"ok": True}
 
     @app.get("/catalog")
-    async def catalog_list():
+    async def catalog_list(request: Request):
         members = store.source_memberships()
+        pk = _pk(request)
+        if pk:   # a project key sees its own project only
+            names, _scope = _project_view(pk)
+            p = store.get_project(pk) or {}
+            return {
+                "sources": [{"name": n, "type": runtime.catalog.sources[n].type,
+                             "projects": [pk]} for n in names],
+                "triggers": [{"name": t.name, "project": t.project, "sources": t.sources,
+                              "key_field": t.key_field}
+                             for t in runtime.catalog.triggers if t.project == pk],
+                "projects": [{"id": pk, "name": p.get("name"), "template": p.get("template")}],
+            }
         return {
             "sources": [{"name": s.name, "type": s.type, "projects": members.get(s.name, [])}
                         for s in runtime.catalog.sources.values()],
@@ -817,13 +924,28 @@ def make_app() -> FastAPI:
         return facets
 
     @app.get("/catalog/{handle}")
-    async def catalog_describe(handle: str):
+    async def catalog_describe(handle: str, request: Request):
         kind, _, name = handle.partition(":")
+        pk = _pk(request)
+        if pk:
+            # a project key describes its project's own sources and triggers; the shared findings
+            # and memory sources hold other projects' rows too, so they are read, not described
+            mine = ({t.name for t in runtime.catalog.triggers if t.project == pk}
+                    if kind == "trigger" else
+                    {s for s in store.project_sources(pk)
+                     if s in runtime.catalog.sources
+                     and runtime.catalog.sources[s].connector not in _SHARED_CONNECTORS})
+            if kind not in ("source", "trigger") or name not in mine:
+                _err(PermissionError(_project_key_denied(pk)), 403)
         if kind == "view":
             _err(KeyError(VIEWS_REMOVED), 404)
         if not name or kind not in ("source", "trigger"):
             _err(ValueError("handle must be source:<name> or trigger:<name>"))
         edges = [e for e in _lineage_edges() if handle in (e["from"], e["to"])]
+        if pk:
+            project_triggers = {f"trigger:{t.name}" for t in runtime.catalog.triggers
+                                if t.project == pk}
+            edges = [e for e in edges if e["to"] in project_triggers]
 
         if kind == "source":
             entry = next((s for s in store.list_catalog_sources() if s["name"] == name), None)
@@ -1037,20 +1159,40 @@ def make_app() -> FastAPI:
                 "enforced": bool(AUTH_TOKEN),   # without a root auth token the instance is open
                 "scopes": sorted(_SCOPES)}
 
+    # A project key (TR-335) reads one project and records findings in it; nothing else.
+    _PROJECT_SCOPES = {"read", "findings"}
+
+    def _make_key(name: str, scopes: list[str], project: str | None) -> dict:
+        kid = uuid.uuid4().hex[:8]
+        secret = f"nvf_{kid}_{secrets.token_urlsafe(24)}"
+        store.insert_api_key(kid, name, f"nvf_{kid}", hashlib.sha256(secret.encode()).hexdigest(),
+                             scopes, project=project)
+        # the secret exists only in this response; the store keeps its hash
+        out = {"id": kid, "name": name, "scopes": scopes, "secret": secret}
+        if project:
+            out["project"] = project
+        return out
+
     @app.post("/api/keys", status_code=201)
     async def create_key(body: dict = Body(...)):
+        """{name, scopes, project?}. With `project` (an id or a name) it is a project key: scopes
+        `read` and `findings` (the default), over that project only."""
         name = str(body.get("name") or "").strip()
         scopes = sorted(set(body.get("scopes") or []))
         if not name:
             _err(ValueError("name is required"))
+        project = str(body.get("project") or "").strip()
+        if project:
+            uid = _resolve_project(project)
+            scopes = scopes or sorted(_PROJECT_SCOPES)
+            if not set(scopes) <= _PROJECT_SCOPES:
+                _err(ValueError(f"a project key's scopes are a subset of {sorted(_PROJECT_SCOPES)}"))
+            return _make_key(name, scopes, uid)
+        if "findings" in scopes:
+            _err(ValueError("the findings scope is for a project key; name the project"))
         if not scopes or not set(scopes) <= _SCOPES:
             _err(ValueError(f"scopes must be a non-empty subset of {sorted(_SCOPES)}"))
-        kid = uuid.uuid4().hex[:8]
-        secret = f"nvf_{kid}_{secrets.token_urlsafe(24)}"
-        store.insert_api_key(kid, name, f"nvf_{kid}", hashlib.sha256(secret.encode()).hexdigest(),
-                             scopes)
-        # the secret exists only in this response; the store keeps its hash
-        return {"id": kid, "name": name, "scopes": scopes, "secret": secret}
+        return _make_key(name, scopes, None)
 
     @app.delete("/api/keys/{kid}")
     async def revoke_key(kid: str):
@@ -1064,7 +1206,10 @@ def make_app() -> FastAPI:
         scopes = getattr(request.state, "scopes", None)
         if ident is None:   # guard not active (open instance) or ingest-path credential
             return {"id": "open", "name": "no auth configured", "scopes": sorted(_SCOPES)}
-        return {**ident, "scopes": scopes or []}
+        out = {**ident, "scopes": scopes or []}
+        if ident.get("project"):   # a project key: the project it reads, by id and name
+            out["project_name"] = (store.get_project(ident["project"]) or {}).get("name")
+        return out
 
     @app.get("/api/capabilities")
     async def capabilities():
@@ -2499,8 +2644,10 @@ def make_app() -> FastAPI:
                                for d in store.recent_deliveries(sub["url"], 10)],
                 }
             a["subscriptions"].append({"subscription_id": sub["subscription_id"],
-                                       "trigger": sub["trigger"], "created_at": sub["created_at"]})
-            if sub["trigger"] not in a["triggers"]:
+                                       "trigger": sub["trigger"], "created_at": sub["created_at"],
+                                       # a subscription to a whole project has no one trigger
+                                       "project": sub.get("project")})
+            if sub["trigger"] and sub["trigger"] not in a["triggers"]:
                 a["triggers"].append(sub["trigger"])
             if sub["created_by"]:
                 a["created_by"].add(sub["created_by"])
@@ -2542,8 +2689,22 @@ def make_app() -> FastAPI:
         except ProjectError:
             _err(KeyError(f"unknown template {key!r}"), 404)
 
+    def _project_card(uid: str) -> dict:
+        """What a project key is told about its project: who it is and what it is made of, not
+        its template parameters (they can hold credentials)."""
+        p = store.get_project(uid) or {}
+        names, _scope = _project_view(uid)
+        return {"id": uid, "name": p.get("name"), "template": p.get("template"),
+                "status": p.get("status"), "created_at": p.get("created_at"),
+                "sources": names,
+                "triggers": sorted(t.name for t in runtime.catalog.triggers if t.project == uid),
+                "skills": [s["name"] for s in store.list_skills(uid)]}
+
     @app.get("/api/projects")
-    async def list_projects():
+    async def list_projects(request: Request):
+        pk = _pk(request)
+        if pk:
+            return {"projects": [_project_card(pk)]}
         return {"projects": projects.list()}
 
     @app.post("/api/projects", status_code=201)
@@ -2555,7 +2716,9 @@ def make_app() -> FastAPI:
             _uc_err(e)
 
     @app.get("/api/projects/{uid}")
-    async def get_project(uid: str):
+    async def get_project(uid: str, request: Request):
+        if _pk(request):
+            return _project_card(uid)   # the guard already held it to the key's own project
         inst = projects.get(uid)
         if inst is None:
             _err(KeyError(f"unknown project {uid!r}"), 404)
@@ -2648,8 +2811,9 @@ def make_app() -> FastAPI:
             _uc_err(e)
 
     @app.get("/api/projects/{uid}/timeline")
-    async def project_timeline(uid: str, limit: int = 50, before: str = "", trigger: str = "",
-                               agent: str = "", outcome: str = "", entity: str = ""):
+    async def project_timeline(request: Request, uid: str, limit: int = 50, before: str = "",
+                               trigger: str = "", agent: str = "", outcome: str = "",
+                               entity: str = ""):
         """Everything that happened in the project, newest first, one thread per firing or
         unprompted run, with what each led to nested inside (TR-331). Page with `before` =
         the previous page's `next_before`."""
@@ -2665,9 +2829,25 @@ def make_app() -> FastAPI:
             _err(ValueError(f"outcome must be one of {', '.join(timeline.OUTCOMES)}"))
         scheduled = {t.name for t in runtime.catalog.triggers
                      if getattr(t.condition, "every", None)}
-        return await asyncio.to_thread(
+        out = await asyncio.to_thread(
             timeline.project_timeline, store, uid, limit=limit, before=at, trigger=trigger,
             agent=agent, outcome=outcome, entity=entity, scheduled=scheduled)
+        if _pk(request):
+            # a webhook URL can carry its receiver's secret: a project key sees it masked,
+            # like the agents roster shows it
+            def mask(threads):
+                for t in threads:
+                    for d in t.get("deliveries") or []:
+                        if d.get("kind") == "webhook":
+                            d["target"] = _agent_identity(d["target"] or "")[1]
+                    for r in t.get("runs") or []:
+                        stack = [r]
+                        while stack:
+                            x = stack.pop()
+                            mask(x.get("firings") or [])
+                            stack.extend(x.get("children") or [])
+            mask(out["threads"])
+        return out
 
     @app.get("/api/projects/{uid}/summary")
     async def project_summary(uid: str):
@@ -2754,6 +2934,176 @@ def make_app() -> FastAPI:
         if not created:
             store.mark_skill_customized(uid, name)
         return {**_skill_or_404(uid, name), "created": created}
+
+    # ── joining a project (TR-335, TR-336): its keys, an external agent's subscription to it,
+    # the findings recorded in it, and stats over its sources ────────────────────────────────
+    def _project_or_404(uid: str) -> dict:
+        p = store.get_project(uid)
+        if p is None:
+            _err(KeyError(f"unknown project {uid!r}"), 404)
+        return p
+
+    @app.get("/api/projects/{uid}/keys")
+    async def list_project_keys(uid: str):
+        """The project's active keys, without their secrets."""
+        _project_or_404(uid)
+        return {"keys": [k for k in store.list_api_keys(project=uid) if not k["revoked_at"]],
+                "enforced": bool(AUTH_TOKEN)}
+
+    @app.post("/api/projects/{uid}/keys", status_code=201)
+    async def create_project_key(uid: str, body: dict = Body(...)):
+        """{name}: a key that reads this project only and records findings in it. The secret is
+        in this response only."""
+        _project_or_404(uid)
+        name = str(body.get("name") or "").strip()
+        if not name:
+            _err(ValueError("name is required"))
+        if len(name) > 64:
+            _err(ValueError("name is at most 64 characters"))
+        return _make_key(name, sorted(_PROJECT_SCOPES), uid)
+
+    def _valid_hook_url(url: str) -> str:
+        url = (url or "").strip()
+        u = urlsplit(url)
+        if u.scheme not in ("http", "https") or not u.netloc:
+            _err(ValueError("url must be an http or https URL your agent listens on"))
+        return url
+
+    @app.post("/api/projects/{uid}/subscribe")
+    async def subscribe_project(uid: str, request: Request, body: dict = Body(...)):
+        """{url}: POST every firing of every trigger of the project to `url`, the triggers added
+        later included. The body is the usual firing plus `project`. Subscribing the same URL
+        again with the same key returns the subscription it already has."""
+        _project_or_404(uid)
+        url = _valid_hook_url(str(body.get("url") or ""))
+        ident = getattr(request.state, "credential", None)
+        created_by = ident["id"] if ident else None
+        for s in store.list_project_subscriptions(uid):
+            if s["url"] == url and s["created_by"] == created_by:
+                return {"subscription_id": s["subscription_id"], "project": uid, "existing": True}
+        sid = "sub_" + uuid.uuid4().hex[:8]
+        # created_by: revoking the key removes the subscription with it
+        store.add_subscription(sid, "", url, created_by=created_by, project=uid)
+        return {"subscription_id": sid, "project": uid}
+
+    @app.delete("/api/projects/{uid}/subscribe/{sid}")
+    async def unsubscribe_project(uid: str, sid: str, request: Request):
+        """A project key removes only its own subscriptions; an admin any of the project's."""
+        _project_or_404(uid)
+        sub = store.get_subscription(sid)
+        if sub is None or sub["project"] != uid:
+            _err(KeyError(f"project has no subscription {sid!r}"), 404)
+        pk = _pk(request)
+        if pk:
+            ident = getattr(request.state, "credential", None) or {}
+            if sub["created_by"] != ident.get("id"):
+                _err(PermissionError("that subscription belongs to another key"), 403)
+        store.remove_subscription(sid)
+        return {"ok": True}
+
+    @app.get("/api/projects/{uid}/external-agents")
+    async def project_external_agents(uid: str):
+        """The agents that joined the project with a subscription: where it delivers (masked,
+        a URL can carry the receiver's secret), which key made it, and its last delivery."""
+        _project_or_404(uid)
+        keys = {f"key:{k['id']}": k for k in store.list_api_keys()}
+        out = []
+        for s in store.list_project_subscriptions(uid):
+            key = keys.get(s["created_by"] or "")
+            name, masked = _agent_identity(s["url"])
+            out.append({"subscription_id": s["subscription_id"], "name": name, "url": masked,
+                        "key_id": key["id"] if key else None,
+                        "key_name": (key["name"] if key else
+                                     "auth token" if s["created_by"] == "env:auth" else None),
+                        "created_at": s["created_at"],
+                        "last_delivery": store.last_delivery(s["subscription_id"])})
+        return {"agents": out}
+
+    def _finding_row(r: dict) -> dict:
+        return {"run_id": r["id"], "agent": r["agent"], "entity": r["key"],
+                "verdict": r.get("verdict"), "finding": r.get("finding"),
+                "at": r["started_at"], "trigger": r.get("trigger") or None,
+                "external": r.get("woken_by") == "external"}
+
+    @app.get("/api/projects/{uid}/findings")
+    async def project_findings(uid: str, entity: str = "", agent: str = "", limit: int = 20):
+        """Findings recorded in the project, newest first: its Tares agents' and the external
+        agents'. `entity` and `agent` narrow them."""
+        _project_or_404(uid)
+        rows = store.project_findings(uid, entity=entity.strip(), agent=agent.strip(),
+                                      limit=max(1, min(int(limit), 200)))
+        return {"findings": [_finding_row(r) for r in rows]}
+
+    _VERDICT = re.compile(r"^[a-z][a-z0-9_-]{0,39}$")
+    _LABEL = re.compile(r"^[A-Za-z0-9_]{1,64}$")
+
+    @app.post("/api/projects/{uid}/findings", status_code=201)
+    async def record_project_finding(uid: str, request: Request, body: dict = Body(...)):
+        """{entity, finding, verdict?, label?}: an external agent records what it concluded about
+        an entity. It is stored like a Tares agent's finding (on the entity's timeline, read by
+        findings triggers) and shows in the project timeline as a run marked external. The agent
+        is the key's name; `label` is the label the entity is a value of (default: the entity
+        label of the project's first trigger)."""
+        _project_or_404(uid)
+        entity = str(body.get("entity") or "").strip()
+        finding = str(body.get("finding") or "").strip()
+        if not entity or len(entity) > 512:
+            _err(ValueError("entity is required (at most 512 characters): what the finding is about"))
+        if not finding:
+            _err(ValueError("finding is required"))
+        if len(finding.encode()) > 64 * 1024:
+            _err(ValueError("a finding is at most 64 KB"))
+        verdict = str(body.get("verdict") or "").strip().lower() or None
+        if verdict and not _VERDICT.match(verdict):
+            _err(ValueError("verdict is one lowercase word, e.g. rca or resolved"))
+        label = str(body.get("label") or "").strip() or None
+        if label and not _LABEL.match(label):
+            _err(ValueError("label is a label name: letters, digits and underscores"))
+        if label is None:
+            from .config import trigger_entity_label
+            trig = next((t for t in sorted(runtime.catalog.triggers, key=lambda t: t.name)
+                         if t.project == uid), None)
+            label = trigger_entity_label(trig, runtime.catalog.sources) if trig else None
+        ident = getattr(request.state, "credential", None)
+        if ident:   # the key's name (a project key's always)
+            agent = ident["name"]
+        else:   # an open instance: whoever calls names itself, or is "external agent"
+            agent = str(body.get("agent") or "").strip()[:64] or "external agent"
+        if store.get_catalog_agent(agent) is not None:
+            _err(ValueError(f"{agent!r} is also the name of a Tares agent; record the finding with "
+                            "a key of another name"), 409)
+        run_id = await dispatcher.agents.record_external(uid, agent, entity, finding,
+                                                         verdict=verdict, label=label)
+        return {"ok": True, "run_id": run_id, "agent": agent, "entity": entity,
+                "verdict": verdict}
+
+    @app.post("/api/projects/{uid}/stats")
+    async def project_stats(uid: str, body: dict = Body(...)):
+        """{by, window?, where?, top?, sources?}: counts per value of the label `by` over the
+        project's sources, the last window against the one before, as a few lines of text."""
+        from .stats import stats_table
+        _project_or_404(uid)
+        by = str(body.get("by") or "").strip()
+        if not by:
+            _err(ValueError('stats needs `by`, the label to count per, e.g. "service"'))
+        names, scope = _project_view(uid)
+        named = body.get("sources") or []
+        if named:
+            if not isinstance(named, list) or set(named) - set(names):
+                _err(PermissionError("sources must be sources of this project"), 403)
+            names = [s for s in names if s in named]
+        where = body.get("where") or None
+        if where is not None and not isinstance(where, dict):
+            _err(ValueError("where is a {label: value} object"))
+        window = str(body.get("window") or "30m")
+        p = store.get_project(uid) or {}
+        try:
+            text = stats_table(store, names, by, window, where=where, top=body.get("top") or 20,
+                               scope=f"project {p.get('name') or uid}", project_rows=scope)
+        except ValueError as e:
+            _err(e)
+        store.log_query("s_" + uuid.uuid4().hex[:12], "(stats)", f"by {by}", window, 0, "http")
+        return {"stats": text}
 
     # /api/usecases*: the pre-1.14 routes, same handlers, old response shape ({"usecases"},
     # {"recipes"}, and `recipe` on an instance, which get() still emits). Not in the schema;

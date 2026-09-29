@@ -335,6 +335,11 @@ _MIGRATIONS = [
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS project TEXT",
     "ALTER TABLE dispatch_log ADD COLUMN IF NOT EXISTS project TEXT",
     "ALTER TABLE dispatch_log ADD COLUMN IF NOT EXISTS parent_run_id TEXT",
+    # Project keys and joining a project (TR-335, TR-336): a key may belong to one project, and a
+    # subscription may be to a whole project (every trigger of it, including ones added later)
+    # instead of to one trigger. NULL on both is what every row before meant.
+    "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS project TEXT",
+    "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS project TEXT",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -420,6 +425,26 @@ def _filter_sql(filters) -> tuple[str, list]:
         else:
             raise ValueError(f"bad filter op {op!r}")
     return (" AND " + " AND ".join(clauses)) if clauses else "", params
+
+
+def _scope_sql(scope) -> tuple[str, list]:
+    """A project's view of the shared findings and memory sources -> ('AND ...' SQL, params).
+    `scope` is {"sources": [the shared sources], "project": id, "agents": [its agents]}: rows of
+    other sources pass; rows of a shared source only when they were recorded in the project
+    (payload `project`) or, for rows from before findings named their project, by one of its
+    agents (the `agent` label)."""
+    if not scope or not scope.get("sources"):
+        return "", []
+    shared = list(scope["sources"])
+    agents = list(scope.get("agents") or [])
+    sql = (f" AND (source NOT IN ({', '.join(['?'] * len(shared))}) "
+           "OR json_extract_string(payload, '$.project') = ?")
+    params = [*shared, scope.get("project") or ""]
+    if agents:
+        sql += (" OR (json_extract_string(payload, '$.project') IS NULL AND "
+                f"json_extract_string(labels, '$.agent') IN ({', '.join(['?'] * len(agents))}))")
+        params += agents
+    return sql + ")", params
 
 
 def _cgroup_mem_bytes() -> int | None:
@@ -823,7 +848,7 @@ class Store:
     # ── reads ───────────────────────────────────────────────────────────────
     def read_window(self, sources: list[str], key: str | None, since: datetime, cap: int = 12,
                          filters: list | None = None, where: dict | None = None,
-                         include_payload: bool = False):
+                         include_payload: bool = False, scope: dict | None = None):
         """Rows for an entity across sources, time-ordered: (event_time, source, text, labels), plus
         the raw lossless `payload` as a 5th column when `include_payload` is set.
 
@@ -835,12 +860,15 @@ class Store:
         bloated payload (e.g. thousands of identical log lines or every 5s metric sample). Ingest
         stays lossless; this bound is a read-path summary, matching what an SRE actually wants.
         `include_payload` pulls the full stored record per row (bounded by the same cap) for callers
-        that need fidelity beyond the summary `text`.
+        that need fidelity beyond the summary `text`. `scope` narrows the shared findings and
+        memory sources to one project's rows (see _scope_sql).
         """
         cols = "event_time, source, text, labels" + (", payload" if include_payload else "")
         ph = ", ".join(["?"] * len(sources))
         fsql, fparams = _filter_sql(filters)
         wsql, wparams = _where_sql(where)
+        ssql, sparams = _scope_sql(scope)
+        wsql, wparams = wsql + ssql, wparams + sparams
         ksql, kparams = (" AND key_value = ?", [key]) if key is not None else ("", [])
         with self._lock:
             return self.con.execute(
@@ -857,7 +885,8 @@ class Store:
 
     def aggregate(self, sources: list[str], field: str | None, agg: str, since: datetime,
                   filters: list | None = None, where: dict | None = None,
-                  group_by="key_value", until: datetime | None = None) -> dict:
+                  group_by="key_value", until: datetime | None = None,
+                  scope: dict | None = None) -> dict:
         """{group: value} for an aggregate over `field` in the window, grouped by one or more
         labels. `group_by` is a label name (scalar keys, key_value by default) or a list of
         names (tuple keys — a trigger grouping per (env, app)). NULL group values are dropped
@@ -868,6 +897,8 @@ class Store:
         ph = ", ".join(["?"] * len(sources))
         fsql, fparams = _filter_sql(filters)
         wsql, wparams = _where_sql(where)
+        ssql, sparams = _scope_sql(scope)   # a project's view of the shared sources
+        wsql, wparams = wsql + ssql, wparams + sparams
         if field and not re.match(r"^[A-Za-z0-9_.]+$", str(field)):
             raise ValueError(f"bad aggregate field {field!r}")
         # quoted JSON path so dotted field names (http.status_code) resolve as one flat key
@@ -1224,6 +1255,17 @@ class Store:
         return list(reversed(self.list_agent_runs(limit=100000, where_sql=sql,
                                                   where_params=params)))
 
+    def project_findings(self, project: str, entity: str = "", agent: str = "",
+                         limit: int = 50) -> list[dict]:
+        """The findings recorded in a project, newest first: its Tares agents' runs that
+        concluded with one, and external agents' findings (TR-336)."""
+        sql, params = "project = ? AND status = 'ok' AND outcome = 'finding'", [project]
+        if entity:
+            sql += " AND key_value = ?"
+            params.append(entity)
+        return self.list_agent_runs(agent or None, limit=limit, where_sql=sql,
+                                    where_params=params)
+
     def set_run_results(self, run_id: str, results: list) -> None:
         """What the run produced (TR-220), stamped when it ends."""
         with self._lock:
@@ -1539,6 +1581,10 @@ class Store:
     def delete_project(self, uid: str) -> None:
         with self._lock:
             self.con.execute("DELETE FROM skills WHERE project = ?", [uid])
+            # its keys stop working and nothing is delivered for it any more (TR-335)
+            self.con.execute("UPDATE api_keys SET revoked_at = ? WHERE project = ? "
+                             "AND revoked_at IS NULL", [now_utc(), uid])
+            self.con.execute("DELETE FROM subscriptions WHERE project = ?", [uid])
             self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ?", [uid])
             self.con.execute("DELETE FROM usecase_log WHERE usecase_id = ?", [uid])
             self.con.execute("DELETE FROM usecases WHERE id = ?", [uid])
@@ -2350,13 +2396,48 @@ class Store:
         return n
 
     # ── subscriptions ─────────────────────────────────────────────────────────
-    def add_subscription(self, sid: str, trigger: str, url: str, created_by: str | None = None) -> None:
+    def add_subscription(self, sid: str, trigger: str, url: str, created_by: str | None = None,
+                         project: str | None = None) -> None:
+        """A subscription to one trigger, or with `project` (and trigger "") to every trigger of
+        that project, the ones added later included (TR-336)."""
         with self._lock:
             self.con.execute(
-                "INSERT INTO subscriptions VALUES (?, ?, ?, ?, ?) "
+                "INSERT INTO subscriptions (subscription_id, trigger, url, created_at, created_by, "
+                "project) VALUES (?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (subscription_id) DO UPDATE SET trigger = excluded.trigger, url = excluded.url",
-                [sid, trigger, url, now_utc(), created_by],
+                [sid, trigger, url, now_utc(), created_by, project or None],
             )
+
+    def list_project_subscriptions(self, project: str) -> list[dict]:
+        """The subscriptions to a whole project, oldest first."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT subscription_id, url, created_at, created_by FROM subscriptions "
+                "WHERE project = ? ORDER BY created_at", [project]).fetchall()
+        return [{"subscription_id": r[0], "url": r[1], "created_at": r[2], "created_by": r[3]}
+                for r in rows]
+
+    def get_subscription(self, sid: str) -> dict | None:
+        with self._lock:
+            r = self.con.execute(
+                "SELECT subscription_id, trigger, url, created_at, created_by, project "
+                "FROM subscriptions WHERE subscription_id = ?", [sid]).fetchone()
+        if r is None:
+            return None
+        return {"subscription_id": r[0], "trigger": r[1], "url": r[2], "created_at": r[3],
+                "created_by": r[4], "project": r[5]}
+
+    def last_delivery(self, subscription_id: str) -> dict | None:
+        """The newest delivery made through one subscription, or None."""
+        with self._lock:
+            r = self.con.execute(
+                "SELECT delivered_at, ok, error, dispatch_id FROM dispatch_deliveries "
+                "WHERE subscription_id = ? ORDER BY delivered_at DESC LIMIT 1",
+                [subscription_id]).fetchone()
+        if r is None:
+            return None
+        return {"at": r[0], "ok": None if r[1] is None else bool(r[1]), "error": r[2],
+                "dispatch_id": r[3]}
 
     def list_subscriptions(self, trigger: str):
         with self._lock:
@@ -2368,11 +2449,11 @@ class Store:
     def list_all_subscriptions(self) -> list[dict]:
         with self._lock:
             rows = self.con.execute(
-                "SELECT subscription_id, trigger, url, created_at FROM subscriptions "
+                "SELECT subscription_id, trigger, url, created_at, project FROM subscriptions "
                 "ORDER BY created_at DESC"
             ).fetchall()
-        return [{"subscription_id": r[0], "trigger": r[1], "url": r[2], "created_at": r[3]}
-                for r in rows]
+        return [{"subscription_id": r[0], "trigger": r[1], "url": r[2], "created_at": r[3],
+                 "project": r[4]} for r in rows]
 
     def remove_subscription(self, sid: str) -> None:
         with self._lock:
@@ -2423,10 +2504,10 @@ class Store:
     def all_subscriptions(self) -> list[dict]:
         with self._lock:
             rows = self.con.execute(
-                "SELECT subscription_id, trigger, url, created_at, created_by "
+                "SELECT subscription_id, trigger, url, created_at, created_by, project "
                 "FROM subscriptions ORDER BY created_at").fetchall()
         return [{"subscription_id": r[0], "trigger": r[1], "url": r[2],
-                 "created_at": r[3], "created_by": r[4]} for r in rows]
+                 "created_at": r[3], "created_by": r[4], "project": r[5]} for r in rows]
 
     def delivery_stats(self, window: str = "24h") -> dict:
         """{url: {ok, fail, ok_total, fail_total, last_at, last_ok, last_error}} per endpoint.
@@ -2470,28 +2551,42 @@ class Store:
                  "key": r[3], "dispatch_id": r[4], "error": r[5]} for r in rows]
 
     # ── API keys (scoped credentials; only the SHA-256 of the secret is stored) ─
-    def insert_api_key(self, kid: str, name: str, prefix: str, hash_: str, scopes: list[str]) -> None:
+    def insert_api_key(self, kid: str, name: str, prefix: str, hash_: str, scopes: list[str],
+                       project: str | None = None) -> None:
+        """`project` makes it a project key: it reads that project only (TR-335)."""
         with self._lock:
-            self.con.execute("INSERT INTO api_keys VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)",
-                             [kid, name, prefix, hash_, json.dumps(scopes), now_utc()])
+            self.con.execute(
+                "INSERT INTO api_keys (id, name, prefix, hash, scopes, created_at, last_used_at, "
+                "revoked_at, project) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
+                [kid, name, prefix, hash_, json.dumps(scopes), now_utc(), project or None])
 
-    def list_api_keys(self) -> list[dict]:
+    def list_api_keys(self, project: str | None = None) -> list[dict]:
+        """Every key, newest first; with `project`, only that project's keys."""
+        sql = ("SELECT id, name, prefix, scopes, created_at, last_used_at, revoked_at, project "
+               "FROM api_keys ")
+        params = []
+        if project is not None:
+            sql += "WHERE project = ? "
+            params.append(project)
         with self._lock:
-            rows = self.con.execute(
-                "SELECT id, name, prefix, scopes, created_at, last_used_at, revoked_at "
-                "FROM api_keys ORDER BY created_at DESC").fetchall()
+            rows = self.con.execute(sql + "ORDER BY created_at DESC", params).fetchall()
         return [{"id": r[0], "name": r[1], "prefix": r[2], "scopes": json.loads(r[3]),
-                 "created_at": r[4], "last_used_at": r[5], "revoked_at": r[6]} for r in rows]
+                 "created_at": r[4], "last_used_at": r[5], "revoked_at": r[6],
+                 "project": r[7]} for r in rows]
+
+    def get_api_key(self, kid: str) -> dict | None:
+        return next((k for k in self.list_api_keys() if k["id"] == kid), None)
 
     def find_api_key(self, hash_: str) -> dict | None:
         """Active (non-revoked) key by secret hash, or None."""
         with self._lock:
             r = self.con.execute(
-                "SELECT id, name, scopes, last_used_at FROM api_keys "
+                "SELECT id, name, scopes, last_used_at, project FROM api_keys "
                 "WHERE hash = ? AND revoked_at IS NULL", [hash_]).fetchone()
         if not r:
             return None
-        return {"id": r[0], "name": r[1], "scopes": json.loads(r[2]), "last_used_at": r[3]}
+        return {"id": r[0], "name": r[1], "scopes": json.loads(r[2]), "last_used_at": r[3],
+                "project": r[4]}
 
     def touch_api_key(self, kid: str) -> None:
         with self._lock:

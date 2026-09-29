@@ -38,8 +38,10 @@ def _delivery(d: dict) -> dict:
 
 def _run_item(r: dict) -> dict:
     finding = r.get("finding")
+    # an external agent's finding (TR-336) is a run too, recorded by the agent that joined the
+    # project rather than run by Tares
     return {**r, "finding": finding[:FINDING_MAX] if finding else finding,
-            "children": [], "firings": []}
+            "external": r.get("woken_by") == "external", "children": [], "firings": []}
 
 
 def _fired(d: dict, scheduled: set, runs: list) -> dict:
@@ -80,8 +82,8 @@ def _build(store, project: str, roots: list, scheduled: set) -> list[dict]:
         elif kind == "run" and rid in root_runs:
             r = root_runs[rid]
             out.append({"id": r["id"], "kind": "run", "at": r["started_at"],
-                        "trigger": r.get("trigger"), "entity": r.get("key"), "runs": [r],
-                        "deliveries": []})
+                        "trigger": r.get("trigger") or None, "entity": r.get("key"), "runs": [r],
+                        "external": r["external"], "deliveries": []})
 
     pending_firings = list(threads_of.values())
     pending_runs = list(root_runs.values())
