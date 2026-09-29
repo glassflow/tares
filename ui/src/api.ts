@@ -5,7 +5,7 @@ import type {
   AgentPreset, AgentRun, BuiltinAgent, Handoff,
   GithubCredential,
   LabelFacet, ModelUsage, QueryLogEntry,
-  McpServer, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
+  McpServer, Plan, ProjectSetup, SetupConnect, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults,
   Skill, SkillSummary,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
@@ -45,6 +45,13 @@ export type SlackChannels = {
   detail?: string;
 };
 
+/** A failed call: the daemon's plain message, plus the HTTP status for the few places that act on
+ *  it (setup planning says "add a model provider" on a 409). */
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) { super(message); this.status = status; }
+}
+
 function unauthorized() {
   auth.clear();
   window.dispatchEvent(new Event("tares-auth-required"));
@@ -71,7 +78,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* non-JSON error body */
     }
-    throw new Error(detail);
+    throw new ApiError(detail, res.status);
   }
   return res.json() as Promise<T>;
 }
@@ -389,6 +396,27 @@ export const api = {
   uploadSkill: (id: string, text: string) =>
     request<Skill & { created: boolean }>(`/api/projects/${encodeURIComponent(id)}/skills/upload`,
       { method: "POST", body: text, headers: { "content-type": "text/markdown" } }),
+  // ── Goal-first setup: plan from a goal, adjust in plain words, apply, then connect and try ──
+  planSetup: (body: { goal: string; who?: "tares" | "own"; existing_sources?: boolean }) =>
+    request<{ plan: Plan }>("/api/setup/plan", { method: "POST", body: JSON.stringify(body) }),
+  adjustSetup: (plan: Plan, instruction: string) =>
+    request<{ plan: Plan }>("/api/setup/adjust", { method: "POST", body: JSON.stringify({ plan, instruction }) }),
+  applySetup: (plan: Plan) =>
+    request<{ project: Project; connect: SetupConnect }>("/api/setup/apply",
+      { method: "POST", body: JSON.stringify({ plan }) }),
+  projectSetup: (id: string) =>
+    request<ProjectSetup>(`/api/projects/${encodeURIComponent(id)}/setup`),
+  setSetupStep: (id: string, step: SetupStep) =>
+    request<unknown>(`/api/projects/${encodeURIComponent(id)}/setup`,
+      { method: "PUT", body: JSON.stringify({ step }) }),
+  // ingests the plan's example event into a push source, marked practice=true
+  sendSetupTestEvent: (id: string, source: string) =>
+    request<unknown>(`/api/projects/${encodeURIComponent(id)}/setup/test-event`,
+      { method: "POST", body: JSON.stringify({ source }) }),
+  // Tares agents answer run_id; an own agent answers dispatch_id
+  runSetupPractice: (id: string) =>
+    request<{ run_id?: string; dispatch_id?: string }>(`/api/projects/${encodeURIComponent(id)}/setup/practice`,
+      { method: "POST" }),
   pauseProject: (id: string, sources = false) =>
     request<Project>(`/api/projects/${encodeURIComponent(id)}/pause`, { method: "POST", body: JSON.stringify({ sources }) }),
   resumeProject: (id: string) =>

@@ -567,6 +567,7 @@ export interface ProjectResult {
   duration_ms: number | null; // the whole chain
   handled: { at: string; by: string } | null;
   external: boolean;
+  practice?: boolean;         // from a practice run during setup; left out of today's totals
 }
 export interface ProjectResults {
   results: ProjectResult[];
@@ -650,4 +651,73 @@ export interface ModelProviders {
   providers: ModelProvider[];
   default: string | null;
   kinds: { id: ModelProvider["kind"]; label: string }[];
+}
+
+// ── goal-first project setup (contract: setup-flow-contract.md, "The Plan object" and "Backend") ──
+
+export interface PlanWatch {
+  key: string;
+  existing: boolean;            // an existing source reused (config omitted) or a new one
+  name: string;
+  connector: string;
+  config?: Record<string, unknown>;
+  sentence: string;
+  needs: "send" | "credential" | "none";
+  sample: Record<string, unknown> | null;
+}
+export interface PlanKnob { id: string; label: string; value: number; min: number; max: number }
+export interface PlanWake {
+  key: string; name: string; sources: string[]; filters: unknown[];
+  key_field: string | null; condition: Record<string, unknown>;
+  cooldown: string | null; window: string | null;
+  sentence: string;
+  knobs: PlanKnob[];
+}
+export interface PlanAgent {
+  key: string; name: string;
+  trigger: string | null; on_trigger: boolean;
+  prompt: string; model: string | null;
+  handoffs: { verdict: string; agent: string; cooldown?: string | null }[];
+  mcp_servers: string[];
+  sentence: string;
+  optional: boolean;
+  enabled: boolean;
+}
+export interface PlanOwnAgent { name: string; wake: "webhook" | "poll"; sentence: string }
+export interface PlanTool { key: string; name: string; url: string; why: string; can_act: boolean; enabled: boolean }
+export interface PlanSkill { key: string; name: string; description: string; body: string; enabled: boolean }
+export interface Plan {
+  goal: string;
+  name: string;
+  summary: string;
+  watches: PlanWatch[];
+  wakes: PlanWake[];
+  who: "tares" | "own";
+  agents: PlanAgent[];
+  own_agent: PlanOwnAgent | null;
+  tools: PlanTool[];
+  skills: PlanSkill[];
+  notes: string[];
+}
+export type SetupStep = "connect" | "try" | "done";
+
+// POST /api/setup/apply -> connect: what only the user can do next
+export interface SetupConnect {
+  sources: { name: string; needs: PlanWatch["needs"]; ingest_url: string | null;
+             sample: Record<string, unknown> | null; credential_hint: string | null }[];
+  tools: { name: string; url: string; needs_token: boolean }[];
+  own_agent: { key: string; mcp_url: string; claude_command: string; subscribe_hint: string } | null;
+}
+
+// GET /api/projects/{uid}/setup -> checks: live state for the Connect step
+export interface SetupChecks {
+  sources: { name: string; state: "waiting" | "receiving" | "error"; detail: string | null;
+             last_event_at: string | null; fields_seen: string[] }[];
+  tools: { name: string; state: "untested" | "ok" | "error"; detail: string | null }[];
+  own_agent: { state: "waiting" | "joined"; detail: string | null } | null;
+}
+export interface ProjectSetup {
+  step: SetupStep;
+  plan: Plan;
+  checks: SetupChecks;
 }
