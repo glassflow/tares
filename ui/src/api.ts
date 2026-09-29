@@ -1,13 +1,13 @@
 import type {
   AgentInfo,
   ApiKey,
-  CatalogDescribe, CatalogList, ConnectorSpec, DiscoverProposal, DispatchDetail, DispatchLogEntry, Entity, EnvScan,
+  CatalogDescribe, ConnectorSpec, DiscoverProposal, DispatchDetail, DispatchLogEntry, Entity, EnvScan,
   AgentPreset, AgentRun, BuiltinAgent,
   GithubCredential,
   LabelFacet, ModelUsage, QueryLogEntry,
   McpServer, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
-  TimelineEventRow, Trigger, View, ModelProvider, ModelProviders,
+  TimelineEventRow, Trigger, ModelProvider, ModelProviders,
 } from "./types";
 
 const TOKEN_KEY = "tares_token";
@@ -120,7 +120,7 @@ export const api = {
     request<{ ok: boolean; purged_events: number; deleted: string[] }>(
       `/api/sources/${encodeURIComponent(name)}?purge_events=${purge}&cascade=${cascade}`, { method: "DELETE" }),
   // what else goes if an object is deleted, in delete order
-  dependents: (kind: "source" | "view" | "trigger", name: string) =>
+  dependents: (kind: "source" | "trigger", name: string) =>
     request<{ dependents: { kind: ProjectObjectKind; name: string }[] }>(
       `/api/catalog/dependents?kind=${kind}&name=${encodeURIComponent(name)}`),
   pauseSource: (name: string) => request(`/api/sources/${name}/pause`, { method: "POST" }),
@@ -141,18 +141,10 @@ export const api = {
               results: { from: string; to: string; events: number }[] }>(
       "/api/labels/preview", { method: "POST", body: JSON.stringify({ source, label }) }),
 
-  views: () => request<View[]>("/api/views"),
-  createView: (body: View) =>
-    request("/api/views", { method: "POST", body: JSON.stringify(body) }),
-  updateView: (name: string, body: View) =>
-    request(`/api/views/${name}`, { method: "PUT", body: JSON.stringify(body) }),
-  deleteView: (name: string, cascade = false) =>
-    request<{ ok: boolean; deleted: string[] }>(`/api/views/${encodeURIComponent(name)}?cascade=${cascade}`, { method: "DELETE" }),
-
   triggers: () => request<Trigger[]>("/api/triggers"),
-  createTrigger: (body: Trigger) =>
+  createTrigger: (body: TriggerBody) =>
     request("/api/triggers", { method: "POST", body: JSON.stringify(body) }),
-  updateTrigger: (name: string, body: Trigger) =>
+  updateTrigger: (name: string, body: TriggerBody) =>
     request(`/api/triggers/${name}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteTrigger: (name: string) => request(`/api/triggers/${name}`, { method: "DELETE" }),
   pauseTrigger: (name: string) => request(`/api/triggers/${name}/pause`, { method: "POST" }),
@@ -166,10 +158,10 @@ export const api = {
               default_max_rounds: number; default_max_rounds_with_mcp: number;
               max_rounds_limit: number;
               presets: AgentPreset[] }>("/api/agents/builtin"),
-  createBuiltinAgent: (body: { name: string; trigger: string; prompt: string; slack_webhook?: string; slack_webhook_clear?: boolean; model?: string; provider?: string; slack_channel?: string; webhook_url?: string; webhook_token?: string; mcp_servers?: string[]; max_rounds?: number | null; budget_usd?: number | null }) =>
+  createBuiltinAgent: (body: AgentBody) =>
     request<{ ok: boolean; enabled: boolean }>("/api/agents/builtin",
       { method: "POST", body: JSON.stringify(body) }),
-  updateBuiltinAgent: (name: string, body: { name: string; trigger: string; prompt: string; slack_webhook?: string; slack_webhook_clear?: boolean; model?: string; provider?: string; slack_channel?: string; webhook_url?: string; webhook_token?: string; mcp_servers?: string[]; max_rounds?: number | null; budget_usd?: number | null }) =>
+  updateBuiltinAgent: (name: string, body: AgentBody) =>
     request(`/api/agents/builtin/${name}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteBuiltinAgent: (name: string) => request(`/api/agents/builtin/${name}`, { method: "DELETE" }),
   enableBuiltinAgent: (name: string) => request(`/api/agents/builtin/${name}/enable`, { method: "POST" }),
@@ -273,10 +265,10 @@ export const api = {
   // ── MCP connections: external tool servers agents can opt into ──
   mcpServers: () => request<{ servers: McpServer[] }>("/api/mcp-servers"),
   createMcpServer: (body: { name: string; url: string; auth_header?: string; auth_value?: string;
-                            headers?: Record<string, string> }) =>
+                            headers?: Record<string, string>; project?: string }) =>
     request<{ ok: boolean }>("/api/mcp-servers", { method: "POST", body: JSON.stringify(body) }),
   updateMcpServer: (name: string, body: { name: string; url: string; auth_header?: string; auth_value?: string;
-                                          headers?: Record<string, string> }) =>
+                                          headers?: Record<string, string>; project?: string }) =>
     request<{ ok: boolean }>(`/api/mcp-servers/${encodeURIComponent(name)}`,
       { method: "PUT", body: JSON.stringify(body) }),
   deleteMcpServer: (name: string) =>
@@ -325,12 +317,20 @@ export const api = {
                                       objects?: { kind: ProjectObjectKind; name: string }[] }) =>
     request<Project & { report?: ProjectUpdateReport }>(`/api/projects/${encodeURIComponent(id)}`,
       { method: "PUT", body: JSON.stringify(body) }),
-  // `deleteObjects`: the project's objects to delete along with it; the rest are released and
-  // stay. Omit for the default (a template project takes everything, a custom one keeps everything).
-  deleteProject: (id: string, purgeEvents = false, deleteObjects?: { kind: ProjectObjectKind; name: string }[]) =>
-    request<{ ok: boolean; deleted?: string[]; released?: string[]; purged_events?: number }>(
+  // Triggers, agents and MCP servers always go with the project. `deleteSources`: which of its
+  // sources to delete too; one another project still uses is kept (and reported) either way.
+  deleteProject: (id: string, purgeEvents = false, deleteSources: string[] = []) =>
+    request<{ ok: boolean; deleted?: string[]; released?: string[]; kept?: string[]; purged_events?: number }>(
       `/api/projects/${encodeURIComponent(id)}?purge_events=${purgeEvents}`
-      + (deleteObjects === undefined ? "" : `&delete=${encodeURIComponent(deleteObjects.length ? deleteObjects.map((o) => `${o.kind}:${o.name}`).join(",") : "none")}`),
+      + (deleteSources.length ? `&delete_sources=${encodeURIComponent(deleteSources.join(","))}` : ""),
+      { method: "DELETE" }),
+  // Sources are shared: a project lists the ones it uses. Removing one is refused while a trigger
+  // of the project reads it.
+  addProjectSource: (id: string, name: string) =>
+    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/sources`,
+      { method: "POST", body: JSON.stringify({ name }) }),
+  removeProjectSource: (id: string, name: string) =>
+    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/sources/${encodeURIComponent(name)}`,
       { method: "DELETE" }),
   pauseProject: (id: string, sources = false) =>
     request<Project>(`/api/projects/${encodeURIComponent(id)}/pause`, { method: "POST", body: JSON.stringify({ sources }) }),
@@ -370,31 +370,20 @@ export const api = {
   // TARES_MAX_DB_SIZE — see the Usage type before rendering any of it.
   usage: () => request<Usage>("/api/usage"),
 
-  catalog: () => request<CatalogList>("/catalog"),
   describe: (handle: string) => request<CatalogDescribe>(`/catalog/${handle}`),
 
   entities: (label?: string) =>
     request<{ labels?: LabelFacet[]; label?: string; sources?: string[]; values?: Entity[] }>(
       label ? `/api/entities?label=${encodeURIComponent(label)}` : "/api/entities"),
 
-  // Raw label-native read across ALL sources — no view. `selector` is a {label: value}
-  // conjunction (strict AND). Returns the rendered payload, contributing sources, and structured
-  // rows (each with its per-event labels, for the console timeline).
-  read: (selector: Record<string, string>, window: string) =>
+  // Label-native read. `selector` is a {label: value} conjunction (strict AND). Without `project`
+  // or `sources` it reads every source; either narrows which sources are read. Returns the
+  // rendered payload, contributing sources, and structured rows (each with its per-event labels,
+  // for the console timeline).
+  read: (selector: Record<string, string>, window: string, scope?: { project?: string; sources?: string[] }) =>
     request<{ payload: string; count: number; sources: string[]; rows: TimelineEventRow[] }>("/read", {
       method: "POST",
-      body: JSON.stringify({ selector, window, client: "ui" }),
-    }),
-
-  runQuery: (view: string, key: string, window: string) =>
-    request<{ payload: string; rows: TimelineEventRow[] }>("/query", {
-      method: "POST",
-      body: JSON.stringify({ view, key, window, client: "ui" }),
-    }),
-  runQueryWhere: (view: string, where: Record<string, string>, window: string) =>
-    request<{ payload: string; rows: TimelineEventRow[] }>("/query", {
-      method: "POST",
-      body: JSON.stringify({ view, where, window, client: "ui" }),
+      body: JSON.stringify({ selector, window, client: "ui", ...(scope ?? {}) }),
     }),
 
   // Defaults match the agent/MCP call: all sources, secrets omitted. The UI passes options.
@@ -411,13 +400,24 @@ export const api = {
     return res.text();
   },
   importYaml: (yaml: string, mode: "merge" | "replace") =>
-    request<{ sources: number; views: number; triggers: number; agents: number;
+    request<{ sources: number; triggers: number; agents: number;
               mcp_servers: number;
-              names: { sources: string[]; views: string[]; triggers: string[];
+              names: { sources: string[]; triggers: string[];
                        agents: string[]; mcp_servers: string[] } }>("/api/catalog/import", {
       method: "POST",
       body: JSON.stringify({ yaml, mode }),
     }),
+};
+
+// What a trigger is saved from. `project` omitted = the default project.
+export type TriggerBody = Pick<Trigger, "name" | "sources" | "filters" | "condition" | "emit" | "cooldown">
+  & { project?: string; key_field?: string | null };
+
+export type AgentBody = {
+  name: string; trigger: string; prompt: string; project?: string;
+  slack_webhook?: string; slack_webhook_clear?: boolean; model?: string; provider?: string;
+  slack_channel?: string; webhook_url?: string; webhook_token?: string; mcp_servers?: string[];
+  max_rounds?: number | null; budget_usd?: number | null;
 };
 
 export type AgentLimits = {

@@ -21,6 +21,7 @@ export interface Source {
   ingest_key?: string;   // stable path segment for push endpoints: /ingest/<ingest_key>
   owned_by?: string | null;   // the project that created it, if any
   customized?: boolean;       // edited by hand since; the project keeps that version
+  projects?: string[];        // every project the source is a member of (ids)
 }
 
 export interface ConnectorField {
@@ -80,14 +81,9 @@ export interface TimelineEventRow {
   labels: Record<string, string>;
 }
 
-export interface CatalogList {
-  sources: { name: string; type: string }[];
-  views: { name: string; key_field: string; sources: string[]; created_by: string }[];
-  triggers: { name: string; view: string }[];
-}
 export interface CatalogDescribe {
   handle: string;
-  kind: "source" | "view" | "trigger";
+  kind: "source" | "trigger";
   entry: Record<string, unknown>;
   schema?: { event_types?: string[]; fields?: Record<string, string>; sampled_events?: number } & Record<string, unknown>;
   labels?: Record<string, { value: string; events: number; last_ingest?: string }[]>;
@@ -177,15 +173,11 @@ export interface ColumnsProposal {
   proposed_config: Record<string, unknown>;
 }
 
-export interface ViewFilter {
+// One filter row on a trigger: which events it counts. Same ops the daemon accepts.
+export interface TriggerFilter {
   field: string;
   op: "eq" | "neq" | "contains" | "gt" | "lt" | "gte" | "lte";
   value: string | number;
-}
-
-export interface ViewUsage {
-  queries: number;
-  last_used_at: string | null;
 }
 
 export interface Entity {
@@ -202,17 +194,6 @@ export interface LabelFacet {
   values: Entity[];
 }
 
-export interface View {
-  name: string;
-  key_field: string;
-  sources: string[];
-  filters?: ViewFilter[];
-  created_by?: string;
-  usage?: ViewUsage | null;
-  owned_by?: string | null;
-  customized?: boolean;
-}
-
 export interface TriggerCondition {
   aggregate: string;
   predicate: string;
@@ -224,9 +205,14 @@ export interface TriggerCondition {
   summary_by?: string[];
 }
 
+// A trigger reads its own sources (members of its project), narrowed by filters, grouped by the
+// entity label (key_field; empty = the first source's primary label).
 export interface Trigger {
   name: string;
-  view: string;
+  project?: string;   // the project it belongs to; omitted on create = the default project
+  sources: string[];
+  filters?: TriggerFilter[];
+  key_field?: string | null;
   condition: TriggerCondition;
   emit: Record<string, unknown>;
   cooldown: string;
@@ -241,6 +227,7 @@ export interface Trigger {
 // means it's subscribed to its trigger, exactly like an external agent.
 export interface BuiltinAgent {
   name: string;
+  project?: string;            // the project it belongs to (its trigger is in the same one)
   trigger: string;
   prompt: string;
   enabled: boolean;
@@ -342,8 +329,7 @@ export interface AgentPreset {
 }
 
 export interface QueryLogEntry {
-  id: string;
-  view: string;
+  id: string;   // r_ = a read, s_ = a stats call
   key: string;
   window: string;
   rows_returned: number;
@@ -478,8 +464,9 @@ export interface McpServer {
   name: string; url: string; auth_header: string; auth_value_configured: boolean;
   auth_credential: string; headers: Record<string, string>; updated_at: string;
   owned_by?: string | null; customized?: boolean;
+  project?: string;
 }
-export type ProjectObjectKind = "source" | "view" | "trigger" | "agent" | "mcp_server";
+export type ProjectObjectKind = "source" | "trigger" | "agent" | "mcp_server";
 export interface ProjectObject {
   kind: ProjectObjectKind;
   key: string;
@@ -499,6 +486,7 @@ export interface Project {
   updated_at: string;
   last_error: string | null;
   objects: ProjectObject[];
+  default?: boolean;   // the Default project: holds whatever was made outside a project; never deleted
 }
 export interface ProjectLogEntry { at: string; action: string; detail: string }
 // summary = instance + log + whatever the template reports. The template part is free-form; the
