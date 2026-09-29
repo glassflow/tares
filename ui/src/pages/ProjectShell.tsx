@@ -11,6 +11,7 @@ import InfoDialog, { HelpButton } from "../components/InfoDialog";
 import { SessionsPanel } from "../components/ChallengerSessions";
 import ProjectActivity from "../components/ProjectActivity";
 import SkillsPanel from "../components/SkillsPanel";
+import { ExternalAgentsPanel, ProjectKeysPanel } from "../components/ProjectKeys";
 import { RunsPanel } from "./AgentDetail";
 import { ServerForm } from "./McpServers";
 import type { ConnectorSpec, ProjectSummary, Template, RecipeActionOption, Source, Trigger, TriggerCondition } from "../types";
@@ -536,6 +537,10 @@ export default function ProjectShell({ s, id, reload, template }: {
             </div>
           )}
 
+          <div id="keys" style={{ scrollMarginTop: 16 }}>
+            <ProjectKeysPanel project={id} />
+          </div>
+
           {s.log && s.log.length > 0 && (
             <details style={{ marginTop: 24 }}>
               <summary style={{ cursor: "pointer" }}><h2 style={{ display: "inline", marginLeft: 6 }}>Change history</h2></summary>
@@ -603,6 +608,10 @@ export default function ProjectShell({ s, id, reload, template }: {
               <a href="#add-agent" onClick={(e) => { e.preventDefault(); setTab("setup"); openAddAgent(""); }}>add one on the Setup tab</a>
             </p>
           )}
+          <ExternalAgentsPanel project={id} onOpenKeys={() => {
+            setTab("setup");
+            setTimeout(() => document.getElementById("keys")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+          }} />
         </>
       )}
 

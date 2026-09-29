@@ -14,8 +14,9 @@ import type { AgentRun } from "../types";
 // finding tripped under that run, with the runs that firing woke.
 
 export type TimelineRun = AgentRun & {
-  woken_by?: "trigger" | "schedule" | "manual" | "rerun" | "bootstrap" | "handoff" | null;
+  woken_by?: "trigger" | "schedule" | "manual" | "rerun" | "bootstrap" | "handoff" | "external" | null;
   parent_run_id?: string | null;
+  external?: boolean;           // a finding an external agent recorded (TR-336), not a Tares run
   children: TimelineRun[];
   firings: TimelineThread[];
 };
@@ -31,6 +32,7 @@ export interface TimelineThread {
     fired_at: string; payload_excerpt: string; subscribers: number | null;
   } | null;
   runs: TimelineRun[];
+  external?: boolean;
   deliveries: { kind: "tares" | "slack" | "webhook"; target: string; ok: boolean | null;
                 error: string | null; at: string | null }[];
 }
@@ -44,7 +46,7 @@ const OUTCOME_LABELS: Record<string, string> = {
 // why a run started, where the thread around it does not already say
 const WOKEN: Record<string, string> = {
   manual: "started by hand", bootstrap: "first look at a new project", rerun: "rerun",
-  handoff: "handed off",
+  handoff: "handed off", external: "recorded a finding from outside Tares",
 };
 
 /** Every run in a thread, nested ones included, for the row summary. */
@@ -222,9 +224,10 @@ function RunBlock({ r, depth = 0 }: { r: TimelineRun; depth?: number }) {
           {woken && <> · {woken}</>}
           {r.key && <> · on <span className="mono">{r.key}</span></>}
           {" · "}<TimeAgo ts={r.started_at} />
-          {r.duration_ms != null && <> · {(r.duration_ms / 1000).toFixed(1)}s</>}
-          {r.cost_usd != null && <> · {fmtCost(r.cost_usd)}</>}
-          {" · "}<Link to={`/agents/${encodeURIComponent(r.agent)}?run=${encodeURIComponent(r.id)}`}>the run</Link>
+          {/* an external agent's finding has no run in Tares to time, cost or open */}
+          {!r.external && r.duration_ms != null && <> · {(r.duration_ms / 1000).toFixed(1)}s</>}
+          {!r.external && r.cost_usd != null && <> · {fmtCost(r.cost_usd)}</>}
+          {!r.external && <>{" · "}<Link to={`/agents/${encodeURIComponent(r.agent)}?run=${encodeURIComponent(r.id)}`}>the run</Link></>}
         </span>
       </p>
       {r.finding

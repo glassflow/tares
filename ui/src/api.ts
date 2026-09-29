@@ -1,6 +1,6 @@
 import type {
   AgentInfo,
-  ApiKey,
+  ApiKey, ExternalAgent,
   CatalogDescribe, ConnectorSpec, DiscoverProposal, DispatchDetail, DispatchLogEntry, Entity, EnvScan,
   AgentPreset, AgentRun, BuiltinAgent,
   GithubCredential,
@@ -339,6 +339,18 @@ export const api = {
       { method: "POST", body: JSON.stringify({ name }) }),
   removeProjectSource: (id: string, name: string) =>
     request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/sources/${encodeURIComponent(name)}`,
+      { method: "DELETE" }),
+  // Project keys and the external agents that joined a project (TR-335, TR-336). A project key
+  // reads that project only and records findings in it; its secret is in the create response only.
+  projectKeys: (id: string) =>
+    request<{ keys: ApiKey[]; enforced: boolean }>(`/api/projects/${encodeURIComponent(id)}/keys`),
+  createProjectKey: (id: string, name: string) =>
+    request<{ id: string; name: string; scopes: string[]; secret: string; project: string }>(
+      `/api/projects/${encodeURIComponent(id)}/keys`, { method: "POST", body: JSON.stringify({ name }) }),
+  externalAgents: (id: string) =>
+    request<{ agents: ExternalAgent[] }>(`/api/projects/${encodeURIComponent(id)}/external-agents`),
+  unsubscribeProject: (id: string, sid: string) =>
+    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/subscribe/${encodeURIComponent(sid)}`,
       { method: "DELETE" }),
   // A project's skills (TR-332). Upload takes a SKILL.md as it is: front matter, then the body.
   skills: (id: string) => request<SkillSummary[]>(`/api/projects/${encodeURIComponent(id)}/skills`),
