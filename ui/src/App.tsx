@@ -67,7 +67,7 @@ type Crumb = { label: string; to?: string; mono?: boolean };
  *  so second-level pages link back to their own list (/sources/:name → Sources) rather than to
  *  the root the way they did when Sources *was* the root. */
 function useCrumbs(): Crumb[] {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const parts = pathname.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
   const projectId = parts[0] === "projects" && parts.length > 1 && parts[1] !== "new" ? decodeURIComponent(parts[1]) : undefined;
   const projectName = useProjectName(projectId);
@@ -89,6 +89,15 @@ function useCrumbs(): Crumb[] {
     const sub = decodeURIComponent(parts[1]);
     // the path carries the instance id; show its name once /api/projects has answered
     const last: Crumb = sub === "new" ? { label: "Set up" } : { label: projectName?.name ?? "\u2026" };
+    // past the project's Overview: a result, How it works, or the full setup
+    const q = new URLSearchParams(search);
+    // old ?tab= and ?session= links land in the full setup too
+    const kind = sub === "new" ? undefined
+      : q.get("view")?.split(":")[0] || (q.get("tab") || q.get("session") ? "setup" : undefined);
+    if (kind && kind !== "overview") {
+      const here = kind === "result" ? "Result" : kind === "how" ? "How it works" : "Full setup";
+      return [{ label: "Projects", to: "/projects" }, { ...last, to: `/projects/${encodeURIComponent(sub)}` }, { label: here }];
+    }
     return [{ label: "Projects", to: "/projects" }, last];
   }
 

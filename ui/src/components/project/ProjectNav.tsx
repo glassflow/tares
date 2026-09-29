@@ -1,9 +1,9 @@
 import { SETTINGS, VLink, sameView, sourceState, viewParam, type Ctx, type View } from "./common";
 import { handedBy } from "../../pages/AgentDetail";
 
-// The project's own navigation: the views that are always there (Activity, Events), one group per
-// kind of object, filled with the project's real objects, and Settings. On a narrow screen it
-// folds into one select.
+// The full setup's navigation: back to the project's Overview, the views that are always there
+// (Activity, Events), one group per kind of object, filled with the project's real objects, and
+// Settings. On a narrow screen it folds into one select.
 
 interface Entry { v: View; label: string; dot?: "ok" | "error" | "paused"; hint?: string; title?: string }
 interface Group { head: View; label: string; add?: { extra: Record<string, string>; label: string }; items: Entry[] }
@@ -74,7 +74,11 @@ export default function ProjectNav({ ctx }: { ctx: Ctx }) {
   const optionLabel = (e: Entry) => e.label + (e.hint ? ` (${e.hint})` : e.dot && e.dot !== "ok" ? ` (${e.dot})` : "");
   return (
     <>
-      <nav className="pnav" aria-label="Project">
+      <VLink v={{ kind: "overview" }} className="pnav-back pnav-back-narrow">
+        <span aria-hidden="true">←</span> Back to the project</VLink>
+      <nav className="pnav" aria-label="Project setup">
+        <VLink v={{ kind: "overview" }} className="pnav-link pnav-back">
+          <span aria-hidden="true">←</span><span className="pnav-label">Back to the project</span></VLink>
         {top.map((e) => link(e, "pnav-top"))}
         {gs.map((g) => (
           <div className="pnav-group" key={g.label}>

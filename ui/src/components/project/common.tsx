@@ -9,24 +9,39 @@ import type {
 } from "../../types";
 
 // What the project page shows in its main pane, and how that sits in the URL:
-//   (no view)            Activity, the landing view
-//   ?view=events         a section: events, sources, triggers, agents, skills, sessions
+//   (no view)            the Overview: the goal, whether it works, what the agents found
+//   ?view=result:<run>   one result: the next step, the note, how Tares got there
+//   ?view=how            how this project works, in four plain steps
+// and the full setup, the left-nav views for when something does not work as expected:
+//   ?view=activity       a section: activity, events, sources, triggers, agents, skills, sessions
 //   ?view=agent:<name>   one item: source:, trigger:, agent:, external:<subscription id>, skill:
 //   ?view=settings:keys  one settings page: mcp, subscribers, keys, history
-// plus `add=1` (or add=<trigger> on agents) to open a section's Add form, and `run=` / `dispatch=`
-// on an agent to open that run.
+// plus `add=1` (or add=<trigger> on agents) to open a section's Add form, `run=` / `dispatch=`
+// on an agent to open that run, and `thread=` on activity to open one thread.
 
-export type ViewKind = "activity" | "events" | "sources" | "source" | "triggers" | "trigger" | "agents"
+export type ViewKind = "overview" | "result" | "how"
+  | "activity" | "events" | "sources" | "source" | "triggers" | "trigger" | "agents"
   | "agent" | "external" | "skills" | "skill" | "sessions" | "settings";
 export interface View { kind: ViewKind; name?: string }
 
-const SECTIONS: ViewKind[] = ["activity", "events", "sources", "triggers", "agents", "skills", "sessions"];
-const ITEMS: ViewKind[] = ["source", "trigger", "agent", "external", "skill"];
+const SECTIONS: ViewKind[] = ["overview", "how", "activity", "events", "sources", "triggers", "agents", "skills", "sessions"];
+const ITEMS: ViewKind[] = ["result", "source", "trigger", "agent", "external", "skill"];
 export const SETTINGS: [string, string][] = [
   ["mcp", "MCP servers"], ["subscribers", "Subscribers"], ["keys", "Keys"], ["history", "Change history"],
 ];
 
-/** The view a URL asks for. Links from before the side navigation (?tab=) land on the nearest one. */
+/** The views of the goal-first page; every other view is the full setup, with the left nav. */
+export const isSetup = (v: View) => v.kind !== "overview" && v.kind !== "result" && v.kind !== "how";
+
+/** A view named the way ?view= names it (the health API's `view`); undefined when it names none. */
+export function viewFrom(raw: string | null | undefined, hasSessions: boolean): View | undefined {
+  if (!raw) return undefined;
+  const v = parseView(new URLSearchParams({ view: raw }), hasSessions);
+  return v.kind === "overview" && raw !== "overview" ? undefined : v;
+}
+
+/** The view a URL asks for. Links from before the side navigation (?tab=) land on the nearest
+ *  setup view; a bare project link lands on the Overview. */
 export function parseView(p: URLSearchParams, hasSessions: boolean): View {
   const raw = p.get("view");
   if (raw) {
@@ -45,16 +60,16 @@ export function parseView(p: URLSearchParams, hasSessions: boolean): View {
     case "sessions": if (hasSessions) return { kind: "sessions" }; break;
   }
   if (p.get("session") && hasSessions) return { kind: "sessions" };
-  return { kind: "activity" };
+  return { kind: "overview" };
 }
 
 export const viewParam = (v: View) => (v.name ? `${v.kind}:${v.name}` : v.kind);
 export const sameView = (a: View, b: View) => a.kind === b.kind && (a.name ?? "") === (b.name ?? "");
 
-/** The search string for a view; Activity is the bare page. */
+/** The search string for a view; the Overview is the bare page. */
 export function viewSearch(v: View, extra?: Record<string, string>): string {
   const parts: string[] = [];
-  if (!(v.kind === "activity" && !v.name)) {
+  if (v.kind !== "overview") {
     parts.push(`view=${v.kind}${v.name ? `:${encodeURIComponent(v.name)}` : ""}`);
   }
   for (const [k, val] of Object.entries(extra ?? {})) parts.push(`${k}=${encodeURIComponent(val)}`);

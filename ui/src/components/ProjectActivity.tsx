@@ -58,20 +58,23 @@ function allRuns(runs: TimelineRun[]): TimelineRun[] {
   return runs.flatMap((r) => [r, ...allRuns(r.children), ...r.firings.flatMap((f) => allRuns(f.runs))]);
 }
 
-export default function ProjectActivity({ id, triggers, agents, onShowTrigger }: {
+// `openThread`: a thread to open and scroll to on arrival (a result's "See the raw events and runs")
+export default function ProjectActivity({ id, triggers, agents, onShowTrigger, openThread }: {
   id: string;
   triggers: string[];
   agents: string[];
   onShowTrigger: (name: string) => void;
+  openThread?: string;
 }) {
-  return <ProjectAgents.Provider value={agents}><Timeline id={id} triggers={triggers} agents={agents} onShowTrigger={onShowTrigger} /></ProjectAgents.Provider>;
+  return <ProjectAgents.Provider value={agents}><Timeline id={id} triggers={triggers} agents={agents} onShowTrigger={onShowTrigger} openThread={openThread} /></ProjectAgents.Provider>;
 }
 
-function Timeline({ id, triggers, agents, onShowTrigger }: {
+function Timeline({ id, triggers, agents, onShowTrigger, openThread }: {
   id: string;
   triggers: string[];
   agents: string[];
   onShowTrigger: (name: string) => void;
+  openThread?: string;
 }) {
   const [trigger, setTrigger] = useState("");
   const [agent, setAgent] = useState("");
@@ -80,7 +83,7 @@ function Timeline({ id, triggers, agents, onShowTrigger }: {
   const [older, setOlder] = useState<TimelineThread[]>([]);
   const [olderCursor, setOlderCursor] = useState<string | null | undefined>(undefined);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [open, setOpen] = useState<Set<string>>(() => new Set(openThread ? [openThread] : []));
   const filters = { trigger, agent, outcome, entity };
   const { data: head, error, reload } = usePolling(() => api.projectTimeline(id, filters), 10000);
   useEffect(() => { setOlder([]); setOlderCursor(undefined); reload(); },
@@ -106,6 +109,14 @@ function Timeline({ id, triggers, agents, onShowTrigger }: {
     if (n.has(tid)) n.delete(tid); else n.add(tid);
     return n;
   });
+  // bring the thread a link asked for into view once, when it first shows up
+  const [scrolled, setScrolled] = useState(false);
+  const arrived = !!openThread && !!threads?.some((t) => t.id === openThread);
+  useEffect(() => {
+    if (!arrived || scrolled) return;
+    setScrolled(true);
+    document.getElementById(`thread-${openThread}`)?.scrollIntoView({ block: "start" });
+  }, [arrived, scrolled, openThread]);
   const entities = [...new Set([...(threads ?? []).map((t) => t.entity ?? ""), entity].filter(Boolean))].sort();
   const filtered = !!(trigger || agent || outcome || entity);
 
@@ -157,7 +168,7 @@ function ThreadRow({ t, open, onToggle, onShowTrigger, knownTriggers }: {
   const first = t.runs[0];
   return (
     <>
-      <tr className="clickable" onClick={onToggle}>
+      <tr className="clickable" onClick={onToggle} id={`thread-${t.id}`}>
         <td style={{ whiteSpace: "nowrap" }}><TimeAgo ts={t.at} /></td>
         <td>
           {t.kind === "firing" && t.fired

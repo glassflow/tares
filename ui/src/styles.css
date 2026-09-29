@@ -1495,3 +1495,115 @@ pre.payload {
   .pnav { display: none; }
   .pnav-select { display: flex; flex-direction: column; gap: 4px; }
 }
+
+/* ── the goal-first project page: Overview, a result, How it works (components/project/overview.tsx).
+   Bold and outcome-first: the goal, whether it works, what the agents found. Tokens only. ── */
+.gf { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+.gf-narrow { max-width: 880px; }
+.gf p { margin: 0; }
+.gf-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px 24px; flex-wrap: wrap; }
+.gf-head-text { display: flex; flex-direction: column; gap: 6px; max-width: 760px; min-width: 0; flex: 1 1 420px; }
+.gf-name { font-size: 28px; font-weight: 700; letter-spacing: -0.01em; margin: 0; overflow-wrap: anywhere; }
+.gf-goal { font-size: 17px; color: var(--ink); overflow-wrap: anywhere; }
+.gf-goal-change { font-size: 13px; margin-left: 4px; }
+.gf-goal-add {
+  align-self: flex-start; text-align: left; font-size: 16px; font-weight: 500; padding: 8px 14px;
+  border: 1px dashed var(--border-strong); background: transparent; color: var(--accent-deep);
+}
+.gf-goal-add:hover { border-style: solid; }
+.gf-goal-form { max-width: 640px; }
+.gf-goal-form input { width: 100%; font-size: 15px; }
+.gf-sentence { color: var(--ink-soft); }
+.gf-head-actions { display: flex; gap: 8px; flex-wrap: wrap; flex-shrink: 0; }
+.gf-head-actions > button, .gf-head-actions > .btn { min-height: 40px; padding: 0 14px; display: inline-flex; align-items: center; }
+
+.gf-health { padding: 14px 18px; border: 1px solid var(--line); background: var(--th-bg); display: flex; flex-direction: column; gap: 8px; }
+.gf-health-row { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+.gf-health-dot { width: 10px; height: 10px; flex: 0 0 auto; background: var(--ink-faint); }
+.gf-health-title { font-weight: 600; }
+.gf-health-msg { flex: 1 1 260px; min-width: 0; color: var(--ink-soft); }
+.gf-health-more { color: var(--ink-soft); padding-left: 22px; }
+.gf-health-toggle { align-self: flex-start; margin-left: 22px; font-size: 13px; }
+.gf-health-list { list-style: none !important; margin: 0 0 0 22px !important; padding: 0 !important; display: flex; flex-direction: column; gap: 6px; }
+.gf-health-list li { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; color: var(--ink-soft); }
+.gf-health.working { background: var(--ok-soft); border-color: var(--ok-border); }
+.gf-health.working .gf-health-dot { background: var(--ok); }
+.gf-health.error { background: var(--err-soft); border-color: var(--danger-border); }
+.gf-health.error .gf-health-dot { background: var(--err); }
+.gf-health.warning, .gf-health.paused { background: var(--warn-soft); border-color: var(--warn); }
+.gf-health.warning .gf-health-dot, .gf-health.paused .gf-health-dot { background: var(--warn); }
+.gf-health.error .gf-health-msg, .gf-health.warning .gf-health-msg { color: var(--ink); }
+.gf-fix { min-height: 36px; padding: 0 12px; font-weight: 600; background: var(--input-bg); flex-shrink: 0; }
+.gf-fix.small { min-height: 30px; font-size: 12px; }
+.gf-health.error .gf-fix { border-color: var(--err); color: var(--err); }
+
+.gf-today { display: flex; gap: 8px 32px; flex-wrap: wrap; color: var(--ink-soft); font-size: 13px; }
+.gf-today strong { color: var(--ink); font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.gf-results { display: flex; flex-direction: column; gap: 12px; }
+.gf-results h2, .gf-h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.gf-h3 { font-size: 14px; }
+.main ol.gf-cards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.gf-card {
+  display: flex; gap: 12px 18px; align-items: flex-start; width: 100%; text-align: left;
+  padding: 18px 20px; font-size: 14px; font-weight: 400; line-height: 1.5; color: var(--ink);
+}
+.gf-card:hover { color: var(--ink); border-color: var(--accent); }
+.gf-card.handled .gf-card-body { color: var(--ink-soft); }
+.gf-card-body { display: flex; flex-direction: column; gap: 4px; flex: 1 1 auto; min-width: 0; }
+.gf-card-top { display: flex; gap: 4px 10px; align-items: baseline; flex-wrap: wrap; }
+.gf-card-headline { font-weight: 600; font-size: 15px; overflow-wrap: anywhere; }
+.gf-card-summary { color: var(--ink-soft); overflow-wrap: anywhere; }
+.gf-card-next { overflow-wrap: anywhere; }
+.gf-card-next strong { font-weight: 600; }
+.gf-card-meta { flex-shrink: 0; text-align: right; font-size: 12px; color: var(--ink-soft); display: flex; flex-direction: column; gap: 2px; max-width: 220px; }
+.gf-entity { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.gf-badge { flex-shrink: 0; margin-top: 2px; padding: 2px 8px; font-size: 12px; font-weight: 600; white-space: nowrap; background: var(--chip-bg); color: var(--ink-soft); }
+.gf-badge.action { background: var(--err-soft); color: var(--err); }
+.gf-badge.handled { background: var(--ok-soft); color: var(--ok); }
+.gf-empty { padding: 20px; border: 1px dashed var(--border-strong); display: flex; flex-direction: column; gap: 6px; color: var(--ink); }
+
+.gf-result-head { display: flex; flex-direction: column; gap: 6px; }
+.gf-result-meta { display: flex; gap: 6px 10px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+.gf-result-meta .gf-badge { margin-top: 0; }
+.gf-result-title { font-size: 26px; font-weight: 700; margin: 0; overflow-wrap: anywhere; }
+.gf-next { padding: 18px 20px; background: var(--warn-soft); border: 1px solid var(--accent); overflow-wrap: anywhere; }
+.gf-next strong { font-weight: 600; }
+.gf .gf-note { margin: 0; }
+.gf-summary { color: var(--ink-soft); }
+.main ol.gf-steps { list-style: none; margin: 10px 0 0 6px; padding: 0; border-left: 2px solid var(--line); display: flex; flex-direction: column; }
+.gf-steps li { padding: 0 0 12px 18px; overflow-wrap: anywhere; }
+.gf-steps li:last-child { padding-bottom: 0; }
+.gf-step-time { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
+.gf-steps .gf-steps-end { color: var(--ink-soft); }
+
+.main ol.gf-how { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.gf-step { padding: 16px; background: var(--panel); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.gf-step-n { margin: 0; font-size: 12px; font-weight: 600; color: var(--ink-soft); letter-spacing: 0; }
+.gf-step-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.gf-step-item + .gf-step-item { border-top: 1px solid var(--line); padding-top: 12px; }
+.gf-step-what { font-weight: 600; overflow-wrap: anywhere; }
+.gf-step-desc { color: var(--ink-soft); overflow-wrap: anywhere; }
+.gf-step-desc.mono { font-family: var(--mono); font-size: 12px; }
+.gf-step-state { font-size: 13px; }
+.gf-step-state.ok { color: var(--ok); }
+.gf-step-state.err { color: var(--err); font-weight: 600; }
+.gf-step-state.warn { color: var(--warn); font-weight: 600; }
+.gf-step-state.dim { color: var(--ink-soft); }
+.gf-step-empty { color: var(--ink-soft); }
+.gf-change, .gf-setup-link { color: var(--accent-deep); text-decoration: underline; text-underline-offset: 2px; font-size: 13px; align-self: flex-start; }
+.gf-setup-row { padding: 16px 18px; border: 1px dashed var(--border-strong); display: flex; justify-content: space-between; align-items: center; gap: 12px 16px; flex-wrap: wrap; }
+.gf-setup-link { font-weight: 600; font-size: 14px; flex-shrink: 0; }
+.gf .pv-panels { margin: 0; }
+
+/* the full setup's way back to the project */
+.pnav-back { color: var(--accent-deep); margin-bottom: 8px; }
+.pnav-back-narrow { display: none; text-decoration: none; font-weight: 500; }
+@media (max-width: 900px) { .pnav-back-narrow { display: inline-flex; gap: 6px; } }
+
+@media (max-width: 720px) {
+  .gf-name { font-size: 24px; }
+  .gf-card { flex-direction: column; padding: 14px 16px; }
+  .gf-card-meta { text-align: left; flex-direction: row; flex-wrap: wrap; gap: 4px 12px; max-width: none; }
+  .gf-result-title { font-size: 22px; }
+}
