@@ -2,13 +2,13 @@
 
 Unlike the event connectors, this is DECLARATIVE reference material: files (json / csv / md / txt)
 keyed to an entity by their labels, so an agent correlating on that entity always gets them
-regardless of any read time window (see store.read_view_window's `source_type = 'reference'` clause).
+regardless of any read time window (see store.read_window's `source_type = 'reference'` clause).
 
 The config *is* the data: each attachment carries its own labels and content. Editing the source
 re-materializes it — the stored rows always mirror the current config (runtime._materialize), so
 there's no poll loop and no poll interval. Labels are per-attachment (one file may be service=navflow,
 another service=glassflow) and become real Tares labels: they ride on the event AND on the payload
-(so the source's Fields view shows them), and the UI declares them in `config.labels` so views can
+(so the source's Fields view shows them), and the UI declares them in `config.labels` so triggers can
 correlate on them. There's no entity key — correlation is label-native.
 """
 from __future__ import annotations

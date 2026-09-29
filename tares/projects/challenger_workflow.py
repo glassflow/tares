@@ -7,7 +7,7 @@ the `claude_code` source on one session timeline. Tares is the record and the af
 brain, never the control point: nothing here decides whether Codex runs.
 
 This template owns the Tares side: the `claude_code` source (adopted from the plugin, which creates
-it on first run), a view per session, a trigger that fires when a challenger session ends, and a
+it on first run), a trigger that fires when a challenger session ends, and a
 Tares agent that reads the session and writes one finding: the session summary and up to five
 memory proposals. Proposals live inside the finding; nothing is written to memory until a person
 accepts one from the console, so only accepted memory ever exists.
@@ -24,8 +24,6 @@ from .registry import register
 
 FLOW = "challenger"
 SOURCE = "claude_code"           # the plugin's own name for the source, adopted as is
-VIEW = "challenger_session"
-ENDS_VIEW = "challenger_session_ends"
 TRIGGER = "challenger_session_ended"
 AGENT = "challenger_summarizer"
 PROPOSALS_HEADING = "Memory proposals"
@@ -138,23 +136,18 @@ class ChallengerWorkflow(Template):
             # unchanged rather than reconfigured
             PlannedObject("source", "source", {
                 "name": SOURCE, "connector": "claude_code", "poll": "10s", "config": {}}),
-            # the session timeline people and the agent read. The summarizer's finding lands on
-            # the same session key and joins it through `read` (the findings source is internal,
-            # provisioned by the daemon on the first finding, so a view must not name it).
-            PlannedObject("view", "view", {
-                "name": VIEW, "key_field": "session", "sources": [SOURCE]}),
-            # the detection view: only the end-of-session line of a challenger session. The
-            # plugin stamps `flow` on every line of a marked session and writes a session_end
-            # line when the session closes.
-            PlannedObject("view", "ends", {
-                "name": ENDS_VIEW, "key_field": "session", "sources": [SOURCE],
-                "filters": [{"field": "event_type", "op": "eq", "value": "session_end"},
-                            {"field": "flow", "op": "eq", "value": FLOW}]}),
+            # fires on the end-of-session line of a challenger session only. The plugin stamps
+            # `flow` on every line of a marked session and writes a session_end line when the
+            # session closes. The summarizer's finding lands on the same session key and joins it
+            # through `read` (the findings source is internal, provisioned by the daemon on the
+            # first finding, so the trigger does not read it).
             PlannedObject("trigger", "trigger", {
-                "name": TRIGGER, "view": ENDS_VIEW,
+                "name": TRIGGER, "sources": [SOURCE], "key_field": "session",
+                "filters": [{"field": "event_type", "op": "eq", "value": "session_end"},
+                            {"field": "flow", "op": "eq", "value": FLOW}],
                 "condition": {"aggregate": "count", "predicate": "> 0", "window": "5m",
                               "group_by": ["key_value"]},
-                "emit": {"kind": "session_ended", "attach_view": True, "context_window": "24h"},
+                "emit": {"kind": "session_ended", "context_window": "24h"},
                 "cooldown": "30m"}),
         ]
         agent = {"name": AGENT, "trigger": TRIGGER, "prompt": PROMPT, "enabled": True,
@@ -202,7 +195,7 @@ class ChallengerWorkflow(Template):
         for x in sessions:
             x["run_id"] = summarized.get(x["session"])
         out["sessions"] = sessions
-        out["names"] = {"view": VIEW, "ends_view": ENDS_VIEW, "trigger": TRIGGER, "agent": AGENT}
+        out["names"] = {"source": SOURCE, "trigger": TRIGGER, "agent": AGENT}
         out["panels"] = [{
             "title": "Where it delivers",
             "rows": [{"label": "Slack channel", "value": params["slack_channel"], "mono": True}],
@@ -283,10 +276,10 @@ THREAD_TYPES = tuple(ClaudeCodeConnector.CHALLENGE_TYPES) + ("session_flow", "se
 def recent_sessions(store) -> list[dict]:
     """The challenger sessions of the last SESSION_DAYS, newest first: who and where, what Codex
     said about the plan and each commit, and the challenge thread (only the challenge events, so
-    the Claude/Codex exchange reads on its own; the full session stays on the view)."""
-    from ..views import _labels
+    the Claude/Codex exchange reads on its own; the full session stays on the source)."""
+    from ..reads import _labels
     since = datetime.now(timezone.utc) - timedelta(days=SESSION_DAYS)
-    rows = store.read_view_window([SOURCE], None, since, cap=5000, where={"flow": FLOW},
+    rows = store.read_window([SOURCE], None, since, cap=5000, where={"flow": FLOW},
                                   include_payload=True)
     by_session: dict[str, dict] = {}
     for event_time, _source, text, labels, payload in rows:

@@ -16,7 +16,7 @@ from datetime import datetime
 import duckdb
 
 from .envelope import Envelope, now_utc
-from .views import parse_window
+from .reads import parse_window
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -95,18 +95,11 @@ CREATE TABLE IF NOT EXISTS catalog_sources (
   updated_at TIMESTAMPTZ,
   ingest_key TEXT
 );
-CREATE TABLE IF NOT EXISTS catalog_views (
-  name       TEXT PRIMARY KEY,
-  key_field  TEXT,
-  sources    JSON,
-  filters    JSON,
-  created_by TEXT,
-  created_at TIMESTAMPTZ,
-  updated_at TIMESTAMPTZ
-);
 CREATE TABLE IF NOT EXISTS catalog_triggers (
   name       TEXT PRIMARY KEY,
-  view       TEXT,
+  sources    JSON,
+  filters    JSON,
+  key_field  TEXT,
   condition  JSON,
   emit       JSON,
   cooldown   TEXT,
@@ -193,9 +186,10 @@ CREATE TABLE IF NOT EXISTS ask_sessions (
   created_at TIMESTAMPTZ,
   updated_at TIMESTAMPTZ
 );
+-- scope: what was read, the trigger or agent tool, "(read)" for a raw read
 CREATE TABLE IF NOT EXISTS query_log (
   id            TEXT PRIMARY KEY,
-  view          TEXT,
+  scope         TEXT,
   key_value     TEXT,
   time_window   TEXT,
   rows_returned INTEGER,
@@ -213,9 +207,12 @@ CREATE TABLE IF NOT EXISTS dispatch_log (
   payload     TEXT
 );
 -- Projects: a template (code) instantiated with params. Table and column names predate the
--- rename (use case, recipe) while the API says project and template. The project owns the ordinary
--- catalog objects it created (owned_by on those tables). usecase_objects maps the template plan
--- keys to the real object names so a re-plan can diff against what exists.
+-- rename (use case, recipe) while the API says project and template. Every trigger, agent and MCP
+-- server belongs to exactly one project (owned_by on those tables). A source is shared, and
+-- usecase_objects says which projects it is in (its owned_by only records which created it).
+-- usecase_objects also maps the template plan keys to the real object names so a re-plan can
+-- diff against what exists. The default project (settings key default_project) holds whatever
+-- no other project does.
 CREATE TABLE IF NOT EXISTS usecases (
   id         TEXT PRIMARY KEY,
   recipe     TEXT,
@@ -245,8 +242,6 @@ CREATE TABLE IF NOT EXISTS usecase_log (
 
 # Columns added after the first release; bring pre-existing DBs up to the current schema.
 _MIGRATIONS = [
-    "ALTER TABLE catalog_views ADD COLUMN IF NOT EXISTS filters JSON",
-    "ALTER TABLE catalog_views ADD COLUMN IF NOT EXISTS created_by TEXT",
     "ALTER TABLE events ADD COLUMN IF NOT EXISTS labels JSON",
     "ALTER TABLE catalog_sources ADD COLUMN IF NOT EXISTS ingest_key TEXT",
     "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS created_by TEXT",
@@ -280,8 +275,6 @@ _MIGRATIONS = [
     # NULL reads as "not owned" / "not customized".
     "ALTER TABLE catalog_sources ADD COLUMN IF NOT EXISTS owned_by TEXT",
     "ALTER TABLE catalog_sources ADD COLUMN IF NOT EXISTS customized BOOLEAN",
-    "ALTER TABLE catalog_views ADD COLUMN IF NOT EXISTS owned_by TEXT",
-    "ALTER TABLE catalog_views ADD COLUMN IF NOT EXISTS customized BOOLEAN",
     "ALTER TABLE catalog_triggers ADD COLUMN IF NOT EXISTS owned_by TEXT",
     "ALTER TABLE catalog_triggers ADD COLUMN IF NOT EXISTS customized BOOLEAN",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS owned_by TEXT",
@@ -315,6 +308,11 @@ _MIGRATIONS = [
     # hosted trial's enforcement counts against. Rows from before attribution stay NULL (unknown).
     "ALTER TABLE model_usage ADD COLUMN IF NOT EXISTS key_source TEXT",
     "ALTER TABLE model_usage ADD COLUMN IF NOT EXISTS provider TEXT",
+    # Triggers name their own sources and filters (views were removed): the view's fields move
+    # onto the trigger in _fold_views, which then drops the view column and catalog_views.
+    "ALTER TABLE catalog_triggers ADD COLUMN IF NOT EXISTS sources JSON",
+    "ALTER TABLE catalog_triggers ADD COLUMN IF NOT EXISTS filters JSON",
+    "ALTER TABLE catalog_triggers ADD COLUMN IF NOT EXISTS key_field TEXT",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -370,7 +368,7 @@ def _where_sql(where) -> tuple[str, list]:
 
 
 def _filter_sql(filters) -> tuple[str, list]:
-    """View filters -> ('AND ...' SQL fragment, params). A field name resolves against the source's
+    """Trigger filters -> ('AND ...' SQL fragment, params). A field name resolves against the source's
     extracted labels (the string/number axes a user defined). JSON paths are quoted so dotted names
     address one flat key, not a nested object. Numeric ops cast to DOUBLE (TRY_CAST: rows without
     the label — or non-numeric values — simply don't match)."""
@@ -474,16 +472,85 @@ class Store:
                     self.con.execute(stmt)
             for stmt in _MIGRATIONS:
                 self.con.execute(stmt)
+            self._rename_query_log_scope()
+            self._fold_views()
             self._migrate_claude_code_repo_label()
+            self._normalize_projects()
             self._init_source_stats()
             self._init_entity_counts()
         except Exception as e:
             raise StoreUnavailable(f"cannot initialize the database at {path}: {e}", path) from e
 
+    def _columns(self, table: str) -> set:
+        return {r[0] for r in self.con.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
+            [table]).fetchall()}
+
+    def _tables(self) -> set:
+        return {r[0] for r in self.con.execute(
+            "SELECT table_name FROM information_schema.tables").fetchall()}
+
+    def _rename_query_log_scope(self) -> None:
+        """query_log.view named what an agent read through when views existed; it is now the
+        read's scope (a trigger, an agent tool, "(read)"). Renamed in place so the log is kept."""
+        if "view" in self._columns("query_log") and "scope" not in self._columns("query_log"):
+            self.con.execute("ALTER TABLE query_log RENAME COLUMN view TO scope")
+
+    def _fold_views(self) -> None:
+        """Views were removed: a trigger names its own sources, filters and key_field. Copy them
+        from the view each trigger named, then drop the view column and the catalog_views table.
+        Idempotent: a trigger that already has sources is left alone, and once the column and the
+        table are gone there is nothing to do. A trigger whose view no longer exists could never
+        fire (evaluating it failed); it keeps no sources and is paused, so it shows up in the
+        console to be fixed or deleted instead of vanishing."""
+        tables = self._tables()
+        if "view" in self._columns("catalog_triggers"):
+            views = {}
+            if "catalog_views" in tables:
+                vcols = self._columns("catalog_views")
+                sel = ", ".join(c if c in vcols else "NULL" for c in
+                                ("name", "sources", "filters", "key_field"))
+                for name, sources, filters, key_field in self.con.execute(
+                        f"SELECT {sel} FROM catalog_views").fetchall():
+                    views[name] = (json.loads(sources or "[]"), json.loads(filters or "[]"),
+                                   key_field or "")
+            for name, view, sources, cond in self.con.execute(
+                    "SELECT name, view, sources, condition FROM catalog_triggers").fetchall():
+                if json.loads(sources or "[]"):
+                    continue
+                v = views.get(view)
+                if v is None:
+                    self.con.execute("UPDATE catalog_triggers SET sources = '[]', filters = '[]', "
+                                     "key_field = '', paused = TRUE WHERE name = ?", [name])
+                    print(f"taresd: trigger {name!r} named view {view!r}, which is gone; "
+                          "paused it with no sources")
+                    continue
+                self.con.execute(
+                    "UPDATE catalog_triggers SET sources = ?, filters = ?, key_field = ? "
+                    "WHERE name = ?", [json.dumps(v[0]), json.dumps(v[1]), v[2], name])
+                # a schedule trigger's last tick was recorded under its view's name; it is under
+                # the trigger's own name now, so carry it over or the first tick comes early
+                if (json.loads(cond or "{}") or {}).get("every"):
+                    self.con.execute("UPDATE trigger_state SET key_value = ? WHERE trigger = ? "
+                                     "AND key_value = ? AND NOT EXISTS (SELECT 1 FROM "
+                                     "trigger_state WHERE trigger = ? AND key_value = ?)",
+                                     [name, name, view, name, name])
+            # emit.attach_view asked for the view's timeline in the payload, which it always
+            # carries; nothing reads it, so it goes with the view
+            for name, emit in self.con.execute("SELECT name, emit FROM catalog_triggers").fetchall():
+                e = json.loads(emit or "{}") or {}
+                if isinstance(e, dict) and "attach_view" in e:
+                    e.pop("attach_view")
+                    self.con.execute("UPDATE catalog_triggers SET emit = ? WHERE name = ?",
+                                     [json.dumps(e), name])
+            self.con.execute("ALTER TABLE catalog_triggers DROP COLUMN view")
+        if "catalog_views" in tables:
+            self.con.execute("DROP TABLE catalog_views")
+
     def migrate_claude_code_repo_label(self) -> None:
         """1.14: the claude_code label `project` became `repo`. Rewrites what the catalog says
         about the label: the declaration on every claude_code source, and the key or filters of
-        views that read only claude_code sources (a view mixing in other sources is left alone,
+        triggers that read only claude_code sources (a trigger mixing in other sources is left alone,
         `project` may be another source's label there). Events already stored keep their old
         label, as any label change does: new events only. Idempotent, cheap (catalog tables
         only), run at every open and again after a catalog import, since an old catalog file can
@@ -509,7 +576,7 @@ class Store:
                 self.con.execute("UPDATE catalog_sources SET config = ? WHERE name = ?",
                                  [json.dumps(cfg), name])
         for name, key_field, sources, filters in self.con.execute(
-                "SELECT name, key_field, sources, filters FROM catalog_views").fetchall():
+                "SELECT name, key_field, sources, filters FROM catalog_triggers").fetchall():
             srcs = set(json.loads(sources or "[]"))
             if not srcs or not srcs <= set(names):
                 continue
@@ -518,7 +585,7 @@ class Store:
                 if f.get("field") == "project":
                     f["field"] = "repo"
             if key_field == "project" or json.loads(filters or "[]") != fl:
-                self.con.execute("UPDATE catalog_views SET key_field = ?, filters = ? WHERE name = ?",
+                self.con.execute("UPDATE catalog_triggers SET key_field = ?, filters = ? WHERE name = ?",
                                  ["repo" if key_field == "project" else key_field, json.dumps(fl), name])
 
     def ping(self) -> None:
@@ -702,7 +769,7 @@ class Store:
                 self._truncate_entity_label(src, lab)
 
     # ── reads ───────────────────────────────────────────────────────────────
-    def read_view_window(self, sources: list[str], key: str | None, since: datetime, cap: int = 12,
+    def read_window(self, sources: list[str], key: str | None, since: datetime, cap: int = 12,
                          filters: list | None = None, where: dict | None = None,
                          include_payload: bool = False):
         """Rows for an entity across sources, time-ordered: (event_time, source, text, labels), plus
@@ -834,7 +901,6 @@ class Store:
         with self._lock:
             n = self.con.execute(
                 "SELECT (SELECT COUNT(*) FROM catalog_sources)"
-                " + (SELECT COUNT(*) FROM catalog_views)"
                 " + (SELECT COUNT(*) FROM catalog_triggers)"
             ).fetchone()[0]
         return n == 0
@@ -882,40 +948,9 @@ class Store:
                 [paused, now_utc(), name],
             )
 
-    def upsert_catalog_view(self, name: str, key_field: str, sources: list,
-                            filters: list | None = None, created_by: str = "human") -> None:
-        # Explicit column list: migrated DBs have filters/created_by appended after created_at.
-        ts = now_utc()
-        with self._lock:
-            self.con.execute(
-                "INSERT INTO catalog_views (name, key_field, sources, filters, created_by, "
-                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT (name) DO UPDATE SET key_field = excluded.key_field, "
-                "sources = excluded.sources, filters = excluded.filters, "
-                "created_by = excluded.created_by, updated_at = excluded.updated_at",
-                [name, key_field, json.dumps(sources), json.dumps(filters or []),
-                 created_by, ts, ts],
-            )
-
-    def list_catalog_views(self) -> list[dict]:
-        with self._lock:
-            rows = self.con.execute(
-                "SELECT name, key_field, sources, filters, created_by, owned_by, customized "
-                "FROM catalog_views ORDER BY name"
-            ).fetchall()
-        return [
-            {"name": r[0], "key_field": r[1], "sources": json.loads(r[2]),
-             "filters": json.loads(r[3]) if r[3] else [],
-             "created_by": r[4] or "human", "owned_by": r[5], "customized": bool(r[6])}
-            for r in rows
-        ]
-
-    def delete_catalog_view(self, name: str) -> None:
-        with self._lock:
-            self.con.execute("DELETE FROM catalog_views WHERE name = ?", [name])
-
-    def upsert_catalog_trigger(self, name: str, view: str, condition: dict,
-                               emit: dict, cooldown: str) -> None:
+    def upsert_catalog_trigger(self, name: str, sources: list, condition: dict,
+                               emit: dict, cooldown: str, filters: list | None = None,
+                               key_field: str = "") -> None:
         # Explicit column list: `paused` was appended by migration, so positional VALUES no longer
         # match. A new trigger starts active (FALSE); an edit preserves the current paused state
         # (paused is intentionally NOT in the DO UPDATE SET — it's toggled via set_trigger_paused).
@@ -923,24 +958,27 @@ class Store:
         with self._lock:
             self.con.execute(
                 "INSERT INTO catalog_triggers "
-                "(name, view, condition, emit, cooldown, created_at, updated_at, paused) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, FALSE) "
-                "ON CONFLICT (name) DO UPDATE SET view = excluded.view, "
+                "(name, sources, filters, key_field, condition, emit, cooldown, created_at, "
+                "updated_at, paused) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE) "
+                "ON CONFLICT (name) DO UPDATE SET sources = excluded.sources, "
+                "filters = excluded.filters, key_field = excluded.key_field, "
                 "condition = excluded.condition, emit = excluded.emit, "
                 "cooldown = excluded.cooldown, updated_at = excluded.updated_at",
-                [name, view, json.dumps(condition), json.dumps(emit), cooldown, ts, ts],
+                [name, json.dumps(list(sources or [])), json.dumps(list(filters or [])),
+                 key_field or "", json.dumps(condition), json.dumps(emit), cooldown, ts, ts],
             )
 
     def list_catalog_triggers(self) -> list[dict]:
         with self._lock:
             rows = self.con.execute(
-                "SELECT name, view, condition, emit, cooldown, paused, owned_by, customized "
-                "FROM catalog_triggers ORDER BY name"
+                "SELECT name, sources, filters, key_field, condition, emit, cooldown, paused, "
+                "owned_by, customized FROM catalog_triggers ORDER BY name"
             ).fetchall()
         return [
-            {"name": r[0], "view": r[1], "condition": json.loads(r[2]),
-             "emit": json.loads(r[3]), "cooldown": r[4], "paused": bool(r[5]),
-             "owned_by": r[6], "customized": bool(r[7])}
+            {"name": r[0], "sources": json.loads(r[1] or "[]"), "filters": json.loads(r[2] or "[]"),
+             "key_field": r[3] or "", "condition": json.loads(r[4]),
+             "emit": json.loads(r[5]), "cooldown": r[6], "paused": bool(r[7]),
+             "project": r[8], "owned_by": r[8], "customized": bool(r[9])}
             for r in rows
         ]
 
@@ -958,7 +996,6 @@ class Store:
     def clear_catalog(self) -> None:
         with self._lock:
             self.con.execute("DELETE FROM catalog_sources")
-            self.con.execute("DELETE FROM catalog_views")
             self.con.execute("DELETE FROM catalog_triggers")
             self.con.execute("DELETE FROM catalog_agents")
             self.con.execute("DELETE FROM mcp_servers")
@@ -1324,7 +1361,7 @@ class Store:
             self.con.execute("DELETE FROM mcp_servers WHERE name = ?", [name])
 
     # ── projects (templates instantiated with params; they own ordinary catalog objects) ──
-    _OWNED_TABLES = {"source": "catalog_sources", "view": "catalog_views",
+    _OWNED_TABLES = {"source": "catalog_sources",
                      "trigger": "catalog_triggers", "agent": "catalog_agents",
                      "mcp_server": "mcp_servers"}
 
@@ -1365,7 +1402,7 @@ class Store:
             if not row or not row[0]:
                 return False
             owner = self.con.execute("SELECT recipe FROM usecases WHERE id = ?", [row[0]]).fetchone()
-            if owner and owner[0] == "custom":
+            if owner and owner[0] in ("custom", "default"):
                 return True   # adopted, not planned: there is no planned version to diverge from
             self.con.execute(f"UPDATE {table} SET customized = TRUE WHERE name = ?", [name])
             self.con.execute("UPDATE usecase_objects SET customized = TRUE "
@@ -1444,6 +1481,239 @@ class Store:
         with self._lock:
             self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = ? "
                              "AND key = ?", [uid, kind, key])
+
+    # ── project membership: every object is in a project ─────────────────────
+    # A trigger, agent or MCP server belongs to exactly one project (owned_by, plus its
+    # usecase_objects row); a source is in any number (one usecase_objects row per project). The
+    # default project holds what no other project does. These helpers keep the two records in
+    # step, and keep a custom project's `objects` param (its whole configuration) in step too.
+    DEFAULT_PROJECT_NAME = "Default"
+
+    def default_project_id(self) -> str:
+        with self._lock:
+            return self._ensure_default_project()
+
+    def _ensure_default_project(self) -> str:
+        """The default project's id, creating the project if the cell has none yet. Called with
+        the lock held."""
+        row = self.con.execute("SELECT value FROM settings WHERE key = 'default_project'").fetchone()
+        if row and self.con.execute("SELECT 1 FROM usecases WHERE id = ?", [row[0]]).fetchone():
+            return row[0]
+        found = self.con.execute("SELECT id FROM usecases WHERE recipe = 'default' "
+                                 "ORDER BY created_at LIMIT 1").fetchone()
+        if found:
+            uid = found[0]
+        else:
+            uid = "uc_" + uuid.uuid4().hex[:10]
+            taken = {r[0] for r in self.con.execute("SELECT name FROM usecases").fetchall()}
+            name = self.DEFAULT_PROJECT_NAME if self.DEFAULT_PROJECT_NAME not in taken \
+                else "Default project"
+            ts = now_utc()
+            self.con.execute(
+                "INSERT INTO usecases (id, recipe, name, params, status, created_at, updated_at, "
+                "last_error) VALUES (?, 'default', ?, '{}', 'active', ?, ?, NULL)",
+                [uid, name, ts, ts])
+        self.con.execute(
+            "INSERT INTO settings (key, value, updated_at) VALUES ('default_project', ?, ?) "
+            "ON CONFLICT (key) DO UPDATE SET value = excluded.value, "
+            "updated_at = excluded.updated_at", [uid, now_utc()])
+        return uid
+
+    def _recipes(self) -> dict:
+        return {r[0]: r[1] for r in self.con.execute("SELECT id, recipe FROM usecases").fetchall()}
+
+    def _custom_objects(self, uid: str, change) -> None:
+        """Rewrite a custom project's `objects` param with `change(list) -> list`."""
+        row = self.con.execute("SELECT params FROM usecases WHERE id = ?", [uid]).fetchone()
+        params = json.loads((row[0] if row else None) or "{}")
+        objs = list(params.get("objects") or [])
+        new = change(objs)
+        if new != objs:
+            params["objects"] = new
+            self.con.execute("UPDATE usecases SET params = ?, updated_at = ? WHERE id = ?",
+                             [json.dumps(params), now_utc(), uid])
+
+    def _add_row(self, uid: str, kind: str, name: str, key: str | None = None) -> None:
+        """Record `name` as one of project `uid`'s objects. Without a `key`, an existing row for
+        the name is kept as it is (a template's planned key must survive a later move back); a
+        new row is keyed `kind:name` in a custom or default project (the key a custom plan uses)
+        and `+kind:name` in a template project, where the `+` keeps it apart from the plan."""
+        recipe = self._recipes().get(uid)
+        if recipe is None:
+            raise KeyError(f"unknown project {uid!r}")
+        have = self.con.execute("SELECT key FROM usecase_objects WHERE usecase_id = ? AND kind = ? "
+                                "AND name = ?", [uid, kind, name]).fetchall()
+        if key is None:
+            if have:
+                return
+            key = f"{kind}:{name}" if recipe in ("custom", "default") else f"+{kind}:{name}"
+        else:
+            for (k,) in have:
+                if k != key:
+                    self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = ? "
+                                     "AND key = ?", [uid, kind, k])
+        self.con.execute(
+            "INSERT INTO usecase_objects (usecase_id, kind, key, name, customized, created_at) "
+            "VALUES (?, ?, ?, ?, FALSE, ?) ON CONFLICT (usecase_id, kind, key) DO UPDATE SET "
+            "name = excluded.name", [uid, kind, key, name, now_utc()])
+        if recipe == "custom":
+            self._custom_objects(uid, lambda objs: objs if any(
+                o.get("kind") == kind and o.get("name") == name for o in objs)
+                else objs + [{"kind": kind, "name": name}])
+
+    def _drop_rows(self, kind: str, name: str, uids) -> None:
+        """Forget `name` as an object of each project in `uids`."""
+        recipes = self._recipes()
+        for uid in uids:
+            self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = ? "
+                             "AND name = ?", [uid, kind, name])
+            if recipes.get(uid) == "custom":
+                self._custom_objects(uid, lambda objs: [
+                    o for o in objs if not (o.get("kind") == kind and o.get("name") == name)])
+
+    def _rows_for(self, kind: str, name: str) -> list[str]:
+        return [r[0] for r in self.con.execute(
+            "SELECT DISTINCT usecase_id FROM usecase_objects WHERE kind = ? AND name = ?",
+            [kind, name]).fetchall()]
+
+    def put_in_project(self, kind: str, name: str, uid: str, key: str | None = None,
+                       creator: bool = False) -> None:
+        """Place an object in project `uid`. A trigger, agent or MCP server moves: it leaves the
+        custom and default projects it was listed in (a template project keeps its planned row,
+        which then reads as missing there, like any object that is gone from its plan). A source
+        joins `uid` and stays in its other projects; `creator` also records `uid` as the project
+        that created it."""
+        table = self._OWNED_TABLES[kind]
+        with self._lock:
+            if kind == "source":
+                if creator:
+                    self.con.execute(f"UPDATE {table} SET owned_by = ? WHERE name = ?", [uid, name])
+                # the default project holds what no other project does: a source joining another
+                # project leaves it, unless a trigger of the default project still reads it
+                default = self._ensure_default_project()
+                if uid != default and default in self._rows_for("source", name):
+                    readers = [r[0] for r in self.con.execute(
+                        "SELECT sources FROM catalog_triggers WHERE owned_by = ?",
+                        [default]).fetchall() if name in json.loads(r[0] or "[]")]
+                    if not readers:
+                        self._drop_rows("source", name, [default])
+            else:
+                recipes = self._recipes()
+                # it leaves the project it is in now: a template keeps a planned row (it reads as
+                # missing there), a row that was only placed there goes. A row in some other
+                # project is how that project shows an object it lost; it stays.
+                row = self.con.execute(f"SELECT owned_by FROM {table} WHERE name = ?",
+                                       [name]).fetchone()
+                current = {row[0] if row else None, self._ensure_default_project()}
+                others = [u for u, key in self.con.execute(
+                    "SELECT usecase_id, key FROM usecase_objects WHERE kind = ? AND name = ?",
+                    [kind, name]).fetchall()
+                    if u != uid and u in current
+                    and (recipes.get(u) in ("custom", "default") or key.startswith("+"))]
+                self._drop_rows(kind, name, others)
+                self.con.execute(f"UPDATE {table} SET owned_by = ? WHERE name = ? "
+                                 f"AND owned_by IS DISTINCT FROM ?", [uid, name, uid])
+            self._add_row(uid, kind, name, key)
+
+    def remove_from_project(self, kind: str, name: str, uid: str) -> None:
+        """Drop an object from a project. A source left in no project joins the default one; a
+        trigger, agent or MCP server leaving its project also goes to the default one (every
+        object is in a project)."""
+        with self._lock:
+            self._drop_rows(kind, name, [uid])
+            default = self._ensure_default_project()
+            table = self._OWNED_TABLES[kind]
+            exists = self.con.execute(f"SELECT owned_by FROM {table} WHERE name = ?",
+                                      [name]).fetchone()
+            if exists is None:
+                return
+            if kind == "source":
+                if not self._rows_for("source", name):
+                    self._add_row(default, "source", name)
+            elif exists[0] == uid:
+                self.con.execute(f"UPDATE {table} SET owned_by = ? WHERE name = ?", [default, name])
+                self._add_row(default, kind, name)
+
+    def source_memberships(self) -> dict[str, list[str]]:
+        """{source name: [project ids it is in]}, for every source with a membership."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT DISTINCT name, usecase_id FROM usecase_objects WHERE kind = 'source' "
+                "ORDER BY name, usecase_id").fetchall()
+        out: dict[str, list[str]] = {}
+        for name, uid in rows:
+            out.setdefault(name, []).append(uid)
+        return out
+
+    def project_sources(self, uid: str) -> list[str]:
+        """The sources project `uid` is made of: its source rows that name a source that exists."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT DISTINCT o.name FROM usecase_objects o JOIN catalog_sources s "
+                "ON s.name = o.name WHERE o.usecase_id = ? AND o.kind = 'source' ORDER BY o.name",
+                [uid]).fetchall()
+        return [r[0] for r in rows]
+
+    def normalize_projects(self) -> None:
+        """Make every object sit in a project. Runs at every open (it is the upgrade that folded
+        views into triggers placing what it touched) and after a catalog import; idempotent and
+        cheap, catalog tables only. The rules: a trigger with no project goes to the default
+        project; an agent with none follows its trigger; an MCP server with none goes to the one
+        project whose agents use it, else to the default; a trigger's sources are members of its
+        project; a source in no project joins the default one. An owner that no longer exists
+        counts as none."""
+        with self._lock:
+            self._normalize_projects()
+
+    def _normalize_projects(self) -> None:
+        default = self._ensure_default_project()
+        recipes = self._recipes()
+        # views are gone: so are their rows, and their entries in custom projects
+        self.con.execute("DELETE FROM usecase_objects WHERE kind = 'view'")
+        for uid, recipe in recipes.items():
+            if recipe == "custom":
+                self._custom_objects(uid, lambda objs: [o for o in objs
+                                                        if o.get("kind") != "view"])
+
+        def valid(owner):
+            return owner if owner in recipes else None
+
+        triggers = {r[0]: (valid(r[1]), json.loads(r[2] or "[]")) for r in self.con.execute(
+            "SELECT name, owned_by, sources FROM catalog_triggers").fetchall()}
+        owners: dict[tuple[str, str], str] = {}
+        for name, (owner, _srcs) in triggers.items():
+            owners[("trigger", name)] = owner or default
+        agents = {r[0]: (valid(r[1]), r[2], json.loads(r[3] or "[]")) for r in self.con.execute(
+            "SELECT name, owned_by, trigger, mcp_servers FROM catalog_agents").fetchall()}
+        for name, (owner, trig, _servers) in agents.items():
+            owners[("agent", name)] = owner or owners.get(("trigger", trig)) or default
+        users: dict[str, set] = {}
+        for name, (_o, _t, servers) in agents.items():
+            for srv in servers:
+                users.setdefault(srv, set()).add(owners[("agent", name)])
+        for name, owner in self.con.execute("SELECT name, owned_by FROM mcp_servers").fetchall():
+            by = users.get(name) or set()
+            owners[("mcp_server", name)] = valid(owner) or (next(iter(by)) if len(by) == 1
+                                                            else default)
+        table = self._OWNED_TABLES
+        for (kind, name), owner in owners.items():
+            current = self.con.execute(f"SELECT owned_by FROM {table[kind]} WHERE name = ?",
+                                       [name]).fetchone()
+            if current and current[0] != owner:
+                self.con.execute(f"UPDATE {table[kind]} SET owned_by = ? WHERE name = ?",
+                                 [owner, name])
+            # a row elsewhere is left alone: it is how a project shows an object it lost (one
+            # deleted by hand and recreated, which lands here unowned), and how an edit that
+            # still lists it takes it back
+            self._add_row(owner, kind, name)
+        existing = {r[0] for r in self.con.execute("SELECT name FROM catalog_sources").fetchall()}
+        for name, (_owner, srcs) in triggers.items():
+            for src in srcs:
+                if src in existing:
+                    self._add_row(owners[("trigger", name)], "source", src)
+        for src in existing:
+            if not self._rows_for("source", src):
+                self._add_row(default, "source", src)
 
     def log_project(self, uid: str, action: str, detail: str = "") -> None:
         with self._lock:
@@ -1530,22 +1800,24 @@ class Store:
         return bool(n and n[0])
 
     # ── activity logs (agent-facing observability) ────────────────────────────
-    def log_query(self, qid: str, view: str, key: str, window: str,
+    def log_query(self, qid: str, scope: str, key: str, window: str,
                   rows_returned: int, client: str) -> None:
+        """`scope` says what was read: a trigger's name, an agent tool, "(read)" for a raw read."""
         with self._lock:
             self.con.execute(
-                "INSERT INTO query_log VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [qid, view, key, window, rows_returned, client, now_utc()],
+                "INSERT INTO query_log (id, scope, key_value, time_window, rows_returned, client, "
+                "queried_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [qid, scope, key, window, rows_returned, client, now_utc()],
             )
 
     def list_queries(self, limit: int = 100) -> list[dict]:
         with self._lock:
             rows = self.con.execute(
-                "SELECT id, view, key_value, time_window, rows_returned, client, queried_at "
+                "SELECT id, scope, key_value, time_window, rows_returned, client, queried_at "
                 "FROM query_log ORDER BY queried_at DESC LIMIT ?", [int(limit)],
             ).fetchall()
         return [
-            {"id": r[0], "view": r[1], "key": r[2], "window": r[3],
+            {"id": r[0], "scope": r[1], "key": r[2], "window": r[3],
              "rows_returned": r[4], "client": r[5], "queried_at": r[6]}
             for r in rows
         ]
@@ -1708,14 +1980,6 @@ class Store:
                                   and not isinstance(v, bool) else "string")
         return {"event_types": sorted(event_types), "fields": fields,
                 "sampled_events": len(rows)}
-
-    def view_usage(self) -> dict:
-        """{view: {queries, last_used_at}} from the query log — feeds usage-driven deprecation."""
-        with self._lock:
-            rows = self.con.execute(
-                "SELECT view, COUNT(*), MAX(queried_at) FROM query_log GROUP BY view"
-            ).fetchall()
-        return {r[0]: {"queries": r[1], "last_used_at": r[2]} for r in rows}
 
     def backfill_labels(self, source: str, specs: list, context_fn=None) -> int:
         """Recompute a source's stored events' labels from their lossless payload using `specs`.

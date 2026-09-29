@@ -8,7 +8,7 @@ to it through GitHub's hosted MCP server, registered by the template with the sa
 the sources use.
 
 Objects one instance owns (all names prefixed `ctx_<slug>_`): one `github` commits source per
-source repo, one view keyed by repo, one trigger that fires on any new commit (batched per repo),
+source repo, one trigger over all of them that fires on any new commit (batched per repo),
 one MCP server (GitHub, toolsets repos + pull_requests), one Tares agent subscribed to the trigger.
 """
 from __future__ import annotations
@@ -244,8 +244,7 @@ class SharedCodeContext(Template):
     # ── plan ─────────────────────────────────────────────────────────────────
     def names(self, params: dict) -> dict:
         s = _slug(params.get("context_repo", ""))
-        return {"prefix": f"ctx_{s}_", "view": f"ctx_{s}_repo_activity",
-                "trigger": f"ctx_{s}_changes", "mcp": f"ctx_{s}_github",
+        return {"prefix": f"ctx_{s}_", "trigger": f"ctx_{s}_changes", "mcp": f"ctx_{s}_github",
                 "agent": f"ctx_{s}_maintainer"}
 
     def source_name(self, params: dict, repo: str) -> str:
@@ -268,14 +267,12 @@ class SharedCodeContext(Template):
                 config["branch"] = item["branch"]
             objs.append(PlannedObject("source", f"source:{repo}", {
                 "name": name, "connector": "github", "poll": "60s", "config": config}))
-        objs.append(PlannedObject("view", "view", {
-            "name": n["view"], "key_field": "repo", "sources": source_names}))
         trig = TRIGGERS[params["trigger"]]
         objs.append(PlannedObject("trigger", "trigger", {
-            "name": n["trigger"], "view": n["view"],
+            "name": n["trigger"], "sources": source_names, "key_field": "repo",
             "condition": {"aggregate": "count", "predicate": "> 0", "window": trig["window"],
                           "group_by": ["key_value"]},
-            "emit": {"kind": "code_change", "attach_view": True, "context_window": "30m"},
+            "emit": {"kind": "code_change", "context_window": "30m"},
             "cooldown": trig["cooldown"]}))
         objs.append(PlannedObject("mcp_server", "mcp", {
             "name": n["mcp"], "url": GITHUB_MCP_URL, "auth_header": "Authorization",
@@ -338,7 +335,7 @@ class SharedCodeContext(Template):
             return
         n = self.names(instance["params"])
         repos = [r["repo"] for r in instance["params"]["source_repos"]]
-        agents.bootstrap(n["agent"], n["trigger"], n["view"], repos, window="7d", limit=20)
+        agents.bootstrap(n["agent"], n["trigger"], repos, window="7d", limit=20)
 
 
 _PR_RE = re.compile(r"https://github\.com/[^\s)\]]+/(?:pull|commit)/[^\s)\]]+")

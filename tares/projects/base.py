@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-KINDS = ("source", "view", "trigger", "agent", "mcp_server")
+KINDS = ("source", "trigger", "agent", "mcp_server")
 
 
 class ProjectError(ValueError):

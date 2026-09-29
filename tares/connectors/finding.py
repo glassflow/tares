@@ -36,7 +36,7 @@ class FindingConnector(Connector):
             raise ValueError("finding payload needs a non-empty 'finding'")
 
         # Labels come from the payload, not from source config: the runner knows which label the
-        # firing entity was identified by (the trigger's view key) and stamps it, so the finding
+        # firing entity was identified by (the trigger's key_field) and stamps it, so the finding
         # carries the SAME axis as the evidence it was drawn from. Without that, a label-native
         # `read` for the entity would not return the finding written about it.
         key = str(item.get("key") or "agent")

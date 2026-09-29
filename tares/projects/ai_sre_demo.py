@@ -1,6 +1,6 @@
-"""The AI SRE demo as a project: the same six objects `demo/catalog.demo.yaml` seeds (three
-sources keyed by `service`, the `service_timeline` view, the `incident` trigger, the
-`incident-first-look` agent), created with one click in the console instead of importing the
+"""The AI SRE demo as a project: the same five objects `demo/catalog.demo.yaml` seeds (three
+sources keyed by `service`, the `incident` trigger over all three, the `incident-first-look`
+agent), created with one click in the console instead of importing the
 catalog. Same names on purpose, so the docs guide (docs.glassflow.ai/tares/guides/ai-sre) reads
 the same whichever way you set it up; an unowned object of the same name is adopted, never
 duplicated.
@@ -256,14 +256,12 @@ class AiSreDemo(Template):
                                       {"name": "severity", "field": "labels.severity"},
                                       {"name": "state", "field": "state"},
                                       {"name": "alert_active", "const": 1, "type": "number"}]}}),
-            PlannedObject("view", "view", {
-                "name": "service_timeline", "key_field": "service",
-                "sources": ["demo_logs", "demo_metrics", "demo_alerts"]}),
             PlannedObject("trigger", "trigger", {
-                "name": "incident", "view": "service_timeline",
+                "name": "incident", "sources": ["demo_logs", "demo_metrics", "demo_alerts"],
+                "key_field": "service",
                 "condition": {"aggregate": "sum", "field": "alert_active", "predicate": "> 0",
                               "window": "1m", "group_by": ["key_value"]},
-                "emit": {"kind": "incident", "attach_view": True, "context_window": "15m"},
+                "emit": {"kind": "incident", "context_window": "15m"},
                 "cooldown": "5m"}),
         ]
         agent = {"name": "incident-first-look", "trigger": "incident", "enabled": True, "prompt": PROMPT}
