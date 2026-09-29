@@ -222,7 +222,11 @@ async def main():
                   ("GET", "/api/projects/{uid}/skills"), ("GET", "/api/projects/{uid}/skills/{name}"),
                   ("GET", "/api/projects/{uid}/findings"), ("POST", "/api/projects/{uid}/findings"),
                   ("POST", "/api/projects/{uid}/stats"), ("POST", "/api/projects/{uid}/subscribe"),
-                  ("DELETE", "/api/projects/{uid}/subscribe/{sid}")}
+                  ("DELETE", "/api/projects/{uid}/subscribe/{sid}"),
+                  # the goal-first page's reads
+                  ("GET", "/api/projects/{uid}/results"),
+                  ("GET", "/api/projects/{uid}/results/{run_id}"),
+                  ("GET", "/api/projects/{uid}/outline"), ("GET", "/api/projects/{uid}/health")}
         bad, n = [], 0
         for route in app.routes:
             if not isinstance(route, APIRoute) or "{uid}" not in route.path:
