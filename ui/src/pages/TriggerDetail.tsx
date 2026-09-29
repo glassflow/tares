@@ -25,7 +25,6 @@ export default function TriggerDetail() {
   // stake, and a failed load would otherwise silently read as "nothing depends on this".
   const { data: agents, error: agentsError, reload: reloadAgents } = usePolling(() => api.agents(), 10000);
   const { data: dispatches, error: dispatchesError } = usePolling(() => api.dispatches(100), 10000);
-  const { data: views } = usePolling(() => api.views(), 30000);
   // Per-firing recipients with outcomes: the list endpoint carries only counts, the detail has
   // names; five small fetches for the five rows shown.
   const [details, setDetails] = useState<Record<string, DispatchDetail>>({});
@@ -118,12 +117,20 @@ export default function TriggerDetail() {
         <div className="panel">
           <table>
             <tbody>
-              <tr><td className="help" style={{ width: 150 }}>watches</td>
-                  <td><Link to={`/views/${encodeURIComponent(trigger.view)}`} className="mono">{trigger.view}</Link></td></tr>
-              {trigger.owned_by && (
-                <tr><td className="help">part of</td>
-                    <td><ProjectBadge ownedBy={trigger.owned_by} customized={trigger.customized} compact /></td></tr>
+              {(trigger.project ?? trigger.owned_by) && (
+                <tr><td className="help" style={{ width: 150 }}>project</td>
+                    <td><ProjectBadge ownedBy={trigger.project ?? trigger.owned_by} customized={trigger.customized} compact /></td></tr>
               )}
+              <tr><td className="help" style={{ width: 150 }}>sources</td>
+                  <td>{(trigger.sources ?? []).map((s) => (
+                    <Link key={s} to={`/sources/${encodeURIComponent(s)}`} className="chip mono">{s}</Link>))}</td></tr>
+              {(trigger.filters ?? []).length > 0 && (
+                <tr><td className="help">filters</td>
+                    <td className="mono">{(trigger.filters ?? []).map((f, i) => (
+                      <span className="chip" key={i}>{f.field} {f.op} {String(f.value)}</span>))}</td></tr>
+              )}
+              <tr><td className="help">entity label</td>
+                  <td className="mono">{trigger.key_field || <span className="dim">the first source's main label</span>}</td></tr>
               <tr><td className="help" style={{ width: 150 }}>condition</td>
                   <td className="mono">
                     {conditionText(trigger.condition)}
@@ -146,7 +153,8 @@ export default function TriggerDetail() {
           <button type="button" onClick={() => { setAdding(adding === "slack" ? null : "slack"); setMsg(undefined); }}>
             Add Slack channel
           </button>
-          <Link className="btn primary" to={`/agents/new?trigger=${encodeURIComponent(name)}`}>
+          <Link className="btn primary" to={`/agents/new?trigger=${encodeURIComponent(name)}`
+                + (trigger.project ? `&project=${encodeURIComponent(trigger.project)}` : "")}>
             Add a Tares agent
           </Link>
         </span>
@@ -297,7 +305,7 @@ export default function TriggerDetail() {
         <>
         <table>
           <thead><tr><th style={{ width: 110 }}>fired</th>
-            <th>{(views ?? []).find((v) => v.name === trigger.view)?.key_field || "entity"}</th>
+            <th>{trigger.key_field || "entity"}</th>
             <th>delivered to</th></tr></thead>
           <tbody>
             {firings.slice(0, 5).map((d) => {
