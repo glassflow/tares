@@ -392,6 +392,28 @@ def _health_for(runtime_health: dict, store, names: list) -> dict:
 
 
 # ── outline ──────────────────────────────────────────────────────────────────
+def _chain_order(agents: list[dict]) -> list[dict]:
+    """In the order the work happens: the agents a trigger wakes first, each followed by the
+    agents it hands off to (depth first), then any left over."""
+    by_name = {a["name"]: a for a in agents}
+    out: list[dict] = []
+
+    def visit(a):
+        if a in out:
+            return
+        out.append(a)
+        for h in a["handoffs"]:
+            if h["agent"] in by_name:
+                visit(by_name[h["agent"]])
+
+    for a in agents:
+        if a["runs_on"] == "trigger":
+            visit(a)
+    for a in agents:
+        visit(a)
+    return out
+
+
 def outline(store, catalog, uid: str, runtime_health: dict | None = None, now=None) -> dict:
     now = now or datetime.now(timezone.utc)
     sources = catalog.sources
@@ -416,6 +438,7 @@ def outline(store, catalog, uid: str, runtime_health: dict | None = None, now=No
                        "handoffs": [{"verdict": h.get("verdict"), "agent": h.get("agent"),
                                      "cooldown": _handoff_cooldown(h)}
                                     for h in a.get("handoffs") or []]})
+    agents = _chain_order(agents)
     loads = store.skill_loads([a["name"] for a in parts["agents"]], days=7)
     skills = [{"name": sk["name"], "description": sk["description"],
                "loaded_by": loads.get(sk["name"], [])} for sk in store.list_skills(uid)]
@@ -522,9 +545,23 @@ def _paragraphs(note: str | None) -> list[str]:
     return out
 
 
-def summary_of(note: str | None) -> str | None:
-    para = _paragraphs(note)
-    return _cut(para[0], SUMMARY_MAX) if para else None
+def summary_of(note: str | None, headline: str | None = None) -> str | None:
+    """The note's first paragraph as plain text, without what the card already shows: the
+    headline when the paragraph opens with it, and a next step written into the paragraph."""
+    text = str(note or "")
+    m = _NEXT_LABEL.search(text)
+    if m:
+        text = text[:m.start()]
+    para = _paragraphs(text)
+    if not para:
+        return None
+    first = para[0]
+    head = (headline or "").rstrip(". ")
+    if head and first.startswith(head):
+        first = first[len(head):].lstrip(" .:")
+        if not first and len(para) > 1:
+            first = para[1]
+    return _cut(first, SUMMARY_MAX)
 
 
 def headline_and_next(run: dict) -> tuple[str | None, str | None]:
@@ -589,7 +626,7 @@ def result_for(thread: dict, run: dict, parent: dict) -> dict:
     return {"id": run["id"], "thread": thread["id"], "at": _iso(thread.get("at")),
             "entity": run.get("key") or thread.get("entity"),
             "kind": kind_of(run, next_step),
-            "headline": headline, "summary": summary_of(run.get("finding")),
+            "headline": headline, "summary": summary_of(run.get("finding"), headline),
             "next_step": next_step, "verdict": run.get("verdict"), "chain": chain,
             "cost_usd": round(sum(float(r.get("cost_usd") or 0) for r in path), 6),
             "duration_ms": sum(int(r.get("duration_ms") or 0) for r in path),

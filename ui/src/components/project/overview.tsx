@@ -473,7 +473,6 @@ export function HowView({ ctx, panels, manage }: { ctx: Ctx; panels: React.React
             {o.agents.map((a) => (
               <div className="gf-step-item" key={a.name}>
                 <span className="gf-step-what">{a.sentence}</span>
-                <span className="gf-step-desc mono">{a.name}</span>
                 {!a.enabled && a.runs_on === "trigger" && <span className="gf-step-state warn">Off</span>}
                 <Change v={{ kind: "agent", name: a.name }} what={a.name} />
               </div>

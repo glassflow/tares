@@ -1503,6 +1503,7 @@ pre.payload {
 .gf p { margin: 0; }
 .gf-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px 24px; flex-wrap: wrap; }
 .gf-head-text { display: flex; flex-direction: column; gap: 6px; max-width: 760px; min-width: 0; flex: 1 1 420px; }
+.gf > .gf-head-text { flex: none; }   /* in the page column, not a header row: no 420px height */
 .gf-name { font-size: 28px; font-weight: 700; letter-spacing: -0.01em; margin: 0; overflow-wrap: anywhere; }
 .gf-goal { font-size: 17px; color: var(--ink); overflow-wrap: anywhere; }
 .gf-goal-change { font-size: 13px; margin-left: 4px; }
