@@ -22,7 +22,7 @@ Tares is MIT licensed, runs on your own machine or server, and starts with two c
 - **Anything with a failure mode.** Failed jobs, sandbox runs, voice calls: each gets a timeline, a trigger on failure, and a finding that says what broke.
 - **A better read path for the agents you have.** Claude Code, Cursor or your own loop asks one question and gets the correlated history of an entity instead of ten tool calls.
 
-Pick a template under **Projects** in the console, answer a few questions, click Start; Tares creates the sources, view, trigger and agent, each on its own page and editable there.
+Pick a template under **Projects** in the console, answer a few questions, click Start; Tares creates the project with its sources, trigger and agent, each on its own page and editable there.
 
 ## Who Tares is for
 
@@ -78,7 +78,7 @@ curl -O https://raw.githubusercontent.com/glassflow/tares/main/demo/docker-compo
 docker compose up -d                      # start the stack to ingest from
 ```
 
-In the console, open **Projects**, pick the **AI SRE demo** template, click Start: the setup page detects the running stack and creates the three sources, the correlated view, the trigger and the agent, and gives you a Cause an incident button. Or do the same from a file: stop the daemon from the previous step (Ctrl-C), then restart it seeded with the demo catalog:
+In the console, open **Projects**, pick the **AI SRE demo** template, click Start: the setup page detects the running stack and creates a project with the three sources, the trigger and the agent, and gives you a Cause an incident button. Or do the same from a file: stop the daemon from the previous step (Ctrl-C), then restart it seeded with the demo catalog:
 
 ```bash
 curl -O https://raw.githubusercontent.com/glassflow/tares/main/demo/catalog.demo.yaml
@@ -135,15 +135,15 @@ The key reads that project only and records findings in it. The agent loads the 
 ## What you get
 
 - **Connectors** for the systems you already run: Prometheus (metrics and alerts), Alertmanager, Docker logs, GitHub, Postgres, Vercel, OpenTelemetry (OTLP), any JSON API by polling, a generic webhook, reference documents, agent memory, and Claude Code sessions. Add sources at runtime from the console; a **Discover** step proposes the config for you where it can. → [Connectors](https://docs.glassflow.ai/tares/connectors)
-- **Correlated reads**: `read(selector, window)` returns any entity's timeline across *all* sources with no setup; `query(view, …)` reads through a saved, narrowed view; agents `subscribe` to be pushed the timeline when a trigger fires. → [Reads, views, and triggers](https://docs.glassflow.ai/tares/concepts)
+- **Correlated reads**: `read(selector, window)` returns any entity's timeline across *all* sources with no setup, or only a project's sources; agents `subscribe` to be pushed the timeline when a trigger fires. → [Reads, projects, and triggers](https://docs.glassflow.ai/tares/concepts)
 - **Tares agents**: attach a prompt to a trigger and Tares runs it in-process when the trigger fires. It reads the correlated timeline and writes a **finding** back onto the entity's timeline. Read-only: it concludes, it doesn't act. → [Tares agents](https://docs.glassflow.ai/tares/tares-agents)
 - **Slack**: subscribe a channel to any trigger and every firing is posted there, retried, logged, and visible in the console like any other subscriber. Ask back from the channel with `/tares ask <question>`. → [Slack setup](https://docs.glassflow.ai/tares)
-- **Console**: Sources (health + setup), **Explore** (pick an entity, read its timeline), Views & Triggers, **Agents**, and **Ask**, an in-console assistant over your data, summonable with ⌘K.
-- **MCP tools**: `read`, `query`, `subscribe`, `catalog_list` / `catalog_describe`, `derive` (an agent authors its own view), `remember` (write observations back), and source-setup tools. → [MCP tools reference](https://docs.glassflow.ai/tares/agents)
+- **Console**: Sources (health + setup), **Explore** (pick an entity, read its timeline), **Projects** (each with its triggers, agents, skills and one activity timeline), **Agents**, and **Ask**, an in-console assistant over your data, summonable with ⌘K.
+- **MCP tools**: `read`, `stats`, `subscribe`, `catalog_list` / `catalog_describe`, `remember` (write observations back), the project tools (`list_projects`, `join_project`, `list_skills`, `get_skill`, `list_findings`, `record_finding`, `project_timeline`), and source-setup tools. → [MCP tools reference](https://docs.glassflow.ai/tares/agents)
 
 ## How it works
 
-Sources bring events in, views join them per entity, triggers watch the views, and agents (yours over MCP, or Tares agents in-process) read the timeline and write findings back onto it. Underneath, Tares is a data plane: a single daemon (`taresd`) with a thin MCP proxy (`tares-mcp`), storing everything losslessly in one embedded DuckDB file, which is why there is no external database or broker to set up. The full design, including the ingest and trigger pipeline, is in the [architecture docs](https://docs.glassflow.ai/tares/concepts).
+Sources bring events in, projects group the triggers that watch them, and agents (yours over MCP, or Tares agents in-process) read the timeline and write findings back onto it. Underneath, Tares is a data plane: a single daemon (`taresd`) with a thin MCP proxy (`tares-mcp`), storing everything losslessly in one embedded DuckDB file, which is why there is no external database or broker to set up. The full design, including the ingest and trigger pipeline, is in the [architecture docs](https://docs.glassflow.ai/tares/concepts).
 
 ## Common questions
 
