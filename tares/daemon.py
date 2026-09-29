@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import ipaddress
 import os
+import socket
 import time
 import re
 import secrets
@@ -2990,6 +2992,24 @@ def make_app() -> FastAPI:
             _err(ValueError("url must be an http or https URL your agent listens on"))
         return url
 
+    async def _refuse_internal_hook(url: str) -> None:
+        """A project key is handed to an outside agent, so its webhook may not point inside the
+        cell's network (loopback, private ranges, link-local such as cloud metadata).
+        TARES_WEBHOOK_ALLOW_PRIVATE=1 allows it, for a cell whose agents live on its network."""
+        if os.environ.get("TARES_WEBHOOK_ALLOW_PRIVATE", "").lower() in ("1", "true", "yes"):
+            return
+        host = urlsplit(url).hostname or ""
+        try:
+            infos = await asyncio.to_thread(socket.getaddrinfo, host, None)
+        except OSError:
+            _err(ValueError(f"cannot resolve {host!r}"), 400)
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0].split("%")[0])
+            if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                    or ip.is_multicast or ip.is_unspecified):
+                _err(ValueError(f"a project key cannot send firings to {host} (an internal "
+                                "address); use a public URL"), 400)
+
     @app.post("/api/projects/{uid}/subscribe")
     async def subscribe_project(uid: str, request: Request, body: dict = Body(...)):
         """{url}: POST every firing of every trigger of the project to `url`, the triggers added
@@ -2997,6 +3017,8 @@ def make_app() -> FastAPI:
         again with the same key returns the subscription it already has."""
         _project_or_404(uid)
         url = _valid_hook_url(str(body.get("url") or ""))
+        if getattr(request.state, "project_key", None):
+            await _refuse_internal_hook(url)
         ident = getattr(request.state, "credential", None)
         created_by = ident["id"] if ident else None
         for s in store.list_project_subscriptions(uid):

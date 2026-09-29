@@ -81,7 +81,10 @@ the project follows [Semantic Versioning](https://semver.org/).
   every other key.
 - Joining a project: `POST /api/projects/{uid}/subscribe {url}` (a project key or admin) POSTs
   every firing of every trigger of the project to the URL, the triggers added later included;
-  `DELETE /api/projects/{uid}/subscribe/{sid}` removes it (a project key only its own).
+  `DELETE /api/projects/{uid}/subscribe/{sid}` removes it (a project key only its own). A
+  project key cannot point the URL at an internal address (loopback, private ranges, link-local
+  such as cloud metadata); `TARES_WEBHOOK_ALLOW_PRIVATE=1` allows it for a cell whose agents
+  share its network.
   `POST /api/projects/{uid}/findings {entity, finding, verdict?, label?}` records an external
   agent's finding under the key's name: it lands on the entity's timeline like a Tares agent's,
   and shows in the project timeline as a thread of kind `run` with `external: true`.

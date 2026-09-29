@@ -326,6 +326,11 @@ async def main():
         r = await cx.post(f"/api/projects/{a}/subscribe", json={"url": "slack://channel/C1"},
                           headers=H(key_a))
         ck("only an http(s) URL can join", r.status_code == 400, r.text)
+        for internal in ("http://169.254.169.254/latest/meta-data/", hook, "http://10.0.0.5/x"):
+            r = await cx.post(f"/api/projects/{a}/subscribe", json={"url": internal}, headers=H(key_a))
+            ck(f"a project key cannot join with an internal address ({internal.split('/')[2]})",
+               r.status_code == 400 and "internal" in r.text, r.text)
+        os.environ["TARES_WEBHOOK_ALLOW_PRIVATE"] = "1"   # the stub webhook below is on loopback
         r = await cx.post(f"/api/projects/{a}/subscribe", json={"url": hook}, headers=H(key_a))
         ck("the key subscribes to its project", r.status_code == 200 and r.json()["project"] == a, r.text)
         sid = r.json()["subscription_id"]
