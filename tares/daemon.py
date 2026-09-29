@@ -2770,8 +2770,11 @@ def make_app() -> FastAPI:
         """Deletes the project's triggers, agents and MCP servers. `delete_sources=a,b` also
         deletes those of its sources that no other project uses (the others are kept and listed
         in `kept`); every other source stays, in the default project if in no other. Sources are
-        only ever deleted when named (`none`, or leaving it out, keeps them all)."""
+        only ever deleted when asked: `delete_sources=all` names every source of the project, and
+        `none`, or leaving it out, keeps them all."""
         chosen = [x.strip() for x in delete_sources.split(",") if x.strip() and x.strip() != "none"]
+        if chosen == ["all"]:
+            chosen = sorted(store.project_sources(uid))
         try:
             return projects.delete(uid, purge_events=purge_events, delete_sources=chosen)
         except Exception as e:

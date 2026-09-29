@@ -122,8 +122,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 - Deleting a project deletes its triggers, agents and MCP servers, a custom project's too. Its
   sources stay, since other projects may read them, unless `delete_sources=a,b` names them: each
   is deleted when no other project uses it, and kept and listed under `kept` when one does. A
-  source left in no project joins the default project. Callers that relied on a template project
-  taking its sources with it (the Rius control plane, for one) now pass `delete_sources`.
+  source left in no project joins the default project. `delete_sources=all` names every source of
+  the project. Callers that relied on a template project taking its sources with it (Rius, for
+  one) now pass `delete_sources=all`.
 - The catalog export names each trigger's `project`, `sources`, `filters` and `key_field`, each
   agent's and MCP server's `project` and each source's `projects`, and never a `views:` section.
   The default project is not listed under `projects:`; objects that name it go to the importing

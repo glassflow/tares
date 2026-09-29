@@ -193,7 +193,7 @@ async def main():
                   and rows.get("reports go to") == PARAMS["callback_url"], str(rows))
 
             print("== delete releases nothing weird ==")
-            r = await cx.delete(f"/api/projects/{uid}", params={"purge": "true", "delete_sources": "rius_alerts"})
+            r = await cx.delete(f"/api/projects/{uid}", params={"purge": "true", "delete_sources": "all"})
             check("delete -> 200", r.status_code == 200, r.text[:200])
             names = {s["name"] for s in (await cx.get("/api/sources")).json()}
             check("source gone", "rius_alerts" not in names, str(names))

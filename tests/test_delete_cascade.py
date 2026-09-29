@@ -219,6 +219,11 @@ async def main():
         ck("template project, no choice given: its sources are kept",
            r.status_code == 200 and "source:w_src" not in r.json()["deleted"]
            and r.json()["released"] == ["source:w_src"], r.text[:300])
+        r = await cx.post("/api/projects", json={"template": "test_cascade", "name": "T5", "params": {"prefix": "v"}})
+        r = await cx.delete(f"/api/projects/{r.json()['id']}?delete_sources=all")
+        ck("delete_sources=all deletes every source of the project",
+           r.status_code == 200 and "source:v_src" in r.json()["deleted"] and r.json()["released"] == [],
+           r.text[:300])
 
         await cx.aclose()
     print(f"\n{P} passed, {F} failed")
