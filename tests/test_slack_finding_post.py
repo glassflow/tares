@@ -53,7 +53,7 @@ class Store:
         return None
 
 
-LONG = ("## 1. What is failing\n\nkonnectivity-agent log volume rose 3.4x in ten minutes. " * 20
+LONG = ("## 1. What is failing\n\nkonnectivity-agent log volume rose 3.4x in ten minutes. " * 50
         + "\n\n**Summary:** Benign traffic growth, no action needed.")
 META = {"verdict": "resolved", "model": "claude-sonnet-5", "run_id": "run_9",
         "when": "2026-09-29T07:30:51+00:00"}
@@ -80,12 +80,13 @@ async def main():
     check("the notification text names the agent and the entity",
           top["text"].startswith("rca on konnectivity-agent:"), top["text"])
 
-    print("== a short note: posted whole, no thread ==")
+    print("== a note that fits in one block: posted whole, no thread ==")
     POSTS.clear()
-    ok = await r._slack_channel("rca", "C123", "escalate", "api", "Traffic is normal.", META)
+    MID = "Benign, self-resolved volume spike. " + "The tunnels carried more keepalive traffic. " * 25
+    ok = await r._slack_channel("rca", "C123", "escalate", "api", MID, META)
     check("one post", ok is True and len(POSTS) == 1, str(len(POSTS)))
     check("the whole note is in it, and no pointer to a thread",
-          any(b.get("text", {}).get("text") == "Traffic is normal." for b in POSTS[0]["blocks"])
+          any(b.get("text", {}).get("text") == MID.strip() for b in POSTS[0]["blocks"])
           and "thread" not in json.dumps(POSTS[0]["blocks"][-1]), json.dumps(POSTS[0]["blocks"])[:300])
 
     print("== Slack refuses the post ==")
