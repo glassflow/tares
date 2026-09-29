@@ -3,7 +3,7 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.36.0] - 2026-09-29
 
 ### Changed
 - Slack messages from Tares read like an alert, not a wall of text. An agent's finding shows the
