@@ -416,12 +416,14 @@ class AgentRunner:
 
     # ── manual and bootstrap runs (no firing behind them) ────────────────────
     def run_now(self, agent_name: str, trigger_name: str, key: str, payload: str,
-                woken_by: str = "manual", parent_run_id: str | None = None) -> str | None:
+                woken_by: str = "manual", parent_run_id: str | None = None,
+                practice: bool = False) -> str | None:
         """Run an agent once outside a firing (a project bootstrapping its first pages, a manual
         re-run). Same run record, same caps and dedupe as a firing; no delivery row, since there is
         no dispatch. `woken_by` and `parent_run_id` are the run's lineage: manual, bootstrap, or a
-        rerun of the parent. Returns the run id, or None when the agent does not exist or is
-        already running for this key."""
+        rerun of the parent. `practice` marks a run the guided setup's "Try it" started: it and the
+        handoffs it leads to are shown as practice and never counted. Returns the run id, or None
+        when the agent does not exist or is already running for this key."""
         agent = self.store.get_catalog_agent(agent_name)
         if agent is None or (agent_name, key) in self._inflight:
             return None
@@ -451,7 +453,7 @@ class AgentRunner:
         self.store.start_agent_run(run_id, agent_name, trigger_name, "", key,
                                    prompt_hash(agent["prompt"]), effective_max_rounds(agent),
                                    woken_by=woken_by, parent_run_id=parent_run_id,
-                                   project=agent.get("owned_by"))
+                                   project=agent.get("owned_by"), practice=practice)
         return run_id
 
     def attach_loop(self) -> None:
@@ -546,7 +548,9 @@ class AgentRunner:
         self.store.start_agent_run(run_id, to, trigger_name, "", key,
                                    prompt_hash(target["prompt"]), effective_max_rounds(target),
                                    woken_by="handoff", parent_run_id=parent["id"],
-                                   project=target.get("owned_by"))
+                                   project=target.get("owned_by"),
+                                   # a practice run's handoff is practice too
+                                   practice=bool(parent.get("practice")))
         if self._handoff_depth(parent) >= MAX_HANDOFF_DEPTH:
             self.store.finish_agent_run(run_id, "capped", error=HANDOFF_STOPPED)
             metrics.agent_run(to, "capped", 0.0)

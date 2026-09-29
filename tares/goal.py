@@ -630,7 +630,9 @@ def result_for(thread: dict, run: dict, parent: dict) -> dict:
             "next_step": next_step, "verdict": run.get("verdict"), "chain": chain,
             "cost_usd": round(sum(float(r.get("cost_usd") or 0) for r in path), 6),
             "duration_ms": sum(int(r.get("duration_ms") or 0) for r in path),
-            "handled": handled, "external": run.get("woken_by") == "external"}
+            "handled": handled, "external": run.get("woken_by") == "external",
+            # a run the guided setup's "Try it" started, or what it led to: shown, never counted
+            "practice": any(bool(r.get("practice")) for r in path)}
 
 
 def thread_result(thread: dict) -> dict | None:
@@ -682,7 +684,7 @@ def project_results(store, uid: str, limit: int = 20, before=None, scheduled: se
             break
         r = thread_result(t)
         if r is not None:
-            if today_thread and r["kind"] == "action":
+            if today_thread and r["kind"] == "action" and not r["practice"]:
                 found += 1
             if not full:
                 results.append(r)
@@ -897,7 +899,7 @@ def project_health(store, catalog, uid: str, project: dict, runtime_health: dict
     capped = []
     for a in ready:
         cap, _src = effective_daily_cap(a, store)
-        if store.agent_runs_today(a["name"]) >= cap:
+        if store.agent_runs_today(a["name"], include_practice=False) >= cap:
             capped.append(a["name"])
             warnings.append({"severity": "warning",
                              "message": f"{a['name']} reached its limit of {_plural(cap, 'run')} "

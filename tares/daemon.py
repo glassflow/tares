@@ -624,8 +624,9 @@ def make_app() -> FastAPI:
             if method == "POST" and rest == "/findings":
                 return "findings"   # recording one; admin implies it, a plain read key does not
             # a project's keys, and who is subscribed to it with which URL: credentials
+            # ... and the guided setup, whose plan and checks describe the whole configuration
             if (rest.startswith("/keys") or rest.startswith("/subscribe")
-                    or rest == "/external-agents"):
+                    or rest == "/external-agents" or rest.startswith("/setup")):
                 return "admin"
             if method == "POST" and rest == "/stats":
                 return "read"
@@ -1718,7 +1719,9 @@ def make_app() -> FastAPI:
                 list_remote_tools(resolve_servers(store, [server])[0]), timeout=20)
         except Exception as e:
             detail = f"{type(e).__name__}: {str(e)[:200]}" if str(e).strip() else type(e).__name__
+            _record_tool_test(name, False, 0, detail)
             return {"ok": False, "error": detail, "tools": []}
+        _record_tool_test(name, True, len(tools or []), None)
         return {"ok": True, "tools": tools}
 
     # ── GitHub credentials: a token stored once, referenced by sources and MCP servers ──
@@ -2964,6 +2967,291 @@ def make_app() -> FastAPI:
         except Exception as e:
             _uc_err(e)
 
+    # ── the guided project setup: goal -> plan -> apply -> connect -> try it ──
+    from . import setup_flow
+
+    def _setup_err(e):
+        raise HTTPException(status_code=e.status, detail=e.message)
+
+    def _setup_model():
+        """(provider, model, key origin, provider id) the plan is written on: the cell's
+        default provider, exactly as Ask resolves it. 409 with a plain message when none."""
+        provider, origin = resolve_provider(store)
+        if provider is None:
+            _err(ValueError(setup_flow.NO_PROVIDER), 409)
+        pid = providers_mod.default_id(store)
+        return provider, providers_mod.default_model_for(store, pid), origin, pid
+
+    async def _setup_read(name: str, args: dict) -> tuple[bool, str]:
+        """The planner's read tools, answered by this daemon's own routes in process."""
+        paths = {"list_connectors": "/api/connectors", "list_sources": "/api/sources",
+                 "list_templates": "/api/projects/templates"}
+        if name == "source_fields":
+            path = f"/api/sources/{str(args.get('name') or '')}/fields"
+        elif name in paths:
+            path = paths[name]
+        else:
+            return False, f"unknown tool {name!r}"
+        headers = {"Authorization": f"Bearer {AUTH_TOKEN}"} if AUTH_TOKEN else {}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="http://setup", headers=headers, timeout=30) as cx:
+            r = await cx.get(path)
+        text = r.text
+        return r.status_code < 400, text if len(text) <= 20000 else text[:20000] + "\n(truncated)"
+
+    async def _setup_generate(message: str, prev: dict | None = None,
+                              who: str | None = None) -> dict:
+        provider, model, origin, pid = _setup_model()
+        try:
+            return await setup_flow.model_plan(
+                provider, model, message, store, runtime.catalog, _setup_read,
+                tracer=tracing.tracer_for("project-setup"),
+                on_usage=lambda u: _record_ask_usage(model, u, key_source=origin,
+                                                     kind=provider.kind, provider_id=pid),
+                prev=prev, who=who)
+        except setup_flow.SetupError as e:
+            _setup_err(e)
+
+    @app.post("/api/setup/plan")
+    async def setup_plan(body: dict = Body(...)):
+        """{goal, who?, existing_sources?} -> {plan}: the whole project in plain words, written
+        by the cell's model and checked like a catalog import."""
+        try:
+            goal = goal_mod.normalize_goal(body.get("goal"))
+        except ValueError as e:
+            _err(e)
+        if not goal:
+            _err(ValueError("say what the project is for"))
+        who = body.get("who") or None
+        if who not in (None, "tares", "own"):
+            _err(ValueError("who is tares or own"))
+        plan = await _setup_generate(setup_flow.plan_message(
+            goal, who, body.get("existing_sources", True) is not False, store, runtime.catalog),
+            who=who)
+        return {"plan": plan}
+
+    @app.post("/api/setup/adjust")
+    async def setup_adjust(body: dict = Body(...)):
+        """{plan, instruction} -> {plan}: the plan revised as the person asked."""
+        plan = body.get("plan")
+        instruction = " ".join(str(body.get("instruction") or "").split())
+        if not isinstance(plan, dict):
+            _err(ValueError("plan is required"))
+        if not instruction:
+            _err(ValueError("say what to change"))
+        if len(instruction) > 2000:
+            _err(ValueError("an instruction is at most 2000 characters"))
+        return {"plan": await _setup_generate(setup_flow.adjust_message(plan, instruction),
+                                              prev=plan)}
+
+    @app.post("/api/setup/apply", status_code=201)
+    async def setup_apply(request: Request, body: dict = Body(...)):
+        """{plan} -> {project, connect}: create the project and everything it needs in one go,
+        then say what only the person can do."""
+        raw = body.get("plan")
+        if not isinstance(raw, dict):
+            _err(ValueError("plan is required"))
+        plan, errors = setup_flow.normalize(raw, store, runtime.catalog)
+        if errors:
+            _err(ValueError("This plan cannot be set up: " + " ".join(errors)), 422)
+        try:
+            uid, key = setup_flow.apply(store, projects, plan, _make_key)
+        except setup_flow.SetupError as e:
+            _setup_err(e)
+        setup = {"plan": plan, "step": "connect", "practice_run": None}
+        if key is not None:
+            setup["own_key_id"] = key["id"]
+        store.set_project_setup(uid, setup)
+        base = setup_flow.public_base(str(request.base_url))
+        return {"project": projects.get(uid),
+                "connect": setup_flow.connect_info(store, runtime.catalog, uid, plan, base, key)}
+
+    def _setup_or_404(uid: str) -> dict:
+        _project_or_404(uid)
+        setup = store.get_project_setup(uid)
+        if setup is None:
+            _err(KeyError("this project was not set up with the guided setup"), 404)
+        return setup
+
+    @app.get("/api/projects/{uid}/setup")
+    async def get_project_setup(uid: str):
+        """{step, plan, checks}: where the guided setup is, and live status for Connect."""
+        setup = _setup_or_404(uid)
+        checks = await asyncio.to_thread(setup_flow.checks, store, runtime.catalog,
+                                         runtime.health_snapshot(), uid, setup)
+        return {"step": setup.get("step"), "plan": setup.get("plan"),
+                "practice_run": setup.get("practice_run"), "checks": checks}
+
+    @app.put("/api/projects/{uid}/setup")
+    async def put_project_setup(uid: str, body: dict = Body(...)):
+        """{step}: connect, try or done."""
+        setup = _setup_or_404(uid)
+        step = body.get("step")
+        if step not in setup_flow.STEPS:
+            _err(ValueError(f"step is one of {', '.join(setup_flow.STEPS)}"))
+        setup["step"] = step
+        store.set_project_setup(uid, setup)
+        return {"ok": True, "step": step}
+
+    def _plan_watch(setup: dict, name: str) -> dict:
+        w = next((w for w in (setup.get("plan") or {}).get("watches") or []
+                  if w.get("name") == name), None)
+        if w is None:
+            _err(KeyError(f"the plan has no source named {name!r}"), 404)
+        return w
+
+    async def _practice_ingest(name: str, sample: dict) -> list:
+        """Store the example event on the source, labelled practice=true, without waking any
+        trigger: a practice event must not start a real run."""
+        from .connectors import build_connector
+        cfg = runtime.catalog.sources[name]
+        envs = build_connector(cfg, store).map_payload(sample)
+        for e in envs:
+            e.labels = {**(e.labels or {}), "practice": "true"}
+        await asyncio.to_thread(store.append, envs)
+        rt = runtime.sources.get(name)
+        if rt is not None:
+            rt.health.events_since_start += len(envs)
+            rt.health.last_ok_at = now_utc()
+        _metrics.events_ingested(name, len(envs))
+        return envs
+
+    @app.post("/api/projects/{uid}/setup/test-event")
+    async def setup_test_event(uid: str, body: dict = Body(...)):
+        """{source}: send the plan's example event into a push source, so the person sees it
+        arrive without wiring anything."""
+        setup = _setup_or_404(uid)
+        name = str(body.get("source") or "").strip()
+        w = _plan_watch(setup, name)
+        cfg = runtime.catalog.sources.get(name)
+        if cfg is None:
+            _err(KeyError(f"source {name!r} no longer exists"), 404)
+        if SPECS.get(cfg.connector, {}).get("mode") != "push":
+            _err(ValueError(f"{name} collects its events itself, so there is no test event to "
+                            "send"))
+        if not isinstance(w.get("sample"), dict):
+            _err(ValueError(f"the plan has no example event for {name}"))
+        _refuse_if_full()
+        envs = await _practice_ingest(name, w["sample"])
+        return {"ok": True, "ingested": len(envs)}
+
+    async def _practice_input(uid: str, setup: dict, trig) -> tuple[str, str]:
+        """(entity, timeline) a practice run or firing starts from: the example event's entity
+        (sent now when the source has nothing for it), else the newest event's."""
+        from .connectors import build_connector
+        from .reads import resolve_sources_full
+        plan = setup.get("plan") or {}
+        window = trig.emit.get("context_window") or "15m"
+        key = None
+        for w in plan.get("watches") or []:
+            cfg = runtime.catalog.sources.get(w.get("name"))
+            if (w.get("name") in trig.sources and isinstance(w.get("sample"), dict)
+                    and cfg is not None and SPECS.get(cfg.connector, {}).get("mode") == "push"):
+                envs = build_connector(cfg, store).map_payload(w["sample"])
+                if not envs:
+                    continue
+                env = envs[0]
+                key = (env.labels or {}).get(trig.key_field) if trig.key_field else None
+                key = str(key or env.key_value or "")
+                _p, count, _rows = resolve_sources_full(store, trig.sources, trig.name, key=key,
+                                                        window=window, filters=trig.filters)
+                if not count:
+                    await _practice_ingest(w["name"], w["sample"])
+                break
+        if not key:
+            for s in trig.sources:
+                ev = store.recent_events(source=s, limit=1)
+                if ev and ev[0].get("key"):
+                    key = ev[0]["key"]
+                    break
+        if not key:
+            _err(ValueError("Nothing has arrived yet to practice on. Send a test event first."),
+                 409)
+        payload, _n, _rows = resolve_sources_full(store, trig.sources, trig.name, key=key,
+                                                  window=window, filters=trig.filters)
+        return key, payload
+
+    @app.post("/api/projects/{uid}/setup/practice")
+    async def setup_practice(uid: str):
+        """A practice spike: the first agent that looks runs once on the example event's entity
+        ({run_id}), or, for the person's own agent, a practice firing goes to the project's
+        subscriptions ({dispatch_id}). Practice results are shown, never counted."""
+        setup = _setup_or_404(uid)
+        plan = setup.get("plan") or {}
+        triggers = sorted((t for t in runtime.catalog.triggers if t.project == uid),
+                          key=lambda t: t.name)
+        if not triggers:
+            _err(ValueError("this project has no trigger to practice with"), 409)
+        if plan.get("who") == "own":
+            trig = triggers[0]
+            key, payload = await _practice_input(uid, setup, trig)
+            subs = store.list_project_subscriptions(uid)
+            dispatch_id = uuid.uuid4().hex
+            kind = trig.emit.get("kind", trig.name)
+            body = {"dispatch_id": dispatch_id, "trigger": trig.name, "project": uid,
+                    "kind": kind, "key": key, "fired_at": now_utc().isoformat(),
+                    "payload": payload, "run_ids": [], "practice": True}
+            delivered = 0
+            for s in subs:
+                ok, error = await dispatcher._post(s["url"], body, attempts=1)
+                store.log_delivery(dispatch_id, s["subscription_id"], s["url"], ok, error)
+                delivered += 1 if ok else 0
+            store.log_dispatch(dispatch_id, trig.name, key, kind, len(subs), delivered, payload,
+                               project=uid, practice=True)
+            setup.update({"practice_run": dispatch_id, "practice_at": now_utc().isoformat(),
+                          "practice_kind": "own", "practice_finding": None})
+            store.set_project_setup(uid, setup)
+            return {"dispatch_id": dispatch_id, "delivered": delivered, "subscribers": len(subs)}
+        agents = {a["name"]: a for a in store.list_catalog_agents() if a.get("owned_by") == uid}
+        first = next((a for a in plan.get("agents") or []
+                      if a.get("enabled", True) and a.get("on_trigger", True)
+                      and a.get("name") in agents), None)
+        if first is None:
+            _err(ValueError("no agent of this project looks first, so there is nothing to "
+                            "practice"), 409)
+        trig = next((t for t in triggers if t.name == agents[first["name"]]["trigger"]), None)
+        if trig is None:
+            _err(ValueError(f"{first['name']} has no trigger to practice with"), 409)
+        key, payload = await _practice_input(uid, setup, trig)
+        rid = dispatcher.agents.run_now(first["name"], trig.name, key, payload,
+                                        woken_by="practice", practice=True)
+        if rid is None:
+            _err(ValueError(f"{first['name']} is already working on {key}; try again when it "
+                            "is done"), 409)
+        setup.update({"practice_run": rid, "practice_at": now_utc().isoformat(),
+                      "practice_kind": "tares"})
+        store.set_project_setup(uid, setup)
+        return {"run_id": rid}
+
+    def _flag_practice_finding(uid: str, run_id: str, ident: dict | None) -> None:
+        """An outside agent's finding recorded within ten minutes of a practice firing, by the
+        project's own agent key, answers that firing: it is practice."""
+        setup = store.get_project_setup(uid)
+        if not setup or setup.get("practice_kind") != "own" or setup.get("practice_finding"):
+            return
+        try:
+            at = datetime.fromisoformat(str(setup.get("practice_at")))
+        except ValueError:
+            return
+        if (now_utc() - at).total_seconds() > setup_flow.PRACTICE_WINDOW_S:
+            return
+        if ident is not None and ident.get("id") != f"key:{setup.get('own_key_id')}":
+            return
+        store.set_run_practice(run_id)
+        setup["practice_finding"] = run_id
+        store.set_project_setup(uid, setup)
+
+    def _record_tool_test(name: str, ok: bool, n_tools: int, error: str | None) -> None:
+        """A tool's last test, kept on the guided setup of the project that owns it."""
+        server = store.get_mcp_server(name) or {}
+        uid = server.get("owned_by")
+        setup = store.get_project_setup(uid) if uid else None
+        if setup is None:
+            return
+        setup.setdefault("tool_tests", {})[name] = {"ok": ok, "tools": n_tools, "error": error,
+                                                    "at": now_utc().isoformat()}
+        store.set_project_setup(uid, setup)
+
     # ── a project's skills (TR-332): instructions its agents load by name ─────
     def _skill_project(uid: str) -> dict:
         p = store.get_project(uid)
@@ -3209,6 +3497,7 @@ def make_app() -> FastAPI:
         run_id = await dispatcher.agents.record_external(uid, agent, entity, finding,
                                                          verdict=verdict, label=label,
                                                          headline=headline, next_step=next_step)
+        _flag_practice_finding(uid, run_id, ident)
         return {"ok": True, "run_id": run_id, "agent": agent, "entity": entity,
                 "verdict": verdict}
 

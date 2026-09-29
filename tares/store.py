@@ -351,6 +351,13 @@ _MIGRATIONS = [
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS next_step TEXT",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS handled_at TIMESTAMPTZ",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS handled_by TEXT",
+    # The guided project setup: the plan a project was set up from and how far the person got
+    # ({plan, step, practice_run}, NULL for any other project), and a practice mark on the runs
+    # and firings "Try it" makes. A practice result is shown, never counted: today's totals and
+    # health leave it out. NULL on every earlier row reads as not practice.
+    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS setup JSON",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS practice BOOLEAN",
+    "ALTER TABLE dispatch_log ADD COLUMN IF NOT EXISTS practice BOOLEAN",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -1186,7 +1193,7 @@ class Store:
     def start_agent_run(self, run_id: str, agent: str, trigger: str, dispatch_id: str,
                         key: str, prompt_hash: str, max_rounds: int | None = None,
                         woken_by: str | None = None, parent_run_id: str | None = None,
-                        project: str | None = None) -> None:
+                        project: str | None = None, practice: bool = False) -> None:
         # max_rounds is the cap this run will be held to (the effective value, not the agent's
         # nullable setting), so the history stays honest if defaults change later. woken_by,
         # parent_run_id and project are the run's lineage (TR-330), fixed when it starts.
@@ -1194,10 +1201,10 @@ class Store:
             self.con.execute(
                 "INSERT INTO agent_runs (id, agent, trigger, dispatch_id, key_value, status, "
                 "rounds, tool_calls, prompt_hash, started_at, max_rounds, woken_by, "
-                "parent_run_id, project) "
-                "VALUES (?, ?, ?, ?, ?, 'running', 0, 0, ?, ?, ?, ?, ?, ?)",
+                "parent_run_id, project, practice) "
+                "VALUES (?, ?, ?, ?, ?, 'running', 0, 0, ?, ?, ?, ?, ?, ?, ?)",
                 [run_id, agent, trigger, dispatch_id, key, prompt_hash, now_utc(), max_rounds,
-                 woken_by, parent_run_id or None, project or None],
+                 woken_by, parent_run_id or None, project or None, bool(practice)],
             )
 
     def finish_agent_run(self, run_id: str, status: str, rounds: int = 0, tool_calls: int = 0,
@@ -1251,7 +1258,7 @@ class Store:
                "model, input_tokens, output_tokens, cache_creation_input_tokens, "
                "cache_read_input_tokens, cost_usd, delivery, delivery_error, provider, "
                "outcome, verdict, results, woken_by, parent_run_id, project, skills, "
-               "headline, next_step, handled_at, handled_by "
+               "headline, next_step, handled_at, handled_by, practice "
                "FROM agent_runs ")
         where, params = [], []
         if where_sql:
@@ -1281,7 +1288,8 @@ class Store:
              "results": json.loads(r[25]) if r[25] else [],
              "woken_by": r[26], "parent_run_id": r[27], "project": r[28],
              "skills": json.loads(r[29]) if r[29] else [],
-             "headline": r[30], "next_step": r[31], "handled_at": r[32], "handled_by": r[33]}
+             "headline": r[30], "next_step": r[31], "handled_at": r[32], "handled_by": r[33],
+             "practice": bool(r[34])}
             for r in rows
         ]
 
@@ -1327,26 +1335,34 @@ class Store:
             self.con.execute("UPDATE agent_runs SET handled_at = ?, handled_by = ? WHERE id = ?",
                              [now_utc() if by else None, by or None, run_id])
 
+    def set_run_practice(self, run_id: str) -> None:
+        """Mark a run as practice: an outside agent's finding answering a practice firing."""
+        with self._lock:
+            self.con.execute("UPDATE agent_runs SET practice = TRUE WHERE id = ?", [run_id])
+
     def project_threads_since(self, project: str, since) -> int:
         """How many timeline threads of a project started at or after `since`: the roots
-        timeline_roots pages through, counted."""
+        timeline_roots pages through, counted. Practice threads are left out."""
         with self._lock:
             r = self.con.execute(
                 "SELECT (SELECT count(*) FROM dispatch_log d WHERE project = ? AND fired_at >= ? "
+                "        AND NOT COALESCE(practice, FALSE) "
                 "        AND NOT EXISTS (SELECT 1 FROM agent_runs p WHERE p.id = d.parent_run_id "
                 "                        AND p.project = d.project)) + "
                 "       (SELECT count(*) FROM agent_runs r WHERE project = ? AND started_at >= ? "
-                "        AND COALESCE(dispatch_id, '') = '' "
+                "        AND COALESCE(dispatch_id, '') = '' AND NOT COALESCE(practice, FALSE) "
                 "        AND NOT EXISTS (SELECT 1 FROM agent_runs p WHERE p.id = r.parent_run_id "
                 "                        AND p.project = r.project))",
                 [project, since, project, since]).fetchone()
         return int(r[0] or 0) if r else 0
 
     def project_spend_since(self, project: str, since) -> float:
-        """What the runs of a project started at or after `since` cost, in USD."""
+        """What the runs of a project started at or after `since` cost, in USD. Practice runs are
+        left out."""
         with self._lock:
             r = self.con.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM agent_runs "
-                                 "WHERE project = ? AND started_at >= ?", [project, since]).fetchone()
+                                 "WHERE project = ? AND started_at >= ? "
+                                 "AND NOT COALESCE(practice, FALSE)", [project, since]).fetchone()
         return float(r[0] or 0) if r else 0.0
 
     def recent_ingest_gaps(self, source: str, since, limit: int = 1000) -> list[float]:
@@ -1477,7 +1493,8 @@ class Store:
                                  "WHERE agent = ?", [agent]).fetchone()
         return float(r[0] or 0)
 
-    def agent_runs_today(self, agent: str, exclude_run_id: str | None = None) -> int:
+    def agent_runs_today(self, agent: str, exclude_run_id: str | None = None,
+                         include_practice: bool = True) -> int:
         """Runs started in the last 24h — the cost ceiling's counter. `exclude_run_id` leaves out the
         run being checked: the row is inserted before the cap is evaluated, so the cap must count the
         runs that came BEFORE this one or it lets one extra through.
@@ -1495,6 +1512,8 @@ class Store:
         if exclude_run_id:
             sql += " AND id <> ?"
             params.append(exclude_run_id)
+        if not include_practice:   # project health: a practice run is not the agent's workload
+            sql += " AND NOT COALESCE(practice, FALSE)"
         with self._lock:
             row = self.con.execute(sql, params).fetchone()
         return int(row[0]) if row else 0
@@ -1683,6 +1702,19 @@ class Store:
             self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ?", [uid])
             self.con.execute("DELETE FROM usecase_log WHERE usecase_id = ?", [uid])
             self.con.execute("DELETE FROM usecases WHERE id = ?", [uid])
+
+    def get_project_setup(self, uid: str) -> dict | None:
+        """The guided setup of a project ({plan, step, practice_run, ...}), or None when it was
+        not set up that way."""
+        with self._lock:
+            r = self.con.execute("SELECT setup FROM usecases WHERE id = ?", [uid]).fetchone()
+        return json.loads(r[0]) if r and r[0] else None
+
+    def set_project_setup(self, uid: str, setup: dict | None) -> None:
+        with self._lock:
+            self.con.execute("UPDATE usecases SET setup = ?, updated_at = ? WHERE id = ?",
+                             [json.dumps(setup, default=str) if setup is not None else None,
+                              now_utc(), uid])
 
     def upsert_project_object(self, uid: str, kind: str, key: str, name: str) -> None:
         with self._lock:
@@ -2148,15 +2180,16 @@ class Store:
 
     def log_dispatch(self, dispatch_id: str, trigger: str, key: str, kind: str,
                      subscribers: int, delivered: int, payload: str,
-                     project: str | None = None, parent_run_id: str | None = None) -> None:
+                     project: str | None = None, parent_run_id: str | None = None,
+                     practice: bool = False) -> None:
         # project: the trigger's at firing time. parent_run_id: the run whose finding tripped it.
         with self._lock:
             self.con.execute(
                 "INSERT INTO dispatch_log (dispatch_id, trigger, key_value, kind, fired_at, "
-                "subscribers, delivered, payload, project, parent_run_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "subscribers, delivered, payload, project, parent_run_id, practice) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [dispatch_id, trigger, key, kind, now_utc(), subscribers, delivered, payload,
-                 project or None, parent_run_id or None],
+                 project or None, parent_run_id or None, bool(practice)],
             )
 
     # ── project timeline (TR-331): the store's side is indexed lookups only ──
