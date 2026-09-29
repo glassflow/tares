@@ -6,6 +6,7 @@ import type {
   GithubCredential,
   LabelFacet, ModelUsage, QueryLogEntry,
   McpServer, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
+  ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults,
   Skill, SkillSummary,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, ModelProvider, ModelProviders,
@@ -318,13 +319,33 @@ export const api = {
       `/api/projects/${encodeURIComponent(id)}/timeline?` + new URLSearchParams(
         Object.entries(q).filter(([, v]) => v != null && v !== "").map(([k, v]) => [k, String(v)])).toString()),
   // template "custom" takes `objects` ({kind, name} each) instead of params
+  // `goal`: one line, <= 200 chars; a template's own goal applies when it is left out
   createProject: (body: { template: string; name?: string; params?: Record<string, unknown>;
-                          objects?: { kind: ProjectObjectKind; name: string }[] }) =>
+                          objects?: { kind: ProjectObjectKind; name: string }[]; goal?: string }) =>
     request<Project>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
+  // a body with only `goal` works on every project, the default one included; "" or null clears it
   updateProject: (id: string, body: { params?: Record<string, unknown>; name?: string;
-                                      objects?: { kind: ProjectObjectKind; name: string }[] }) =>
+                                      objects?: { kind: ProjectObjectKind; name: string }[];
+                                      goal?: string | null }) =>
     request<Project & { report?: ProjectUpdateReport }>(`/api/projects/${encodeURIComponent(id)}`,
       { method: "PUT", body: JSON.stringify(body) }),
+  // The goal-first page: the setup in plain sentences, what the agents concluded, and whether the
+  // project is working. All computed by the daemon, no model call.
+  projectOutline: (id: string) =>
+    request<ProjectOutline>(`/api/projects/${encodeURIComponent(id)}/outline`),
+  // newest first; page with `before` = the previous page's next_before
+  projectResults: (id: string, q: { limit?: number; before?: string | null } = {}) =>
+    request<ProjectResults>(
+      `/api/projects/${encodeURIComponent(id)}/results?` + new URLSearchParams(
+        Object.entries(q).filter(([, v]) => v != null && v !== "").map(([k, v]) => [k, String(v)])).toString()),
+  projectResult: (id: string, runId: string) =>
+    request<ProjectResultDetail>(`/api/projects/${encodeURIComponent(id)}/results/${encodeURIComponent(runId)}`),
+  // the response body is not relied on: the page refetches the result after it
+  setResultHandled: (id: string, runId: string, handled: boolean) =>
+    request<unknown>(`/api/projects/${encodeURIComponent(id)}/results/${encodeURIComponent(runId)}/handled`,
+      { method: "POST", body: JSON.stringify({ handled }) }),
+  projectHealth: (id: string) =>
+    request<ProjectHealth>(`/api/projects/${encodeURIComponent(id)}/health`),
   // Triggers, agents and MCP servers always go with the project. `deleteSources`: which of its
   // sources to delete too; one another project still uses is kept (and reported) either way.
   deleteProject: (id: string, purgeEvents = false, deleteSources: string[] = []) =>

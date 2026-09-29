@@ -526,6 +526,70 @@ export interface Project {
   last_error: string | null;
   objects: ProjectObject[];
   default?: boolean;   // the Default project: holds whatever was made outside a project; never deleted
+  goal?: string | null; // what the project should achieve, one line (<= 200 chars); null = not set yet
+}
+
+// ── the goal-first project page (contract: goal-first-contract.md, "Backend") ──
+
+// GET /api/projects/{uid}/outline: the project's setup in plain sentences, built from its config
+export type OutlineSourceState = "receiving" | "silent" | "error" | "paused" | "waiting";
+export interface OutlineWatch {
+  source: string; connector: string; description: string; state: OutlineSourceState;
+  last_event_at: string | null; detail: string | null;
+}
+export interface OutlineWake { trigger: string; sentence: string; cooldown_sentence: string | null; paused: boolean }
+export interface OutlineHandoff { verdict: string; agent: string; cooldown: string | number | null }
+export interface OutlineAgent {
+  name: string; sentence: string; enabled: boolean; runs_on: "trigger" | "handoff"; handoffs: OutlineHandoff[];
+}
+export interface OutlineSkill { name: string; description: string; loaded_by: string[] }
+export interface ProjectOutline {
+  sentence: string;
+  watches: OutlineWatch[];
+  wakes: OutlineWake[];
+  agents: OutlineAgent[];
+  skills: OutlineSkill[];
+}
+
+// GET /api/projects/{uid}/results: one entry per concluded chain, newest first
+export interface ProjectResult {
+  id: string;                 // run id of the concluding run
+  thread: string;             // the timeline thread it belongs to
+  at: string;
+  entity: string | null;
+  kind: "action" | "no_action";
+  headline: string | null;
+  summary: string | null;     // first paragraph of the note, plain text
+  next_step: string | null;
+  verdict: string | null;
+  chain: string[];            // the agents in order, e.g. triage then root cause
+  cost_usd: number | null;    // the whole chain
+  duration_ms: number | null; // the whole chain
+  handled: { at: string; by: string } | null;
+  external: boolean;
+}
+export interface ProjectResults {
+  results: ProjectResult[];
+  next_before: string | null;
+  today: { looked_at: number; found: number; spent_usd: number };
+}
+// GET /api/projects/{uid}/results/{run_id}
+export interface ProjectResultDetail extends ProjectResult {
+  note: string | null;                  // the full markdown note
+  steps: { at: string; text: string }[]; // how Tares got there, oldest first
+}
+
+// GET /api/projects/{uid}/health
+export interface ProjectHealthIssue {
+  severity: "error" | "warning";
+  message: string;
+  fix: string | null;
+  view: string | null;        // a project view to open, same form as ?view= (e.g. "source:checkout-errors")
+}
+export interface ProjectHealth {
+  state: "working" | "attention" | "paused" | "setting_up";
+  message: string;
+  issues: ProjectHealthIssue[];
 }
 export interface ProjectLogEntry { at: string; action: string; detail: string }
 // summary = instance + log + whatever the template reports. The template part is free-form; the
