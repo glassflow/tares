@@ -168,8 +168,9 @@ async def main(app):
                                headers={"content-type": "application/x-ndjson"})
             check("a second marked line does not create another", len((await cx.get("/api/projects")).json()["projects"]) == 2)
             srcs = {s["name"]: s for s in (await cx.get("/api/sources")).json()}
-            check("one claude_code source, taken over by the project from the default one",
-                  sum(1 for n in srcs if n == SOURCE) == 1 and srcs[SOURCE]["owned_by"] == uid
+            # it existed before the project, so the project uses it but is not its creator
+            check("one claude_code source, moved into the project from the default one",
+                  sum(1 for n in srcs if n == SOURCE) == 1 and srcs[SOURCE]["owned_by"] != uid
                   and srcs[SOURCE]["projects"] == [uid],
                   json.dumps(srcs.get(SOURCE))[:200])
             agents = (await cx.get("/api/agents/builtin")).json()["agents"]

@@ -436,13 +436,17 @@ class Engine:
         doc: dict = {}
         for o in plan:
             doc.setdefault(_SECTION[o.kind], []).append(dict(o.spec))
+        # a source that was already there is used, not created: this project never becomes its
+        # creator, so deleting the project cannot take it (the plugin's claude_code source)
+        had = {s["name"] for s in self.store.list_catalog_sources()}
         try:
             # validates the whole doc, then writes; this engine places what it applies
             import_catalog_dict(self.store, doc, assign=False)
         except CatalogError as e:
             raise ProjectError(str(e)) from e
         for o in plan:
-            self.store.set_owned_by(o.kind, o.name, uid)
+            if not (o.kind == "source" and o.name in had):
+                self.store.set_owned_by(o.kind, o.name, uid)
             self.store.put_in_project(o.kind, o.name, uid, key=o.key)
         # a trigger's sources are members of its project, planned or not (the findings source a
         # handoff trigger reads, say)

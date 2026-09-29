@@ -128,8 +128,8 @@ async def main():
             after = {s["name"] for s in (await cx.get("/api/sources")).json()}
             check("no duplicate sources: adopted the existing ones", after == before, str(after ^ before))
             srcs = {s["name"]: s for s in (await cx.get("/api/sources")).json()}
-            check("demo sources owned by the project",
-                  all(srcs[n]["owned_by"] == uid for n in ("demo_metrics", "demo_logs", "demo_alerts")))
+            check("the existing demo sources are in the project",
+                  all(uid in srcs[n]["projects"] for n in ("demo_metrics", "demo_logs", "demo_alerts")))
             agents = (await cx.get("/api/agents/builtin")).json()["agents"]
             a = next(x for x in agents if x["name"] == "incident-first-look")
             check("agent owned and on the incident trigger", a["owned_by"] == uid and a["trigger"] == "incident")
