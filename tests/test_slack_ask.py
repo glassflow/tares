@@ -232,6 +232,18 @@ async def main():
             r = await post_raw(cx, hs, {"content-type": "application/json"})
             ck("an UNSIGNED handshake is rejected", r.status_code == 401, str(r.status_code))
 
+            # ── a click on a link button (View in Tares, Open timeline, TR-275) ──
+            from urllib.parse import urlencode
+            click = urlencode({"payload": json.dumps({
+                "type": "block_actions", "team": {"id": "T1"},
+                "actions": [{"action_id": "tares_link_0", "type": "button",
+                             "url": "https://cell.example.com/agents/a?tab=runs"}]})}).encode()
+            r = await post_raw(cx, click, signed_headers(click, "application/x-www-form-urlencoded"))
+            ck("a signed button click is ACKed with an empty 200 (no warning in Slack)",
+               r.status_code == 200 and r.content == b"", f"{r.status_code} {r.text[:200]}")
+            r = await post_raw(cx, click, {"content-type": "application/x-www-form-urlencoded"})
+            ck("an UNSIGNED button click is rejected", r.status_code == 401, str(r.status_code))
+
             # ── the negative cases: nothing runs, nothing leaks ──────────────
             good = command_body("ask what happened to checkout-svc")
             hdr = signed_headers(good, "application/x-www-form-urlencoded")

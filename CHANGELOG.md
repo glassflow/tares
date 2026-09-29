@@ -11,6 +11,11 @@ the project follows [Semantic Versioning](https://semver.org/).
   note in the thread. In 1.36.0 any note longer than its excerpt was threaded, so a one-paragraph
   root cause appeared twice.
 
+### Fixed
+- Clicking a button on a Tares message in Slack no longer shows "This app is not configured to
+  handle interactive responses". `/api/slack/events` acknowledges the click, so a Slack app
+  pointed at a cell can enable Interactivity with that same URL as its Request URL.
+
 ## [1.36.0] - 2026-09-29
 
 ### Changed
