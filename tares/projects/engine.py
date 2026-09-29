@@ -282,7 +282,8 @@ class Engine:
     def delete(self, uid: str, purge_events: bool = False,
                delete_sources: list[str] | None = None) -> dict:
         """Remove the project with its triggers, agents and MCP servers. Its sources stay, since
-        other projects may read them, unless named in `delete_sources`: each of those is deleted
+        other projects may read them, unless named in `delete_sources` (None: a template
+        project's own sources, a custom project's none): each of those is deleted
         too when no other project uses it, and kept (and reported) when one does. A source this
         project leaves behind in no project joins the default project. `purge_events` purges the
         events of the sources deleted and the firings of the triggers deleted."""
@@ -291,8 +292,14 @@ class Engine:
             raise ProjectError("the default project cannot be deleted")
         rows = self.store.list_project_objects(uid)
         members = sorted({o["name"] for o in rows if o["kind"] == "source"})
+        if delete_sources is None:
+            # no choice made: a template project takes the sources it created, as it always did
+            created = self._existing_names()["source"]
+            delete_sources = ([] if _is_custom(inst["template"]) else
+                              [o["name"] for o in rows if o["kind"] == "source"
+                               and (created.get(o["name"]) or {}).get("owned_by") == uid])
         chosen = []
-        for n in delete_sources or []:
+        for n in delete_sources:
             if n not in chosen:
                 chosen.append(n)
         unknown = [n for n in chosen if n not in members]

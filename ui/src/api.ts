@@ -322,7 +322,7 @@ export const api = {
   deleteProject: (id: string, purgeEvents = false, deleteSources: string[] = []) =>
     request<{ ok: boolean; deleted?: string[]; released?: string[]; kept?: string[]; purged_events?: number }>(
       `/api/projects/${encodeURIComponent(id)}?purge_events=${purgeEvents}`
-      + (deleteSources.length ? `&delete_sources=${encodeURIComponent(deleteSources.join(","))}` : ""),
+      + `&delete_sources=${encodeURIComponent(deleteSources.length ? deleteSources.join(",") : "none")}`,
       { method: "DELETE" }),
   // Sources are shared: a project lists the ones it uses. Removing one is refused while a trigger
   // of the project reads it.

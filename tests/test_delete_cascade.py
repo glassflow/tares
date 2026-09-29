@@ -200,8 +200,8 @@ async def main():
         r = await cx.post("/api/projects", json={"template": "test_cascade", "name": "T", "params": {}})
         ck("test template project created", r.status_code == 201, r.text[:200])
         uid = r.json()["id"]
-        r = await cx.delete(f"/api/projects/{uid}")
-        ck("template project: trigger and agent go, the source is released",
+        r = await cx.delete(f"/api/projects/{uid}?delete_sources=none")
+        ck("template project, delete_sources=none: trigger and agent go, the source is released",
            r.status_code == 200 and set(r.json()["deleted"]) == {"agent:t_agent", "trigger:t_trig"}
            and r.json()["released"] == ["source:t_src"], r.text[:300])
         n = await names(cx)
@@ -214,6 +214,11 @@ async def main():
            r.status_code == 200 and len(r.json()["deleted"]) == 3 and r.json()["released"] == [], r.text[:300])
         r = await cx.post("/api/projects", json={"template": "test_cascade", "name": "T3", "params": {}})
         ck("the released source can be planned again by a new project", r.status_code == 201, r.text[:300])
+        r = await cx.post("/api/projects", json={"template": "test_cascade", "name": "T4", "params": {"prefix": "w"}})
+        r = await cx.delete(f"/api/projects/{r.json()['id']}")
+        ck("template project, no choice given: the source it created goes too",
+           r.status_code == 200 and "source:w_src" in r.json()["deleted"] and r.json()["released"] == [],
+           r.text[:300])
 
         await cx.aclose()
     print(f"\n{P} passed, {F} failed")
