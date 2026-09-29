@@ -160,8 +160,34 @@ the project follows [Semantic Versioning](https://semver.org/).
   its key records within 10 minutes is practice. Runs (and firings) carry `practice`; a practice
   run's handoffs are practice too. Results show them with `practice: true`; today's totals and the
   daily cap check in health leave them out.
+- `POST /api/setup/check {plan}` (admin, no model call) answers `{plan, problems}`: the plan
+  normalized exactly as apply does it, with the wake-up, cooldown and agent sentences and the
+  summary derived from the plan as it now is, and what stops it from applying per item
+  (`{where: "watches.w1" | "wakes.k1" | "agents.a1" | "tools.t1" | "skills.s1" | "own_agent" |
+  a section | "plan", message}`) in plain words. Apply accepts any plan check accepts. A plan
+  tool may name an MCP server already on the cell (`existing: true`), and a plan agent a
+  `provider`. The apply answer carries the plan as the project keeps it: a secret typed into a
+  new source's settings is left out of the stored plan.
+- The guided setup's Plan screen is editable in place, one part at a time. Watches: change a
+  source for one already on Tares (with its kind and when it last received an event) or a new one
+  (its connector and settings, the source form), remove one or add another; a swapped source
+  follows into the wake-ups that counted it, and a wake-up left with no source is flagged. Wakes
+  when: what to count (events, or the average, highest, lowest or total of a number), the
+  threshold and window, "only when" conditions built from the sources' real fields, counted
+  separately for each of a label, or every so many minutes instead; add or remove a wake-up.
+  Agents: switch between Tares agents and your own agent; each Tares agent's name, when it runs
+  (a wake-up, or only on a handoff), instructions, model, tools and handoffs; add one from the
+  agent presets, or remove one. Your own agent: its name and whether Tares calls its webhook or
+  it checks in. Know-how: copy a skill from another project, or remove one. Tools: attach an MCP
+  server already on Tares. The plan is checked after every edit; problems show next to the part
+  they concern, and "Looks right, set it up" waits until there are none.
 
 ### Changed
+- The guided setup's summary is derived from the plan as edited, never the model's own text, and
+  names the person's own agent once: "your agent is told" for a name like "your own agent", "your
+  agent claude-code is told" otherwise (it read "your agent your own agent is told"). A new
+  polled source whose connector takes a secret and has none yet needs a credential; one with its
+  secret filled in needs nothing.
 - The store writes its startup migrations into the database file before serving (a checkpoint).
   Upgrading a cell from 1.37.0 and then stopping it hard (a pod killed) could otherwise replay the
   new `agent_runs` columns into a corrupted index: every request then failed with "database has
