@@ -55,6 +55,7 @@ from .runtime import Runtime
 from . import slack as slack_mod
 from . import slack_verify
 from . import timeline
+from . import goal as goal_mod
 from .slack import SETTING_KEY as SLACK_TOKEN_SETTING, resolve_token as resolve_slack_token
 from .tracing import PROVIDERS as tracing_providers, status as tracing_status
 from .store import Store, StoreUnavailable
@@ -362,6 +363,7 @@ class ProjectIn(BaseModel):
     name: str = ""         # defaults to the template title
     params: dict = {}
     objects: list | None = None   # template "custom": the objects, each {kind, name}
+    goal: str | None = None       # one line, at most 200 characters; none = the template's GOAL
 
     @model_validator(mode="before")
     @classmethod
@@ -376,6 +378,9 @@ class ProjectUpdate(BaseModel):
     params: dict = {}
     name: str = ""         # blank = unchanged
     objects: list | None = None   # template "custom": the new object list
+    # the project's goal; left out = unchanged, "" or null = cleared. A body that sets only the
+    # goal changes nothing else, and is the one edit the default project takes.
+    goal: str | None = None
 
 
 class ProjectRepair(BaseModel):
@@ -503,6 +508,8 @@ def make_app() -> FastAPI:
     # follow the same switch and land in the same backend.
     tracing = dispatcher.agents.tracing
 
+    # projects made from a template before goals existed get the template's goal (once)
+    projects.fill_template_goals()
     _seed_project(store, projects)
 
     def _otlp_source_for(header: str | None) -> str:
@@ -640,6 +647,10 @@ def make_app() -> FastAPI:
         ("GET", re.compile(r"^/skills$"), "read"),
         ("GET", re.compile(r"^/skills/[^/]+$"), "read"),
         ("GET", re.compile(r"^/findings$"), "read"),
+        ("GET", re.compile(r"^/results$"), "read"),
+        ("GET", re.compile(r"^/results/[^/]+$"), "read"),
+        ("GET", re.compile(r"^/outline$"), "read"),
+        ("GET", re.compile(r"^/health$"), "read"),
         ("POST", re.compile(r"^/findings$"), "findings"),
         ("POST", re.compile(r"^/stats$"), "read"),
         ("POST", re.compile(r"^/subscribe$"), "read"),
@@ -2724,6 +2735,7 @@ def make_app() -> FastAPI:
         p = store.get_project(uid) or {}
         names, _scope = _project_view(uid)
         return {"id": uid, "name": p.get("name"), "template": p.get("template"),
+                "goal": p.get("goal"),
                 "status": p.get("status"), "created_at": p.get("created_at"),
                 "sources": names,
                 "triggers": sorted(t.name for t in runtime.catalog.triggers if t.project == uid),
@@ -2740,7 +2752,7 @@ def make_app() -> FastAPI:
     async def create_project(body: ProjectIn):
         try:
             params = {**body.params, "objects": body.objects} if body.objects is not None else body.params
-            return projects.create(body.template, params, name=body.name or None)
+            return projects.create(body.template, params, name=body.name or None, goal=body.goal)
         except Exception as e:
             _uc_err(e)
 
@@ -2755,9 +2767,15 @@ def make_app() -> FastAPI:
 
     @app.put("/api/projects/{uid}")
     async def update_project(uid: str, body: ProjectUpdate):
+        given = body.model_fields_set
         try:
+            if "goal" in given and not ({"params", "objects"} & given) and not body.name.strip():
+                return projects.set_goal(uid, body.goal)
             params = {**body.params, "objects": body.objects} if body.objects is not None else body.params
             out = projects.update(uid, params)
+            if "goal" in given:
+                projects.set_goal(uid, body.goal)
+                out = {**projects.get(uid), "report": out["report"]}
             if body.name.strip():
                 store.update_project(uid, name=body.name.strip())
                 out = {**projects.get(uid), "report": out["report"]}
@@ -2878,6 +2896,66 @@ def make_app() -> FastAPI:
                             stack.extend(x.get("children") or [])
             mask(out["threads"])
         return out
+
+    # ── the goal-first project page: how it works, what the agents found, is it working ──
+    def _scheduled() -> set:
+        return {t.name for t in runtime.catalog.triggers if getattr(t.condition, "every", None)}
+
+    @app.get("/api/projects/{uid}/outline")
+    async def project_outline(uid: str):
+        """How the project works, in plain sentences built from its configuration."""
+        _project_or_404(uid)
+        return await asyncio.to_thread(goal_mod.outline, store, runtime.catalog, uid,
+                                       runtime.health_snapshot())
+
+    @app.get("/api/projects/{uid}/results")
+    async def project_results(uid: str, limit: int = 20, before: str = ""):
+        """What the agents concluded, newest first: one result per chain of runs. Page with
+        `before` = the previous page's `next_before`."""
+        _project_or_404(uid)
+        at = None
+        if before:
+            try:
+                at = datetime.fromisoformat(before.replace("Z", "+00:00"))
+            except ValueError:
+                _err(ValueError("before must be an ISO timestamp, as next_before gives it"))
+        return await asyncio.to_thread(goal_mod.project_results, store, uid, limit=limit,
+                                       before=at, scheduled=_scheduled())
+
+    @app.get("/api/projects/{uid}/results/{run_id}")
+    async def project_result(uid: str, run_id: str):
+        """One result with its full note and the steps that led to it."""
+        _project_or_404(uid)
+        try:
+            return await asyncio.to_thread(goal_mod.result_detail, store, runtime.catalog, uid,
+                                           run_id, _scheduled())
+        except KeyError as e:
+            _err(e, 404)
+
+    @app.post("/api/projects/{uid}/results/{run_id}/handled")
+    async def project_result_handled(uid: str, run_id: str, request: Request,
+                                     body: dict = Body(...)):
+        """{"handled": true|false}: mark a result handled by the caller, or clear the mark."""
+        _project_or_404(uid)
+        run = store.get_agent_run(run_id)
+        if run is None or run.get("project") != uid:
+            _err(KeyError(f"project has no run {run_id!r}"), 404)
+        handled = (body or {}).get("handled")
+        if not isinstance(handled, bool):
+            _err(ValueError("handled must be true or false"))
+        ident = getattr(request.state, "credential", None)
+        store.set_run_handled(run_id, (ident or {}).get("name") or "console" if handled else None)
+        run = store.get_agent_run(run_id)
+        return {"ok": True, "id": run_id,
+                "handled": ({"at": run["handled_at"], "by": run["handled_by"]}
+                            if run.get("handled_at") else None)}
+
+    @app.get("/api/projects/{uid}/health")
+    async def project_health(uid: str):
+        """Is the project working: a state, one message, and what needs attention first."""
+        p = _project_or_404(uid)
+        return await asyncio.to_thread(goal_mod.project_health, store, runtime.catalog, uid, p,
+                                       runtime.health_snapshot())
 
     @app.get("/api/projects/{uid}/summary")
     async def project_summary(uid: str):

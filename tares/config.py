@@ -493,16 +493,22 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
             if not u.get(field):
                 raise CatalogError(f"project is missing required field {field!r}")
         if u.get("template") == "default":
-            continue   # every cell has its own default project; its objects carry `project`
+            # every cell has its own default project (its objects carry `project`); only its
+            # goal comes along
+            if "goal" in u:
+                engine.set_goal(store.default_project_id(), u.get("goal"))
+            continue
         params = dict(u.get("params") or {})
         if u.get("template") == "custom" and "objects" in u:
             # a hand-assembled project: `objects: [{kind, name}]` is its whole configuration
             params["objects"] = u["objects"]
         existing = store.get_project_by_name(u["name"])
         if existing is None:
-            engine.create(u["template"], params, name=u["name"])
+            engine.create(u["template"], params, name=u["name"], goal=u.get("goal"))
         else:
             engine.update(existing["id"], params)
+            if "goal" in u:
+                engine.set_goal(existing["id"], u.get("goal"))
 
     if assign:
         _place_imported(store, sources, triggers, agents, mcp_servers, only_existing=False,
@@ -714,7 +720,10 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
              "agent": {x["name"]: x.get("owned_by") for x in store.list_catalog_agents()},
              "mcp_server": {x["name"]: x.get("owned_by") for x in store.list_mcp_servers()}}
     for u in store.list_projects():
+        goal = {"goal": u["goal"]} if u.get("goal") else {}
         if u["template"] == "default":
+            if goal:   # only its goal: the default project's objects say `project` above
+                uc_out.append({"template": "default", "name": u["name"], **goal})
             continue
         if u["template"] == "custom":
             # only objects that are in the sections above and still this project's: one deleted
@@ -724,9 +733,10 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
                     if o.get("name") in owner.get(o.get("kind"), {})
                     and (u["id"] in members.get(o["name"], []) if o.get("kind") == "source"
                          else owner[o["kind"]][o["name"]] in (None, u["id"]))]
-            uc_out.append({"template": "custom", "name": u["name"], "objects": objs})
+            uc_out.append({"template": "custom", "name": u["name"], **goal, "objects": objs})
         else:
-            uc_out.append({"template": u["template"], "name": u["name"], "params": u["params"]})
+            uc_out.append({"template": u["template"], "name": u["name"], **goal,
+                           "params": u["params"]})
     if uc_out and want is None:
         doc["projects"] = uc_out
     # Skills belong to a project, not to a source: a full export carries them, a partial one

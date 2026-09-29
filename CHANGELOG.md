@@ -101,6 +101,34 @@ the project follows [Semantic Versioning](https://semver.org/).
 - The project page has a Keys section on Setup (create, the secret shown once, revoke) and an
   External agents list on the Agents tab (where it delivers, the key, the last delivery, revoke).
   The Activity tab marks an external agent's finding as recorded from outside Tares.
+- A project has a goal: one line of at most 200 characters saying what it is for.
+  `POST /api/projects` takes `goal`, and `PUT /api/projects/{uid}` with only `goal` sets or clears
+  it on any project, the default one included. The project endpoints and the summary return it,
+  and the catalog export and import carry it. A project made from a template without a goal gets
+  the template's own (every built-in template has one); the AI-guided builder's project card can
+  propose one.
+- `GET /api/projects/{uid}/outline` says how a project works in plain sentences built from its
+  configuration, with no model call: "When checkout-errors gets more than 5 events in 5 minutes
+  for one service, checkout-triage looks first. If it concludes investigate, checkout-rca digs
+  in." It lists what the project watches (with each source's state), when it wakes (with the
+  cooldown), its agents (first look or handed off to) and its skills.
+- An agent's `conclude` takes `headline` (one line, what was found) and `next_step` (what a person
+  should do, empty when nothing needs doing), and agents are told to give both. Runs and finding
+  events carry them. For a run without them they are taken from the note: its heading, bold lead
+  or first sentence, and the text after "Next step:", "Next:" or "Recommendation:".
+- `GET /api/projects/{uid}/results` lists what the agents found, newest first: one result per
+  chain of runs (a triage that handed off is not a result, the run it handed to is), marked
+  `action` or `no_action`, with headline, summary, next step, the agents in the chain, its cost
+  and time, and today's totals (since midnight UTC). External agents' findings are results too.
+  Page with `before`. `GET /api/projects/{uid}/results/{run_id}` adds the full note and the steps
+  that led to it, in plain words. `POST /api/projects/{uid}/results/{run_id}/handled` marks a
+  result handled or clears the mark (admin).
+- `GET /api/projects/{uid}/health` says whether a project is working, needs attention, is paused
+  or is still setting up, in one message, with what needs attention first: sources that fail
+  (several with the same error are one issue), stay silent far longer than usual or never
+  received anything, no agent that can run, no model provider, an agent at its daily cap or
+  budget.
+- A project key may read its project's results, outline and health.
 
 ### Changed
 - The store writes its startup migrations into the database file before serving (a checkpoint).
@@ -131,8 +159,8 @@ the project follows [Semantic Versioning](https://semver.org/).
   one) now pass `delete_sources=all`.
 - The catalog export names each trigger's `project`, `sources`, `filters` and `key_field`, each
   agent's and MCP server's `project` and each source's `projects`, and never a `views:` section.
-  The default project is not listed under `projects:`; objects that name it go to the importing
-  cell's own.
+  The default project is listed under `projects:` only when it has a goal, and only its goal is
+  imported; objects that name it go to the importing cell's own.
 - The project page's Firings tab is now Activity: one row per thread with the agents that ran and
   how each ended, opening in place to the firing, its deliveries, each run's finding and what the
   run led to, with filters and "Load older". `?tab=firings` links still open it.
@@ -155,6 +183,9 @@ the project follows [Semantic Versioning](https://semver.org/).
   second time.
 - Runs and firings from before lineage get their project from their agent's or trigger's owner,
   when it still exists. What woke them stays unknown.
+- The first start gives each project made from a template its template's goal. Custom projects
+  and the default project start without one. This runs once, so a goal cleared later stays
+  cleared.
 - A catalog exported while views existed still imports: each trigger that names a view gets that
   view's sources, filters and key field, a custom project's view entries are dropped, and objects
   without a project go to the default project.

@@ -342,6 +342,15 @@ _MIGRATIONS = [
     # instead of to one trigger. NULL on both is what every row before meant.
     "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS project TEXT",
     "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS project TEXT",
+    # The goal-first project page: what a project is for, in the user's words (NULL = not said
+    # yet), and on a run the one-line headline and next step of what it concluded, plus when a
+    # person marked the result handled and who. NULL on every earlier row. Headline and next
+    # step are derived from the note at read time for those (tares/goal.py).
+    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS goal TEXT",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS headline TEXT",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS next_step TEXT",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS handled_at TIMESTAMPTZ",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS handled_by TEXT",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -1194,16 +1203,18 @@ class Store:
     def finish_agent_run(self, run_id: str, status: str, rounds: int = 0, tool_calls: int = 0,
                          finding: str | None = None, error: str | None = None,
                          external_tools: list[str] | None = None, outcome: str | None = None,
-                         verdict: str | None = None) -> None:
+                         verdict: str | None = None, headline: str | None = None,
+                         next_step: str | None = None) -> None:
         with self._lock:
             self.con.execute(
                 "UPDATE agent_runs SET status = ?, rounds = ?, tool_calls = ?, finding = ?, "
-                "error = ?, external_tools = ?, outcome = ?, verdict = ?, finished_at = ?, "
+                "error = ?, external_tools = ?, outcome = ?, verdict = ?, headline = ?, "
+                "next_step = ?, finished_at = ?, "
                 "duration_ms = CAST(date_diff('millisecond', started_at, ?) AS INTEGER) "
                 "WHERE id = ?",
                 [status, rounds, tool_calls, finding, error,
-                 json.dumps(external_tools or []), outcome, verdict, now_utc(), now_utc(),
-                 run_id],
+                 json.dumps(external_tools or []), outcome, verdict, headline or None,
+                 next_step or None, now_utc(), now_utc(), run_id],
             )
 
     def record_run_usage(self, run_id: str, model: str, input_tokens: int, output_tokens: int,
@@ -1239,7 +1250,8 @@ class Store:
                "started_at, duration_ms, finding, error, external_tools, max_rounds, "
                "model, input_tokens, output_tokens, cache_creation_input_tokens, "
                "cache_read_input_tokens, cost_usd, delivery, delivery_error, provider, "
-               "outcome, verdict, results, woken_by, parent_run_id, project, skills "
+               "outcome, verdict, results, woken_by, parent_run_id, project, skills, "
+               "headline, next_step, handled_at, handled_by "
                "FROM agent_runs ")
         where, params = [], []
         if where_sql:
@@ -1268,7 +1280,8 @@ class Store:
              "provider": r[22] or "", "outcome": r[23], "verdict": r[24],
              "results": json.loads(r[25]) if r[25] else [],
              "woken_by": r[26], "parent_run_id": r[27], "project": r[28],
-             "skills": json.loads(r[29]) if r[29] else []}
+             "skills": json.loads(r[29]) if r[29] else [],
+             "headline": r[30], "next_step": r[31], "handled_at": r[32], "handled_by": r[33]}
             for r in rows
         ]
 
@@ -1307,6 +1320,44 @@ class Store:
         with self._lock:
             self.con.execute("UPDATE agent_runs SET skills = ? WHERE id = ?",
                              [json.dumps(names), run_id])
+
+    def set_run_handled(self, run_id: str, by: str | None) -> None:
+        """Mark a run's result handled by `by` now, or clear the mark when `by` is None."""
+        with self._lock:
+            self.con.execute("UPDATE agent_runs SET handled_at = ?, handled_by = ? WHERE id = ?",
+                             [now_utc() if by else None, by or None, run_id])
+
+    def project_threads_since(self, project: str, since) -> int:
+        """How many timeline threads of a project started at or after `since`: the roots
+        timeline_roots pages through, counted."""
+        with self._lock:
+            r = self.con.execute(
+                "SELECT (SELECT count(*) FROM dispatch_log d WHERE project = ? AND fired_at >= ? "
+                "        AND NOT EXISTS (SELECT 1 FROM agent_runs p WHERE p.id = d.parent_run_id "
+                "                        AND p.project = d.project)) + "
+                "       (SELECT count(*) FROM agent_runs r WHERE project = ? AND started_at >= ? "
+                "        AND COALESCE(dispatch_id, '') = '' "
+                "        AND NOT EXISTS (SELECT 1 FROM agent_runs p WHERE p.id = r.parent_run_id "
+                "                        AND p.project = r.project))",
+                [project, since, project, since]).fetchone()
+        return int(r[0] or 0) if r else 0
+
+    def project_spend_since(self, project: str, since) -> float:
+        """What the runs of a project started at or after `since` cost, in USD."""
+        with self._lock:
+            r = self.con.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM agent_runs "
+                                 "WHERE project = ? AND started_at >= ?", [project, since]).fetchone()
+        return float(r[0] or 0) if r else 0.0
+
+    def recent_ingest_gaps(self, source: str, since, limit: int = 1000) -> list[float]:
+        """Seconds between consecutive ingests of a source since `since`, over at most its last
+        `limit` events: how often the source usually hears something (project health)."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT epoch(ingest_time) FROM events WHERE source = ? AND ingest_time >= ? "
+                "ORDER BY ingest_time DESC LIMIT ?", [source, since, int(limit)]).fetchall()
+        ts = sorted(float(r[0]) for r in rows if r[0] is not None)
+        return [b - a for a, b in zip(ts, ts[1:])]
 
     def set_run_delivery(self, run_id: str, delivery: str, error: str | None = None) -> None:
         """The write-back's outcome for a run, recorded after the finding is stored: a failed
@@ -1562,18 +1613,22 @@ class Store:
         return True
 
     def create_project(self, uid: str, template: str, name: str, params: dict,
-                       status: str = "active") -> None:
+                       status: str = "active", goal: str | None = None) -> None:
         ts = now_utc()
         with self._lock:
             self.con.execute(
                 "INSERT INTO usecases (id, recipe, name, params, status, created_at, updated_at, "
-                "last_error) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
-                [uid, template, name, json.dumps(params), status, ts, ts])
+                "last_error, goal) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)",
+                [uid, template, name, json.dumps(params), status, ts, ts, goal or None])
 
     def update_project(self, uid: str, params: dict | None = None, status: str | None = None,
-                       last_error: str | None = "", name: str | None = None) -> None:
-        """last_error: "" (default) leaves it unchanged; None clears it; a string sets it."""
+                       last_error: str | None = "", name: str | None = None,
+                       goal: str | None = "") -> None:
+        """last_error and goal: "" (default) leaves it unchanged; None clears it; a string sets
+        it."""
         sets, vals = ["updated_at = ?"], [now_utc()]
+        if goal != "":
+            sets.append("goal = ?"); vals.append(goal)
         if params is not None:
             sets.append("params = ?"); vals.append(json.dumps(params))
         if status is not None:
@@ -1589,20 +1644,21 @@ class Store:
     @staticmethod
     def _project_row(r) -> dict:
         return {"id": r[0], "template": r[1], "name": r[2], "params": json.loads(r[3] or "{}"),
-                "status": r[4], "created_at": r[5], "updated_at": r[6], "last_error": r[7]}
+                "status": r[4], "created_at": r[5], "updated_at": r[6], "last_error": r[7],
+                "goal": r[8]}
 
     def list_projects(self) -> list[dict]:
         with self._lock:
             rows = self.con.execute(
-                "SELECT id, recipe, name, params, status, created_at, updated_at, last_error "
-                "FROM usecases ORDER BY created_at").fetchall()
+                "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
+                "goal FROM usecases ORDER BY created_at").fetchall()
         return [self._project_row(r) for r in rows]
 
     def get_project(self, uid: str) -> dict | None:
         with self._lock:
             r = self.con.execute(
-                "SELECT id, recipe, name, params, status, created_at, updated_at, last_error "
-                "FROM usecases WHERE id = ?", [uid]).fetchone()
+                "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
+                "goal FROM usecases WHERE id = ?", [uid]).fetchone()
         return self._project_row(r) if r else None
 
     def get_project_by_name(self, name: str) -> dict | None:

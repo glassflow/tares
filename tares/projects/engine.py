@@ -16,6 +16,7 @@ import uuid
 
 from .. import skills as _skills
 from ..config import CatalogError, agent_url, import_catalog_dict
+from ..goal import normalize_goal
 from .base import PlannedObject, ProjectError
 from .registry import get_template, list_templates as _list_templates
 
@@ -101,10 +102,16 @@ class Engine:
         return {**{k: v for k, v in extra.items() if k not in base}, **base}
 
     # ── write side ───────────────────────────────────────────────────────────
-    def create(self, template_key: str, params: dict, name: str | None = None) -> dict:
+    def create(self, template_key: str, params: dict, name: str | None = None,
+               goal: str | None = None) -> dict:
+        """`goal`: what the project is for, one line; none given = the template's GOAL."""
         if template_key == "default":
             raise ProjectError("every cell has one default project; Tares creates it")
         template = get_template(template_key)
+        try:
+            goal = normalize_goal(goal) or normalize_goal(getattr(template, "GOAL", "") or None)
+        except ValueError as e:
+            raise ProjectError(str(e)) from e
         params = template.validate(params)
         template.preflight(params, self.store)
         name = (name or "").strip()
@@ -116,7 +123,7 @@ class Engine:
             raise ProjectError(f"a project named {name!r} already exists")
         plan = template.plan(params)
         uid = "uc_" + uuid.uuid4().hex[:10]
-        self.store.create_project(uid, template.key, name, params, status="active")
+        self.store.create_project(uid, template.key, name, params, status="active", goal=goal)
         self.store.log_project(uid, "create", f"{len(plan)} objects planned")
         before = self._existing_names(uid)
         try:
@@ -206,6 +213,36 @@ class Engine:
         self.store.log_project(uid, "updated", "; ".join(
             f"{k}: {', '.join(v)}" for k, v in report.items() if v) or "no changes")
         return {**self.get(uid), "report": report}
+
+    def set_goal(self, uid: str, goal: str | None) -> dict:
+        """Set or clear what the project is for. Any project, the default one included: the goal
+        is the user's words, not configuration."""
+        self._require(uid)
+        try:
+            goal = normalize_goal(goal)
+        except ValueError as e:
+            raise ProjectError(str(e)) from e
+        self.store.update_project(uid, goal=goal)
+        return self.get(uid)
+
+    def fill_template_goals(self) -> int:
+        """Upgrade, once per database: a project made from a template before goals existed gets
+        its template's GOAL. A custom or default project stays without one (the console asks).
+        The settings marker keeps a goal the user cleared later from coming back on a restart.
+        Returns how many projects were given a goal."""
+        if self.store.get_setting("template_goals_filled"):
+            return 0
+        n = 0
+        for p in self.store.list_projects():
+            if p.get("goal"):
+                continue
+            template = _safe_template(p["template"])
+            goal = normalize_goal(getattr(template, "GOAL", "") or None) if template else None
+            if goal:
+                self.store.update_project(p["id"], goal=goal)
+                n += 1
+        self.store.set_setting("template_goals_filled", "1")
+        return n
 
     def pause(self, uid: str, sources: bool = False) -> dict:
         """Triggers off, agents unsubscribed; sources keep ingesting unless `sources` is set, in

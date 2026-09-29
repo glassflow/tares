@@ -287,6 +287,12 @@ CONCLUDE_DEF = {
         "key": {"type": "string", "description": "the entity the finding is about"},
         "label": {"type": "string", "description": "the label `key` is a value of, e.g. "
                                                    "service, path; default: the woken entity's"},
+        "headline": {"type": "string", "description": "one line, at most 100 characters: what "
+                                                      "you found, in the reader's terms, e.g. "
+                                                      "Payment provider outage"},
+        "next_step": {"type": "string", "description": "at most 300 characters: what a person "
+                                                       "should do now; empty when nothing needs "
+                                                       "doing"},
         "produced": {"type": "array", "items": {"type": "string"},
                      "description": "anything you produced that Tares cannot see from your "
                                     "tool calls, one short line each; usually leave empty"}},
@@ -294,8 +300,27 @@ CONCLUDE_DEF = {
 }
 
 
+# Appended to the system prompt of an agent offered `conclude`: the project page shows the
+# headline and the next step first, the note behind them.
+CONCLUDE_GUIDANCE = (
+    "\n\nWhen you call conclude, also give `headline`: one line of at most 100 characters "
+    "saying what you found, in the reader's terms (for example: Payment provider outage). And "
+    "give `next_step`: what a person should do now, in at most 300 characters; leave it empty "
+    "when nothing needs doing.")
+HEADLINE_MAX = 100
+NEXT_STEP_MAX = 300
+
+
 def offers_conclude(agent: dict) -> bool:
     return CONCLUDE in (agent.get("prompt") or "")
+
+
+def _one_line(text, limit: int) -> str | None:
+    """Whitespace folded to single spaces, cut to `limit` characters; None when empty."""
+    t = " ".join(str(text or "").split())
+    if len(t) > limit:
+        t = t[:limit - 1].rstrip() + "\u2026"
+    return t or None
 
 
 def parse_conclude(args: dict) -> tuple[dict | None, str | None]:
@@ -310,6 +335,8 @@ def parse_conclude(args: dict) -> tuple[dict | None, str | None]:
             "verdict": str(args.get("verdict") or "").strip().lower() or None,
             "key": str(args.get("key") or "").strip() or None,
             "label": str(args.get("label") or "").strip() or None,
+            "headline": _one_line(args.get("headline"), HEADLINE_MAX),
+            "next_step": _one_line(args.get("next_step"), NEXT_STEP_MAX),
             "produced": args.get("produced") or []}, None
 
 
@@ -769,7 +796,9 @@ class AgentRunner:
             obs.set_output(concluded["summary"])
             self.store.finish_agent_run(run_id, "ok", rounds=rounds, tool_calls=tool_calls,
                                         finding=concluded["summary"] or None,
-                                        external_tools=external_used, outcome="no_op")
+                                        external_tools=external_used, outcome="no_op",
+                                        headline=concluded.get("headline"),
+                                        next_step=concluded.get("next_step"))
             return "ok", None
         if not finding:
             msg = "the model returned no conclusion"
@@ -795,10 +824,14 @@ class AgentRunner:
                                           finding, verdict=verdict,
                                           label=concluded.get("label"),
                                           run_id=run_id, model=model,
-                                          dispatch_id=dispatch_id) or [])
+                                          dispatch_id=dispatch_id,
+                                          headline=concluded.get("headline"),
+                                          next_step=concluded.get("next_step")) or [])
         self.store.finish_agent_run(run_id, "ok", rounds=rounds, tool_calls=tool_calls,
                                     finding=finding, external_tools=external_used,
-                                    outcome="finding", verdict=verdict)
+                                    outcome="finding", verdict=verdict,
+                                    headline=concluded.get("headline"),
+                                    next_step=concluded.get("next_step"))
         if (agent.get("webhook_url") or "").strip():
             delivery, derr = await self._webhook(agent, {
                 "event": "finding",
@@ -903,7 +936,8 @@ class AgentRunner:
         # the model loads it. None in the project: prompt and tools exactly as before.
         skills = self._project_skills(agent)
         skill_names = [sk["name"] for sk in skills]
-        system = agent["prompt"] + (_skills.prompt_section(skills) if skills else "")
+        system = (agent["prompt"] + (CONCLUDE_GUIDANCE if offers_conclude(agent) else "")
+                  + (_skills.prompt_section(skills) if skills else ""))
         tools = (TOOL_DEFS + ([CONCLUDE_DEF] if offers_conclude(agent) else [])
                  + ([_skills.TOOL_DEF] if skills else []) + toolbox.tool_defs)
         max_rounds = effective_max_rounds(agent)
@@ -1101,7 +1135,8 @@ class AgentRunner:
     async def _ingest_finding(self, agent_name: str, trigger_name: str, key: str, finding: str,
                               prompt_hash_: str, verdict: str | None = None,
                               label: str | None = None, run_id: str | None = None,
-                              dispatch_id: str | None = None, project: str | None = None) -> None:
+                              dispatch_id: str | None = None, project: str | None = None,
+                              headline: str | None = None, next_step: str | None = None) -> None:
         """Store one finding as an event of the findings source. `project` is the project it was
         recorded in: a project's reads of the shared findings source see only its own."""
         if FINDINGS_SOURCE not in self.runtime.catalog.sources:
@@ -1119,6 +1154,8 @@ class AgentRunner:
             "key": key, "finding": finding, "agent": agent_name, "trigger": trigger_name,
             "prompt_hash": prompt_hash_,
             **({"verdict": verdict} if verdict else {}),
+            **({"headline": headline} if headline else {}),
+            **({"next_step": next_step} if next_step else {}),
             **lineage,
             **({"project": project} if project else {}),
             "labels": labels,
@@ -1141,7 +1178,8 @@ class AgentRunner:
     async def _record(self, agent: dict, trigger_name: str, key: str, finding: str,
                       verdict: str | None = None, label: str | None = None,
                       run_id: str | None = None, model: str | None = None,
-                      dispatch_id: str | None = None) -> list:
+                      dispatch_id: str | None = None, headline: str | None = None,
+                      next_step: str | None = None) -> list:
         """Record the finding, then notify. Returns the notifications delivered, as results.
         The finding names the run and the firing it came from, in its payload and its labels, so
         a firing it trips later can be traced back to this run (TR-330)."""
@@ -1151,7 +1189,8 @@ class AgentRunner:
         await self._ingest_finding(agent["name"], trigger_name, key, finding,
                                    prompt_hash(agent["prompt"]), verdict=verdict, label=label,
                                    run_id=run_id, dispatch_id=dispatch_id,
-                                   project=agent.get("owned_by"))
+                                   project=agent.get("owned_by"), headline=headline,
+                                   next_step=next_step)
         # Notification: the workspace bot posting to a channel is the primary path (one token,
         # picked from a list, no credential per agent); the per-agent incoming webhook stays as
         # the secondary/legacy path. An agent uses one — channel wins when both are set.
