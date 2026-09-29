@@ -9,6 +9,7 @@ import type {
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, ModelProvider, ModelProviders,
 } from "./types";
+import type { TimelineThread } from "./components/ProjectActivity";
 
 const TOKEN_KEY = "tares_token";
 export const auth = {
@@ -309,6 +310,12 @@ export const api = {
     request<{ ok: boolean; source: string }>("/remember", { method: "POST", body: JSON.stringify(body) }),
   projectSummary: (id: string) =>
     request<ProjectSummary>(`/api/projects/${encodeURIComponent(id)}/summary`),
+  // the project's threads, newest first; page with `before` = the previous page's next_before
+  projectTimeline: (id: string, q: { trigger?: string; agent?: string; outcome?: string;
+                                     entity?: string; before?: string | null; limit?: number } = {}) =>
+    request<{ threads: TimelineThread[]; next_before: string | null }>(
+      `/api/projects/${encodeURIComponent(id)}/timeline?` + new URLSearchParams(
+        Object.entries(q).filter(([, v]) => v != null && v !== "").map(([k, v]) => [k, String(v)])).toString()),
   // template "custom" takes `objects` ({kind, name} each) instead of params
   createProject: (body: { template: string; name?: string; params?: Record<string, unknown>;
                           objects?: { kind: ProjectObjectKind; name: string }[] }) =>

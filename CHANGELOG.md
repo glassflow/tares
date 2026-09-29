@@ -26,6 +26,16 @@ the project follows [Semantic Versioning](https://semver.org/).
   moves the triggers, agents and MCP servers it names out of the default project (with what they
   need: an agent's trigger, a trigger's agents and sources) and refuses one that belongs to another
   project, naming that project.
+- Every agent run records what woke it (`woken_by`: trigger, schedule, manual, rerun, bootstrap
+  or handoff), the run it repeats (`parent_run_id`) and its project. A firing records its
+  trigger's project and, when a finding tripped it, the run that wrote that finding. A finding
+  event carries `run_id` and `dispatch_id` in its payload and labels.
+- `GET /api/projects/{uid}/timeline` lists what happened in a project, newest first, one thread
+  per firing or per run that no firing woke. Each thread holds the firing (trigger, entity, an
+  excerpt of what it carried, where it was delivered) and its runs, and each run holds what it led
+  to: its reruns, and the firings its finding tripped with the runs they woke. A watcher's alert,
+  its finding and the root-cause run that finding started read as one thread. Filters: `trigger`,
+  `agent`, `outcome`, `entity`; page with `before` set to the previous page's `next_before`.
 
 ### Changed
 - Views are gone. A trigger names the sources it watches, the filters that narrow them and the
@@ -45,6 +55,9 @@ the project follows [Semantic Versioning](https://semver.org/).
   agent's and MCP server's `project` and each source's `projects`, and never a `views:` section.
   The default project is not listed under `projects:`; objects that name it go to the importing
   cell's own.
+- The project page's Firings tab is now Activity: one row per thread with the agents that ran and
+  how each ended, opening in place to the firing, its deliveries, each run's finding and what the
+  run led to, with filters and "Load older". `?tab=firings` links still open it.
 - `tares status` shows projects instead of views. The activity log of reads reports `scope`
   (what was read) instead of `view`.
 
@@ -59,6 +72,8 @@ the project follows [Semantic Versioning](https://semver.org/).
   sources become members of its project. Objects a template or custom project owned stay there;
   a custom project's list drops its views. The pass runs at every start and changes nothing the
   second time.
+- Runs and firings from before lineage get their project from their agent's or trigger's owner,
+  when it still exists. What woke them stays unknown.
 - A catalog exported while views existed still imports: each trigger that names a view gets that
   view's sources, filters and key field, a custom project's view entries are dropped, and objects
   without a project go to the default project.

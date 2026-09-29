@@ -342,7 +342,7 @@ class AgentRunner:
 
     # ── entry point (called by the dispatcher, once per internal subscription) ─
     def deliver(self, agent_name: str, subscription_id: str, trigger_name: str, key: str,
-                payload: str, dispatch_id: str) -> None:
+                payload: str, dispatch_id: str, woken_by: str = "trigger") -> None:
         """Wake a Tares agent for one firing. Logs a pending delivery immediately, then runs the
         agent in the background. Never raises and never blocks — a run must not break the dispatch."""
         agent = self.store.get_catalog_agent(agent_name)
@@ -353,16 +353,18 @@ class AgentRunner:
         # pending delivery: the firing already "reached" the agent; whether it concludes is async.
         self.store.log_delivery(dispatch_id, subscription_id, agent_url(agent_name), None)
         task = asyncio.create_task(self._guarded(agent, subscription_id, trigger_name, key,
-                                                 payload, dispatch_id))
+                                                 payload, dispatch_id, woken_by))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
     # ── manual and bootstrap runs (no firing behind them) ────────────────────
-    def run_now(self, agent_name: str, trigger_name: str, key: str, payload: str) -> str | None:
+    def run_now(self, agent_name: str, trigger_name: str, key: str, payload: str,
+                woken_by: str = "manual", parent_run_id: str | None = None) -> str | None:
         """Run an agent once outside a firing (a project bootstrapping its first pages, a manual
         re-run). Same run record, same caps and dedupe as a firing; no delivery row, since there is
-        no dispatch. Returns the run id, or None when the agent does not exist or is already
-        running for this key."""
+        no dispatch. `woken_by` and `parent_run_id` are the run's lineage: manual, bootstrap, or a
+        rerun of the parent. Returns the run id, or None when the agent does not exist or is
+        already running for this key."""
         agent = self.store.get_catalog_agent(agent_name)
         if agent is None or (agent_name, key) in self._inflight:
             return None
@@ -388,7 +390,9 @@ class AgentRunner:
             self._inflight.discard(marker)
             raise
         self.store.start_agent_run(run_id, agent_name, trigger_name, "", key,
-                                   prompt_hash(agent["prompt"]), effective_max_rounds(agent))
+                                   prompt_hash(agent["prompt"]), effective_max_rounds(agent),
+                                   woken_by=woken_by, parent_run_id=parent_run_id,
+                                   project=agent.get("owned_by"))
         return run_id
 
     def attach_loop(self) -> None:
@@ -435,7 +439,8 @@ class AgentRunner:
                     if not count:
                         print(f"[agent {agent_name}] bootstrap: no events for {key} yet, skipped")
                         return
-                    rid = self.run_now(agent_name, trigger_name, key, payload)
+                    rid = self.run_now(agent_name, trigger_name, key, payload,
+                                       woken_by="bootstrap")
                     if rid:
                         print(f"[agent {agent_name}] bootstrap run {rid} for {key} ({count} events)")
                         # wait for the run so the semaphore really bounds concurrency
@@ -449,7 +454,7 @@ class AgentRunner:
         task.add_done_callback(self._tasks.discard)
 
     async def _guarded(self, agent: dict, subscription_id: str, trigger_name: str, key: str,
-                       payload: str, dispatch_id: str) -> None:
+                       payload: str, dispatch_id: str, woken_by: str = "trigger") -> None:
         marker = (agent["name"], key)
         if marker in self._inflight:   # at-least-once dedupe
             self.store.update_delivery(dispatch_id, subscription_id, True, "deduped (already running)")
@@ -457,7 +462,8 @@ class AgentRunner:
         self._inflight.add(marker)
         run_id = "run_" + uuid.uuid4().hex[:12]
         self.store.start_agent_run(run_id, agent["name"], trigger_name, dispatch_id, key,
-                                   prompt_hash(agent["prompt"]), effective_max_rounds(agent))
+                                   prompt_hash(agent["prompt"]), effective_max_rounds(agent),
+                                   woken_by=woken_by, project=agent.get("owned_by"))
         t0 = time.monotonic()
         try:
             status, error = await self._run(agent, trigger_name, key, payload, run_id,
@@ -632,7 +638,8 @@ class AgentRunner:
         results.extend(await self._record(agent, trigger_name, concluded.get("key") or key,
                                           finding, verdict=verdict,
                                           label=concluded.get("label"),
-                                          run_id=run_id, model=model) or [])
+                                          run_id=run_id, model=model,
+                                          dispatch_id=dispatch_id) or [])
         self.store.finish_agent_run(run_id, "ok", rounds=rounds, tool_calls=tool_calls,
                                     finding=finding, external_tools=external_used,
                                     outcome="finding", verdict=verdict)
@@ -912,8 +919,11 @@ class AgentRunner:
 
     async def _record(self, agent: dict, trigger_name: str, key: str, finding: str,
                       verdict: str | None = None, label: str | None = None,
-                      run_id: str | None = None, model: str | None = None) -> list:
-        """Record the finding, then notify. Returns the notifications delivered, as results."""
+                      run_id: str | None = None, model: str | None = None,
+                      dispatch_id: str | None = None) -> list:
+        """Record the finding, then notify. Returns the notifications delivered, as results.
+        The finding names the run and the firing it came from, in its payload and its labels, so
+        a firing it trips later can be traced back to this run (TR-330)."""
         if FINDINGS_SOURCE not in self.runtime.catalog.sources:
             # provisioned on the first finding, like the memory source — a fresh install has no
             # reason to carry an empty one. No `labels` config: the runner stamps them per event.
@@ -927,10 +937,13 @@ class AgentRunner:
         labels = {label: key} if label else {}
         if verdict:
             labels["verdict"] = verdict
+        lineage = {k: v for k, v in (("run_id", run_id), ("dispatch_id", dispatch_id)) if v}
+        labels.update(lineage)
         await self.runtime.ingest(FINDINGS_SOURCE, {
             "key": key, "finding": finding, "agent": agent["name"], "trigger": trigger_name,
             "prompt_hash": prompt_hash(agent["prompt"]),
             **({"verdict": verdict} if verdict else {}),
+            **lineage,
             "labels": labels,
         })
         # Notification: the workspace bot posting to a channel is the primary path (one token,

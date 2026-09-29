@@ -17,7 +17,7 @@ import type { AgentRun, BuiltinAgent } from "../types";
 
 type Tab = "overview" | "runs" | "configuration";
 
-function statusBadge(r: AgentRun) {
+export function statusBadge(r: AgentRun) {
   // a run that concluded with nothing to hand on: a success, but quiet
   if (r.status === "ok" && r.outcome === "no_op")
     return <span className="badge" title="concluded with nothing to report; no finding was recorded">no finding</span>;
@@ -35,7 +35,7 @@ function statusBadge(r: AgentRun) {
 
 /** What a run produced (TR-220), one chip per result, linked when there is somewhere to go.
  *  `limit` keeps the row short; the expanded run lists them all. */
-function ResultChips({ r, limit }: { r: AgentRun; limit?: number }) {
+export function ResultChips({ r, limit }: { r: AgentRun; limit?: number }) {
   const all = r.results ?? [];
   if (!all.length) return null;
   const shown = limit ? all.slice(0, limit) : all;

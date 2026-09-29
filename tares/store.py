@@ -313,6 +313,15 @@ _MIGRATIONS = [
     "ALTER TABLE catalog_triggers ADD COLUMN IF NOT EXISTS sources JSON",
     "ALTER TABLE catalog_triggers ADD COLUMN IF NOT EXISTS filters JSON",
     "ALTER TABLE catalog_triggers ADD COLUMN IF NOT EXISTS key_field TEXT",
+    # TR-330 run lineage: what woke a run (trigger | schedule | manual | rerun | bootstrap |
+    # handoff; NULL before, shown as unknown), the run it repeats or was handed off from, and the
+    # project it ran in. A firing records its trigger's project and, when a finding tripped it,
+    # the run that wrote the finding. Backfilled and indexed in _lineage_upgrade.
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS woken_by TEXT",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS parent_run_id TEXT",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS project TEXT",
+    "ALTER TABLE dispatch_log ADD COLUMN IF NOT EXISTS project TEXT",
+    "ALTER TABLE dispatch_log ADD COLUMN IF NOT EXISTS parent_run_id TEXT",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -326,6 +335,11 @@ _DOTTED_FIELD_RE = re.compile(r"^[A-Za-z0-9_.]+$")
 # cap we drop that (source, label)'s rows and mark it truncated: reads fall back to a live scan and
 # the UI can flag it as high-cardinality (not a useful entity axis anyway).
 _ENTITY_CARDINALITY_CAP = int(os.getenv("TARES_ENTITY_CARDINALITY_CAP", "10000"))
+
+
+# A finding's labels name the run and firing it came from (TR-330). They are for tracing a
+# finding back, one value per run, so they are never counted as an entity axis.
+_PROVENANCE_LABELS = {"run_id", "dispatch_id"}
 
 
 def _accum_entity(ent: dict, source: str, label: str, value, ingest_time) -> None:
@@ -476,6 +490,7 @@ class Store:
             self._fold_views()
             self._migrate_claude_code_repo_label()
             self._normalize_projects()
+            self._lineage_upgrade()
             self._init_source_stats()
             self._init_entity_counts()
         except Exception as e:
@@ -588,6 +603,25 @@ class Store:
                 self.con.execute("UPDATE catalog_triggers SET key_field = ?, filters = ? WHERE name = ?",
                                  ["repo" if key_field == "project" else key_field, json.dumps(fl), name])
 
+    def _lineage_upgrade(self) -> None:
+        """Runs and firings from before lineage have no project: take it from the agent's or the
+        trigger's owner when that still exists (a run of a deleted agent stays unplaced). Then the
+        indexes the project timeline reads through. Idempotent: only NULL rows are touched."""
+        self.con.execute(
+            "UPDATE agent_runs SET project = a.owned_by FROM catalog_agents a "
+            "WHERE agent_runs.project IS NULL AND a.name = agent_runs.agent "
+            "AND a.owned_by IS NOT NULL")
+        self.con.execute(
+            "UPDATE dispatch_log SET project = t.owned_by FROM catalog_triggers t "
+            "WHERE dispatch_log.project IS NULL AND t.name = dispatch_log.trigger "
+            "AND t.owned_by IS NOT NULL")
+        for stmt in ("CREATE INDEX IF NOT EXISTS ix_agent_runs_dispatch ON agent_runs(dispatch_id)",
+                     "CREATE INDEX IF NOT EXISTS ix_agent_runs_parent ON agent_runs(parent_run_id)",
+                     "CREATE INDEX IF NOT EXISTS ix_agent_runs_project ON agent_runs(project, started_at)",
+                     "CREATE INDEX IF NOT EXISTS ix_dispatch_log_project ON dispatch_log(project, fired_at)",
+                     "CREATE INDEX IF NOT EXISTS ix_dispatch_log_parent ON dispatch_log(parent_run_id)"):
+            self.con.execute(stmt)
+
     def ping(self) -> None:
         """Cheapest possible liveness probe for /health — proves the connection still answers.
         Raises whatever DuckDB raises when the store has gone away underneath us."""
@@ -629,6 +663,7 @@ class Store:
                 "  SELECT source, k.key AS label, "
                 "         json_extract_string(labels, '$.\"' || k.key || '\"') AS value, ingest_time "
                 "  FROM events, UNNEST(json_keys(labels)) AS k(key) WHERE labels IS NOT NULL"
+                "  AND NOT (event_type = 'finding' AND k.key IN ('run_id', 'dispatch_id'))"
                 ") WHERE value IS NOT NULL AND value <> '' GROUP BY source, label, value")
             # The primary key axis (key_value), stored under the reserved label name 'key_value'.
             self.con.execute(
@@ -666,6 +701,8 @@ class Store:
         for e in envelopes:
             _accum_entity(ent, e.source, "key_value", e.key_value, e.ingest_time)
             for lname, lval in (e.labels or {}).items():
+                if e.event_type == "finding" and lname in _PROVENANCE_LABELS:
+                    continue
                 _accum_entity(ent, e.source, lname, lval, e.ingest_time)
             if last is None or e.ingest_time > last:
                 last = e.ingest_time
@@ -718,6 +755,8 @@ class Store:
                     d[1] = e.ingest_time
             _accum_entity(ent, e.source, "key_value", e.key_value, e.ingest_time)
             for lname, lval in (e.labels or {}).items():
+                if e.event_type == "finding" and lname in _PROVENANCE_LABELS:
+                    continue
                 _accum_entity(ent, e.source, lname, lval, e.ingest_time)
         # Insert in bounded chunks. DuckDB's executemany binds rows one at a time, so a single huge
         # batch (e.g. a connector catching up a large backlog) would bind millions of parameters at
@@ -1062,15 +1101,20 @@ class Store:
 
     # ── agent runs (the operational record; the finding is an event, not this) ──
     def start_agent_run(self, run_id: str, agent: str, trigger: str, dispatch_id: str,
-                        key: str, prompt_hash: str, max_rounds: int | None = None) -> None:
+                        key: str, prompt_hash: str, max_rounds: int | None = None,
+                        woken_by: str | None = None, parent_run_id: str | None = None,
+                        project: str | None = None) -> None:
         # max_rounds is the cap this run will be held to (the effective value, not the agent's
-        # nullable setting), so the history stays honest if defaults change later.
+        # nullable setting), so the history stays honest if defaults change later. woken_by,
+        # parent_run_id and project are the run's lineage (TR-330), fixed when it starts.
         with self._lock:
             self.con.execute(
                 "INSERT INTO agent_runs (id, agent, trigger, dispatch_id, key_value, status, "
-                "rounds, tool_calls, prompt_hash, started_at, max_rounds) "
-                "VALUES (?, ?, ?, ?, ?, 'running', 0, 0, ?, ?, ?)",
-                [run_id, agent, trigger, dispatch_id, key, prompt_hash, now_utc(), max_rounds],
+                "rounds, tool_calls, prompt_hash, started_at, max_rounds, woken_by, "
+                "parent_run_id, project) "
+                "VALUES (?, ?, ?, ?, ?, 'running', 0, 0, ?, ?, ?, ?, ?, ?)",
+                [run_id, agent, trigger, dispatch_id, key, prompt_hash, now_utc(), max_rounds,
+                 woken_by, parent_run_id or None, project or None],
             )
 
     def finish_agent_run(self, run_id: str, status: str, rounds: int = 0, tool_calls: int = 0,
@@ -1112,16 +1156,21 @@ class Store:
         return (int(r[0]), int(r[1])) if r else (0, 0)
 
     def list_agent_runs(self, agent: str | None = None, limit: int = 50, offset: int = 0,
-                        status: str | None = None) -> list[dict]:
+                        status: str | None = None, where_sql: str = "",
+                        where_params: list | None = None) -> list[dict]:
         """Newest first. `status` narrows to one run status (ok, failed, capped, ...); `offset`
-        pages, so a console can show more without re-reading what it has."""
+        pages, so a console can show more without re-reading what it has. `where_sql` is an extra
+        condition for the store's own lookups (by id, dispatch, parent run)."""
         sql = ("SELECT id, agent, trigger, dispatch_id, key_value, status, rounds, tool_calls, "
                "started_at, duration_ms, finding, error, external_tools, max_rounds, "
                "model, input_tokens, output_tokens, cache_creation_input_tokens, "
                "cache_read_input_tokens, cost_usd, delivery, delivery_error, provider, "
-               "outcome, verdict, results "
+               "outcome, verdict, results, woken_by, parent_run_id, project "
                "FROM agent_runs ")
         where, params = [], []
+        if where_sql:
+            where.append(where_sql)
+            params += list(where_params or [])
         if agent:
             where.append("agent = ?")
             params.append(agent)
@@ -1143,9 +1192,23 @@ class Store:
              "cache_creation_input_tokens": r[17], "cache_read_input_tokens": r[18],
              "cost_usd": r[19], "delivery": r[20], "delivery_error": r[21],
              "provider": r[22] or "", "outcome": r[23], "verdict": r[24],
-             "results": json.loads(r[25]) if r[25] else []}
+             "results": json.loads(r[25]) if r[25] else [],
+             "woken_by": r[26], "parent_run_id": r[27], "project": r[28]}
             for r in rows
         ]
+
+    def runs_where(self, column: str, values: list, project: str | None = None) -> list[dict]:
+        """Runs whose dispatch_id or parent_run_id is one of `values` (the timeline's indexed
+        lookups), oldest first, optionally only those of one project."""
+        if column not in ("dispatch_id", "parent_run_id", "id") or not values:
+            return []
+        sql = f"{column} IN ({', '.join(['?'] * len(values))})"
+        params = list(values)
+        if project is not None:
+            sql += " AND project = ?"
+            params.append(project)
+        return list(reversed(self.list_agent_runs(limit=100000, where_sql=sql,
+                                                  where_params=params)))
 
     def set_run_results(self, run_id: str, results: list) -> None:
         """What the run produced (TR-220), stamped when it ends."""
@@ -1252,11 +1315,8 @@ class Store:
 
     def get_agent_run(self, run_id: str) -> dict | None:
         """One run by id, in the list_agent_runs shape."""
-        with self._lock:
-            row = self.con.execute("SELECT agent FROM agent_runs WHERE id = ?", [run_id]).fetchone()
-        if row is None:
-            return None
-        return next((r for r in self.list_agent_runs(row[0], limit=100000) if r["id"] == run_id), None)
+        rows = self.list_agent_runs(limit=1, where_sql="id = ?", where_params=[run_id])
+        return rows[0] if rows else None
 
     def agent_cost_total(self, agent: str) -> float:
         """Lifetime spend of one agent, from the run log (the budget_usd cap counts against it)."""
@@ -1854,12 +1914,91 @@ class Store:
                  "error": r[3], "delivered_at": r[4]} for r in rows]
 
     def log_dispatch(self, dispatch_id: str, trigger: str, key: str, kind: str,
-                     subscribers: int, delivered: int, payload: str) -> None:
+                     subscribers: int, delivered: int, payload: str,
+                     project: str | None = None, parent_run_id: str | None = None) -> None:
+        # project: the trigger's at firing time. parent_run_id: the run whose finding tripped it.
         with self._lock:
             self.con.execute(
-                "INSERT INTO dispatch_log VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [dispatch_id, trigger, key, kind, now_utc(), subscribers, delivered, payload],
+                "INSERT INTO dispatch_log (dispatch_id, trigger, key_value, kind, fired_at, "
+                "subscribers, delivered, payload, project, parent_run_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [dispatch_id, trigger, key, kind, now_utc(), subscribers, delivered, payload,
+                 project or None, parent_run_id or None],
             )
+
+    # ── project timeline (TR-331): the store's side is indexed lookups only ──
+    def timeline_roots(self, project: str, before: datetime | None, limit: int) -> list[tuple]:
+        """[(kind, id, at)] newest first: the threads of a project's timeline. A firing starts
+        one unless a run of the same project wrote the finding that tripped it (it then sits under
+        that run); a run starts one when no firing woke it and it repeats or continues no run of
+        the project (a rerun or a handoff sits under its parent)."""
+        b = "AND {col} < ? " if before is not None else ""
+        args = [before] if before is not None else []
+        with self._lock:
+            return self.con.execute(
+                "SELECT * FROM ("
+                "SELECT 'firing' AS kind, dispatch_id AS id, fired_at AS ts FROM dispatch_log d "
+                f"WHERE project = ? {b.format(col='fired_at')}"
+                "AND NOT EXISTS (SELECT 1 FROM agent_runs p WHERE p.id = d.parent_run_id "
+                "                AND p.project = d.project) "
+                "UNION ALL "
+                "SELECT 'run', id, started_at FROM agent_runs r "
+                f"WHERE project = ? {b.format(col='started_at')}"
+                "AND COALESCE(dispatch_id, '') = '' "
+                "AND NOT EXISTS (SELECT 1 FROM agent_runs p WHERE p.id = r.parent_run_id "
+                "                AND p.project = r.project)"
+                ") ORDER BY ts DESC, id DESC LIMIT ?",
+                [project, *args, project, *args, int(limit)]).fetchall()
+
+    def dispatches_where(self, column: str, values: list, project: str | None = None) -> list[dict]:
+        """Firings by dispatch_id or by the run that tripped them, oldest first."""
+        if column not in ("dispatch_id", "parent_run_id") or not values:
+            return []
+        sql = (f"SELECT dispatch_id, trigger, key_value, kind, fired_at, subscribers, payload, "
+               f"project, parent_run_id FROM dispatch_log "
+               f"WHERE {column} IN ({', '.join(['?'] * len(values))})")
+        params = list(values)
+        if project is not None:
+            sql += " AND project = ?"
+            params.append(project)
+        with self._lock:
+            rows = self.con.execute(sql + " ORDER BY fired_at", params).fetchall()
+        return [{"dispatch_id": r[0], "trigger": r[1], "key": r[2], "kind": r[3],
+                 "fired_at": r[4], "subscribers": r[5], "payload": r[6], "project": r[7],
+                 "parent_run_id": r[8]} for r in rows]
+
+    def deliveries_for_many(self, dispatch_ids: list) -> dict[str, list[dict]]:
+        """{dispatch_id: [delivery]} for several firings at once, each in the deliveries_for shape."""
+        if not dispatch_ids:
+            return {}
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT dispatch_id, subscription_id, url, ok, error, delivered_at "
+                f"FROM dispatch_deliveries WHERE dispatch_id IN ({', '.join(['?'] * len(dispatch_ids))}) "
+                "ORDER BY delivered_at", list(dispatch_ids)).fetchall()
+        out: dict[str, list[dict]] = {}
+        for r in rows:
+            out.setdefault(r[0], []).append({"subscription_id": r[1], "url": r[2],
+                                             "ok": None if r[3] is None else bool(r[3]),
+                                             "error": r[4], "delivered_at": r[5]})
+        return out
+
+    def finding_run(self, sources: list[str], key: str | None, since: datetime,
+                    filters: list | None = None, where: dict | None = None) -> str | None:
+        """The run that wrote the newest finding for an entity in the window, when the finding
+        names one: how a firing on a findings source knows which run caused it."""
+        ph = ", ".join(["?"] * len(sources))
+        fsql, fparams = _filter_sql(filters)
+        wsql, wparams = _where_sql(where)
+        ksql, kparams = (" AND key_value = ?", [key]) if key is not None else ("", [])
+        with self._lock:
+            row = self.con.execute(
+                "SELECT json_extract_string(labels, '$.run_id') AS rid FROM events "
+                f"WHERE source IN ({ph}) AND event_type = 'finding' AND event_time >= ?"
+                f"{ksql}{fsql}{wsql} AND json_extract_string(labels, '$.run_id') IS NOT NULL "
+                "ORDER BY event_time DESC LIMIT 1",
+                [*sources, since, *kparams, *fparams, *wparams]).fetchone()
+        return row[0] if row else None
 
     def list_dispatches(self, limit: int = 100) -> list[dict]:
         # `delivered` and `pending` are computed LIVE from deliveries, not read from the snapshot:

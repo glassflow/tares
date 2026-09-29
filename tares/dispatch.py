@@ -32,8 +32,12 @@ class Dispatcher:
         # current catalog instead of the one captured when it was scheduled.
         self.runtime = None
 
-    async def fire(self, trigger, key: str, payload: str) -> None:
+    async def fire(self, trigger, key: str, payload: str,
+                   parent_run_id: str | None = None) -> None:
+        """`parent_run_id` is the run whose finding tripped this firing, when a trigger reads
+        findings: the project timeline puts the firing under that run (TR-331)."""
         subs = self.store.list_subscriptions(trigger.name)
+        woken_by = "schedule" if getattr(trigger.condition, "every", None) else "trigger"
         kind = trigger.emit.get("kind", trigger.name)
         dispatch_id = uuid.uuid4().hex
         body = {
@@ -52,7 +56,8 @@ class Dispatcher:
                 # it (ok/error) when the run finishes — so `delivered` here is the synchronous count
                 # (external only); list_dispatches computes the live total including agents.
                 if self.agents is not None:
-                    self.agents.deliver(agent_name, sid, trigger.name, key, payload, dispatch_id)
+                    self.agents.deliver(agent_name, sid, trigger.name, key, payload, dispatch_id,
+                                        woken_by=woken_by)
                 continue
             channel = slack_channel_from_url(url)
             if channel is not None:
@@ -65,7 +70,9 @@ class Dispatcher:
                 delivered += 1
         # log every firing, even with zero subscribers — the UI shows what would have woken agents
         self.store.log_dispatch(dispatch_id, trigger.name, key, kind,
-                                len(subs), delivered, payload)
+                                len(subs), delivered, payload,
+                                project=getattr(trigger, "project", None),
+                                parent_run_id=parent_run_id)
 
     async def _post(self, url: str, body: dict, attempts: int = 5) -> tuple[bool, str | None]:
         """Deliver to one subscriber. Returns (ok, error): ok only on a 2xx. A 4xx is a definitive
