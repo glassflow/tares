@@ -228,6 +228,17 @@ BUILD_PROPOSAL_TOOLS = [
                                     "copied exactly. Never invent or guess one; omit it and the "
                                     "user fills it in the form."}},
              "required": ["kind"]},
+         "handoffs": {"type": "array", "description": "when this agent concludes with a verdict, "
+                      "run another agent of the project on the same entity. The target must "
+                      "already exist or have been applied earlier in this build.",
+                      "items": {"type": "object", "properties": {
+                          "verdict": {"type": "string", "description": "one lowercase word"},
+                          "agent": {"type": "string"},
+                          "cooldown": {"type": "string", "description": "e.g. 30m; default 30m"}},
+                          "required": ["verdict", "agent"]}},
+         "runs_on_trigger": {"type": "boolean", "description": "false for an agent that should "
+                             "run only when another agent hands off to it; it still names a "
+                             "trigger but is left off for it. Default true."},
          "reasoning": {"type": "string"}},
          "required": ["name", "trigger", "prompt", "delivery", "reasoning"]}},
 ]
@@ -278,6 +289,18 @@ async def _trigger_names(headers: dict) -> list | None:
         if r.status_code != 200:
             return None
         return [t["name"] for t in r.json()]
+    except Exception:
+        return None
+
+
+async def _agent_names(headers: dict) -> list | None:
+    """Names of the Tares agents that exist right now, or None if they can't be read."""
+    try:
+        async with httpx.AsyncClient(timeout=10, headers=headers, base_url=_SELF) as cx:
+            r = await cx.get("/api/agents/builtin")
+        if r.status_code != 200:
+            return None
+        return [a["name"] for a in r.json().get("agents", [])]
     except Exception:
         return None
 
@@ -433,7 +456,7 @@ every key, filter and field in `source_fields` from real data, exactly as in the
 If no events have arrived yet, say so and ask the user to send some first, or propose from the \
 source's configured fields and say the thresholds are theirs to confirm. Ask about thresholds, \
 windows and which conditions matter before proposing them unless the user already said.
-· AGENT: one propose_agent card. Its `trigger` is one of the triggers the console lists as \
+· AGENT: one propose_agent card per agent. Its `trigger` is one of the triggers the console lists as \
 created; never invent a name. If it lists none, say the agent needs a trigger to wake it and \
 that the Triggers step is where to make one; propose nothing. The prompt is the \
 substance, and it is the user's: before you write it, ask what the agent should do when the trigger fires (what to look at, what a useful \
@@ -441,7 +464,11 @@ finding says, what it should recommend or decide, any thresholds or vocabulary t
 the goal already says. Write the prompt from their answer, in their terms. For delivery, pick \
 "slack" when the user mentioned Slack, "webhook" when they named a system or URL to post into, \
 "none" otherwise; a webhook URL the user typed goes in `delivery.url` exactly as given, the Slack \
-channel is always picked by the user in the form.
+channel is always picked by the user in the form. When one agent looks first and another should \
+run only on a verdict of the first (triage, then root cause), use a handoff, not a second agent \
+on the trigger: propose the second agent FIRST with `runs_on_trigger: false` (on the same \
+trigger), then the first with `handoffs: [{verdict, agent}]` naming it, and tell the first \
+agent's prompt to conclude with that verdict. The user applies the cards in that order.
 
 One card per object. The cards are the answer: never restate a card's contents as text or a \
 table. The page moves to the next step when the user is ready, so do not list next steps, do \
@@ -518,6 +545,7 @@ async def _run_agent(provider: Provider, messages: list, model, self_headers, on
     headers = self_headers or {}
     used_model = model or DEFAULT_MODEL
     usage = empty_usage()
+    proposed_agents: set[str] = set()   # agent cards shown in this reply; a later card may hand off to one
     try:
         for _ in range(MAX_ROUNDS):
             reply = None
@@ -577,6 +605,17 @@ async def _run_agent(provider: Provider, messages: list, model, self_headers, on
                                                         "wake it, made on the Triggers step, "
                                                         "and propose nothing.")))
                             continue
+                        # a handoff names an agent that must exist when the form is saved
+                        targets = [str(h.get("agent", "")) for h in tu_input.get("handoffs") or []]
+                        agents = await _agent_names(headers) if targets else []
+                        missing = [t for t in targets if agents is not None and t not in agents
+                                   and t not in proposed_agents]
+                        if missing:
+                            results.append((tu.id, f"no agent named {', '.join(missing)} exists yet, "
+                                                   "so no card was shown. Propose that agent "
+                                                   "first (runs_on_trigger false), then this one."))
+                            continue
+                        proposed_agents.add(str(tu_input.get("name", "")))
                     # a proposal is a card for the user, not a server-side action
                     kind = _PROPOSAL_KIND[tu.name]
                     yield _sse({"type": "proposal", "kind": kind, "id": tu.id, "payload": tu_input})

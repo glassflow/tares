@@ -933,6 +933,7 @@ function AgentCard({ proposal: p, triggers, decision, decide, own, projectId }: 
     webhook_url: p.delivery.kind === "webhook" ? (p.delivery.url ?? "") : "", webhook_token_configured: false,
     mcp_servers: [], max_rounds: p.max_rounds ?? null, budget_usd: p.budget_usd ?? null,
     effective_max_rounds: p.max_rounds ?? 6,
+    handoffs: (p.handoffs ?? []).map((h) => ({ verdict: h.verdict, agent: h.agent, cooldown: h.cooldown || "30m" })),
   };
   return (
     <ProposalShell title={proposalTitle(p)} decision={decision} reasoning={p.reasoning}
@@ -956,7 +957,8 @@ function AgentCard({ proposal: p, triggers, decision, decide, own, projectId }: 
                    onSaved={async (name) => {
                      // enable through the same endpoint the agent page uses: it refuses without a
                      // key, so the agent cannot look enabled and then fail on the first firing
-                     try { await api.enableBuiltinAgent(name); }
+                     // an agent that runs only on a handoff stays off for its trigger
+                     try { if (p.runs_on_trigger !== false) await api.enableBuiltinAgent(name); }
                      catch (e) { setNote(`Created, but not enabled: ${String((e as Error).message ?? e)}. Enable it on the agent's page once a key is set.`); }
                      try { await own("agent", name); }
                      catch (e) { decide(p.id, "error", String((e as Error).message ?? e)); return; }

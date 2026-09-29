@@ -30,6 +30,8 @@ export type Proposal =
   | { id: string; kind: "agent"; name: string; trigger: string; prompt: string; model?: string;
       max_rounds?: number; budget_usd?: number;
       delivery: { kind: "slack" | "webhook" | "none"; url?: string };   // url only when the user typed it
+      handoffs?: { verdict: string; agent: string; cooldown?: string }[];
+      runs_on_trigger?: boolean;                                        // false: only when handed off
       reasoning: string };
 
 // The operators a trigger filter may use: the set the daemon validates against on Apply.
@@ -281,12 +283,19 @@ export function ProposalBody({ proposal }: { proposal: Proposal }) {
 
       {proposal.kind === "agent" && (
         <p style={{ margin: "0 0 8px" }}>
-          runs on <span className="chip mono">{proposal.trigger}</span>
+          {proposal.runs_on_trigger === false
+            ? <>runs only when another agent hands off to it</>
+            : <>runs on <span className="chip mono">{proposal.trigger}</span></>}
           {proposal.model && <> · model <span className="chip mono">{proposal.model}</span></>}
           {" · "}
           {proposal.delivery.kind === "slack" ? "posts the finding to a Slack channel you pick"
             : proposal.delivery.kind === "webhook" ? (proposal.delivery.url ? <>posts the finding to <span className="mono">{proposal.delivery.url}</span></> : "posts the finding to a URL you give")
             : "writes the finding onto the timeline only"}
+          {(proposal.handoffs ?? []).map((h) => (
+            <span key={h.verdict + h.agent} style={{ display: "block" }}>
+              on verdict <span className="chip mono">{h.verdict}</span> hands off to <span className="chip mono">{h.agent}</span>
+            </span>
+          ))}
         </p>
       )}
 
