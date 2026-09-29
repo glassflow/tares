@@ -283,7 +283,7 @@ export function Overview({ ctx, actions, onResume }: { ctx: Ctx; actions: React.
           {outline?.sentence && <p className="gf-sentence">{outline.sentence}</p>}
         </div>
         <div className="gf-head-actions">
-          <VLink v={{ kind: "how" }} className="btn">How it works</VLink>
+          <VLink v={{ kind: "how" }} className="btn">Setup</VLink>
           {actions}
         </div>
       </div>
@@ -424,12 +424,19 @@ export function HowView({ ctx, panels, manage }: { ctx: Ctx; panels: React.React
 
   return (
     <div className="gf">
-      <div className="gf-head-text">
-        <h1 className="gf-name">How this project works</h1>
-        <p className="gf-sentence">What it watches, when it wakes, and who does the work. Change any step here.</p>
+      <div className="gf-head">
+        <div className="gf-head-text">
+          <h1 className="gf-name">Setup</h1>
+          <p className="gf-sentence">What this project watches, when it wakes, and who does the work. Change any step here.</p>
+        </div>
+        <div className="gf-head-actions">
+          <VLink v={{ kind: "activity" }} className="btn"
+                 title="Every source, trigger, agent run, firing and raw event, for when something does not work as expected">
+            Advanced setup</VLink>
+        </div>
       </div>
 
-      {error && <ErrorState error={error} what="how this project works" onRetry={reload} />}
+      {error && <ErrorState error={error} what="the setup" onRetry={reload} />}
       {!o && !error && <p className="help">Loading…</p>}
       {o && (
         <ol className="gf-how">
@@ -499,8 +506,8 @@ export function HowView({ ctx, panels, manage }: { ctx: Ctx; panels: React.React
       {panels}
 
       <div className="gf-setup-row">
-        <span>Something not working as expected? The full setup shows every source, trigger, agent run, firing and raw event.</span>
-        <VLink v={{ kind: "activity" }} className="gf-setup-link">Open the full setup</VLink>
+        <span>Something not working as expected? Advanced setup shows every source, trigger, agent run, firing and raw event.</span>
+        <VLink v={{ kind: "activity" }} className="gf-setup-link">Open advanced setup</VLink>
       </div>
 
       <div className="btnrow">

@@ -95,7 +95,7 @@ function useCrumbs(): Crumb[] {
     const kind = sub === "new" ? undefined
       : q.get("view")?.split(":")[0] || (q.get("tab") || q.get("session") ? "setup" : undefined);
     if (kind && kind !== "overview") {
-      const here = kind === "result" ? "Result" : kind === "how" ? "How it works" : "Full setup";
+      const here = kind === "result" ? "Result" : kind === "how" ? "Setup" : "Advanced setup";
       return [{ label: "Projects", to: "/projects" }, { ...last, to: `/projects/${encodeURIComponent(sub)}` }, { label: here }];
     }
     return [{ label: "Projects", to: "/projects" }, last];
