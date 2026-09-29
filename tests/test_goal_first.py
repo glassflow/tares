@@ -163,7 +163,7 @@ def phrasing():
               "timed out.\n\n**Next step:** escalate to the payment provider.\n\nMore detail.")
     eq("heading", G.derive_headline(note_h), "Payment provider outage")
     eq("next step after a bold label", G.derive_next_step(note_h),
-       "escalate to the payment provider.")
+       "Escalate to the payment provider.")
     eq("summary skips the heading", G.summary_of(note_h),
        "8 checkout payments failed in one burst. The gateway timed out.")
     note_b = "**Bad client input, checkout kept working.** A burst of 422s from one client."
@@ -177,14 +177,14 @@ def phrasing():
     eq("first sentence, markdown stripped", G.derive_headline(note_s),
        "Checkout is failing for payments-api since 14:02.")
     eq("numbered next action", G.derive_next_step(note_s),
-       "roll back the deploy and watch the error rate")
+       "Roll back the deploy and watch the error rate")
     eq("Recommendation: label", G.derive_next_step("All fine.\nRecommendation: nothing yet."),
-       "nothing yet.")
+       "Nothing yet.")
     eq("Next: label after a sentence", G.derive_next_step("It is noise. Next: ignore it."),
-       "ignore it.")
+       "Ignore it.")
     eq("a heading named Next steps", G.derive_next_step("# Note\n\n## Next steps\n\n- page "
                                                         "the on-call\n- open a ticket\n\n## Other"),
-       "page the on-call open a ticket")
+       "Page the on-call open a ticket")
     eq("no label: no next step", G.derive_next_step("Everything is normal."), None)
     long = "word " * 60
     h = G.derive_headline(long)
@@ -435,7 +435,7 @@ async def main():
            "no_action")
         old = by_entity["db-1"]
         eq("derived for an older note", (old["headline"], old["next_step"], old["kind"]),
-           ("Disk full on db-1", "add space to db-1.", "action"))
+           ("Disk full on db-1", "Add space to db-1.", "action"))
         ext = by_entity["search-api"]
         eq("an external finding is a result", (ext["id"], ext["external"], ext["chain"],
                                                ext["kind"]),
@@ -509,12 +509,19 @@ async def main():
         project = store.get_project(a)
         later = datetime.now(timezone.utc) + timedelta(hours=3)
         h = G.project_health(store, catalog, a, project, runtime.health_snapshot(), now=later)
-        eq("silent for much longer than usual", (h["state"], h["issues"][:1]), ("attention", [{
-            "severity": "error", "message": "Nothing has arrived on checkout-errors for 3 hours.",
+        eq("a source that speaks in bursts is not silent when quiet (quiet errors are good news)",
+           (h["state"], h["issues"]), ("working", []))
+        # a steady source: events in many hours of the day
+        real_hours = store.recent_ingest_hours
+        store.recent_ingest_hours = lambda name, since: list(range(8))
+        h = G.project_health(store, catalog, a, project, runtime.health_snapshot(), now=later)
+        eq("a steady source silent for much longer than usual", (h["state"], h["issues"][:1]), ("attention", [{
+            "severity": "warning", "message": "Nothing has arrived on checkout-errors for 3 hours.",
             "fix": "Check the connection", "view": "source:checkout-errors"}]))
         ol = G.outline(store, catalog, a, runtime.health_snapshot(), now=later)
         eq("the outline says silent too", (ol["watches"][0]["state"], ol["watches"][0]["detail"]),
            ("silent", "Nothing for 3 hours"))
+        store.recent_ingest_hours = real_hours
         store.con.execute("UPDATE catalog_agents SET daily_cap = 2 WHERE name = 'checkout-triage'")
         h = (await cx.get(f"/api/projects/{a}/health")).json()
         eq("the daily cap", (h["state"], h["issues"]), ("attention", [{

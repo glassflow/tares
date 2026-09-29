@@ -1359,6 +1359,15 @@ class Store:
         ts = sorted(float(r[0]) for r in rows if r[0] is not None)
         return [b - a for a, b in zip(ts, ts[1:])]
 
+    def recent_ingest_hours(self, source: str, since) -> list:
+        """The distinct hours a source received events in since `since` (project health: a
+        source with a steady rhythm can go silent, a bursty one cannot)."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT DISTINCT date_trunc('hour', ingest_time) FROM events "
+                "WHERE source = ? AND ingest_time >= ?", [source, since]).fetchall()
+        return [r[0] for r in rows]
+
     def set_run_delivery(self, run_id: str, delivery: str, error: str | None = None) -> None:
         """The write-back's outcome for a run, recorded after the finding is stored: a failed
         delivery never loses the finding, it only marks the run."""

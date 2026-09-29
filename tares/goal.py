@@ -30,6 +30,10 @@ RESULTS_SCAN_CAP = 2000  # threads examined per request before handing back a cu
 # longer than SILENT_MIN_S. See _silent().
 SILENT_FACTOR = 10
 SILENT_MIN_S = 30 * 60
+# Only a source with a steady rhythm can go silent: events in at least this many different hours
+# of that day. A source that speaks in bursts (errors, alerts) is quiet when things are fine, and
+# its quiet is good news, not a problem.
+SILENT_MIN_HOURS = 6
 
 
 # ── goal ─────────────────────────────────────────────────────────────────────
@@ -347,8 +351,9 @@ def _silent(store, name: str, last, now) -> tuple[bool, float]:
     age = (now - last).total_seconds()
     if age <= SILENT_MIN_S:
         return False, age
-    gaps = [g for g in store.recent_ingest_gaps(name, last - timedelta(days=1)) if g > 0]
-    if not gaps:
+    since = last - timedelta(days=1)
+    gaps = [g for g in store.recent_ingest_gaps(name, since) if g > 0]
+    if not gaps or len(store.recent_ingest_hours(name, since)) < SILENT_MIN_HOURS:
         return False, age
     return age > SILENT_FACTOR * statistics.median(gaps), age
 
@@ -482,6 +487,13 @@ def derive_headline(note: str | None) -> str | None:
     return _cut(_first_sentence(para[0]), HEADLINE_MAX) if para else None
 
 
+def _tidy(text: str | None) -> str | None:
+    """A derived line without emphasis marks left over from markdown around a label, starting
+    with a capital."""
+    t = (text or "").strip().strip("*_ ").strip()
+    return (t[:1].upper() + t[1:]) if t else None
+
+
 def derive_next_step(note: str | None) -> str | None:
     """The text after a "Next step:", "Next:" or "Recommendation:" label (or under a heading
     of that name), to the end of its paragraph; None when the note has no such label."""
@@ -490,13 +502,13 @@ def derive_next_step(note: str | None) -> str | None:
     if m:
         rest = text[m.end():].lstrip("\n")
         body = re.split(r"\n\s*\n|\n\s{0,3}#{1,6}\s", rest, maxsplit=1)[0]
-        return _cut(plain(body), NEXT_STEP_MAX)
+        return _tidy(_cut(plain(body), NEXT_STEP_MAX))
     m = _NEXT_LABEL.search(text)
     if not m:
         return None
     rest = text[m.end():]
     body = re.split(r"\n\s*\n", rest, maxsplit=1)[0]
-    return _cut(plain(body), NEXT_STEP_MAX)
+    return _tidy(_cut(plain(body), NEXT_STEP_MAX))
 
 
 def _paragraphs(note: str | None) -> list[str]:
@@ -839,7 +851,7 @@ def project_health(store, catalog, uid: str, project: dict, runtime_health: dict
     for n, st in states.items():
         if st["state"] == "silent":
             age = (now - _aware(st["last_event_at"])).total_seconds()
-            errors.append({"severity": "error",
+            errors.append({"severity": "warning",
                            "message": f"Nothing has arrived on {n} for {span_words(age)}.",
                            "fix": "Check the connection", "view": f"source:{n}"})
     capped = []
