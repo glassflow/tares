@@ -8,8 +8,8 @@ import type { ApiKey, ExternalAgent } from "../types";
 
 // Joining a project from outside (TR-335, TR-336). A project key reads this project only (its
 // sources, skills, findings and activity) and records findings in it; an agent holding one can
-// subscribe a webhook to every trigger of the project. Keys live on the Setup tab, the agents that
-// joined on the Agents tab next to the Tares agents.
+// subscribe a webhook to every trigger of the project. Keys live under the project's Settings, the
+// agents that joined under its Agents, next to the Tares agents.
 
 export function ProjectKeysPanel({ project }: { project: string }) {
   const { data, error, reload } = usePolling(() => api.projectKeys(project), 30000);
@@ -141,12 +141,12 @@ export function ExternalAgentsPanel({ project, onOpenKeys }: { project: string; 
       ) : (
         <p className="help">
           no external agent has joined this project yet; give one a key under{" "}
-          <a href="#keys" onClick={(e) => { e.preventDefault(); onOpenKeys(); }}>Setup, Keys</a>
+          <a href="#keys" onClick={(e) => { e.preventDefault(); onOpenKeys(); }}>Settings, Keys</a>
         </p>
       ))}
       {revoking && (
         <ConfirmDialog title={`Stop delivering to ${revoking.name}?`}
-          message="The project's triggers stop delivering to this webhook. The key keeps working; revoke it under Setup, Keys to cut the agent off entirely."
+          message="The project's triggers stop delivering to this webhook. The key keeps working; revoke it under Settings, Keys to cut the agent off entirely."
           confirmLabel="Revoke" danger
           onCancel={() => setRevoking(undefined)}
           onConfirm={async () => {

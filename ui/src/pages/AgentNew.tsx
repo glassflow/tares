@@ -53,7 +53,7 @@ export default function AgentNew() {
   }, [askedProject, presetTrigger]);
 
   const back = presetTrigger ? `/triggers/${encodeURIComponent(presetTrigger)}`
-    : askedProject ? `/projects/${encodeURIComponent(askedProject)}?tab=agents` : "/agents";
+    : askedProject ? `/projects/${encodeURIComponent(askedProject)}?view=agents` : "/agents";
 
   return (
     <>

@@ -1445,3 +1445,53 @@ pre.payload {
 .skill-editor textarea { width: 100%; box-sizing: border-box; min-height: 320px; resize: vertical; }
 .skill-preview { border: 1px solid var(--line); background: var(--panel); padding: 10px 12px; min-height: 320px; max-height: 520px; overflow: auto; }
 @media (max-width: 860px) { .skill-editor { grid-template-columns: 1fr; } }
+
+/* The project page (ProjectShell): its own navigation on the left, one view on the right. The
+   nav reads like the app sidebar, lighter: no rail background, a hairline on its right, and it
+   scrolls on its own when a project has many objects. */
+.project-body { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 28px; align-items: start; margin-top: 6px; }
+.pview { min-width: 0; }
+.pnav {
+  position: sticky; top: 62px;
+  max-height: calc(100vh - 78px); overflow-y: auto;
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 2px 12px 12px 0; border-right: 1px solid var(--line);
+}
+.pnav-link {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+  padding: 5px 10px; color: var(--ink-soft); text-decoration: none; font-weight: 500; font-size: 13.5px;
+}
+.pnav-link:hover { background: var(--hover); color: var(--ink); }
+.pnav-link.active { background: var(--accent-soft); color: var(--accent-deep); font-weight: 600; }
+.pnav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pnav-group { display: flex; flex-direction: column; gap: 1px; margin-top: 12px; }
+.pnav-head { display: flex; align-items: center; }
+.pnav-head .pnav-link { flex: 1; }
+.pnav-title, .pnav-static {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+  font-variant-ligatures: none; color: var(--ink-faint); font-weight: 400;
+}
+.pnav-static { padding: 5px 10px 3px; }
+.pnav-link.pnav-title.active { font-weight: 600; }
+.pnav-add {
+  flex: 0 0 auto; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
+  color: var(--ink-faint); text-decoration: none; font-size: 16px; line-height: 1;
+}
+.pnav-add:hover { background: var(--hover); color: var(--ink); }
+.pnav-item { font-family: var(--mono); font-size: 12.5px; padding-left: 14px; }
+.pnav-item.pnav-plain { font-family: inherit; font-size: 13.5px; }
+.pnav-dot { width: 6px; height: 6px; flex: 0 0 auto; background: var(--ok); }
+.pnav-dot.error { background: var(--err); }
+.pnav-dot.paused { background: var(--warn); }
+.pnav-hint { flex: 0 0 auto; font-family: var(--font-sans); font-size: 11px; font-weight: 400; color: var(--ink-faint); }
+.pnav-select { display: none; }
+.pv-head { margin-bottom: 12px; }
+.pv-facts td:first-child { width: 150px; white-space: nowrap; vertical-align: top; }
+.pv-panels { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.pv-panels .panel { margin: 0; padding: 14px 16px; }
+.pv-keys > .pagehead:first-child { margin-top: 0 !important; }
+@media (max-width: 900px) {
+  .project-body { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .pnav { display: none; }
+  .pnav-select { display: flex; flex-direction: column; gap: 4px; }
+}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -8,7 +8,7 @@ import { ErrorState, Picker, TimeAgo, fmtCost, usePolling } from "./bits";
 import { ResultChips, SkillChips, statusBadge } from "../pages/AgentDetail";
 import type { AgentRun } from "../types";
 
-// The project's Activity tab (TR-331): one row per thread, a firing or a run nothing fired,
+// The project's Activity view (TR-331): one row per thread, a firing or a run nothing fired,
 // expandable in place to what it carried and everything it led to. Runs nest what came of them:
 // a rerun under the run it repeats, a handoff under the run that handed off, and a firing its
 // finding tripped under that run, with the runs that firing woke.
@@ -49,12 +49,25 @@ const WOKEN: Record<string, string> = {
   handoff: "handed off", external: "recorded a finding from outside Tares",
 };
 
+// The project's own agents: their runs open on the agent's view inside the project, not on the
+// global agent page.
+const ProjectAgents = createContext<string[]>([]);
+
 /** Every run in a thread, nested ones included, for the row summary. */
 function allRuns(runs: TimelineRun[]): TimelineRun[] {
   return runs.flatMap((r) => [r, ...allRuns(r.children), ...r.firings.flatMap((f) => allRuns(f.runs))]);
 }
 
 export default function ProjectActivity({ id, triggers, agents, onShowTrigger }: {
+  id: string;
+  triggers: string[];
+  agents: string[];
+  onShowTrigger: (name: string) => void;
+}) {
+  return <ProjectAgents.Provider value={agents}><Timeline id={id} triggers={triggers} agents={agents} onShowTrigger={onShowTrigger} /></ProjectAgents.Provider>;
+}
+
+function Timeline({ id, triggers, agents, onShowTrigger }: {
   id: string;
   triggers: string[];
   agents: string[];
@@ -149,7 +162,7 @@ function ThreadRow({ t, open, onToggle, onShowTrigger, knownTriggers }: {
         <td>
           {t.kind === "firing" && t.fired
             ? <>{knownTriggers.includes(t.fired.trigger)
-                  ? <a href={`#trigger-${t.fired.trigger}`} className="mono" title="the trigger, on the Setup tab"
+                  ? <a href={`?view=trigger:${encodeURIComponent(t.fired.trigger)}`} className="mono"
                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onShowTrigger(t.fired!.trigger); }}>{t.fired.trigger}</a>
                   : <span className="mono">{t.fired.trigger}</span>}
                 <span className="help"> {t.fired.kind === "schedule" ? "ticked" : "fired"}</span></>
@@ -213,6 +226,7 @@ function FiringBody({ t }: { t: TimelineThread }) {
 }
 
 function RunBlock({ r, depth = 0 }: { r: TimelineRun; depth?: number }) {
+  const mine = useContext(ProjectAgents).includes(r.agent);
   const woken = WOKEN[r.woken_by ?? ""];
   return (
     <div style={{ marginLeft: depth ? 18 : 0, paddingLeft: depth ? 12 : 0,
@@ -227,7 +241,9 @@ function RunBlock({ r, depth = 0 }: { r: TimelineRun; depth?: number }) {
           {/* an external agent's finding has no run in Tares to time, cost or open */}
           {!r.external && r.duration_ms != null && <> · {(r.duration_ms / 1000).toFixed(1)}s</>}
           {!r.external && r.cost_usd != null && <> · {fmtCost(r.cost_usd)}</>}
-          {!r.external && <>{" · "}<Link to={`/agents/${encodeURIComponent(r.agent)}?run=${encodeURIComponent(r.id)}`}>the run</Link></>}
+          {!r.external && <>{" · "}<Link to={mine
+            ? `?view=agent:${encodeURIComponent(r.agent)}&run=${encodeURIComponent(r.id)}`
+            : `/agents/${encodeURIComponent(r.agent)}?run=${encodeURIComponent(r.id)}`}>the run</Link></>}
         </span>
       </p>
       {r.finding
