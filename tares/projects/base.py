@@ -5,6 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 KINDS = ("source", "trigger", "agent", "mcp_server")
+# what a template may plan: the object kinds plus skills (TR-332), which live in the project
+# itself rather than in the catalog, so a hand-assembled project never lists one as an object
+PLANNED_KINDS = KINDS + ("skill",)
 
 
 class ProjectError(ValueError):
@@ -22,7 +25,7 @@ class PlannedObject:
     spec: dict = field(default_factory=dict)
 
     def __post_init__(self):
-        if self.kind not in KINDS:
+        if self.kind not in PLANNED_KINDS:
             raise ProjectError(f"unknown planned object kind {self.kind!r}")
         if not self.key:
             raise ProjectError("planned object needs a key")

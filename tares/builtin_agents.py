@@ -32,6 +32,7 @@ import httpx
 
 from . import metrics
 from . import results as _results
+from . import skills as _skills
 from . import tracing as _tracing
 from .config import (FINDINGS_SOURCE, API_BASE, agent_url, parse_duration,
                      trigger_entity_label)
@@ -500,10 +501,14 @@ class AgentRunner:
             obs.set_attribute("tares.agent", agent["name"])
             # what the run produced (TR-220), filled as evidence arrives and stored however it ends
             results: list = []
+            loaded: list = []   # the skills the run loads (TR-332)
             try:
                 status, error = await self._run_traced(agent, trigger_name, key, payload, run_id,
-                                                       dispatch_id, tracer, obs, anchor, results)
+                                                       dispatch_id, tracer, obs, anchor, results,
+                                                       skills_loaded=loaded)
             finally:
+                if loaded:
+                    self.store.set_run_skills(run_id, loaded)
                 if results:
                     self.store.set_run_results(run_id, _results.merge(results))
                     obs.set_attribute("tares.results", len(_results.merge(results)))
@@ -530,7 +535,8 @@ class AgentRunner:
                           run_id: str, dispatch_id: str | None, tracer,
                           obs: _tracing.Observation,
                           anchor: tuple[str, dict] | None = None,
-                          results: list | None = None) -> tuple[str, str | None]:
+                          results: list | None = None,
+                          skills_loaded: list | None = None) -> tuple[str, str | None]:
         results = [] if results is None else results
         started_at = now_utc()
         t0 = time.monotonic()
@@ -583,7 +589,7 @@ class AgentRunner:
         try:
             finding, rounds, tool_calls, external_used, exhausted, partial = await self._loop(
                 agent, trigger_name, key, payload, provider, model, usage, tracer, obs,
-                concluded=concluded, produced=results)
+                concluded=concluded, produced=results, skills_loaded=skills_loaded)
         finally:
             if usage["calls"]:
                 cost = price_usage(provider.kind, model, usage)
@@ -714,7 +720,7 @@ class AgentRunner:
     async def _loop(self, agent: dict, trigger_name: str, key: str, payload: str,
                     provider: Provider, model: str, usage: dict, tracer=None,
                     obs: _tracing.Observation | None = None, concluded: dict | None = None,
-                    produced: list | None = None,
+                    produced: list | None = None, skills_loaded: list | None = None,
                     ) -> tuple[str, int, int, list[str], bool, str]:
         # External tools: the agent's selected MCP servers, connected for the duration of this
         # run. A server that fails to connect is skipped (recorded below) — losing a tool server
@@ -728,17 +734,26 @@ class AgentRunner:
                 print(f"[agent {agent['name']}] mcp connect failed; {failure}")
             return await self._loop_with(agent, trigger_name, key, payload, provider, toolbox,
                                          usage, tracer, obs, model=model, concluded=concluded,
-                                         produced=produced)
+                                         produced=produced, skills_loaded=skills_loaded)
 
     async def _loop_with(self, agent: dict, trigger_name: str, key: str, payload: str,
                          provider: Provider, toolbox, usage: dict, tracer=None,
                          obs: _tracing.Observation | None = None, model: str = "",
                          concluded: dict | None = None, produced: list | None = None,
+                         skills_loaded: list | None = None,
                          ) -> tuple[str, int, int, list[str], bool, str]:
         """Returns (finding, rounds, tool_calls, external_tools_used, exhausted, partial_text).
-        A `conclude` call ends the loop at the end of its round and fills `concluded`."""
+        A `conclude` call ends the loop at the end of its round and fills `concluded`; each skill
+        the model loads is appended to `skills_loaded` once."""
         concluded = {} if concluded is None else concluded
-        tools = TOOL_DEFS + ([CONCLUDE_DEF] if offers_conclude(agent) else []) + toolbox.tool_defs
+        skills_loaded = [] if skills_loaded is None else skills_loaded
+        # The project's skills (TR-332): listed after the agent's own prompt, a body only when
+        # the model loads it. None in the project: prompt and tools exactly as before.
+        skills = self._project_skills(agent)
+        skill_names = [sk["name"] for sk in skills]
+        system = agent["prompt"] + (_skills.prompt_section(skills) if skills else "")
+        tools = (TOOL_DEFS + ([CONCLUDE_DEF] if offers_conclude(agent) else [])
+                 + ([_skills.TOOL_DEF] if skills else []) + toolbox.tool_defs)
         max_rounds = effective_max_rounds(agent)
         external_used: list[str] = []
         # The agent's own last conclusion for this entity, so a run builds on the previous one
@@ -767,7 +782,7 @@ class AgentRunner:
         model = model or agent.get("model") or MODEL
 
         async def call(with_tools: bool):
-            reply = await provider.complete(model=model, system=agent["prompt"], tools=tools,
+            reply = await provider.complete(model=model, system=system, tools=tools,
                                             messages=messages, max_tokens=MAX_TOKENS,
                                             tools_allowed=with_tools, tracer=tracer)
             add_usage(usage, reply.usage)
@@ -813,6 +828,11 @@ class AgentRunner:
                             if not concluded:
                                 concluded.update(outcome)
                             out = f"concluded: {outcome['outcome']}"
+                        elif name == _skills.TOOL and skills:
+                            wanted = str((tc.arguments or {}).get("name") or "").strip()
+                            out = _skills.load(self.store, agent["owned_by"], wanted, skill_names)
+                            if wanted not in skills_loaded:
+                                skills_loaded.append(wanted)
                         elif toolbox.owns(name):
                             external_used.append(name)
                             out = await toolbox.call(name, tc.arguments)
@@ -848,6 +868,12 @@ class AgentRunner:
         if text:
             return text, rounds, tool_calls, external_used, False, ""
         return "", rounds, tool_calls, external_used, True, last_text
+
+    def _project_skills(self, agent: dict) -> list[dict]:
+        """The skills of the agent's project (name, description); an agent sees only its own
+        project's."""
+        uid = agent.get("owned_by")
+        return self.store.list_skills(uid) if uid else []
 
     def _is_scheduled(self, trigger_name: str) -> bool:
         """Whether the run was woken by a schedule trigger (TR-320), which ticks for all its

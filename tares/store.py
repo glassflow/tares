@@ -238,6 +238,17 @@ CREATE TABLE IF NOT EXISTS usecase_log (
   action     TEXT,
   detail     TEXT
 );
+-- Skills (TR-332): instructions a project's agents load by name when a task matches the
+-- description. `project` is the project id. Deleted with the project (tares/skills.py).
+CREATE TABLE IF NOT EXISTS skills (
+  project     TEXT,
+  name        TEXT,
+  description TEXT,
+  body        TEXT,
+  created_at  TIMESTAMPTZ,
+  updated_at  TIMESTAMPTZ,
+  PRIMARY KEY (project, name)
+);
 """
 
 # Columns added after the first release; bring pre-existing DBs up to the current schema.
@@ -304,6 +315,8 @@ _MIGRATIONS = [
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS verdict TEXT",
     # TR-220: what the run produced, [{kind, label, url?}], read off its tool calls and deliveries
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS results JSON",
+    # TR-332: the skills a run loaded, in order, each once
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS skills JSON",
     # Which key paid for a ledger row ("env:ANTHROPIC_API_KEY" | "console") — the boundary a
     # hosted trial's enforcement counts against. Rows from before attribution stay NULL (unknown).
     "ALTER TABLE model_usage ADD COLUMN IF NOT EXISTS key_source TEXT",
@@ -1165,7 +1178,7 @@ class Store:
                "started_at, duration_ms, finding, error, external_tools, max_rounds, "
                "model, input_tokens, output_tokens, cache_creation_input_tokens, "
                "cache_read_input_tokens, cost_usd, delivery, delivery_error, provider, "
-               "outcome, verdict, results, woken_by, parent_run_id, project "
+               "outcome, verdict, results, woken_by, parent_run_id, project, skills "
                "FROM agent_runs ")
         where, params = [], []
         if where_sql:
@@ -1193,7 +1206,8 @@ class Store:
              "cost_usd": r[19], "delivery": r[20], "delivery_error": r[21],
              "provider": r[22] or "", "outcome": r[23], "verdict": r[24],
              "results": json.loads(r[25]) if r[25] else [],
-             "woken_by": r[26], "parent_run_id": r[27], "project": r[28]}
+             "woken_by": r[26], "parent_run_id": r[27], "project": r[28],
+             "skills": json.loads(r[29]) if r[29] else []}
             for r in rows
         ]
 
@@ -1215,6 +1229,12 @@ class Store:
         with self._lock:
             self.con.execute("UPDATE agent_runs SET results = ? WHERE id = ?",
                              [json.dumps(results), run_id])
+
+    def set_run_skills(self, run_id: str, names: list[str]) -> None:
+        """The skills the run loaded (TR-332), stamped when it ends."""
+        with self._lock:
+            self.con.execute("UPDATE agent_runs SET skills = ? WHERE id = ?",
+                             [json.dumps(names), run_id])
 
     def set_run_delivery(self, run_id: str, delivery: str, error: str | None = None) -> None:
         """The write-back's outcome for a run, recorded after the finding is stored: a failed
@@ -1518,6 +1538,7 @@ class Store:
 
     def delete_project(self, uid: str) -> None:
         with self._lock:
+            self.con.execute("DELETE FROM skills WHERE project = ?", [uid])
             self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ?", [uid])
             self.con.execute("DELETE FROM usecase_log WHERE usecase_id = ?", [uid])
             self.con.execute("DELETE FROM usecases WHERE id = ?", [uid])
@@ -1541,6 +1562,77 @@ class Store:
         with self._lock:
             self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = ? "
                              "AND key = ?", [uid, kind, key])
+
+    # ── skills (TR-332): per project, validated by tares/skills.py before they get here ──
+    def list_skills(self, project: str) -> list[dict]:
+        """A project's skills without their bodies: name, description, updated_at, size (bytes
+        of the body)."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT name, description, updated_at, octet_length(encode(body)) FROM skills "
+                "WHERE project = ? ORDER BY name", [project]).fetchall()
+        return [{"name": r[0], "description": r[1], "updated_at": r[2], "size": int(r[3] or 0)}
+                for r in rows]
+
+    def list_all_skills(self) -> list[dict]:
+        """Every skill with its body and project id, for the catalog export."""
+        with self._lock:
+            rows = self.con.execute("SELECT project, name, description, body FROM skills "
+                                    "ORDER BY project, name").fetchall()
+        return [{"project": r[0], "name": r[1], "description": r[2], "body": r[3]} for r in rows]
+
+    def get_skill(self, project: str, name: str) -> dict | None:
+        with self._lock:
+            r = self.con.execute(
+                "SELECT name, description, body, created_at, updated_at FROM skills "
+                "WHERE project = ? AND name = ?", [project, name]).fetchone()
+        return ({"name": r[0], "description": r[1], "body": r[2], "created_at": r[3],
+                 "updated_at": r[4]} if r else None)
+
+    def upsert_skill(self, project: str, name: str, description: str, body: str) -> bool:
+        """Create or replace. Returns True when the skill is new."""
+        ts = now_utc()
+        with self._lock:
+            new = self.con.execute("SELECT 1 FROM skills WHERE project = ? AND name = ?",
+                                   [project, name]).fetchone() is None
+            self.con.execute(
+                "INSERT INTO skills (project, name, description, body, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (project, name) DO UPDATE SET "
+                "description = excluded.description, body = excluded.body, "
+                "updated_at = excluded.updated_at", [project, name, description, body, ts, ts])
+        return new
+
+    def delete_skill(self, project: str, name: str) -> bool:
+        with self._lock:
+            gone = self.con.execute("SELECT 1 FROM skills WHERE project = ? AND name = ?",
+                                    [project, name]).fetchone() is not None
+            self.con.execute("DELETE FROM skills WHERE project = ? AND name = ?", [project, name])
+        return gone
+
+    def mark_skill_customized(self, project: str, name: str) -> None:
+        """A skill a template planned was edited by hand: a re-plan keeps the edit."""
+        with self._lock:
+            self.con.execute("UPDATE usecase_objects SET customized = TRUE WHERE usecase_id = ? "
+                             "AND kind = 'skill' AND name = ?", [project, name])
+
+    def skill_loads(self, agents: list[str], days: int = 7) -> dict[str, list[str]]:
+        """{skill: [agents]} for the runs of `agents` in the last `days` that loaded a skill."""
+        if not agents:
+            return {}
+        from datetime import timedelta
+        since = now_utc() - timedelta(days=days)
+        marks = ", ".join("?" for _ in agents)
+        with self._lock:
+            rows = self.con.execute(
+                f"SELECT agent, skills FROM agent_runs WHERE agent IN ({marks}) "
+                "AND skills IS NOT NULL AND started_at >= ? ORDER BY started_at DESC",
+                [*agents, since]).fetchall()
+        out: dict[str, list[str]] = {}
+        for agent, names in rows:
+            for n in json.loads(names or "[]"):
+                if agent not in out.setdefault(n, []):
+                    out[n].append(agent)
+        return out
 
     # ── project membership: every object is in a project ─────────────────────
     # A trigger, agent or MCP server belongs to exactly one project (owned_by, plus its

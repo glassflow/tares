@@ -1436,3 +1436,9 @@ pre.payload {
 .builder-running .spinner { width: 10px; height: 10px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: builder-spin 0.8s linear infinite; }
 @keyframes builder-spin { to { transform: rotate(360deg); } }
 .builder-steps .step.busy { border-style: dashed; }
+
+/* Skills tab (TR-332): the instructions beside their rendered preview; stacked on a narrow screen */
+.skill-editor { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.skill-editor textarea { width: 100%; box-sizing: border-box; min-height: 320px; resize: vertical; }
+.skill-preview { border: 1px solid var(--line); background: var(--panel); padding: 10px 12px; min-height: 320px; max-height: 520px; overflow: auto; }
+@media (max-width: 860px) { .skill-editor { grid-template-columns: 1fr; } }

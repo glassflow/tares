@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 
 import { api } from "../api";
 import { ErrorState, Picker, TimeAgo, fmtCost, usePolling } from "./bits";
-import { ResultChips, statusBadge } from "../pages/AgentDetail";
+import { ResultChips, SkillChips, statusBadge } from "../pages/AgentDetail";
 import type { AgentRun } from "../types";
 
 // The project's Activity tab (TR-331): one row per thread, a firing or a run nothing fired,
@@ -217,7 +217,7 @@ function RunBlock({ r, depth = 0 }: { r: TimelineRun; depth?: number }) {
                   borderLeft: depth ? "2px solid var(--line)" : undefined, marginBottom: 10 }}>
       <p style={{ margin: "0 0 6px" }}>
         <span className="mono">{r.agent}</span> {statusBadge(r)}
-        <ResultChips r={r} />
+        <ResultChips r={r} /><SkillChips r={r} />
         <span className="help">
           {woken && <> · {woken}</>}
           {r.key && <> · on <span className="mono">{r.key}</span></>}

@@ -56,6 +56,17 @@ export function ResultChips({ r, limit }: { r: AgentRun; limit?: number }) {
   </>;
 }
 
+/** The project skills a run loaded (TR-332), one chip each. */
+export function SkillChips({ r }: { r: AgentRun }) {
+  return <>
+    {(r.skills ?? []).map((n) => (
+      <span key={n} className="chip mono" title="a skill of the project this run loaded" style={{ marginLeft: 4 }}>
+        <span className="help">skill</span> {n}
+      </span>
+    ))}
+  </>;
+}
+
 /** Whether the finding reached the write-back webhook; nothing when the agent has none. */
 function deliveryBadge(r: AgentRun) {
   if (!r.delivery) return null;
@@ -463,7 +474,7 @@ function RunRow({ r, open, focused, onToggle }: {
       <tr className="clickable" onClick={onToggle}
           style={focused ? { outline: "2px solid var(--accent)", outlineOffset: -2 } : undefined}
           ref={rowRef}>
-        <td>{statusBadge(r)} {deliveryBadge(r)}<ResultChips r={r} limit={2} /></td>
+        <td>{statusBadge(r)} {deliveryBadge(r)}<ResultChips r={r} limit={2} /><SkillChips r={r} /></td>
         <td style={{ whiteSpace: "nowrap" }}><TimeAgo ts={r.started_at} /></td>
         <td className="mono">{r.key}</td>
         <td className="mono">{r.model ? <>{r.provider && r.provider !== "anthropic" && <span className="help">{r.provider} / </span>}{r.model}</> : <span className="dim">—</span>}</td>
