@@ -106,7 +106,7 @@ def runner(store, provider):
     r.store = store
     recorded = []
 
-    async def record(agent, trigger, key, finding, verdict=None, label=None):
+    async def record(agent, trigger, key, finding, verdict=None, label=None, **kw):
         recorded.append({"key": key, "finding": finding, "verdict": verdict, "label": label})
 
     async def loop(agent, trigger, key, payload, prov, model, usage, tracer, obs, concluded=None,

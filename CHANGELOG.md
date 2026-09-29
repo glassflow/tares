@@ -3,6 +3,21 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- Slack messages from Tares read like an alert, not a wall of text. An agent's finding shows the
+  entity as a header, the agent, trigger, verdict, model and time as fields, a short excerpt (the
+  note's own summary when it has one) and View in Tares / Open timeline buttons; the full note goes
+  in the message's thread. A short note is posted whole. A trigger firing shows the trigger as a
+  header, the entity and time as fields, the payload, and a View firing in Tares button. Buttons
+  appear when the cell has a public address (`TARES_PUBLIC_URL`).
+- Wide markdown tables in Slack become one line per row instead of a code block that wrapped
+  badly; narrow ones stay aligned. Long notes no longer split inside a code block, which showed a
+  stray ``` in Slack.
+- The `rca-from-triage` preset opens its note with a one-sentence conclusion, which is what a chat
+  notification shows.
+
 ## [1.35.0] - 2026-09-28
 
 ### Added
