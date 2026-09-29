@@ -6,6 +6,7 @@ import type {
   GithubCredential,
   LabelFacet, ModelUsage, QueryLogEntry,
   McpServer, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
+  Skill, SkillSummary,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, ModelProvider, ModelProviders,
 } from "./types";
@@ -332,6 +333,22 @@ export const api = {
   removeProjectSource: (id: string, name: string) =>
     request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/sources/${encodeURIComponent(name)}`,
       { method: "DELETE" }),
+  // A project's skills (TR-332). Upload takes a SKILL.md as it is: front matter, then the body.
+  skills: (id: string) => request<SkillSummary[]>(`/api/projects/${encodeURIComponent(id)}/skills`),
+  skill: (id: string, name: string) =>
+    request<Skill>(`/api/projects/${encodeURIComponent(id)}/skills/${encodeURIComponent(name)}`),
+  createSkill: (id: string, body: { name: string; description: string; body: string }) =>
+    request<Skill>(`/api/projects/${encodeURIComponent(id)}/skills`,
+      { method: "POST", body: JSON.stringify(body) }),
+  updateSkill: (id: string, name: string, body: { description?: string; body?: string }) =>
+    request<Skill>(`/api/projects/${encodeURIComponent(id)}/skills/${encodeURIComponent(name)}`,
+      { method: "PUT", body: JSON.stringify(body) }),
+  deleteSkill: (id: string, name: string) =>
+    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/skills/${encodeURIComponent(name)}`,
+      { method: "DELETE" }),
+  uploadSkill: (id: string, text: string) =>
+    request<Skill & { created: boolean }>(`/api/projects/${encodeURIComponent(id)}/skills/upload`,
+      { method: "POST", body: text, headers: { "content-type": "text/markdown" } }),
   pauseProject: (id: string, sources = false) =>
     request<Project>(`/api/projects/${encodeURIComponent(id)}/pause`, { method: "POST", body: JSON.stringify({ sources }) }),
   resumeProject: (id: string) =>

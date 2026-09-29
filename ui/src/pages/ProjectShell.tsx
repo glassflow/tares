@@ -9,6 +9,7 @@ import AgentForm from "../components/AgentForm";
 import IngestEndpoint from "../components/IngestEndpoint";
 import InfoDialog, { HelpButton } from "../components/InfoDialog";
 import { SessionsPanel } from "../components/ChallengerSessions";
+import SkillsPanel from "../components/SkillsPanel";
 import { RunsPanel } from "./AgentDetail";
 import { ServerForm } from "./McpServers";
 import type { ConnectorSpec, ProjectSummary, Template, RecipeActionOption, Source, Trigger, TriggerCondition } from "../types";
@@ -32,9 +33,9 @@ export default function ProjectShell({ s, id, reload, template }: {
   const sourceCount = (s.objects ?? []).filter((o) => o.kind === "source" && !o.missing).length;
   const pausedSources = ((s.params as Record<string, unknown> | undefined)?.paused_sources as string[] | undefined) ?? [];
   // ?tab= deep links win; otherwise a project with sessions opens on them
-  const [tab, setTab] = useState<"setup" | "events" | "firings" | "agents" | "sessions">(() => {
+  const [tab, setTab] = useState<"setup" | "events" | "firings" | "agents" | "skills" | "sessions">(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
-    if (t === "setup" || t === "events" || t === "firings" || t === "agents" || (t === "sessions" && s.sessions)) return t;
+    if (t === "setup" || t === "events" || t === "firings" || t === "agents" || t === "skills" || (t === "sessions" && s.sessions)) return t;
     return s.sessions ? "sessions" : "setup";
   });
   const [busyKey, setBusyKey] = useState<string>();
@@ -330,7 +331,10 @@ export default function ProjectShell({ s, id, reload, template }: {
         <button className={tab === "events" ? "active" : ""} onClick={() => setTab("events")}>Events</button>
         <button className={tab === "firings" ? "active" : ""} onClick={() => setTab("firings")}>Firings</button>
         <button className={tab === "agents" ? "active" : ""} onClick={() => { setFocusDispatch(undefined); setTab("agents"); }}>Agents</button>
+        <button className={tab === "skills" ? "active" : ""} onClick={() => setTab("skills")}>Skills</button>
       </div>
+
+      {tab === "skills" && <SkillsPanel project={id} onOpenAgent={openAgentTab} />}
 
       {tab === "sessions" && s.sessions && (
         <>

@@ -294,6 +294,23 @@ export interface AgentRun {
   verdict?: string | null;
   // what the run produced (TR-220), read off its tool calls and deliveries; [] when nothing
   results?: RunResult[];
+  // the project skills the run loaded (TR-332), in order; [] when none
+  skills?: string[];
+}
+
+// A project's skill (TR-332): instructions its agents load by name when a task matches.
+export interface SkillSummary {
+  name: string;
+  description: string;
+  updated_at: string;
+  size: number;          // bytes of the body
+  loaded_by: string[];   // agents of the project that loaded it in the last 7 days
+}
+export interface Skill {
+  name: string;
+  description: string;
+  body: string;
+  updated_at: string;
 }
 
 export interface RunResult {
