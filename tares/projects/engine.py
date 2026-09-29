@@ -14,13 +14,14 @@ from __future__ import annotations
 import traceback
 import uuid
 
+from .. import skills as _skills
 from ..config import CatalogError, agent_url, import_catalog_dict
 from .base import PlannedObject, ProjectError
 from .registry import get_template, list_templates as _list_templates
 
 # delete order: dependents first (an agent references a trigger and may reference an mcp server,
-# a trigger reads sources)
-_DELETE_ORDER = ("agent", "trigger", "source", "mcp_server")
+# a trigger reads sources). A skill (TR-332) is the project's own and depends on nothing.
+_DELETE_ORDER = ("agent", "trigger", "source", "mcp_server", "skill")
 _SECTION = {"source": "sources", "trigger": "triggers",
             "agent": "agents", "mcp_server": "mcp_servers"}
 # the kinds that belong to exactly one project (a source is shared)
@@ -40,12 +41,16 @@ class Engine:
     def list_templates(self) -> list[dict]:
         return [r.describe() for r in _list_templates()]
 
-    def _existing_names(self) -> dict[str, dict[str, dict]]:
+    def _existing_names(self, uid: str | None = None) -> dict[str, dict[str, dict]]:
+        """The catalog by kind and name; with `uid`, also that project's skills (a skill name is
+        only unique within its project)."""
         s = self.store
         return {"source": {x["name"]: x for x in s.list_catalog_sources()},
                 "trigger": {x["name"]: x for x in s.list_catalog_triggers()},
                 "agent": {x["name"]: x for x in s.list_catalog_agents()},
-                "mcp_server": {x["name"]: x for x in s.list_mcp_servers()}}
+                "mcp_server": {x["name"]: x for x in s.list_mcp_servers()},
+                "skill": ({x["name"]: {**x, "owned_by": uid} for x in s.list_skills(uid)}
+                          if uid else {})}
 
     def default_id(self) -> str:
         return self.store.default_project_id()
@@ -54,7 +59,7 @@ class Engine:
         inst = self.store.get_project(uid)
         if inst is None:
             return None
-        existing = self._existing_names()
+        existing = self._existing_names(uid)
         objects = []
         for o in self.store.list_project_objects(uid):
             if o["kind"] not in existing:   # a kind that no longer exists (a folded view)
@@ -113,7 +118,7 @@ class Engine:
         uid = "uc_" + uuid.uuid4().hex[:10]
         self.store.create_project(uid, template.key, name, params, status="active")
         self.store.log_project(uid, "create", f"{len(plan)} objects planned")
-        before = self._existing_names()
+        before = self._existing_names(uid)
         try:
             # a custom project shares sources rather than taking them
             self._check_ownership(uid, [o for o in plan if not (_is_custom(template.key)
@@ -133,7 +138,7 @@ class Engine:
                 self._do_reload()
                 raise
             created = [o for o in plan if o.name not in before[o.kind]]
-            self._delete_objects(created, purge_events=False)
+            self._delete_objects(created, purge_events=False, uid=uid)
             self.store.update_project(uid, status="error", last_error=_errtext(e))
             self.store.log_project(uid, "create_failed", _errtext(e))
             self._do_reload()
@@ -162,7 +167,7 @@ class Engine:
         # leaves them alone
         existing = {(o["kind"], o["key"]): o for o in self.store.list_project_objects(uid)
                     if not o["key"].startswith("+")}
-        current = self._existing_names()
+        current = self._existing_names(uid)
         report = {"created": [], "updated": [], "kept": [], "deleted": []}
         to_apply: list[PlannedObject] = []
         for o in plan:
@@ -394,7 +399,7 @@ class Engine:
                      if o["kind"] == target.kind and o["key"] == target.key), None)
         if prev and prev["name"] != target.name:
             self._retire(uid, [PlannedObject(target.kind, target.key, {"name": prev["name"]})])
-        self._check_ownership(uid, [target], self._existing_names())
+        self._check_ownership(uid, [target], self._existing_names(uid))
         self._apply(uid, [target])
         self._do_reload()
         self.store.log_project(uid, "repaired", f"{target.kind}:{target.name}")
@@ -433,6 +438,17 @@ class Engine:
     def _apply(self, uid: str, plan: list[PlannedObject]) -> None:
         if not plan:
             return
+        # skills are checked with the rest of the plan, before anything is written, and stored
+        # in the project directly: they are not catalog objects
+        skills = []
+        for o in plan:
+            if o.kind == "skill":
+                try:
+                    skills.append((o, _skills.validate(o.name, o.spec.get("description"),
+                                                       o.spec.get("body"))))
+                except _skills.SkillError as e:
+                    raise ProjectError(str(e)) from e
+        plan = [o for o in plan if o.kind != "skill"]
         doc: dict = {}
         for o in plan:
             doc.setdefault(_SECTION[o.kind], []).append(dict(o.spec))
@@ -450,6 +466,9 @@ class Engine:
             if o.kind == "trigger":
                 for src in o.spec.get("sources") or []:
                     self.store.put_in_project("source", src, uid)
+        for o, (name, description, body) in skills:
+            self.store.upsert_skill(uid, name, description, body)
+            self.store.upsert_project_object(uid, "skill", o.key, name)
 
     # ── custom projects: adopt and release instead of create and delete ─────
     def _adopt(self, uid: str, objs: list[PlannedObject], existing: dict) -> None:
@@ -577,7 +596,7 @@ class Engine:
                 self.store.remove_from_project("source", o.name, uid)
             else:
                 gone.append(o)
-        self._delete_objects(gone, purge_events=False)
+        self._delete_objects(gone, purge_events=False, uid=uid)
 
     def _update_custom(self, uid: str, inst: dict, params: dict, plan: list[PlannedObject]) -> dict:
         existing = {(o["kind"], o["key"]): o for o in self.store.list_project_objects(uid)}
@@ -647,7 +666,9 @@ class Engine:
             f"{k}: {', '.join(v)}" for k, v in report.items() if v) or "no changes")
         return {**self.get(uid), "report": report}
 
-    def _delete_objects(self, objs: list[PlannedObject], purge_events: bool) -> int:
+    def _delete_objects(self, objs: list[PlannedObject], purge_events: bool,
+                        uid: str | None = None) -> int:
+        """`uid`: the project a planned skill is deleted from."""
         purged = 0
         s = self.store
         for kind in _DELETE_ORDER:
@@ -666,6 +687,8 @@ class Engine:
                         purged += s.purge_events(o.name)
                 elif kind == "mcp_server":
                     s.delete_mcp_server(o.name)
+                elif kind == "skill" and uid:
+                    s.delete_skill(uid, o.name)
         return purged
 
     def _do_reload(self) -> None:

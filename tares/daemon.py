@@ -45,6 +45,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL,
                              resolve_anthropic_headers, resolve_api_base, resolve_provider,
                              DEFAULT_API_BASE)
 from . import metrics as _metrics
+from . import skills as skills_mod
 from . import providers as providers_mod
 from .runtime import Runtime
 from . import slack as slack_mod
@@ -575,6 +576,8 @@ def make_app() -> FastAPI:
     # Credentials: the env AUTH_TOKEN is the implicit root (admin, non-revocable), plus revocable
     # scoped keys in the api_keys table (docs/design/api-keys.md).
     _ADMIN_PATHS = ("/api/catalog/export", "/api/catalog/import", "/api/agent/chat")
+    # a project's skills: what its agents are told to do, so writing one is a catalog write
+    _SKILLS_PATH = re.compile(r"^/api/projects/[^/]+/skills(/|$)")
 
     def _required_scope(method: str, path: str) -> str | None:
         """None = public. 'any' = any valid credential. Reads of credentials and all catalog
@@ -595,7 +598,8 @@ def make_app() -> FastAPI:
             return "admin"
         if method != "GET" and (path.startswith("/api/sources")
                                 or path.startswith("/api/triggers")
-                                or path.startswith("/api/agents")):
+                                or path.startswith("/api/agents")
+                                or _SKILLS_PATH.match(path)):
             return "admin"
         return "read"
 
@@ -2646,6 +2650,85 @@ def make_app() -> FastAPI:
             return projects.summary(uid)
         except Exception as e:
             _uc_err(e)
+
+    # ── a project's skills (TR-332): instructions its agents load by name ─────
+    def _skill_project(uid: str) -> dict:
+        p = store.get_project(uid)
+        if p is None:
+            _err(KeyError(f"unknown project {uid!r}"), 404)
+        return p
+
+    def _skill_or_404(uid: str, name: str) -> dict:
+        sk = store.get_skill(uid, name)
+        if sk is None:
+            _err(KeyError(f"project has no skill named {name!r}"), 404)
+        return {k: sk[k] for k in ("name", "description", "body", "updated_at")}
+
+    @app.get("/api/projects/{uid}/skills")
+    async def list_skills(uid: str):
+        """The project's skills, with the agents of the project that loaded each one in the
+        last 7 days (`loaded_by`)."""
+        _skill_project(uid)
+        agents = [a["name"] for a in store.list_catalog_agents() if a.get("owned_by") == uid]
+        loads = store.skill_loads(agents, days=7)
+        return [{**sk, "loaded_by": loads.get(sk["name"], [])} for sk in store.list_skills(uid)]
+
+    @app.get("/api/projects/{uid}/skills/{name}")
+    async def get_skill(uid: str, name: str):
+        _skill_project(uid)
+        return _skill_or_404(uid, name)
+
+    @app.post("/api/projects/{uid}/skills", status_code=201)
+    async def create_skill(uid: str, body: dict = Body(...)):
+        _skill_project(uid)
+        try:
+            name, description, text = skills_mod.validate(
+                body.get("name"), body.get("description"), body.get("body"))
+        except skills_mod.SkillError as e:
+            _err(e)
+        if store.get_skill(uid, name) is not None:
+            _err(ValueError(f"this project already has a skill named {name!r}; edit it "
+                            "instead"), 409)
+        store.upsert_skill(uid, name, description, text)
+        return _skill_or_404(uid, name)
+
+    @app.put("/api/projects/{uid}/skills/{name}")
+    async def update_skill(uid: str, name: str, body: dict = Body(...)):
+        """Change the description, the body, or both; a field left out keeps its value."""
+        _skill_project(uid)
+        cur = _skill_or_404(uid, name)
+        try:
+            _, description, text = skills_mod.validate(
+                name, body.get("description", cur["description"]), body.get("body", cur["body"]))
+        except skills_mod.SkillError as e:
+            _err(e)
+        store.upsert_skill(uid, name, description, text)
+        store.mark_skill_customized(uid, name)
+        return _skill_or_404(uid, name)
+
+    @app.delete("/api/projects/{uid}/skills/{name}")
+    async def delete_skill(uid: str, name: str):
+        _skill_project(uid)
+        if not store.delete_skill(uid, name):
+            _err(KeyError(f"project has no skill named {name!r}"), 404)
+        return {"ok": True, "deleted": name}
+
+    @app.post("/api/projects/{uid}/skills/upload")
+    async def upload_skill(uid: str, request: Request):
+        """The raw body is a SKILL.md: front matter with name and description, then the body.
+        Creates the skill, or replaces the one of the same name."""
+        _skill_project(uid)
+        raw = await request.body()
+        try:
+            name, description, text = skills_mod.parse_skill_md(raw.decode("utf-8"))
+        except UnicodeDecodeError:
+            _err(ValueError("a SKILL.md must be UTF-8 text"))
+        except skills_mod.SkillError as e:
+            _err(e)
+        created = store.upsert_skill(uid, name, description, text)
+        if not created:
+            store.mark_skill_customized(uid, name)
+        return {**_skill_or_404(uid, name), "created": created}
 
     # /api/usecases*: the pre-1.14 routes, same handlers, old response shape ({"usecases"},
     # {"recipes"}, and `recipe` on an instance, which get() still emits). Not in the schema;

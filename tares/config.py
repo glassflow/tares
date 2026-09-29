@@ -386,6 +386,7 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
     mcp_servers = raw.get("mcp_servers", []) or []
     for m in mcp_servers:
         validate_mcp_server_dict(m)
+    skills = _validated_skills(raw.get("skills", []) or [])
 
     # validate the whole document before writing anything. Names already in the store count as
     # known (a merge import may add a trigger over existing sources).
@@ -420,6 +421,10 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
                 for ref in _project_refs(o):
                     if _resolve_project(store, ref) is None and ref not in declared:
                         raise CatalogError(f"{kind} {o['name']!r}: unknown project {ref!r}")
+        for sk in skills:
+            ref = sk["project"]
+            if ref and _resolve_project(store, ref) is None and ref not in declared:
+                raise CatalogError(f"skill {sk['name']!r}: unknown project {ref!r}")
 
     from .connectors import normalize_config, source_type_for
     for s in sources:
@@ -499,17 +504,48 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
         # everything the document left without a project lands in the default project, and a
         # trigger's sources join its project (the same pass the store runs at every start)
         store.normalize_projects()
+        # skills last: the projects they name exist now, and a skill in the document wins over
+        # the one a template planned under the same name
+        for sk in skills:
+            uid = _resolve_project(store, sk["project"]) if sk["project"] \
+                else store.default_project_id()
+            store.upsert_skill(uid, sk["name"], sk["description"], sk["body"])
 
     return {"sources": len(sources), "triggers": len(triggers),
             "agents": len(agents), "mcp_servers": len(mcp_servers), "projects": len(projects),
+            "skills": len(skills),
             "names": {"sources": [s["name"] for s in sources],
                       "triggers": [t["name"] for t in triggers],
                       "agents": [a["name"] for a in agents],
                       "mcp_servers": [m["name"] for m in mcp_servers],
-                      "projects": [u["name"] for u in projects]}}
+                      "projects": [u["name"] for u in projects],
+                      "skills": [s["name"] for s in skills]}}
 
 
 DEFAULT_PROJECT_NAME = "Default"
+
+
+def _validated_skills(raw) -> list[dict]:
+    """The `skills:` section: [{project, name, description, body}], each checked like the API
+    checks one (tares/skills.py). `project` is a name or id; absent means the default project."""
+    from .skills import SkillError, validate as validate_skill
+    if not isinstance(raw, list):
+        raise CatalogError("skills must be a list of {project, name, description, body}")
+    out, seen = [], set()
+    for sk in raw:
+        if not isinstance(sk, dict):
+            raise CatalogError(f"each skill must be a mapping, got {sk!r}")
+        try:
+            name, description, body = validate_skill(sk.get("name"), sk.get("description"),
+                                                     sk.get("body"))
+        except SkillError as e:
+            raise CatalogError(str(e)) from e
+        project = str(sk.get("project") or "").strip()
+        if (project, name) in seen:
+            raise CatalogError(f"skill {name!r} appears twice for project {project or 'Default'!r}")
+        seen.add((project, name))
+        out.append({"project": project, "name": name, "description": description, "body": body})
+    return out
 
 
 def _project_refs(o: dict) -> list[str]:
@@ -686,6 +722,13 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
             uc_out.append({"template": u["template"], "name": u["name"], "params": u["params"]})
     if uc_out and want is None:
         doc["projects"] = uc_out
+    # Skills belong to a project, not to a source: a full export carries them, a partial one
+    # (a subset of sources) does not.
+    skill_out = [{"project": _pname(sk["project"]), "name": sk["name"],
+                  "description": sk["description"], "body": sk["body"]}
+                 for sk in store.list_all_skills() if _pname(sk["project"])]
+    if skill_out and want is None:
+        doc["skills"] = skill_out
     return yaml.safe_dump(doc, sort_keys=False, default_flow_style=False)
 
 

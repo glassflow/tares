@@ -26,6 +26,20 @@ the project follows [Semantic Versioning](https://semver.org/).
   moves the triggers, agents and MCP servers it names out of the default project (with what they
   need: an agent's trigger, a trigger's agents and sources) and refuses one that belongs to another
   project, naming that project.
+- Skills: a project holds named instructions (a playbook, a runbook, a house style) its agents load
+  when a task matches. A skill is a name (lowercase letters, digits and dashes), a one-paragraph
+  description of up to 1024 characters and a markdown body of up to 64 KB. When an agent's project
+  has skills, its system prompt ends with a "Skills available in this project" list of names and
+  descriptions, and it gets a `skill` tool that returns a body; a project with none leaves the
+  prompt and tools as they were. A run records the skills it loaded (`skills` on the run), and the
+  runs table shows them. Routes: `GET`/`POST /api/projects/{uid}/skills`,
+  `GET`/`PUT`/`DELETE /api/projects/{uid}/skills/{name}`, and
+  `POST /api/projects/{uid}/skills/upload` with a SKILL.md as the body (front matter with `name`
+  and `description`, then the body). Writing a skill needs the admin scope, reading one the read
+  scope. Skills go with their project when it is deleted, are exported and imported under a
+  top-level `skills:` section (each with its `project` by name), and a template may plan one.
+  The project page has a Skills tab: list with the agents that loaded each skill in the last 7
+  days, new skill with a markdown preview, upload a SKILL.md, edit, delete. Ask never gets skills.
 
 ### Changed
 - Views are gone. A trigger names the sources it watches, the filters that narrow them and the

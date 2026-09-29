@@ -110,9 +110,9 @@ def runner(store, provider):
         recorded.append({"key": key, "finding": finding, "verdict": verdict, "label": label})
 
     async def loop(agent, trigger, key, payload, prov, model, usage, tracer, obs, concluded=None,
-                   produced=None):
+                   produced=None, **kw):
         return await r._loop_with(agent, trigger, key, payload, provider, Toolbox(), usage,
-                                  tracer, obs, model=model, concluded=concluded, produced=produced)
+                                  tracer, obs, model=model, concluded=concluded, produced=produced, **kw)
 
     r._record, r._loop, r.recorded = record, loop, recorded
     r._callback_anchor = lambda agent, trigger, key: (key, {})
