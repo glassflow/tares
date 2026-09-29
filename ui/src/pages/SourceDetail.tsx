@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
 import Dependents from "../components/Dependents";
-import ProjectBadge from "../components/ProjectBadge";
+import { ProjectLink } from "../components/ProjectBadge";
 import IngestEndpoint from "../components/IngestEndpoint";
 import SourceForm from "../components/SourceForm";
 import { ErrorState, StatusBadge, TimeAgo, ruleSummary, usePolling } from "../components/bits";
@@ -52,7 +52,9 @@ export default function SourceDetail() {
           <h1><span className="mono">{source.name}</span></h1>
           <p className="subtitle">
             {spec?.label ?? source.connector}
-            {source.owned_by && <> · <ProjectBadge ownedBy={source.owned_by} customized={source.customized} /></>}
+            {(source.projects ?? []).length > 0 && (
+              <> · in {(source.projects ?? []).map((id, k) => <span key={id}>{k > 0 && ", "}<ProjectLink id={id} /></span>)}</>
+            )}
           </p>
         </div>
         <div className="btnrow">

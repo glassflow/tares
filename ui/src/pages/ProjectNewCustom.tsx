@@ -5,17 +5,17 @@ import { api } from "../api";
 import { Combo } from "../components/bits";
 import type { McpServer, Project, ProjectObjectKind } from "../types";
 
-// A project assembled by hand: name it, tick the objects that are not part of another project,
-// Start. Nothing is created; Tares adopts the objects (ownership badge) and the project page shows
-// their runs and firings. Edit reopens this page with the current list; removing an object from
-// the project releases it, it is never deleted.
+// A project assembled by hand: name it, pick the objects it is made of, Start. Nothing is created.
+// Sources are shared, so any source can be picked. A trigger, agent or MCP server belongs to one
+// project: the ones still in the Default project (or in none) can be moved here. Edit reopens this
+// page with the current list; removing an object from the project hands it back, it is never
+// deleted.
 
 type Pick = { kind: ProjectObjectKind; name: string };
 type Choice = { name: string; ownedBy: string | null | undefined; missing?: boolean };
 
 const KINDS: { kind: ProjectObjectKind; label: string }[] = [
   { kind: "source", label: "Sources" },
-  { kind: "view", label: "Views" },
   { kind: "trigger", label: "Triggers" },
   { kind: "agent", label: "Tares agents" },
   { kind: "mcp_server", label: "MCP servers" },
@@ -39,17 +39,18 @@ export default function ProjectNewCustom() {
     let cancelled = false;
     (async () => {
       try {
-        const [sources, views, triggers, agents, mcp, current] = await Promise.all([
-          api.sources(), api.views(), api.triggers(), api.builtinAgents(), api.mcpServers(),
+        const [sources, triggers, agents, mcp, projects, current] = await Promise.all([
+          api.sources(), api.triggers(), api.builtinAgents(), api.mcpServers(), api.projects(),
           editId ? api.project(editId) : Promise.resolve(undefined),
         ]);
         if (cancelled) return;
         const mine = current?.id;
-        const free = (rows: { name: string; owned_by?: string | null }[]) =>
-          rows.filter((r) => !r.owned_by || r.owned_by === mine)
-              .map((r) => ({ name: r.name, ownedBy: r.owned_by }));
+        const dflt = projects.projects.find((p) => p.default)?.id;
+        const free = (rows: { name: string; owned_by?: string | null; project?: string }[]) =>
+          rows.map((r) => ({ name: r.name, ownedBy: r.project ?? r.owned_by }))
+              .filter((r) => !r.ownedBy || r.ownedBy === mine || r.ownedBy === dflt);
         const byKind: Record<ProjectObjectKind, Choice[]> = {
-          source: free(sources), view: free(views), trigger: free(triggers),
+          source: sources.map((r) => ({ name: r.name, ownedBy: r.owned_by })), trigger: free(triggers),
           agent: free(agents.agents), mcp_server: free(mcp.servers as McpServer[]),
         };
         // an object of this project that was deleted by hand is still on its list: show it as
@@ -107,9 +108,9 @@ export default function ProjectNewCustom() {
         <div>
           <h1>{existing ? `Edit ${existing.name}` : "From existing objects"}</h1>
           <p className="subtitle">
-            A project assembled from sources, views, triggers, agents and MCP servers you already have.
-            Nothing is created; the project page shows their runs and firings. Removing an object from the
-            project leaves it in place.
+            A project assembled from sources, triggers, agents and MCP servers you already have.
+            Nothing is created; the project page shows their runs and firings. Sources can be in several
+            projects; a trigger, agent or MCP server moves here from the Default project.
           </p>
         </div>
       </div>
@@ -121,7 +122,7 @@ export default function ProjectNewCustom() {
         </label>
         {!choices && !err && <div className="dim">loading…</div>}
         {choices && total === 0 && (
-          <div className="empty">Every object on this instance is already part of a project. Create a source, view, trigger or agent first.</div>
+          <div className="empty">Nothing to pick yet. Connect a source first.</div>
         )}
         {choices && KINDS.map((k) => {
           const all = choices[k.kind];

@@ -4,7 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { Search, Settings as SettingsIco } from "../components/icons";
 import { ErrorState, Picker, StatusBadge, TimeAgo, formatBytes, usePolling } from "../components/bits";
-import ProjectBadge from "../components/ProjectBadge";
+import { ProjectLink } from "../components/ProjectBadge";
 
 // Gear dropdown next to "Add source" — catalog import/export, each on its own page.
 function CatalogMenu() {
@@ -59,8 +59,11 @@ export default function Sources() {
     for (const p of projectList?.projects ?? []) m[p.id] = p.name;
     return m;
   }, [projectList]);
+  // a source can be in several projects: `projects` lists them all
+  const memberOf = (s: { projects?: string[]; owned_by?: string | null }) =>
+    s.projects ?? (s.owned_by ? [s.owned_by] : []);
   const owningProjects = useMemo(
-    () => Array.from(new Set((sources ?? []).map((s) => s.owned_by).filter((x): x is string => !!x))).sort(
+    () => Array.from(new Set((sources ?? []).flatMap(memberOf))).sort(
       (a, b) => (projectName[a] ?? a).localeCompare(projectName[b] ?? b)),
     [sources, projectName],
   );
@@ -71,7 +74,7 @@ export default function Sources() {
       const st = s.health?.status ?? "starting";
       return (status === "all" || st === status) &&
         (connector === "all" || s.connector === connector) &&
-        (project === "all" || (project === "none" ? !s.owned_by : s.owned_by === project)) &&
+        (project === "all" || (project === "none" ? !memberOf(s).length : memberOf(s).includes(project))) &&
         (!needle || s.name.toLowerCase().includes(needle) || s.connector.toLowerCase().includes(needle));
     });
   }, [sources, q, status, connector, project]);
@@ -140,17 +143,18 @@ export default function Sources() {
           <table>
             <thead>
               <tr>
-                <th>name</th><th>connector</th><th>status</th><th>poll</th>
+                <th>name</th><th>projects</th><th>connector</th><th>status</th><th>poll</th>
                 <th className="num">events</th><th>last ingest</th><th>last error</th>
               </tr>
             </thead>
             <tbody>
               {shown.map((s) => (
                 <tr key={s.name} className="clickable" onClick={() => nav(`/sources/${s.name}`)}>
-                  <td className="mono">{s.name}
-                    {s.owned_by && <span onClick={(e) => e.stopPropagation()} style={{ marginLeft: 8 }}>
-                      <ProjectBadge ownedBy={s.owned_by} customized={s.customized} compact />
-                    </span>}
+                  <td className="mono">{s.name}</td>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    {memberOf(s).length
+                      ? memberOf(s).map((id, k) => <span key={id}>{k > 0 && ", "}<ProjectLink id={id} /></span>)
+                      : <span className="dim">none</span>}
                   </td>
                   <td>{s.connector}</td>
                   <td><StatusBadge status={s.health?.status} /></td>
@@ -163,7 +167,7 @@ export default function Sources() {
                 </tr>
               ))}
               {!shown.length && (
-                <tr><td colSpan={7} className="dim" style={{ textAlign: "center", padding: 24 }}>
+                <tr><td colSpan={8} className="dim" style={{ textAlign: "center", padding: 24 }}>
                   no sources match the current filter
                 </td></tr>
               )}

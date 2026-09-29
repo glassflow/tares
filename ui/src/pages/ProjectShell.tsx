@@ -1,21 +1,21 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
 import TriggerEditor from "../components/TriggerEditor";
-import ViewEditor from "../components/ViewEditor";
 import { Combo, Picker, ErrorState, TimeAgo, conditionText, usePolling } from "../components/bits";
 import AgentForm from "../components/AgentForm";
 import IngestEndpoint from "../components/IngestEndpoint";
 import InfoDialog, { HelpButton } from "../components/InfoDialog";
 import { SessionsPanel } from "../components/ChallengerSessions";
 import { RunsPanel } from "./AgentDetail";
-import type { ConnectorSpec, ProjectSummary, Template, RecipeActionOption, Source, TriggerCondition } from "../types";
+import { ServerForm } from "./McpServers";
+import type { ConnectorSpec, ProjectSummary, Template, RecipeActionOption, Source, Trigger, TriggerCondition } from "../types";
 
 // The page for every project: what a project really is, on one page, driven by the live APIs
-// plus the template's summary. Setup (sources, views and triggers, the latter two editable in
-// place, plus whatever the template declares as panels), Events, Firings (every dispatch across
+// plus the template's summary. Setup (its sources, triggers, agents and MCP servers, all added and
+// edited in place, plus whatever the template declares as panels), Events, Firings (every dispatch across
 // the project's triggers, with who it went to), Agents (runs and configuration inline, exactly
 // like the agent's own page), and Sessions when the template reports them. Template-specific
 // content arrives as data (actions, facts, panels, cards), never as template-specific markup.
@@ -46,32 +46,9 @@ export default function ProjectShell({ s, id, reload, template }: {
   const [openEvent, setOpenEvent] = useState<number>();
   const [actionError, setActionError] = useState<string>();
   const [confirmDel, setConfirmDel] = useState(false);
-  // Which of a custom project's objects go with it. The builder assembled them, so deleting the
-  // project is the one place to take them apart in one go; a pick pulls in what depends on it
-  // (a source brings its views, triggers and agents) and unpicking one lets go of what needed it.
-  const [delSel, setDelSel] = useState<Set<string>>(new Set());
-  const [delDeps, setDelDeps] = useState<Record<string, string[]>>();
-  useEffect(() => {
-    if (!confirmDel) return;
-    let live = true;
-    setDelSel(new Set(s.objects.filter((o) => o.kind !== "mcp_server").map((o) => `${o.kind}:${o.name}`)));
-    const objs = s.objects.filter((o) => o.kind !== "mcp_server");
-    Promise.all(objs.map(async (o) => {
-      if (o.kind === "agent") return [`${o.kind}:${o.name}`, [] as string[]] as const;
-      try {
-        const r = await api.dependents(o.kind as "source" | "view" | "trigger", o.name);
-        return [`${o.kind}:${o.name}`, r.dependents.map((d) => `${d.kind}:${d.name}`)] as const;
-      } catch { return [`${o.kind}:${o.name}`, [] as string[]] as const; }
-    })).then((rows) => { if (live) setDelDeps(Object.fromEntries(rows)); });
-    return () => { live = false; };
-  }, [confirmDel]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const delKeys = s.objects.filter((o) => o.kind !== "mcp_server").map((o) => `${o.kind}:${o.name}`);
-  const pick = (k: string, on: boolean) => setDelSel((cur) => {
-    const next = new Set(cur);
-    if (on) { next.add(k); for (const d of delDeps?.[k] ?? []) if (delKeys.includes(d)) next.add(d); }
-    else { next.delete(k); for (const [j, ds] of Object.entries(delDeps ?? {})) if (ds.includes(k)) next.delete(j); }
-    return next;
-  });
+  // Deleting a project always takes its triggers, agents and MCP servers. Sources are shared, so
+  // the dialog lists them and the person ticks which go too; one another project uses is kept.
+  const [delSources, setDelSources] = useState<Set<string>>(new Set());
   const [purge, setPurge] = useState(false);
   const [confirmPause, setConfirmPause] = useState(false);
   const [pauseSources, setPauseSources] = useState(false);
@@ -79,8 +56,10 @@ export default function ProjectShell({ s, id, reload, template }: {
   const names = (kind: string) => s.objects.filter((o) => o.kind === kind).map((o) => o.name);
   const { data: sources, reload: reloadSources } = usePolling(() => api.sources(), 10000);
   const { data: specs } = usePolling(() => api.connectors(), 600000);
-  const { data: views, reload: reloadViews } = usePolling(() => api.views(), 10000);
   const { data: triggers, reload: reloadTriggers } = usePolling(() => api.triggers(), 10000);
+  const { data: agentsData, reload: reloadAgents } = usePolling(() => api.builtinAgents(), 15000);
+  const { data: mcp, reload: reloadMcp } = usePolling(() => api.mcpServers(), 30000);
+  const { data: projects } = usePolling(() => api.projects(), 30000);
   const { data: dispatches, error: dispatchesError } = usePolling(() => api.dispatches(100), 10000);
   const { data: roster, reload: reloadRoster } = usePolling(() => api.agents(), 15000);
   const { data: slack } = usePolling(() => api.slackChannels(), 60000);
@@ -91,9 +70,33 @@ export default function ProjectShell({ s, id, reload, template }: {
       .then((lists) => lists.flat().sort((a, b) => (b.ingest_time > a.ingest_time ? 1 : -1)).slice(0, 50)),
     10000);
 
-  const mySources = (sources ?? []).filter((x) => names("source").includes(x.name));
-  const myViews = (views ?? []).filter((x) => names("view").includes(x.name));
-  const myTriggers = (triggers ?? []).filter((x) => names("trigger").includes(x.name));
+  // Membership from both sides: the summary's objects and each object's own `project`, so a trigger
+  // made a moment ago shows before the summary is refetched.
+  const mySources = (sources ?? []).filter((x) => names("source").includes(x.name) || (x.projects ?? []).includes(id));
+  const myTriggers = (triggers ?? []).filter((x) => names("trigger").includes(x.name) || x.project === id);
+  const agentNames = [...new Set([...names("agent"),
+    ...(agentsData?.agents ?? []).filter((a) => a.project === id).map((a) => a.name)])];
+  const mcpNames = [...new Set([...names("mcp_server"),
+    ...(mcp?.servers ?? []).filter((m) => m.project === id).map((m) => m.name)])];
+  const projectName = (pid: string) => projects?.projects.find((p) => p.id === pid)?.name ?? pid;
+  const otherProjects = (x: Source) => (x.projects ?? []).filter((p) => p !== id);
+  // Inline "add" forms on the Setup tab: a trigger, an agent, an MCP server, an existing source.
+  const [addingTrigger, setAddingTrigger] = useState(false);
+  const [addingAgent, setAddingAgent] = useState<string | null>(null);   // the trigger to preselect
+  const [addingMcp, setAddingMcp] = useState(false);
+  const [addingSource, setAddingSource] = useState(false);
+  const [sourcePick, setSourcePick] = useState("");
+  const [removeSource, setRemoveSource] = useState<string | null>(null);
+  const notMine = (sources ?? []).filter((x) => !mySources.some((m) => m.name === x.name)).map((x) => x.name);
+  const addExistingSource = async (name: string) => {
+    setActionError(undefined);
+    try { await api.addProjectSource(id, name); setSourcePick(""); setAddingSource(false); reload(); reloadSources(); }
+    catch (e) { setActionError(String((e as Error).message ?? e)); }
+  };
+  const openAddAgent = (trigger: string) => {
+    setAddingAgent(trigger);
+    setTimeout(() => document.getElementById("add-agent")?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+  };
   const triggerNames = new Set(myTriggers.map((t) => t.name));
   const allFirings = (dispatches ?? []).filter((d) => triggerNames.has(d.trigger));
   // Filters on the Firings tab (TR-284): outcome, trigger, entity. Client-side over the loaded
@@ -212,8 +215,9 @@ export default function ProjectShell({ s, id, reload, template }: {
           {s.status === "paused"
             ? <button onClick={act(() => api.resumeProject(id))}>Resume</button>
             : <button onClick={() => { setPauseSources(false); setConfirmPause(true); }}>Pause</button>}
-          <Link className="btn" to={`/projects/new/${custom ? "custom" : encodeURIComponent(s.template)}?edit=${encodeURIComponent(id)}`}>Edit</Link>
-          <button className="danger" onClick={() => { setPurge(false); setConfirmDel(true); }}>Delete</button>
+          {!s.default && <Link className="btn" to={`/projects/new/${custom ? "custom" : encodeURIComponent(s.template)}?edit=${encodeURIComponent(id)}`}>Edit</Link>}
+          {/* the Default project holds whatever was made outside a project; it is never deleted */}
+          {!s.default && <button className="danger" onClick={() => { setPurge(false); setDelSources(new Set()); setConfirmDel(true); }}>Delete</button>}
         </div>
       </div>
 
@@ -330,7 +334,7 @@ export default function ProjectShell({ s, id, reload, template }: {
 
       {tab === "sessions" && s.sessions && (
         <>
-          <SessionsPanel sessions={s.sessions} runs={s.runs} view={s.names?.view ?? "challenger_session"}
+          <SessionsPanel sessions={s.sessions} runs={s.runs} project={id}
                          onSummarize={s.status === "active"
                            ? (sid) => { setActionArgs({ ...actionArgs, "summarize.session": sid }); return runActionWith("summarize", { session: sid }); }
                            : undefined}
@@ -360,46 +364,111 @@ export default function ProjectShell({ s, id, reload, template }: {
             </div>
           ))}
 
-          <h2>Sources</h2>
+          <div className="pagehead">
+            <h2 style={{ margin: 0 }}>Sources</h2>
+            <span className="btnrow">
+              <button type="button" onClick={() => { setAddingSource((o) => !o); setSourcePick(""); }}>Add existing source</button>
+              <Link className="btn" to={`/sources/new?project=${encodeURIComponent(id)}`}>Connect a new source</Link>
+            </span>
+          </div>
+          {addingSource && (
+            <div className="panel" style={{ marginBottom: 10 }}>
+              {notMine.length ? (
+                <div className="field" style={{ maxWidth: 360, margin: 0 }}>
+                  <span className="lbl">source</span>
+                  <Combo value={sourcePick} options={notMine} placeholder="pick a source to add…"
+                         onChange={(v) => (notMine.includes(v) ? addExistingSource(v) : setSourcePick(v))} />
+                  <span className="help">sources are shared: it stays in its other projects too</span>
+                </div>
+              ) : <p className="help" style={{ margin: 0 }}>every source is already in this project</p>}
+            </div>
+          )}
           {mySources.length ? (
             <table>
-              <thead><tr><th style={{ width: 24 }}></th><th>source</th><th>type</th><th>status</th><th className="num">events</th><th>last ingest</th></tr></thead>
+              <thead><tr><th style={{ width: 24 }}></th><th>source</th><th>type</th><th>status</th><th className="num">events</th><th>last ingest</th><th aria-label="actions" /></tr></thead>
               <tbody>
-                {mySources.map((x) => <SourceRow key={x.name} x={x} spec={specs?.[x.connector]} />)}
+                {mySources.map((x) => (
+                  <SourceRow key={x.name} x={x} spec={specs?.[x.connector]}
+                             others={otherProjects(x).map(projectName)}
+                             onRemove={() => setRemoveSource(x.name)} />))}
               </tbody>
             </table>
-          ) : <p className="help">none in this project</p>}
+          ) : <p className="help">none in this project yet</p>}
 
-          <h2 style={{ marginTop: 24 }}>Views</h2>
-          {myViews.map((v) => (
-            <ViewPanel key={v.name} v={v} sourceNames={(sources ?? []).map((x) => x.name)}
-                       watchers={(triggers ?? []).filter((t) => t.view === v.name).length}
-                       onSaved={() => { reloadViews(); reload(); }} />))}
-          {!myViews.length && <p className="help">none in this project</p>}
-
-          <h2 style={{ marginTop: 24 }}>Triggers</h2>
+          <div className="pagehead" style={{ marginTop: 24 }}>
+            <h2 style={{ margin: 0 }}>Triggers</h2>
+            {!addingTrigger && <button type="button" className="primary" onClick={() => setAddingTrigger(true)}>Add trigger</button>}
+          </div>
+          {addingTrigger && (
+            <div style={{ marginBottom: 12 }}>
+              <TriggerEditor project={id}
+                             onSaved={() => { setAddingTrigger(false); reloadTriggers(); reload(); reloadSources(); }}
+                             onCancel={() => setAddingTrigger(false)} />
+            </div>
+          )}
           {myTriggers.map((t) => (
             <TriggerPanel key={t.name} t={t}
-                          viewInProject={myViews.some((v) => v.name === t.view)}
                           lastFired={firings.find((d) => d.trigger === t.name)?.fired_at ?? null}
-                          onSaved={() => { reloadTriggers(); reload(); }} />
+                          onAddAgent={() => openAddAgent(t.name)}
+                          onSaved={() => { reloadTriggers(); reload(); reloadSources(); }} />
           ))}
-          {!myTriggers.length && <p className="help">none in this project</p>}
+          {!myTriggers.length && !addingTrigger && <p className="help">none in this project yet</p>}
 
-          {names("mcp_server").length > 0 && (
-            <>
-              <h2 style={{ marginTop: 24 }}>MCP servers</h2>
-              <p style={{ margin: "4px 0 0" }}>
-                {names("mcp_server").map((n) => (
-                  <Link key={n} to="/mcp-servers" className="chip mono">{n}</Link>))}
-              </p>
-            </>
+          <div className="pagehead" style={{ marginTop: 24 }} id="add-agent">
+            <h2 style={{ margin: 0 }}>Agents</h2>
+            {addingAgent === null && (
+              <button type="button" className="primary" disabled={!myTriggers.length}
+                      title={myTriggers.length ? undefined : "an agent runs on a trigger; add a trigger first"}
+                      onClick={() => openAddAgent("")}>Add agent</button>
+            )}
+          </div>
+          {addingAgent !== null && agentsData && (
+            <div style={{ marginBottom: 12 }}>
+              <AgentForm project={id}
+                         presetTrigger={addingAgent || myTriggers[0]?.name}
+                         triggers={myTriggers.map((t) => t.name)}
+                         presets={agentsData.presets} models={agentsData.models} defaultModel={agentsData.default_model}
+                         providers={agentsData.providers ?? []} defaultProvider={agentsData.default_provider ?? null}
+                         defaultModels={agentsData.default_models ?? {}}
+                         slackWorkspace={agentsData.slack_workspace}
+                         defaultMaxRounds={agentsData.default_max_rounds}
+                         defaultMaxRoundsWithMcp={agentsData.default_max_rounds_with_mcp}
+                         maxRoundsLimit={agentsData.max_rounds_limit}
+                         onSaved={() => { setAddingAgent(null); reloadAgents(); reloadRoster(); reload(); }}
+                         onCancel={() => setAddingAgent(null)} />
+            </div>
           )}
+          {agentNames.length > 0 ? (
+            <p style={{ margin: "4px 0 0" }}>
+              {agentNames.map((n) => (
+                <a key={n} href="#agents" className="chip mono" title="the agent, on the Agents tab"
+                   onClick={(e) => { e.preventDefault(); openAgentTab(n); }}>{n}</a>))}
+            </p>
+          ) : addingAgent === null && <p className="help">none in this project yet</p>}
+
+          <div className="pagehead" style={{ marginTop: 24 }}>
+            <h2 style={{ margin: 0 }}>MCP servers</h2>
+            {!addingMcp && <button type="button" onClick={() => setAddingMcp(true)}>Add MCP server</button>}
+          </div>
+          {addingMcp && (
+            <div style={{ marginBottom: 12 }}>
+              <ServerForm project={id}
+                          onSaved={() => { setAddingMcp(false); reloadMcp(); reload(); }}
+                          onCancel={() => setAddingMcp(false)} />
+            </div>
+          )}
+          {mcpNames.length > 0 ? (
+            <p style={{ margin: "4px 0 0" }}>
+              {mcpNames.map((n) => (
+                <Link key={n} to="/mcp-servers" className="chip mono">{n}</Link>))}
+            </p>
+          ) : !addingMcp && <p className="help">none in this project; its agents can use the ones added here</p>}
 
           <div className="pagehead" style={{ marginTop: 24 }}>
             <h2 style={{ margin: 0 }}>Subscribers</h2>
             <span className="btnrow">
-              <Link className="btn" to={`/agents/new?trigger=${encodeURIComponent(subTrigger || myTriggers[0]?.name || "")}`}>Add a Tares agent</Link>
+              <button type="button" disabled={!myTriggers.length}
+                      onClick={() => openAddAgent(subTrigger || myTriggers[0]?.name || "")}>Add a Tares agent</button>
               <button type="button" onClick={() => { setAdding(adding === "slack" ? null : "slack"); setSubMsg(undefined); }}>Add Slack channel</button>
               <button type="button" onClick={() => { setAdding(adding === "webhook" ? null : "webhook"); setSubMsg(undefined); }}>Add webhook</button>
             </span>
@@ -412,7 +481,7 @@ export default function ProjectShell({ s, id, reload, template }: {
                   <tr key={sub.subscription_id}>
                     <td>
                       {a.kind === "tares"
-                        ? names("agent").includes(a.name)
+                        ? agentNames.includes(a.name)
                           ? <a href="#agents" onClick={(e) => { e.preventDefault(); openAgentTab(a.name); }}><strong>{a.name}</strong></a>
                           : <Link to={`/agents/${encodeURIComponent(a.name)}`}><strong>{a.name}</strong></Link>
                         : a.kind === "slack"
@@ -605,11 +674,16 @@ export default function ProjectShell({ s, id, reload, template }: {
 
       {tab === "agents" && (
         <>
-          {names("agent").map((n) => (
+          {agentNames.map((n) => (
             <AgentSection key={n} name={n} focusDispatch={focusDispatch}
-                          triggerInProject={names("trigger")}
+                          triggerInProject={myTriggers.map((t) => t.name)}
                           onShowTrigger={showTrigger} />))}
-          {!names("agent").length && <p className="help">no agents in this project</p>}
+          {!agentNames.length && (
+            <p className="help">
+              no agents in this project yet;{" "}
+              <a href="#add-agent" onClick={(e) => { e.preventDefault(); setTab("setup"); openAddAgent(""); }}>add one on the Setup tab</a>
+            </p>
+          )}
         </>
       )}
 
@@ -639,44 +713,67 @@ export default function ProjectShell({ s, id, reload, template }: {
           )}
         </ConfirmDialog>
       )}
+      {removeSource && (
+        <ConfirmDialog title={`Remove ${removeSource} from this project?`}
+          message="The source stays connected and keeps ingesting; it is only no longer part of this project. A trigger of this project that reads it has to drop it first."
+          confirmLabel="Remove from project"
+          onConfirm={async () => {
+            const n = removeSource; setRemoveSource(null); setActionError(undefined);
+            try { await api.removeProjectSource(id, n); reload(); reloadSources(); }
+            catch (e) { setActionError(String((e as Error).message ?? e)); }
+          }}
+          onCancel={() => setRemoveSource(null)} />
+      )}
       {confirmDel && (
         <ConfirmDialog title={`Delete project ${s.name}?`}
-          message="Removes the project. The objects picked below go with it; anything unpicked stays in place, no longer part of a project. Events already stored stay unless you purge them."
-          confirmLabel={delSel.size ? `Delete project and ${delSel.size} object${delSel.size === 1 ? "" : "s"}` : "Delete project only"} danger
+          message="Its triggers, agents and MCP servers are deleted with it. Its sources stay unless you tick them below. Events already stored stay unless you purge them."
+          confirmLabel={delSources.size ? `Delete project and ${delSources.size} source${delSources.size === 1 ? "" : "s"}` : "Delete project"} danger
           onConfirm={async () => {
-            const chosen = s.objects.filter((o) => delSel.has(`${o.kind}:${o.name}`)).map((o) => ({ kind: o.kind, name: o.name }));
-            try { await api.deleteProject(id, purge, chosen); navigate("/projects", { replace: true }); }
+            try { await api.deleteProject(id, purge, [...delSources]); navigate("/projects", { replace: true }); }
             catch (e) { setActionError(String((e as Error).message ?? e)); setConfirmDel(false); }
           }}
           onCancel={() => setConfirmDel(false)}>
-          {delKeys.length > 0 && (
+          {(myTriggers.length + agentNames.length + mcpNames.length) > 0 && (
             <div style={{ margin: "10px 0 4px" }}>
-              <div className="btnrow" style={{ marginBottom: 6 }}>
-                <span className="lbl">its objects</span>
-                <button type="button" className="dim" onClick={() => setDelSel(new Set(delKeys))}>Select all</button>
-                <button type="button" className="dim" onClick={() => setDelSel(new Set())}>None</button>
-                {!delDeps && <span className="help">checking what depends on what…</span>}
-              </div>
-              {s.objects.filter((o) => o.kind !== "mcp_server").map((o) => {
-                const k = `${o.kind}:${o.name}`;
+              <span className="lbl">deleted with it</span>
+              {[...myTriggers.map((t) => ["trigger", t.name]), ...agentNames.map((n) => ["agent", n]),
+                ...mcpNames.map((n) => ["MCP server", n])].map(([k, n]) => (
+                <div key={`${k}:${n}`} style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "2px 0", minWidth: 0 }}>
+                  <span className="help" style={{ width: 76, flex: "0 0 auto" }}>{k}</span>
+                  <span className="mono" style={{ minWidth: 0, wordBreak: "break-all" }}>{n}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {mySources.length > 0 && (
+            <div style={{ margin: "10px 0 4px" }}>
+              <span className="lbl">its sources</span>
+              {mySources.map((x) => {
+                const others = otherProjects(x);
                 return (
-                  <label key={k} style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "2px 0", minWidth: 0 }}>
-                    <input type="checkbox" checked={delSel.has(k)} disabled={!delDeps} onChange={(e) => pick(k, e.target.checked)} />
-                    <span className="help" style={{ width: 56, flex: "0 0 auto" }}>{o.kind}</span>
-                    <span className="mono" style={{ minWidth: 0, wordBreak: "break-all" }}>{o.name}</span>
+                  <label key={x.name} style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "2px 0", minWidth: 0 }}>
+                    <input type="checkbox" disabled={others.length > 0}
+                           checked={!others.length && delSources.has(x.name)}
+                           onChange={(e) => setDelSources((cur) => {
+                             const next = new Set(cur);
+                             if (e.target.checked) next.add(x.name); else next.delete(x.name);
+                             return next;
+                           })} />
+                    <span className="mono" style={{ minWidth: 0, wordBreak: "break-all" }}>{x.name}</span>
+                    {others.length > 0 && (
+                      <span className="help">kept: also used by {others.map(projectName).join(", ")}</span>
+                    )}
                   </label>
                 );
               })}
               <p className="help" style={{ margin: "6px 0 0", whiteSpace: "normal" }}>
-                Picking a source also picks the views, triggers and agents that need it. Unpicked objects stay{custom ? "" : ", and the project no longer repairs them"}.
+                Ticked sources are deleted; the rest stay connected. A source another project uses is always kept.
               </p>
             </div>
           )}
           <label style={{ display: "block", marginTop: 8 }}>
             <input type="checkbox" checked={purge} onChange={(e) => setPurge(e.target.checked)} />{" "}
-            {custom
-              ? "also purge the events its sources ingested"
-              : "also purge the events its sources ingested and its triggers' firings"}
+            also purge the events of the sources deleted and its triggers' firings
           </label>
         </ConfirmDialog>
       )}
@@ -684,13 +781,15 @@ export default function ProjectShell({ s, id, reload, template }: {
   );
 }
 
-// One view, as its own page shows it (key field, sources, filters, author, usage), with the same
-// in-place editor. "+ trigger" preselects this view on the trigger form.
 /** One source, folded: the row is the health line; opening it shows what a producer needs (the
  *  ingest endpoint for a push source, the polled target for a poll one) with a Configure button
  *  to the source page. A builder-made project is looked at here first, and a push source is
  *  nothing until something posts to it, so the address has to be one click away, not one page. */
-function SourceRow({ x, spec }: { x: Source; spec?: ConnectorSpec }) {
+function SourceRow({ x, spec, others, onRemove }: {
+  x: Source; spec?: ConnectorSpec;
+  others: string[];          // the other projects that use it, by name
+  onRemove: () => void;      // take it out of this project (the source stays)
+}) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const push = spec?.mode === "push";
@@ -709,11 +808,14 @@ function SourceRow({ x, spec }: { x: Source; spec?: ConnectorSpec }) {
           : <span className="badge ok">ok</span>}</td>
         <td className="num">{(x.health?.events_total ?? 0).toLocaleString()}</td>
         <td><TimeAgo ts={x.health?.last_ingest ?? null} /></td>
+        <td style={{ textAlign: "right" }} onClick={(e) => e.stopPropagation()}>
+          <button type="button" onClick={onRemove} title="take it out of this project; the source stays">remove</button>
+        </td>
       </tr>
       {open && (
         <tr>
           <td></td>
-          <td colSpan={5} style={{ paddingTop: 10, paddingBottom: 14 }}>
+          <td colSpan={6} style={{ paddingTop: 10, paddingBottom: 14 }}>
             {push ? <IngestEndpoint source={x} /> : shown.length > 0 ? (
               <table style={{ marginBottom: 10 }}>
                 <tbody>
@@ -725,6 +827,7 @@ function SourceRow({ x, spec }: { x: Source; spec?: ConnectorSpec }) {
               </table>
             ) : <p className="help">polls every {x.poll}</p>}
             {x.health?.last_error && <div className="alert error" style={{ marginBottom: 10 }}>{x.health.last_error}</div>}
+            {others.length > 0 && <p className="help">also used by {others.join(", ")}</p>}
             <div className="btnrow">
               <button className="primary" onClick={() => navigate(`/sources/${encodeURIComponent(x.name)}`)}>Configure</button>
             </div>
@@ -735,70 +838,9 @@ function SourceRow({ x, spec }: { x: Source; spec?: ConnectorSpec }) {
   );
 }
 
-function ViewPanel({ v, sourceNames, watchers, onSaved }: {
-  v: import("../types").View; sourceNames: string[]; watchers: number; onSaved: () => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [confirmDel, setConfirmDel] = useState(false);
-  const [err, setErr] = useState<string>();
-  return (
-    <div className="panel" id={`view-${v.name}`} style={{ marginBottom: 12, scrollMarginTop: 16 }}>
-      <div className="pagehead" style={{ marginBottom: 8 }}>
-        <div>
-          <h3 style={{ margin: 0 }}><span className="mono">{v.name}</span></h3>
-        </div>
-        <span className="btnrow">
-          <Link className="btn" to={`/triggers/new?view=${encodeURIComponent(v.name)}`}>+ trigger</Link>
-          {!editing && <button className="primary" onClick={() => setEditing(true)}>Edit</button>}
-          {!editing && <button className="danger" onClick={() => setConfirmDel(true)}>Delete</button>}
-        </span>
-      </div>
-      {err && <div className="alert error">{err}</div>}
-      {confirmDel && (
-        <ConfirmDialog title={`Delete view ${v.name}?`}
-          message={watchers
-            ? `${watchers} trigger(s) watch this view and will stop working. Agents querying it will start failing.`
-            : "Agents querying this view will start failing. This can't be undone."}
-          confirmLabel="Delete" danger
-          onConfirm={async () => {
-            try { await api.deleteView(v.name); onSaved(); }
-            catch (e) { setErr(String((e as Error).message ?? e)); }
-            setConfirmDel(false);
-          }}
-          onCancel={() => setConfirmDel(false)} />
-      )}
-      {editing ? (
-        <ViewEditor initial={v} sourceNames={sourceNames}
-                    onSaved={() => { setEditing(false); onSaved(); }}
-                    onCancel={() => setEditing(false)} />
-      ) : (
-        <table>
-          <tbody>
-            <tr><td className="help" style={{ width: 140 }}>key field</td><td className="mono">{v.key_field}</td></tr>
-            <tr><td className="help">sources</td>
-                <td>{v.sources.map((x) => <Link key={x} to={`/sources/${encodeURIComponent(x)}`} className="chip mono">{x}</Link>)}</td></tr>
-            <tr><td className="help">filters</td>
-                <td className="mono">{(v.filters ?? []).length
-                  ? (v.filters ?? []).map((f, i) => <span className="chip" key={i}>{f.field} {f.op} {String(f.value)}</span>)
-                  : <span className="help">none; everything the sources carry</span>}</td></tr>
-            <tr><td className="help">author</td>
-                <td>{(v.created_by ?? "human").startsWith("agent")
-                  ? <span className="badge agent">agent</span> : <span className="badge starting">human</span>}</td></tr>
-            <tr><td className="help">usage</td>
-                <td>{v.usage?.queries
-                  ? <>{v.usage.queries} quer{v.usage.queries === 1 ? "y" : "ies"}
-                      {v.usage.last_used_at && <> · last <TimeAgo ts={v.usage.last_used_at} /></>}</>
-                  : <span className="help">never queried</span>}</td></tr>
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
-}
-
 // One trigger, as its own page shows it, with the same in-place editor and its last firing.
-function TriggerPanel({ t, viewInProject, lastFired, onSaved }: {
-  t: import("../types").Trigger; viewInProject: boolean; lastFired: string | null; onSaved: () => void;
+function TriggerPanel({ t, lastFired, onSaved, onAddAgent }: {
+  t: Trigger; lastFired: string | null; onSaved: () => void; onAddAgent: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
@@ -813,6 +855,7 @@ function TriggerPanel({ t, viewInProject, lastFired, onSaved }: {
           </p>
         </div>
         <span className="btnrow">
+          {!editing && <button onClick={onAddAgent}>+ agent</button>}
           {!editing && <button className="primary" onClick={() => setEditing(true)}>Edit</button>}
           {!editing && <button className="danger" onClick={() => setConfirmDel(true)}>Delete</button>}
         </span>
@@ -836,12 +879,14 @@ function TriggerPanel({ t, viewInProject, lastFired, onSaved }: {
       ) : (
         <table>
           <tbody>
-            <tr><td className="help" style={{ width: 140 }}>watches</td>
-                <td>{viewInProject
-                  // the view is right above on this page, editable there; scroll, don't navigate
-                  ? <a href={`#view-${t.view}`} className="chip mono" title="the view, above on this page"
-                       onClick={(e) => { e.preventDefault(); document.getElementById(`view-${t.view}`)?.scrollIntoView({ behavior: "smooth", block: "start" }); }}>{t.view}</a>
-                  : <Link to={`/views/${encodeURIComponent(t.view)}`} className="chip mono">{t.view}</Link>}</td></tr>
+            <tr><td className="help" style={{ width: 140 }}>sources</td>
+                <td>{(t.sources ?? []).map((x) => <Link key={x} to={`/sources/${encodeURIComponent(x)}`} className="chip mono">{x}</Link>)}</td></tr>
+            <tr><td className="help">filters</td>
+                <td className="mono">{(t.filters ?? []).length
+                  ? (t.filters ?? []).map((f, i) => <span className="chip" key={i}>{f.field} {f.op} {String(f.value)}</span>)
+                  : <span className="help">none; every event of these sources counts</span>}</td></tr>
+            <tr><td className="help">entity label</td>
+                <td className="mono">{t.key_field || <span className="help">the first source's main label</span>}</td></tr>
             <tr><td className="help">condition</td><td className="mono">{fmtCond(t)}</td></tr>
             <tr><td className="help">context window</td>
                 <td className="mono">{String(t.emit?.context_window ?? "15m")}
