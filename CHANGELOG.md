@@ -3,6 +3,66 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Every cell has a default project. It is created at start when missing and holds everything no
+  other project does: a source, trigger, agent or MCP server made without naming a project, and
+  anything a project lets go of. It cannot be deleted. `GET /api/projects` lists it first, with
+  `default: true`.
+- A trigger, agent or MCP server belongs to exactly one project. `POST /api/triggers`,
+  `/api/agents/builtin`, `/api/mcp-servers` and `/api/sources` take `project` (the default project
+  when it is left out), and the list endpoints report it. An agent runs on a trigger of its own
+  project and uses that project's MCP servers; anything else is refused with a 400 naming it.
+  Moving a trigger to another project (`PUT /api/triggers/{name}` with `project`) takes its agents
+  along.
+- Sources are shared: a source can be in any number of projects. `GET /api/sources` lists them
+  under `projects`. `POST /api/projects/{uid}/sources` adds an existing source to a project and
+  `DELETE /api/projects/{uid}/sources/{name}` takes it out, refused while one of the project's
+  triggers reads it. A trigger's sources always join its project.
+- `POST /read` takes `project` and `sources` to read only those sources. A Tares agent's `read`
+  and `stats` tools cover its project's sources unless it names others.
+- A custom project may start empty and be filled as its objects are made. Saving its object list
+  moves the triggers, agents and MCP servers it names out of the default project (with what they
+  need: an agent's trigger, a trigger's agents and sources) and refuses one that belongs to another
+  project, naming that project.
+
+### Changed
+- Views are gone. A trigger names the sources it watches, the filters that narrow them and the
+  label its entity is keyed by (`sources`, `filters`, `key_field`; the key defaults to the first
+  source's primary label). `/api/views`, `POST /query` and `POST /derive` answer 404, and a
+  trigger that names a `view` is refused with 400 "views were removed: give the trigger `sources`
+  (and `filters`)". The MCP `query`, `derive` and `update_view` tools are gone: read with `read`,
+  and `create_trigger` / `update_trigger` take `sources`, `filters`, `key_field` and `project`. A
+  Tares agent's `stats` tool counts over sources instead of a view and its `query` tool is gone.
+  In Ask and the project builder, a trigger card names its sources; there is no view card.
+- Deleting a project deletes its triggers, agents and MCP servers, a custom project's too. Its
+  sources stay, since other projects may read them, unless `delete_sources=a,b` names them: each
+  is deleted when no other project uses it, and kept and listed under `kept` when one does. A
+  source left in no project joins the default project. Callers that relied on a template project
+  taking its sources with it (the Rius control plane, for one) now pass `delete_sources`.
+- The catalog export names each trigger's `project`, `sources`, `filters` and `key_field`, each
+  agent's and MCP server's `project` and each source's `projects`, and never a `views:` section.
+  The default project is not listed under `projects:`; objects that name it go to the importing
+  cell's own.
+- `tares status` shows projects instead of views. The activity log of reads reports `scope`
+  (what was read) instead of `view`.
+
+### Upgrade
+- The first start after upgrading folds every view into the triggers that used it: each trigger
+  takes its view's sources, filters and key field, then the views table is dropped. A trigger
+  whose view was already gone is paused with no sources, so it shows up to be fixed or deleted. A
+  schedule trigger keeps its last tick, so it does not fire early.
+- The same start places everything in a project: a trigger with none goes to the default project,
+  an agent with none follows its trigger, an MCP server with none goes to the project whose agents
+  use it (else the default one), a source in no project joins the default one, and a trigger's
+  sources become members of its project. Objects a template or custom project owned stay there;
+  a custom project's list drops its views. The pass runs at every start and changes nothing the
+  second time.
+- A catalog exported while views existed still imports: each trigger that names a view gets that
+  view's sources, filters and key field, a custom project's view entries are dropped, and objects
+  without a project go to the default project.
+
 ## [1.37.0] - 2026-09-29
 
 ### Added
