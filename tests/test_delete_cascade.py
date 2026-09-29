@@ -216,9 +216,9 @@ async def main():
         ck("the released source can be planned again by a new project", r.status_code == 201, r.text[:300])
         r = await cx.post("/api/projects", json={"template": "test_cascade", "name": "T4", "params": {"prefix": "w"}})
         r = await cx.delete(f"/api/projects/{r.json()['id']}")
-        ck("template project, no choice given: the source it created goes too",
-           r.status_code == 200 and "source:w_src" in r.json()["deleted"] and r.json()["released"] == [],
-           r.text[:300])
+        ck("template project, no choice given: its sources are kept",
+           r.status_code == 200 and "source:w_src" not in r.json()["deleted"]
+           and r.json()["released"] == ["source:w_src"], r.text[:300])
 
         await cx.aclose()
     print(f"\n{P} passed, {F} failed")

@@ -193,8 +193,7 @@ async def main():
                   and rows.get("reports go to") == PARAMS["callback_url"], str(rows))
 
             print("== delete releases nothing weird ==")
-            # the control plane deletes with no delete_sources: the project's own source goes too
-            r = await cx.delete(f"/api/projects/{uid}", params={"purge": "true"})
+            r = await cx.delete(f"/api/projects/{uid}", params={"purge": "true", "delete_sources": "rius_alerts"})
             check("delete -> 200", r.status_code == 200, r.text[:200])
             names = {s["name"] for s in (await cx.get("/api/sources")).json()}
             check("source gone", "rius_alerts" not in names, str(names))

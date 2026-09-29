@@ -2763,11 +2763,9 @@ def make_app() -> FastAPI:
     async def delete_project(uid: str, purge_events: bool = False, delete_sources: str = ""):
         """Deletes the project's triggers, agents and MCP servers. `delete_sources=a,b` also
         deletes those of its sources that no other project uses (the others are kept and listed
-        in `kept`); every other source stays, in the default project if in no other.
-        `delete_sources=none` keeps them all. Absent: a template project also deletes the sources
-        it created, a custom project keeps them (what deleting a project always did)."""
-        chosen = (None if delete_sources == "" else
-                  [x.strip() for x in delete_sources.split(",") if x.strip() and x.strip() != "none"])
+        in `kept`); every other source stays, in the default project if in no other. Sources are
+        only ever deleted when named (`none`, or leaving it out, keeps them all)."""
+        chosen = [x.strip() for x in delete_sources.split(",") if x.strip() and x.strip() != "none"]
         try:
             return projects.delete(uid, purge_events=purge_events, delete_sources=chosen)
         except Exception as e:
