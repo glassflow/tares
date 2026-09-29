@@ -191,6 +191,8 @@ function FinishSetup({ id }: { id: string }) {
     return () => { live = false; };
   }, [id]);
   if (!setup || !setup.step || setup.step === "done") return null;
+  // a practice run already done is the end of the flow, whether or not "Open the project" was pressed
+  if (setup.step === "try" && setup.practice_run) return null;
   const own = setup.plan?.who === "own";
   const message = setup.step === "try"
     ? "Run a practice spike to see a result before a real one."
