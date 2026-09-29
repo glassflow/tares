@@ -3,7 +3,14 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.37.0] - 2026-09-29
+
+### Added
+- The `rius_rca` template takes a `daily_cap`: runs per rolling 24 hours for its agent, so the Rius
+  control plane can size each workspace's RCA by plan. It is set on create and changed with
+  `PUT /api/projects/{uid}`; without it the agent uses the cell-wide cap (Settings, Agents), as
+  before. An agent's own cap is kept when its settings are edited in the console, and a run it
+  caps says to raise it in the project.
 
 ### Changed
 - A Tares finding in Slack is posted whole when it fits in one message block; Slack folds it
