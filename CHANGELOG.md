@@ -103,6 +103,10 @@ the project follows [Semantic Versioning](https://semver.org/).
   The Activity tab marks an external agent's finding as recorded from outside Tares.
 
 ### Changed
+- The store writes its startup migrations into the database file before serving (a checkpoint).
+  Upgrading a cell from 1.37.0 and then stopping it hard (a pod killed) could otherwise replay the
+  new `agent_runs` columns into a corrupted index: every request then failed with "database has
+  been invalidated" until a restart.
 - Every write needs the admin scope, except `/read`, `/subscribe`, `/unsubscribe`, a project's
   `stats`, the label preview (a read key), recording a finding (the findings scope) and ingest.
   A read key could create and delete projects, add MCP servers and GitHub credentials, and pause
