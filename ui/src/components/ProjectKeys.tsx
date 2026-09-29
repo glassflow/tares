@@ -141,7 +141,7 @@ export function ExternalAgentsPanel({ project, onOpenKeys }: { project: string; 
       ) : (
         <p className="help">
           no external agent has joined this project yet; give one a key under{" "}
-          <a href="#keys" onClick={(e) => { e.preventDefault(); onOpenKeys(); }}>Settings, Keys</a>
+          <a href="?view=settings:keys" onClick={(e) => { e.preventDefault(); onOpenKeys(); }}>Settings, Keys</a>
         </p>
       ))}
       {revoking && (

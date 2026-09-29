@@ -61,7 +61,7 @@ export function SubscribersView({ ctx }: { ctx: Ctx }) {
     <>
       <ViewHead title="Subscribers" sub="Everything this project's triggers deliver to when they fire.">
         <button type="button" disabled={noTriggers}
-                onClick={() => ctx.go({ kind: "agents" }, { add: subTrigger || ctx.triggers[0]?.name || "1" })}>Add a Tares agent</button>
+                onClick={() => ctx.go({ kind: "agents" }, { add: "1", trigger: subTrigger || ctx.triggers[0]?.name || "" })}>Add a Tares agent</button>
         <button type="button" disabled={noTriggers} onClick={() => { setAdding(adding === "slack" ? null : "slack"); setMsg(undefined); }}>Add Slack channel</button>
         <button type="button" disabled={noTriggers} onClick={() => { setAdding(adding === "webhook" ? null : "webhook"); setMsg(undefined); }}>Add webhook</button>
       </ViewHead>

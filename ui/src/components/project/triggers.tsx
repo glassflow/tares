@@ -87,7 +87,7 @@ export function TriggerView({ ctx, name }: { ctx: Ctx; name: string }) {
       <ViewHead title={<><span className="mono">{t.name}</span>{t.paused && <span className="badge paused" style={{ marginLeft: 10 }}>paused</span>}</>}
                 sub={t.paused ? "Paused: it is not evaluated and does not fire." : "Fires when the condition trips, and wakes every agent on it."}>
         {!editing && <>
-          <button onClick={() => ctx.go({ kind: "agents" }, { add: t.name })}>Add agent</button>
+          <button onClick={() => ctx.go({ kind: "agents" }, { add: "1", trigger: t.name })}>Add agent</button>
           <button onClick={togglePause}>{t.paused ? "Resume" : "Pause"}</button>
           <button className="primary" onClick={() => setEditing(true)}>Edit</button>
           <button className="danger" onClick={() => setConfirmDel(true)}>Delete</button>

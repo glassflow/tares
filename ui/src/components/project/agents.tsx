@@ -28,8 +28,8 @@ function handoffsInto(all: BuiltinAgent[], name: string) {
 
 /** Agents: one row per Tares agent of the project, then the agents that joined from outside. */
 export function AgentsView({ ctx }: { ctx: Ctx }) {
-  const add = ctx.params.get("add");            // "1", or the trigger to preselect
-  const adding = add !== null;
+  const adding = ctx.params.get("add") !== null;
+  const preset = ctx.params.get("trigger");     // the trigger to preselect, from a trigger's page
   const close = () => ctx.go({ kind: "agents" }, undefined, true);
   const d = ctx.agentsData;
   const all = d?.agents ?? [];
@@ -45,7 +45,7 @@ export function AgentsView({ ctx }: { ctx: Ctx }) {
       {adding && d && (
         <div style={{ marginBottom: 12 }}>
           <AgentForm project={ctx.id}
-                     presetTrigger={add !== "1" ? add : ctx.triggers[0]?.name}
+                     presetTrigger={preset || ctx.triggers[0]?.name}
                      triggers={ctx.triggers.map((t) => t.name)}
                      {...formProps(d)}
                      onSaved={(name) => { ctx.refresh(); ctx.go({ kind: "agent", name }, undefined, true); }}
