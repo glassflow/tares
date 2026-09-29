@@ -140,6 +140,7 @@ class AgentCfg:
     mcp_servers: list = dc_field(default_factory=list)   # registry names this agent may use
     max_rounds: int | None = None   # model rounds per run; None = default for the agent's shape
     budget_usd: float | None = None  # lifetime spend cap in USD; None = no budget
+    daily_cap: int | None = None     # runs per rolling 24h; None = the instance-wide cap
     enabled: bool = False
 
 
@@ -256,6 +257,7 @@ def _agent_from_dict(a: dict, enabled: bool = False) -> AgentCfg:
         mcp_servers=list(a.get("mcp_servers") or []),
         max_rounds=(int(a["max_rounds"]) if a.get("max_rounds") not in (None, "") else None),
         budget_usd=(float(a["budget_usd"]) if a.get("budget_usd") not in (None, "") else None),
+        daily_cap=(int(a["daily_cap"]) if a.get("daily_cap") not in (None, "") else None),
         enabled=bool(a.get("enabled", enabled)),
     )
 
@@ -385,7 +387,9 @@ def import_catalog_dict(store, raw: dict, engine=None) -> dict:
                                    (float(a["budget_usd"]) if a.get("budget_usd") not in (None, "")
                                     else None),
                                    webhook_key_label=a.get("webhook_key_label"),
-                                   provider=a.get("provider"))
+                                   provider=a.get("provider"),
+                                   daily_cap=(int(a["daily_cap"])
+                                              if a.get("daily_cap") not in (None, "") else None))
         # enabled ⟺ a subscription to the trigger. Reflect the document's state so an enabled agent
         # round-trips: add the internal subscription if enabled, remove it if not.
         url = agent_url(a["name"])
@@ -515,6 +519,7 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
          **({"mcp_servers": a["mcp_servers"]} if a.get("mcp_servers") else {}),
          **({"max_rounds": a["max_rounds"]} if a.get("max_rounds") else {}),
          **({"budget_usd": a["budget_usd"]} if a.get("budget_usd") else {}),
+         **({"daily_cap": a["daily_cap"]} if a.get("daily_cap") else {}),
          **({"slack_webhook": a["slack_webhook"]}
             if include_secrets and a.get("slack_webhook") else {}),
          **({"webhook_token": a["webhook_token"]}
@@ -858,6 +863,15 @@ def validate_agent_dict(a: dict, trigger_names: set, triggers: dict | None = Non
         if b <= 0:
             raise CatalogError(f"agent {a['name']!r}: budget_usd must be above zero "
                                "(or empty for no budget)")
+    dc = a.get("daily_cap")
+    if dc not in (None, ""):
+        try:
+            dc = int(str(dc).strip())
+        except ValueError:
+            raise CatalogError(f"agent {a['name']!r}: daily_cap must be a whole number")
+        if dc <= 0:
+            raise CatalogError(f"agent {a['name']!r}: daily_cap must be above zero "
+                               "(or empty for the instance-wide cap)")
 
     # Loop guard: a Tares agent writes a finding into the `findings` source. If its trigger
     # watches a view containing that source, its own finding re-fires the trigger, which runs the
