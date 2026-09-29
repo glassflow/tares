@@ -15,15 +15,19 @@ const NAME_RE = /^[a-z0-9-]{1,64}$/;
 
 type Draft = { name: string; description: string; body: string; editing?: string };
 
-/** The form for one skill: a new one (no `initial`) or an edit of `initial`. */
-export function SkillEditor({ project, initial, onSaved, onCancel }: {
-  project: string;
+/** The form for one skill: a new one (no `initial`) or an edit of `initial`. It saves to
+ *  `project`, or hands the draft to `onSubmit` instead (setup edits skills before the project
+ *  exists); `renamable` lets an edit change the name too, which only a draft can. */
+export function SkillEditor({ project, initial, onSaved, onCancel, onSubmit, renamable }: {
+  project?: string;
   initial?: { name: string; description: string; body: string };
   onSaved: (name: string, body: string) => void;
   onCancel: () => void;
+  onSubmit?: (skill: { name: string; description: string; body: string }) => Promise<void> | void;
+  renamable?: boolean;
 }) {
   const [draft, setDraft] = useState<Draft>(initial
-    ? { ...initial, editing: initial.name }
+    ? { ...initial, editing: renamable ? undefined : initial.name }
     : { name: "", description: "", body: "" });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
@@ -39,7 +43,11 @@ export function SkillEditor({ project, initial, onSaved, onCancel }: {
     setBusy(true); setErr(undefined);
     try {
       const name = draft.editing ?? draft.name.trim();
-      if (draft.editing) {
+      if (onSubmit) {
+        await onSubmit({ name, description: draft.description, body: draft.body });
+      } else if (!project) {
+        throw new Error("no project to save the skill to");
+      } else if (draft.editing) {
         await api.updateSkill(project, draft.editing, { description: draft.description, body: draft.body });
       } else {
         await api.createSkill(project, { name, description: draft.description, body: draft.body });
@@ -51,7 +59,8 @@ export function SkillEditor({ project, initial, onSaved, onCancel }: {
 
   return (
     <div className="panel" style={{ marginBottom: 16 }}>
-      <h3 style={{ margin: "0 0 10px" }}>{draft.editing ? <>Edit <span className="mono">{draft.editing}</span></> : "New skill"}</h3>
+      <h3 style={{ margin: "0 0 10px" }}>{draft.editing ? <>Edit <span className="mono">{draft.editing}</span></>
+        : initial ? <>Edit <span className="mono">{initial.name}</span></> : "New skill"}</h3>
       {err && <div className="alert error">{err}</div>}
       {!draft.editing && (
         <label className={`field${nameBad ? " invalid" : ""}`} style={{ maxWidth: 420 }}>
@@ -90,7 +99,7 @@ export function SkillEditor({ project, initial, onSaved, onCancel }: {
       </div>
       <div className="btnrow" style={{ marginTop: 12 }}>
         <button className="primary" disabled={!canSave} onClick={save}>
-          {busy ? "saving…" : draft.editing ? "Save" : "Add skill"}
+          {busy ? "saving…" : draft.editing || initial ? "Save" : "Add skill"}
         </button>
         <button type="button" onClick={onCancel}>Cancel</button>
       </div>

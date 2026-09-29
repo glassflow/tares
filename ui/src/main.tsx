@@ -27,9 +27,8 @@ import Sources from "./pages/Sources";
 import TriggersPage from "./pages/Triggers";
 import Projects from "./pages/Projects";
 import ProjectTemplates from "./pages/ProjectNew";
-import { ProjectNewPage } from "./pages/Landing";
 import ProjectDetail from "./pages/ProjectDetail";
-import ProjectNewAssist from "./pages/ProjectNewAssist";
+import ProjectSetup from "./pages/ProjectSetup";
 import ProjectNewCustom from "./pages/ProjectNewCustom";
 import ProjectNewGeneric from "./pages/ProjectNewGeneric";
 import ProjectNewSharedContext from "./pages/ProjectNewSharedContext";
@@ -59,16 +58,19 @@ const router = createBrowserRouter([
       // here, so a customer arrives at the instance at a glance rather than at a table.
       { index: true, element: <Home /> },
       { path: "projects", element: <Projects /> },
-      // Create new is the landing screen; the template gallery is the step-by-step path behind it
-      { path: "projects/new", element: <ProjectNewPage /> },
+      // Create new is the goal-first setup: goal, plan, connect, try it. The template gallery and
+      // the by-hand path are links from its first step.
+      { path: "projects/new", element: <ProjectSetup /> },
       { path: "projects/new/templates", element: <ProjectTemplates /> },
       { path: "projects/new/shared_code_context", element: <ProjectNewSharedContext /> },
       { path: "projects/new/custom", element: <ProjectNewCustom /> },
-      // the AI-guided builder is not a template (it assembles a custom project), so it sits
-      // above the :template fallback
-      { path: "projects/new/assist", element: <ProjectNewAssist /> },
+      // the AI-guided builder's old address; the goal-first setup replaced it. Above the
+      // :template fallback, which would read "assist" as a template key.
+      { path: "projects/new/assist", element: <Navigate to="/projects/new" replace /> },
       { path: "projects/new/:template", element: <ProjectNewGeneric /> },
       { path: "projects/:id", element: <ProjectDetail /> },
+      // a project set up goal first, resumed at the step it stored
+      { path: "projects/:id/setup", element: <ProjectSetup /> },
       { path: "sources", element: <Sources /> },
       { path: "sources/discover", element: <SourceDiscover /> },
       { path: "sources/claude-code", element: <SourceClaudeCode /> },
