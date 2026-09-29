@@ -369,13 +369,19 @@ async def list_findings(entity: str = "", agent: str = "", limit: int = 20,
 
 @mcp.tool()
 async def record_finding(entity: str, finding: str, verdict: str = "", label: str = "",
-                         project: str = "") -> str:
+                         project: str = "", headline: str = "", next_step: str = "") -> str:
     """Record what you concluded about an entity (a service, a repo, a customer) in the project.
     It lands on the entity's timeline next to the Tares agents' findings and in the project's
     activity, under your key's name. `finding` is markdown; `verdict` one lowercase word (for
     example rca or resolved); `label` the label the entity is a value of when it is not the
-    project's usual one (for example service)."""
+    project's usual one (for example service). `headline` is one line (at most 100 characters)
+    saying what you found, and `next_step` what a person should do (empty when nothing needs
+    doing): both show on the project's Overview."""
     body = {"entity": entity, "finding": finding}
+    if headline:
+        body["headline"] = headline
+    if next_step:
+        body["next_step"] = next_step
     if verdict:
         body["verdict"] = verdict
     if label:

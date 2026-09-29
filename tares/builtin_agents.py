@@ -1162,7 +1162,8 @@ class AgentRunner:
         })
 
     async def record_external(self, project: str, agent_label: str, key: str, finding: str,
-                              verdict: str | None = None, label: str | None = None) -> str:
+                              verdict: str | None = None, label: str | None = None,
+                              headline: str | None = None, next_step: str | None = None) -> str:
         """An external agent's finding (TR-336): a run of kind external in the project, ended
         with this finding, plus the finding event every read and findings trigger sees, exactly
         like a Tares agent's. Returns the run id."""
@@ -1170,9 +1171,10 @@ class AgentRunner:
         self.store.start_agent_run(run_id, agent_label, "", "", key, "", None,
                                    woken_by="external", project=project)
         await self._ingest_finding(agent_label, "", key, finding, "", verdict=verdict,
-                                   label=label, run_id=run_id, project=project)
+                                   label=label, run_id=run_id, project=project,
+                                   headline=headline, next_step=next_step)
         self.store.finish_agent_run(run_id, "ok", finding=finding, outcome="finding",
-                                    verdict=verdict)
+                                    verdict=verdict, headline=headline, next_step=next_step)
         return run_id
 
     async def _record(self, agent: dict, trigger_name: str, key: str, finding: str,

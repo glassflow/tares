@@ -87,7 +87,7 @@ the project follows [Semantic Versioning](https://semver.org/).
   project key cannot point the URL at an internal address (loopback, private ranges, link-local
   such as cloud metadata); `TARES_WEBHOOK_ALLOW_PRIVATE=1` allows it for a cell whose agents
   share its network.
-  `POST /api/projects/{uid}/findings {entity, finding, verdict?, label?}` records an external
+  `POST /api/projects/{uid}/findings {entity, finding, verdict?, label?, headline?, next_step?}` records an external
   agent's finding under the key's name: it lands on the entity's timeline like a Tares agent's,
   and shows in the project timeline as a thread of kind `run` with `external: true`.
   `GET /api/projects/{uid}/findings?entity=&agent=&limit=` lists the project's findings, Tares

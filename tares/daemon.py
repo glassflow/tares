@@ -3167,7 +3167,7 @@ def make_app() -> FastAPI:
 
     @app.post("/api/projects/{uid}/findings", status_code=201)
     async def record_project_finding(uid: str, request: Request, body: dict = Body(...)):
-        """{entity, finding, verdict?, label?}: an external agent records what it concluded about
+        """{entity, finding, verdict?, label?, headline?, next_step?}: an external agent records what it concluded about
         an entity. It is stored like a Tares agent's finding (on the entity's timeline, read by
         findings triggers) and shows in the project timeline as a run marked external. The agent
         is the key's name; `label` is the label the entity is a value of (default: the entity
@@ -3184,6 +3184,12 @@ def make_app() -> FastAPI:
         verdict = str(body.get("verdict") or "").strip().lower() or None
         if verdict and not _VERDICT.match(verdict):
             _err(ValueError("verdict is one lowercase word, e.g. rca or resolved"))
+        headline = " ".join(str(body.get("headline") or "").split()) or None
+        next_step = " ".join(str(body.get("next_step") or "").split()) or None
+        if headline and len(headline) > 100:
+            _err(ValueError("headline is one line of at most 100 characters"))
+        if next_step and len(next_step) > 300:
+            _err(ValueError("next_step is at most 300 characters"))
         label = str(body.get("label") or "").strip() or None
         if label and not _LABEL.match(label):
             _err(ValueError("label is a label name: letters, digits and underscores"))
@@ -3201,7 +3207,8 @@ def make_app() -> FastAPI:
             _err(ValueError(f"{agent!r} is also the name of a Tares agent; record the finding with "
                             "a key of another name"), 409)
         run_id = await dispatcher.agents.record_external(uid, agent, entity, finding,
-                                                         verdict=verdict, label=label)
+                                                         verdict=verdict, label=label,
+                                                         headline=headline, next_step=next_step)
         return {"ok": True, "run_id": run_id, "agent": agent, "entity": entity,
                 "verdict": verdict}
 

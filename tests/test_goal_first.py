@@ -501,6 +501,18 @@ async def main():
                           json={"handled": True})
         ck("another project's run is a 404", r.status_code == 404, r.text)
 
+        r = await cx.post(f"/api/projects/{a}/findings", json={
+            "entity": "images-api", "finding": "The CDN certificate expired at 09:00.",
+            "headline": "CDN certificate expired", "next_step": "Renew the certificate.",
+            "agent": "outside-bot"})
+        ck("an outside agent can send a headline and next step", r.status_code == 201, r.text)
+        mine = next(x for x in (await cx.get(f"/api/projects/{a}/results")).json()["results"]
+                    if x["entity"] == "images-api")
+        eq("they show on its result", (mine["headline"], mine["next_step"], mine["kind"]),
+           ("CDN certificate expired", "Renew the certificate.", "action"))
+        r = await cx.post(f"/api/projects/{a}/findings", json={
+            "entity": "x", "finding": "y", "headline": "h" * 101, "agent": "outside-bot"})
+        ck("a headline over 100 characters is refused", r.status_code == 400, r.text)
         print("== health ==")
         h = (await cx.get(f"/api/projects/{a}/health")).json()
         eq("working", (h["state"], h["message"], h["issues"]),
