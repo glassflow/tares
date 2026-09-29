@@ -19,6 +19,7 @@ import traceback
 import uuid
 from urllib.parse import urlsplit
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs
 
@@ -49,6 +50,7 @@ from . import providers as providers_mod
 from .runtime import Runtime
 from . import slack as slack_mod
 from . import slack_verify
+from . import timeline
 from .slack import SETTING_KEY as SLACK_TOKEN_SETTING, resolve_token as resolve_slack_token
 from .tracing import PROVIDERS as tracing_providers, status as tracing_status
 from .store import Store, StoreUnavailable
@@ -1968,7 +1970,8 @@ def make_app() -> FastAPI:
         if run.get("dispatch_id"):
             d = store.get_dispatch(run["dispatch_id"])
             payload = (d or {}).get("payload") or ""
-        rid = dispatcher.agents.run_now(name, run["trigger"], run["key"], payload)
+        rid = dispatcher.agents.run_now(name, run["trigger"], run["key"], payload,
+                                        woken_by="rerun", parent_run_id=run_id)
         if rid is None:
             _err(ValueError(f"the agent is already running for {run['key']!r}"), 409)
         return {"ok": True, "run_id": rid, "rerun_of": run_id}
@@ -2639,6 +2642,28 @@ def make_app() -> FastAPI:
             return await asyncio.to_thread(projects.action, uid, name, body if isinstance(body, dict) else {})
         except Exception as e:
             _uc_err(e)
+
+    @app.get("/api/projects/{uid}/timeline")
+    async def project_timeline(uid: str, limit: int = 50, before: str = "", trigger: str = "",
+                               agent: str = "", outcome: str = "", entity: str = ""):
+        """Everything that happened in the project, newest first, one thread per firing or
+        unprompted run, with what each led to nested inside (TR-331). Page with `before` =
+        the previous page's `next_before`."""
+        if projects.get(uid) is None:
+            _err(KeyError(f"unknown project {uid!r}"), 404)
+        at = None
+        if before:
+            try:
+                at = datetime.fromisoformat(before.replace("Z", "+00:00"))
+            except ValueError:
+                _err(ValueError("before must be an ISO timestamp, as next_before gives it"))
+        if outcome and outcome not in timeline.OUTCOMES:
+            _err(ValueError(f"outcome must be one of {', '.join(timeline.OUTCOMES)}"))
+        scheduled = {t.name for t in runtime.catalog.triggers
+                     if getattr(t.condition, "every", None)}
+        return await asyncio.to_thread(
+            timeline.project_timeline, store, uid, limit=limit, before=at, trigger=trigger,
+            agent=agent, outcome=outcome, entity=entity, scheduled=scheduled)
 
     @app.get("/api/projects/{uid}/summary")
     async def project_summary(uid: str):

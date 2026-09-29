@@ -91,6 +91,19 @@ def clear_cooldowns(store, catalog: Catalog, source: str, envelopes: list) -> li
     return cleared
 
 
+def _finding_run(store, catalog, trig, key, where, since) -> str | None:
+    """When the trigger reads a findings source, the run whose finding tripped it: the newest
+    finding for the entity in the condition window that names its run. None otherwise, and on any
+    error, since this only places the firing on the project timeline."""
+    try:
+        sources = getattr(catalog, "sources", None) or {}
+        if not any(getattr(sources.get(s), "type", None) == "finding" for s in trig.sources):
+            return None
+        return store.finding_run(trig.sources, key, since, filters=trig.filters, where=where)
+    except Exception:
+        return None
+
+
 _catchups: dict = {}   # trigger name -> pending asyncio task for a debounced re-evaluation
 
 
@@ -213,7 +226,10 @@ async def _eval_triggers(store, catalog: Catalog, dispatcher, affected_sources=N
             ctx_window = trig.emit.get("context_window", "15m")
             payload = resolve_trigger(store, trig, key=(fire_key if legacy else None),
                                       window=ctx_window, where=where)
-            await dispatcher.fire(trig, fire_key, payload)
+            cause = _finding_run(store, catalog, trig, fire_key if legacy else None, where,
+                                 since)
+            await dispatcher.fire(trig, fire_key, payload,
+                                  **({"parent_run_id": cause} if cause else {}))
             fired.append((trig.name, fire_key))
 
     return fired
