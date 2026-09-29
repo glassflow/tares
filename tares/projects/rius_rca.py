@@ -67,6 +67,7 @@ class RiusRca(Template):
     description = ("Root-cause analysis for a Rius workspace: alert firings flow in, the agent "
                    "investigates over the Rius MCP server, and the report posts back to Rius.")
     tags = ("partner",)
+    GOAL = "Find the root cause of each Rius alert and report it back to Rius."
     # Hidden from the console's template gallery: this template is created by the Rius control
     # plane over the API, not picked by a person browsing cards.
     hidden = True

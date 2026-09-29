@@ -67,6 +67,7 @@ class ChallengerWorkflow(Template):
                    "keep the whole exchange on one session timeline, and get a session summary "
                    "with memory proposals when the session ends.")
     tags = ()
+    GOAL = "Get a second opinion on Claude Code's plans and commits, and a summary of each session."
     sentence = ("challenge Claude Code's plan and every commit on my laptop, and summarise "
                 "each session when it ends")
     guide = {"label": "Challenger workflow guide",

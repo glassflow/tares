@@ -201,6 +201,9 @@ BUILD_PROPOSAL_TOOLS = [
      "input_schema": {"type": "object", "properties": {
          "template": {"type": "string", "description": "the template key from list_templates"},
          "name": {"type": "string", "description": "a short project name"},
+         "goal": {"type": "string", "description": "what the project is for, one plain line of "
+                                                  "at most 200 characters, in the user's words "
+                                                  "where you can"},
          "params": {"type": "object", "description": "parameter values, keyed by parameter name"},
          "needs": {"type": "array", "items": {"type": "string"},
                    "description": "parameter names the user must fill themselves"},

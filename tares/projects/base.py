@@ -47,6 +47,9 @@ class Template:
     # Free-form labels the console shows on the card ("demo" marks a project that needs the demo
     # stack rather than your systems).
     tags: tuple = ()
+    # The goal a project made from this template starts with when its creator gives none: one
+    # plain line saying what the project is for (the project page leads with it). "" = none.
+    GOAL: str = ""
     # An optional walkthrough the console links next to the description: {label, url}.
     guide: dict | None = None
     # What a person would type to get this template, in the first person ("watch my checkout
@@ -132,7 +135,7 @@ class Template:
         return {"key": self.key, "title": self.title, "description": self.description,
                 "params": self.PARAMS, "tags": list(self.tags), "setup": list(self.SETUP),
                 "actions": list(self.ACTIONS), "guide": dict(self.guide) if self.guide else None,
-                "sentence": self.sentence}
+                "sentence": self.sentence, "goal": self.GOAL or None}
 
 
 def _iso(v):
