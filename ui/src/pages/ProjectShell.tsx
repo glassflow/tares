@@ -79,6 +79,10 @@ export default function ProjectShell({ s, id, reload, template }: {
   const myTriggers = (triggers ?? []).filter((x) => names("trigger").includes(x.name) || x.project === id);
   const agentNames = [...new Set([...names("agent"),
     ...(agentsData?.agents ?? []).filter((a) => a.project === id).map((a) => a.name)])];
+  // each agent's handoffs (TR-334), one row per verdict and target
+  const handoffRows = (agentsData?.agents ?? [])
+    .filter((a) => agentNames.includes(a.name))
+    .flatMap((a) => (a.handoffs ?? []).map((h) => ({ from: a.name, h })));
   const mcpNames = [...new Set([...names("mcp_server"),
     ...(mcp?.servers ?? []).filter((m) => m.project === id).map((m) => m.name)])];
   const projectName = (pid: string) => projects?.projects.find((p) => p.id === pid)?.name ?? pid;
@@ -419,11 +423,27 @@ export default function ProjectShell({ s, id, reload, template }: {
             </div>
           )}
           {agentNames.length > 0 ? (
-            <p style={{ margin: "4px 0 0" }}>
-              {agentNames.map((n) => (
-                <a key={n} href="#agents" className="chip mono" title="the agent, on the Agents tab"
-                   onClick={(e) => { e.preventDefault(); openAgentTab(n); }}>{n}</a>))}
-            </p>
+            <>
+              <p style={{ margin: "4px 0 0" }}>
+                {agentNames.map((n) => (
+                  <a key={n} href="#agents" className="chip mono" title="the agent, on the Agents tab"
+                     onClick={(e) => { e.preventDefault(); openAgentTab(n); }}>{n}</a>))}
+              </p>
+              {handoffRows.length > 0 && (
+                <table style={{ marginTop: 8 }}>
+                  <thead><tr><th>agent</th><th>on verdict</th><th>hands off to</th><th>cooldown</th></tr></thead>
+                  <tbody>
+                    {handoffRows.map(({ from, h }) => (
+                      <tr key={`${from}-${h.verdict}-${h.agent}`}>
+                        <td className="mono">{from}</td>
+                        <td className="mono">{h.verdict}</td>
+                        <td className="mono">{h.agent}</td>
+                        <td className="mono">{h.cooldown}</td>
+                      </tr>))}
+                  </tbody>
+                </table>
+              )}
+            </>
           ) : addingAgent === null && <p className="help">none in this project yet</p>}
 
           <div className="pagehead" style={{ marginTop: 24 }}>
@@ -916,6 +936,14 @@ function AgentSection({ name, focusDispatch, triggerInProject, onShowTrigger }: 
                     {!agent.slack_channel && !agent.slack_configured && !agent.webhook_url &&
                       <span className="help"> · nothing else configured</span>}
                   </td></tr>
+              <tr><td className="help">when it concludes</td>
+                  <td>{agent.handoffs?.length
+                    ? agent.handoffs.map((h) => (
+                        <div key={`${h.verdict}-${h.agent}`}>
+                          <span className="mono">{h.verdict}</span> hands off to <span className="mono">{h.agent}</span>
+                          <span className="help"> · once per entity per {h.cooldown}</span>
+                        </div>))
+                    : <span className="dim">no handoffs</span>}</td></tr>
               <tr><td className="help">prompt</td>
                   <td><pre className="mono" style={{ whiteSpace: "pre-wrap", margin: 0, maxHeight: 180, overflow: "auto" }}>{agent.prompt}</pre></td></tr>
             </tbody>

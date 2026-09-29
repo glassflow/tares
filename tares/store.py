@@ -317,6 +317,8 @@ _MIGRATIONS = [
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS results JSON",
     # TR-332: the skills a run loaded, in order, each once
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS skills JSON",
+    # TR-334: [{verdict, agent, cooldown}], the agents this one hands a finding to by verdict
+    "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS handoffs JSON",
     # Which key paid for a ledger row ("env:ANTHROPIC_API_KEY" | "console") — the boundary a
     # hosted trial's enforcement counts against. Rows from before attribution stay NULL (unknown).
     "ALTER TABLE model_usage ADD COLUMN IF NOT EXISTS key_source TEXT",
@@ -1070,15 +1072,18 @@ class Store:
                              budget_usd: float | None = None,
                              webhook_key_label: str | None = None,
                              provider: str | None = None,
-                             daily_cap: int | None = None) -> None:
+                             daily_cap: int | None = None,
+                             handoffs: list[dict] | None = None) -> None:
+        # handoffs: None keeps what is stored (a caller that does not know about them, such as a
+        # template re-plan, must not wipe them); [] clears
         ts = now_utc()
         with self._lock:
             self.con.execute(
                 "INSERT INTO catalog_agents "
                 "(name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, max_rounds, budget_usd, "
-                "webhook_key_label, provider, daily_cap, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "webhook_key_label, provider, daily_cap, handoffs, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (name) DO UPDATE SET trigger = excluded.trigger, "
                 "prompt = excluded.prompt, slack_webhook = excluded.slack_webhook, "
                 "model = excluded.model, slack_channel = excluded.slack_channel, "
@@ -1087,11 +1092,13 @@ class Store:
                 "budget_usd = excluded.budget_usd, "
                 "webhook_key_label = excluded.webhook_key_label, "
                 "provider = excluded.provider, daily_cap = excluded.daily_cap, "
+                "handoffs = COALESCE(excluded.handoffs, catalog_agents.handoffs), "
                 "updated_at = excluded.updated_at",
                 [name, trigger, prompt, slack_webhook or "", model or "",
                  slack_channel or "", webhook_url or "", webhook_token or "",
                  json.dumps(mcp_servers or []), max_rounds, budget_usd,
-                 webhook_key_label or "", provider or "", daily_cap, ts, ts],
+                 webhook_key_label or "", provider or "", daily_cap,
+                 None if handoffs is None else json.dumps(handoffs), ts, ts],
             )
 
     def list_catalog_agents(self) -> list[dict]:
@@ -1099,7 +1106,7 @@ class Store:
             rows = self.con.execute(
                 "SELECT name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, updated_at, max_rounds, budget_usd, owned_by, customized, "
-                "webhook_key_label, provider, daily_cap "
+                "webhook_key_label, provider, daily_cap, handoffs "
                 "FROM catalog_agents ORDER BY name"
             ).fetchall()
         return [
@@ -1108,7 +1115,8 @@ class Store:
              "webhook_url": r[6] or "", "webhook_token": r[7] or "",
              "mcp_servers": json.loads(r[8]) if r[8] else [], "updated_at": r[9],
              "max_rounds": r[10], "budget_usd": r[11], "owned_by": r[12], "customized": bool(r[13]),
-             "webhook_key_label": r[14] or "", "provider": r[15] or "", "daily_cap": r[16]}
+             "webhook_key_label": r[14] or "", "provider": r[15] or "", "daily_cap": r[16],
+             "handoffs": json.loads(r[17]) if r[17] else []}
             for r in rows
         ]
 
@@ -1119,6 +1127,16 @@ class Store:
         with self._lock:
             self.con.execute("DELETE FROM catalog_agents WHERE name = ?", [name])
             self.con.execute("DELETE FROM agent_runs WHERE agent = ?", [name])
+            # a handoff to the agent goes with it (TR-334): the agents that handed off to it
+            # keep their other handoffs
+            rows = self.con.execute("SELECT name, handoffs FROM catalog_agents "
+                                    "WHERE handoffs IS NOT NULL").fetchall()
+            for other, raw in rows:
+                entries = json.loads(raw) if raw else []
+                kept = [h for h in entries if h.get("agent") != name]
+                if len(kept) != len(entries):
+                    self.con.execute("UPDATE catalog_agents SET handoffs = ? WHERE name = ?",
+                                     [json.dumps(kept), other])
 
     # ── agent runs (the operational record; the finding is an event, not this) ──
     def start_agent_run(self, run_id: str, agent: str, trigger: str, dispatch_id: str,

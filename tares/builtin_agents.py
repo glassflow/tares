@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from datetime import timedelta
+from datetime import timedelta, timezone
 import os
 import time
 import uuid
@@ -88,6 +88,24 @@ def effective_daily_cap(agent: dict, store) -> tuple[int, str]:
         return int(own), "agent"
     return daily_cap(store)
 MAX_BOOTSTRAP_KEYS = 50    # a project bootstraps at most this many entities in one go
+# Handoffs (TR-334): a chain stops after this many handoffs in a row; the next one is recorded
+# as a capped run. The cooldown per (from, to, entity) lives in trigger_state under this name.
+MAX_HANDOFF_DEPTH = 3
+HANDOFF_STOPPED = f"handoff chain stopped at depth {MAX_HANDOFF_DEPTH}"
+
+
+def handoff_state(from_agent: str, to_agent: str) -> str:
+    return f"handoff:{from_agent}->{to_agent}"
+
+
+def handoff_input(from_agent: str, verdict: str, key: str, label: str | None,
+                  finding: str) -> str:
+    """What a handed-off run is given: a line naming who handed off, the verdict and the entity,
+    then the finding itself."""
+    entity = f"{label}={key}" if label else key
+    return (f'Handed off by {from_agent} with verdict "{verdict}" on {entity}.\n\n'
+            f"{from_agent}'s finding:\n\n{finding}")
+
 
 def _canonical_tool(name: str, tools: list) -> str | None:
     """The declared tool a model's name refers to: exact, else case-insensitive and trimmed."""
@@ -154,7 +172,8 @@ PRESETS = {
         ),
     },
     # The first level of a watch-then-escalate chain (TR-321): on a schedule trigger, cheap and
-    # quiet unless something needs a closer look. Its `investigate` findings wake the second.
+    # quiet unless something needs a closer look. Its `investigate` findings wake the second,
+    # through a handoff on that verdict (TR-334) or a trigger over findings (TR-322).
     "triage": {
         "label": "Triage (on a schedule)",
         "prompt": (
@@ -176,30 +195,32 @@ PRESETS = {
             "- outcome finding with verdict investigate when something does: key is the entity "
             "that looks off, label is the entity label the summary names (for example service), "
             "and summary names the numbers that moved (now, before, change) and why it looks "
-            "like a problem.\n"
+            "like a problem. A finding with verdict investigate hands the entity off to the "
+            "agent that takes a closer look.\n"
             "Name the entity, not the symptom. If what moved is a status code or another "
             "attribute, find which entity carries it (stats by the entity label with a `where` on "
             "that attribute, for example by service where code=404) and name that entity.\n"
             "Flag at most one entity per run, the most serious one."
         ),
     },
-    # The second level (TR-322): woken by a triage finding marked investigate, it is handed that
-    # finding, not the logs, so it fetches its own evidence.
+    # The second level (TR-322, TR-334): handed a triage finding marked investigate, not the
+    # logs, so it fetches its own evidence.
     "rca-from-triage": {
-        "label": "Root cause after triage",
+        "label": "Root cause after a handoff",
         "prompt": (
             "You are an SRE doing root-cause analysis. A triage agent flagged the entity you were "
-            "woken for as worth a closer look; you are handed its finding (the numbers that moved "
-            "and why), not the logs. Fetch the evidence yourself: read the entity's timeline over "
+            "woken for as worth a closer look and handed it to you; you are given its finding (the "
+            "numbers that moved and why), not the logs. Fetch the evidence yourself: read the "
+            "entity's timeline over "
             "the last hour, use stats to see which labels moved and since when, and use any other "
             "tools you have (an MCP server for traces, for example).\n\n"
             "Establish what is failing and since when, what changed just before it started, and "
             "the most likely cause, grounded in what the tools returned. If the evidence shows it "
             "is not a real problem, or it is already over, say so.\n\n"
             "Always end with the conclude tool: outcome finding; verdict rca, or resolved if it "
-            "was noise or is already over; key and label exactly as in the triage finding (its "
-            "label is shown on the finding's line, for example service=checkout or "
-            "path=/docs/x); summary is a short incident note that opens with one sentence "
+            "was noise or is already over; key and label exactly as the entity you were handed "
+            "(for example service=checkout or path=/docs/x); summary is a short incident note "
+            "that opens with one sentence "
             "stating your conclusion (it is what a chat notification shows), then: 1) what is "
             "failing and since when, 2) the most likely cause with the evidence, 3) the "
             "suggested next action."
@@ -384,6 +405,8 @@ class AgentRunner:
             finally:
                 self._inflight.discard(marker)
             metrics.agent_run(agent_name, status, time.monotonic() - t0)
+            if status == "ok":
+                self._hand_off(agent, run_id)
 
         try:
             self._spawn(go)
@@ -415,6 +438,115 @@ class AgentRunner:
             self._event_loop.call_soon_threadsafe(start)
             return
         start()
+
+    # ── handoffs (TR-334): a finding with a matching verdict starts another agent ──
+    def _hand_off(self, agent: dict, run_id: str) -> None:
+        """After a run ends ok: when it concluded a finding whose verdict one of the agent's
+        handoffs names (case-insensitive), start that agent on the concluded entity. What does
+        not start is still on record: a handoff inside its cooldown is a note on this run's
+        results; a chain too deep, an agent already running for the entity, the daily cap and the
+        budget each leave a capped run under this one. Never raises."""
+        concluded = self.__dict__.get("_concluded", {}).pop(run_id, None)
+        try:
+            current = self.store.get_catalog_agent(agent["name"]) or agent
+            handoffs = current.get("handoffs") or []
+            if not handoffs:
+                return
+            run = self.store.get_agent_run(run_id)
+            if not run or run.get("status") != "ok" or run.get("outcome") != "finding":
+                return
+            verdict = str(run.get("verdict") or "").strip().lower()
+            matches = [h for h in handoffs
+                       if verdict and str(h.get("verdict") or "").strip().lower() == verdict]
+            if not matches:
+                return
+            key, label = concluded or (run["key"], None)
+            if not label:
+                try:
+                    label = self._entity_label(run.get("trigger") or current["trigger"])
+                except Exception:
+                    label = None
+            notes = [n for n in (self._start_handoff(current, run, h, verdict, key, label)
+                                 for h in matches) if n]
+            if notes:
+                self.store.set_run_results(run_id, _results.merge(
+                    list(run.get("results") or [])
+                    + [{"kind": "custom", "label": n} for n in notes]))
+        except Exception as e:  # noqa: BLE001 — a handoff must never break the run it follows
+            print(f"[agent {agent['name']}] handoff: {type(e).__name__}: {e}")
+
+    def _handoff_depth(self, run: dict) -> int:
+        """How many handoffs led to `run`: the handed-off runs on its line of parents, itself
+        included."""
+        depth, seen = 0, set()
+        while run and run["id"] not in seen and len(seen) < 50:
+            seen.add(run["id"])
+            if run.get("woken_by") == "handoff":
+                depth += 1
+            pid = run.get("parent_run_id")
+            run = self.store.get_agent_run(pid) if pid else None
+        return depth
+
+    def _start_handoff(self, agent: dict, parent: dict, h: dict, verdict: str, key: str,
+                       label: str | None) -> str | None:
+        """Start one handoff, or record why it did not start. Returns a note for the parent run's
+        results when nothing was recorded as a run (cooldown, a target that is gone)."""
+        to = h["agent"]
+        target = self.store.get_catalog_agent(to)
+        if target is None:
+            return f"handoff to {to} skipped: no such agent"
+        if (target.get("owned_by") or None) != (agent.get("owned_by") or None):
+            return f"handoff to {to} skipped: it is in another project"
+        state = handoff_state(agent["name"], to)
+        cooldown = parse_duration(h.get("cooldown") or "30m")
+        last = self.store.last_fired(state, key)
+        if last is not None and last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        if last is not None and cooldown > 0 \
+                and (now_utc() - last).total_seconds() < cooldown:
+            return f"handoff to {to} skipped: cooldown"
+        self.store.set_fired(state, key, now_utc())
+        run_id = "run_" + uuid.uuid4().hex[:12]
+        trigger_name = target["trigger"]
+        self.store.start_agent_run(run_id, to, trigger_name, "", key,
+                                   prompt_hash(target["prompt"]), effective_max_rounds(target),
+                                   woken_by="handoff", parent_run_id=parent["id"],
+                                   project=target.get("owned_by"))
+        if self._handoff_depth(parent) >= MAX_HANDOFF_DEPTH:
+            self.store.finish_agent_run(run_id, "capped", error=HANDOFF_STOPPED)
+            metrics.agent_run(to, "capped", 0.0)
+            return None
+        marker = (to, key)
+        if marker in self._inflight:
+            self.store.finish_agent_run(
+                run_id, "capped", error=f"not started: {to} is already running for {key}")
+            metrics.agent_run(to, "capped", 0.0)
+            return None
+        payload = handoff_input(agent["name"], verdict, key, label, parent.get("finding") or "")
+        self._inflight.add(marker)
+
+        async def go():
+            t0 = time.monotonic()
+            status = "failed"
+            try:
+                status, _error = await self._run(target, trigger_name, key, payload, run_id,
+                                                 None, handoff=True)
+            except Exception as e:
+                detail = f"{type(e).__name__}: {str(e) or repr(e)}"
+                self.store.finish_agent_run(run_id, "failed", error=detail[:500])
+                print(f"[agent {to}] {detail}")
+            finally:
+                self._inflight.discard(marker)
+            metrics.agent_run(to, status, time.monotonic() - t0)
+            if status == "ok":
+                self._hand_off(target, run_id)
+
+        try:
+            self._spawn(go)
+        except RuntimeError as e:
+            self._inflight.discard(marker)
+            self.store.finish_agent_run(run_id, "failed", error=str(e))
+        return None
 
     def bootstrap(self, agent_name: str, trigger_name: str, keys: list[str],
                   window: str = "7d", limit: int = 20, delay_s: float = 90.0,
@@ -477,6 +609,8 @@ class AgentRunner:
         finally:
             self._inflight.discard(marker)
         metrics.agent_run(agent["name"], status, time.monotonic() - t0)
+        if status == "ok":
+            self._hand_off(agent, run_id)
         # resolve the delivery: ok when the agent concluded ('ok'); 'empty'/'capped' are not
         # failures (it ran and declined to conclude, or hit the cap) but aren't a delivered finding
         # either — mark ok=false with the reason so the firing row is honest without crying wolf.
@@ -484,7 +618,8 @@ class AgentRunner:
                                    None if status == "ok" else error)
 
     async def _run(self, agent: dict, trigger_name: str, key: str, payload: str,
-                   run_id: str, dispatch_id: str | None = None) -> tuple[str, str | None]:
+                   run_id: str, dispatch_id: str | None = None,
+                   handoff: bool = False) -> tuple[str, str | None]:
         tracer = self.tracing.tracer_for(agent["name"])
         # Resolved before the span opens: the firing's delivery id is the session (TR-317).
         anchor = self._callback_anchor(agent, trigger_name, key)
@@ -505,7 +640,8 @@ class AgentRunner:
             try:
                 status, error = await self._run_traced(agent, trigger_name, key, payload, run_id,
                                                        dispatch_id, tracer, obs, anchor, results,
-                                                       skills_loaded=loaded)
+                                                       skills_loaded=loaded,
+                                                       **({"handoff": True} if handoff else {}))
             finally:
                 if loaded:
                     self.store.set_run_skills(run_id, loaded)
@@ -536,7 +672,8 @@ class AgentRunner:
                           obs: _tracing.Observation,
                           anchor: tuple[str, dict] | None = None,
                           results: list | None = None,
-                          skills_loaded: list | None = None) -> tuple[str, str | None]:
+                          skills_loaded: list | None = None,
+                          handoff: bool = False) -> tuple[str, str | None]:
         results = [] if results is None else results
         started_at = now_utc()
         t0 = time.monotonic()
@@ -589,7 +726,8 @@ class AgentRunner:
         try:
             finding, rounds, tool_calls, external_used, exhausted, partial = await self._loop(
                 agent, trigger_name, key, payload, provider, model, usage, tracer, obs,
-                concluded=concluded, produced=results, skills_loaded=skills_loaded)
+                concluded=concluded, produced=results, skills_loaded=skills_loaded,
+                **({"handoff": True} if handoff else {}))
         finally:
             if usage["calls"]:
                 cost = price_usage(provider.kind, model, usage)
@@ -636,6 +774,9 @@ class AgentRunner:
             return "empty", msg
 
         verdict = concluded.get("verdict")
+        # the entity a handoff starts the next agent on: the concluded key and its label
+        self.__dict__.setdefault("_concluded", {})[run_id] = (concluded.get("key") or key,
+                                                               concluded.get("label"))
         obs.set_output(finding)
         obs.set_attribute("tares.rounds", rounds)
         obs.set_attribute("tares.tool_calls", tool_calls)
@@ -721,6 +862,7 @@ class AgentRunner:
                     provider: Provider, model: str, usage: dict, tracer=None,
                     obs: _tracing.Observation | None = None, concluded: dict | None = None,
                     produced: list | None = None, skills_loaded: list | None = None,
+                    handoff: bool = False,
                     ) -> tuple[str, int, int, list[str], bool, str]:
         # External tools: the agent's selected MCP servers, connected for the duration of this
         # run. A server that fails to connect is skipped (recorded below) — losing a tool server
@@ -734,13 +876,14 @@ class AgentRunner:
                 print(f"[agent {agent['name']}] mcp connect failed; {failure}")
             return await self._loop_with(agent, trigger_name, key, payload, provider, toolbox,
                                          usage, tracer, obs, model=model, concluded=concluded,
-                                         produced=produced, skills_loaded=skills_loaded)
+                                         produced=produced, skills_loaded=skills_loaded,
+                                         **({"handoff": True} if handoff else {}))
 
     async def _loop_with(self, agent: dict, trigger_name: str, key: str, payload: str,
                          provider: Provider, toolbox, usage: dict, tracer=None,
                          obs: _tracing.Observation | None = None, model: str = "",
                          concluded: dict | None = None, produced: list | None = None,
-                         skills_loaded: list | None = None,
+                         skills_loaded: list | None = None, handoff: bool = False,
                          ) -> tuple[str, int, int, list[str], bool, str]:
         """Returns (finding, rounds, tool_calls, external_tools_used, exhausted, partial_text).
         A `conclude` call ends the loop at the end of its round and fills `concluded`; each skill
@@ -762,19 +905,22 @@ class AgentRunner:
         prior = self.store.last_finding(FINDINGS_SOURCE, agent["name"], key)
         prior_block = (f'Your finding from an earlier run on "{key}":\n\n{prior[:4000]}\n\n'
                        if prior else "")
-        opening = (
-            f'The schedule "{trigger_name}" ticked. The summary of its last '
-            f"window:\n\n{payload}\n\n" if self._is_scheduled(trigger_name) else
-            f'The condition "{trigger_name}" tripped for "{key}".\n\n'
-            f"{prior_block}"
-            f"The correlated timeline at that moment:\n\n{payload}\n\n")
-        messages = [{
-            "role": "user",
-            "content": (
-                f"{opening}"
-                f"Take a first look, per your instructions. You already hold the evidence above; "
-                f"read again only if you need a wider window or a different entity."),
-        }]
+        if handoff:
+            # handed a finding by another agent (TR-334), not a timeline: it reads its own evidence
+            content = (f"{prior_block}{payload}\n\n"
+                       f"Take it from here, per your instructions. You hold the finding that was "
+                       f"handed to you, not the evidence behind it; read what you need.")
+        else:
+            opening = (
+                f'The schedule "{trigger_name}" ticked. The summary of its last '
+                f"window:\n\n{payload}\n\n" if self._is_scheduled(trigger_name) else
+                f'The condition "{trigger_name}" tripped for "{key}".\n\n'
+                f"{prior_block}"
+                f"The correlated timeline at that moment:\n\n{payload}\n\n")
+            content = (f"{opening}"
+                       f"Take a first look, per your instructions. You already hold the evidence "
+                       f"above; read again only if you need a wider window or a different entity.")
+        messages = [{"role": "user", "content": content}]
         rounds = tool_calls = 0
         last_text = ""
         if obs is not None:

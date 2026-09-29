@@ -50,6 +50,23 @@ the project follows [Semantic Versioning](https://semver.org/).
   top-level `skills:` section (each with its `project` by name), and a template may plan one.
   The project page has a Skills tab: list with the agents that loaded each skill in the last 7
   days, new skill with a markdown preview, upload a SKILL.md, edit, delete. Ask never gets skills.
+- Handoffs: an agent names, per verdict, the agent that takes over when it concludes. `handoffs`
+  on an agent is a list of up to ten `{verdict, agent, cooldown}` (the verdict one lowercase word,
+  the agent another agent of the same project, the cooldown a duration, 30m when left out). When
+  a run ends with a finding whose verdict matches one (case does not matter), that agent is
+  started on the concluded entity, handed the finding with a line naming who handed it off, the
+  verdict and the entity. The run is `woken_by: handoff` with the finishing run as its parent, and
+  the project timeline shows it under that run. It runs whether or not the agent is on for its
+  own trigger. A chain stops after three handoffs in a row: the next is a capped run, "handoff
+  chain stopped at depth 3". Within the cooldown for the same agents and entity no run starts and
+  the finishing run's results say "handoff to X skipped: cooldown". An agent already running for
+  the entity, the daily cap and the budget each leave a capped run with the reason. The API and
+  the catalog take and return `handoffs` (an update without the field keeps them, an empty list
+  clears them); a template may plan them. Deleting an agent removes the handoffs to it, and the
+  delete returns `handoffs_removed_from`. The agent form has a "When it concludes" section
+  (verdict, an agent of the project, cooldown), and the project's Setup tab lists each agent's
+  handoffs. A trigger over the findings source still wakes an agent as before; handoffs are the
+  simpler way to chain two agents.
 
 ### Changed
 - Views are gone. A trigger names the sources it watches, the filters that narrow them and the
@@ -72,6 +89,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 - The project page's Firings tab is now Activity: one row per thread with the agents that ran and
   how each ended, opening in place to the firing, its deliveries, each run's finding and what the
   run led to, with filters and "Load older". `?tab=firings` links still open it.
+- The `triage` preset says a finding with verdict investigate hands the entity off. The
+  `rca-from-triage` preset is labelled "Root cause after a handoff" and asks for the key and label
+  of the entity it was handed.
 - `tares status` shows projects instead of views. The activity log of reads reports `scope`
   (what was read) instead of `view`.
 
