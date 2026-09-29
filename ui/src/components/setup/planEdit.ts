@@ -97,7 +97,9 @@ export function mergeDerived(draft: Plan, checked: Plan): Plan {
     }),
     agents: draft.agents.map((a) => {
       const c = ca.get(a.key);
-      return c ? { ...a, sentence: c.sentence } : a;
+      // a handoff-only agent whose wake-up went away gets the first one (it never starts it):
+      // show what will be saved
+      return c ? { ...a, sentence: c.sentence, trigger: a.on_trigger ? a.trigger : c.trigger } : a;
     }),
     tools: draft.tools.map((t) => {
       const c = ct.get(t.key);

@@ -279,8 +279,13 @@ async def main():
 
         STUB.script = [[("propose_plan", wrong)], [("propose_plan", wrong)]]
         r = await cx.post("/api/setup/plan", json={"goal": GOOD["goal"]})
-        ck("still wrong after the retry: 422 with a plain message",
-           r.status_code == 422 and "did not come out right" in r.text, r.text)
+        # still wrong after the retry: the plan opens anyway, and check names the problem on
+        # its card, for the person to fix in place
+        ck("still wrong after the retry: the plan opens", r.status_code == 200
+           and r.json()["plan"]["agents"][0]["name"] == "checkout-triage", r.text[:300])
+        probs = (await cx.post("/api/setup/check", json={"plan": r.json()["plan"]})).json()["problems"]
+        ck("and check names the problem on the agent", any(p["where"].startswith("agents.")
+                                                           for p in probs), probs)
         r = await cx.post("/api/setup/plan", json={"goal": ""})
         eq("no goal: 400", r.status_code, 400)
         STUB.script = [[("propose_plan", GOOD)], [("propose_plan", GOOD)]]
@@ -704,6 +709,24 @@ async def main():
            (chk["plan"]["tools"][0]["name"], chk["plan"]["tools"][0]["url"],
             chk["plan"]["tools"][0]["existing"]),
            ("deploys-mcp", "https://deploys.example.com/mcp", True))
+        # a server another project owns is not taken from it
+        other_uid = next(p["id"] for p in store.list_projects()
+                         if p["id"] != store.default_project_id())
+        store.set_owned_by("mcp_server", "deploys-mcp", other_uid)
+        probs = (await cx.post("/api/setup/check", json={"plan": attach})).json()["problems"]
+        ck("a server another project owns cannot be attached",
+           any(p["where"] == "tools.t5" and "belongs to the project" in p["message"] for p in probs),
+           probs)
+        store.set_owned_by("mcp_server", "deploys-mcp", store.default_project_id())
+        moved = copy.deepcopy(attach)
+        moved["name"] = "Attach test"
+        r = await cx.post("/api/setup/apply", json={"plan": moved})
+        ck("apply with a server from the default project", r.status_code == 201, r.text[:300])
+        if r.status_code == 201:
+            new_uid = r.json()["project"]["id"]
+            eq("the attached server moved into the new project",
+               store.get_mcp_server("deploys-mcp")["owned_by"], new_uid)
+            store.put_in_project("mcp_server", "deploys-mcp", store.default_project_id())   # for the checks below
         missing = copy.deepcopy(attach)
         missing["tools"][0]["name"] = "gone-mcp"
         missing["agents"][0]["mcp_servers"] = []

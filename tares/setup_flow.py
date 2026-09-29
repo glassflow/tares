@@ -598,6 +598,13 @@ def _normalize(raw, store, catalog, prev: dict | None) -> tuple[dict, _Problems]
                           label)
             else:
                 try:
+                    # a label the model gave neither a field nor a fixed value reads the event
+                    # field of its own name (label service -> field service)
+                    for lb in (spec["config"].get("labels") or []) if isinstance(spec["config"], dict) else []:
+                        if isinstance(lb, dict) and lb.get("name") and not lb.get("field") \
+                                and lb.get("const") in (None, ""):
+                            lb.pop("const", None)
+                            lb["field"] = lb["name"]
                     validate_source_dict(spec)
                     w["config"] = normalize_config(conn, spec["config"])
                     phr_sources[nm] = _source_from_dict({**spec, "config": w["config"]})
@@ -621,6 +628,7 @@ def _normalize(raw, store, catalog, prev: dict | None) -> tuple[dict, _Problems]
 
     # tools
     servers = {m["name"]: m for m in store.list_mcp_servers()}
+    default_uid = store.default_project_id()
     tool_map: dict[str, str] = {}
     tools, taken_tools = [], set()
     for i, t in enumerate(x for x in plan.get("tools") or [] if isinstance(x, dict)):
@@ -647,12 +655,24 @@ def _normalize(raw, store, catalog, prev: dict | None) -> tuple[dict, _Problems]
             found = servers.get(nm)
             # an MCP server of that name already registered is reused when the plan names no
             # other address for it
-            if found is not None and t["url"] in ("", found["url"]):
+            free = found is not None and found.get("owned_by") in (None, "", default_uid)
+            if found is not None and t["url"] in ("", found["url"]) and free:
                 t["url"] = found["url"]
                 t["existing"] = True
             else:
+                # another project's server of that name: this project gets its own, same address
+                if found is not None and not t["url"]:
+                    t["url"] = found["url"]
                 nm = _unique(nm, set(servers) | taken_tools)
                 t["existing"] = False
+        # an MCP server belongs to one project: one already on Tares moves into this project when
+        # it is unowned or in the default project, never out of another project that uses it
+        if t["existing"] and t["enabled"] and found is not None:
+            owner = found.get("owned_by")
+            if owner and owner != default_uid:
+                other = (store.get_project(owner) or {}).get("name") or owner
+                probs.add(where, f"{nm} belongs to the project {other}; add a new one here, or "
+                                 "turn it off.", f"Tool {nm}")
         taken_tools.add(nm)
         tool_map.setdefault(orig, nm)
         t["name"] = nm
@@ -771,6 +791,9 @@ def _normalize(raw, store, catalog, prev: dict | None) -> tuple[dict, _Problems]
         taken.add(nm)
         names.append(nm)
         agent_map.setdefault(orig, nm)
+        # a model sometimes names the handoff target by the plan's key ("a2") instead
+        if a.get("key"):
+            agent_map.setdefault(str(a["key"]), nm)
     seen_agent = set()
     for i, a in enumerate(raw_agents):
         a = dict(a)
@@ -955,11 +978,16 @@ async def _model_plan(provider, model, first_message, store, catalog, read_tool,
             raw, _ = await _run_model(provider, model, convo, read_tool, tracer, usage,
                                       forced_only=True)
             plan, errors = _check(raw, store, catalog, prev, who)
-            if errors:
-                raise SetupError(422, "The plan did not come out right: "
-                                 + " ".join(errors[:3])
-                                 + " Try saying the goal another way, or start from a "
-                                   "template.")
+            # still not right: the plan opens anyway when there is something to show, and the
+            # plan screen names each problem on its card for the person to fix in place
+            # (who the person chose is not something to fix by hand: a plan that ignores it is refused)
+            wrong_who = bool(who and plan.get("who") != who)
+            if errors and (wrong_who or not (plan.get("watches") or plan.get("wakes")
+                                             or plan.get("agents"))):
+                raise SetupError(422, (f"The plan did not keep who does the work (who {who}). "
+                                       "Try again." if wrong_who else
+                                       "The plan did not come out right. Try saying the goal "
+                                       "another way, or start from a template."))
         return plan
     except (ModelError, ModelUnavailable) as e:
         raise SetupError(502, f"The model provider did not answer: {e}") from e
@@ -1030,6 +1058,11 @@ def apply(store, engine, plan: dict, make_key) -> tuple[str, dict | None]:
         made += objs
         engine._apply(uid, objs)
         objects += [{"kind": "mcp_server", "name": t["name"]} for t in tools]
+        # one already on Tares moves into this project (check refused one another project owns)
+        for t in plan["tools"]:
+            if t["enabled"] and t.get("existing"):
+                store.put_in_project("mcp_server", t["name"], uid, key=f"mcp_server:{t['name']}")
+                objects.append({"kind": "mcp_server", "name": t["name"]})
         usable_tools = {t["name"] for t in plan["tools"] if t["enabled"]}
 
         step = "skills"
