@@ -33,6 +33,7 @@ from .config import (SLACK_URL_PREFIX, CatalogError, agent_url, export_db_to_yam
                      validate_mcp_server_dict,
                      import_yaml_to_db, slack_channel_from_url, slack_url,
                      validate_agent_dict, validate_slack_channel, validate_source_dict,
+                     check_handoff_targets, normalize_handoffs,
                      validate_trigger_dict, VIEWS_REMOVED, _source_from_dict)
 from .connectors import (SPECS, normalize_config, redact_config, restore_secrets,
                          source_type_for)
@@ -344,6 +345,9 @@ class AgentIn(BaseModel):
     max_rounds: int | None = None   # model rounds per run; None = default (6, or 12 with MCP servers)
     budget_usd: float | None = None  # lifetime spend cap in USD; None = no budget
     project: str = ""            # "" = the default project on create, unchanged on update
+    # [{verdict, agent, cooldown}]: who takes over when a run concludes with that verdict
+    # (TR-334); None = none on create, unchanged on update
+    handoffs: list[dict] | None = None
 
 
 class ImportReq(BaseModel):
@@ -1824,6 +1828,16 @@ def make_app() -> FastAPI:
             if servers[srv].get("owned_by") != uid:
                 _err(ValueError(f"MCP server {srv!r} is in another project; an agent uses the MCP "
                                 "servers of its own project"), 400)
+        if body.handoffs is not None:
+            # the targets: agents that exist, in this agent's project (TR-334)
+            try:
+                raw["handoffs"] = normalize_handoffs(raw["name"], body.handoffs)
+                check_handoff_targets(raw["name"], raw["handoffs"],
+                                      {a["name"]: a.get("owned_by")
+                                       for a in store.list_catalog_agents()
+                                       if a["name"] != raw["name"]}, uid)
+            except CatalogError as e:
+                _err(e)
         return raw
 
     @app.get("/api/agents/builtin")
@@ -1854,6 +1868,7 @@ def make_app() -> FastAPI:
                          "max_rounds": a.get("max_rounds"),
                          "budget_usd": a.get("budget_usd"),
                          "daily_cap": a.get("daily_cap"),
+                         "handoffs": a.get("handoffs") or [],
                          "effective_max_rounds": effective_max_rounds(a),
                          "enabled": _agent_enabled(a["name"]), "updated_at": a.get("updated_at"),
                          "project": a.get("owned_by"),
@@ -1878,13 +1893,14 @@ def make_app() -> FastAPI:
         if store.get_catalog_agent(body.name) is not None:
             _err(ValueError(f"agent {body.name!r} already exists"), 409)
         uid = _resolve_project(body.project)
-        _agent_payload(body, uid)
+        raw = _agent_payload(body, uid)
         store.upsert_catalog_agent(body.name, body.trigger, body.prompt, body.slack_webhook,
                                    body.model, body.slack_channel,
                                    body.webhook_url, body.webhook_token, body.mcp_servers,
                                    body.max_rounds, body.budget_usd,
                                    webhook_key_label=body.webhook_key_label,
-                                   provider=body.provider.strip())
+                                   provider=body.provider.strip(),
+                                   handoffs=raw.get("handoffs") or [])
         store.put_in_project("agent", body.name, uid)
         runtime.reload_catalog()
         return {"ok": True, "enabled": False, "project": uid,
@@ -1900,7 +1916,7 @@ def make_app() -> FastAPI:
             _err(ValueError("renaming an agent is not supported; delete and recreate"), 400)
         uid = _resolve_project(body.project, default=False) or existing.get("owned_by") \
             or store.default_project_id()
-        _agent_payload(body, uid, name)
+        raw = _agent_payload(body, uid, name)
         # blank-to-keep for the webhook, matching the connector-secret convention: the UI never
         # receives the stored URL back, so an unedited form must not wipe it.
         hook = "" if body.slack_webhook_clear else (body.slack_webhook or existing.get("slack_webhook", ""))
@@ -1915,7 +1931,9 @@ def make_app() -> FastAPI:
                                    body.budget_usd, webhook_key_label=body.webhook_key_label,
                                    provider=body.provider.strip(),
                                    # the form has no daily cap field; keep what a project set
-                                   daily_cap=existing.get("daily_cap"))
+                                   daily_cap=existing.get("daily_cap"),
+                                   # absent (None) keeps the stored handoffs
+                                   handoffs=raw.get("handoffs"))
         store.mark_customized("agent", name)
         store.put_in_project("agent", name, uid)
         # if the trigger changed while enabled, re-point the subscription so the agent fires on the
@@ -1932,9 +1950,12 @@ def make_app() -> FastAPI:
         if store.get_catalog_agent(name) is None:
             _err(KeyError(f"unknown agent {name!r}"), 404)
         store.remove_subscription_by_url(agent_url(name))   # unwire before dropping the definition
+        # the agents that handed off to it lose that handoff (the store drops it with the agent)
+        handed = [a["name"] for a in store.list_catalog_agents()
+                  if any(h.get("agent") == name for h in a.get("handoffs") or [])]
         store.delete_catalog_agent(name)
         runtime.reload_catalog()
-        return {"ok": True}
+        return {"ok": True, "handoffs_removed_from": handed}
 
     @app.post("/api/agents/builtin/{name}/enable")
     async def enable_builtin_agent(name: str):

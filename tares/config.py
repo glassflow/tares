@@ -400,8 +400,11 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
     all_triggers.update({t["name"]: t for t in triggers})
     server_names = ({m["name"] for m in mcp_servers}
                     | {m["name"] for m in store.list_mcp_servers()})
+    agent_names = {a["name"] for a in agents} | {a["name"] for a in store.list_catalog_agents()}
     for a in agents:
         validate_agent_dict(a, trigger_names, all_triggers, server_names)
+        check_handoff_targets(a["name"], normalize_handoffs(a["name"], a.get("handoffs")),
+                              {n: None for n in agent_names})
 
     # projects: {template, name, params}. `usecases:` with `recipe:` is the pre-1.14 form, read
     # until two releases after 1.14
@@ -452,7 +455,10 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
                                    webhook_key_label=a.get("webhook_key_label"),
                                    provider=a.get("provider"),
                                    daily_cap=(int(a["daily_cap"])
-                                              if a.get("daily_cap") not in (None, "") else None))
+                                              if a.get("daily_cap") not in (None, "") else None),
+                                   # absent keeps what is stored (see upsert_catalog_agent)
+                                   handoffs=(normalize_handoffs(a["name"], a["handoffs"])
+                                             if "handoffs" in a else None))
         # enabled ⟺ a subscription to the trigger. Reflect the document's state so an enabled agent
         # round-trips: add the internal subscription if enabled, remove it if not.
         url = agent_url(a["name"])
@@ -683,6 +689,7 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
          **({"max_rounds": a["max_rounds"]} if a.get("max_rounds") else {}),
          **({"budget_usd": a["budget_usd"]} if a.get("budget_usd") else {}),
          **({"daily_cap": a["daily_cap"]} if a.get("daily_cap") else {}),
+         **({"handoffs": a["handoffs"]} if a.get("handoffs") else {}),
          **({"slack_webhook": a["slack_webhook"]}
             if include_secrets and a.get("slack_webhook") else {}),
          **({"webhook_token": a["webhook_token"]}
@@ -976,6 +983,65 @@ MAX_PROMPT_CHARS = 8000
 MAX_AGENT_ROUNDS = 24   # upper bound for a per-agent max_rounds (see builtin_agents.MAX_ROUNDS_LIMIT)
 
 
+MAX_HANDOFFS = 10
+HANDOFF_COOLDOWN = "30m"
+_VERDICT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+def normalize_handoffs(name: str, raw) -> list[dict]:
+    """An agent's `handoffs` (TR-334) as [{verdict, agent, cooldown}], checked for shape: at most
+    ten, each a one-word verdict (lowercased), another agent's name, and a cooldown duration
+    (default 30m). Whether the target exists and is in the same project is the caller's check
+    (see check_handoff_targets): it needs the store."""
+    if raw in (None, ""):
+        return []
+    if not isinstance(raw, list):
+        raise CatalogError(f"agent {name!r}: handoffs must be a list of {{verdict, agent, cooldown}}")
+    if len(raw) > MAX_HANDOFFS:
+        raise CatalogError(f"agent {name!r}: at most {MAX_HANDOFFS} handoffs")
+    out, seen = [], set()
+    for h in raw:
+        if not isinstance(h, dict):
+            raise CatalogError(f"agent {name!r}: each handoff is a mapping of verdict, agent "
+                               "and cooldown")
+        verdict = str(h.get("verdict") or "").strip().lower()
+        target = str(h.get("agent") or "").strip()
+        cooldown = str(h.get("cooldown") or "").strip() or HANDOFF_COOLDOWN
+        if not verdict or not _VERDICT_RE.match(verdict):
+            raise CatalogError(f"agent {name!r}: a handoff verdict is one word, such as "
+                               f"investigate (got {h.get('verdict')!r})")
+        if not target:
+            raise CatalogError(f"agent {name!r}: the handoff on verdict {verdict!r} names no agent")
+        if target == name:
+            raise CatalogError(f"agent {name!r}: an agent cannot hand off to itself")
+        try:
+            if parse_duration(cooldown) < 0:
+                raise ValueError
+        except (KeyError, ValueError, IndexError):
+            raise CatalogError(f"agent {name!r}: handoff cooldown {cooldown!r} must be a "
+                               "duration such as 30m or 2h")
+        if (verdict, target) in seen:
+            raise CatalogError(f"agent {name!r}: the handoff to {target!r} on verdict "
+                               f"{verdict!r} is listed twice")
+        seen.add((verdict, target))
+        out.append({"verdict": verdict, "agent": target, "cooldown": cooldown})
+    return out
+
+
+def check_handoff_targets(name: str, handoffs: list[dict], projects: dict,
+                          own_project: str | None = None) -> None:
+    """Each handoff names an agent that exists and, when projects are known, is in the handing
+    agent's project. `projects` is {agent name: project id or None}."""
+    for h in handoffs:
+        if h["agent"] not in projects:
+            raise CatalogError(f"agent {name!r}: the handoff on verdict {h['verdict']!r} names "
+                               f"an unknown agent {h['agent']!r}")
+        theirs = projects[h["agent"]]
+        if own_project and theirs and theirs != own_project:
+            raise CatalogError(f"agent {name!r}: {h['agent']!r} is in another project; an agent "
+                               "hands off only to agents of its own project")
+
+
 def validate_agent_dict(a: dict, trigger_names: set, triggers: dict | None = None,
                         mcp_server_names: set | None = None) -> None:
     for field in ("name", "trigger", "prompt"):
@@ -1050,13 +1116,15 @@ def validate_agent_dict(a: dict, trigger_names: set, triggers: dict | None = Non
         if dc <= 0:
             raise CatalogError(f"agent {a['name']!r}: daily_cap must be above zero "
                                "(or empty for the instance-wide cap)")
+    normalize_handoffs(str(a["name"]), a.get("handoffs"))
 
     # Loop guard: a Tares agent writes a finding into the `findings` source. If its trigger
     # watches that source, its own finding re-fires the trigger, which runs the agent again,
-    # forever. The one valid form is a handoff (TR-322): the trigger keeps only ANOTHER agent's
-    # findings (`agent` eq that agent), so this agent's own findings never match. A chain that
-    # loops back through two agents is bounded by their cooldowns, daily cap and budgets; a depth
-    # limit is later work.
+    # forever. The one valid form is a chain through findings (TR-322): the trigger keeps only
+    # ANOTHER agent's findings (`agent` eq that agent), so this agent's own findings never match.
+    # A chain that loops back through two agents is bounded by their cooldowns, daily cap and
+    # budgets. The simpler way to chain is the agent's own `handoffs` (TR-334), which stop at a
+    # depth of three.
     if triggers is not None:
         trig = triggers.get(a["trigger"])
         if trig and FINDINGS_SOURCE in (trig.get("sources") or []):
