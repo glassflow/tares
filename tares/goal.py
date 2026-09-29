@@ -564,13 +564,21 @@ def summary_of(note: str | None, headline: str | None = None) -> str | None:
     return _cut(first, SUMMARY_MAX)
 
 
+_DASH = re.compile(r"\s*[\u2014\u2013]\s*")
+
+
+def _no_dash(text: str | None) -> str | None:
+    """A model's line with its em and en dashes turned into commas: the console shows no dashes."""
+    return _DASH.sub(", ", text).strip(", ") if text else text
+
+
 def headline_and_next(run: dict) -> tuple[str | None, str | None]:
     """What the agent gave; when it gave neither (older runs, small models), derived from the
     note."""
     if run.get("headline") or run.get("next_step"):
-        return run.get("headline"), run.get("next_step")
+        return _no_dash(run.get("headline")), _no_dash(run.get("next_step"))
     note = run.get("finding")
-    return derive_headline(note), derive_next_step(note)
+    return _no_dash(derive_headline(note)), _no_dash(derive_next_step(note))
 
 
 # ── results ──────────────────────────────────────────────────────────────────
@@ -606,7 +614,14 @@ def kind_of(run: dict, next_step: str | None) -> str:
         return "no_action"
     if not next_step or str(run.get("verdict") or "").strip().lower() in NO_ACTION_VERDICTS:
         return "no_action"
+    # a next step that says there is nothing to do ("No action required. Monitor ...")
+    if _NOTHING_TO_DO.match(next_step):
+        return "no_action"
     return "action"
+
+
+_NOTHING_TO_DO = re.compile(r"\s*(no action|nothing to do|no further action|none needed|no need to)",
+                            re.IGNORECASE)
 
 
 def result_for(thread: dict, run: dict, parent: dict) -> dict:

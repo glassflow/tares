@@ -88,7 +88,12 @@ function useCrumbs(): Crumb[] {
   if (parts[0] === "projects" && parts.length > 1) {
     const sub = decodeURIComponent(parts[1]);
     // the path carries the instance id; show its name once /api/projects has answered
-    const last: Crumb = sub === "new" ? { label: "Set up" } : { label: projectName?.name ?? "\u2026" };
+    const last: Crumb = sub === "new" ? { label: "New project" } : { label: projectName?.name ?? "\u2026" };
+    // the guided setup of a project that exists: Projects > name > Set up
+    if (sub !== "new" && parts[2] === "setup") {
+      return [{ label: "Projects", to: "/projects" }, { ...last, to: `/projects/${encodeURIComponent(sub)}` },
+              { label: "Set up" }];
+    }
     // past the project's Overview: a result, How it works, or the full setup
     const q = new URLSearchParams(search);
     // old ?tab= and ?session= links land in the full setup too

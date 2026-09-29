@@ -3074,13 +3074,18 @@ def make_app() -> FastAPI:
         return setup
 
     @app.get("/api/projects/{uid}/setup")
-    async def get_project_setup(uid: str):
-        """{step, plan, checks}: where the guided setup is, and live status for Connect."""
+    async def get_project_setup(uid: str, request: Request):
+        """{step, plan, practice_run, checks, connect}: where the guided setup is, live status for
+        Connect, and what Connect shows (the addresses as the daemon sees them; the own agent's
+        key is not in it, it was shown once)."""
         setup = _setup_or_404(uid)
         checks = await asyncio.to_thread(setup_flow.checks, store, runtime.catalog,
                                          runtime.health_snapshot(), uid, setup)
+        base = setup_flow.public_base(str(request.base_url))
         return {"step": setup.get("step"), "plan": setup.get("plan"),
-                "practice_run": setup.get("practice_run"), "checks": checks}
+                "practice_run": setup.get("practice_run"), "checks": checks,
+                "connect": setup_flow.connect_info(store, runtime.catalog, uid,
+                                                   setup.get("plan") or {}, base, None)}
 
     @app.put("/api/projects/{uid}/setup")
     async def put_project_setup(uid: str, body: dict = Body(...)):

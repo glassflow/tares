@@ -20,10 +20,10 @@ const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** The sentence cut around its numbers, in knob order, so the steppers sit where the numbers were
  *  ("more than [5] errors in [5] minutes"). null when a number can't be found in order; the
  *  steppers then go on their own lines under the sentence. */
-function splitAtKnobs(w: PlanWake, base: Baseline): (string | PlanKnob)[] | null {
+function splitAtKnobs(w: PlanWake, base: Baseline, knobs: PlanKnob[]): (string | PlanKnob)[] | null {
   const out: (string | PlanKnob)[] = [];
   let rest = w.sentence;
-  for (const k of w.knobs) {
+  for (const k of knobs) {
     const v = base[`${w.key}.${k.id}`];
     if (v === undefined) return null;
     const m = new RegExp(`(^|[^\\d.,])(${esc(String(v))})(?![\\d.,]\\d|\\d)`).exec(rest);
@@ -37,16 +37,22 @@ function splitAtKnobs(w: PlanWake, base: Baseline): (string | PlanKnob)[] | null
 }
 
 function WakeItem({ w, base, onKnob }: { w: PlanWake; base: Baseline; onKnob: (id: string, v: number) => void }) {
-  const parts = w.knobs.length ? splitAtKnobs(w, base) : null;
+  // the wait after a wake is not in the sentence: it gets a line of its own
+  const wait = w.knobs.find((k) => k.id === "cooldown_minutes");
+  const inline = w.knobs.filter((k) => k !== wait);
+  const parts = inline.length ? splitAtKnobs(w, base, inline) : null;
   const stepper = (k: PlanKnob) => (
     <NumberStepper key={k.id} value={k.value} min={k.min} max={k.max} label={k.label}
                    onChange={(v) => onKnob(k.id, v)} />
   );
   if (parts) {
     return (
-      <p className="su-wake">
-        {parts.map((x, i) => (typeof x === "string" ? <span key={i}>{x}</span> : stepper(x)))}
-      </p>
+      <>
+        <p className="su-wake">
+          {parts.map((x, i) => (typeof x === "string" ? <span key={i}>{x}</span> : stepper(x)))}
+        </p>
+        {wait && <p className="su-wake su-wake-then">Then waits {stepper(wait)} minutes before waking again.</p>}
+      </>
     );
   }
   return (

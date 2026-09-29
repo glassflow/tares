@@ -23,21 +23,6 @@ export default function ProjectSetup() {
   return id ? <ResumeSetup key={id} id={id} /> : <NewSetup />;
 }
 
-function Crumbs({ project }: { project?: { id: string; name: string } }) {
-  return (
-    <nav className="su-crumbs" aria-label="Breadcrumb">
-      <Link to="/projects">Projects</Link>
-      <span aria-hidden="true">/</span>
-      {project
-        ? <>
-            <Link to={`/projects/${encodeURIComponent(project.id)}`}>{project.name}</Link>
-            <span aria-hidden="true">/</span>
-            <span aria-current="page">Set up</span>
-          </>
-        : <span aria-current="page">New project</span>}
-    </nav>
-  );
-}
 
 function NewSetup() {
   const navigate = useNavigate();
@@ -52,7 +37,6 @@ function NewSetup() {
 
   return (
     <div className="su">
-      <Crumbs />
       <Stepper at={step} />
       {step === "goal" && (
         <GoalStep goal={goal} setGoal={setGoal} who={who} setWho={setWho}
@@ -101,29 +85,26 @@ function ResumeSetup({ id }: { id: string }) {
     } catch (e) { setErr(errText(e)); }
     setMoving(false);
   };
-  const crumbs = <Crumbs project={{ id, name: project?.name ?? plan?.name ?? id }} />;
 
   if (!data && error) {
     return (
       <div className="su">
-        {crumbs}
         <ErrorState error={error} what="this project's setup" onRetry={reload} />
         <p className="help"><Link to={`/projects/${encodeURIComponent(id)}`}>Open the project</Link></p>
       </div>
     );
   }
   if (!plan || !step || step === "goal" || step === "plan") {
-    return <div className="su">{crumbs}<p className="help">Loading…</p></div>;
+    return <div className="su"><p className="help">Loading…</p></div>;
   }
 
   return (
     <div className="su">
-      {crumbs}
       <Stepper at={step} />
       {err && <div className="alert error" role="alert">{err}</div>}
       {step === "connect" && (
-        <ConnectStep projectId={id} plan={plan} connect={connect} checks={data?.checks}
-                     onContinue={() => move("try")}
+        <ConnectStep projectId={id} plan={plan} connect={connect ?? data?.connect} checks={data?.checks}
+                     onContinue={() => move("try")} onRefresh={reload}
                      onLater={() => navigate(`/projects/${encodeURIComponent(id)}`)} />
       )}
       {step === "try" && (

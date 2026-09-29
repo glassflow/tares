@@ -55,9 +55,9 @@ function curlFor(url: string, sample: Record<string, unknown> | null, authRequir
   ].join("\n");
 }
 
-function SourceSection({ projectId, src, connector, sentence, check, authRequired }: {
+function SourceSection({ projectId, src, connector, sentence, check, authRequired, onRefresh }: {
   projectId: string; src: ConnectSource; connector: string; sentence: string;
-  check: SetupChecks["sources"][number] | undefined; authRequired: boolean;
+  check: SetupChecks["sources"][number] | undefined; authRequired: boolean; onRefresh: () => void;
 }) {
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
@@ -66,7 +66,8 @@ function SourceSection({ projectId, src, connector, sentence, check, authRequire
 
   const sendTest = async () => {
     setSending(true); setErr(undefined);
-    try { await api.sendSetupTestEvent(projectId, src.name); setSent(true); }
+    // check again right away rather than waiting for the next poll (a hidden tab does not poll)
+    try { await api.sendSetupTestEvent(projectId, src.name); setSent(true); setTimeout(onRefresh, 800); }
     catch (e) { setErr(errText(e)); }
     setSending(false);
   };
@@ -121,7 +122,6 @@ function SourceSection({ projectId, src, connector, sentence, check, authRequire
             <>
               <strong>Connected.</strong>{" "}
               {check?.detail ?? "Events are arriving."}
-              {check?.last_event_at && <> Last one <TimeAgo ts={check.last_event_at} />.</>}
               {check && check.fields_seen.length > 0 && (
                 <> Tares read {check.fields_seen.map((f, i) => (
                   <span key={f}>{i > 0 && (i === check.fields_seen.length - 1 ? " and " : ", ")}<span className="mono">{f}</span></span>
@@ -227,7 +227,7 @@ function OwnAgentSection({ projectId, own, name, check }: {
   return (
     <section className="su-box" aria-labelledby="su-own-h">
       <h2 id="su-own-h" className="su-h2">Connect your agent</h2>
-      {own ? (
+      {own?.key ? (
         <>
           <p>Its key, <span className="mono">{name}</span>. It reads this project only and records findings in it.</p>
           <CopyLine text={own.key} what="the key" />
@@ -239,11 +239,20 @@ function OwnAgentSection({ projectId, own, name, check }: {
           {own.subscribe_hint && <p className="help">{own.subscribe_hint}</p>}
         </>
       ) : (
-        <p>
-          The key for <span className="mono">{name}</span> was shown once, when this project was set up. If you did
-          not keep it, <Link to={`/projects/${encodeURIComponent(projectId)}?view=settings:keys`}>make a new key</Link>{" "}
-          and connect with that.
-        </p>
+        <>
+          <p>
+            The key for <span className="mono">{name}</span> was shown once, when this project was set up. If you did
+            not keep it, <Link to={`/projects/${encodeURIComponent(projectId)}?view=settings:keys`}>make a new key</Link>{" "}
+            and connect with that.
+          </p>
+          {own && <>
+            <p>For Claude Code, run this once, with the key in place of the placeholder:</p>
+            <CopyLine text={own.claude_command} what="the Claude Code command" multiline />
+            <p>Any other MCP client connects to this address with the key as a bearer token:</p>
+            <CopyLine text={own.mcp_url} what="the MCP address" />
+            {own.subscribe_hint && <p className="help">{own.subscribe_hint}</p>}
+          </>}
+        </>
       )}
       <div className={`su-state ${joined ? "receiving" : "waiting"}`} role="status" aria-live="polite">
         <span className="su-dot" aria-hidden="true" />
@@ -257,9 +266,9 @@ function OwnAgentSection({ projectId, own, name, check }: {
   );
 }
 
-export function ConnectStep({ projectId, plan, connect, checks, onContinue, onLater }: {
+export function ConnectStep({ projectId, plan, connect, checks, onContinue, onLater, onRefresh }: {
   projectId: string; plan: Plan; connect: SetupConnect | undefined; checks: SetupChecks | undefined;
-  onContinue: () => void; onLater: () => void;
+  onContinue: () => void; onLater: () => void; onRefresh: () => void;
 }) {
   const { sources, tools, ownAgent } = useConnect(projectId, plan, connect);
   const [authRequired, setAuthRequired] = useState(false);
@@ -287,7 +296,8 @@ export function ConnectStep({ projectId, plan, connect, checks, onContinue, onLa
       {shown.map((s) => (
         <SourceSection key={s.name} projectId={projectId} src={s}
                        connector={watch(s.name)?.connector ?? ""} sentence={watch(s.name)?.sentence ?? s.name}
-                       check={checks?.sources.find((c) => c.name === s.name)} authRequired={authRequired} />
+                       check={checks?.sources.find((c) => c.name === s.name)} authRequired={authRequired}
+                       onRefresh={onRefresh} />
       ))}
       {own && (
         <OwnAgentSection projectId={projectId} own={ownAgent} name={own.name} check={checks?.own_agent} />

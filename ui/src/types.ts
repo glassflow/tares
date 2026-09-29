@@ -706,7 +706,8 @@ export interface SetupConnect {
   sources: { name: string; needs: PlanWatch["needs"]; ingest_url: string | null;
              sample: Record<string, unknown> | null; credential_hint: string | null }[];
   tools: { name: string; url: string; needs_token: boolean }[];
-  own_agent: { key: string; mcp_url: string; claude_command: string; subscribe_hint: string } | null;
+  // key: the secret on the answer to apply only; null when the setup is read again (shown once)
+  own_agent: { key: string | null; mcp_url: string; claude_command: string; subscribe_hint: string } | null;
 }
 
 // GET /api/projects/{uid}/setup -> checks: live state for the Connect step
@@ -719,5 +720,7 @@ export interface SetupChecks {
 export interface ProjectSetup {
   step: SetupStep;
   plan: Plan;
+  practice_run: string | null;
   checks: SetupChecks;
+  connect: SetupConnect;        // what Connect shows; the own agent's key is never in it
 }

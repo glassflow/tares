@@ -433,6 +433,9 @@ async def main():
         SCRIPT["checkout-rca"] = {"verdict": "rca", "headline": "Gateway timeout",
                                   "next_step": "Roll back the gateway config.",
                                   "summary": "The gateway timed out."}
+        # both agents have a write-back webhook: a practice run must not call it
+        store.con.execute("UPDATE catalog_agents SET webhook_url = 'http://127.0.0.1:9/hook' "
+                          "WHERE name IN ('checkout-triage', 'checkout-rca')")
         r = await cx.post(f"/api/projects/{uid}/setup/practice")
         ck("practice answers a run id", r.status_code == 200 and r.json().get("run_id"), r.text)
         rid = r.json().get("run_id")
@@ -442,6 +445,9 @@ async def main():
         eq("the practice run is flagged and woken by practice",
            (tri["practice"], tri["woken_by"], tri["key"]), (True, "practice", "checkout"))
         ck("its handoff is practice too", bool(done) and done[0]["practice"], done)
+        ck("a practice run delivers nowhere outside Tares (no write-back attempt)",
+           tri["delivery"] is None and done and done[0]["delivery"] is None,
+           (tri["delivery"], done and done[0]["delivery"]))
         res = (await cx.get(f"/api/projects/{uid}/results")).json()
         ck("the result is shown, marked practice",
            len(res["results"]) == 1 and res["results"][0]["practice"] is True, res)

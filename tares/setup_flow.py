@@ -189,7 +189,8 @@ concludes with the verdict investigate when it is real, handing off to an option
 agent (on_trigger false, optional true). A prompt says what to look at, what a useful finding \
 says, and which verdict to conclude with.
 - who own: no agents; fill own_agent. A Tares agent cannot hand off to the person's own agent \
-yet; if they ask for that, say so in notes.
+yet: say so in notes ONLY when the goal asks for Tares agents and their own agent together; \
+otherwise do not mention it.
 - Tools: suggest an outside MCP server only when the goal needs context Tares does not hold \
 (deploys, tickets, code); enabled false, url empty unless the person gave one, can_act true when \
 it can change things.
@@ -297,7 +298,10 @@ def apply_knobs(w: dict, prev: dict | None, errors: list, where: str) -> None:
             pass
         if lo > hi:
             lo, hi = hi, lo
-        knobs[kid] = {"id": kid, "label": str(k.get("label") or _knob_label(kid, w)).strip(),
+        # the threshold keeps the model's unit ("failed logins"); the time knobs always say what
+        # they mean, since "minutes" alone reads the same for the window and the wait after
+        label = (str(k.get("label") or "").strip() if kid == "threshold" else "") or _knob_label(kid, w)
+        knobs[kid] = {"id": kid, "label": label,
                       "value": _num(min(max(value, lo), hi)), "min": _num(lo), "max": _num(hi)}
     prev_knobs = {k.get("id"): k for k in (prev or {}).get("knobs") or [] if isinstance(k, dict)}
     for kid in wanted:
@@ -896,7 +900,10 @@ def connect_info(store, catalog, uid: str, plan: dict, base: str, key: dict | No
         tools.append({"name": t["name"], "url": m.get("url") or t.get("url") or "",
                       "needs_token": not bool(m.get("auth_value"))})
     own = None
-    if key is not None:
+    # on a resume (no key in hand: it was shown once) the own agent's details still come back,
+    # with a placeholder where the key goes
+    if key is not None or (plan.get("who") == "own" and plan.get("own_agent")):
+        secret = key["secret"] if key is not None else None
         url = mcp_url(base)
         wake = (plan.get("own_agent") or {}).get("wake") or "webhook"
         hint = (f"Your agent subscribes once: POST {base}/api/projects/{uid}/subscribe with the "
@@ -905,9 +912,9 @@ def connect_info(store, catalog, uid: str, plan: dict, base: str, key: dict | No
                 f"Your agent checks the project with GET {base}/api/projects/{uid}/timeline and "
                 f"records what it finds with POST {base}/api/projects/{uid}/findings, both "
                 "with the key.")
-        own = {"key": key["secret"], "mcp_url": url,
+        own = {"key": secret, "mcp_url": url,
                "claude_command": (f"claude mcp add --transport http tares {url} --header "
-                                  f"\"Authorization: Bearer {key['secret']}\""),
+                                  f"\"Authorization: Bearer {secret or '<your project key>'}\""),
                "subscribe_hint": hint}
     return {"sources": sources, "tools": tools, "own_agent": own}
 

@@ -54,7 +54,6 @@ export function TryStep({ projectId, plan, ownCheck, onBackToConnect, onFinish, 
         if (hit && live) {
           setResult(hit);
           setPhase("done");
-          api.projectResult(projectId, hit.id).then((d) => { if (live) setDetail(d); }).catch(() => {});
           return;
         }
         if (!own && firstName && runId) {
@@ -73,6 +72,16 @@ export function TryStep({ projectId, plan, ownCheck, onBackToConnect, onFinish, 
     const id = window.setInterval(tick, POLL_MS);
     return () => { live = false; window.clearInterval(id); };
   }, [phase, projectId, runId, own, firstName]);
+
+  // the steps of the result, once it is here (its own effect: the polling one is torn down as
+  // soon as the result stops it)
+  const resultId = result?.id;
+  useEffect(() => {
+    if (!resultId) return;
+    let live = true;
+    api.projectResult(projectId, resultId).then((d) => { if (live) setDetail(d); }).catch(() => {});
+    return () => { live = false; };
+  }, [projectId, resultId]);
 
   const tried = phase !== "idle" && phase !== "starting";
   const waitingText = own
@@ -111,7 +120,7 @@ export function TryStep({ projectId, plan, ownCheck, onBackToConnect, onFinish, 
       {tried && (
         <div className="su-section">
           <ol className="su-progress" aria-live="polite">
-            {!detail && <li>{waitingText}</li>}
+            {!detail && !result && <li>{waitingText}</li>}
             {detail?.steps.map((st, i) => <li key={i}>{st.text}</li>)}
             {phase === "slow" && <li>No result yet. It lands on the project page when it arrives.</li>}
           </ol>
