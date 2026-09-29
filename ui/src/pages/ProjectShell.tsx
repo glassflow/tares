@@ -12,7 +12,7 @@ import { SessionsPanel } from "../components/ChallengerSessions";
 import ProjectActivity from "../components/ProjectActivity";
 import SkillsPanel from "../components/SkillsPanel";
 import { ExternalAgentsPanel, ProjectKeysPanel } from "../components/ProjectKeys";
-import { RunsPanel } from "./AgentDetail";
+import { RunsPanel, WakesOn, handedBy } from "./AgentDetail";
 import { ServerForm } from "./McpServers";
 import type { ConnectorSpec, ProjectSummary, Template, RecipeActionOption, Source, Trigger, TriggerCondition } from "../types";
 
@@ -905,7 +905,7 @@ function AgentSection({ name, focusDispatch, triggerInProject, onShowTrigger }: 
             <span>
               <span className="opt-title">Configuration</span>
               <span className="opt-desc help">
-                wakes on <span className="mono">{agent.trigger}</span>
+                runs on <WakesOn agent={agent} from={handedBy(data.agents, name)} />
                 {" · "}{agent.model ? <span className="mono">{agent.model}</span> : "instance default model"}
                 {lastRun ? <> · last woken <TimeAgo ts={lastRun.started_at} /> for <span className="mono">{lastRun.key}</span></> : " · never woken"}
               </span>
@@ -961,7 +961,7 @@ function AgentSection({ name, focusDispatch, triggerInProject, onShowTrigger }: 
         </div>
       )}
       <h3 style={{ margin: "12px 0 6px" }}>Runs</h3>
-      <RunsPanel name={name} agent={agent}
+      <RunsPanel name={name} agent={agent} from={handedBy(data.agents, name)}
                  focusDispatch={focusDispatch} focusRun={undefined}
                  openRun={openRun} setOpenRun={setOpenRun} />
     </div>

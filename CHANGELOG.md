@@ -66,7 +66,9 @@ the project follows [Semantic Versioning](https://semver.org/).
   delete returns `handoffs_removed_from`. The agent form has a "When it concludes" section
   (verdict, an agent of the project, cooldown), and the project's Setup tab lists each agent's
   handoffs. A trigger over the findings source still wakes an agent as before; handoffs are the
-  simpler way to chain two agents.
+  simpler way to chain two agents. The AI-guided builder proposes them: for "one agent looks
+  first, another digs in on its verdict" it proposes the second agent left off for its trigger,
+  then the first with a handoff to it. An agent that only runs on a handoff says so on its page.
 - Project keys: a key that belongs to one project. It reads that project and records findings in
   it, and nothing else. `POST /api/projects/{uid}/keys {name}` makes one, as does
   `POST /api/keys {name, project}`; its scopes are `read` and `findings` (a read-only one takes

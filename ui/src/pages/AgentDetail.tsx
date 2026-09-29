@@ -56,6 +56,19 @@ export function ResultChips({ r, limit }: { r: AgentRun; limit?: number }) {
   </>;
 }
 
+/** The agents that hand off to `name` (TR-334). */
+export function handedBy(all: BuiltinAgent[], name: string): string[] {
+  return all.filter((a) => (a.handoffs ?? []).some((h) => h.agent === name)).map((a) => a.name);
+}
+
+/** What wakes an agent: its trigger when it is on, and any agent that hands off to it. */
+export function WakesOn({ agent, from }: { agent: BuiltinAgent; from: string[] }) {
+  const hands = from.length > 0 &&
+    <>a handoff from {from.map((n, i) => <span key={n}>{i ? ", " : ""}<span className="mono">{n}</span></span>)}</>;
+  if (!agent.enabled && hands) return hands;
+  return <><span className="mono">{agent.trigger}</span> firing{hands && <> or {hands}</>}</>;
+}
+
 /** The project skills a run loaded (TR-332), one chip each. */
 export function SkillChips({ r }: { r: AgentRun }) {
   return <>
@@ -247,7 +260,7 @@ export default function AgentDetail() {
       )}
 
       {tab === "runs" && (
-        <RunsPanel name={name} agent={agent}
+        <RunsPanel name={name} agent={agent} from={handedBy(data.agents, name)}
                    focusDispatch={focusDispatch} focusRun={focusRun}
                    openRun={openRun} setOpenRun={setOpenRun} />
       )}
@@ -344,9 +357,10 @@ const RUN_FILTER_LABELS: Record<string, string> = { "": "all runs", ok: "success
  *  The newest page is polled; older pages are fetched once with an offset and kept until the
  *  filter changes. A run that lands while paging shifts the offsets by one, so the two are
  *  merged by id. */
-export function RunsPanel({ name, agent, focusDispatch, focusRun, openRun, setOpenRun }: {
+export function RunsPanel({ name, agent, from = [], focusDispatch, focusRun, openRun, setOpenRun }: {
   name: string;
   agent: BuiltinAgent;
+  from?: string[];                     // agents that hand off to this one
   focusDispatch?: string;
   focusRun?: string;
   openRun: string | undefined;
@@ -374,7 +388,7 @@ export function RunsPanel({ name, agent, focusDispatch, focusRun, openRun, setOp
   };
   const empty = filter === "ok" ? "no successful runs yet"
     : filter === "failed" ? "no failed runs"
-    : <>no runs yet; this agent runs when <span className="mono">{agent.trigger}</span> fires</>;
+    : <>no runs yet; this agent runs on <WakesOn agent={agent} from={from} /></>;
   return (
     <>
       <div className="btnrow" style={{ marginBottom: 8 }}>
