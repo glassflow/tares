@@ -139,16 +139,14 @@ export function AgentView({ ctx, name }: { ctx: Ctx; name: string }) {
                    onSaved={() => { setEditing(false); ctx.refresh(); }}
                    onCancel={() => setEditing(false)} />
       ) : (
-        <Facts rows={[
+        <Facts rows={([
           ["trigger", <>{ctx.triggers.some((t) => t.name === agent.trigger)
               ? <VLink v={{ kind: "trigger", name: agent.trigger }} className="chip mono">{agent.trigger}</VLink>
               : <Link to={`/triggers/${encodeURIComponent(agent.trigger)}`} className="chip mono">{agent.trigger}</Link>}
             {!agent.enabled && <span className="help"> · off; enable the agent to run on it</span>}</>],
-          ["handed off from", into.length
-            ? into.map(({ from: f, h }) => (
+          into.length ? ["handed off from", into.map(({ from: f, h }) => (
                 <div key={`${f}-${h.verdict}`}>{agentLink(f)}<span className="help"> when it concludes </span>
-                  <span className="mono">{h.verdict}</span></div>))
-            : <span className="dim">no agent hands off to it</span>],
+                  <span className="mono">{h.verdict}</span></div>))] : null,
           ["hands off to", agent.handoffs?.length
             ? agent.handoffs.map((h) => (
                 <div key={`${h.verdict}-${h.agent}`}>
@@ -178,7 +176,7 @@ export function AgentView({ ctx, name }: { ctx: Ctx; name: string }) {
                 <button type="button" className="linklike" onClick={() => setPromptOpen(false)}>hide</button></>
             : <button type="button" className="linklike" onClick={() => setPromptOpen(true)}>
                 show ({agent.prompt.split("\n").length} line{agent.prompt.split("\n").length === 1 ? "" : "s"})</button>],
-        ]} />
+        ] as ([string, React.ReactNode] | null)[]).filter((r): r is [string, React.ReactNode] => r !== null)} />
       )}
       <h3 style={{ margin: "20px 0 8px" }}>Runs</h3>
       <RunsPanel name={name} agent={agent} from={from}

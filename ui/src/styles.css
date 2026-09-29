@@ -1463,7 +1463,7 @@ pre.payload {
 }
 .pnav-link:hover { background: var(--hover); color: var(--ink); }
 .pnav-link.active { background: var(--accent-soft); color: var(--accent-deep); font-weight: 600; }
-.pnav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pnav-label { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.3; }
 .pnav-group { display: flex; flex-direction: column; gap: 1px; margin-top: 12px; }
 .pnav-head { display: flex; align-items: center; }
 .pnav-head .pnav-link { flex: 1; }

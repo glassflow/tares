@@ -239,7 +239,7 @@ export default function ProjectShell({ s, id, reload, template }: {
             <span className={`badge ${s.status === "active" ? "ok" : s.status === "paused" ? "paused" : "error"}`}>{s.status}</span>
           </h1>
           <p className="subtitle">
-            {s.template_title}
+            {s.template === "default" ? "holds what no other project does" : s.template_title}
             {s.status === "paused" && (pausedSources.length
               ? ` · ${pausedSources.length === sourceCount ? "sources" : `${pausedSources.length} of ${sourceCount} sources`}, triggers and agents are off`
               : " · triggers and agents are off; sources keep ingesting")}
