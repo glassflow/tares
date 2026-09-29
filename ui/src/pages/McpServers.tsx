@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { api } from "../api";
-import { TimeAgo, usePolling } from "../components/bits";
-import ProjectBadge from "../components/ProjectBadge";
+import { Picker, TimeAgo, usePolling } from "../components/bits";
+import { ProjectLink } from "../components/ProjectBadge";
+import type { Project } from "../types";
 
 // The MCP connections registry: external tool servers a Tares agent can opt into. This page owns
 // the connection (URL + credential, entered once); which agent uses which server is chosen on the
@@ -12,7 +13,7 @@ import ProjectBadge from "../components/ProjectBadge";
 type Server = { name: string; url: string; auth_header: string;
                 auth_value_configured: boolean; auth_credential: string;
                 headers: Record<string, string>; updated_at: string;
-                owned_by?: string | null; customized?: boolean };
+                owned_by?: string | null; customized?: boolean; project?: string };
 type Tool = { name: string; description: string };
 
 const headersToText = (h: Record<string, string> | undefined) =>
@@ -28,10 +29,24 @@ const textToHeaders = (t: string): Record<string, string> => {
   return out;
 };
 
-function ServerForm({ initial, onSaved, onCancel }: {
-  initial?: Server; onSaved: () => void; onCancel: () => void;
+/** Add or edit one server. A server belongs to one project (its agents may use it); `project` fixes
+ *  it (a project's page), otherwise a new server asks, the Default project preselected. */
+export function ServerForm({ initial, project, onSaved, onCancel }: {
+  initial?: Server; project?: string; onSaved: () => void; onCancel: () => void;
 }) {
   const isNew = !initial;
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [proj, setProj] = useState(project ?? initial?.project ?? "");
+  useEffect(() => {
+    if (!isNew || project) return;
+    let live = true;
+    api.projects().then((r) => {
+      if (!live) return;
+      setProjects(r.projects);
+      setProj((cur) => cur || (r.projects.find((p) => p.default) ?? r.projects[0])?.id || "");
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [isNew, project]);
   const [name, setName] = useState(initial?.name ?? "");
   const [url, setUrl] = useState(initial?.url ?? "");
   const [header, setHeader] = useState(initial?.auth_header ?? "");
@@ -54,7 +69,8 @@ function ServerForm({ initial, onSaved, onCancel }: {
     const body = { name: name.trim(), url: url.trim(),
                    auth_header: credential ? "" : header.trim(),
                    auth_value: credential ? `credential:github/${credential}` : value,
-                   headers: textToHeaders(headersText) };
+                   headers: textToHeaders(headersText),
+                   ...(proj ? { project: proj } : {}) };
     try {
       if (isNew) await api.createMcpServer(body);
       else await api.updateMcpServer(initial!.name, body);
@@ -66,6 +82,15 @@ function ServerForm({ initial, onSaved, onCancel }: {
   return (
     <div className="panel">
       {err && <div className="alert error">{err}</div>}
+      {isNew && !project && projects.length > 0 && (
+        <div className="field" style={{ maxWidth: 340 }}>
+          <span className="lbl">project</span>
+          <Picker value={proj} onChange={setProj} ariaLabel="project"
+                  options={projects.map((p) => p.id)}
+                  labels={Object.fromEntries(projects.map((p) => [p.id, p.default ? `${p.name} (default)` : p.name]))} />
+          <span className="help">agents of this project can use it</span>
+        </div>
+      )}
       <div className="row2">
         <label className="field">
           <span className="lbl">name</span>
@@ -187,18 +212,15 @@ export default function McpServers() {
           </div>
         ) : (
           <table>
-            <thead><tr><th>name</th><th>url</th><th>auth</th><th>updated</th><th aria-label="actions" /></tr></thead>
+            <thead><tr><th>name</th><th>project</th><th>url</th><th>auth</th><th>updated</th><th aria-label="actions" /></tr></thead>
             <tbody>
               {servers.map((s) => {
                 const t = tests[s.name];
                 return (
                   <>
                     <tr key={s.name}>
-                      <td className="mono"><strong>{s.name}</strong>
-                        {s.owned_by && <span style={{ marginLeft: 8 }}>
-                          <ProjectBadge ownedBy={s.owned_by} customized={s.customized} compact />
-                        </span>}
-                      </td>
+                      <td className="mono"><strong>{s.name}</strong></td>
+                      <td><ProjectLink id={s.project ?? s.owned_by} /></td>
                       <td className="mono">{s.url}</td>
                       <td>{s.auth_credential
                         ? <span className="badge ok">GitHub credential {s.auth_credential}</span>
@@ -223,7 +245,7 @@ export default function McpServers() {
                     </tr>
                     {open === s.name && t && !t.busy && (
                       <tr key={s.name + "-test"}>
-                        <td colSpan={5} style={{ background: "var(--wash)" }}>
+                        <td colSpan={6} style={{ background: "var(--wash)" }}>
                           {t.ok ? (
                             <div style={{ padding: "6px 4px" }}>
                               <span className="badge ok">connected</span>{" "}

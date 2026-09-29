@@ -5,7 +5,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import type { SlackChannels } from "../api";
 import type { ModelProvider } from "../types";
-import { Combo, Picker } from "./bits";
+import { Picker } from "./bits";
 import type { AgentPreset, BuiltinAgent } from "../types";
 
 /** One delivery option: a collapsed row whose title and description read before it is opened.
@@ -53,7 +53,7 @@ function OptionRow({ title, desc, on, disabled, disabledHint, onToggle, children
 // lands on the entity's timeline; these rows only deliver it elsewhere too. The write-back URL and
 // its bearer token render as one connected control (.hook-group): they are one credential pair,
 // not two settings.
-export default function AgentForm({ initial, prefill, deliveryKind, presetTrigger, triggers,
+export default function AgentForm({ initial, prefill, deliveryKind, presetTrigger, triggers, project,
                                     presets, models, defaultModel, slackWorkspace, onSaved,
                                     onCancel, defaultMaxRounds = 6, defaultMaxRoundsWithMcp = 12,
                                     maxRoundsLimit = 24, providers = [], defaultProvider = null,
@@ -62,7 +62,8 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   prefill?: boolean;                   // initial is a proposal for a NEW agent: create, editable name
   deliveryKind?: "slack" | "webhook" | "none";   // prefill: which delivery row starts open (and on)
   presetTrigger?: string;              // create: trigger preselected (came from a trigger page)
-  triggers: string[];
+  triggers: string[];                  // the project's triggers: an agent wakes on one in its own project
+  project?: string;                    // the project it is made in (create); edit keeps initial.project
   presets: AgentPreset[];
   models: string[];                    // curated choices; [0] is the instance default
   defaultModel: string;
@@ -77,6 +78,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   onCancel: () => void;
 }) {
   const isNew = !initial || !!prefill;
+  const projectId = project ?? initial?.project ?? "";
   const [name, setName] = useState(initial?.name ?? "");
   const [trigger, setTrigger] = useState(initial?.trigger ?? presetTrigger ?? "");
   const [prompt, setPrompt] = useState(initial?.prompt ?? "");
@@ -137,9 +139,12 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   const [mcpAvail, setMcpAvail] = useState<{ name: string; url: string }[]>();
   useEffect(() => {
     let live = true;
-    api.mcpServers().then((r) => { if (live) setMcpAvail(r.servers); }).catch(() => { if (live) setMcpAvail([]); });
+    // only the project's own servers: an agent may use MCP servers of its project
+    api.mcpServers().then((r) => {
+      if (live) setMcpAvail(r.servers.filter((m) => !projectId || !m.project || m.project === projectId));
+    }).catch(() => { if (live) setMcpAvail([]); });
     return () => { live = false; };
-  }, []);
+  }, [projectId]);
   const toggleMcp = (name: string, on: boolean) =>
     setMcpSel((cur) => (on ? [...cur, name] : cur.filter((n) => n !== name)));
 
@@ -151,6 +156,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
     setBusy(true); setErr(undefined);
     const body = {
       name: name.trim(), trigger, prompt: prompt.trim(), model, provider,
+      ...(projectId ? { project: projectId } : {}),
       slack_channel: channelOn ? channel : "",
       slack_webhook: hookOn ? slack.trim() : "",
       slack_webhook_clear: !hookOn,
@@ -181,8 +187,13 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
           </label>
           <div className="field">
             <span className="lbl">trigger</span>
-            <Combo value={trigger} options={triggers}
-                   placeholder="the trigger that wakes this agent" onChange={setTrigger} />
+            {triggers.length ? (
+              <Picker value={trigger} options={trigger && !triggers.includes(trigger) ? ["", ...triggers, trigger] : ["", ...triggers]}
+                      labels={{ "": "pick the trigger that wakes this agent" }}
+                      ariaLabel="trigger" onChange={setTrigger} />
+            ) : (
+              <span className="help">this project has no triggers yet; add one first</span>
+            )}
           </div>
         </div>
       ) : (
@@ -245,7 +256,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
         {mcpAvail === undefined ? <span className="dim">loading…</span>
           : mcpAvail.length === 0 ? (
             <span className="help">
-              none connected yet. Add one under <Link to="/mcp-servers">MCP servers</Link>, then
+              none in this project yet. Add one under <Link to="/mcp-servers">MCP servers</Link>, then
               pick it here.
             </span>
           ) : (

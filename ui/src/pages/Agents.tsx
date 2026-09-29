@@ -3,6 +3,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { AgentsRoster } from "./Activity";
 import { TimeAgo, fmtCost, usePolling } from "../components/bits";
+import NewInProject from "../components/NewInProject";
+import { ProjectLink } from "../components/ProjectBadge";
 import type { AgentRun } from "../types";
 
 // Tares agents: the prompts you author that run in-process when a trigger fires. Subscribers
@@ -31,7 +33,8 @@ export default function Agents() {
             prompts that run inside Tares when a trigger fires and write a finding back
           </p>
         </div>
-        <button className="primary" onClick={() => nav("/agents/new")}>Create Tares agent</button>
+        <NewInProject label="Create Tares agent" what="agent"
+                      to={(p) => `/agents/new?project=${encodeURIComponent(p)}`} />
       </div>
 
       {data && !data.key_configured && (
@@ -45,21 +48,21 @@ export default function Agents() {
         : data.agents.length === 0 ? (
           <div className="panel">
             <p className="help" style={{ whiteSpace: "normal", marginTop: 0 }}>
-              No Tares agents yet. Create one here, or from a trigger's page; it reads the same
+              No Tares agents yet. Create one here, or from a project's page; it reads the same
               correlated timeline your external agents receive and writes what it found back into
               Tares, so the next agent to read that entity already has the conclusion.
             </p>
-            <button className="primary" onClick={() => nav("/agents/new")}>Create Tares agent</button>
           </div>
         ) : (
           <table>
-            <thead><tr><th>agent</th><th>trigger</th><th>status</th><th>last run</th>
+            <thead><tr><th>agent</th><th>project</th><th>trigger</th><th>status</th><th>last run</th>
               <th className="num">runs</th><th className="num">cost</th><th>finding</th></tr></thead>
             <tbody>
               {data.agents.map((a) => (
                 <tr key={a.name} className="clickable"
                     onClick={() => nav(`/agents/${encodeURIComponent(a.name)}`)}>
                   <td><Link to={`/agents/${encodeURIComponent(a.name)}`}><strong>{a.name}</strong></Link></td>
+                  <td onClick={(e) => e.stopPropagation()}><ProjectLink id={a.project ?? a.owned_by} /></td>
                   <td><Link to={`/triggers/${encodeURIComponent(a.trigger)}`} className="mono">{a.trigger}</Link></td>
                   <td>{a.enabled ? <span className="badge ok">enabled</span> : <span className="badge">disabled</span>}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
