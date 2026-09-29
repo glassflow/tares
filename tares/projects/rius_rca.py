@@ -84,6 +84,8 @@ class RiusRca(Template):
                            "help": "bearer token for the callback POST"},
         "budget_usd": {"type": "number", "default": None, "label": "Budget (USD)",
                        "help": "lifetime spend cap for the agent; empty = no cap"},
+        "daily_cap": {"type": "number", "default": None, "label": "Daily run cap",
+                      "help": "runs per rolling 24h for the agent; empty = the instance-wide cap (50)"},
         "max_rounds": {"type": "number", "default": 10, "label": "Max rounds",
                        "help": "model rounds per run; a real MCP investigation uses 3 to 5"},
         "model": {"type": "string", "default": "", "label": "Model",
@@ -103,6 +105,15 @@ class RiusRca(Template):
                 raise ProjectError(f"{self.key}: budget_usd must be positive")
         else:
             p["budget_usd"] = None
+        if p.get("daily_cap") not in (None, ""):
+            try:
+                p["daily_cap"] = int(str(p["daily_cap"]).strip())
+            except ValueError:
+                raise ProjectError(f"{self.key}: daily_cap must be a whole number")
+            if p["daily_cap"] <= 0:
+                raise ProjectError(f"{self.key}: daily_cap must be positive")
+        else:
+            p["daily_cap"] = None
         p["max_rounds"] = int(p.get("max_rounds") or 10)
         return p
 
@@ -146,6 +157,8 @@ class RiusRca(Template):
                  "max_rounds": p["max_rounds"], "enabled": True}
         if p.get("budget_usd") is not None:
             agent["budget_usd"] = p["budget_usd"]
+        if p.get("daily_cap") is not None:
+            agent["daily_cap"] = p["daily_cap"]
         if p.get("model"):
             agent["model"] = p["model"]
         objs.append(PlannedObject("agent", "agent", agent))

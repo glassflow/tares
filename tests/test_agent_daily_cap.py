@@ -1,5 +1,6 @@
 """Runs per agent per day as a console setting (TR-325): the saved value, else
-TARES_AGENT_DAILY_CAP, else 50; read at each run, so a change needs no restart.
+TARES_AGENT_DAILY_CAP, else 50; read at each run, so a change needs no restart. An agent's own
+daily_cap (a project param, RIUS-1101) wins over all three.
 """
 import asyncio
 import os
@@ -43,6 +44,11 @@ class RunStore(Settings):
     def agent_runs_today(self, *a, **k):
         return self.runs_today
 
+    def agent_cost_total(self, *a):
+        # past the run cap the next gate is the budget; spent out, it stops the run before any
+        # model call, so a "budget" refusal proves the run cap let it through
+        return 1e9
+
     def finish_agent_run(self, run_id, status, **kw):
         self.finished = (status, kw.get("error"))
 
@@ -75,6 +81,32 @@ async def enforcement():
                                       None, Obs(), ("k", {}))
     check("at the cap the run is capped", status == "capped" and "3 runs" in (err or ""), f"{status} {err}")
     check("and says where to raise it", "Settings, Agents" in (err or ""), err)
+
+    print("== an agent's own daily_cap (RIUS-1101) ==")
+    os.environ.pop(ba.DAILY_CAP_ENV, None)
+
+    async def run(agent, runs_today, **settings):
+        r.store = RunStore(runs_today=runs_today, **settings)
+        return await r._run_traced({"name": "a", "prompt": "p", "budget_usd": 1, **agent}, "t",
+                                   "k", "", "run_1", None, None, Obs(), ("k", {}))
+
+    status, err = await run({"daily_cap": 3}, 2)
+    check("cap 3: run 3 in 24h goes ahead", status == "capped" and "budget" in (err or ""),
+          f"{status} {err}")
+    status, err = await run({"daily_cap": 3}, 3)
+    check("cap 3: run 4 in 24h is refused", status == "capped" and "3 runs" in (err or ""),
+          f"{status} {err}")
+    check("and points at the project, not Settings", "daily_cap" in (err or "")
+          and "Settings" not in (err or ""), err)
+    status, err = await run({"daily_cap": 3}, 3, agent_daily_cap="200")
+    check("the agent's cap wins over the console setting", "3 runs" in (err or ""), err)
+    status, err = await run({"daily_cap": 100}, 60)
+    check("a cap above 50 lets run 61 through", "budget" in (err or ""), f"{status} {err}")
+    status, err = await run({}, 49)
+    check("no agent cap: run 50 goes ahead", "budget" in (err or ""), f"{status} {err}")
+    status, err = await run({"daily_cap": None}, 50)
+    check("no agent cap: run 51 is refused at the default 50", "50 runs" in (err or ""),
+          f"{status} {err}")
 
 
 async def api():

@@ -1862,6 +1862,7 @@ def make_app() -> FastAPI:
                          "mcp_servers": a.get("mcp_servers") or [],
                          "max_rounds": a.get("max_rounds"),
                          "budget_usd": a.get("budget_usd"),
+                         "daily_cap": a.get("daily_cap"),
                          "effective_max_rounds": effective_max_rounds(a),
                          "enabled": _agent_enabled(a["name"]), "updated_at": a.get("updated_at"),
                          "owned_by": a.get("owned_by"), "customized": bool(a.get("customized")),
@@ -1916,7 +1917,9 @@ def make_app() -> FastAPI:
                                    body.model, body.slack_channel,
                                    body.webhook_url, wtoken, body.mcp_servers, body.max_rounds,
                                    body.budget_usd, webhook_key_label=body.webhook_key_label,
-                                   provider=body.provider.strip())
+                                   provider=body.provider.strip(),
+                                   # the form has no daily cap field; keep what a project set
+                                   daily_cap=existing.get("daily_cap"))
         store.mark_customized("agent", name)
         # if the trigger changed while enabled, re-point the subscription so the agent fires on the
         # new trigger (the subscription, not the definition, is what the dispatcher reads).

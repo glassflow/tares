@@ -76,6 +76,15 @@ def daily_cap(store) -> tuple[int, str]:
         if 1 <= n <= DAILY_CAP_MAX:
             return n, source
     return DAILY_RUN_CAP, "default"
+
+
+def effective_daily_cap(agent: dict, store) -> tuple[int, str]:
+    """(runs per rolling 24h this agent is held to, where it came from): the agent's own cap when
+    set (a project param such as rius_rca's daily_cap), else the instance-wide daily_cap()."""
+    own = agent.get("daily_cap")
+    if own:
+        return int(own), "agent"
+    return daily_cap(store)
 MAX_BOOTSTRAP_KEYS = 50    # a project bootstraps at most this many entities in one go
 
 def _canonical_tool(name: str, tools: list) -> str | None:
@@ -530,10 +539,10 @@ class AgentRunner:
             return "failed", msg
         # Count the runs BEFORE this one (its row is already inserted), so the cap fires at exactly
         # daily-cap runs rather than one over it.
-        cap, _source = daily_cap(self.store)
+        cap, source = effective_daily_cap(agent, self.store)
         if self.store.agent_runs_today(agent["name"], exclude_run_id=run_id) >= cap:
-            msg = (f"cap of {cap} runs in the last 24h reached for this agent; "
-                   f"raise it under Settings, Agents")
+            where = "in its project's daily_cap" if source == "agent" else "under Settings, Agents"
+            msg = f"cap of {cap} runs in the last 24h reached for this agent; raise it {where}"
             self.store.finish_agent_run(run_id, "capped", error=msg)
             obs.set_attribute(_tracing.SKIPPED_REASON, "daily_run_cap")
             return "capped", msg

@@ -263,6 +263,7 @@ _MIGRATIONS = [
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS external_tools JSON",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS max_rounds INTEGER",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS budget_usd DOUBLE",
+    "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS daily_cap INTEGER",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS max_rounds INTEGER",
     # extra, non-secret headers an MCP server wants on every request (toolset selection, read-only
     # mode); the auth header stays its own column because it is the secret
@@ -971,15 +972,16 @@ class Store:
                              max_rounds: int | None = None,
                              budget_usd: float | None = None,
                              webhook_key_label: str | None = None,
-                             provider: str | None = None) -> None:
+                             provider: str | None = None,
+                             daily_cap: int | None = None) -> None:
         ts = now_utc()
         with self._lock:
             self.con.execute(
                 "INSERT INTO catalog_agents "
                 "(name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, max_rounds, budget_usd, "
-                "webhook_key_label, provider, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "webhook_key_label, provider, daily_cap, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (name) DO UPDATE SET trigger = excluded.trigger, "
                 "prompt = excluded.prompt, slack_webhook = excluded.slack_webhook, "
                 "model = excluded.model, slack_channel = excluded.slack_channel, "
@@ -987,12 +989,12 @@ class Store:
                 "mcp_servers = excluded.mcp_servers, max_rounds = excluded.max_rounds, "
                 "budget_usd = excluded.budget_usd, "
                 "webhook_key_label = excluded.webhook_key_label, "
-                "provider = excluded.provider, "
+                "provider = excluded.provider, daily_cap = excluded.daily_cap, "
                 "updated_at = excluded.updated_at",
                 [name, trigger, prompt, slack_webhook or "", model or "",
                  slack_channel or "", webhook_url or "", webhook_token or "",
                  json.dumps(mcp_servers or []), max_rounds, budget_usd,
-                 webhook_key_label or "", provider or "", ts, ts],
+                 webhook_key_label or "", provider or "", daily_cap, ts, ts],
             )
 
     def list_catalog_agents(self) -> list[dict]:
@@ -1000,7 +1002,7 @@ class Store:
             rows = self.con.execute(
                 "SELECT name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, updated_at, max_rounds, budget_usd, owned_by, customized, "
-                "webhook_key_label, provider "
+                "webhook_key_label, provider, daily_cap "
                 "FROM catalog_agents ORDER BY name"
             ).fetchall()
         return [
@@ -1009,7 +1011,7 @@ class Store:
              "webhook_url": r[6] or "", "webhook_token": r[7] or "",
              "mcp_servers": json.loads(r[8]) if r[8] else [], "updated_at": r[9],
              "max_rounds": r[10], "budget_usd": r[11], "owned_by": r[12], "customized": bool(r[13]),
-             "webhook_key_label": r[14] or "", "provider": r[15] or ""}
+             "webhook_key_label": r[14] or "", "provider": r[15] or "", "daily_cap": r[16]}
             for r in rows
         ]
 
