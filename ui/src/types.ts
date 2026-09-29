@@ -242,12 +242,21 @@ export interface BuiltinAgent {
   mcp_servers: string[];       // registry names this agent may use
   max_rounds: number | null;   // model rounds per run; null = the default for its shape
   budget_usd?: number | null;  // lifetime spend cap in USD; null = no budget
+  handoffs?: Handoff[];        // who takes over when a run concludes with a verdict (TR-334)
   effective_max_rounds: number;   // the cap its next run will be held to
   updated_at?: string;
   last_run?: AgentRun | null;
   owned_by?: string | null;
   customized?: boolean;
   stats?: AgentStats;
+}
+
+// When a run concludes a finding with `verdict`, `agent` (in the same project) is started on the
+// concluded entity, handed the finding; at most once per entity per `cooldown`.
+export interface Handoff {
+  verdict: string;
+  agent: string;
+  cooldown: string;            // a duration, e.g. 30m
 }
 
 // Lifetime aggregates over an agent's runs. cost_usd is a floor: runs from before usage tracking

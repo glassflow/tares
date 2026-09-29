@@ -582,6 +582,9 @@ label.field .help, div.field > .help { display: block; font-size: 12px; color: v
 .json-scalar.number { color: var(--ink); }
 .kv-rows { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .kv-row { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(160px, 2fr) auto; gap: 6px; width: 100%; align-items: center; }
+/* an agent's handoff: verdict, the agent that takes over, cooldown, remove */
+.handoff-row { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(160px, 2fr) 80px auto; gap: 6px; width: 100%; align-items: center; }
+@media (max-width: 560px) { .handoff-row { grid-template-columns: 1fr 1fr; } }
 .fld-row.invalid .help { color: var(--err); }
 /* a required field the last Create or Test found empty: red until it is filled */
 .fld-row.missing input, .fld-row.missing textarea, .field.missing input { border-color: var(--err); box-shadow: 0 0 0 2px var(--err-soft); }

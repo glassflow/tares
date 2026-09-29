@@ -6,7 +6,10 @@ import { api } from "../api";
 import type { SlackChannels } from "../api";
 import type { ModelProvider } from "../types";
 import { Picker } from "./bits";
-import type { AgentPreset, BuiltinAgent } from "../types";
+import type { AgentPreset, BuiltinAgent, Handoff } from "../types";
+
+const VERDICT_RE = /^[a-z0-9][a-z0-9_-]*$/;
+const DURATION_RE = /^\d+(\.\d+)?[smhd]$/;
 
 /** One delivery option: a collapsed row whose title and description read before it is opened.
  *  Opening the row shows an explicit on/off toggle; the fields appear only when it is on. */
@@ -102,6 +105,21 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   const [budget, setBudget] = useState<string>(
     initial?.budget_usd ? String(initial.budget_usd) : "");
   const [advancedOpen, setAdvancedOpen] = useState(!!initial?.max_rounds || !!initial?.budget_usd);
+  // When it concludes: verdict -> the project agent that takes over (TR-334)
+  const [handoffs, setHandoffs] = useState<Handoff[]>(initial?.handoffs ?? []);
+  const [peers, setPeers] = useState<string[]>();
+  useEffect(() => {
+    let live = true;
+    api.builtinAgents().then((r) => {
+      if (live) setPeers(r.agents.filter((a) => (!projectId || a.project === projectId)).map((a) => a.name));
+    }).catch(() => { if (live) setPeers([]); });
+    return () => { live = false; };
+  }, [projectId]);
+  const others = (peers ?? []).filter((n) => n !== name.trim());
+  const setHandoff = (i: number, patch: Partial<Handoff>) =>
+    setHandoffs((cur) => cur.map((h, j) => (j === i ? { ...h, ...patch } : h)));
+  const handoffBad = (h: Handoff) => !VERDICT_RE.test(h.verdict.trim().toLowerCase()) || !h.agent
+    || (!!h.cooldown.trim() && !DURATION_RE.test(h.cooldown.trim()));
 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
@@ -166,6 +184,8 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
       mcp_servers: mcpSel,
       max_rounds: maxRounds.trim() ? Number(maxRounds) : null,
       budget_usd: budget.trim() ? Number(budget) : null,
+      handoffs: handoffs.map((h) => ({ verdict: h.verdict.trim().toLowerCase(), agent: h.agent,
+                                      cooldown: h.cooldown.trim() || "30m" })),
     };
     try {
       if (isNew) await api.createBuiltinAgent(body);
@@ -337,6 +357,46 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
       </div>
 
       <div className="field">
+        <h3 style={{ margin: "10px 0 2px", fontSize: 16 }}>When it concludes</h3>
+        <span className="help" style={{ display: "block", margin: "0 0 10px" }}>
+          when a run ends with a finding of this verdict, the agent you pick takes over on the same
+          entity and is handed the finding. It runs whether or not it is on for its own trigger,
+          at most once per entity within the cooldown.
+        </span>
+        {handoffs.length > 0 && (
+          <div className="kv-rows" style={{ marginBottom: 8 }}>
+            {handoffs.map((h, i) => (
+              <div key={i} className="handoff-row">
+                <input type="text" className="mono" value={h.verdict} placeholder="verdict, e.g. investigate"
+                       aria-label="verdict" onChange={(e) => setHandoff(i, { verdict: e.target.value })} />
+                <Picker value={h.agent} ariaLabel="agent that takes over"
+                        options={["", ...others, ...(h.agent && !others.includes(h.agent) ? [h.agent] : [])]}
+                        labels={{ "": others.length ? "pick an agent…" : "no other agent in this project yet" }}
+                        onChange={(v) => setHandoff(i, { agent: v })} />
+                <input type="text" className="mono" value={h.cooldown} placeholder="30m"
+                       aria-label="cooldown" title="at most one handoff per entity within this time"
+                       onChange={(e) => setHandoff(i, { cooldown: e.target.value })} />
+                <button type="button" aria-label="remove this handoff"
+                        onClick={() => setHandoffs((cur) => cur.filter((_, j) => j !== i))}>×</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {handoffs.length < 10 && (
+          <button type="button" disabled={peers !== undefined && others.length === 0}
+                  title={peers !== undefined && others.length === 0 ? "add another agent to this project first" : undefined}
+                  onClick={() => setHandoffs((cur) => [...cur, { verdict: "", agent: others.length === 1 ? others[0] : "", cooldown: "30m" }])}>
+            Add a handoff
+          </button>
+        )}
+        {handoffs.some(handoffBad) && (
+          <span className="help" style={{ display: "block", marginTop: 4 }}>
+            each handoff needs a one-word verdict, an agent, and a cooldown such as 30m or 2h
+          </span>
+        )}
+      </div>
+
+      <div className="field">
         <button type="button" onClick={() => setAdvancedOpen((o) => !o)}
                 style={{ padding: 0, border: 0, background: "none", cursor: "pointer" }}
                 className="help">
@@ -364,6 +424,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
                 disabled={busy || !name.trim() || !trigger.trim() || !prompt.trim()
                           || (writebackOn && !webhookUrl.trim())
                           || (channelOn && !channel)
+                          || handoffs.some(handoffBad)
                           || (!!maxRounds.trim() && (Number(maxRounds) < 1
                               || Number(maxRounds) > maxRoundsLimit
                               || !Number.isInteger(Number(maxRounds))))}>
