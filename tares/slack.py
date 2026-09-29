@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import re
+from urllib.parse import quote
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -66,11 +67,24 @@ def public_base() -> str:
     return os.getenv("TARES_PUBLIC_URL", "").strip().rstrip("/")
 
 
-def deep_link(key: str) -> str:
-    """The `<url|label>` suffix appended to an agent's FINDING — the entity is what a finding is
-    about, so the entity's timeline is where it should land."""
+def entity_url(key: str) -> str:
+    """The entity's timeline in the console, or "" without a public address."""
     base = public_base()
-    return f"\n\n<{base}/explore?key={key}|Open {key} in Tares>" if base else ""
+    return f"{base}/explore?key={quote(key, safe='')}" if base and key else ""
+
+
+def run_url(agent: str, run_id: str | None) -> str:
+    """One run on its agent's page, opened and scrolled to, or "" without a public address."""
+    base = public_base()
+    if not base or not agent:
+        return ""
+    url = f"{base}/agents/{quote(agent, safe='')}?tab=runs"
+    return url + (f"&run={quote(run_id, safe='')}" if run_id else "")
+
+
+def dispatch_url(dispatch_id: str | None) -> str:
+    base = public_base()
+    return f"{base}/dispatches/{dispatch_id}" if base and dispatch_id else ""
 
 
 def dispatch_link(dispatch_id: str | None) -> str:
@@ -129,19 +143,58 @@ def build_message(trigger: str, key: str, payload: str, fired_at: str | None = N
     nothing about the incident, read as though Tares were linking somewhere relevant, and meant
     alerting had the side effect of Slack fetching a customer's URLs.
     """
-    headline = f"*{trigger}* fired for *{key}*"
-    link = dispatch_link(dispatch_id)
-    blocks: list[dict] = [{"type": "section", "text": {"type": "mrkdwn", "text": headline}}]
+    # the trigger is the header, as an alert's name is on a Rius alert
+    fields = [("Entity", key)]
+    if fired_at:
+        fields.append(("Fired", _slack_date(fired_at)))
+    blocks: list[dict] = [_header(trigger), _fields(fields)]
     body = _humanize_ages((payload or "").strip())
     if body:
         blocks.append({"type": "section", "text": {
-            "type": "mrkdwn", "text": "```" + _truncate(body) + "```"}})
-    context = f"Tares · {_slack_date(fired_at)}" if fired_at else "Tares"
-    if link:
-        context += " · " + link
-    blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": context}]})
+            "type": "mrkdwn", "text": "```" + _truncate(body, _MAX_PAYLOAD) + "```"}})
+    actions = _buttons([("View firing in Tares", dispatch_url(dispatch_id), "primary")])
+    if actions:
+        blocks.append(actions)
+    blocks.append(_context("Tares trigger" + (f" · {_slack_date(fired_at)}" if fired_at else "")))
     return {"text": f"{trigger} fired for {key}", "blocks": blocks,
             "unfurl_links": False, "unfurl_media": False}
+
+
+# ── Block Kit pieces shared by every message Tares posts (TR-275) ────────────
+_MAX_PAYLOAD = 1500      # a firing's payload excerpt; the full timeline is one click away
+_MAX_EXCERPT = 600       # a finding's excerpt in the channel; the full note is in the thread
+
+
+def _header(text: str) -> dict:
+    # plain_text only, 150 characters at most, or Slack rejects the whole message
+    return {"type": "header", "text": {"type": "plain_text", "text": _truncate(text, 150),
+                                        "emoji": True}}
+
+
+def _fields(pairs: list[tuple[str, str]]) -> dict:
+    """A two-column grid of label and value, as Rius alerts show; empty values are left out."""
+    return {"type": "section", "fields": [
+        {"type": "mrkdwn", "text": f"*{label}*\n{_truncate(str(value), 1900)}"}
+        for label, value in pairs if value not in (None, "")][:10]}
+
+
+def _buttons(buttons: list[tuple[str, str, str | None]]) -> dict | None:
+    """Link buttons; one without a URL (no public address) is left out, and none at all means no
+    actions block rather than an empty one."""
+    elems = []
+    for i, (text, url, style) in enumerate(buttons):
+        if not url:
+            continue
+        b = {"type": "button", "action_id": f"tares_link_{i}",
+             "text": {"type": "plain_text", "text": text}, "url": url}
+        if style:
+            b["style"] = style
+        elems.append(b)
+    return {"type": "actions", "elements": elems} if elems else None
+
+
+def _context(text: str) -> dict:
+    return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
 
 
 def classify(status: int, data: dict | None) -> tuple[bool, str | None, bool]:
@@ -368,6 +421,35 @@ def _table_to_code(rows: list[str]) -> str:
     return "```\n" + "\n".join(lines) + "\n```"
 
 
+_TABLE_CODE_WIDTH = 60   # a table this narrow stays an aligned code block; wider ones wrap badly
+
+
+def _table_to_lines(rows: list[str]) -> str:
+    """A wide markdown table as one bullet per row: the first cell in bold, then the rest. With two
+    columns that reads as `• *Immediate*: No action needed`; with more, each value is named by its
+    column. Nothing to align, so nothing wraps into a mess at any width (TR-275)."""
+    grid = [_cells(r) for r in rows if not _TBL_SEP.match(r)]
+    if not grid:
+        return ""
+    head, body = (grid[0], grid[1:]) if len(grid) > 1 else ([], grid)
+    lines = []
+    for row in body:
+        first, rest = row[0], row[1:]
+        if len(rest) == 1 or not head:
+            tail = " ".join(c for c in rest if c)
+        else:
+            tail = " · ".join(f"{h}: {c}" if h else c
+                              for h, c in zip(head[1:], rest) if c)
+        lines.append((f"•  *{first}*" + (f": {tail}" if tail else "")) if first else f"•  {tail}")
+    return "\n".join(lines)
+
+
+def _render_table(rows: list[str]) -> str:
+    code = _table_to_code(rows)
+    widest = max((len(line) for line in code.splitlines()[1:-1]), default=0)
+    return code if widest <= _TABLE_CODE_WIDTH else _table_to_lines(rows)
+
+
 def _extract_tables(text: str) -> tuple[str, list[str]]:
     """Replace each markdown table with a placeholder, returning the rendered blocks separately.
 
@@ -380,7 +462,7 @@ def _extract_tables(text: str) -> tuple[str, list[str]]:
         # One row and a separator is a table; a single pipe-ish line is prose and stays prose.
         if len(run) >= 2 and any(_TBL_SEP.match(r) for r in run):
             out.append(f"\x00TBL{len(tables)}\x00")
-            tables.append(_table_to_code(run))
+            tables.append(_render_table(run))
         else:
             out.extend(run)
         run.clear()
@@ -417,34 +499,111 @@ def to_mrkdwn(text: str) -> str:
     return text
 
 
-def build_finding_message(agent_name: str, trigger: str, key: str, finding: str,
-                          link: str = "") -> dict:
-    """Block Kit body for a Tares agent's finding: a headline, the finding rendered as mrkdwn
-    (headers, emphasis, tables converted; split across sections so a long incident note never
-    trips Slack's 3000-char block cap), and a context line. `text` is the notification fallback.
+def build_finding_message(agent_name: str, trigger: str, key: str, finding: str, *,
+                          verdict: str | None = None, model: str | None = None,
+                          run_id: str | None = None, when: str | None = None,
+                          full_note: bool = False) -> dict:
+    """Block Kit body for a Tares agent's finding (TR-275): the entity as the header, a grid of
+    fields, a short excerpt of the note, and buttons into Tares.
 
-    The finding is the model's markdown; sending it raw is why findings showed up as literal
-    `**` and `##` and pipe tables in Slack (TR-141). Same converter `/tares ask` answers use."""
-    headline = f"*{agent_name}* · `{trigger}` fired for *{key}*"
-    blocks: list[dict] = [{"type": "section", "text": {"type": "mrkdwn", "text": headline}}]
-    blocks += _sections(finding)
-    context = "Tares agent finding" + (f" · {link.strip()}" if link.strip() else "")
-    blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": context}]})
-    return {"text": f"{agent_name}: {trigger} fired for {key}", "blocks": blocks,
-            "unfurl_links": False, "unfurl_media": False}
+    The note itself goes in the message's thread (`build_finding_thread`), so a channel of findings
+    stays scannable: a one-paragraph root cause used to arrive as a wall of text and a long incident
+    note filled the screen. `full_note=True` puts the whole note inline instead, for the incoming-
+    webhook path, which cannot post into a thread. `text` is the notification fallback."""
+    # the entity is the header, so the fields say who wrote the note and why
+    fields = [("Agent", agent_name), ("Trigger", f"`{trigger}`"), ("Verdict", verdict),
+              ("Model", model)]
+    if when:
+        fields.append(("When", _slack_date(when)))
+    blocks: list[dict] = [_header(key), _fields(fields)]
+    if full_note:
+        blocks += _sections(finding)
+    else:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn",
+                                                    "text": excerpt(finding) or "_(no note)_"}})
+    actions = _buttons([("View in Tares", run_url(agent_name, run_id), "primary"),
+                        ("Open timeline", entity_url(key), None)])
+    if actions:
+        blocks.append(actions)
+    blocks.append(_context("Tares agent finding" + ("" if full_note else " · full note in the thread")))
+    return {"text": f"{agent_name} on {key}: {excerpt(finding, 200)}",
+            "blocks": blocks, "unfurl_links": False, "unfurl_media": False}
+
+
+def needs_thread(finding: str) -> bool:
+    """Whether the channel message would leave part of the note out: then the full note goes in
+    the thread. A note short enough to be its own excerpt is posted whole."""
+    return excerpt(finding).strip() != to_mrkdwn(finding or "").strip()
+
+
+def build_finding_thread(finding: str) -> list[dict]:
+    """The full note, as the thread reply under a finding."""
+    return _sections(finding)
+
+
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+
+
+def excerpt(text: str, limit: int = _MAX_EXCERPT) -> str:
+    """The part of a note worth reading in the channel, as mrkdwn: the note's own summary paragraph
+    when it has one ("Summary: ..."), else its first paragraph that says something (not a heading,
+    not a rule, not a lead-in ending in a colon), cut at a sentence near `limit` characters."""
+    paras = [p.strip() for p in re.split(r"\n\s*\n", text or "") if p.strip()]
+
+    def plain(p: str) -> str:
+        return re.sub(r"[*_#`>]", "", p).strip()
+
+    def useful(p: str) -> bool:
+        first = p.splitlines()[0]
+        return not (_MD_HEAD.match(first) or _MD_RULE.match(first) or _TBL_ROW.match(first)
+                    or first.startswith("```") or plain(p).endswith(":"))
+
+    pick = next((p for p in paras if plain(p).lower().startswith("summary")), None)
+    pick = pick or next((p for p in paras if useful(p)), paras[0] if paras else "")
+    out = to_mrkdwn(pick).strip()
+    if len(out) <= limit:
+        return out
+    cut, n = "", 0
+    for sentence in _SENTENCE_END.split(out):
+        if n + len(sentence) > limit and cut:
+            break
+        cut += (" " if cut else "") + sentence
+        n += len(sentence) + 1
+    return _truncate(cut, limit)
 
 
 def _sections(text: str) -> list[dict]:
-    """Split a long answer across section blocks — one section caps at 3000 characters, and an
-    over-long block makes Slack reject the whole message (`invalid_blocks`) rather than truncate."""
-    out, buf = [], to_mrkdwn(text).strip()
-    while buf:
-        chunk, buf = buf[:_MAX_SECTION], buf[_MAX_SECTION:]
-        if buf:                       # prefer a line boundary so we don't cut mid-sentence
-            cut = chunk.rfind("\n")
-            if cut > _MAX_SECTION // 2:
-                chunk, buf = chunk[:cut], chunk[cut + 1:] + buf
-        out.append({"type": "section", "text": {"type": "mrkdwn", "text": chunk}})
+    """Split a long note across section blocks: one section caps at 3000 characters, and an
+    over-long block makes Slack reject the whole message (`invalid_blocks`) rather than truncate.
+
+    Splits at line boundaries and never inside a code block: a cut there left each half with an
+    unmatched ``` that Slack showed literally (TR-275). A code block too long for one section is
+    closed at the cut and reopened in the next."""
+    out: list[dict] = []
+    cur: list[str] = []
+    in_fence = False
+
+    def emit(close: bool) -> None:
+        body = "\n".join(cur).strip("\n")
+        if close:
+            body += "\n```"
+        if body.strip() and body.strip() != "```":
+            out.append({"type": "section", "text": {"type": "mrkdwn", "text": body}})
+
+    for line in to_mrkdwn(text).strip().splitlines():
+        # a single line longer than a section is cut hard; rare, and better than a rejection
+        while len(line) > _MAX_SECTION - 10:
+            cur.append(line[:_MAX_SECTION - 10])
+            line = line[_MAX_SECTION - 10:]
+            emit(in_fence)
+            cur = ["```"] if in_fence else []
+        if sum(len(x) + 1 for x in cur) + len(line) + 4 > _MAX_SECTION:
+            emit(in_fence)
+            cur = ["```"] if in_fence else []
+        cur.append(line)
+        if line.count("```") % 2:
+            in_fence = not in_fence
+    emit(False)
     return out or [{"type": "section", "text": {"type": "mrkdwn", "text": "_(no answer)_"}}]
 
 

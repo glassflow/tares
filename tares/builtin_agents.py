@@ -37,7 +37,6 @@ from .config import FINDINGS_SOURCE, API_BASE, agent_url, parse_duration
 from .envelope import now_utc
 from .models import ModelError, Provider, add_usage, empty_usage, tool_call_in_text, tool_message
 from .pricing import price_usage
-from .slack import deep_link as _slack_deep_link
 from .views import resolve_query_full, resolve_read
 
 MODEL = os.getenv("TARES_AGENT_MODEL", "claude-sonnet-4-6")
@@ -188,8 +187,10 @@ PRESETS = {
             "Always end with the conclude tool: outcome finding; verdict rca, or resolved if it "
             "was noise or is already over; key and label exactly as in the triage finding (its "
             "label is shown on the finding's line, for example service=checkout or "
-            "path=/docs/x); summary is a short incident note: 1) what is failing and since when, "
-            "2) the most likely cause with the evidence, 3) the suggested next action."
+            "path=/docs/x); summary is a short incident note that opens with one sentence "
+            "stating your conclusion (it is what a chat notification shows), then: 1) what is "
+            "failing and since when, 2) the most likely cause with the evidence, 3) the "
+            "suggested next action."
         ),
     },
 }
@@ -623,7 +624,8 @@ class AgentRunner:
         obs.set_attribute("tares.verdict", verdict)
         results.extend(await self._record(agent, trigger_name, concluded.get("key") or key,
                                           finding, verdict=verdict,
-                                          label=concluded.get("label")) or [])
+                                          label=concluded.get("label"),
+                                          run_id=run_id, model=model) or [])
         self.store.finish_agent_run(run_id, "ok", rounds=rounds, tool_calls=tool_calls,
                                     finding=finding, external_tools=external_used,
                                     outcome="finding", verdict=verdict)
@@ -907,7 +909,8 @@ class AgentRunner:
         return None
 
     async def _record(self, agent: dict, trigger_name: str, key: str, finding: str,
-                      verdict: str | None = None, label: str | None = None) -> list:
+                      verdict: str | None = None, label: str | None = None,
+                      run_id: str | None = None, model: str | None = None) -> list:
         """Record the finding, then notify. Returns the notifications delivered, as results."""
         if FINDINGS_SOURCE not in self.runtime.catalog.sources:
             # provisioned on the first finding, like the memory source — a fresh install has no
@@ -933,11 +936,13 @@ class AgentRunner:
         # the secondary/legacy path. An agent uses one — channel wins when both are set.
         channel = (agent.get("slack_channel") or "").strip()
         hook = agent.get("slack_webhook")
+        # what the Slack message shows beside the note (TR-275)
+        meta = {"verdict": verdict, "model": model, "run_id": run_id, "when": now_utc().isoformat()}
         if channel:
-            if await self._slack_channel(agent["name"], channel, trigger_name, key, finding):
+            if await self._slack_channel(agent["name"], channel, trigger_name, key, finding, meta):
                 return [{"kind": "slack", "label": f"Slack {channel}"}]
         elif hook:
-            if await self._slack(agent["name"], hook, trigger_name, key, finding):
+            if await self._slack(agent["name"], hook, trigger_name, key, finding, meta):
                 return [{"kind": "slack", "label": "Slack webhook"}]
         return []
 
@@ -977,10 +982,12 @@ class AgentRunner:
         return "failed", f"after {attempts} attempts: {err}"
 
     async def _slack_channel(self, agent_name: str, channel: str, trigger_name: str,
-                             key: str, finding: str) -> bool:
-        """Post the finding through the workspace bot (`chat.postMessage`). Same message shape as
-        the webhook path — the full finding, standing alone — but the credential is the one bot
-        token the instance already holds, and the target is a channel picked from a list.
+                             key: str, finding: str, meta: dict | None = None) -> bool:
+        """Post the finding through the workspace bot (`chat.postMessage`): the entity, a grid of
+        fields, an excerpt and buttons in the channel, and the full note as a reply in that
+        message's thread, so a channel of findings stays scannable (TR-275). A note short enough to
+        be its own excerpt is posted whole, with no thread. The credential is the one bot token the
+        instance holds, and the target is a channel picked from a list.
 
         One attempt, verdict from `slack.classify` (Slack answers HTTP 200 with ok:false), failure
         printed — a notification failing must never lose the finding, which is already stored."""
@@ -989,13 +996,14 @@ class AgentRunner:
         if not token:
             print(f"[agent {agent_name}] slack: no bot token configured, channel post skipped")
             return False
+        threaded = _slack_mod.needs_thread(finding)
         msg = _slack_mod.build_finding_message(agent_name, trigger_name, key, finding,
-                                               _slack_deep_link(key))
+                                               full_note=not threaded, **(meta or {}))
+        headers = {"authorization": f"Bearer {token}"}
         try:
             async with httpx.AsyncClient(timeout=15) as cx:
                 r = await cx.post(f"{_slack_mod.API_BASE}/chat.postMessage",
-                                  json={"channel": channel, **msg},
-                                  headers={"authorization": f"Bearer {token}"})
+                                  json={"channel": channel, **msg}, headers=headers)
                 try:
                     data = r.json()
                 except Exception:
@@ -1003,13 +1011,30 @@ class AgentRunner:
                 ok, error, _retry = _slack_mod.classify(r.status_code, data)
                 if not ok:
                     print(f"[agent {agent_name}] slack: {error}")
-                return ok
+                    return False
+                ts = (data or {}).get("ts")
+                if threaded and ts:
+                    # The full note under the message. Failing here still leaves the finding in
+                    # the channel with its excerpt and buttons, so the post counts as delivered.
+                    r2 = await cx.post(f"{_slack_mod.API_BASE}/chat.postMessage", headers=headers,
+                                       json={"channel": channel, "thread_ts": ts,
+                                             "text": f"Full note from {agent_name} on {key}",
+                                             "blocks": _slack_mod.build_finding_thread(finding),
+                                             "unfurl_links": False, "unfurl_media": False})
+                    try:
+                        d2 = r2.json()
+                    except Exception:
+                        d2 = None
+                    ok2, err2, _ = _slack_mod.classify(r2.status_code, d2)
+                    if not ok2:
+                        print(f"[agent {agent_name}] slack: thread reply: {err2}")
+                return True
         except Exception as e:   # notification failing must never lose the finding
             print(f"[agent {agent_name}] slack: {type(e).__name__}: {e}")
             return False
 
     async def _slack(self, agent_name: str, hook: str, trigger_name: str, key: str,
-                     finding: str) -> bool:
+                     finding: str, meta: dict | None = None) -> bool:
         """Slack carries the FULL finding, not a pointer. A local install has no reachable URL, and
         a link to 127.0.0.1 is worse than no link — so the message must stand alone. The text is the
         stored finding verbatim; a summary here would become a second, divergent record.
@@ -1023,8 +1048,10 @@ class AgentRunner:
         """
         # Incoming webhooks accept blocks too, so the finding renders the same way as on the
         # channel path instead of as raw markdown.
+        # An incoming webhook cannot post into a thread, so the full note stays inline here.
         from .slack import build_finding_message
-        msg = build_finding_message(agent_name, trigger_name, key, finding, _slack_deep_link(key))
+        msg = build_finding_message(agent_name, trigger_name, key, finding, full_note=True,
+                                    **(meta or {}))
         try:
             async with httpx.AsyncClient(timeout=15) as cx:
                 r = await cx.post(hook, json=msg)

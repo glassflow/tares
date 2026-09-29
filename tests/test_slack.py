@@ -398,20 +398,68 @@ async def main():
                          "2026-08-07T11:47:17.162746+00:00", "ab41d2bbfeec4319bf288abe607fa8ab")
     ck("unfurling is off — a host label must not make Slack fetch the customer's site",
        m.get("unfurl_links") is False and m.get("unfurl_media") is False, str(m)[:200])
-    ctx = m["blocks"][-1]["elements"][0]["text"]
-    ck("footer uses Slack's date token, not a raw ISO string",
-       "<!date^" in ctx and "{time}" in ctx, ctx)
-    ck("footer links the DISPATCH, not the entity",
-       "/dispatches/ab41d2bbfeec4319bf288abe607fa8ab" in ctx, ctx)
-    ck("event ages are readable in the Slack copy", "[29m ago]" in m["blocks"][1]["text"]["text"],
-       m["blocks"][1]["text"]["text"])
+    blocks = {b["type"]: b for b in m["blocks"]}
+    ck("a firing reads like a Rius alert: the trigger as header, then fields",
+       blocks["header"]["text"]["text"] == "t1"
+       and any("*Entity*\nsvc-a" == f["text"] for f in m["blocks"][1]["fields"]), str(m["blocks"][:2]))
+    fired = next(f["text"] for f in m["blocks"][1]["fields"] if f["text"].startswith("*Fired*"))
+    ck("when it fired uses Slack's date token, not a raw ISO string",
+       "<!date^" in fired and "{time}" in fired, fired)
+    btn = blocks["actions"]["elements"][0]
+    ck("a button opens the DISPATCH, not the entity",
+       btn["url"].endswith("/dispatches/ab41d2bbfeec4319bf288abe607fa8ab")
+       and btn["text"]["text"] == "View firing in Tares", str(btn))
+    ck("event ages are readable in the Slack copy", "[29m ago]" in m["blocks"][2]["text"]["text"],
+       m["blocks"][2]["text"]["text"])
 
     _os.environ["TARES_PUBLIC_URL"] = ""
-    ck("no link when the instance has no reachable address",
-       "Open in Tares" not in _s.build_message("t1", "k", "p", None, "abc")["blocks"][-1]
-       ["elements"][0]["text"])
+    ck("no button when the instance has no reachable address",
+       not any(b["type"] == "actions" for b in _s.build_message("t1", "k", "p", None, "abc")["blocks"]))
     ck("a firing with no dispatch id still builds",
        "blocks" in _s.build_message("t1", "k", "p"))
+
+    # ── TR-275: an agent's finding, scannable in the channel ─────────────────
+    _os.environ["TARES_PUBLIC_URL"] = "https://cell.example.com"
+    note = ("I have sufficient evidence to diagnose this.\n\n## 1. What is failing\n\n"
+            "ingress-nginx is returning 404s to one scanner.\n\n"
+            "| Priority | Action |\n|---|---|\n"
+            "| Immediate | No service action required; the upstream correctly returns 404 and nothing is exposed. |\n"
+            "| Short-term | Block 35.221.224.65 at the ingress level; it is an active scanner. |\n\n"
+            "**Summary:** A security scanner, not a service fault. Block the IP.")
+    fm = _s.build_finding_message("rca", "escalate", "ingress-nginx", note, verdict="resolved",
+                                  model="claude-sonnet-5", run_id="run_1",
+                                  when="2026-09-28T20:46:00+00:00")
+    kinds = [b["type"] for b in fm["blocks"]]
+    ck("finding: header, fields, excerpt, buttons, context",
+       kinds == ["header", "section", "section", "actions", "context"], str(kinds))
+    ck("the entity is the header", fm["blocks"][0]["text"]["text"] == "ingress-nginx")
+    labels = [f["text"].split("\n")[0] for f in fm["blocks"][1]["fields"]]
+    ck("fields: agent, trigger, verdict, model, when",
+       labels == ["*Agent*", "*Trigger*", "*Verdict*", "*Model*", "*When*"], str(labels))
+    ck("the excerpt is the note's own summary",
+       fm["blocks"][2]["text"]["text"].startswith("*Summary:* A security scanner"),
+       fm["blocks"][2]["text"]["text"])
+    urls = [e["url"] for e in fm["blocks"][3]["elements"]]
+    ck("buttons open the run and the entity's timeline",
+       urls == ["https://cell.example.com/agents/rca?tab=runs&run=run_1",
+                "https://cell.example.com/explore?key=ingress-nginx"], str(urls))
+    ck("a long note goes in the thread", _s.needs_thread(note))
+    ck("a short note is posted whole", not _s.needs_thread("Traffic is normal."))
+    th = "\n".join(b["text"]["text"] for b in _s.build_finding_thread(note))
+    ck("a wide table becomes one line per row, not a code block",
+       "•  *Immediate*: No service action required" in th and "```" not in th, th)
+    _os.environ["TARES_PUBLIC_URL"] = ""
+    bare = _s.build_finding_message("rca", "escalate", "k", "short", full_note=True)
+    ck("no buttons without a public address; the note still renders",
+       "actions" not in [b["type"] for b in bare["blocks"]]
+       and any(b.get("text", {}).get("text") == "short" for b in bare["blocks"]), str(bare["blocks"]))
+    long_code = "intro\n\n```\n" + "\n".join(f"line {i} " + "x" * 60 for i in range(90)) + "\n```\n\nafter"
+    parts = [b["text"]["text"] for b in _s._sections(long_code)]
+    ck("a code block longer than a section is split with every part fenced",
+       len(parts) >= 2 and all(p.count("```") % 2 == 0 for p in parts)
+       and all(len(p) <= 3000 for p in parts), str([p.count("```") for p in parts]))
+    ck("an excerpt is cut at a sentence",
+       _s.excerpt("One. " * 200, 50).endswith("One."), _s.excerpt("One. " * 200, 50))
 
     md = ("You have **3 sources**:\n\n"
           "| # | Name | Status |\n|---|------|--------|\n"
