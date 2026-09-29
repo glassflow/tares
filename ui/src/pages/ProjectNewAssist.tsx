@@ -17,14 +17,14 @@ import type { Detected } from "../components/TemplateParams";
 import TriggerEditor from "../components/TriggerEditor";
 import { useAgentStream } from "../components/useAgentStream";
 import type { StreamEvent, WireMessage } from "../components/useAgentStream";
-import ViewEditor from "../components/ViewEditor";
-import type { AgentPreset, BuiltinAgent, ConnectorSpec, Project, ProjectObjectKind, Source, Template, Trigger, View, ViewFilter } from "../types";
+import type { AgentPreset, BuiltinAgent, ConnectorSpec, Project, ProjectObjectKind, Source, Template, Trigger, TriggerFilter } from "../types";
 
 // The AI-guided project builder (TR-243 to TR-246): describe what you need in your own words,
 // the assistant proposes the pieces one step at a time, and you complete each proposal in the
-// same form you would use on that object's own page. Every Apply creates a real object through
-// its normal API and appends it to an ordinary `custom` project, so the result is a project like
-// any other and abandoning the page mid-way leaves real, editable objects behind by design.
+// same form you would use on that object's own page. The project (an ordinary `custom` one) is
+// created when the build starts, and every Apply creates a real object inside it through its
+// normal API, so the result is a project like any other and abandoning the page mid-way leaves
+// real, editable objects behind by design.
 //
 // The assistant never creates anything: each build turn gets only that step's proposal tool
 // (tares/agent.py, tools_for) and the console fires the create call when the user clicks.
@@ -32,10 +32,11 @@ import type { AgentPreset, BuiltinAgent, ConnectorSpec, Project, ProjectObjectKi
 // `needs` and the form highlights them; an agent proposal picks only the delivery kind.
 
 type StepKey = "sources" | "watch" | "agent";
-// Views and triggers are one step: the user thinks "what should fire" as one question.
+// "watch" is the triggers step: which sources each trigger watches, which events count, and what
+// should fire.
 const STEPS: { key: StepKey; label: string; kinds: ProjectObjectKind[] }[] = [
   { key: "sources", label: "Sources", kinds: ["source"] },
-  { key: "watch", label: "Views and triggers", kinds: ["view", "trigger"] },
+  { key: "watch", label: "Triggers", kinds: ["trigger"] },
   { key: "agent", label: "Agent", kinds: ["agent"] },
 ];
 const NEXT: Record<StepKey, StepKey | "done"> = { sources: "watch", watch: "agent", agent: "done" };
@@ -111,7 +112,7 @@ export default function ProjectNewAssist() {
   // a decided card folds to one line; "show" opens it again, and revealing from the chat too
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
-  // what this build has made so far; the project is created around the first source
+  // what this build has made so far; the project is created when the build starts
   const [project, setProject] = useState<Project>();
   const [objects, setObjects] = useState<{ kind: ProjectObjectKind; name: string }[]>([]);
   const [projectErr, setProjectErr] = useState<string>();
@@ -130,42 +131,38 @@ export default function ProjectNewAssist() {
   const decide = (id: string, status: "applied" | "skipped" | "error", detail?: string) =>
     setDecisions((d) => ({ ...d, [id]: { status, detail } }));
 
-  /** Create the project around the first object, append every later one. Throws with the API
-   *  error so the card shows it; the object itself already exists and stays.
-   *
-   *  Serialized through a promise chain and refs, not state: two cards applied in quick
-   *  succession would both see "no project yet" and try to create it twice, and the second
-   *  append would overwrite the first with a stale object list. */
+  /** The project every object of this build is made in: created once, when the build starts (or
+   *  on the first create, for a build that began from a template pick). Serialized through a ref
+   *  so two quick Applies can never create it twice. */
   const projectRef = useRef<Project>();
-  const objectsRef = useRef<{ kind: ProjectObjectKind; name: string }[]>([]);
-  const ownQueue = useRef<Promise<void>>(Promise.resolve());
-  const own = (kind: ProjectObjectKind, name: string) => {
-    const run = async () => {
-      const next = [...objectsRef.current, { kind, name }];
+  const projectQueue = useRef<Promise<Project>>();
+  const ensureProject = (): Promise<Project> => {
+    if (projectRef.current) return Promise.resolve(projectRef.current);
+    if (!projectQueue.current) {
       setProjectErr(undefined);
-      try {
-        if (!projectRef.current) {
-          const p = await api.createProject({ template: "custom", name: projectName.trim(), objects: next });
-          projectRef.current = p;
-          setProject(p);
-        } else {
-          await api.updateProject(projectRef.current.id, { objects: next });
-        }
-        objectsRef.current = next;
-        setObjects(next);
-      } catch (e) {
-        const msg = String((e as Error).message ?? e);
-        setProjectErr(`${kind} ${name} exists but could not be added to the project: ${msg}`);
-        throw e;
-      }
-    };
-    const p = ownQueue.current.then(run, run);
-    ownQueue.current = p.catch(() => {});
-    return p;
+      projectQueue.current = api.createProject({ template: "custom", name: projectName.trim(), objects: [] })
+        .then((p) => { projectRef.current = p; setProject(p); return p; })
+        .catch((e) => {
+          projectQueue.current = undefined;
+          setProjectErr(`could not create the project: ${String((e as Error).message ?? e)}`);
+          throw e;
+        });
+    }
+    return projectQueue.current;
+  };
+  /** Note an object this build made (it was created inside the project already). */
+  const objectsRef = useRef<{ kind: ProjectObjectKind; name: string }[]>([]);
+  const own = async (kind: ProjectObjectKind, name: string) => {
+    if (objectsRef.current.some((o) => o.kind === kind && o.name === name)) return;
+    objectsRef.current = [...objectsRef.current, { kind, name }];
+    setObjects(objectsRef.current);
   };
 
-  /** A template project is the whole build in one card: record it and finish. */
+  /** A template project is the whole build in one card: record it and finish. A custom project
+   *  this build opened and never used is removed, so it does not linger empty. */
   const finishWith = (p: Project) => {
+    const empty = projectRef.current;
+    if (empty && empty.id !== p.id && objectsRef.current.length === 0) api.deleteProject(empty.id).catch(() => {});
     api.template(p.template).then(setFinishedTemplate).catch(() => {});
     projectRef.current = p;
     setProject(p);
@@ -210,7 +207,7 @@ export default function ProjectNewAssist() {
   /** What this build has already made, for the framing: after a Change the assistant must build
    *  on it, not propose it again. Sources are the ones the user took pains over. */
   const existingLine = () => {
-    const have = (["source", "view", "trigger", "agent"] as ProjectObjectKind[])
+    const have = (["source", "trigger", "agent"] as ProjectObjectKind[])
       .map((k) => [k, created(k)] as const).filter(([, n]) => n.length);
     return have.length
       ? `\n\nAlready created and part of this project, keep and build on them, do not propose them again: `
@@ -219,6 +216,10 @@ export default function ProjectNewAssist() {
   };
 
   const start = async () => {
+    // the project exists before the first proposal: every object is made inside it
+    if (!handoff.template) {
+      try { await ensureProject(); } catch { return; }
+    }
     setStep("sources");
     const framing = handoff.incident
       ? `Project: ${projectName.trim()}.\nThis is an incident I had, pasted as it was written:\n\n${goal.trim()}\n\nPropose the project that would have caught it: the sources that carry the signal it shows, named the way the paste names things. Say in one sentence when it would have fired. Ask me only what the paste does not say.`
@@ -265,8 +266,8 @@ export default function ProjectNewAssist() {
     }
   }, [ready, already]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Sources of this build with no events yet: on the watch step the model has nothing to ground
-  // a view or trigger in, and the page says so instead of leaving the user with a silent step.
+  // Sources of this build with no events yet: on the triggers step the model has nothing to ground
+  // a trigger in, and the page says so instead of leaving the user with a silent step.
   const [quiet, setQuiet] = useState<string[]>([]);
   useEffect(() => {
     if (step !== "watch" || streaming) return;
@@ -292,8 +293,8 @@ export default function ProjectNewAssist() {
     if (next === "done") { setStep("done"); return; }
     setStep(next);
     const framing = next === "watch"
-      ? `Sources connected: ${created("source").join(", ") || "none"}. Now the views and triggers: what to correlate and what should fire, for the goal. Check source_fields on each source first. Ask me what you need to know before proposing thresholds or conditions I have not stated.`
-      : `Views created: ${created("view").join(", ") || "none"}; triggers created: ${created("trigger").join(", ") || "none"}. Now propose the one Tares agent that runs when they fire, and its delivery kind.`;
+      ? `Sources connected: ${created("source").join(", ") || "none"}. Now the triggers: for each, which of these sources it watches, which events count (filters), the entity label it fires per, and what should fire, for the goal. Check source_fields on each source first. Ask me what you need to know before proposing thresholds or conditions I have not stated.`
+      : `Triggers created: ${created("trigger").join(", ") || "none"}. Now propose the one Tares agent that runs when they fire, and its delivery kind.`;
     await turn(next, framing);
   };
 
@@ -387,7 +388,7 @@ export default function ProjectNewAssist() {
             <span className="lbl">project name<span className="req"> *</span></span>
             <input type="text" value={projectName} onChange={(e) => setProjectName(e.target.value)}
                    disabled={!!project} placeholder="e.g. checkout incidents" style={{ maxWidth: 420 }} />
-            {handoff.goal && !project && <span className="help">proposed from what you typed; change it any time before the first object is created</span>}
+            {handoff.goal && !project && <span className="help">proposed from what you typed; change it any time before you start</span>}
           </label>
           <label className="field">
             <span className="lbl">what you need<span className="req"> *</span></span>
@@ -396,8 +397,8 @@ export default function ProjectNewAssist() {
                       style={{ width: "100%", boxSizing: "border-box" }} />
             <span className="help">
               Name the systems you run and where they are. Tares proposes sources from the connectors
-              installed here, then views, triggers and an agent, one step at a time. Everything you
-              create is a real object you can edit on its own page.
+              installed here, then triggers and an agent, one step at a time. Everything you create
+              is a real object in this project, editable on the project's page.
             </span>
           </label>
           {changing && objects.length > 0 && (
@@ -475,14 +476,16 @@ export default function ProjectNewAssist() {
           {s.key === step && !streaming && states[s.key].turns.length > 0 && proposalsInStep === 0 && !asking && (
             <div className="empty">
               {s.key === "sources"
-                ? <>No source was proposed. Say which systems you run and where (a container name, a URL, a repo), or <Link to="/sources/new">add a source by hand</Link> and come back to assemble the project from <Link to="/projects/new/custom">existing objects</Link>.</>
+                ? <>No source was proposed. Say which systems you run and where (a container name, a URL, a repo), or {project
+                    ? <Link to={`/projects/${encodeURIComponent(project.id)}`}>add a source on the project's page</Link>
+                    : <Link to="/sources/new">add a source by hand</Link>}.</>
                 : <>Nothing was proposed for this step. Ask for what you have in mind below, or continue.</>}
             </div>
           )}
           {s.key === step && s.key === "watch" && quiet.length > 0 && !streaming && (
             <div className="alert">
               {quiet.length === 1 ? <>Source <span className="mono">{quiet[0]}</span> has</> : <>Sources <span className="mono">{quiet.join(", ")}</span> have</>}{" "}
-              no events yet. Views and triggers are proposed from real events, so send one first
+              no events yet. Triggers are proposed from real events, so send one first
               (the ingest URL is on the source page), then ask again below.
             </div>
           )}
@@ -520,7 +523,7 @@ export default function ProjectNewAssist() {
           {pending > 0 && <span className="badge paused">{pending} to decide</span>}
         </div>
         {allProposals.length === 0 && (
-          <div className="empty">Each source, view, trigger and agent the assistant proposes appears here for you to complete or skip.</div>
+          <div className="empty">Each source, trigger and agent the assistant proposes appears here for you to complete or skip.</div>
         )}
         {allProposals.map(({ p, stepKey }) => {
           const d = decisions[p.id];
@@ -542,8 +545,8 @@ export default function ProjectNewAssist() {
                 </div>
               )}
               <CardFor proposal={p} decision={d} decide={decide} own={own} active={stepKey === step}
+                       ensureProject={ensureProject} projectId={project?.id}
                        specs={specs ?? {}} existing={existing} refreshSources={refreshSources}
-                       sourceNames={[...new Set([...created("source"), ...existing.map((x) => x.name)])]}
                        createdTriggers={created("trigger")} finishWith={finishWith} />
             </div>
           );
@@ -560,7 +563,7 @@ export default function ProjectNewAssist() {
             <>
               <p>
                 <strong>{project.name}</strong> is set up with{" "}
-                {(["source", "view", "trigger", "agent"] as ProjectObjectKind[])
+                {(["source", "trigger", "agent"] as ProjectObjectKind[])
                   .map((k) => ({ k, n: created(k).length })).filter((x) => x.n > 0)
                   .map((x, i, arr) => <span key={x.k}>{i > 0 ? (i === arr.length - 1 ? " and " : ", ") : ""}{x.n} {x.k}{x.n === 1 ? "" : "s"}</span>)}.
                 The project page shows its objects, firings and agent runs.
@@ -604,8 +607,8 @@ function PageHead() {
       <div>
         <h1>Build with Tares</h1>
         <p className="subtitle">
-          describe what you need; Tares proposes the sources, views, triggers and agent, and you
-          confirm each one in place. If you leave part way, what you created so far stays, real
+          describe what you need; Tares proposes the sources, triggers and agent, and you confirm
+          each one in place. If you leave part way, what you created so far stays, real
           and editable on its own page; the project page is where to pick it up.
         </p>
       </div>
@@ -649,29 +652,31 @@ function TurnText({ turn, decisions, reveal, thinking }: {
 }
 
 /** The card for one proposal: the form or the apply card its kind needs. */
-function CardFor({ proposal: p, decision, decide, own, active, specs, existing, refreshSources, sourceNames,
-                   createdTriggers, finishWith }: CardCommon & {
+function CardFor({ proposal: p, decision, decide, own, active, ensureProject, projectId, specs, existing,
+                   refreshSources, createdTriggers, finishWith }: CardCommon & {
   proposal: Proposal; specs: Record<string, ConnectorSpec>; existing: Source[]; refreshSources: () => void;
-  sourceNames: string[]; createdTriggers: string[]; finishWith: (p: Project) => void;
+  createdTriggers: string[]; finishWith: (p: Project) => void;
 }) {
-  const common = { decision, decide, own, active };
+  const common = { decision, decide, own, active, ensureProject, projectId };
   if (p.kind === "source")
     return <SourceCard proposal={p} specs={specs} existing={existing} refreshSources={refreshSources} {...common} />;
   if (p.kind === "agent")
     return <AgentCard proposal={p} triggers={createdTriggers} {...common} />;
   if (p.kind === "project")
     return <ProjectCard proposal={p} finishWith={finishWith} {...common} />;
-  return <CatalogCard proposal={p} sourceNames={sourceNames} {...common} />;
+  return <CatalogCard proposal={p} {...common} />;
 }
 type CardCommon = {
   decision?: DecisionMap[string]; active: boolean;
   decide: (id: string, status: "applied" | "skipped" | "error", detail?: string) => void;
   own: (kind: ProjectObjectKind, name: string) => Promise<void>;
+  ensureProject: () => Promise<Project>;   // the build's project, created on first need
+  projectId?: string;
 };
 
 /** A proposed source as the connector form, prefilled, the `needs` fields highlighted. Test and
- *  Create are the form's own; on create the project adopts the source. */
-function SourceCard({ proposal: p, specs, existing, refreshSources, decision, decide, own }: CardCommon & {
+ *  Create are the form's own; the source is created inside the build's project. */
+function SourceCard({ proposal: p, specs, existing, refreshSources, decision, decide, own, ensureProject, projectId }: CardCommon & {
   proposal: Extract<Proposal, { kind: "source" }>;
   specs: Record<string, ConnectorSpec>; existing: Source[]; refreshSources: () => void;
 }) {
@@ -685,8 +690,8 @@ function SourceCard({ proposal: p, specs, existing, refreshSources, decision, de
   const [authOn, setAuthOn] = useState(false);
   useEffect(() => { api.health().then((h) => setAuthOn(h.auth_required)).catch(() => {}); }, []);
   const unknown = Object.keys(specs).length > 0 && !specs[p.connector];
-  // the same name, unowned: adopt it instead of creating a second one
-  const twin = existing.find((s) => s.name === p.name && !s.owned_by);
+  // the same name already exists: sources are shared, so add that one to this project instead
+  const twin = existing.find((s) => s.name === p.name && !(projectId && (s.projects ?? []).includes(projectId)));
 
   // prefill from the proposal only while the connector is the proposed one; a switched
   // connector starts from its own defaults. Fields in `needs` stay empty whatever the model sent.
@@ -702,8 +707,11 @@ function SourceCard({ proposal: p, specs, existing, refreshSources, decision, de
   }, [spec, connector]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const adopt = async () => {
-    try { await own("source", p.name); decide(p.id, "applied"); }
-    catch (e) { decide(p.id, "error", String((e as Error).message ?? e)); }
+    try {
+      const pr = await ensureProject();
+      await api.addProjectSource(pr.id, p.name);
+      await own("source", p.name); refreshSources(); decide(p.id, "applied");
+    } catch (e) { decide(p.id, "error", String((e as Error).message ?? e)); }
   };
 
   return (
@@ -724,8 +732,8 @@ function SourceCard({ proposal: p, specs, existing, refreshSources, decision, de
           )}
           {twin && (
             <div className="alert">
-              A source named <span className="mono">{twin.name}</span> already exists and is not part of a project.{" "}
-              <button type="button" onClick={adopt}>Use the existing source</button>
+              A source named <span className="mono">{twin.name}</span> already exists.{" "}
+              <button type="button" onClick={adopt}>Use it in this project</button>
             </div>
           )}
           <div className="field">
@@ -738,7 +746,8 @@ function SourceCard({ proposal: p, specs, existing, refreshSources, decision, de
                         highlight={connector === p.connector ? p.needs : undefined}
                         submitLabel="Create source"
                         onSubmit={async (body) => {
-                          const res = await api.createSource(body);
+                          const pr = await ensureProject();
+                          const res = await api.createSource({ ...body, project: pr.id });
                           refreshSources();
                           let authKey: string | undefined, keyErr: string | undefined;
                           if (spec.mode === "push" && authOn) {
@@ -853,11 +862,10 @@ function ProjectCard({ proposal: p, decision, decide, finishWith }: CardCommon &
   );
 }
 
-/** A proposed view or trigger, or labels for a source: Apply as is, or Edit in the object's own
- *  editor first. Either way the object is created through its API and appended to the project. */
-function CatalogCard({ proposal: p, sourceNames, decision, decide, own }: CardCommon & {
-  proposal: Extract<Proposal, { kind: "labels" | "view" | "trigger" }>;
-  sourceNames: string[];
+/** A proposed trigger, or labels for a source: Apply as is, or Edit in the trigger editor first.
+ *  Either way a trigger is created through its API inside the build's project. */
+function CatalogCard({ proposal: p, decision, decide, own, ensureProject, projectId }: CardCommon & {
+  proposal: Extract<Proposal, { kind: "labels" | "trigger" }>;
 }) {
   const [editing, setEditing] = useState(false);
   const kind = kindOf(p);
@@ -869,7 +877,7 @@ function CatalogCard({ proposal: p, sourceNames, decision, decide, own }: CardCo
     decide(p.id, "applied");
   };
   const apply = async () => {
-    try { await applyProposal(p); }
+    try { await applyProposal(p, p.kind === "trigger" ? (await ensureProject()).id : undefined); }
     catch (e) { decide(p.id, "error", String((e as Error).message ?? e)); return; }
     await settle(p.kind === "labels" ? p.source : p.name);
   };
@@ -884,15 +892,11 @@ function CatalogCard({ proposal: p, sourceNames, decision, decide, own }: CardCo
                      </div>
                    ) : null}>
       <ProposalBody proposal={p} />
-      {open && editing && p.kind === "view" && (
-        <ViewEditor prefill sourceNames={sourceNames}
-                    initial={{ name: p.name, key_field: p.key_field, sources: p.sources,
-                               filters: (p.filters ?? []) as unknown as ViewFilter[] } as View}
-                    onSaved={settle} onCancel={() => setEditing(false)} />
-      )}
       {open && editing && p.kind === "trigger" && (
-        <TriggerEditor prefill presetView={p.view}
-                       initial={{ name: p.name, view: p.view, condition: p.condition,
+        <TriggerEditor prefill project={projectId}
+                       initial={{ name: p.name, sources: p.sources ?? [], key_field: p.key_field ?? "",
+                                  filters: (p.filters ?? []) as unknown as TriggerFilter[],
+                                  condition: p.condition,
                                   emit: { kind: p.emit?.kind ?? p.name, context_window: p.emit?.context_window ?? "15m" },
                                   cooldown: p.cooldown ?? "5m" } as Trigger}
                        onSaved={settle} onCancel={() => setEditing(false)} />
@@ -901,9 +905,9 @@ function CatalogCard({ proposal: p, sourceNames, decision, decide, own }: CardCo
   );
 }
 
-/** The proposed agent as the agent form, prefilled. Create, then enable (which checks a key
- *  resolves), then the project adopts it. */
-function AgentCard({ proposal: p, triggers, decision, decide, own }: CardCommon & {
+/** The proposed agent as the agent form, prefilled, inside the build's project: the trigger
+ *  picker offers only that project's triggers. Create, then enable (which checks a key resolves). */
+function AgentCard({ proposal: p, triggers, decision, decide, own, projectId }: CardCommon & {
   proposal: Extract<Proposal, { kind: "agent" }>; triggers: string[];
 }) {
   const [bundle, setBundle] = useState<{ presets: AgentPreset[]; models: string[]; default_model: string;
@@ -913,8 +917,10 @@ function AgentCard({ proposal: p, triggers, decision, decide, own }: CardCommon 
   const [note, setNote] = useState<string>();
   useEffect(() => {
     api.builtinAgents().then(setBundle).catch(() => {});
-    api.triggers().then((ts) => setAllTriggers(ts.map((t) => t.name))).catch(() => setAllTriggers(triggers));
-  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+    api.triggers()
+      .then((ts) => setAllTriggers(ts.filter((t) => !projectId || t.project === projectId).map((t) => t.name)))
+      .catch(() => setAllTriggers(triggers));
+  }, [projectId]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const open = !decision || decision.status === "error";
   const triggerNames = [...new Set([...(allTriggers ?? []), ...triggers])];
@@ -937,11 +943,11 @@ function AgentCard({ proposal: p, triggers, decision, decide, own }: CardCommon 
         <div className="alert">
           {triggerNames.length > 0
             ? <>The proposed trigger <span className="mono">{p.trigger}</span> does not exist; pick one of yours in the form.</>
-            : <>This project has no trigger yet, and an agent needs one to wake it. Go back to Views and triggers and create one first.</>}
+            : <>This project has no trigger yet, and an agent needs one to wake it. Go back to Triggers and create one first.</>}
         </div>
       )}
       {open && bundle && allTriggers && (
-        <AgentForm prefill deliveryKind={p.delivery.kind} initial={initial}
+        <AgentForm prefill deliveryKind={p.delivery.kind} initial={initial} project={projectId}
                    presetTrigger={known ? p.trigger : undefined}
                    triggers={triggerNames} presets={bundle.presets} models={bundle.models}
                    defaultModel={bundle.default_model} slackWorkspace={bundle.slack_workspace}
