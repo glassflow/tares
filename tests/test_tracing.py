@@ -312,8 +312,7 @@ async def part2():
             "sources:\n  - name: evt\n    connector: webhook\n    poll: 5s\n"
             "    config:\n      labels:\n        - name: service\n          field: service\n"
             "          primary: true\n"
-            "views:\n  - name: svc\n    key_field: service\n    sources: [evt]\n"
-            "triggers:\n  - name: incident\n    view: svc\n    cooldown: 1s\n"
+                "triggers:\n  - name: incident\n    sources: [evt]\n    key_field: service\n    cooldown: 1s\n"
             "    condition:\n      aggregate: count\n      predicate: '>= 2'\n      window: 1m\n")
     for p in (DB, DB + ".wal"):
         if os.path.exists(p):

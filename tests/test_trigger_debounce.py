@@ -1,4 +1,4 @@
-"""Two sources of one view ingesting within the trigger debounce interval must both fire (per key).
+"""Two sources of one trigger ingesting within the trigger debounce interval must both fire (per key).
 Regression for the shared code context cookbook: billing fired, orders (ingested one second later)
 never did, because the debounced evaluation was dropped and the 2m window slid past the commits.
 Run: .venv/bin/python tests/test_trigger_debounce.py
@@ -39,15 +39,12 @@ sources:
     config:
       event_type: commit
       labels: [{name: repo, field: repo, primary: true}]
-views:
-  - name: repos
-    key_field: repo
-    sources: [a_repo, b_repo]
 triggers:
   - name: changes
-    view: repos
+    sources: [a_repo, b_repo]
+    key_field: repo
     condition: {aggregate: count, predicate: "> 0", window: 2m, group_by: [key_value]}
-    emit: {kind: change, attach_view: true, context_window: 15m}
+    emit: {kind: change, context_window: 15m}
     cooldown: 5m
 """
 

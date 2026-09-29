@@ -39,13 +39,13 @@ def names(tools):
 
 print("== toolsets ==")
 ck("ask mode is the read tools plus the catalog cards",
-   names(agent.tools_for()) == READ | {"propose_labels", "propose_view", "propose_trigger"},
+   names(agent.tools_for()) == READ | {"propose_labels", "propose_trigger"},
    str(names(agent.tools_for())))
 ck("ask mode never offers the build-only cards",
    not names(agent.tools_for()) & {"propose_source", "propose_agent"})
 expected = {
     "sources": {"propose_source", "propose_project"},
-    "watch": {"propose_view", "propose_labels", "propose_trigger"},
+    "watch": {"propose_labels", "propose_trigger"},
     "agent": {"propose_agent"},
 }
 for step, cards in expected.items():
@@ -84,7 +84,15 @@ ck("every proposal tool requires reasoning",
 ck("every proposal tool maps to a card kind",
    set(agent._PROPOSAL_KIND) == ALL_PROPOSALS, str(set(agent._PROPOSAL_KIND) ^ ALL_PROPOSALS))
 ck("card kinds are the object kinds the console knows",
-   set(agent._PROPOSAL_KIND.values()) == {"labels", "view", "trigger", "source", "agent", "project"})
+   set(agent._PROPOSAL_KIND.values()) == {"labels", "trigger", "source", "agent", "project"})
+tr = next(t for t in agent.PROPOSAL_TOOLS if t["name"] == "propose_trigger")["input_schema"]
+ck("propose_trigger names sources (and filters, key_field), never a view",
+   "sources" in tr["required"] and "view" not in tr["properties"]
+   and tr["properties"]["sources"]["type"] == "array"
+   and tr["properties"]["filters"]["items"]["properties"]["op"]["enum"][0] == "eq"
+   and "key_field" in tr["properties"], str(tr["required"]))
+ck("the read tools read, they do not query a view",
+   "read" in READ and "query" not in READ and "propose_view" not in ALL_PROPOSALS)
 
 print("== prompts ==")
 base, build = agent.system_prompt(), agent.system_prompt("build")

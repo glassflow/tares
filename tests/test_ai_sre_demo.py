@@ -98,12 +98,15 @@ async def main():
         check("bad url rejected", True)
     plan = r.plan(r.validate({"prometheus_url": "http://prom:9090/"}))
     names = [(o.kind, o.name) for o in plan]
-    check("the six demo objects by their catalog names",
+    check("the five demo objects by their catalog names",
           names == [("source", "demo_metrics"), ("source", "demo_logs"), ("source", "demo_alerts"),
-                    ("view", "service_timeline"), ("trigger", "incident"), ("agent", "incident-first-look")], str(names))
+                    ("trigger", "incident"), ("agent", "incident-first-look")], str(names))
+    check("the trigger reads all three sources, keyed by service",
+          plan[3].spec["sources"] == ["demo_logs", "demo_metrics", "demo_alerts"]
+          and plan[3].spec["key_field"] == "service" and "view" not in plan[3].spec, str(plan[3].spec))
     check("prometheus url applied without trailing slash",
           plan[0].spec["config"]["url"] == "http://prom:9090" and plan[2].spec["config"]["url"] == "http://prom:9090")
-    check("agent prompt has no em dash", "—" not in plan[5].spec["prompt"])
+    check("agent prompt has no em dash", "—" not in plan[4].spec["prompt"])
 
     from tares.daemon import make_app
     app = make_app()
@@ -160,10 +163,13 @@ async def main():
                   rr.status_code == 400 and "could not reach" in rr.text, rr.text[:200])
 
             print("== delete ==")
-            rr = await cx.delete(f"/api/projects/{uid}")
+            rr = await cx.delete(f"/api/projects/{uid}", params={
+                "delete_sources": "demo_metrics,demo_logs,demo_alerts"})
             check("delete -> 200", rr.status_code == 200, rr.text[:200])
             after = {s["name"] for s in (await cx.get("/api/sources")).json()}
             check("demo sources gone", not ({"demo_metrics", "demo_logs", "demo_alerts"} & after), str(after))
+            check("the trigger and agent went with the project",
+                  not any(t["name"] == "incident" for t in (await cx.get("/api/triggers")).json()))
 
     srv.shutdown()
 

@@ -56,7 +56,7 @@ async def main():
                 ck("MCP client connected over HTTP + initialized", True)
 
                 names = {t.name for t in (await session.list_tools()).tools}
-                ck("read tools advertised over remote MCP", {"query", "catalog_list", "list_connectors"} <= names, str(sorted(names)))
+                ck("read tools advertised over remote MCP", {"read", "catalog_list", "list_connectors"} <= names, str(sorted(names)))
                 ck("write tools present (not read-only)", "create_source" in names, str(sorted(names)))
 
                 res = await session.call_tool("list_connectors", {})

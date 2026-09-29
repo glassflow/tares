@@ -38,12 +38,13 @@ async def main():
             "config": {"event_type": "log", "text_template": "{msg}",
                        "labels": [{"name": "service", "field": "service", "primary": True}]}})
         ck("source", r.status_code == 201, r.text)
-        r = await cx.post("/api/views", json={"name": "v", "key_field": "service", "sources": ["evt"]})
-        ck("view", r.status_code == 201, r.text)
         r = await cx.post("/api/triggers", json={
-            "name": "t", "view": "v", "condition": {"aggregate": "count", "predicate": "> 0", "window": "1m"},
+            "name": "t", "sources": ["evt"], "key_field": "service",
+            "condition": {"aggregate": "count", "predicate": "> 0", "window": "1m"},
             "emit": {"kind": "x"}, "cooldown": "1m"})
         ck("trigger", r.status_code == 201, r.text)
+        default = next(p["id"] for p in (await cx.get("/api/projects")).json()["projects"] if p["default"])
+        ck("trigger lands in the default project", r.json().get("project") == default, r.text)
         r = await cx.post("/api/agents/builtin", json={"name": "a", "trigger": "t", "prompt": "look"})
         ck("agent", r.status_code == 201, r.text)
 

@@ -23,7 +23,7 @@ PASS = FAIL = 0
 
 def test_repo_label_migration():
     """A store saved before 1.14 declares the claude_code label `project`; reopening renames it and
-    any view on it to `repo` (stored events keep theirs). The same rewrite runs after a catalog import."""
+    any trigger on it to `repo` (stored events keep theirs). The same rewrite runs after a catalog import."""
     from tares.store import Store
     print("== repo label migration ==")
     path = DB + ".migration"
@@ -34,25 +34,29 @@ def test_repo_label_migration():
         {"name": "session", "field": "session", "primary": True},
         {"name": "project", "field": "project"}]})
     s.upsert_catalog_source("cc_plain", "logs", "claude_code", "10s", {})
-    s.upsert_catalog_view("byrepo", "project", ["claude_code"], [])
-    s.upsert_catalog_view("mixed", "project", ["claude_code", "something_else"],
-                          [{"field": "project", "op": "eq", "value": "shop"}])
-    s.upsert_catalog_view("mine", "session", ["claude_code"],
-                          [{"field": "project", "op": "eq", "value": "shop"}])
-    s.upsert_catalog_view("other", "session", ["something_else"],
-                          [{"field": "project", "op": "eq", "value": "x"}])
+    cond = {"aggregate": "count", "predicate": "> 0", "window": "5m"}
+    s.upsert_catalog_trigger("byrepo", ["claude_code"], cond, {}, "5m", key_field="project")
+    s.upsert_catalog_trigger("mixed", ["claude_code", "something_else"], cond, {}, "5m",
+                             filters=[{"field": "project", "op": "eq", "value": "shop"}],
+                             key_field="project")
+    s.upsert_catalog_trigger("mine", ["claude_code"], cond, {}, "5m",
+                             filters=[{"field": "project", "op": "eq", "value": "shop"}],
+                             key_field="session")
+    s.upsert_catalog_trigger("other", ["something_else"], cond, {}, "5m",
+                             filters=[{"field": "project", "op": "eq", "value": "x"}],
+                             key_field="session")
     s.con.close()
     s = Store(path)
     labels = {l["name"]: l for l in next(x for x in s.list_catalog_sources()
                                          if x["name"] == "claude_code")["config"]["labels"]}
     check("saved claude_code source now declares repo", "repo" in labels and "project" not in labels
           and labels["repo"]["field"] == "repo", json.dumps(labels))
-    views = {v["name"]: v for v in s.list_catalog_views()}
-    check("view filter on the claude_code source renamed", views["mine"]["filters"][0]["field"] == "repo")
-    check("unrelated view untouched", views["other"]["filters"][0]["field"] == "project")
-    check("view keyed by project now keyed by repo", views["byrepo"]["key_field"] == "repo")
-    check("mixed-source view left alone", views["mixed"]["key_field"] == "project"
-          and views["mixed"]["filters"][0]["field"] == "project")
+    trigs = {t["name"]: t for t in s.list_catalog_triggers()}
+    check("trigger filter on the claude_code source renamed", trigs["mine"]["filters"][0]["field"] == "repo")
+    check("unrelated trigger untouched", trigs["other"]["filters"][0]["field"] == "project")
+    check("trigger keyed by project now keyed by repo", trigs["byrepo"]["key_field"] == "repo")
+    check("mixed-source trigger left alone", trigs["mixed"]["key_field"] == "project"
+          and trigs["mixed"]["filters"][0]["field"] == "project")
     # an old catalog file imported later brings the label back; the daemon reruns the rewrite
     s.upsert_catalog_source("claude_code", "logs", "claude_code", "10s", {"push": True, "labels": [
         {"name": "project", "field": "project"}]})
@@ -92,8 +96,8 @@ async def main(app):
 
     from tares.projects import get_template
     from tares.projects.base import ProjectError
-    from tares.projects.challenger_workflow import (AGENT, ENDS_VIEW, PROMPT, SOURCE, TRIGGER,
-                                                    VIEW, parse_proposals)
+    from tares.projects.challenger_workflow import (AGENT, PROMPT, SOURCE, TRIGGER,
+                                                    parse_proposals)
     r = get_template("challenger_workflow")
 
     print("== template ==")
@@ -112,12 +116,13 @@ async def main(app):
         check("bad slack channel rejected", True)
     plan = r.plan(r.validate({"slack_channel": "C0123456789", "model": "claude-sonnet-4-6"}))
     names = [(o.kind, o.name) for o in plan]
-    check("five objects", names == [("source", SOURCE), ("view", VIEW), ("view", ENDS_VIEW),
-                                    ("trigger", TRIGGER), ("agent", AGENT)], str(names))
-    ends = plan[2].spec
-    check("detection view filters on session_end and the challenger flow",
-          {(f["field"], f["value"]) for f in ends["filters"]} == {("event_type", "session_end"), ("flow", "challenger")})
-    agent = plan[4].spec
+    check("three objects", names == [("source", SOURCE), ("trigger", TRIGGER), ("agent", AGENT)],
+          str(names))
+    ends = plan[1].spec
+    check("the trigger reads the source and filters on session_end and the challenger flow",
+          ends["sources"] == [SOURCE] and ends["key_field"] == "session" and "view" not in ends
+          and {(f["field"], f["value"]) for f in ends["filters"]} == {("event_type", "session_end"), ("flow", "challenger")})
+    agent = plan[2].spec
     check("agent on the trigger with slack and model applied",
           agent["trigger"] == TRIGGER and agent["slack_channel"] == "C0123456789"
           and agent["model"] == "claude-sonnet-4-6")
@@ -152,19 +157,20 @@ async def main(app):
                 {"sessionId": "s0", "type": "user", "cwd": "/x", "timestamp": ts(60)}) + "\n",
                 headers={"content-type": "application/x-ndjson"})
             check("an unmarked line creates nothing",
-                  rr.status_code == 202 and (await cx.get("/api/projects")).json()["projects"] == [])
+                  rr.status_code == 202 and [p["template"] for p in (await cx.get("/api/projects")).json()["projects"]] == ["default"])
             rr = await cx.post(f"/ingest/{SOURCE}", content=line("s0", "session_flow", ts(59)) + "\n",
                                headers={"content-type": "application/x-ndjson"})
-            ucs = (await cx.get("/api/projects")).json()["projects"]
+            ucs = [p for p in (await cx.get("/api/projects")).json()["projects"] if not p["default"]]
             check("a flow=challenger line creates the challenger_workflow project",
                   rr.status_code == 202 and len(ucs) == 1 and ucs[0]["template"] == "challenger_workflow", json.dumps(ucs)[:300])
             uid = ucs[0]["id"]
             rr = await cx.post(f"/ingest/{SOURCE}", content=line("s0", "session_flow", ts(58)) + "\n",
                                headers={"content-type": "application/x-ndjson"})
-            check("a second marked line does not create another", len((await cx.get("/api/projects")).json()["projects"]) == 1)
+            check("a second marked line does not create another", len((await cx.get("/api/projects")).json()["projects"]) == 2)
             srcs = {s["name"]: s for s in (await cx.get("/api/sources")).json()}
-            check("one claude_code source, owned by the project",
-                  sum(1 for n in srcs if n == SOURCE) == 1 and srcs[SOURCE]["owned_by"] == uid,
+            check("one claude_code source, taken over by the project from the default one",
+                  sum(1 for n in srcs if n == SOURCE) == 1 and srcs[SOURCE]["owned_by"] == uid
+                  and srcs[SOURCE]["projects"] == [uid],
                   json.dumps(srcs.get(SOURCE))[:200])
             agents = (await cx.get("/api/agents/builtin")).json()["agents"]
             a = next(x for x in agents if x["name"] == AGENT)
@@ -194,11 +200,14 @@ async def main(app):
                 headers={"content-type": "application/x-ndjson"})
             check("unmarked session end ingested", rr.status_code == 202)
 
-            rr = await cx.post("/query", json={"view": ENDS_VIEW, "key": "s1", "window": "24h"})
-            check("detection view shows only the end line of s1",
-                  rr.status_code == 200 and rr.text.count("session_end") >= 1 and "pricing page" not in rr.text, rr.text[:300])
-            rr = await cx.post("/query", json={"view": VIEW, "key": "s1", "window": "24h"})
-            check("session view has the transcript and the challenge",
+            from tares.reads import resolve_trigger
+            trig = next(t for t in app.state.runtime.catalog.triggers if t.name == TRIGGER)
+            handed = resolve_trigger(app.state.store, trig, key="s1", window="24h")
+            check("the trigger hands over only the end line of s1",
+                  handed.count("session_end") >= 1 and "pricing page" not in handed, handed[:300])
+            rr = await cx.post("/read", json={"selector": {"session": "s1"}, "window": "30d",
+                                              "project": uid})
+            check("a read of the project for the session has the transcript and the challenge",
                   "pricing page" in rr.text and "Challenger reviewed commit abc1234" in rr.text, rr.text[:400])
 
             from tares.triggers import eval_triggers
@@ -255,8 +264,11 @@ async def main(app):
             print("== delete ==")
             rr = await cx.delete(f"/api/projects/{uid}")
             check("delete -> 200", rr.status_code == 200, rr.text[:200])
-            names = {v["name"] for v in (await cx.get("/api/views")).json()}
-            check("views gone", not ({VIEW, ENDS_VIEW} & names), str(names))
+            names = {t["name"] for t in (await cx.get("/api/triggers")).json()}
+            check("trigger gone", TRIGGER not in names, str(names))
+            src = next(s for s in (await cx.get("/api/sources")).json() if s["name"] == SOURCE)
+            check("the plugin's source stays, back in the default project",
+                  len(src["projects"]) == 1 and src["projects"][0] != uid, str(src["projects"]))
 
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)
