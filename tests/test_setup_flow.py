@@ -8,7 +8,10 @@ servers from enabled tools only, rollback naming the failing step), the own agen
 Tares agents), the Connect checks (waiting then receiving after a test event, tool test states,
 the own agent joining after a key call), practice runs (flagged, handoffs too, left out of today
 and health), the own agent's practice firing and finding, and auth (admin only, closed to
-project keys).
+project keys). The check route: the plan normalized as apply does it, sentences and the
+summary derived from the plan as edited, problems per item in plain words, a source swapped for
+one already on the cell, a schedule, the average of a field, an MCP server already on the cell, a
+copied skill, and apply taking a plan edited in the console.
 
 Run: .venv/bin/python tests/test_setup_flow.py
 """
@@ -538,6 +541,232 @@ async def main():
         eq("the setup remembers the firing",
            (await cx.get(f"/api/projects/{ouid}/setup")).json()["practice_run"], did)
 
+        print("== check: normalization, derived sentences and the summary ==")
+        draft = copy.deepcopy(GOOD)
+        draft["name"] = "Edited outages"
+        draft["summary"] = "The model's words, which must not survive."
+        draft["wakes"][0]["knobs"][0]["value"] = 8
+        r = await cx.post("/api/setup/check", json={"plan": draft})
+        ck("check answers 200", r.status_code == 200, r.text)
+        chk = r.json()
+        eq("a good plan has no problems", chk["problems"], [])
+        cp = chk["plan"]
+        eq("names come back the way apply makes them (unique against the cell)",
+           (cp["watches"][0]["name"], cp["wakes"][0]["sources"]),
+           ("checkout-errors-3", ["checkout-errors-3"]))
+        eq("the summary follows the plan, not the model's text", cp["summary"],
+           "When checkout-errors-3 gets more than 8 errors in 5 minutes for one service, "
+           "checkout-triage-3 looks first. If it concludes investigate, checkout-rca-3 digs in.")
+        eq("agent sentences are derived", [a["sentence"] for a in cp["agents"]],
+           ["checkout-triage-3 looks first.",
+            "checkout-rca-3 digs in when checkout-triage-3 concludes investigate, at most once "
+            "every 30 minutes."])
+        eq("the cooldown sentence is derived", cp["wakes"][0]["cooldown_sentence"],
+           "Then waits 10 minutes before waking again for the same service.")
+        no_em_dash("a checked plan", chk)
+        r2 = await cx.post("/api/setup/check", json={"plan": cp})
+        eq("checking a checked plan changes nothing", r2.json()["plan"], cp)
+        r = await cx.post("/api/setup/check", json={"plan": "nope"})
+        eq("no plan object: 400", r.status_code, 400)
+
+        print("== check: problems per item ==")
+        bad = copy.deepcopy(GOOD)
+        bad["watches"].append({"key": "w9", "existing": True, "name": "no-such-source",
+                               "sentence": "", "needs": "none"})
+        bad["wakes"][0]["sources"] = []
+        bad["wakes"][0]["filters"] = [{"field": "level", "op": "eq", "value": ""}]
+        bad["agents"][0]["prompt"] = " "
+        bad["agents"][1]["handoffs"] = [{"verdict": "escalate", "agent": "nobody"}]
+        bad["tools"][1]["enabled"] = True
+        bad["skills"][0]["body"] = ""
+        r = await cx.post("/api/setup/check", json={"plan": bad})
+        probs = r.json()["problems"]
+        where = {}
+        for p in probs:
+            where.setdefault(p["where"], []).append(p["message"])
+        ck("an unknown existing source is flagged on its watch",
+           any("no source called no-such-source" in m for m in where.get("watches.w9", [])),
+           probs)
+        ck("a wake-up left with no source is flagged, not dropped",
+           any("no source to watch" in m for m in where.get("wakes.k1", []))
+           and len(r.json()["plan"]["wakes"]) == 1, probs)
+        ck("an \"only when\" line without a value is flagged",
+           any("level" in m and "no value" in m for m in where.get("wakes.k1", [])), probs)
+        ck("empty instructions are flagged on the agent",
+           any("instructions are empty" in m for m in where.get("agents.a1", [])), probs)
+        ck("a handoff to an agent not in the plan is flagged",
+           any("nobody" in m for m in where.get("agents.a2", [])), probs)
+        ck("a tool turned on without an address is flagged on the tool",
+           any("no address" in m for m in where.get("tools.t2", [])), probs)
+        ck("an empty skill is flagged on the skill", "skills.s1" in where, probs)
+        ck("messages are plain: no catalog prefixes",
+           not any(m.startswith(("trigger '", "agent '", "source '", "skill '")) for m in
+                   [p["message"] for p in probs]), probs)
+        r = await cx.post("/api/setup/apply", json={"plan": bad})
+        eq("apply refuses what check flags", r.status_code, 422)
+
+        print("== check: who own, the summary names the agent once ==")
+        own_draft = plan_with(who="own", agents=[],
+                              own_agent={"name": "your own agent", "wake": "webhook",
+                                         "sentence": "whatever"})
+        cp = (await cx.post("/api/setup/check", json={"plan": own_draft})).json()["plan"]
+        ck("\"your own agent\" reads \"your agent is told\"",
+           cp["summary"].endswith(", your agent is told.")
+           and "your agent your" not in cp["summary"], cp["summary"])
+        eq("the own agent's sentence is derived", cp["own_agent"]["sentence"],
+           "Your agent is woken at its webhook with what happened.")
+        own_draft["own_agent"] = {"name": "claude-code", "wake": "poll"}
+        cp = (await cx.post("/api/setup/check", json={"plan": own_draft})).json()["plan"]
+        ck("a named agent: your agent claude-code is told",
+           cp["summary"].endswith(", your agent claude-code is told."), cp["summary"])
+        eq("and polls", cp["own_agent"]["sentence"],
+           "Your agent claude-code checks the project for what happened.")
+
+        print("== check: swap a source for one already on the cell ==")
+        r = await cx.post("/api/sources", json={
+            "name": "payments-events", "connector": "webhook",
+            "config": {"text_template": "{service}: {msg}",
+                       "labels": [{"name": "service", "field": "service", "primary": True},
+                                  {"name": "latency_ms", "field": "latency_ms",
+                                   "type": "number"}]}})
+        ck("an existing source to swap in", r.status_code in (200, 201), r.text)
+        swap = copy.deepcopy(GOOD)
+        swap["name"] = "Swapped outages"
+        swap["watches"][0] = {"key": "w1", "existing": True, "name": "payments-events",
+                              "sentence": "", "needs": "none"}
+        swap["wakes"][0]["sources"] = ["payments-events"]   # the console renames the reference
+        chk = (await cx.post("/api/setup/check", json={"plan": swap})).json()
+        eq("the swapped plan has no problems", chk["problems"], [])
+        w0 = chk["plan"]["watches"][0]
+        eq("the swapped watch is existing, needs nothing, has a derived sentence",
+           (w0["existing"], w0["needs"], w0["connector"], w0["sentence"]),
+           (True, "none", "webhook", "payments-events, a source already on Tares"))
+        ck("the wake-up counts the swapped source",
+           chk["plan"]["wakes"][0]["sentence"].startswith("Payments-events gets more than 5"),
+           chk["plan"]["wakes"][0]["sentence"])
+        stale = copy.deepcopy(swap)
+        stale["wakes"][0]["sources"] = ["Checkout Errors"]
+        probs = (await cx.post("/api/setup/check", json={"plan": stale})).json()["problems"]
+        ck("a wake-up still naming the removed source is flagged",
+           any(p["where"] == "wakes.k1" and "Checkout Errors" in p["message"] for p in probs),
+           probs)
+
+        print("== check: a schedule, and the average of a field ==")
+        sched = copy.deepcopy(swap)
+        sched["wakes"][0].update({"condition": {"every": "60m"}, "key_field": "",
+                                  "knobs": [{"id": "cooldown_minutes", "label": "", "value": 10}]})
+        chk = (await cx.post("/api/setup/check", json={"plan": sched})).json()
+        eq("a schedule has no problems", chk["problems"], [])
+        wk = chk["plan"]["wakes"][0]
+        eq("its knobs: every N minutes, derived from the condition",
+           [(k["id"], k["value"]) for k in wk["knobs"]],
+           [("every_minutes", 60), ("cooldown_minutes", 10)])
+        eq("its sentence is in the knob's unit", wk["sentence"], "Every 60 minutes.")
+        ck("the summary leads with the schedule",
+           chk["plan"]["summary"].startswith("Every 60 minutes, checkout-triage"),
+           chk["plan"]["summary"])
+        avg = copy.deepcopy(swap)
+        avg["wakes"][0].update({
+            "condition": {"aggregate": "avg", "field": "latency_ms", "predicate": "> 500",
+                          "window": "5m"},
+            "filters": [{"field": "level", "op": "eq", "value": "error"}],
+            "knobs": [{"id": "threshold", "label": "", "value": 500},
+                      {"id": "window_minutes", "label": "", "value": 5}]})
+        chk = (await cx.post("/api/setup/check", json={"plan": avg})).json()
+        eq("an average has no problems", chk["problems"], [])
+        eq("its sentence says the average of the field, with the filter",
+           chk["plan"]["wakes"][0]["sentence"],
+           "The average latency_ms of payments-events events matching level = error goes "
+           "above 500 in 5 minutes for one service.")
+        eq("the threshold knob is labelled with the field",
+           chk["plan"]["wakes"][0]["knobs"][0]["label"], "latency_ms")
+        nofield = copy.deepcopy(avg)
+        nofield["wakes"][0]["condition"]["field"] = ""
+        probs = (await cx.post("/api/setup/check", json={"plan": nofield})).json()["problems"]
+        ck("an average without a field is flagged in plain words",
+           any(p["where"] == "wakes.k1" and "Pick the number to take the average of" in
+               p["message"] for p in probs), probs)
+
+        print("== check: an MCP server already on the cell, a copied skill ==")
+        r = await cx.post("/api/mcp-servers", json={"name": "deploys-mcp",
+                                                    "url": "https://deploys.example.com/mcp"})
+        ck("an existing MCP server", r.status_code == 201, r.text)
+        attach = copy.deepcopy(swap)
+        attach["tools"] = [{"key": "t5", "name": "deploys-mcp", "existing": True, "url": "",
+                            "why": "", "can_act": False, "enabled": True}]
+        attach["agents"][0]["mcp_servers"] = ["deploys-mcp"]
+        attach["skills"] = [{"key": "s7", "name": "checkout-error-codes",
+                             "description": "What the checkout error codes mean.",
+                             "body": "# Codes\n\nE42 is a declined card.", "enabled": True}]
+        chk = (await cx.post("/api/setup/check", json={"plan": attach})).json()
+        eq("an attached server and a copied skill: no problems", chk["problems"], [])
+        eq("the attached server keeps its name and address",
+           (chk["plan"]["tools"][0]["name"], chk["plan"]["tools"][0]["url"],
+            chk["plan"]["tools"][0]["existing"]),
+           ("deploys-mcp", "https://deploys.example.com/mcp", True))
+        missing = copy.deepcopy(attach)
+        missing["tools"][0]["name"] = "gone-mcp"
+        missing["agents"][0]["mcp_servers"] = []
+        probs = (await cx.post("/api/setup/check", json={"plan": missing})).json()["problems"]
+        ck("attaching a server that is not on the cell is flagged on the tool",
+           any(p["where"] == "tools.t5" and "gone-mcp" in p["message"] for p in probs), probs)
+
+        print("== apply: a plan edited in the console ==")
+        edited = copy.deepcopy(attach)
+        edited["name"] = "Edited in place"
+        edited["watches"].append({
+            "key": "w2", "existing": False, "name": "deploy-hooks", "connector": "webhook",
+            "config": {"text_template": "{service} deployed",
+                       "labels": [{"name": "service", "field": "service", "primary": True}]},
+            "sentence": "", "needs": "send", "sample": None})
+        edited["wakes"][0].update(avg["wakes"][0])
+        edited["wakes"].append({
+            "key": "k2", "name": "hourly-deploys", "sources": ["deploy-hooks"], "filters": [],
+            "key_field": "", "condition": {"every": "60m"}, "cooldown": "5m", "window": "1h",
+            "sentence": "", "knobs": []})
+        edited["agents"][0].update({"prompt": "Look at the latency first.",
+                                    "handoffs": [{"verdict": "dig", "agent": "checkout-rca",
+                                                  "cooldown": "1h"}]})
+        edited["agents"][1].update({"enabled": True})
+        edited["agents"].append({"key": "a3", "name": "deploy-digest", "trigger": "hourly-deploys",
+                                 "on_trigger": True, "prompt": "Summarize the deploys.",
+                                 "handoffs": [], "mcp_servers": [], "sentence": "",
+                                 "optional": False, "enabled": True})
+        chk = (await cx.post("/api/setup/check", json={"plan": edited})).json()
+        eq("the edited plan checks clean", chk["problems"], [])
+        r = await cx.post("/api/setup/apply", json={"plan": chk["plan"]})
+        ck("apply accepts the checked plan", r.status_code == 201, r.text)
+        euid = r.json()["project"]["id"]
+        trig = {t["name"]: t for t in store.list_catalog_triggers()}
+        t1 = trig[chk["plan"]["wakes"][0]["name"]]
+        eq("the average wake-up is set up on the swapped source",
+           (t1["sources"], t1["condition"]["aggregate"], t1["condition"]["field"],
+            t1["filters"], t1.get("owned_by")),
+           (["payments-events"], "avg", "latency_ms",
+            [{"field": "level", "op": "eq", "value": "error"}], euid))
+        t2 = trig[chk["plan"]["wakes"][1]["name"]]
+        eq("the schedule wake-up is set up", (t2["sources"], t2["condition"].get("every")),
+           (["deploy-hooks"], "60m"))
+        tri = store.get_catalog_agent(chk["plan"]["agents"][0]["name"])
+        eq("the edited agent: its prompt, handoff and the attached server",
+           (tri["prompt"], [(h["verdict"], h["cooldown"]) for h in tri["handoffs"]],
+            tri["mcp_servers"]),
+           ("Look at the latency first.", [("dig", "1h")], ["deploys-mcp"]))
+        dig = store.get_catalog_agent(chk["plan"]["agents"][2]["name"])
+        eq("the added agent is on the schedule", dig["trigger"], t2["name"])
+        eq("the copied skill is the project's", [s["name"] for s in store.list_skills(euid)],
+           ["checkout-error-codes"])
+        eq("the attached server is not created again",
+           [m["name"] for m in store.list_mcp_servers()].count("deploys-mcp"), 1)
+
+        secret_plan = {"watches": [{"connector": "postgres",
+                                    "config": {"dsn": "postgres://u:p@h/db", "table": "t"}}]}
+        eq("the stored plan leaves a typed secret out",
+           S.stored_plan(secret_plan)["watches"][0]["config"], {"dsn": "", "table": "t"})
+        eq("a new polled source without its secret needs a credential",
+           (S.needs_for("postgres", {"table": "t"}), S.needs_for("postgres", {"dsn": "x"}),
+            S.needs_for("webhook", {})), ("credential", "none", "send"))
+
         print("== auth ==")
         r = await anon.post("/api/setup/plan", json={"goal": "x"})
         eq("no credential: 401", r.status_code, 401)
@@ -546,6 +775,7 @@ async def main():
         for method, path, js in (("post", "/api/setup/plan", {"goal": "x"}),
                                  ("post", "/api/setup/adjust", {"plan": {}, "instruction": "x"}),
                                  ("post", "/api/setup/apply", {"plan": {}}),
+                                 ("post", "/api/setup/check", {"plan": {}}),
                                  ("get", f"/api/projects/{uid}/setup", None),
                                  ("put", f"/api/projects/{uid}/setup", {"step": "done"}),
                                  ("post", f"/api/projects/{uid}/setup/test-event",

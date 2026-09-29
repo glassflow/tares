@@ -3044,10 +3044,23 @@ def make_app() -> FastAPI:
         return {"plan": await _setup_generate(setup_flow.adjust_message(plan, instruction),
                                               prev=plan)}
 
+    @app.post("/api/setup/check")
+    async def setup_check(body: dict = Body(...)):
+        """{plan} -> {plan, problems}: the plan normalized exactly as apply would (sentences and
+        the summary derived from it as it is now) and what stops it from applying, per item
+        ({where, message}), in plain words. No model call; apply accepts a plan with no
+        problems."""
+        raw = body.get("plan")
+        if not isinstance(raw, dict):
+            _err(ValueError("plan is required"))
+        plan, problems = setup_flow.check(raw, store, runtime.catalog)
+        return {"plan": plan, "problems": problems}
+
     @app.post("/api/setup/apply", status_code=201)
     async def setup_apply(request: Request, body: dict = Body(...)):
-        """{plan} -> {project, connect}: create the project and everything it needs in one go,
-        then say what only the person can do."""
+        """{plan} -> {project, plan, connect}: create the project and everything it needs in one
+        go, then say what only the person can do. `plan` is the plan as the project keeps it (a
+        secret typed into a new source's settings left out)."""
         raw = body.get("plan")
         if not isinstance(raw, dict):
             _err(ValueError("plan is required"))
@@ -3058,12 +3071,12 @@ def make_app() -> FastAPI:
             uid, key = setup_flow.apply(store, projects, plan, _make_key)
         except setup_flow.SetupError as e:
             _setup_err(e)
-        setup = {"plan": plan, "step": "connect", "practice_run": None}
+        setup = {"plan": setup_flow.stored_plan(plan), "step": "connect", "practice_run": None}
         if key is not None:
             setup["own_key_id"] = key["id"]
         store.set_project_setup(uid, setup)
         base = setup_flow.public_base(str(request.base_url))
-        return {"project": projects.get(uid),
+        return {"project": projects.get(uid), "plan": setup["plan"],
                 "connect": setup_flow.connect_info(store, runtime.catalog, uid, plan, base, key)}
 
     def _setup_or_404(uid: str) -> dict:

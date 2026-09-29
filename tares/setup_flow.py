@@ -336,7 +336,14 @@ def clause(trig, sources: dict, knobs: list) -> str:
     """"checkout-errors gets more than 5 errors in 5 minutes for one service": goal.py's
     phrasing, with the threshold knob's unit for a count."""
     if getattr(trig.condition, "every", None):
-        return G.schedule_words(trig)
+        every = next((k for k in knobs if k.get("id") == "every_minutes"), None)
+        if every is None:
+            return G.schedule_words(trig)
+        # in the knob's own unit, so the number a person tunes is the number in the sentence
+        n = G._num(every["value"])
+        filt = G.filters_words(trig.filters)
+        return (f"every {n} {'minute' if n == '1' else 'minutes'}"
+                + (f", for events{filt}" if filt else ""))
     text = G.condition_clause(trig, sources)
     th = next((k for k in knobs if k.get("id") == "threshold"), None)
     if th and trig.condition.aggregate == "count" and th.get("label"):
@@ -350,19 +357,38 @@ def _lead(trig, sources, knobs) -> str:
     return _cap(c) if getattr(trig.condition, "every", None) else f"When {c}"
 
 
+def own_agent_words(name) -> str:
+    """How a sentence names the person's own agent: "your agent claude-code", or the name alone
+    when it already says agent ("your own agent" reads "your agent", "support-agent" stays)."""
+    raw = " ".join(str(name or "").split())
+    low = " ".join(re.sub(r"[-_]+", " ", raw).split()).lower()
+    if not low or re.fullmatch(r"(?:(?:my|your|our|the)\s+)?(?:own\s+)?agent", low):
+        return "your agent"
+    if re.search(r"\bagent\b", low):
+        return raw
+    return f"your agent {raw}"
+
+
+def own_sentence(own: dict) -> str:
+    who = _cap(own_agent_words(own.get("name")))
+    return (f"{who} is woken at its webhook with what happened." if own.get("wake") != "poll"
+            else f"{who} checks the project for what happened.")
+
+
 def summary(plan: dict, trigs: dict, sources: dict) -> str:
+    """The plan in one or two sentences, from the plan as it is now (never the model's text)."""
     out = []
     agents = [a for a in plan.get("agents") or [] if a.get("enabled", True)] \
         if plan.get("who") == "tares" else []
     by_name = {a["name"]: a for a in agents}
-    own = (plan.get("own_agent") or {}).get("name") or "your agent"
+    own = own_agent_words((plan.get("own_agent") or {}).get("name"))
     for w in plan.get("wakes") or []:
         trig = trigs.get(w["name"])
         if trig is None:
             continue
         lead = _lead(trig, sources, w.get("knobs") or [])
         if plan.get("who") == "own":
-            out.append(f"{lead}, your agent {own} is told.")
+            out.append(f"{lead}, {own} is told.")
             continue
         first = [a for a in agents if a.get("trigger") == w["name"] and a.get("on_trigger", True)]
         if not first:
@@ -385,31 +411,135 @@ def summary(plan: dict, trigs: dict, sources: dict) -> str:
     return " ".join(out) or "Nothing wakes this project yet: it has no trigger."
 
 
+def agent_sentence(a: dict, agents: list, trigs: dict, sources: dict, n_wakes: int) -> str:
+    """What one Tares agent of the plan does, from its settings: looks first (on which wake-up
+    when there are several), digs in on whose verdict, or is turned off."""
+    name = a["name"]
+    if not a.get("enabled", True):
+        return f"{name} is turned off, so it is not set up."
+    if a.get("on_trigger", True):
+        trig = trigs.get(a.get("trigger"))
+        if trig is not None and n_wakes > 1:
+            return f"{name} looks first when {clause(trig, sources, [])}."
+        return f"{name} looks first."
+    by = [(frm, h) for frm in agents if frm.get("enabled", True) and frm is not a
+          for h in frm.get("handoffs") or [] if h.get("agent") == name]
+    if not by:
+        return f"{name} runs only when another agent hands off to it, and none does yet."
+    parts = []
+    for frm, h in by:
+        cd = str(h.get("cooldown") or "30m")
+        try:
+            cd = G.duration_words(parse_duration(cd))
+        except (ValueError, KeyError, IndexError):
+            pass
+        parts.append(f"when {frm['name']} concludes {h.get('verdict')}, at most once every {cd}")
+    return f"{name} digs in {' or '.join(parts)}."
+
+
 # ── normalize: the catalog's validators in a dry run, plus the derived parts ─
-def _needs_default(connector: str) -> str:
-    return "send" if SPECS.get(connector, {}).get("mode") == "push" else "none"
+def needs_for(connector: str, config: dict | None) -> str:
+    """What a new source needs from the person: a push source is sent to; a polled source whose
+    connector takes a secret and has none yet needs a credential."""
+    spec = SPECS.get(connector, {})
+    if spec.get("mode") == "push":
+        return "send"
+    secrets = [f["name"] for f in spec.get("fields") or [] if f.get("secret")]
+    if secrets and not any((config or {}).get(n) for n in secrets):
+        return "credential"
+    return "none"
+
+
+_ERR_PREFIX = re.compile(r"^(?:source|trigger|agent|skill)(?: name)? '[^']*'"
+                         r"(?: (?:poll|every|window|cooldown))?:?\s*", re.I)
+
+
+def _plain(e) -> str:
+    """A catalog validator's message without its "trigger 'x':" prefix, as a sentence."""
+    t = _ERR_PREFIX.sub("", str(e).strip()) or str(e).strip() or type(e).__name__
+    t = _cap(t)
+    return t if t.endswith((".", "?", "!", ")")) else t + "."
+
+
+class _Problems:
+    """Problems per plan item: where ("watches.w1", "wakes.k1", "agents.a1", "tools.t1",
+    "skills.s1", "own_agent", a section name for the section as a whole, or "plan"), a plain
+    message, and the label the model's retry reads it under ("Trigger checkout-spike")."""
+
+    def __init__(self):
+        self.items: list[dict] = []
+
+    def add(self, where: str, message: str, label: str = "") -> None:
+        p = {"where": where, "message": message, "label": label}
+        if p not in self.items:
+            self.items.append(p)
+
+    def texts(self) -> list[str]:
+        return [f"{p['label']}: {p['message']}" if p["label"] else p["message"]
+                for p in self.items]
+
+    def public(self) -> list[dict]:
+        return [{"where": p["where"], "message": p["message"]} for p in self.items]
+
+
+_NUMERIC_OPS = {"gt", "gte", "lt", "lte"}
+
+
+def _filter_problems(filters: list) -> list[str]:
+    out = []
+    for f in filters:
+        field = f["field"]
+        value = f.get("value")
+        words = G._FILTER_WORDS.get(f.get("op"), f.get("op"))
+        if not field:
+            out.append("An \"only when\" line has no field: pick one, or remove the line.")
+        elif not re.fullmatch(r"[A-Za-z0-9_.]+", field):
+            out.append(f"{field} is not a field name Tares can check.")
+        elif f.get("op") not in G._FILTER_WORDS:
+            out.append(f"\"Only when {field}\" needs a comparison, such as = or above.")
+        elif value is None or str(value).strip() == "":
+            out.append(f"\"Only when {field} {words}\" has no value.")
+        elif f.get("op") in _NUMERIC_OPS:
+            try:
+                float(value)
+            except (TypeError, ValueError):
+                out.append(f"\"Only when {field} {words}\" needs a number, not {value!r}.")
+    return out
 
 
 def normalize(raw, store, catalog, prev: dict | None = None) -> tuple[dict, list[str]]:
     """(plan, errors). The plan comes back in canonical shape: names made unique against the
     catalog (references follow a rename), configs normalized, knobs applied, sentences and the
     summary derived. `errors` are plain sentences; empty means the plan applies as it is."""
-    errors: list[str] = []
+    plan, probs = _normalize(raw, store, catalog, prev)
+    return plan, probs.texts()
+
+
+def check(raw, store, catalog) -> tuple[dict, list[dict]]:
+    """(plan, problems) for the console: the plan normalized exactly as apply normalizes it, and
+    what stops it from applying, per item ({where, message}). No model call."""
+    plan, probs = _normalize(raw, store, catalog, None)
+    return plan, probs.public()
+
+
+def _normalize(raw, store, catalog, prev: dict | None) -> tuple[dict, _Problems]:
+    probs = _Problems()
     if not isinstance(raw, dict):
-        return {}, ["The plan is not an object."]
+        probs.add("plan", "The plan is not an object.")
+        return {}, probs
     plan = scrub(copy.deepcopy(raw))
     out: dict = {}
 
     try:
         out["goal"] = G.normalize_goal(plan.get("goal"))
     except ValueError as e:
-        errors.append(str(e)[:1].upper() + str(e)[1:] + ".")
+        probs.add("plan", str(e)[:1].upper() + str(e)[1:] + ".")
         out["goal"] = " ".join(str(plan.get("goal")).split())
     if not out["goal"]:
-        errors.append("The plan has no goal.")
+        probs.add("plan", "The plan has no goal.")
     name = " ".join(str(plan.get("name") or "").split())[:80]
     if not name:
-        errors.append("The plan has no project name.")
+        probs.add("plan", "The plan has no project name.")
     taken_projects = {p["name"] for p in store.list_projects()}
     if name in taken_projects:
         n = 2
@@ -419,7 +549,7 @@ def normalize(raw, store, catalog, prev: dict | None = None) -> tuple[dict, list
     out["name"] = name
     who = plan.get("who") if plan.get("who") in ("tares", "own") else None
     if who is None:
-        errors.append("Say who does the work: tares or own.")
+        probs.add("plan", "Say who does the work: tares or own.")
         who = "tares"
     out["who"] = who
     prev_wakes = {w.get("key"): w for w in (prev or {}).get("wakes") or [] if isinstance(w, dict)}
@@ -428,55 +558,64 @@ def normalize(raw, store, catalog, prev: dict | None = None) -> tuple[dict, list
     catalog_sources = catalog.sources
     src_map: dict[str, str] = {}
     taken = set(catalog_sources)
-    watches, phr_sources = [], dict(catalog_sources)
+    watches, phr_sources, seen_watch = [], dict(catalog_sources), set()
     for i, w in enumerate(x for x in plan.get("watches") or [] if isinstance(x, dict)):
         w = dict(w)
         w["key"] = str(w.get("key") or f"w{i + 1}")
         w["existing"] = bool(w.get("existing"))
         orig = str(w.get("name") or "").strip()
-        where = f"Source {orig or w['key']}"
+        where, label = f"watches.{w['key']}", f"Source {orig or w['key']}"
+        if orig and orig in seen_watch:
+            probs.add(where, f"The plan already has a source called {orig}.", label)
+        seen_watch.add(orig)
         if w["existing"]:
             cfg = catalog_sources.get(orig)
-            if cfg is None:
-                errors.append(f"{where}: there is no source named {orig!r} to reuse; use one "
-                              "list_sources shows, or plan a new one.")
-                w["name"] = orig
+            if not orig:
+                probs.add(where, "Pick the source to use.", label)
+            elif cfg is None:
+                probs.add(where, f"There is no source called {orig} on Tares; use one "
+                                 "list_sources shows, or plan a new one.", label)
             else:
-                w["name"] = orig
                 w["connector"] = cfg.connector
+            w["name"] = orig
             w["config"] = None
-            src_map[orig] = orig
+            w.pop("poll", None)
+            src_map.setdefault(orig, orig)
+            w["needs"] = "none"   # it is already connected
         else:
             nm = _unique(slug(orig) or f"source-{i + 1}", taken)
             taken.add(nm)
-            src_map[orig] = nm
+            src_map.setdefault(orig, nm)
             w["name"] = nm
             conn = str(w.get("connector") or "")
-            if SPECS.get(conn, {}).get("internal"):
-                errors.append(f"{where}: {conn} is filled by Tares itself; pick another "
-                              "connector.")
             spec = {"name": nm, "connector": conn, "config": w.get("config") or {}}
             if w.get("poll"):
                 spec["poll"] = str(w["poll"])
-            try:
-                validate_source_dict(spec)
-                w["config"] = normalize_config(conn, spec["config"])
-                phr_sources[nm] = _source_from_dict({**spec, "config": w["config"]})
-            except CatalogError as e:
-                errors.append(f"{where}: {e}")
-            except Exception as e:  # noqa: BLE001 — a bad value in a config is the plan's error
-                errors.append(f"{where}: {type(e).__name__}: {e}")
-        if w.get("needs") not in ("send", "credential", "none"):
-            w["needs"] = _needs_default(str(w.get("connector") or "")) \
-                if not w["existing"] else "none"
-        mode = SPECS.get(str(w.get("connector") or ""), {}).get("mode")
+            if not conn:
+                probs.add(where, "Pick what kind of source this is.", label)
+            elif SPECS.get(conn, {}).get("internal"):
+                probs.add(where, f"{conn} is filled by Tares itself; pick another connector.",
+                          label)
+            else:
+                try:
+                    validate_source_dict(spec)
+                    w["config"] = normalize_config(conn, spec["config"])
+                    phr_sources[nm] = _source_from_dict({**spec, "config": w["config"]})
+                except CatalogError as e:
+                    probs.add(where, _plain(e), label)
+                except Exception as e:  # noqa: BLE001 — a bad value in a config is the plan's error
+                    probs.add(where, f"{type(e).__name__}: {e}", label)
+            if w.get("needs") not in ("send", "credential", "none"):
+                w["needs"] = needs_for(conn, w.get("config"))
+        spec = SPECS.get(str(w.get("connector") or ""), {})
         sample = w.get("sample")
-        w["sample"] = sample if isinstance(sample, dict) and mode == "push" else None
-        w["sentence"] = " ".join(str(w.get("sentence") or "").split()) or \
-            f"Events from {w['name']}"
+        w["sample"] = sample if isinstance(sample, dict) and spec.get("mode") == "push" else None
+        kind = f"a new {spec['label']} source" if spec.get("label") else "a new source"
+        w["sentence"] = " ".join(str(w.get("sentence") or "").split()) or (
+            f"{w['name']}, a source already on Tares" if w["existing"] else f"{w['name']}, {kind}")
         watches.append(w)
     if not watches:
-        errors.append("The plan watches nothing: add a source.")
+        probs.add("watches", "The plan watches nothing: add a source.")
     out["watches"] = watches
     watch_names = {w["name"] for w in watches}
 
@@ -488,32 +627,44 @@ def normalize(raw, store, catalog, prev: dict | None = None) -> tuple[dict, list
         t = dict(t)
         t["key"] = str(t.get("key") or f"t{i + 1}")
         orig = str(t.get("name") or "").strip()
-        nm = slug(orig) or f"tool-{i + 1}"
+        where = f"tools.{t['key']}"
         t["url"] = str(t.get("url") or "").strip()
         t["enabled"] = bool(t.get("enabled", False))
         t["can_act"] = bool(t.get("can_act", False))
         t["why"] = " ".join(str(t.get("why") or "").split())
-        existing = servers.get(nm)
-        # an MCP server of that name already registered is reused when the plan names no other
-        # address for it
-        if existing is not None and t["url"] in ("", existing["url"]):
-            t["url"] = existing["url"]
+        if t.get("existing"):
+            # attached by name: a server already on the cell, used as it is
+            nm = orig
+            found = servers.get(nm)
+            if found is None:
+                probs.add(where, f"There is no MCP server called {nm or 'that'} on Tares; pick "
+                                 "another.", f"Tool {nm}")
+            else:
+                t["url"] = found["url"]
             t["existing"] = True
         else:
-            nm = _unique(nm, set(servers) | taken_tools)
-            t["existing"] = False
+            nm = slug(orig) or f"tool-{i + 1}"
+            found = servers.get(nm)
+            # an MCP server of that name already registered is reused when the plan names no
+            # other address for it
+            if found is not None and t["url"] in ("", found["url"]):
+                t["url"] = found["url"]
+                t["existing"] = True
+            else:
+                nm = _unique(nm, set(servers) | taken_tools)
+                t["existing"] = False
         taken_tools.add(nm)
-        tool_map[orig] = nm
+        tool_map.setdefault(orig, nm)
         t["name"] = nm
         if t["enabled"] and not t["existing"]:
             if not t["url"]:
-                errors.append(f"Tool {nm} is turned on but has no address; add its URL or turn "
-                              "it off.")
+                probs.add(where, "It is turned on but has no address; add its URL or turn it "
+                                 "off.", f"Tool {nm}")
             else:
                 try:
                     validate_mcp_server_dict({"name": nm, "url": t["url"]})
                 except CatalogError as e:
-                    errors.append(f"Tool {nm}: {e}")
+                    probs.add(where, _plain(e), f"Tool {nm}")
         tools.append(t)
     out["tools"] = tools
 
@@ -529,35 +680,66 @@ def normalize(raw, store, catalog, prev: dict | None = None) -> tuple[dict, list
             _n, sk["description"], sk["body"] = _skills.validate(sk["name"], sk.get("description"),
                                                                  sk.get("body"))
         except _skills.SkillError as e:
-            errors.append(f"Skill {sk['name']}: {e}")
+            probs.add(f"skills.{sk['key']}", _plain(e), f"Skill {sk['name']}")
         skills.append(sk)
     out["skills"] = skills
 
     # wakes
     trig_map: dict[str, str] = {}
     taken = {t.name for t in catalog.triggers}
-    wakes, trig_dicts, trigs = [], {}, {}
+    wakes, trig_dicts, trigs, seen_wake = [], {}, {}, set()
     for i, w in enumerate(x for x in plan.get("wakes") or [] if isinstance(x, dict)):
         w = dict(w)
         w["key"] = str(w.get("key") or f"k{i + 1}")
         orig = str(w.get("name") or "").strip()
         nm = _unique(slug(orig) or f"wake-{i + 1}", taken)
         taken.add(nm)
-        trig_map[orig] = nm
+        trig_map.setdefault(orig, nm)
         w["name"] = nm
-        where = f"Trigger {nm}"
+        where, label = f"wakes.{w['key']}", f"Trigger {nm}"
+        if orig and orig in seen_wake:
+            probs.add(where, f"Another wake-up is already called {orig}.", label)
+        seen_wake.add(orig)
         w["sources"] = [src_map.get(str(s), str(s)) for s in (w.get("sources") or [])]
-        bad = [s for s in w["sources"] if s not in watch_names]
-        if bad:
-            errors.append(f"{where}: {', '.join(bad)} is not a source of this plan.")
-        w["filters"] = [f for f in (w.get("filters") or []) if isinstance(f, dict)]
-        w["key_field"] = str(w.get("key_field") or "")
+        plain: list[str] = []
+        if not w["sources"]:
+            plain.append("It has no source to watch: pick one, or remove this wake-up.")
+        for s in w["sources"]:
+            if s not in watch_names:
+                plain.append(f"{s} is not a source of this plan.")
+        filters = []
+        for f in w.get("filters") or []:
+            if not isinstance(f, dict):
+                continue
+            f = {"field": str(f.get("field") or "").strip(), "op": f.get("op") or "eq",
+                 "value": f.get("value")}
+            if f["op"] in _NUMERIC_OPS and isinstance(f["value"], str):
+                try:
+                    f["value"] = _num(f["value"])
+                except ValueError:
+                    pass
+            filters.append(f)
+        w["filters"] = filters
+        plain += _filter_problems(filters)
+        w["key_field"] = str(w.get("key_field") or "").strip()
         w["cooldown"] = str(w.get("cooldown") or "5m")
         w["window"] = str(w.get("window") or "15m")
         if not isinstance(w.get("condition"), dict):
-            errors.append(f"{where}: it has no condition.")
+            plain.append("It has no condition.")
             w["condition"] = {"aggregate": "count", "predicate": "> 0", "window": "5m"}
-        apply_knobs(w, prev_wakes.get(w["key"]), errors, where)
+        c = w["condition"]
+        if not c.get("every"):
+            agg = c.get("aggregate") or "count"
+            if agg != "count" and not str(c.get("field") or "").strip():
+                plain.append(f"Pick the number to take the {G._AGG_WORDS.get(agg, agg)} of.")
+        knob_errors: list[str] = []
+        apply_knobs(w, prev_wakes.get(w["key"]), knob_errors, label)
+        plain += [e.split(": ", 1)[-1] for e in knob_errors]
+        for msg in plain:
+            probs.add(where, _cap(msg), label)
+        if plain:
+            wakes.append(w)
+            continue
         tdict = {"name": nm, "sources": w["sources"], "condition": w["condition"],
                  "filters": w["filters"], "key_field": w["key_field"], "cooldown": w["cooldown"],
                  "emit": {"context_window": w["window"]}}
@@ -569,79 +751,123 @@ def normalize(raw, store, catalog, prev: dict | None = None) -> tuple[dict, list
             w["sentence"] = _cap(clause(trig, phr_sources, w["knobs"])) + "."
             w["cooldown_sentence"] = G.cooldown_sentence(trig, phr_sources)
         except CatalogError as e:
-            errors.append(f"{where}: {e}")
+            probs.add(where, _plain(e), label)
         except Exception as e:  # noqa: BLE001
-            errors.append(f"{where}: {type(e).__name__}: {e}")
+            probs.add(where, f"{type(e).__name__}: {e}", label)
         wakes.append(w)
     if not wakes:
-        errors.append("Nothing wakes the project: add a trigger.")
+        probs.add("wakes", "Nothing wakes the project: add a wake-up.")
     out["wakes"] = wakes
+    wake_names = [w["name"] for w in wakes]
 
     # agents
     agent_map: dict[str, str] = {}
     taken = {a["name"] for a in store.list_catalog_agents()}
-    agents = []
+    agents, names = [], []
     raw_agents = [x for x in plan.get("agents") or [] if isinstance(x, dict)]
     for i, a in enumerate(raw_agents):
         orig = str(a.get("name") or "").strip()
         nm = _unique(slug(orig) or f"agent-{i + 1}", taken)
         taken.add(nm)
-        agent_map[orig] = nm
+        names.append(nm)
+        agent_map.setdefault(orig, nm)
+    seen_agent = set()
     for i, a in enumerate(raw_agents):
         a = dict(a)
         a["key"] = str(a.get("key") or f"a{i + 1}")
-        a["name"] = agent_map[str(a.get("name") or "").strip()]
+        orig = str(a.get("name") or "").strip()
+        a["name"] = names[i]
+        if who == "tares" and orig and orig in seen_agent:
+            probs.add(f"agents.{a['key']}", f"Another agent is already called {orig}; give "
+                                             "this one its own name.", f"Agent {a['name']}")
+        seen_agent.add(orig)
         a["trigger"] = trig_map.get(str(a.get("trigger") or ""), str(a.get("trigger") or ""))
         a["on_trigger"] = bool(a.get("on_trigger", True))
+        if not a["on_trigger"] and a["trigger"] not in wake_names and wake_names:
+            # a handoff-only agent is never woken by the trigger it sits on: Tares picks one
+            a["trigger"] = wake_names[0]
         a["optional"] = bool(a.get("optional", False))
         a["enabled"] = bool(a.get("enabled", True))
         a["model"] = (str(a["model"]).strip() or None) if a.get("model") else None
+        a["provider"] = (str(a["provider"]).strip() or None) if a.get("provider") else None
         a["prompt"] = str(a.get("prompt") or "").strip()
-        a["mcp_servers"] = [tool_map.get(str(x), str(x)) for x in a.get("mcp_servers") or []]
+        a["mcp_servers"] = list(dict.fromkeys(tool_map.get(str(x), str(x))
+                                              for x in a.get("mcp_servers") or []))
         hs = []
         for h in a.get("handoffs") or []:
             if isinstance(h, dict):
-                hs.append({**h, "agent": agent_map.get(str(h.get("agent") or ""),
-                                                       str(h.get("agent") or ""))})
+                target = str(h.get("agent") or "").strip()
+                hs.append({**h, "agent": agent_map.get(target, target)})
         a["handoffs"] = hs
-        a["sentence"] = " ".join(str(a.get("sentence") or "").split()) or \
-            f"{a['name']} looks at what happened."
         agents.append(a)
     out["agents"] = agents
     if who == "tares":
         if len(agents) > MAX_AGENTS:
-            errors.append(f"At most {MAX_AGENTS} agents; this plan has {len(agents)}.")
+            probs.add("agents", f"At most {MAX_AGENTS} agents; this plan has {len(agents)}.")
         live = [a for a in agents if a["enabled"]]
         if not any(a["on_trigger"] for a in live):
-            errors.append("No agent looks first: turn on an agent that runs when the project "
-                          "wakes.")
+            probs.add("agents", "No agent looks first: turn on an agent that runs when the "
+                                "project wakes.")
         known_servers = set(servers) | {t["name"] for t in tools}
+        all_names = {x["name"] for x in agents}
         for a in live:
-            where = f"Agent {a['name']}"
+            where, label = f"agents.{a['key']}", f"Agent {a['name']}"
+            plain = []
+            if not a["prompt"]:
+                plain.append(f"Say what {a['name']} should do: its instructions are empty.")
+            if a["trigger"] not in wake_names:
+                plain.append("Pick the wake-up that starts it." if not a["trigger"] else
+                             f"It starts on {a['trigger']}, which is not a wake-up of this plan.")
+            for h in a["handoffs"]:
+                if not h["agent"]:
+                    plain.append("A handoff names no agent: pick one, or remove it.")
+                elif h["agent"] not in all_names:
+                    plain.append(f"It hands off to {h['agent']}, which is not an agent of this "
+                                 "plan.")
+            for x in a["mcp_servers"]:
+                if x not in known_servers:
+                    plain.append(f"It uses the tool {x}, which is not in this plan.")
+            for msg in plain:
+                probs.add(where, msg, label)
+            if plain or a["trigger"] not in trig_dicts:
+                continue
             try:
                 a["handoffs"] = normalize_handoffs(a["name"], a["handoffs"])
-                check_handoff_targets(a["name"], a["handoffs"],
-                                      {n: None for n in {x["name"] for x in agents}})
-                validate_agent_dict({**a, "model": a["model"] or ""}, set(trig_dicts),
+                check_handoff_targets(a["name"], a["handoffs"], {n: None for n in all_names})
+                validate_agent_dict({**a, "model": a["model"] or "",
+                                     "provider": a["provider"] or ""}, set(trig_dicts),
                                     trig_dicts, known_servers)
             except CatalogError as e:
-                errors.append(f"{where}: {e}")
+                probs.add(where, _plain(e), label)
+        for a in agents:
+            a["sentence"] = agent_sentence(a, agents, trigs, phr_sources, len(wakes))
 
     own = plan.get("own_agent")
     if who == "own":
         own = dict(own) if isinstance(own, dict) else {}
         own["name"] = " ".join(str(own.get("name") or "").split())[:64] or "my-agent"
         own["wake"] = own.get("wake") if own.get("wake") in ("webhook", "poll") else "webhook"
-        own["sentence"] = " ".join(str(own.get("sentence") or "").split()) or (
-            "Your agent is woken at its webhook with what happened" if own["wake"] == "webhook"
-            else "Your agent checks the project for what happened")
+        own["sentence"] = own_sentence(own)
         if store.get_catalog_agent(own["name"]) is not None:
-            errors.append(f"Your agent's name {own['name']!r} is taken by a Tares agent; pick "
-                          "another.")
+            probs.add("own_agent", f"The name {own['name']} is taken by a Tares agent; pick "
+                                   "another.", "Your agent")
     out["own_agent"] = own if who == "own" else (own if isinstance(own, dict) else None)
     out["notes"] = [" ".join(str(n).split()) for n in plan.get("notes") or [] if str(n).strip()]
     out["summary"] = summary(out, trigs, phr_sources)
-    return out, errors
+    return out, probs
+
+
+def stored_plan(plan: dict) -> dict:
+    """The plan as the project keeps it: a secret typed into a new source's settings is left
+    out, since the console reads the setup back."""
+    p = copy.deepcopy(plan)
+    for w in p.get("watches") or []:
+        cfg = w.get("config")
+        if isinstance(cfg, dict):
+            for n in secret_field_names(w.get("connector") or ""):
+                if cfg.get(n):
+                    cfg[n] = ""
+    return p
 
 
 # ── the model ────────────────────────────────────────────────────────────────
@@ -839,6 +1065,8 @@ def apply(store, engine, plan: dict, make_key) -> tuple[str, dict | None]:
                         "enabled": bool(a["on_trigger"])}
                 if a.get("model"):
                     spec["model"] = a["model"]
+                if a.get("provider"):
+                    spec["provider"] = a["provider"]
                 objs.append(PlannedObject("agent", f"agent:{a['name']}", spec))
                 objects.append({"kind": "agent", "name": a["name"]})
             made += objs
