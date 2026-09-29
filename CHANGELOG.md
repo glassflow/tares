@@ -129,6 +129,37 @@ the project follows [Semantic Versioning](https://semver.org/).
   received anything, no agent that can run, no model provider, an agent at its daily cap or
   budget.
 - A project key may read its project's results, outline and health.
+- Guided project setup. `POST /api/setup/plan {goal, who?, existing_sources?}` answers a whole
+  plan in plain words, written by the cell's model provider through a forced `propose_plan` tool
+  (it may read the connectors, sources, source fields and templates first): what the project
+  watches (new sources, or existing ones reused), when it wakes, who does the work (Tares agents,
+  or the person's own agent joining with a project key), outside tools (MCP servers, off until
+  turned on) and know-how (skills). The plan is checked with the catalog's own validators; a
+  wrong plan gets one retry with the errors, then a 422 with a plain message. No model provider:
+  409. `POST /api/setup/adjust {plan, instruction}` revises it. The numbers a person tunes are
+  knobs (threshold, window, cooldown): the condition, cooldown, sentences and summary are derived
+  from them without the model, so an edited plan applies exactly.
+- `POST /api/setup/apply {plan}` creates the project with its goal and name, then its sources,
+  MCP servers (enabled tools only), skills, triggers and agents (a handoff-only agent left off for
+  its trigger), all owned by the project; a failing step undoes everything and says which step.
+  For the person's own agent it makes a project key (read and findings) instead of agents. The
+  answer says what only the person can do: each source's ingest URL and example event, tools that
+  need a token, and the agent's key (shown once), MCP URL and Claude Code command.
+  `TARES_PUBLIC_URL` sets the address these URLs use (default: the request's), `TARES_MCP_URL`
+  the MCP address (default: that address plus `/mcp`).
+- `GET /api/projects/{uid}/setup` answers the setup step, the plan and live checks: each source
+  waiting, receiving (with the fields seen) or in error, each tool untested, ok or in error (from
+  its last test), and whether the own agent has used its key and subscribed. `PUT` with `{step}`
+  moves the step (connect, try, done). A project lists `setup: {step, practice_run}` when it was
+  set up this way. `POST .../setup/test-event {source}` stores the plan's example event in a push
+  source, labelled `practice=true`, without waking any trigger. All setup routes need admin; a
+  project key cannot reach them.
+- Practice runs. `POST /api/projects/{uid}/setup/practice` runs the first agent that looks once
+  on the example event's entity (woken by `practice`), or, for the person's own agent, sends a
+  practice firing (`practice: true` in the body) to the project's subscriptions; the next finding
+  its key records within 10 minutes is practice. Runs (and firings) carry `practice`; a practice
+  run's handoffs are practice too. Results show them with `practice: true`; today's totals and the
+  daily cap check in health leave them out.
 
 ### Changed
 - The store writes its startup migrations into the database file before serving (a checkpoint).
@@ -186,6 +217,8 @@ the project follows [Semantic Versioning](https://semver.org/).
 - The first start gives each project made from a template its template's goal. Custom projects
   and the default project start without one. This runs once, so a goal cleared later stays
   cleared.
+- New columns, added at start: `usecases.setup`, `agent_runs.practice`, `dispatch_log.practice`.
+  Every earlier run and firing reads as not practice.
 - A catalog exported while views existed still imports: each trigger that names a view gets that
   view's sources, filters and key field, a custom project's view entries are dropped, and objects
   without a project go to the default project.

@@ -297,7 +297,7 @@ async def main():
         con.execute(f"DROP INDEX IF EXISTS {ix}")
     for col in ("woken_by", "parent_run_id", "project"):
         con.execute(f"ALTER TABLE agent_runs DROP COLUMN {col}")
-    for col in ("project", "parent_run_id"):
+    for col in ("project", "parent_run_id", "practice"):
         con.execute(f"ALTER TABLE dispatch_log DROP COLUMN {col}")
     con.execute("DELETE FROM settings WHERE key = 'lineage_backfilled'")   # set by a release with lineage
     con.execute("INSERT INTO agent_runs (id, agent, trigger, dispatch_id, key_value, status, "

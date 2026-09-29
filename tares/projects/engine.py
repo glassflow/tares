@@ -76,8 +76,13 @@ class Engine:
         template = _safe_template(inst["template"])
         # `recipe` mirrors `template` for pre-1.14 clients; dropped two releases after 1.14
         title = template.title if template else inst["template"]
+        setup = self.store.get_project_setup(uid)
         return {**inst, "template_title": title, "objects": objects,
                 "default": uid == self.default_id(),
+                # the guided setup's progress (the plan itself is on GET .../setup); None for a
+                # project set up any other way
+                "setup": ({"step": setup.get("step"), "practice_run": setup.get("practice_run")}
+                          if setup else None),
                 "recipe": inst["template"], "recipe_title": title}
 
     def list(self) -> list[dict]:

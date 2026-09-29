@@ -60,6 +60,8 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARES_TRACING_ENABLED` | agent tracing on/off (a console setting wins over it) |
 | `TARES_TRACING_PROVIDER`, `TARES_TRACING_ENDPOINT` | `rius` (endpoint preset) or `otlp` (any OTLP/HTTP endpoint) |
 | `TARES_TRACING_API_KEY`, `TARES_TRACING_HEADERS` | bearer key, or `k=v,k2=v2` headers for the exporter |
+| `TARES_PUBLIC_URL` | the address people reach the cell at, for the ingest URLs the guided setup shows; default the request's own |
+| `TARES_MCP_URL` | the MCP address the guided setup gives an outside agent; default `TARES_PUBLIC_URL` plus `/mcp` |
 | `TARES_INSTANCE_NAME` | prefix of the trace `service.name` (`<instance>/<agent>`); default the hostname |
 
 `grep -rhoE "TARES_[A-Z_]+" tares/*.py | sort -u` is the authoritative list.
