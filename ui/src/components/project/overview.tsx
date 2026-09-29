@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -125,6 +126,9 @@ function HealthBanner({ ctx, health, onResume }: { ctx: Ctx; health: ProjectHeal
   const rest = health.issues.slice(1);
   const hasSessions = !!ctx.s.sessions;
   const fixButton = (issue: typeof first, cls = "") => {
+    // credentials and model providers are the cell's, on the console's own Settings page
+    if (issue?.fix && (issue.view === "settings:github" || issue.view === "settings:providers"))
+      return <Link className={`btn gf-fix ${cls}`} to="/settings">{issue.fix}</Link>;
     const v = issue && viewFrom(issue.view, hasSessions);
     return issue?.fix && v
       ? <button type="button" className={`gf-fix ${cls}`} onClick={() => ctx.go(v)}>{issue.fix}</button>
