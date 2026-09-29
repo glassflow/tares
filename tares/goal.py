@@ -666,29 +666,32 @@ def utc_midnight(now=None):
 
 def project_results(store, uid: str, limit: int = 20, before=None, scheduled: set | None = None,
                     now=None) -> dict:
+    """One page of results. The first page (no `before`) also counts today's in the same walk:
+    it reads on past the page while threads are from today, so the overview's poll walks the
+    project once. Older pages leave `found` at 0; the console reads today from the first page."""
     limit = max(1, min(int(limit), 100))
     scheduled = scheduled or set()
-    results, next_before, scanned = [], None, 0
-    for t in _threads(store, uid, before, scheduled):
-        scanned += 1
-        r = thread_result(t)
-        if r is not None:
-            results.append(r)
-            if len(results) >= limit:
-                next_before = _iso(t["at"])
-                break
-        if scanned >= RESULTS_SCAN_CAP:
-            next_before = _iso(t["at"])
-            break
     # "today" is since midnight UTC: the cell does not know the viewer's time zone
     midnight = utc_midnight(now)
-    found = 0
-    for i, t in enumerate(_threads(store, uid, None, scheduled)):
-        if _aware(t["at"]) < midnight or i >= RESULTS_SCAN_CAP:
+    first_page = before is None
+    results, next_before, scanned, found, full = [], None, 0, 0, False
+    for t in _threads(store, uid, before, scheduled):
+        scanned += 1
+        today_thread = first_page and _aware(t["at"]) >= midnight
+        if full and not today_thread:
             break
         r = thread_result(t)
-        if r is not None and r["kind"] == "action":
-            found += 1
+        if r is not None:
+            if today_thread and r["kind"] == "action":
+                found += 1
+            if not full:
+                results.append(r)
+                if len(results) >= limit:
+                    next_before, full = _iso(t["at"]), True
+        if scanned >= RESULTS_SCAN_CAP:
+            if not full:
+                next_before = _iso(t["at"])
+            break
     today = {"looked_at": store.project_threads_since(uid, midnight), "found": found,
              "spent_usd": round(store.project_spend_since(uid, midnight), 6)}
     return {"results": results, "next_before": next_before, "today": today}
