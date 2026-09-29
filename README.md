@@ -122,6 +122,16 @@ A built-in agent on a real incident. The prompt is the whole configuration, and 
 
 Other clients, stdio transport, and auth are covered in [connecting AI agents over MCP](https://docs.glassflow.ai/tares/agents).
 
+### Join one project
+
+An agent outside Tares can work inside one project next to its Tares agents. Make a project key on the project page (Setup, Keys) and connect with it:
+
+```bash
+claude mcp add --transport http tares http://localhost:8788/mcp --header "Authorization: Bearer <project key>"
+```
+
+The key reads that project only and records findings in it. The agent loads the project's skills (`list_skills`, `get_skill`), reads its sources (`read`, `stats`), sees what is known (`list_findings`, `project_timeline`), records what it concludes (`record_finding`), and calls `join_project(url)` to be woken by every trigger of the project on its own webhook. Its findings show on the project's Activity tab, marked as recorded from outside Tares. On an instance without auth there are no keys; the tools take `project` by name instead.
+
 ## What you get
 
 - **Connectors** for the systems you already run: Prometheus (metrics and alerts), Alertmanager, Docker logs, GitHub, Postgres, Vercel, OpenTelemetry (OTLP), any JSON API by polling, a generic webhook, reference documents, agent memory, and Claude Code sessions. Add sources at runtime from the console; a **Discover** step proposes the config for you where it can. → [Connectors](https://docs.glassflow.ai/tares/connectors)

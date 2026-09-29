@@ -14,11 +14,13 @@ STATS_MAX_TOP = 50
 
 
 def stats_table(store, sources: list, by: str, window: str, where: dict | None = None,
-                top=20, filters: list | None = None, scope: str = "") -> str:
+                top=20, filters: list | None = None, scope: str = "",
+                project_rows: dict | None = None) -> str:
     """Counts per value of `by` over `sources` (narrowed by `filters`), now against the window
     before, as a few lines whatever the volume (TR-319). Largest absolute change first; a value
     only in one window reads as new or gone. `scope` names what was counted in the header (a
-    trigger, a project); the sources are named when it is empty."""
+    trigger, a project); the sources are named when it is empty. `project_rows` narrows the shared
+    findings and memory sources to one project (store._scope_sql)."""
     span = parse_duration(window)
     if span <= 0:
         raise ValueError(f"bad window {window!r}")
@@ -29,9 +31,9 @@ def stats_table(store, sources: list, by: str, window: str, where: dict | None =
     sources = list(sources)
     if sources:
         cur = store.aggregate(sources, None, "count", start, filters=filters,
-                              where=where, group_by=by)
+                              where=where, group_by=by, scope=project_rows)
         prev = store.aggregate(sources, None, "count", before_start, filters=filters,
-                               where=where, group_by=by, until=start)
+                               where=where, group_by=by, until=start, scope=project_rows)
     else:
         cur, prev = {}, {}
 

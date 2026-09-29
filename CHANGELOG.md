@@ -67,8 +67,41 @@ the project follows [Semantic Versioning](https://semver.org/).
   (verdict, an agent of the project, cooldown), and the project's Setup tab lists each agent's
   handoffs. A trigger over the findings source still wakes an agent as before; handoffs are the
   simpler way to chain two agents.
+- Project keys: a key that belongs to one project. It reads that project and records findings in
+  it, and nothing else. `POST /api/projects/{uid}/keys {name}` makes one, as does
+  `POST /api/keys {name, project}`; its scopes are `read` and `findings` (a read-only one takes
+  `scopes: ["read"]`). With a project key, `/read` and stats cover the project's sources, and the
+  shared findings and memory sources only with the project's own rows; `/catalog`,
+  `GET /api/projects` and `GET /api/projects/{uid}` show that project only (without its template
+  parameters); its skills, timeline and findings are readable, another project's are not. Every
+  other route answers 403 "this key only reads project <name> and records findings in it",
+  including a route added later, since the routes a project key may use are an explicit list.
+  `GET /api/whoami` names the key's project. Revoking a key removes its subscriptions; deleting
+  the project revokes its keys. Keys are enforced when the instance has `TARES_AUTH_TOKEN`, like
+  every other key.
+- Joining a project: `POST /api/projects/{uid}/subscribe {url}` (a project key or admin) POSTs
+  every firing of every trigger of the project to the URL, the triggers added later included;
+  `DELETE /api/projects/{uid}/subscribe/{sid}` removes it (a project key only its own).
+  `POST /api/projects/{uid}/findings {entity, finding, verdict?, label?}` records an external
+  agent's finding under the key's name: it lands on the entity's timeline like a Tares agent's,
+  and shows in the project timeline as a thread of kind `run` with `external: true`.
+  `GET /api/projects/{uid}/findings?entity=&agent=&limit=` lists the project's findings, Tares
+  agents' and external ones, and `POST /api/projects/{uid}/stats {by, window, where?}` counts
+  per label value over the project's sources. `GET /api/projects/{uid}/external-agents` (admin)
+  lists who joined: the webhook (masked), the key, the last delivery.
+- MCP tools for an agent working inside one project: `list_projects`, `join_project(url)`,
+  `stats`, `list_skills`, `get_skill`, `list_findings`, `record_finding` and `project_timeline`.
+  Each takes an optional `project`; with a project key it is implied, otherwise it names the
+  project (an id or a name) and may be left out while there is only one.
+- The project page has a Keys section on Setup (create, the secret shown once, revoke) and an
+  External agents list on the Agents tab (where it delivers, the key, the last delivery, revoke).
+  The Activity tab marks an external agent's finding as recorded from outside Tares.
 
 ### Changed
+- A firing's webhook body carries `project` (the trigger's project id) and `run_ids` (the Tares
+  agent runs the same firing started).
+- `POST /read` with `project` also reads the shared findings and memory sources, only the rows
+  recorded in that project. A finding records its project in its payload.
 - Views are gone. A trigger names the sources it watches, the filters that narrow them and the
   label its entity is keyed by (`sources`, `filters`, `key_field`; the key defaults to the first
   source's primary label). `/api/views`, `POST /query` and `POST /derive` answer 404, and a

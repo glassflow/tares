@@ -162,6 +162,19 @@ export interface ApiKey {
   created_at: string | null;
   last_used_at: string | null;
   revoked_at: string | null;
+  project?: string | null;      // a project key: reads that project only (TR-335)
+}
+
+// An agent that joined a project with a webhook subscription (TR-336). The URL comes masked: it
+// can carry the receiver's secret.
+export interface ExternalAgent {
+  subscription_id: string;
+  name: string;
+  url: string;
+  key_id: string | null;
+  key_name: string | null;
+  created_at: string | null;
+  last_delivery: { at: string | null; ok: boolean | null; error: string | null; dispatch_id: string } | null;
 }
 
 // Discover response for table-shaped connectors (postgres): the columns found plus a proposed

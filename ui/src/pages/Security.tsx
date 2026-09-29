@@ -849,6 +849,12 @@ function ApiKeysPanel() {
   const load = () => api.keys().then((r) => { setKeys(r.keys); setEnforced(r.enforced); })
     .catch((e) => setErr(String((e as Error).message ?? e)));
   useEffect(() => { load(); }, []);
+  // a project key reads one project; the table names it (they are made on the project's page)
+  const [projectNames, setProjectNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    api.projects().then((r) => setProjectNames(Object.fromEntries(r.projects.map((p) => [p.id, p.name]))))
+      .catch(() => undefined);
+  }, []);
 
   return (
     <div className="panel">
@@ -887,7 +893,8 @@ function ApiKeysPanel() {
             {keys.map((k) => (
               <tr key={k.id} style={k.revoked_at ? { opacity: 0.45 } : undefined}>
                 <td>{k.name}</td>
-                <td>{k.scopes.map((s) => <span className="chip" key={s} title={SCOPE_HELP[s]}>{s}</span>)}</td>
+                <td>{k.scopes.map((s) => <span className="chip" key={s} title={SCOPE_HELP[s]}>{s}</span>)}
+                  {k.project && <span className="help"> · project {projectNames[k.project] ?? k.project} only</span>}</td>
                 <td className="mono">{k.prefix}…</td>
                 <td className="help"><TimeAgo ts={k.created_at} /></td>
                 <td className="help">{k.revoked_at ? "revoked" : k.last_used_at ? <TimeAgo ts={k.last_used_at} /> : "never"}</td>
@@ -995,7 +1002,7 @@ function KeyModal({ onClose, onCreated }: {
   );
 }
 
-function CopySecret({ text }: { text: string }) {
+export function CopySecret({ text }: { text: string }) {
   const [done, setDone] = useState(false);
   return (
     <button onClick={() => {

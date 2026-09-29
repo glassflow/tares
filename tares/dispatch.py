@@ -36,28 +36,44 @@ class Dispatcher:
                    parent_run_id: str | None = None) -> None:
         """`parent_run_id` is the run whose finding tripped this firing, when a trigger reads
         findings: the project timeline puts the firing under that run (TR-331)."""
-        subs = self.store.list_subscriptions(trigger.name)
+        project = getattr(trigger, "project", None)
+        subs = list(self.store.list_subscriptions(trigger.name))
+        if project:
+            # subscriptions to the whole project (an external agent that joined it, TR-336): every
+            # trigger of it, the ones added after the subscription included. A URL subscribed both
+            # ways is delivered to once.
+            urls = {url for _sid, _t, url in subs}
+            subs += [(s["subscription_id"], trigger.name, s["url"])
+                     for s in self.store.list_project_subscriptions(project)
+                     if s["url"] not in urls]
         woken_by = "schedule" if getattr(trigger.condition, "every", None) else "trigger"
         kind = trigger.emit.get("kind", trigger.name)
         dispatch_id = uuid.uuid4().hex
         body = {
             "dispatch_id": dispatch_id,
             "trigger": trigger.name,
+            "project": project,
             "kind": kind,
             "key": key,
             "fired_at": now_utc().isoformat(),
             "payload": payload,
         }
         delivered = 0
+        # Tares agents first, so the webhook body can name the runs this firing started.
+        # Tares agent: run in-process. deliver() logs a pending delivery now and resolves it
+        # (ok/error) when the run finishes, so `delivered` here is the synchronous count (external
+        # only); list_dispatches computes the live total including agents.
+        run_ids = []
         for sid, _trig, url in subs:
             agent_name = agent_name_from_url(url)
-            if agent_name is not None:
-                # Tares agent: run in-process. deliver() logs a pending delivery now and resolves
-                # it (ok/error) when the run finishes — so `delivered` here is the synchronous count
-                # (external only); list_dispatches computes the live total including agents.
-                if self.agents is not None:
-                    self.agents.deliver(agent_name, sid, trigger.name, key, payload, dispatch_id,
-                                        woken_by=woken_by)
+            if agent_name is not None and self.agents is not None:
+                rid = self.agents.deliver(agent_name, sid, trigger.name, key, payload, dispatch_id,
+                                          woken_by=woken_by)
+                if rid:
+                    run_ids.append(rid)
+        body["run_ids"] = run_ids
+        for sid, _trig, url in subs:
+            if agent_name_from_url(url) is not None:
                 continue
             channel = slack_channel_from_url(url)
             if channel is not None:
@@ -71,7 +87,7 @@ class Dispatcher:
         # log every firing, even with zero subscribers — the UI shows what would have woken agents
         self.store.log_dispatch(dispatch_id, trigger.name, key, kind,
                                 len(subs), delivered, payload,
-                                project=getattr(trigger, "project", None),
+                                project=project,
                                 parent_run_id=parent_run_id)
 
     async def _post(self, url: str, body: dict, attempts: int = 5) -> tuple[bool, str | None]:
