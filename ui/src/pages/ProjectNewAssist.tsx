@@ -80,6 +80,18 @@ function nameFromGoal(goal: string, incident: boolean): string {
   return incident ? `catch ${base}` : base;
 }
 
+/** The project's goal from what the user typed: one line, its first sentence, at most 200
+ *  characters. The project page shows it and lets the user change it. */
+export function goalLine(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  const m = flat.match(/^.*?[.!?](?=\s|$)/);
+  const first = (m ? m[0] : flat).trim();
+  if (first.length <= 200) return first;
+  const cut = first.slice(0, 200);
+  const sp = cut.lastIndexOf(" ");
+  return (sp > 120 ? cut.slice(0, sp) : cut).trim();
+}
+
 export default function ProjectNewAssist() {
   const [ready, setReady] = useState<boolean>();
   const refreshKey = () => api.capabilities()
@@ -140,7 +152,8 @@ export default function ProjectNewAssist() {
     if (projectRef.current) return Promise.resolve(projectRef.current);
     if (!projectQueue.current) {
       setProjectErr(undefined);
-      projectQueue.current = api.createProject({ template: "custom", name: projectName.trim(), objects: [] })
+      projectQueue.current = api.createProject({ template: "custom", name: projectName.trim(), objects: [],
+                                                 goal: goalLine(goal) || undefined })
         .then((p) => { projectRef.current = p; setProject(p); return p; })
         .catch((e) => {
           projectQueue.current = undefined;
