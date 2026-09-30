@@ -16,6 +16,7 @@ copied skill, and apply taking a plan edited in the console.
 Run: .venv/bin/python tests/test_setup_flow.py
 """
 import asyncio
+from datetime import datetime, timedelta, timezone
 import copy
 import json
 import os
@@ -468,6 +469,29 @@ async def main():
         ck("health does not count it as a capped agent",
            not any("limit" in i["message"] for i in h["issues"]), h)
         await wait_for(lambda: not runner._inflight)
+        ag = {x["name"]: x for x in store.list_catalog_agents()}
+        ck("a planned agent is told to finish with conclude (it carries the headline)",
+           ag["checkout-triage"]["prompt"].endswith(
+               "call conclude with what you found and a verdict (investigate when it needs a "
+               "closer look)."), ag["checkout-triage"]["prompt"])
+        eq("a prompt that names conclude is kept as it is",
+           S.with_conclude("Look, then conclude.", []), "Look, then conclude.")
+
+        print("== practice entity: the newest event the wake-up's filters let through ==")
+        cfg = runtime.catalog.sources["checkout-errors"]
+        for svc in ("payments", "checkout"):
+            r = await cx.post(f"/ingest/{cfg.ingest_key}",
+                              json={"service": svc, "msg": "x", "level": "error"})
+            ck(f"ingest {svc}", r.status_code in (200, 202), r.text)
+        since = datetime.now(timezone.utc) - timedelta(hours=1)
+        eq("unfiltered: the newest", (store.newest_key(["checkout-errors"], [], since) or [None])[0],
+           "checkout")
+        eq("filtered: the newest that matches",
+           (store.newest_key(["checkout-errors"],
+                             [{"field": "service", "op": "eq", "value": "payments"}], since)
+            or [None])[0], "payments")
+        eq("nothing matches: none", store.newest_key(
+            ["checkout-errors"], [{"field": "service", "op": "eq", "value": "nope"}], since), None)
 
         print("== who = own ==")
         own_raw = plan_with(who="own", agents=[], name="Checkout own",
@@ -506,6 +530,16 @@ async def main():
         chk = (await cx.get(f"/api/projects/{ouid}/setup")).json()["checks"]["own_agent"]
         ck("then it has joined", chk["state"] == "joined" and "used its key" in chk["detail"],
            chk)
+        ck("an agent woken at its webhook is told it has not subscribed yet",
+           "not subscribed" in chk["detail"], chk)
+        st_ = store.get_project_setup(ouid)
+        st_["plan"]["own_agent"]["wake"] = "poll"
+        store.set_project_setup(ouid, st_)
+        chk = (await cx.get(f"/api/projects/{ouid}/setup")).json()["checks"]["own_agent"]
+        ck("an agent that checks in is never told to subscribe",
+           chk["state"] == "joined" and "subscribe" not in chk["detail"], chk)
+        st_["plan"]["own_agent"]["wake"] = "webhook"
+        store.set_project_setup(ouid, st_)
 
         print("== own agent: practice firing and finding ==")
         from tares.dispatch import Dispatcher
@@ -545,6 +579,16 @@ async def main():
            store.get_agent_run(r.json()["run_id"])["practice"], False)
         eq("the setup remembers the firing",
            (await cx.get(f"/api/projects/{ouid}/setup")).json()["practice_run"], did)
+        # the first key is shown once: a key made in its place answers a practice firing too
+        st_ = store.get_project_setup(ouid)
+        st_["practice_finding"] = None
+        st_["practice_at"] = datetime.now(timezone.utc).isoformat()
+        store.set_project_setup(ouid, st_)
+        k2 = (await cx.post(f"/api/projects/{ouid}/keys", json={"name": "claude-code-2"})).json()
+        r = await anon.post(f"/api/projects/{ouid}/findings", headers=H(k2["secret"]),
+                            json={"entity": "checkout", "finding": "From the new key."})
+        eq("a replacement key's finding answers the practice firing",
+           store.get_agent_run(r.json()["run_id"])["practice"], True)
 
         print("== check: normalization, derived sentences and the summary ==")
         draft = copy.deepcopy(GOOD)
@@ -813,7 +857,8 @@ async def main():
         eq("the edited agent: its prompt, handoff and the attached server",
            (tri["prompt"], [(h["verdict"], h["cooldown"]) for h in tri["handoffs"]],
             tri["mcp_servers"]),
-           ("Look at the latency first.", [("dig", "1h")], ["deploys-mcp"]))
+           ("Look at the latency first.\n\nWhen you are done, call conclude with what you found "
+            "and a verdict (dig when it needs a closer look).", [("dig", "1h")], ["deploys-mcp"]))
         dig = store.get_catalog_agent(chk["plan"]["agents"][2]["name"])
         eq("the added agent is on the schedule", dig["trigger"], t2["name"])
         eq("the copied skill is the project's", [s["name"] for s in store.list_skills(euid)],

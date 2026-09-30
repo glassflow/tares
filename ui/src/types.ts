@@ -544,11 +544,14 @@ export interface OutlineAgent {
   name: string; sentence: string; enabled: boolean; runs_on: "trigger" | "handoff"; handoffs: OutlineHandoff[];
 }
 export interface OutlineSkill { name: string; description: string; loaded_by: string[] }
+/** An agent outside Tares working for the project: a project key, or a webhook subscribed without one. */
+export interface OutlineOutside { name: string; sentence: string; joined: boolean }
 export interface ProjectOutline {
   sentence: string;
   watches: OutlineWatch[];
   wakes: OutlineWake[];
   agents: OutlineAgent[];
+  outside?: OutlineOutside[];
   skills: OutlineSkill[];
 }
 

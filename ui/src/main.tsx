@@ -10,7 +10,6 @@ import CatalogExport from "./pages/CatalogExport";
 import CatalogImport from "./pages/CatalogImport";
 import Explore from "./pages/Explore";
 import SourceClaudeCode from "./pages/SourceClaudeCode";
-import SourceDetail from "./pages/SourceDetail";
 import SourceDiscover from "./pages/SourceDiscover";
 import SourceNew from "./pages/SourceNew";
 import Security from "./pages/Security";
@@ -19,7 +18,7 @@ import Sources from "./pages/Sources";
 import Projects from "./pages/Projects";
 import ProjectTemplates from "./pages/ProjectNew";
 import ProjectDetail from "./pages/ProjectDetail";
-import { AgentRedirect, DispatchRedirect, FiringsRedirect, NewInProjectRedirect, TriggerRedirect } from "./pages/Redirects";
+import { AgentRedirect, DispatchRedirect, FiringsRedirect, NewInProjectRedirect, NotFound, SourceByName, TriggerRedirect } from "./pages/Redirects";
 import ProjectSetup from "./pages/ProjectSetup";
 import ProjectNewCustom from "./pages/ProjectNewCustom";
 import ProjectNewGeneric from "./pages/ProjectNewGeneric";
@@ -69,7 +68,7 @@ const router = createBrowserRouter([
       { path: "sources/new", element: <SourceNew /> },
       { path: "sources/export", element: <CatalogExport /> },
       { path: "sources/import", element: <CatalogImport /> },
-      { path: "sources/:name", element: <SourceDetail /> },
+      { path: "sources/:name", element: <SourceByName /> },
       { path: "organize", element: <Navigate to="/ask" replace /> },
       { path: "explore", element: <Explore /> },
       // triggers, agents, firings and MCP servers live in their project now (Advanced setup);
@@ -101,6 +100,10 @@ const router = createBrowserRouter([
       { path: "catalog", element: <Navigate to="/sources" replace /> },
       { path: "usecases/*", element: <UsecasesRedirect /> },
       { path: "usecases", element: <UsecasesRedirect /> },
+      // views are gone: a project holds what a view used to
+      { path: "views", element: <Navigate to="/projects" replace /> },
+      { path: "views/*", element: <Navigate to="/projects" replace /> },
+      { path: "*", element: <NotFound /> },
     ],
   },
 ]);

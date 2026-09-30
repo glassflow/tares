@@ -403,8 +403,7 @@ export function ResultView({ ctx, runId }: { ctx: Ctx; runId: string }) {
       {r.handled && (
         <p className="help" style={{ margin: 0 }}>
           Marked as handled {whenLabel(r.handled.at).replace(/^Today /, "today at ").replace(/^Yesterday /, "yesterday at ")
-            .replace(/^([A-Z][a-z]{2} \d)/, "on $1")}{" "}
-          by {r.handled.by === "console" ? "someone in the console" : r.handled.by}.
+            .replace(/^([A-Z][a-z]{2} \d)/, "on $1")}{handledBy(r.handled.by)}.
         </p>
       )}
       <div className="btnrow">
@@ -443,6 +442,13 @@ function Step({ n, title, children }: { n: number; title: string; children: Reac
       {children}
     </li>
   );
+}
+
+/** " by claude-code" for a named key; nothing for the console's own credential (the auth token,
+ *  or the per-person key Tares Cloud names user:<id>), which names no one a reader knows. */
+function handledBy(by: string | null | undefined): string {
+  if (!by || by === "console" || by.startsWith("user:") || by.startsWith("auth token")) return "";
+  return ` by ${by}`;
 }
 
 function Change({ v, what }: { v: View; what: string }) {
@@ -503,7 +509,7 @@ export function HowView({ ctx, panels, manage }: { ctx: Ctx; panels: React.React
             ))}
           </Step>
           <Step n={3} title="Agents">
-            {o.agents.length === 0 && (
+            {o.agents.length === 0 && !(o.outside ?? []).length && (
               <p className="gf-step-empty">No agent does the work yet.{" "}
                 {canAddAgent
                   ? <VLink v={{ kind: "agents" }} extra={{ add: "1" }}>Add an agent</VLink>
@@ -515,6 +521,13 @@ export function HowView({ ctx, panels, manage }: { ctx: Ctx; panels: React.React
                 <span className="gf-step-what">{a.sentence}</span>
                 {!a.enabled && a.runs_on === "trigger" && <span className="gf-step-state warn">Off</span>}
                 <Change v={{ kind: "agent", name: a.name }} what={a.name} />
+              </div>
+            ))}
+            {(o.outside ?? []).map((x) => (
+              <div className="gf-step-item" key={`outside:${x.name}`}>
+                <span className="gf-step-what">{x.sentence}</span>
+                {!x.joined && <span className="gf-step-state warn">Not connected</span>}
+                <Change v={{ kind: "settings", name: "keys" }} what={x.name} />
               </div>
             ))}
           </Step>

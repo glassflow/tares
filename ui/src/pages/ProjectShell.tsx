@@ -55,6 +55,10 @@ export default function ProjectShell({ s, id, reload, template }: {
 
   const names = (kind: string) => s.objects.filter((o) => o.kind === kind).map((o) => o.name);
   const { data: sources, reload: reloadSources } = usePolling(() => api.sources(), 10000);
+  // this project's sources another project uses as well: pausing them stops both
+  const sharedSources = (sources ?? [])
+    .filter((x) => (x.projects ?? []).includes(id) && (x.projects ?? []).some((p) => p !== id))
+    .map((x) => x.name);
   const { data: specs } = usePolling(() => api.connectors(), 600000);
   const { data: triggers, reload: reloadTriggers } = usePolling(() => api.triggers(), 10000);
   const { data: agentsData, reload: reloadAgents } = usePolling(() => api.builtinAgents(), 10000);
@@ -346,22 +350,30 @@ export default function ProjectShell({ s, id, reload, template }: {
               also pause its {sourceCount === 1 ? "source" : `${sourceCount} sources`}, so no data accumulates while it is paused
             </label>
           )}
+          {pauseSources && sharedSources.length > 0 && (
+            <p className="alert warn" style={{ marginTop: 8 }}>
+              {sharedSources.join(", ")} {sharedSources.length === 1 ? "is" : "are"} also used by
+              another project. Pausing {sharedSources.length === 1 ? "it" : "them"} stops that
+              project's data too.
+            </p>
+          )}
         </ConfirmDialog>
       )}
       {confirmDel && (
         <ConfirmDialog title={`Delete project ${s.name}?`}
-          message="Its triggers, agents and MCP servers are deleted with it. Its sources stay unless you tick them below. Events already stored stay unless you purge them."
+          message="Its triggers, agents, MCP servers and skills are deleted with it. Its sources stay unless you tick them below. Events already stored stay unless you purge them."
           confirmLabel={delSources.size ? `Delete project and ${delSources.size} source${delSources.size === 1 ? "" : "s"}` : "Delete project"} danger
           onConfirm={async () => {
             try { await api.deleteProject(id, purge, [...delSources]); navigate("/projects", { replace: true }); }
             catch (e) { fail(e); setConfirmDel(false); }
           }}
           onCancel={() => setConfirmDel(false)}>
-          {(myTriggers.length + agentNames.length + mcpNames.length) > 0 && (
+          {(myTriggers.length + agentNames.length + mcpNames.length + (skills?.length ?? 0)) > 0 && (
             <div style={{ margin: "10px 0 4px" }}>
               <span className="lbl">deleted with it</span>
               {[...myTriggers.map((t) => ["trigger", t.name]), ...agentNames.map((n) => ["agent", n]),
-                ...mcpNames.map((n) => ["MCP server", n])].map(([k, n]) => (
+                ...mcpNames.map((n) => ["MCP server", n]),
+                ...(skills ?? []).map((k) => ["skill", k.name])].map(([k, n]) => (
                 <div key={`${k}:${n}`} style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "2px 0", minWidth: 0 }}>
                   <span className="help" style={{ width: 76, flex: "0 0 auto" }}>{k}</span>
                   <span className="mono" style={{ minWidth: 0, wordBreak: "break-all" }}>{n}</span>
@@ -383,7 +395,8 @@ export default function ProjectShell({ s, id, reload, template }: {
                              if (e.target.checked) next.add(x.name); else next.delete(x.name);
                              return next;
                            })} />
-                    <span className="mono" style={{ minWidth: 0, wordBreak: "break-all" }}>{x.name}</span>
+                    {/* the name keeps its width; the note beside it wraps (a squeezed name broke mid-word) */}
+                    <span className="mono" style={{ flex: "0 0 auto", maxWidth: "55%", overflowWrap: "anywhere" }}>{x.name}</span>
                     {others.length > 0 && (
                       <span className="help">kept: also used by {others.map(projectName).join(", ")}</span>
                     )}

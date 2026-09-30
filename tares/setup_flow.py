@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 
 from . import goal as G
 from . import skills as _skills
+from .builtin_agents import CONCLUDE
 from .config import (CatalogError, _source_from_dict, _trigger_from_dict, check_handoff_targets,
                      normalize_handoffs, normalize_trigger_description, parse_duration,
                      validate_agent_dict,
@@ -1120,7 +1121,8 @@ def apply(store, engine, plan: dict, make_key) -> tuple[str, dict | None]:
             names = {a["name"] for a in live}
             objs = []
             for a in live:
-                spec = {"name": a["name"], "trigger": a["trigger"], "prompt": a["prompt"],
+                spec = {"name": a["name"], "trigger": a["trigger"],
+                        "prompt": with_conclude(a["prompt"], a["handoffs"]),
                         "mcp_servers": [s for s in a["mcp_servers"] if s in usable_tools],
                         "handoffs": [h for h in a["handoffs"] if h["agent"] in names],
                         # on the trigger it runs when the project wakes; a handoff-only agent
@@ -1158,6 +1160,19 @@ def apply(store, engine, plan: dict, make_key) -> tuple[str, dict | None]:
 # ── connect: what only the person can do ─────────────────────────────────────
 def public_base(request_base: str) -> str:
     return (os.getenv("TARES_PUBLIC_URL", "").strip() or request_base).rstrip("/")
+
+
+def with_conclude(prompt: str, handoffs: list) -> str:
+    """The prompt with the instruction to finish with `conclude`: the tool that carries the
+    verdict, the headline and the next step the project page leads with. A planned prompt does
+    not always name it, and without the word the agent is not offered the tool."""
+    if CONCLUDE in prompt:
+        return prompt
+    verdicts = sorted({str(h.get("verdict")) for h in handoffs or [] if h.get("verdict")})
+    line = "When you are done, call conclude with what you found"
+    if verdicts:
+        line += f" and a verdict ({' or '.join(verdicts)} when it needs a closer look)"
+    return f"{prompt.rstrip()}\n\n{line}."
 
 
 def mcp_url(base: str) -> str:
@@ -1262,19 +1277,26 @@ def checks(store, catalog, runtime_health: dict, uid: str, setup: dict, now=None
                           "detail": f"Could not connect: {rec.get('error') or 'no answer'}"})
     own = None
     if plan.get("who") == "own":
-        key = store.get_api_key(setup.get("own_key_id") or "") if setup.get("own_key_id") else None
-        used = _aware(key.get("last_used_at")) if key else None
-        if key is None or key.get("revoked_at"):
+        # the key setup made, or one made in its place (the first is shown only once): the live
+        # project key used most recently
+        live = [k for k in store.list_api_keys(project=uid) if not k.get("revoked_at")]
+        used_keys = sorted((k for k in live if k.get("last_used_at")),
+                           key=lambda k: _aware(k["last_used_at"]), reverse=True)
+        key = used_keys[0] if used_keys else None
+        if not live:
             own = {"state": "waiting", "detail": "The key was revoked; make a new one under "
                                                  "Setup, Advanced setup"}
-        elif used is None:
+        elif key is None:
             own = {"state": "waiting", "detail": "Waiting for your agent to use its key"}
         else:
-            subscribed = any(s.get("created_by") == f"key:{key['id']}"
-                             for s in store.list_project_subscriptions(uid))
+            used = _aware(key["last_used_at"])
             age = G.age_words((now - used).total_seconds())
-            own = {"state": "joined",
-                   "detail": f"Your agent used its key {age}"
-                             + (" and subscribed to the project" if subscribed else
-                                ", it has not subscribed to the project yet")}
+            detail = f"Your agent used its key {age}"
+            # an agent that checks in never subscribes; only one woken at its webhook does
+            if ((plan.get("own_agent") or {}).get("wake") or "webhook") == "webhook":
+                subscribed = any(s.get("created_by") == f"key:{key['id']}"
+                                 for s in store.list_project_subscriptions(uid))
+                detail += (" and subscribed to the project" if subscribed else
+                           ", it has not subscribed to the project yet")
+            own = {"state": "joined", "detail": detail}
     return {"sources": sources, "tools": tools, "own_agent": own}

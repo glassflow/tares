@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, Navigate, useLocation, useParams } from "react-router-dom";
 import { api } from "../api";
+import SourceDetail from "./SourceDetail";
 
 // The cell-wide Triggers, Tares agents, Firings and MCP servers pages are gone: every trigger,
 // agent and MCP server belongs to one project, whose Advanced setup shows it. Their links still
@@ -12,7 +13,7 @@ const projectUrl = (project: string, view: string, extra: Record<string, string>
   return `/projects/${encodeURIComponent(project)}?${q.toString()}`;
 };
 
-function Resolving({ find, what }: { find: () => Promise<string | null>; what: string }) {
+function Resolving({ find, what }: { find: () => Promise<string | null>; what: "agent" | "trigger" | "firing" }) {
   const [to, setTo] = useState<string | null>();
   useEffect(() => {
     let live = true;
@@ -23,18 +24,19 @@ function Resolving({ find, what }: { find: () => Promise<string | null>; what: s
   if (to === null) {
     return (
       <div className="empty">
-        Tares has no {what} by that name any more. <Link to="/projects">See the projects</Link>.
+        {what === "firing" ? "Tares has no record of that firing." : `Tares has no ${what} by that name any more.`}{" "}
+        <Link to="/projects">See the projects</Link>.
       </div>
     );
   }
-  return <p className="help">Opening {what}…</p>;
+  return <p className="help">Opening the {what}…</p>;
 }
 
 /** /agents/<name>[?run=…] -> the agent in its project's Advanced setup. */
 export function AgentRedirect() {
   const { name = "" } = useParams();
   const q = new URLSearchParams(useLocation().search);
-  return <Resolving what="that agent" find={async () => {
+  return <Resolving what="agent" find={async () => {
     const { agents } = await api.builtinAgents();
     const a = agents.find((x) => x.name === name);
     if (!a?.project) return null;
@@ -46,7 +48,7 @@ export function AgentRedirect() {
 /** /triggers/<name> -> the trigger in its project's Advanced setup. */
 export function TriggerRedirect() {
   const { name = "" } = useParams();
-  return <Resolving what="that trigger" find={async () => {
+  return <Resolving what="trigger" find={async () => {
     const t = (await api.triggers()).find((x) => x.name === name);
     return t?.project ? projectUrl(t.project, `trigger:${name}`) : null;
   }} />;
@@ -55,7 +57,7 @@ export function TriggerRedirect() {
 /** /dispatches/<id> (Slack's "Open in Tares") -> the firing's thread in its project's Activity. */
 export function DispatchRedirect() {
   const { id = "" } = useParams();
-  return <Resolving what="that firing" find={async () => {
+  return <Resolving what="firing" find={async () => {
     const d = await api.dispatch(id);
     const t = (await api.triggers()).find((x) => x.name === d.trigger);
     return t?.project ? projectUrl(t.project, "activity", { thread: id }) : null;
@@ -77,4 +79,20 @@ export function NewInProjectRedirect({ kind }: { kind: "agents" | "triggers" }) 
   if (!project) return <Navigate to="/projects" replace />;
   const trigger = q.get("trigger");
   return <Navigate to={projectUrl(project, kind, { add: "1", ...(trigger ? { trigger } : {}) })} replace />;
+}
+
+/** A source's page, drawn fresh for each name: going from one source straight to another
+ *  (search, a link on a source page) must not keep the first one's data. */
+export function SourceByName() {
+  const { name = "" } = useParams();
+  return <SourceDetail key={name} />;
+}
+
+/** Any address the console does not know. */
+export function NotFound() {
+  return (
+    <div className="empty">
+      This page does not exist. <Link to="/projects">See the projects</Link>.
+    </div>
+  );
 }

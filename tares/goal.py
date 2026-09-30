@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import statistics
+from urllib.parse import urlparse
 from datetime import datetime, timedelta, timezone
 
 from .config import agent_url, parse_duration, trigger_entity_label
@@ -328,8 +329,52 @@ def _parts(store, catalog, uid: str) -> dict:
     for a in agents:
         for h in a.get("handoffs") or []:
             targets.setdefault(h.get("agent"), []).append((a, h))
+    outside = outside_agents(store, uid)
     return {"triggers": triggers, "agents": agents, "sources": names, "targets": targets,
-            "external": bool(store.list_project_subscriptions(uid))}
+            "outside": outside, "external": bool(outside)}
+
+
+def outside_agents(store, uid: str) -> list[dict]:
+    """The agents outside Tares that work for the project: each live project key ({name,
+    subscribed: it gets a webhook, joined: it used its key}), and a webhook subscribed without
+    one. An agent that checks in with its key never subscribes: it counts all the same."""
+    subs = store.list_project_subscriptions(uid)
+    out = []
+    for k in store.list_api_keys(project=uid):
+        if k.get("revoked_at"):
+            continue
+        mine = [s for s in subs if s.get("created_by") == f"key:{k['id']}"]
+        out.append({"name": k["name"], "subscribed": bool(mine),
+                    "joined": k.get("last_used_at") is not None})
+    keyed = {f"key:{k['id']}" for k in store.list_api_keys(project=uid)}
+    for s in subs:
+        if s.get("created_by") not in keyed:
+            host = urlparse(str(s.get("url") or "")).hostname or "a webhook"
+            out.append({"name": host, "subscribed": True, "joined": True})
+    return out
+
+
+def outside_words(outside: list[dict]) -> str:
+    """ "claude-code is told" / "claude-code sees it when it checks in", for the agents outside
+    Tares, joined with "and"."""
+    told = [o["name"] for o in outside if o["subscribed"]]
+    checks = [o["name"] for o in outside if not o["subscribed"]]
+    parts = []
+    if told:
+        parts.append(f"{join_words(told)} {'is' if len(told) == 1 else 'are'} told")
+    if checks:
+        parts.append(f"{join_words(checks)} {'sees' if len(checks) == 1 else 'see'} it when "
+                     f"{'it checks' if len(checks) == 1 else 'they check'} in")
+    return " and ".join(parts)
+
+
+def outside_sentence(o: dict) -> str:
+    """One outside agent in the Setup page's Agents step."""
+    if o["subscribed"]:
+        return f"{o['name']}, your own agent, is told at its webhook when the project wakes."
+    if o["joined"]:
+        return f"{o['name']}, your own agent, checks the project for what happened."
+    return f"{o['name']}, your own agent, has not connected with its key yet."
 
 
 def _handoff_cooldown(h: dict) -> str:
@@ -374,7 +419,7 @@ def outline_sentence(parts: dict, sources: dict) -> str:
             names = [agent_words(a["name"]) for a in first]
             s = f"{lead}, {join_words(names)} {'looks' if len(names) == 1 else 'look'} first."
         elif parts["external"]:
-            s = f"{lead}, the agents that joined the project are told."
+            s = f"{lead}, {outside_words(parts['outside'])}."
         else:
             s = f"{lead}, no agent is turned on to look yet."
         # the handoff chain, breadth first; "it" when one agent looked first
@@ -520,8 +565,10 @@ def outline(store, catalog, uid: str, runtime_health: dict | None = None, now=No
     loads = store.skill_loads([a["name"] for a in parts["agents"]], days=7)
     skills = [{"name": sk["name"], "description": sk["description"],
                "loaded_by": loads.get(sk["name"], [])} for sk in store.list_skills(uid)]
+    outside = [{"name": o["name"], "sentence": outside_sentence(o), "joined": o["joined"]}
+               for o in parts["outside"]]
     return {"sentence": outline_sentence(parts, sources), "watches": watches, "wakes": wakes,
-            "agents": agents, "skills": skills}
+            "agents": agents, "outside": outside, "skills": skills}
 
 
 # ── headline, next step, summary ─────────────────────────────────────────────
@@ -566,10 +613,48 @@ def _first_sentence(text: str) -> str:
     return re.split(r"(?<=[.!?])\s+", text.strip(), maxsplit=1)[0]
 
 
+# An agent's narration before the finding ("I have a complete picture.", "Here's the full
+# analysis:"): never a headline or a summary.
+_FILLER = re.compile(r"^(i have (a|the|all|enough|sufficient|everything)|i now have|i've (got|gathered|"
+                     r"collected|confirmed)|i'll|i will|i can now|let me|now (let me|i)|here's|"
+                     r"here (is|are)|okay|alright|great|perfect)\b", re.IGNORECASE)
+FILLER_MAX = 120
+
+
+def _filler(sentence: str, after_filler: bool) -> bool:
+    """Narration: a known opener, short; or, right after one, the line that introduces what
+    follows ("Here's the full analysis:")."""
+    t = plain(sentence).strip()
+    return bool(t) and ((bool(_FILLER.match(t)) and len(t) <= FILLER_MAX)
+                        or (after_filler and t.endswith(":")))
+
+
+def strip_filler(note: str | None) -> str:
+    """The note without the narration sentences it opens with."""
+    text = str(note or "").lstrip()
+    while text:
+        block, sep, rest = text.partition("\n\n")
+        if block.lstrip().startswith(("#", "|", "-", "*", "1.")):
+            break
+        sentences = re.split(r"(?<=[.!?:])\s+", block.strip())
+        keep = 0
+        while keep < len(sentences) and _filler(sentences[keep], keep > 0):
+            keep += 1
+        if keep == 0:
+            break
+        if keep < len(sentences):
+            return (" ".join(sentences[keep:]) + sep + rest).lstrip()
+        text = rest.lstrip()
+    # a note that is all narration keeps it: a weak headline beats none
+    return text or str(note or "").strip()
+
+
 def derive_headline(note: str | None) -> str | None:
     """For a run whose agent gave no headline: the note's first line when it is a markdown
     heading, else its bold lead (the text after it when the bold part is a label such as
-    "Conclusion:"), else its first sentence; plain text, at most HEADLINE_MAX characters."""
+    "Conclusion:"), else its first sentence; plain text, at most HEADLINE_MAX characters. The
+    narration an agent opens with is skipped."""
+    note = strip_filler(note)
     lines = [l for l in str(note or "").splitlines() if l.strip()]
     if not lines:
         return None
@@ -626,7 +711,7 @@ def _paragraphs(note: str | None) -> list[str]:
 def summary_of(note: str | None, headline: str | None = None) -> str | None:
     """The note's first paragraph as plain text, without what the card already shows: the
     headline when the paragraph opens with it, and a next step written into the paragraph."""
-    text = str(note or "")
+    text = strip_filler(note)
     m = _NEXT_LABEL.search(text)
     if m:
         text = text[:m.start()]
@@ -981,6 +1066,12 @@ def project_health(store, catalog, uid: str, project: dict, runtime_health: dict
             errors.append({"severity": "error",
                            "message": "No agent is turned on, so nothing looks at what arrives.",
                            "fix": "Turn on an agent", "view": f"agent:{parts['agents'][0]['name']}"})
+    if (not can_run and parts["outside"] and not any(o["joined"] for o in parts["outside"])
+            and project.get("status") != "paused"):
+        o = parts["outside"][0]
+        warnings.append({"severity": "warning",
+                         "message": f"Your agent {o['name']} has not connected with its key yet.",
+                         "fix": "See its key", "view": "settings:keys"})
     if ready and not any(providers.resolve_provider(store, a.get("provider") or None)[0]
                          for a in ready):
         errors.append({"severity": "error",
@@ -1022,7 +1113,7 @@ def project_health(store, catalog, uid: str, project: dict, runtime_health: dict
         srcs = ("Its sources are paused too." if (project.get("params") or {}).get("paused_sources")
                 else "Sources keep collecting.")
         return {"state": "paused",
-                "message": f"Paused. Triggers are off and agents do not run. {srcs}",
+                "message": f"Triggers are off and agents do not run. {srcs}",
                 "issues": issues}
     if not parts["sources"]:
         return {"state": "setting_up", "message": "Add a source so this project has something "
@@ -1049,5 +1140,9 @@ def project_health(store, catalog, uid: str, project: dict, runtime_health: dict
     if n_ready:
         msg += f" {_plural(n_ready, 'agent')} ready."
     elif parts["external"]:
-        msg += " The agents that joined the project are told when it wakes."
+        joined = [o for o in parts["outside"] if o["joined"]]
+        if len(joined) == 1:
+            msg += f" Your agent {joined[0]['name']} is connected."
+        elif joined:
+            msg += f" {len(joined)} of your agents are connected."
     return {"state": "working", "message": msg, "issues": issues}

@@ -1354,12 +1354,13 @@ class Store:
             self.con.execute("UPDATE agent_runs SET practice = TRUE WHERE id = ?", [run_id])
 
     def project_threads_since(self, project: str, since) -> int:
-        """How many timeline threads of a project started at or after `since`: the roots
-        timeline_roots pages through, counted. Practice threads are left out."""
+        """How many timeline threads of a project started at or after `since` something looked
+        at: the roots timeline_roots pages through, counted, without firings no agent was on
+        (a trigger whose agents are all off still fires). Practice threads are left out."""
         with self._lock:
             r = self.con.execute(
                 "SELECT (SELECT count(*) FROM dispatch_log d WHERE project = ? AND fired_at >= ? "
-                "        AND NOT COALESCE(practice, FALSE) "
+                "        AND NOT COALESCE(practice, FALSE) AND COALESCE(subscribers, 0) > 0 "
                 "        AND NOT EXISTS (SELECT 1 FROM agent_runs p WHERE p.id = d.parent_run_id "
                 "                        AND p.project = d.project)) + "
                 "       (SELECT count(*) FROM agent_runs r WHERE project = ? AND started_at >= ? "
@@ -2336,6 +2337,21 @@ class Store:
             "agent_runs": int(runs),
             "dispatch_deliveries": int(deliveries),
         }
+
+    def newest_key(self, sources: list[str], filters: list | None,
+                   since: datetime) -> tuple[str, datetime] | None:
+        """(entity, event time) of the newest event since `since` across `sources` that passes
+        `filters` (a trigger's), or None."""
+        if not sources:
+            return None
+        ph = ", ".join(["?"] * len(sources))
+        fsql, fparams = _filter_sql(filters)
+        with self._lock:
+            r = self.con.execute(
+                f"SELECT key_value, event_time FROM events WHERE source IN ({ph}) AND ingest_time >= ? "
+                f"AND COALESCE(key_value, '') <> ''{fsql} ORDER BY ingest_time DESC LIMIT 1",
+                [*sources, since, *fparams]).fetchone()
+        return (r[0], r[1]) if r else None
 
     def recent_events(self, source: str | None = None, limit: int = 50) -> list[dict]:
         where = "WHERE source = ?" if source else ""

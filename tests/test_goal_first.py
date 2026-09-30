@@ -283,6 +283,26 @@ def phrasing():
     ck("conclude takes headline and next_step, one line and cut",
        err is None and out["headline"] == "A B" and len(out["next_step"]) == 300, str(out))
 
+    print("== the narration an agent opens with is not the headline ==")
+    note_f = ("I have a complete picture. Here's the full analysis:\n\n## Argus 5xx, rius-prod\n\n"
+              "Three 500s in the window before, none now.")
+    eq("filler sentences, then a heading", G.derive_headline(note_f), "Argus 5xx, rius-prod")
+    eq("the summary skips them too", G.summary_of(note_f, "Argus 5xx, rius-prod"),
+       "Three 500s in the window before, none now.")
+    note_g = ("I have sufficient evidence from the timeline to diagnose this without additional "
+              "reads.\n\nA burst of 404 probes hit the docs site; nothing is broken.")
+    eq("a filler paragraph is skipped", G.derive_headline(note_g),
+       "A burst of 404 probes hit the docs site; nothing is broken.")
+    note_k = "Let me summarize. The disk on db-1 is full. It filled overnight."
+    eq("filler inside the first paragraph", G.derive_headline(note_k), "The disk on db-1 is full.")
+    eq("a finding that ends with a colon is kept",
+       G.derive_headline("Database connection pool exhausted:"), "Database connection pool exhausted:")
+    eq("a note that is all narration keeps it", G.derive_headline("Let me check that."),
+       "Let me check that.")
+    eq("a note that is not narration is kept", G.derive_headline("I have seen this before: "
+                                                                 "the cache node restarts."),
+       "I have seen this before: the cache node restarts.")
+
     print("== source errors in plain words ==")
     eq("GitHub token", G._plain_error("github", "HTTPStatusError: Client error '401 "
                                                 "Unauthorized' for url 'https://api.github.com'"),
@@ -721,7 +741,7 @@ async def main():
         r = await cx.post(f"/api/projects/{a}/pause")
         h = (await cx.get(f"/api/projects/{a}/health")).json()
         eq("paused", (h["state"], h["message"]),
-           ("paused", "Paused. Triggers are off and agents do not run. Sources keep collecting."))
+           ("paused", "Triggers are off and agents do not run. Sources keep collecting."))
         await cx.post(f"/api/projects/{a}/resume")
 
         # source errors: five GitHub sources with the same rejected token are one issue
@@ -753,6 +773,41 @@ async def main():
              "how")])
         eq("nothing arrived, but something is broken: that leads", h["state"], "attention")
         no_em_dash("health", h)
+
+        print("== an agent outside Tares that checks in with its project key ==")
+        k = (await cx.post(f"/api/projects/{g}/keys", json={"name": "claude-code"})).json()
+        h = G.project_health(store, fake, g, store.get_project(g), fake_health)
+        msgs = [i["message"] for i in h["issues"]]
+        ck("a project key counts as an agent: no 'No agent is set up'",
+           not any("No agent is set up" in m for m in msgs), str(msgs))
+        ck("until it uses its key, it is not connected yet",
+           "Your agent claude-code has not connected with its key yet." in msgs, str(msgs))
+        store.touch_api_key(k["id"])
+        h = G.project_health(store, fake, g, store.get_project(g), fake_health)
+        ck("once it used its key, no issue about it",
+           not any("claude-code" in i["message"] for i in h["issues"]), str(h["issues"]))
+        ol = G.outline(store, fake, g, fake_health)
+        eq("the Setup page lists it", ol["outside"], [{
+            "name": "claude-code", "sentence": "claude-code, your own agent, checks the project "
+                                               "for what happened.", "joined": True}])
+        trig = next(t for t in catalog.triggers if t.project == a)
+        parts = {"triggers": [trig], "agents": [], "targets": {}, "external": True,
+                 "outside": G.outside_agents(store, g)}
+        ck("the header says it sees what happened when it checks in",
+           G.outline_sentence(parts, catalog.sources).endswith(
+               ", claude-code sees it when it checks in."),
+           G.outline_sentence(parts, catalog.sources))
+        await cx.delete(f"/api/keys/{k['id']}")
+        eq("a revoked key is no agent", G.outside_agents(store, g), [])
+
+        print("== looked at today: only firings an agent was on ==")
+        midnight = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        before = store.project_threads_since(a, midnight)
+        store.log_dispatch("d-nobody", trig.name, "svc", "count", 0, 0, "", project=a)
+        eq("a firing no agent was on is not counted", store.project_threads_since(a, midnight),
+           before)
+        store.log_dispatch("d-someone", trig.name, "svc", "count", 1, 1, "", project=a)
+        eq("a firing an agent was on is", store.project_threads_since(a, midnight), before + 1)
         await cx.aclose()
 
 

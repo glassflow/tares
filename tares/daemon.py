@@ -21,7 +21,7 @@ import traceback
 import uuid
 from urllib.parse import urlsplit
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs
 
@@ -3173,9 +3173,10 @@ def make_app() -> FastAPI:
 
     async def _practice_input(uid: str, setup: dict, trig) -> tuple[str, str]:
         """(entity, timeline) a practice run or firing starts from: the example event's entity
-        (sent now when the source has nothing for it), else the newest event's."""
+        (sent now when the source has nothing for it), else the newest event the wake-up's
+        filters let through, else the newest event's."""
         from .connectors import build_connector
-        from .reads import resolve_sources_full
+        from .reads import parse_window, resolve_sources_full
         plan = setup.get("plan") or {}
         window = trig.emit.get("context_window") or "15m"
         key = None
@@ -3194,6 +3195,16 @@ def make_app() -> FastAPI:
                 if not count:
                     await _practice_ingest(w["name"], w["sample"])
                 break
+        if not key:
+            # the newest event the wake-up would count (its filters) in the last day, with the
+            # timeline reaching back to it
+            hit = store.newest_key(list(trig.sources), trig.filters, now_utc() - timedelta(days=1))
+            if hit:
+                key, at = hit
+                at = at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+                age_m = int((now_utc() - at).total_seconds() // 60) + 2
+                if age_m > parse_window(window).total_seconds() / 60:
+                    window = f"{age_m}m"
         if not key:
             for s in trig.sources:
                 ev = store.recent_events(source=s, limit=1)
@@ -3260,8 +3271,9 @@ def make_app() -> FastAPI:
         return {"run_id": rid}
 
     def _flag_practice_finding(uid: str, run_id: str, ident: dict | None) -> None:
-        """An outside agent's finding recorded within ten minutes of a practice firing, by the
-        project's own agent key, answers that firing: it is practice."""
+        """An outside agent's finding recorded within ten minutes of a practice firing, by a
+        key of the project (the one setup made, or one made in its place), answers that
+        firing: it is practice."""
         setup = store.get_project_setup(uid)
         if not setup or setup.get("practice_kind") != "own" or setup.get("practice_finding"):
             return
@@ -3271,7 +3283,8 @@ def make_app() -> FastAPI:
             return
         if (now_utc() - at).total_seconds() > setup_flow.PRACTICE_WINDOW_S:
             return
-        if ident is not None and ident.get("id") != f"key:{setup.get('own_key_id')}":
+        if ident is not None and ident.get("project") != uid \
+                and ident.get("id") != f"key:{setup.get('own_key_id')}":
             return
         store.set_run_practice(run_id)
         setup["practice_finding"] = run_id
