@@ -161,6 +161,48 @@ def filters_words(filters) -> str:
     return (" matching " + " and ".join(parts)) if parts else ""
 
 
+# what several sources of one kind are, in a sentence ("any of 5 GitHub repos")
+_KIND_NOUNS = {"github": "GitHub repos", "webhook": "webhooks", "loki": "Loki streams",
+               "prometheus": "Prometheus servers", "prometheus_alerts": "alert feeds",
+               "alertmanager": "alert feeds", "otlp": "OpenTelemetry feeds",
+               "vercel": "Vercel projects", "http_poll": "HTTP APIs", "postgres": "Postgres tables",
+               "docker": "container log streams", "claude_code": "Claude Code session feeds"}
+
+
+def source_title(cfg) -> str:
+    """What a person calls a source: the repo it watches, the host it reads, the table; its
+    name when nothing better is known (internal names like ctx_org_repo stay on the setup page)."""
+    c = getattr(cfg, "config", None) or {}
+    for key in ("repo", "repository", "table", "container", "project"):
+        v = c.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    url = c.get("url") or c.get("base_url")
+    if isinstance(url, str) and "://" in url:
+        from urllib.parse import urlsplit
+        host = urlsplit(url).hostname
+        if host:
+            return host
+    return cfg.name
+
+
+def sources_words(names: list, sources: dict) -> str:
+    """The sources a sentence names: one or two short names as they are; more, or long ones,
+    counted by kind ("any of 5 GitHub repos"), since the names belong on the setup page."""
+    names = [str(n) for n in names]
+    if not names:
+        return ""
+    if len(names) <= 2 and all(len(n) <= 24 for n in names):
+        return join_words(names)
+    kinds = {getattr(sources.get(n), "connector", "") for n in names}
+    if len(kinds) == 1:
+        k = kinds.pop()
+        noun = _KIND_NOUNS.get(k) or f"{(SPECS.get(k, {}).get('label') or k or 'source')} sources"
+        return f"its {noun[:-1] if noun.endswith('s') else noun}" if len(names) == 1 else \
+            f"any of its {len(names)} {noun}"
+    return f"any of its {len(names)} sources"
+
+
 def entity_label(trig, sources: dict) -> str | None:
     """What one firing is about: the trigger's grouping labels, else its entity label."""
     group_by = trig.condition.group_by or ["key_value"]
@@ -179,14 +221,15 @@ def condition_clause(trig, sources: dict) -> str:
     service". For a schedule, "" (see schedule_words)."""
     c = trig.condition
     names = list(trig.sources or [])
-    srcs = join_words(names) or "the project's sources"
+    srcs = sources_words(names, sources) or "the project's sources"
+    one = len(names) == 1 or srcs.startswith("any of")
     filt = filters_words(trig.filters)
     label = entity_label(trig, sources)
     per = f" for one {label}" if label else ""
     window = _window_words(c.window)
     pred = _predicate(c.predicate)
     if pred is None:
-        return f"{srcs} {'meets' if len(names) == 1 else 'meet'} {c.predicate} over {window}{per}"
+        return f"{srcs} {'meets' if one else 'meet'} {c.predicate} over {window}{per}"
     op, n = pred
     if c.aggregate == "count":
         if op == ">" and n == 0:
@@ -195,7 +238,7 @@ def condition_clause(trig, sources: dict) -> str:
             what = f"no events{filt}"
         else:
             what = f"{_COUNT_WORDS[op]} {_num(n)} {'event' if n == 1 else 'events'}{filt}"
-        verb = "gets" if len(names) == 1 else "get"
+        verb = "gets" if one else "get"
         return f"{srcs} {verb} {what} in {window}{per}"
     agg = _AGG_WORDS.get(c.aggregate, c.aggregate)
     return (f"the {agg} {c.field or 'value'} of {srcs} events{filt} {_AGG_VERBS[op]} "
@@ -423,7 +466,7 @@ def outline(store, catalog, uid: str, runtime_health: dict | None = None, now=No
     for n in parts["sources"]:
         cfg = sources[n]
         st = source_state(store, cfg, health.get(n), now)
-        watches.append({"source": n, "connector": cfg.connector,
+        watches.append({"source": n, "title": source_title(cfg), "connector": cfg.connector,
                         "description": SPECS.get(cfg.connector, {}).get("label") or cfg.connector,
                         "state": st["state"], "last_event_at": st["last_event_at"],
                         "detail": st["detail"]})
@@ -946,11 +989,14 @@ def project_health(store, catalog, uid: str, project: dict, runtime_health: dict
     if not parts["sources"]:
         return {"state": "setting_up", "message": "Add a source so this project has something "
                                                   "to watch.", "issues": issues}
+    if errors:   # something is broken: that leads, even before the first event
+        return {"state": "attention", "message": errors[0]["message"], "issues": issues}
     if all(st["last_event_at"] is None for st in states.values()):
         waiting = [n for n in parts["sources"]
                    if SPECS.get(sources[n].connector, {}).get("mode") == "push"] or parts["sources"]
+        where = sources_words(waiting, sources).replace("any of its ", "its ")
         return {"state": "setting_up",
-                "message": f"Waiting for the first event from {join_words(waiting)}.",
+                "message": f"Waiting for the first event from {where}.",
                 "issues": issues}
     if issues:
         return {"state": "attention", "message": issues[0]["message"], "issues": issues}

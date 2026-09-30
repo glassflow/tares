@@ -281,7 +281,6 @@ function Results({ ctx, head, headError, reload, outline }: {
       {results && results.length === 0 && !headError && (
         <div className="gf-empty">
           <p>Nothing yet. Each time this project wakes, its agents look, and what they conclude shows up here, newest first.</p>
-          {wake && <p className="help">It wakes when this happens: {wake}</p>}
           {!wake && outline && <p className="help">Nothing wakes it yet. <VLink v={{ kind: "triggers" }} extra={{ add: "1" }}>Add a trigger</VLink> to say when the agents should look.</p>}
         </div>
       )}
@@ -482,7 +481,7 @@ export function HowView({ ctx, panels, manage }: { ctx: Ctx; panels: React.React
               const st = watchState(w);
               return (
                 <div className="gf-step-item" key={w.source}>
-                  <span className="gf-step-what">{w.source}</span>
+                  <span className="gf-step-what">{w.title || w.source}</span>
                   {w.description && <span className="gf-step-desc">{w.description}</span>}
                   <span className={`gf-step-state ${st.cls}`}>{st.text}</span>
                   <Change v={{ kind: "source", name: w.source }} what={w.source} />

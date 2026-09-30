@@ -583,7 +583,7 @@ async def main():
              "Check the address", "source:logs"),
             ("error", "No agent is set up, so nothing looks at what arrives.", "Add an agent",
              "how")])
-        eq("nothing ever arrived: setting up", h["state"], "setting_up")
+        eq("nothing arrived, but something is broken: that leads", h["state"], "attention")
         no_em_dash("health", h)
         await cx.aclose()
 

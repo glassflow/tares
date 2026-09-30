@@ -534,7 +534,7 @@ export interface Project {
 // GET /api/projects/{uid}/outline: the project's setup in plain sentences, built from its config
 export type OutlineSourceState = "receiving" | "silent" | "error" | "paused" | "waiting";
 export interface OutlineWatch {
-  source: string; connector: string; description: string; state: OutlineSourceState;
+  source: string; title?: string; connector: string; description: string; state: OutlineSourceState;
   last_event_at: string | null; detail: string | null;
 }
 export interface OutlineWake { trigger: string; sentence: string; cooldown_sentence: string | null; paused: boolean }
