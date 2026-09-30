@@ -802,7 +802,12 @@ pre.payload {
   font-family: var(--mono); font-size: 12.5px;
 }
 .combo-item:hover, .combo-item.active { background: var(--row-hover); }
-.pagehead { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+/* the title and subtitle take the free width; the buttons keep theirs on the right, and wrap
+   under the text only on a narrow screen (a long subtitle pushed them onto the table below) */
+.pagehead { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px 24px; margin-bottom: 20px; }
+.pagehead > :first-child { flex: 1 1 auto; min-width: 0; }
+.pagehead > .btnrow { flex: 0 0 auto; margin-top: 6px; }
+@media (max-width: 700px) { .pagehead { flex-wrap: wrap; } }
 
 /* labels & key editor (SourceForm) */
 .label-head, .label-row { display: flex; gap: 8px; align-items: center; }
