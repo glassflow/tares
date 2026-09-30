@@ -139,6 +139,7 @@ class RiusRca(Template):
             # not wake the agent again until the cooldown is over (TR-285)
             PlannedObject("trigger", "trigger", {
                 "name": TRIGGER, "sources": [SOURCE], "key_field": "service",
+                "description": "Rius sends an alert for a service",
                 "condition": {"aggregate": "count", "predicate": "> 0", "window": "5m"},
                 "cooldown": "5m"}),
             PlannedObject("mcp_server", "mcp", {

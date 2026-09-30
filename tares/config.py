@@ -113,6 +113,7 @@ class TriggerCfg:
     cooldown_seconds: float = 300.0
     paused: bool = False
     project: str | None = None
+    description: str = ""     # what wakes it in plain words; "" = said from the rule
 
 
 @dataclass
@@ -254,6 +255,7 @@ def _trigger_from_dict(t: dict) -> TriggerCfg:
         cooldown_seconds=parse_duration(t.get("cooldown", "5m")),
         paused=bool(t.get("paused", False)),
         project=t.get("project") or t.get("owned_by") or None,
+        description=str(t.get("description") or "").strip().rstrip(".").strip(),
     )
 
 
@@ -439,7 +441,9 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
         store.upsert_catalog_trigger(
             t["name"], list(t["sources"]), t["condition"], t.get("emit", {}) or {},
             str(t.get("cooldown", "5m")), filters=list(t.get("filters") or []),
-            key_field=t.get("key_field") or "")
+            key_field=t.get("key_field") or "",
+            description=(normalize_trigger_description(t["description"])
+                         if "description" in t else None))
         # upsert doesn't touch paused (it's toggled separately); reflect the document's state so a
         # paused trigger round-trips. Sources carry paused through upsert_catalog_source already.
         store.set_trigger_paused(t["name"], bool(t.get("paused", False)))
@@ -656,6 +660,7 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
                          "sources": t["sources"],
                          **({"filters": t["filters"]} if t.get("filters") else {}),
                          **({"key_field": t["key_field"]} if t.get("key_field") else {}),
+                         **({"description": t["description"]} if t.get("description") else {}),
                          "condition": t["condition"], "emit": t["emit"], "cooldown": t["cooldown"],
                          **({"paused": True} if t.get("paused") else {})})
     kept_triggers = {t["name"] for t in trig_out}
@@ -928,12 +933,36 @@ def validate_filters(filters, owner: str) -> None:
                     f"{owner}: filter op {f['op']!r} needs a numeric value")
 
 
+MAX_TRIGGER_DESCRIPTION = 160
+
+
+def normalize_trigger_description(value, owner: str = "trigger") -> str:
+    """A trigger's plain-words description: one line of at most 160 characters, phrased to
+    follow "When" ("an alert fires in the demo service"). "" when not given. A trailing full
+    stop is dropped, since the sentence around it adds its own."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise CatalogError(f"{owner}: description must be text")
+    text = value.strip()
+    if "\n" in text or "\r" in text:
+        raise CatalogError(f"{owner}: description must be one line")
+    if "—" in text:
+        raise CatalogError(f"{owner}: description must not use an em dash; use a comma")
+    text = text.rstrip(".").strip()
+    if len(text) > MAX_TRIGGER_DESCRIPTION:
+        raise CatalogError(f"{owner}: description is longer than "
+                           f"{MAX_TRIGGER_DESCRIPTION} characters")
+    return text
+
+
 def validate_trigger_dict(t: dict, source_names: set) -> None:
     if "view" in t and t.get("view") not in (None, ""):
         raise CatalogError(VIEWS_REMOVED)
     for field in ("name", "condition"):
         if not t.get(field):
             raise CatalogError(f"trigger is missing required field {field!r}")
+    normalize_trigger_description(t.get("description"), f"trigger {t['name']!r}")
     srcs = t.get("sources")
     if not isinstance(srcs, list) or not srcs or not all(isinstance(x, str) and x for x in srcs):
         raise CatalogError(f"trigger {t['name']!r}: sources must name at least one source")

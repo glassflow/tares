@@ -87,6 +87,26 @@ class GoalDemo(Template):
 
 register(GoalDemo())
 
+
+class DescDemo(Template):
+    """A template whose planned trigger has a description, for the once-only fill."""
+    key = "desc_demo"
+    title = "Description demo"
+
+    def plan(self, params):
+        return [PlannedObject("source", "source", {**WEBHOOK_SRC, "name": "desc-alerts"}),
+                PlannedObject("trigger", "trigger", {
+                    "name": "desc-alert", "sources": ["desc-alerts"], "key_field": "service",
+                    "description": "an alert fires for a service",
+                    "condition": {"aggregate": "count", "predicate": "> 0", "window": "1m"},
+                    "cooldown": "5m"})]
+
+
+WEBHOOK_SRC = {"connector": "webhook", "poll": "5s",
+               "config": {"event_type": "log", "text_template": "{msg}",
+                          "labels": [{"name": "service", "field": "service", "primary": True}]}}
+register(DescDemo())
+
 WEBHOOK = {"connector": "webhook", "poll": "5s",
            "config": {"event_type": "log", "text_template": "{msg}",
                       "labels": [{"name": "service", "field": "service", "primary": True}]}}
@@ -130,8 +150,50 @@ def phrasing():
        "Then waits 5 minutes before waking again for the same service.")
     avg = trig(Condition("avg", "> 300", "5m", field="latency_ms"), key_field="service")
     eq("average over a field", G.condition_clause(avg, src),
-       "the average latency_ms of checkout-errors events goes above 300 in 5 minutes for one "
-       "service")
+       "the average latency_ms on checkout-errors goes above 300 in 5 minutes for one service")
+    lab = {"labels": [{"name": "service", "field": "service", "primary": True}]}
+    sre = {**src, "demo_logs": SourceCfg("demo_logs", "log", "docker_logs", 5, lab),
+           "demo_metrics": SourceCfg("demo_metrics", "metric", "prometheus", 5, lab),
+           "demo_alerts": SourceCfg("demo_alerts", "log", "prometheus_alerts", 5, lab)}
+    total = trig(Condition("sum", "> 0", "1m", field="alert_active"), key_field="service",
+                 sources=["demo_logs", "demo_metrics", "demo_alerts"])
+    eq("a total across several sources", G.wake_sentence(total, sre),
+       "Wakes when the total alert_active across any of its 3 sources goes above 0 in 1 minute "
+       "for one service.")
+    eq("the highest, two named sources", G.condition_clause(
+        trig(Condition("max", ">= 90", "10m", field="cpu"), sources=["checkout-errors", "api"]),
+        src), "the highest cpu across checkout-errors and api reaches 90 in 10 minutes for one "
+              "service")
+    eq("the lowest, one source with a filter", G.condition_clause(
+        trig(Condition("min", "< 5", "1h", field="free_gb"), sources=["api"],
+             filters=[{"field": "env", "op": "eq", "value": "prod"}]), src),
+       "the lowest free_gb of events matching env = prod on api drops below 5 in 1 hour")
+    eq("a total that is exactly a number", G.condition_clause(
+        trig(Condition("sum", "== 0", "1h", field="orders"), sources=["api"]), src),
+       "the total orders on api is 0 over 1 hour")
+    for label, x in (("sum", total), ("avg", avg)):
+        ck(f"no 'events' after the sources ({label})",
+           " events " not in G.condition_clause(x, sre) + " ", G.condition_clause(x, sre))
+
+    print("== a trigger's own description ==")
+    desc = trig(Condition("sum", "> 0", "1m", field="alert_active"), key_field="service",
+                sources=["demo_logs", "demo_metrics", "demo_alerts"], cooldown_seconds=300,
+                description="Prometheus fires an alert for the demo service")
+    eq("the wake sentence says it", G.wake_sentence(desc, sre),
+       "Wakes when Prometheus fires an alert for the demo service.")
+    eq("the cooldown sentence stays", G.cooldown_sentence(desc, sre),
+       "Then waits 5 minutes before waking again for the same service.")
+    eq("the lead says it", G._lead(desc, sre),
+       "When Prometheus fires an alert for the demo service")
+    parts = {"triggers": [desc], "external": False, "targets": {},
+             "agents": [{"name": "incident-first-look", "trigger": "t", "enabled": True,
+                         "handoffs": []}]}
+    eq("the project sentence says it", G.outline_sentence(parts, sre),
+       "When Prometheus fires an alert for the demo service, incident-first-look looks first.")
+    sched_d = trig(Condition("count", "> 0", "1h", every=3600.0),
+                   description="the hourly check comes round")
+    eq("a schedule with a description", (G.wake_sentence(sched_d, src), G._lead(sched_d, src)),
+       ("Wakes when the hourly check comes round.", "When the hourly check comes round"))
     sched = trig(Condition("count", "> 0", "10m", every=600.0), cooldown_seconds=300)
     eq("schedule", G.wake_sentence(sched, src), "Wakes every 10 minutes.")
     eq("a schedule has no cooldown sentence", G.cooldown_sentence(sched, src), None)
@@ -157,6 +219,32 @@ def phrasing():
        "checkout-errors gets more than 1 event in 2 minutes for one env and app")
     eq("durations", [G.duration_words(x) for x in (30, 60, 5400, 7200, 86400)],
        ["30 seconds", "1 minute", "90 minutes", "2 hours", "1 day"])
+
+    print("== the description column, on a database from before it ==")
+    import duckdb
+    from tares.store import Store
+    old = os.path.join(TMP, "old.duckdb")
+    con = duckdb.connect(old)
+    con.execute("CREATE TABLE catalog_triggers (name TEXT PRIMARY KEY, sources JSON, "
+                "filters JSON, key_field TEXT, condition JSON, emit JSON, cooldown TEXT, "
+                "created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, paused BOOLEAN DEFAULT FALSE)")
+    con.execute("INSERT INTO catalog_triggers (name, sources, filters, key_field, condition, "
+                "emit, cooldown) VALUES ('old', '[\"api\"]', '[]', '', "
+                "'{\"aggregate\": \"count\", \"predicate\": \"> 0\", \"window\": \"5m\"}', "
+                "'{}', '5m')")
+    con.close()
+    st = Store(old)
+    eq("an older trigger reads with no description",
+       [(t["name"], t["description"]) for t in st.list_catalog_triggers()], [("old", "")])
+    st.upsert_catalog_trigger("old", ["api"], {"aggregate": "count", "predicate": "> 0",
+                                               "window": "5m"}, {}, "5m",
+                              description="an event arrives")
+    st.con.close()
+    st = Store(old)   # the migration runs again on a database that has the column
+    eq("the migration runs twice and keeps it",
+       [(t["name"], t["description"]) for t in st.list_catalog_triggers()],
+       [("old", "an event arrives")])
+    st.con.close()
 
     print("== headline and next step, derived from older notes ==")
     note_h = ("## Payment provider outage\n\n8 checkout payments failed in one burst. The gateway "
@@ -340,6 +428,86 @@ async def main():
         eq("skills", [(s["name"], s["description"], s["loaded_by"]) for s in ol["skills"]],
            [("checkout-error-codes", "Which codes are an outage.", [])])
         no_em_dash("the outline", ol)
+
+        print("== a trigger's description, through the API ==")
+        r = await cx.post("/api/projects", json={"template": "custom", "name": "Described",
+                                                 "objects": []})
+        dp = r.json()["id"]
+        await mk("sources", {**WEBHOOK, "name": "pager", "project": dp})
+        base = {"project": dp, "sources": ["pager"], "key_field": "service", "cooldown": "5m",
+                "condition": {"aggregate": "sum", "field": "alert_active", "predicate": "> 0",
+                              "window": "1m"}}
+        for bad, why in (("a\nb", "one line"), ("x" * 161, "160"),
+                         ("an alert — fires", "em dash")):
+            r = await cx.post("/api/triggers", json={**base, "name": "bad", "description": bad})
+            ck(f"a description refused: {why}", r.status_code == 400 and why in r.text, r.text)
+        r = await cx.post("/api/triggers", json={**base, "name": "paged",
+                                                 "description": " an alert fires in the demo "
+                                                                "service. "})
+        ck("create with a description", r.status_code == 201, r.text)
+        rows = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}
+        eq("the list carries it, trimmed", rows["paged"]["description"],
+           "an alert fires in the demo service")
+        await mk("agents/builtin", {"name": "pager-look", "trigger": "paged", "prompt": "look",
+                                    "project": dp})
+        await cx.post("/api/agents/builtin/pager-look/enable")
+        ol = (await cx.get(f"/api/projects/{dp}/outline")).json()
+        eq("the project sentence uses it", ol["sentence"],
+           "When an alert fires in the demo service, pager-look looks first.")
+        eq("the wake sentence uses it", (ol["wakes"][0]["sentence"],
+                                         ol["wakes"][0]["cooldown_sentence"]),
+           ("Wakes when an alert fires in the demo service.",
+            "Then waits 5 minutes before waking again for the same service."))
+        r = await cx.put("/api/triggers/paged", json={**base, "name": "paged",
+                                                      "cooldown": "10m"})
+        ck("an update without it keeps it", r.status_code == 200 and {
+            t["name"]: t for t in (await cx.get("/api/triggers")).json()}["paged"][
+            "description"] == "an alert fires in the demo service", r.text)
+        doc = (await cx.get("/api/catalog/export")).text
+        exported = {t["name"]: t for t in yaml.safe_load(doc)["triggers"]}
+        eq("the export carries it", exported["paged"].get("description"),
+           "an alert fires in the demo service")
+        ck("a trigger without one exports without the key", "description" not in exported["spike"])
+        r = await cx.put("/api/triggers/paged", json={**base, "name": "paged", "description": ""})
+        ck("an empty description clears it", r.status_code == 200 and {
+            t["name"]: t for t in (await cx.get("/api/triggers")).json()}["paged"][
+            "description"] == "", r.text)
+        ol = (await cx.get(f"/api/projects/{dp}/outline")).json()
+        eq("then the sentence is said from the rule", ol["wakes"][0]["sentence"],
+           "Wakes when the total alert_active on pager goes above 0 in 1 minute for one "
+           "service.")
+        r = await cx.post("/api/catalog/import", json={"yaml": doc})
+        ck("an import brings it back", r.status_code == 200 and {
+            t["name"]: t for t in (await cx.get("/api/triggers")).json()}["paged"][
+            "description"] == "an alert fires in the demo service", r.text)
+        bad_doc = yaml.safe_load(doc)
+        bad_doc["triggers"] = [{**exported["paged"], "description": "a\nb"}]
+        r = await cx.post("/api/catalog/import", json={"yaml": yaml.safe_dump(bad_doc)})
+        ck("an import refuses a bad description", r.status_code == 400 and "one line" in r.text,
+           r.text)
+
+        print("== template trigger descriptions, filled once ==")
+        r = await cx.post("/api/projects", json={"template": "desc_demo", "name": "Desc one"})
+        ck("a template project's trigger gets the template's description",
+           r.status_code == 201 and {t["name"]: t for t in store.list_catalog_triggers()}[
+               "desc-alert"]["description"] == "an alert fires for a service", r.text)
+        store.set_trigger_description("desc-alert", None)
+        store.set_setting("template_trigger_descriptions_filled", None)
+        eng = Engine(store)
+        n = eng.fill_template_trigger_descriptions()
+        ck("an older template project's trigger is filled",
+           n == 1 and {t["name"]: t for t in store.list_catalog_triggers()}["desc-alert"][
+               "description"] == "an alert fires for a service", f"{n}")
+        store.set_trigger_description("desc-alert", None)
+        ck("it runs once: a description cleared later stays cleared",
+           eng.fill_template_trigger_descriptions() == 0
+           and {t["name"]: t for t in store.list_catalog_triggers()}["desc-alert"][
+               "description"] == "")
+        from tares.projects.registry import get_template
+        sre = [o for o in get_template("ai_sre_demo").plan(
+            get_template("ai_sre_demo").validate({})) if o.kind == "trigger"]
+        eq("the AI SRE demo's trigger says what happens", sre[0].spec.get("description"),
+           "Prometheus fires an alert for the demo service")
 
         print("== health before anything arrived ==")
         h = (await cx.get(f"/api/projects/{a}/health")).json()

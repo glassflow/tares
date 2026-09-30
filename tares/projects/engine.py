@@ -249,6 +249,36 @@ class Engine:
         self.store.set_setting("template_goals_filled", "1")
         return n
 
+    def fill_template_trigger_descriptions(self) -> int:
+        """Upgrade, once per database: the triggers a template planned, in projects made before
+        triggers had a description, get the template's description when they have none. The
+        settings marker keeps a description the user cleared later from coming back. Returns how
+        many triggers were given one."""
+        if self.store.get_setting("template_trigger_descriptions_filled"):
+            return 0
+        current = {t["name"]: t for t in self.store.list_catalog_triggers()}
+        n = 0
+        for p in self.store.list_projects():
+            template = _safe_template(p["template"])
+            if template is None:
+                continue
+            try:
+                planned = template.plan(template.validate(dict(p.get("params") or {})))
+            except Exception:  # noqa: BLE001 (an old project's params may no longer plan)
+                continue
+            names = {o["key"]: o["name"] for o in self.store.list_project_objects(p["id"])
+                     if o["kind"] == "trigger"}
+            for o in planned:
+                desc = o.spec.get("description") if o.kind == "trigger" else None
+                name = names.get(o.key) or (o.spec.get("name") if o.kind == "trigger" else None)
+                t = current.get(name) if desc and name else None
+                if t is None or t.get("description"):
+                    continue
+                self.store.set_trigger_description(name, desc)
+                n += 1
+        self.store.set_setting("template_trigger_descriptions_filled", "1")
+        return n
+
     def pause(self, uid: str, sources: bool = False) -> dict:
         """Triggers off, agents unsubscribed; sources keep ingesting unless `sources` is set, in
         which case the project's sources that are running are paused too (polling stops, pushes

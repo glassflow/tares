@@ -36,7 +36,8 @@ from .config import (SLACK_URL_PREFIX, CatalogError, agent_url, export_db_to_yam
                      import_yaml_to_db, slack_channel_from_url, slack_url,
                      validate_agent_dict, validate_slack_channel, validate_source_dict,
                      check_handoff_targets, normalize_handoffs,
-                     validate_trigger_dict, VIEWS_REMOVED, _source_from_dict)
+                     validate_trigger_dict, normalize_trigger_description, VIEWS_REMOVED,
+                     _source_from_dict)
 from .connectors import (SPECS, normalize_config, redact_config, restore_secrets,
                          source_type_for)
 from .dispatch import Dispatcher
@@ -329,6 +330,7 @@ class TriggerIn(BaseModel):
     condition: dict
     emit: dict = {}
     cooldown: str = "5m"
+    description: str | None = None  # what wakes it in plain words; None keeps it on update
     view: str | None = None      # only to refuse it by name: views were removed
 
 
@@ -510,6 +512,9 @@ def make_app() -> FastAPI:
 
     # projects made from a template before goals existed get the template's goal (once)
     projects.fill_template_goals()
+    # and the triggers a template planned get its plain-words description (once)
+    if projects.fill_template_trigger_descriptions():
+        runtime.reload_catalog()
     _seed_project(store, projects)
 
     def _otlp_source_for(header: str | None) -> str:
@@ -1874,6 +1879,7 @@ def make_app() -> FastAPI:
     def _trigger_row(t: dict) -> dict:
         return {"name": t["name"], "project": t.get("owned_by"), "sources": t["sources"],
                 "filters": t["filters"], "key_field": t["key_field"],
+                "description": t.get("description") or "",
                 "condition": t["condition"], "emit": t["emit"], "cooldown": t["cooldown"],
                 "paused": t["paused"], "owned_by": t.get("owned_by"),
                 "customized": t["customized"]}
@@ -1891,6 +1897,13 @@ def make_app() -> FastAPI:
         except CatalogError as e:
             _err(e)
         return raw
+
+    def _trigger_description(body: TriggerIn) -> str | None:
+        """The description to store: None keeps the current one (a client that does not send
+        it), "" clears it. Already validated by _check_trigger."""
+        if body.description is None:
+            return None
+        return normalize_trigger_description(body.description)
 
     def _place_trigger(name: str, uid: str, sources: list[str]) -> None:
         """Put the trigger in `uid`, with its sources as members. Its agents come along, since an
@@ -1921,7 +1934,8 @@ def make_app() -> FastAPI:
         uid = _resolve_project(body.project)
         store.upsert_catalog_trigger(body.name, raw["sources"], body.condition, body.emit,
                                      body.cooldown, filters=raw.get("filters") or [],
-                                     key_field=raw.get("key_field") or "")
+                                     key_field=raw.get("key_field") or "",
+                                     description=_trigger_description(body))
         _place_trigger(body.name, uid, raw["sources"])
         runtime.reload_catalog()
         return {"ok": True, "project": uid}
@@ -1938,7 +1952,8 @@ def make_app() -> FastAPI:
             or store.default_project_id()
         store.upsert_catalog_trigger(name, raw["sources"], body.condition, body.emit,
                                      body.cooldown, filters=raw.get("filters") or [],
-                                     key_field=raw.get("key_field") or "")
+                                     key_field=raw.get("key_field") or "",
+                                     description=_trigger_description(body))
         store.mark_customized("trigger", name)
         _place_trigger(name, uid, raw["sources"])
         runtime.reload_catalog()

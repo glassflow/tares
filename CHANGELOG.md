@@ -5,6 +5,25 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- A trigger can say what wakes it in plain words: an optional `description`, one line of at most
+  160 characters phrased to follow "When" ("an alert fires for the checkout service"). The project
+  sentence, the "Wakes when" card and the guided setup plan use it instead of the rule's own
+  wording. `POST` and `PUT /api/triggers`, the trigger list, catalog export and import, and the MCP
+  `create_trigger` and `update_trigger` tools take it; an update that leaves it out keeps it, an
+  empty one clears it. The console's trigger editor and the setup wake-up editor have a field for it.
+- The guided setup asks the model for a short plain description of each wake-up and stores it on
+  the trigger.
+- The AI SRE demo's trigger reads "Prometheus fires an alert for the demo service", the Rius RCA
+  trigger "Rius sends an alert for a service", the challenger workflow trigger "a challenger
+  session in Claude Code ends". Projects made from these templates before get the description once
+  at start, when their trigger has none.
+
+### Changed
+- A trigger over a number reads more naturally without a description: "the total alert_active
+  across any of its 3 sources goes above 0 in 1 minute for one service" instead of "the total
+  alert_active of any of its 3 sources events goes above 0 ...".
+
 ## [1.38.0-rc.1] - 2026-09-30
 
 Release candidate: projects are the unit, the goal-first project page and the guided setup, for testing on a cell before 1.38.0.

@@ -75,12 +75,14 @@ async def read(selector: dict, window: str = "15m", include_payload: bool = Fals
 
 
 def _trigger_body(name: str, sources: list[str], condition: dict, filters, key_field: str,
-                  emit, cooldown: str, project: str) -> dict:
+                  emit, cooldown: str, project: str, description: str | None = None) -> dict:
     body = {"name": name, "sources": sources, "filters": filters or [],
             "key_field": key_field, "condition": condition, "emit": emit or {},
             "cooldown": cooldown}
     if project:
         body["project"] = project
+    if description is not None:
+        body["description"] = description
     return body
 
 
@@ -88,7 +90,7 @@ def _trigger_body(name: str, sources: list[str], condition: dict, filters, key_f
 async def create_trigger(name: str, sources: list[str], condition: dict,
                          filters: list[dict] | None = None, key_field: str = "",
                          emit: dict | None = None, cooldown: str = "5m",
-                         project: str = "") -> str:
+                         project: str = "", description: str | None = None) -> str:
     """Create a trigger: a condition Tares evaluates continuously over one or more sources; when
     it trips, subscribed agents are woken with the correlated timeline. `sources` names the
     sources it watches (at least one). `filters` [{field, op, value}] (ops: eq, neq, contains, gt,
@@ -97,9 +99,13 @@ async def create_trigger(name: str, sources: list[str], condition: dict,
     aggregate (omit for count), predicate: e.g. '> 1.0' / '>= 5' / '== 0', window: detection
     window e.g. '1m'}. `emit` is {kind: what a firing is called e.g. error_spike, context_window:
     timeline the woken agent receives e.g. '15m'}. `project` is the project id the trigger belongs
-    to (default: the default project); its sources join that project. catalog_describe a source
-    to confirm its labels first. Wire agents to it with subscribe()."""
-    body = _trigger_body(name, sources, condition, filters, key_field, emit, cooldown, project)
+    to (default: the default project); its sources join that project. `description` (optional)
+    says in one plain line what wakes it, phrased to follow "When", e.g. "an alert fires in the
+    checkout service"; the project page uses it instead of the rule's own wording (at most 160
+    characters, one line). catalog_describe a source to confirm its labels first. Wire agents
+    to it with subscribe()."""
+    body = _trigger_body(name, sources, condition, filters, key_field, emit, cooldown, project,
+                         description)
     async with _cx(10) as cx:
         r = await cx.post(f"{TARESD}/api/triggers", json=body)
     return r.text
@@ -109,12 +115,14 @@ async def create_trigger(name: str, sources: list[str], condition: dict,
 async def update_trigger(name: str, sources: list[str], condition: dict,
                          filters: list[dict] | None = None, key_field: str = "",
                          emit: dict | None = None, cooldown: str = "5m",
-                         project: str = "") -> str:
+                         project: str = "", description: str | None = None) -> str:
     """Edit an EXISTING trigger in place: replace its sources, filters, key_field, condition,
     emit and cooldown, and move it to another `project` when given. Create new triggers with
     create_trigger(); this only updates one that already exists (renaming isn't supported, so
-    keep `name` the same). See create_trigger for the shapes."""
-    body = _trigger_body(name, sources, condition, filters, key_field, emit, cooldown, project)
+    keep `name` the same). `description` left out keeps the current one, "" clears it. See
+    create_trigger for the shapes."""
+    body = _trigger_body(name, sources, condition, filters, key_field, emit, cooldown, project,
+                         description)
     async with _cx(10) as cx:
         r = await cx.put(f"{TARESD}/api/triggers/{name}", json=body)
     return r.text

@@ -358,6 +358,9 @@ _MIGRATIONS = [
     "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS setup JSON",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS practice BOOLEAN",
     "ALTER TABLE dispatch_log ADD COLUMN IF NOT EXISTS practice BOOLEAN",
+    # A trigger's own words for what wakes it ("an alert fires in the demo service"), used by
+    # every generated sentence instead of the rule's wording. NULL = say it from the rule.
+    "ALTER TABLE catalog_triggers ADD COLUMN IF NOT EXISTS description TEXT",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -1063,35 +1066,45 @@ class Store:
 
     def upsert_catalog_trigger(self, name: str, sources: list, condition: dict,
                                emit: dict, cooldown: str, filters: list | None = None,
-                               key_field: str = "") -> None:
+                               key_field: str = "", description: str | None = None) -> None:
         # Explicit column list: `paused` was appended by migration, so positional VALUES no longer
         # match. A new trigger starts active (FALSE); an edit preserves the current paused state
         # (paused is intentionally NOT in the DO UPDATE SET — it's toggled via set_trigger_paused).
+        # description: None keeps what is stored (a caller that does not know it), "" clears it.
         ts = now_utc()
+        keep = description is None
         with self._lock:
             self.con.execute(
                 "INSERT INTO catalog_triggers "
                 "(name, sources, filters, key_field, condition, emit, cooldown, created_at, "
-                "updated_at, paused) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE) "
+                "updated_at, paused, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, ?) "
                 "ON CONFLICT (name) DO UPDATE SET sources = excluded.sources, "
                 "filters = excluded.filters, key_field = excluded.key_field, "
                 "condition = excluded.condition, emit = excluded.emit, "
-                "cooldown = excluded.cooldown, updated_at = excluded.updated_at",
+                "cooldown = excluded.cooldown, updated_at = excluded.updated_at"
+                + ("" if keep else ", description = excluded.description"),
                 [name, json.dumps(list(sources or [])), json.dumps(list(filters or [])),
-                 key_field or "", json.dumps(condition), json.dumps(emit), cooldown, ts, ts],
+                 key_field or "", json.dumps(condition), json.dumps(emit), cooldown, ts, ts,
+                 description or None],
             )
+
+    def set_trigger_description(self, name: str, description: str | None) -> None:
+        with self._lock:
+            self.con.execute("UPDATE catalog_triggers SET description = ? WHERE name = ?",
+                             [description or None, name])
 
     def list_catalog_triggers(self) -> list[dict]:
         with self._lock:
             rows = self.con.execute(
                 "SELECT name, sources, filters, key_field, condition, emit, cooldown, paused, "
-                "owned_by, customized FROM catalog_triggers ORDER BY name"
+                "owned_by, customized, description FROM catalog_triggers ORDER BY name"
             ).fetchall()
         return [
             {"name": r[0], "sources": json.loads(r[1] or "[]"), "filters": json.loads(r[2] or "[]"),
              "key_field": r[3] or "", "condition": json.loads(r[4]),
              "emit": json.loads(r[5]), "cooldown": r[6], "paused": bool(r[7]),
-             "project": r[8], "owned_by": r[8], "customized": bool(r[9])}
+             "project": r[8], "owned_by": r[8], "customized": bool(r[9]),
+             "description": r[10] or ""}
             for r in rows
         ]
 

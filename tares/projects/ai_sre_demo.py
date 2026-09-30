@@ -259,6 +259,7 @@ class AiSreDemo(Template):
                                       {"name": "alert_active", "const": 1, "type": "number"}]}}),
             PlannedObject("trigger", "trigger", {
                 "name": "incident", "sources": ["demo_logs", "demo_metrics", "demo_alerts"],
+                "description": "Prometheus fires an alert for the demo service",
                 "key_field": "service",
                 "condition": {"aggregate": "sum", "field": "alert_active", "predicate": "> 0",
                               "window": "1m", "group_by": ["key_value"]},

@@ -260,8 +260,12 @@ def condition_clause(trig, sources: dict) -> str:
         verb = "gets" if one else "get"
         return f"{srcs} {verb} {what} in {window}{per}"
     agg = _AGG_WORDS.get(c.aggregate, c.aggregate)
-    return (f"the {agg} {c.field or 'value'} of {srcs} events{filt} {_AGG_VERBS[op]} "
-            f"{_num(n)} in {window}{per}")
+    # "the total alert_active across any of its 3 sources", "the average latency_ms on api";
+    # with filters, "the average latency_ms of events matching level = error on api"
+    prep = "on" if len(names) == 1 else "across"
+    what = f"the {agg} {c.field or 'value'}" + (f" of events{filt}" if filt else "")
+    span = "over" if op == "==" else "in"   # "is 0 over 1 hour", "goes above 5 in 1 minute"
+    return f"{what} {prep} {srcs} {_AGG_VERBS[op]} {_num(n)} {span} {window}{per}"
 
 
 def schedule_words(trig) -> str:
@@ -271,7 +275,16 @@ def schedule_words(trig) -> str:
             + (f", for events{filt}" if filt else ""))
 
 
+def described(trig) -> str:
+    """The trigger's own plain words for what wakes it ("an alert fires in the demo service"),
+    or "" when it has none and the sentence is said from the rule."""
+    return str(getattr(trig, "description", "") or "").strip().rstrip(".").strip()
+
+
 def wake_sentence(trig, sources: dict) -> str:
+    d = described(trig)
+    if d:
+        return f"Wakes when {d}."
     if _is_schedule(trig):
         return f"Wakes {schedule_words(trig)}."
     return f"Wakes when {condition_clause(trig, sources)}."
@@ -286,6 +299,9 @@ def cooldown_sentence(trig, sources: dict) -> str | None:
 
 
 def _lead(trig, sources: dict) -> str:
+    d = described(trig)
+    if d:
+        return f"When {d}"
     if _is_schedule(trig):
         w = schedule_words(trig)
         return w[0].upper() + w[1:]
@@ -837,6 +853,9 @@ def _firing_text(store, catalog, t: dict, nested: bool) -> str:
     value = _firing_value(store, trig, {"fired_at": t.get("at"), "key": entity})
     window = _window_words(c.window)
     if pred is None or value is None:
+        d = described(trig)
+        if d:
+            return f"Woke when {d}, for {entity}"
         return f"{t.get('trigger')} woke the project for {entity}"
     op, n = pred
     if c.aggregate == "count":

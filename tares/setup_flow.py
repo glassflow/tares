@@ -22,7 +22,8 @@ from datetime import datetime, timezone
 from . import goal as G
 from . import skills as _skills
 from .config import (CatalogError, _source_from_dict, _trigger_from_dict, check_handoff_targets,
-                     normalize_handoffs, parse_duration, validate_agent_dict,
+                     normalize_handoffs, normalize_trigger_description, parse_duration,
+                     validate_agent_dict,
                      validate_mcp_server_dict, validate_source_dict, validate_trigger_dict)
 from .connectors import SPECS, normalize_config, secret_field_names
 from .models import ModelError, ModelUnavailable, add_usage, empty_usage, tool_message
@@ -91,6 +92,11 @@ PLAN_SCHEMA = {"type": "object", "properties": {
               "items": {"type": "object", "properties": {
                   "key": {"type": "string", "description": "k1, k2, ..."},
                   "name": {"type": "string", "description": "short kebab-case"},
+                  "description": {"type": "string",
+                                  "description": "what wakes the project in plain words, one "
+                                                 "line of at most 160 characters, phrased to "
+                                                 "follow 'When': e.g. 'an alert fires for the "
+                                                 "checkout service'"},
                   "sources": {"type": "array", "items": _S,
                               "description": "names of watches in this plan"},
                   "filters": {"type": "array", "items": {"type": "object", "properties": {
@@ -183,7 +189,9 @@ customer, repo), plus a text_template for a webhook.
 - Names are short lowercase kebab-case.
 - Wakes: usually one trigger. key_field is the primary label. Give knobs for the numbers a \
 person would tune: threshold, window_minutes and cooldown_minutes (every_minutes for a schedule), \
-each with a plain label and a sensible min and max.
+each with a plain label and a sensible min and max. Give each wake-up a short plain description \
+of the thing that happens, phrased to follow "When" (e.g. "an alert fires for the checkout \
+service", "a customer opens a support ticket"), not the rule's numbers or field names.
 - who tares: at most 3 agents. For an incident goal: a triage agent that looks first and \
 concludes with the verdict investigate when it is real, handing off to an optional root cause \
 agent (on_trigger false, optional true). A prompt says what to look at, what a useful finding \
@@ -342,7 +350,11 @@ def apply_knobs(w: dict, prev: dict | None, errors: list, where: str) -> None:
 
 def clause(trig, sources: dict, knobs: list) -> str:
     """"checkout-errors gets more than 5 errors in 5 minutes for one service": goal.py's
-    phrasing, with the threshold knob's unit for a count."""
+    phrasing, with the threshold knob's unit for a count. A wake-up with a description is said
+    in its own words."""
+    d = G.described(trig)
+    if d:
+        return d
     if getattr(trig.condition, "every", None):
         every = next((k for k in knobs if k.get("id") == "every_minutes"), None)
         if every is None:
@@ -362,7 +374,9 @@ def clause(trig, sources: dict, knobs: list) -> str:
 
 def _lead(trig, sources, knobs) -> str:
     c = clause(trig, sources, knobs)
-    return _cap(c) if getattr(trig.condition, "every", None) else f"When {c}"
+    if getattr(trig.condition, "every", None) and not G.described(trig):
+        return _cap(c)
+    return f"When {c}"
 
 
 def own_agent_words(name) -> str:
@@ -752,6 +766,11 @@ def _normalize(raw, store, catalog, prev: dict | None) -> tuple[dict, _Problems]
         w["filters"] = filters
         plain += _filter_problems(filters)
         w["key_field"] = str(w.get("key_field") or "").strip()
+        try:
+            w["description"] = normalize_trigger_description(w.get("description"), "")
+        except CatalogError as e:
+            w["description"] = str(w.get("description") or "")
+            plain.append("The plain description " + str(e).removeprefix(": description ") + ".")
         w["cooldown"] = str(w.get("cooldown") or "5m")
         w["window"] = str(w.get("window") or "15m")
         if not isinstance(w.get("condition"), dict):
@@ -772,7 +791,7 @@ def _normalize(raw, store, catalog, prev: dict | None) -> tuple[dict, _Problems]
             continue
         tdict = {"name": nm, "sources": w["sources"], "condition": w["condition"],
                  "filters": w["filters"], "key_field": w["key_field"], "cooldown": w["cooldown"],
-                 "emit": {"context_window": w["window"]}}
+                 "emit": {"context_window": w["window"]}, "description": w["description"]}
         try:
             validate_trigger_dict(tdict, watch_names | set(catalog_sources))
             parse_duration(w["window"])
@@ -1089,7 +1108,8 @@ def apply(store, engine, plan: dict, make_key) -> tuple[str, dict | None]:
             objs.append(PlannedObject("trigger", f"trigger:{w['name']}", {
                 "name": w["name"], "sources": w["sources"], "condition": w["condition"],
                 "filters": w["filters"], "key_field": w["key_field"], "cooldown": w["cooldown"],
-                "emit": {"context_window": w["window"]}}))
+                "emit": {"context_window": w["window"]},
+                "description": w.get("description") or ""}))
             objects.append({"kind": "trigger", "name": w["name"]})
         made += objs
         engine._apply(uid, objs)

@@ -681,7 +681,7 @@ async def main():
         eq("an average has no problems", chk["problems"], [])
         eq("its sentence says the average of the field, with the filter",
            chk["plan"]["wakes"][0]["sentence"],
-           "The average latency_ms of payments-events events matching level = error goes "
+           "The average latency_ms of events matching level = error on payments-events goes "
            "above 500 in 5 minutes for one service.")
         eq("the threshold knob is labelled with the field",
            chk["plan"]["wakes"][0]["knobs"][0]["label"], "latency_ms")
@@ -691,6 +691,45 @@ async def main():
         ck("an average without a field is flagged in plain words",
            any(p["where"] == "wakes.k1" and "Pick the number to take the average of" in
                p["message"] for p in probs), probs)
+
+        print("== check and apply: a wake-up said in plain words ==")
+        said = copy.deepcopy(avg)
+        said["name"] = "Said plainly"
+        said["wakes"][0]["description"] = " checkout gets slow for a service. "
+        chk = (await cx.post("/api/setup/check", json={"plan": said})).json()
+        eq("a described wake-up has no problems", chk["problems"], [])
+        wk = chk["plan"]["wakes"][0]
+        eq("its description is trimmed", wk["description"], "checkout gets slow for a service")
+        eq("its sentence says it", wk["sentence"], "Checkout gets slow for a service.")
+        ck("the summary leads with it",
+           chk["plan"]["summary"].startswith("When checkout gets slow for a service, "
+                                             "checkout-triage"),
+           chk["plan"]["summary"])
+        for bad, why in (("a\nb", "one line"), ("slow " * 40, "160 characters")):
+            wrong = copy.deepcopy(said)
+            wrong["wakes"][0]["description"] = bad
+            probs = (await cx.post("/api/setup/check", json={"plan": wrong})).json()["problems"]
+            ck(f"a description that is not one plain line is flagged ({why})",
+               any(p["where"] == "wakes.k1" and why in p["message"]
+                   and p["message"].startswith("The plain description") for p in probs), probs)
+        dashed = copy.deepcopy(said)
+        dashed["wakes"][0]["description"] = "checkout gets slow — again"
+        wk2 = (await cx.post("/api/setup/check", json={"plan": dashed})).json()["plan"]["wakes"][0]
+        eq("an em dash in it becomes a comma, like every plan sentence", wk2["description"],
+           "checkout gets slow, again")
+        r = await cx.post("/api/setup/apply", json={"plan": chk["plan"]})
+        ck("apply a described plan", r.status_code == 201, r.text[:300])
+        stored = {t["name"]: t for t in store.list_catalog_triggers()}.get(wk["name"]) or {}
+        eq("the trigger keeps the description", stored.get("description"),
+           "checkout gets slow for a service")
+        if r.status_code == 201:
+            said_uid = r.json()["project"]["id"]
+            ol = (await cx.get(f"/api/projects/{said_uid}/outline")).json()
+            eq("the project page says it too", ol["wakes"][0]["sentence"],
+               "Wakes when checkout gets slow for a service.")
+        ck("the planner asks for a description",
+           "description" in S.PLAN_SCHEMA["properties"]["wakes"]["items"]["properties"]
+           and "plain description" in S.SYSTEM, "")
 
         print("== check: an MCP server already on the cell, a copied skill ==")
         r = await cx.post("/api/mcp-servers", json={"name": "deploys-mcp",

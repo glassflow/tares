@@ -144,6 +144,7 @@ class ChallengerWorkflow(Template):
             # first finding, so the trigger does not read it).
             PlannedObject("trigger", "trigger", {
                 "name": TRIGGER, "sources": [SOURCE], "key_field": "session",
+                "description": "a challenger session in Claude Code ends",
                 "filters": [{"field": "event_type", "op": "eq", "value": "session_end"},
                             {"field": "flow", "op": "eq", "value": FLOW}],
                 "condition": {"aggregate": "count", "predicate": "> 0", "window": "5m",
