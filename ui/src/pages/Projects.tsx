@@ -8,7 +8,7 @@ import type { Project } from "../types";
 // The Default project holds whatever was made outside another project. This page lists them; Create new (/projects/new) holds the template gallery.
 
 function statusClass(s: Project["status"]) {
-  return s === "active" ? "ok" : s === "paused" ? "paused" : "error";
+  return s === "active" ? "ok" : s === "paused" || s === "draft" ? "paused" : "error";
 }
 
 export function projectKindCounts(u: Project) {
@@ -58,24 +58,29 @@ export default function Projects() {
             {projects.map((u) => {
               const c = projectKindCounts(u);
               const missing = u.objects.filter((o) => o.missing).length;
+              // a draft opens where its setup stopped: nothing of it exists yet
+              const to = u.status === "draft" ? `/projects/${encodeURIComponent(u.id)}/setup`
+                : `/projects/${encodeURIComponent(u.id)}`;
               return (
                 <tr key={u.id}>
-                  <td><Link to={`/projects/${encodeURIComponent(u.id)}`}><strong>{u.name}</strong></Link>
+                  <td><Link to={to}><strong>{u.name}</strong></Link>
                     {u.default && <span className="chip" style={{ marginLeft: 8 }}>default</span>}</td>
-                  <td>{u.template_title}</td>
+                  <td>{u.status === "draft" ? "Guided setup" : u.template_title}</td>
                   <td>
                     <span className={`badge ${statusClass(u.status)}`}>{u.status}</span>
                     {missing > 0 && <span className="help" style={{ marginLeft: 6 }}>{missing} missing</span>}
                   </td>
                   <td className="help">
+                    {u.status === "draft" ? "Not set up yet" : <>
                     {c.source ?? 0} source{c.source === 1 ? "" : "s"}
                     {c.trigger ? `, ${c.trigger} trigger${c.trigger === 1 ? "" : "s"}` : ""}
                     {c.agent ? `, ${c.agent} agent${c.agent === 1 ? "" : "s"}` : ""}
+                    </>}
                   </td>
                   <td style={{ whiteSpace: "nowrap" }}><TimeAgo ts={u.updated_at} /></td>
                   <td>
                     <div className="btnrow" style={{ justifyContent: "flex-end" }}>
-                      <Link className="btn" to={`/projects/${encodeURIComponent(u.id)}`}>Open</Link>
+                      <Link className="btn" to={to}>{u.status === "draft" ? "Finish setting up" : "Open"}</Link>
                     </div>
                   </td>
                 </tr>

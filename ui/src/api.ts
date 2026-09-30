@@ -401,12 +401,21 @@ export const api = {
     request<{ plan: Plan }>("/api/setup/plan", { method: "POST", body: JSON.stringify(body) }),
   adjustSetup: (plan: Plan, instruction: string) =>
     request<{ plan: Plan }>("/api/setup/adjust", { method: "POST", body: JSON.stringify({ plan, instruction }) }),
-  checkSetup: (plan: Plan) =>
+  checkSetup: (plan: Plan, project?: string) =>
     request<{ plan: Plan; problems: SetupProblem[] }>("/api/setup/check",
-      { method: "POST", body: JSON.stringify({ plan }) }),
-  applySetup: (plan: Plan) =>
+      { method: "POST", body: JSON.stringify({ plan, project }) }),
+  applySetup: (plan: Plan, project?: string) =>
     request<{ project: Project; plan: Plan; connect: SetupConnect }>("/api/setup/apply",
-      { method: "POST", body: JSON.stringify({ plan }) }),
+      { method: "POST", body: JSON.stringify({ plan, project }) }),
+  // a draft project: made on "Plan it", planned in the background, kept while it is edited
+  createDraft: (body: { goal: string; who?: "tares" | "own" }) =>
+    request<{ project: Project }>("/api/setup/drafts", { method: "POST", body: JSON.stringify(body) }),
+  replanDraft: (id: string, body: { goal?: string; who?: "tares" | "own"; instruction?: string; plan?: Plan }) =>
+    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/setup/plan`,
+      { method: "POST", body: JSON.stringify(body) }),
+  saveDraftPlan: (id: string, plan: Plan) =>
+    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/setup`,
+      { method: "PUT", body: JSON.stringify({ plan }) }),
   projectSetup: (id: string) =>
     request<ProjectSetup>(`/api/projects/${encodeURIComponent(id)}/setup`),
   setSetupStep: (id: string, step: SetupStep) =>

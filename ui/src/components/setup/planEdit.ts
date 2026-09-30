@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { api } from "../../api";
+import { api, type SlackChannels } from "../../api";
 import type {
   AgentPreset, ConnectorSpec, McpServer, ModelProvider, Plan, PlanWatch, PlanWake, Project,
   SetupProblem, Source,
@@ -147,6 +147,8 @@ export interface CellData {
   defaultModel?: string;
   defaultProvider?: string | null;
   defaultModels?: Record<string, string>;
+  /** The Slack channels the cell's bot can post to (reason says why there are none). */
+  slack?: SlackChannels;
 }
 
 export function useCellData(): CellData {
@@ -158,6 +160,8 @@ export function useCellData(): CellData {
     api.connectors().then((connectors) => put({ connectors })).catch(() => {});
     api.mcpServers().then((r) => put({ servers: r.servers })).catch(() => {});
     api.projects().then((r) => put({ projects: r.projects })).catch(() => {});
+    api.slackChannels().then((slack) => put({ slack }))
+      .catch(() => put({ slack: { channels: [], reason: "error" } }));
     api.builtinAgents().then((r) => put({
       presets: r.presets, providers: r.providers, models: r.models, defaultModel: r.default_model,
       defaultProvider: r.default_provider, defaultModels: r.default_models,

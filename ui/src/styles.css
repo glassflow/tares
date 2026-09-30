@@ -1634,6 +1634,17 @@ pre.payload {
 .su-goal-line { font-size: 16px; overflow-wrap: anywhere; }
 .su-small { font-size: 13px; }
 .su-h2 { margin: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+/* a plan being written: the planner's steps as they happen (components/setup/planning.tsx) */
+.su-progress { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.su-progress li { display: flex; gap: 10px; align-items: baseline; }
+.su-progress-mark { width: 12px; height: 12px; flex: 0 0 auto; border-radius: 50%; border: 2px solid var(--line); transform: translateY(1px); }
+.su-progress li.done .su-progress-mark { background: var(--ok); border-color: var(--ok); }
+.su-progress li.running .su-progress-mark { border-color: var(--accent); border-top-color: transparent; animation: builder-spin 0.9s linear infinite; }
+.su-progress li.running { font-weight: 600; }
+.su-progress li.stopped .su-progress-mark { border-color: var(--err); }
+@media (prefers-reduced-motion: reduce) { .su-progress li.running .su-progress-mark { animation: none; border-top-color: var(--accent); } }
+.su-kind-line { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.su-slack { margin-top: 4px; }
 .su-live:empty { display: none; }
 .su-live { color: var(--ink-soft); }
 .su-err { color: var(--err); }

@@ -3071,22 +3071,176 @@ def make_app() -> FastAPI:
         raw = body.get("plan")
         if not isinstance(raw, dict):
             _err(ValueError("plan is required"))
-        plan, problems = setup_flow.check(raw, store, runtime.catalog)
+        plan, problems = setup_flow.check(raw, store, runtime.catalog,
+                                          draft=body.get("project") or None)
         return {"plan": plan, "problems": problems}
+
+    # ── drafts: a project being planned lives on the cell from the first "Plan it" ─────────
+    # The draft is a project row with status draft and nothing in it; its setup holds the goal,
+    # who does the work, the plan as the person edits it, and `planning`: the steps of a plan
+    # being written right now ({state running|failed, steps [{text, state, at}], error}).
+    # Planning runs in the background; the console polls GET setup to show it.
+    _planning_tasks: dict[str, asyncio.Task] = {}
+
+    def _draft_or_404(uid: str) -> dict:
+        p = _project_or_404(uid)
+        if p.get("status") != setup_flow.DRAFT:
+            _err(ValueError("this project is already set up"), 409)
+        return store.get_project_setup(uid) or {}
+
+    def _draft_name(goal: str) -> str:
+        base = (goal[:60].rsplit(" ", 1)[0] if len(goal) > 60 else goal) or "New project"
+        base = base[:1].upper() + base[1:]
+        taken = {p["name"] for p in store.list_projects()}
+        name, n = base, 2
+        while name in taken:
+            name, n = f"{base} {n}", n + 1
+        return name
+
+    def _start_planning(uid: str, message: str, prev: dict | None, who: str | None) -> None:
+        """Write (or revise) the draft's plan in the background, its steps kept on the setup."""
+        steps: list[dict] = []
+
+        def save(**planning) -> None:
+            if planning.get("state") == "failed":   # the step it was on stopped there
+                for st in steps:
+                    if st["state"] == "running":
+                        st["state"] = "stopped"
+            setup = store.get_project_setup(uid)
+            if setup is None:            # the draft was deleted meanwhile
+                return
+            setup["planning"] = planning or None
+            store.set_project_setup(uid, setup)
+
+        def progress(text: str, running: bool) -> None:
+            for st in steps:
+                if st["state"] == "running":
+                    st["state"] = "done"
+            steps.append({"text": text, "state": "running" if running else "done",
+                          "at": now_utc().isoformat()})
+            save(state="running", steps=list(steps))
+
+        async def run() -> None:
+            try:
+                provider, model, origin, pid = _setup_model()
+                plan = await setup_flow.model_plan(
+                    provider, model, message, store, runtime.catalog, _setup_read,
+                    tracer=tracing.tracer_for("project-setup"),
+                    on_usage=lambda u: _record_ask_usage(model, u, key_source=origin,
+                                                         kind=provider.kind, provider_id=pid),
+                    prev=prev, who=who, progress=progress)
+                setup = store.get_project_setup(uid)
+                if setup is None:
+                    return
+                # a secret typed into a new source stays out of the draft (as on every save)
+                setup.update(plan=setup_flow.stored_plan(plan), planning=None, who=plan.get("who"))
+                store.set_project_setup(uid, setup)
+                other = store.get_project_by_name(plan.get("name") or "")
+                if plan.get("name") and (other is None or other["id"] == uid):
+                    store.update_project(uid, name=plan["name"])   # the list shows the plan's name
+            except HTTPException as e:
+                save(state="failed", steps=steps, error=str(e.detail),
+                     no_provider=e.status_code == 409)
+            except setup_flow.SetupError as e:
+                save(state="failed", steps=steps, error=e.message)
+            except Exception as e:  # noqa: BLE001 — a failed plan is said on the page, not lost
+                save(state="failed", steps=steps, error=f"Planning stopped: {type(e).__name__}: {e}")
+            finally:
+                _planning_tasks.pop(uid, None)
+
+        progress(setup_flow.context_words(runtime.catalog), False)
+        _planning_tasks[uid] = asyncio.create_task(run())
+
+    # a restart ends any planning in flight: say so rather than leave the page waiting
+    for _p in store.list_projects():
+        if _p.get("status") == setup_flow.DRAFT:
+            _s = store.get_project_setup(_p["id"]) or {}
+            if (_s.get("planning") or {}).get("state") == "running":
+                _s["planning"] = {**_s["planning"], "state": "failed",
+                                  "error": "Tares restarted while planning. Plan it again."}
+                store.set_project_setup(_p["id"], _s)
+
+    @app.post("/api/setup/drafts", status_code=202)
+    async def setup_draft(body: dict = Body(...)):
+        """{goal, who?} -> {project}: a draft project, and its plan being written in the
+        background. GET /api/projects/{id}/setup shows the planning step by step, then the plan."""
+        try:
+            goal = goal_mod.normalize_goal(body.get("goal"))
+        except ValueError as e:
+            _err(e)
+        if not goal:
+            _err(ValueError("say what the project is for"))
+        who = body.get("who") or None
+        if who not in (None, "tares", "own"):
+            _err(ValueError("who is tares or own"))
+        _setup_model()   # no provider: 409 now, on the goal page, not later on the draft
+        uid = "uc_" + uuid.uuid4().hex[:10]
+        store.create_project(uid, "custom", _draft_name(goal), {"objects": []},
+                             status=setup_flow.DRAFT, goal=goal)
+        store.log_project(uid, "draft", "planning from the goal")
+        store.set_project_setup(uid, {"step": "plan", "goal": goal, "who": who, "plan": None,
+                                      "practice_run": None})
+        _start_planning(uid, setup_flow.plan_message(goal, who, True, store, runtime.catalog),
+                        None, who)
+        return {"project": projects.get(uid)}
+
+    @app.post("/api/projects/{uid}/setup/plan", status_code=202)
+    async def setup_replan(uid: str, body: dict = Body(default={})):
+        """A draft planned again in the background: {goal, who?} plans from a changed goal;
+        {instruction} changes the current plan as asked."""
+        setup = _draft_or_404(uid)
+        if uid in _planning_tasks:
+            _err(ValueError("Tares is planning this project already"), 409)
+        instruction = " ".join(str(body.get("instruction") or "").split())
+        if instruction:
+            if len(instruction) > 2000:
+                _err(ValueError("an instruction is at most 2000 characters"))
+            plan = body.get("plan") if isinstance(body.get("plan"), dict) else setup.get("plan")
+            if not isinstance(plan, dict):
+                _err(ValueError("there is no plan to change yet"))
+            _setup_model()
+            # a secret typed into a new source is neither kept on the draft nor sent to the model
+            plan = setup_flow.stored_plan(plan)
+            setup["plan"] = plan
+            store.set_project_setup(uid, setup)
+            _start_planning(uid, setup_flow.adjust_message(plan, instruction), plan, None)
+            return {"ok": True}
+        try:
+            goal = goal_mod.normalize_goal(body.get("goal") or setup.get("goal"))
+        except ValueError as e:
+            _err(e)
+        if not goal:
+            _err(ValueError("say what the project is for"))
+        who = body.get("who") or setup.get("who") or None
+        if who not in (None, "tares", "own"):
+            _err(ValueError("who is tares or own"))
+        _setup_model()
+        setup.update(goal=goal, who=who, plan=None)
+        store.set_project_setup(uid, setup)
+        store.update_project(uid, goal=goal)
+        _start_planning(uid, setup_flow.plan_message(goal, who, True, store, runtime.catalog),
+                        None, who)
+        return {"ok": True}
 
     @app.post("/api/setup/apply", status_code=201)
     async def setup_apply(request: Request, body: dict = Body(...)):
-        """{plan} -> {project, plan, connect}: create the project and everything it needs in one
-        go, then say what only the person can do. `plan` is the plan as the project keeps it (a
-        secret typed into a new source's settings left out)."""
+        """{plan, project?} -> {project, plan, connect}: create the project and everything it
+        needs in one go, then say what only the person can do. `project`: the draft that becomes
+        the project. `plan` is the plan as the project keeps it (a secret typed into a new
+        source's settings left out)."""
         raw = body.get("plan")
         if not isinstance(raw, dict):
             _err(ValueError("plan is required"))
-        plan, errors = setup_flow.normalize(raw, store, runtime.catalog)
+        draft = body.get("project") or None
+        if draft is not None:
+            _draft_or_404(str(draft))
+            if str(draft) in _planning_tasks:
+                _err(ValueError("Tares is still planning this project"), 409)
+        plan, errors = setup_flow.normalize(raw, store, runtime.catalog, draft=draft)
         if errors:
             _err(ValueError("This plan cannot be set up: " + " ".join(errors)), 422)
         try:
-            uid, key = setup_flow.apply(store, projects, plan, _make_key)
+            uid, key = setup_flow.apply(store, projects, plan, _make_key, draft=draft)
         except setup_flow.SetupError as e:
             _setup_err(e)
         setup = {"plan": setup_flow.stored_plan(plan), "step": "connect", "practice_run": None}
@@ -3110,6 +3264,11 @@ def make_app() -> FastAPI:
         Connect, and what Connect shows (the addresses as the daemon sees them; the own agent's
         key is not in it, it was shown once)."""
         setup = _setup_or_404(uid)
+        if _project_or_404(uid).get("status") == setup_flow.DRAFT:
+            return {"step": "plan", "draft": True, "goal": setup.get("goal"),
+                    "who": setup.get("who"), "plan": setup.get("plan"),
+                    "planning": setup.get("planning"), "practice_run": None, "checks": None,
+                    "connect": None}
         checks = await asyncio.to_thread(setup_flow.checks, store, runtime.catalog,
                                          runtime.health_snapshot(), uid, setup)
         base = setup_flow.public_base(str(request.base_url))
@@ -3120,8 +3279,17 @@ def make_app() -> FastAPI:
 
     @app.put("/api/projects/{uid}/setup")
     async def put_project_setup(uid: str, body: dict = Body(...)):
-        """{step}: connect, try or done."""
+        """{step}: connect, try or done. On a draft, {plan}: the plan as the person edited it,
+        kept so they can leave and come back."""
         setup = _setup_or_404(uid)
+        if _project_or_404(uid).get("status") == setup_flow.DRAFT:
+            if not isinstance(body.get("plan"), dict):
+                _err(ValueError("a draft keeps its plan: send {plan}"))
+            if uid in _planning_tasks:
+                _err(ValueError("Tares is planning this project; wait for the plan"), 409)
+            setup["plan"] = setup_flow.stored_plan(body["plan"])
+            store.set_project_setup(uid, setup)
+            return {"ok": True}
         step = body.get("step")
         if step not in setup_flow.STEPS:
             _err(ValueError(f"step is one of {', '.join(setup_flow.STEPS)}"))

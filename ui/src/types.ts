@@ -521,7 +521,7 @@ export interface Project {
   template_title: string;
   name: string;
   params: Record<string, unknown>;
-  status: "active" | "paused" | "error";
+  status: "active" | "paused" | "error" | "draft";   // draft: being planned, nothing exists yet
   created_at: string;
   updated_at: string;
   last_error: string | null;
@@ -694,6 +694,8 @@ export interface PlanAgent {
   provider?: string | null;     // a provider id from Settings; empty = the cell default
   handoffs: { verdict: string; agent: string; cooldown?: string | null }[];
   mcp_servers: string[];
+  slack?: boolean;              // Tares posts its findings to Slack, to slack_channel (a channel id)
+  slack_channel?: string;
   sentence: string;
   optional: boolean;
   enabled: boolean;
@@ -739,10 +741,21 @@ export interface SetupChecks {
   tools: { name: string; state: "untested" | "ok" | "error"; detail: string | null }[];
   own_agent: { state: "waiting" | "joined"; detail: string | null } | null;
 }
+/** A plan being written for a draft, step by step as it happens. */
+export interface SetupPlanning {
+  state: "running" | "failed";
+  steps: { text: string; state: "running" | "done" | "stopped"; at: string }[];
+  error?: string;
+  no_provider?: boolean;        // failed for want of a model provider
+}
 export interface ProjectSetup {
-  step: SetupStep;
-  plan: Plan;
+  step: SetupStep | "plan";     // plan: a draft, still being planned or edited
+  draft?: boolean;
+  goal?: string | null;
+  who?: "tares" | "own" | null;
+  plan: Plan | null;            // null on a draft until its first plan is written
+  planning?: SetupPlanning | null;
   practice_run: string | null;
-  checks: SetupChecks;
-  connect: SetupConnect;        // what Connect shows; the own agent's key is never in it
+  checks: SetupChecks | null;
+  connect: SetupConnect | null; // what Connect shows; the own agent's key is never in it
 }

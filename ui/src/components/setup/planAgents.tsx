@@ -1,5 +1,7 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 
+import type { SlackChannels } from "../../api";
 import { Picker } from "../bits";
 import type { PlanAgent, PlanOwnAgent } from "../../types";
 import { Switch } from "./common";
@@ -73,6 +75,13 @@ export function AgentsCard({ ctx }: { ctx: CardCtx }) {
               : <span className="su-item-what">{a.sentence || a.name}</span>}
             {a.optional && !a.enabled && <span className="help">Off: it will not be set up.</span>}
             {a.mcp_servers.length > 0 && <span className="help">Can use {a.mcp_servers.map(toolLabel).join(", ")}.</span>}
+            {a.slack && a.enabled && (
+              <div className="field su-slack">
+                <span className="lbl">Posts to the Slack channel</span>
+                <SlackPick slack={ctx.cell.slack} value={a.slack_channel ?? ""} disabled={busy || !!open}
+                           onChange={(ch) => edit({ ...plan, agents: plan.agents.map((x) => (x.key === a.key ? { ...x, slack_channel: ch } : x)) })} />
+              </div>
+            )}
             <ItemActions id={editId} what={a.name} disabled={busy || !!open}
                          onChange={() => openEditor(id)}
                          onRemove={() => { edit({ ...plan, agents: plan.agents.filter((x) => x.key !== a.key) }); closeEditor(addId); }} />
@@ -108,6 +117,37 @@ export function AgentsCard({ ctx }: { ctx: CardCtx }) {
       ))}
     </li>
   );
+}
+
+/** The Slack channel an agent posts to: the channels the cell's bot is in, or why there are none
+ *  (Slack not connected: where to connect it; the list unavailable: type the channel's ID). */
+function SlackPick({ slack, value, onChange, disabled }: {
+  slack: SlackChannels | undefined; value: string; onChange: (id: string) => void; disabled?: boolean;
+}) {
+  if (!slack) return <p className="help">Reading your Slack channels…</p>;
+  if (slack.reason === "no_token") {
+    return (
+      <p className="help">
+        Slack is not connected to Tares yet. <Link to="/settings">Connect it under Settings, Slack</Link>, then pick the channel here.
+      </p>
+    );
+  }
+  if (!slack.channels.length) {
+    return (
+      <label className="field">
+        <span className="help">
+          {slack.reason === "missing_scope" ? "Tares cannot list your channels." : "No channel to pick from: invite the Tares bot to a channel, or type its ID."}
+        </span>
+        <input type="text" value={value} placeholder="C0123456789" disabled={disabled} aria-label="Slack channel ID"
+               onChange={(e) => onChange(e.target.value.trim())} />
+      </label>
+    );
+  }
+  const options = ["", ...slack.channels.map((c) => c.id)];
+  if (value && !options.includes(value)) options.push(value);
+  const labels: Record<string, string> = { "": "Pick a channel" };
+  for (const c of slack.channels) labels[c.id] = c.is_private ? `${c.name} (private)` : `#${c.name}`;
+  return <Picker value={value} options={options} labels={labels} ariaLabel="Slack channel" onChange={onChange} disabled={disabled} />;
 }
 
 function OwnAgentEditor({ own, onSave, onCancel }: {
@@ -150,6 +190,8 @@ function AgentEditor({ agent, ctx, onSave, onCancel }: {
   const [provider, setProvider] = useState(agent?.provider ?? "");
   const [model, setModel] = useState(agent?.model ?? "");
   const [mcp, setMcp] = useState<string[]>(agent?.mcp_servers ?? []);
+  const [slack, setSlack] = useState(!!agent?.slack);
+  const [channel, setChannel] = useState(agent?.slack_channel ?? "");
   const [handoffs, setHandoffs] = useState<HandoffRow[]>((agent?.handoffs ?? []).map((h) => ({
     verdict: h.verdict, agent: h.agent, minutes: String(minutesOf(h.cooldown, 30)),
   })));
@@ -187,6 +229,7 @@ function AgentEditor({ agent, ctx, onSave, onCancel }: {
   const save = () => onSave({
     key, name: nm, trigger: onTrigger ? trigger : (agent?.trigger ?? trigger), on_trigger: onTrigger, prompt,
     provider: provider || null, model: model || null, mcp_servers: mcp,
+    slack, slack_channel: slack ? channel : "",
     handoffs: handoffs.map((h) => ({ verdict: h.verdict.trim().toLowerCase(), agent: h.agent, cooldown: `${Number(h.minutes)}m` })),
     sentence: agent?.sentence ?? "", optional: agent?.optional ?? false, enabled: agent?.enabled ?? true,
   });
@@ -261,6 +304,14 @@ function AgentEditor({ agent, ctx, onSave, onCancel }: {
           ))}
         </fieldset>
       )}
+
+      <div className="field">
+        <label className="su-check">
+          <input type="checkbox" checked={slack} onChange={(e) => setSlack(e.target.checked)} />
+          <span>Post what it finds to a Slack channel</span>
+        </label>
+        {slack && <SlackPick slack={cell.slack} value={channel} onChange={setChannel} />}
+      </div>
 
       <fieldset className="su-filters">
         <legend className="lbl">When it concludes</legend>

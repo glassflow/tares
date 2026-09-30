@@ -725,6 +725,8 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
              "agent": {x["name"]: x.get("owned_by") for x in store.list_catalog_agents()},
              "mcp_server": {x["name"]: x.get("owned_by") for x in store.list_mcp_servers()}}
     for u in store.list_projects():
+        if u.get("status") == "draft":   # still being planned: nothing of it exists yet
+            continue
         goal = {"goal": u["goal"]} if u.get("goal") else {}
         if u["template"] == "default":
             if goal:   # only its goal: the default project's objects say `project` above

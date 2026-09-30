@@ -874,6 +874,113 @@ async def main():
            (S.needs_for("postgres", {"table": "t"}), S.needs_for("postgres", {"dsn": "x"}),
             S.needs_for("webhook", {})), ("credential", "none", "send"))
 
+        print("== drafts: planned in the background, kept while edited, set up in place ==")
+        D = plan_with(name="Draft checkout", goal="Tell me in Slack about checkout errors",
+                      tools=[], skills=[], notes=[])
+        D["watches"] = [{**GOOD["watches"][0], "name": "Draft Errors", "config": {
+            "event_type": "log", "text_template": "{service}: {msg}",
+            "labels": [{"name": "service", "field": "service", "primary": True}, "region"]}}]
+        D["wakes"] = [{**GOOD["wakes"][0], "key": "k1", "name": "draft-spike",
+                       "sources": ["Draft Errors"]}]
+        D["agents"] = [{**GOOD["agents"][0], "name": "draft-triage", "trigger": "draft-spike",
+                        "handoffs": [], "mcp_servers": [], "slack": True}]
+        STUB.script = [[("list_connectors", {})], [("propose_plan", D)], [("propose_plan", D)]]
+        r = await cx.post("/api/setup/drafts", json={"goal": D["goal"], "who": "tares"})
+        ck("a draft is made right away (202)", r.status_code == 202, r.text)
+        did_ = r.json()["project"]["id"]
+        eq("it is a draft", store.get_project(did_)["status"], "draft")
+
+        async def settled_(uid):
+            for _ in range(300):
+                st = (await cx.get(f"/api/projects/{uid}/setup")).json()
+                if (st.get("planning") or {}).get("state") != "running":
+                    return st
+                await asyncio.sleep(0.02)
+            return st
+        st = await settled_(did_)
+        ck("the plan arrives on the draft", st.get("draft") and st.get("plan") and
+           st.get("planning") is None, st)
+        dp = st["plan"]
+        eq("a label given as a bare word reads the field of its name",
+           [l for l in dp["watches"][0]["config"]["labels"] if l["name"] == "region"],
+           [{"name": "region", "field": "region"}])
+        ck("Slack is asked for, not a Slack tool", dp["agents"][0]["slack"] and not dp["tools"],
+           dp["agents"][0])
+        chk_ = (await cx.post("/api/setup/check", json={"plan": dp, "project": did_})).json()
+        ck("until a channel is picked, that is the one thing to fix",
+           [p_["message"] for p_ in chk_["problems"]] == ["Pick the Slack channel it posts to."],
+           chk_["problems"])
+        eq("the draft takes the plan's name, not renamed against itself",
+           (store.get_project(did_)["name"], chk_["plan"]["name"]), ("Draft checkout",) * 2)
+        ck("the Projects list shows the draft",
+           any(p_["id"] == did_ and p_["status"] == "draft"
+               for p_ in (await cx.get("/api/projects")).json()["projects"]))
+        ck("a draft is left out of the catalog export",
+           "Draft checkout" not in (await cx.get("/api/catalog/export")).text)
+
+        dp["agents"][0]["slack_channel"] = "C0123456789"
+        dp["name"] = "Draft checkout edited"
+        r = await cx.put(f"/api/projects/{did_}/setup", json={"plan": dp})
+        ck("an edit is kept on the draft", r.status_code == 200, r.text)
+        eq("and read back", (await cx.get(f"/api/projects/{did_}/setup")).json()["plan"]["name"],
+           "Draft checkout edited")
+        eq("a draft has no connect step to move to",
+           (await cx.put(f"/api/projects/{did_}/setup", json={"step": "connect"})).status_code,
+           400)
+
+        D2 = copy.deepcopy(dp)
+        D2["wakes"][0]["knobs"][0]["value"] = 9
+        D2["watches"].append({"key": "w9", "existing": False, "name": "gh-extra",
+                              "connector": "github", "needs": "credential", "sample": None,
+                              "sentence": "", "config": {"repo": "o/r", "token": "ghp_secret123"}})
+        STUB.script = [[("propose_plan", D2)]]
+        STUB.calls.clear()
+        dp_secret = copy.deepcopy(dp)
+        dp_secret["watches"].append(copy.deepcopy(D2["watches"][-1]))
+        r = await cx.post(f"/api/projects/{did_}/setup/plan",
+                          json={"instruction": "only more than 9 errors", "plan": dp_secret})
+        ck("a change in plain words plans the draft again", r.status_code == 202, r.text)
+        st = await settled_(did_)
+        eq("the changed plan is on the draft",
+           st["plan"]["wakes"][0]["condition"]["predicate"], "> 9")
+        ck("a typed secret never reaches the model",
+           "ghp_secret123" not in json.dumps(STUB.calls[0]["messages"]))
+        ck("nor stays on the draft, even when the model echoes it back",
+           "ghp_secret123" not in json.dumps(st["plan"])
+           and "ghp_secret123" not in json.dumps(store.get_project_setup(did_)))
+        st["plan"]["watches"] = [w for w in st["plan"]["watches"] if w["name"] != "gh-extra"]
+
+        r = await cx.post("/api/setup/apply", json={"plan": st["plan"], "project": did_})
+        ck("the draft is set up (201)", r.status_code == 201, r.text)
+        eq("same project, now active", (r.json()["project"]["id"],
+                                        store.get_project(did_)["status"]), (did_, "active"))
+        eq("the agent posts to the channel picked",
+           store.get_catalog_agent("draft-triage").get("slack_channel"), "C0123456789")
+        eq("the setup goes on to Connect",
+           (await cx.get(f"/api/projects/{did_}/setup")).json()["step"], "connect")
+        eq("a draft is set up once",
+           (await cx.post("/api/setup/apply", json={"plan": st["plan"], "project": did_})).status_code,
+           409)
+
+        print("== drafts: a plan that does not come out, step by step ==")
+        STUB.script = [[("list_connectors", {})], [("propose_plan", {})], [("propose_plan", {})]]
+        r = await cx.post("/api/setup/drafts", json={"goal": "Something vague", "who": "tares"})
+        bad_ = r.json()["project"]["id"]
+        st = await settled_(bad_)
+        pl = st.get("planning") or {}
+        eq("it failed, and says so", (pl.get("state"), pl.get("error")),
+           ("failed", "The plan did not come out right. Try saying the goal another way, or "
+                      "start from a template."))
+        texts = [x["text"] for x in pl.get("steps") or []]
+        ck("the steps are what the planner did", texts[0].startswith("Read what is on this Tares")
+           and "Looked at the kinds of source" in texts and "Writing the plan" in texts
+           and "Checking the plan again" in texts
+           and any(t.startswith("Fixing") for t in texts), texts)
+        eq("the step it stopped on says so, the rest are done",
+           [x["state"] for x in pl["steps"]], ["done"] * (len(pl["steps"]) - 1) + ["stopped"])
+        r = await cx.delete(f"/api/projects/{bad_}")
+        ck("a draft deletes like any project", r.status_code in (200, 204), r.text)
+
         print("== auth ==")
         r = await anon.post("/api/setup/plan", json={"goal": "x"})
         eq("no credential: 401", r.status_code, 401)

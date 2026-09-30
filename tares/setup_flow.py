@@ -24,12 +24,13 @@ from . import skills as _skills
 from .builtin_agents import CONCLUDE
 from .config import (CatalogError, _source_from_dict, _trigger_from_dict, check_handoff_targets,
                      normalize_handoffs, normalize_trigger_description, parse_duration,
-                     validate_agent_dict,
+                     validate_agent_dict, validate_slack_channel,
                      validate_mcp_server_dict, validate_source_dict, validate_trigger_dict)
 from .connectors import SPECS, normalize_config, secret_field_names
 from .models import ModelError, ModelUnavailable, add_usage, empty_usage, tool_message
 
 STEPS = ("connect", "try", "done")
+DRAFT = "draft"           # a project being planned: nothing of it exists or runs yet
 MAX_AGENTS = 3
 MAX_ROUNDS = 4            # model calls for one plan: reads, then the forced propose_plan
 PRACTICE_WINDOW_S = 600   # an outside agent's finding this soon after a practice firing is practice
@@ -141,6 +142,10 @@ PLAN_SCHEMA = {"type": "object", "properties": {
                        "agent": _S, "cooldown": _S}, "required": ["verdict", "agent"]}},
                    "mcp_servers": {"type": "array", "items": _S,
                                    "description": "names of tools in this plan"},
+                   "slack": {"type": "boolean",
+                             "description": "true when the person wants to be told in Slack: "
+                                            "Tares posts each finding of this agent to a Slack "
+                                            "channel itself (no tool needed)"},
                    "sentence": _S,
                    "optional": {"type": "boolean"},
                    "enabled": {"type": "boolean"}},
@@ -203,6 +208,7 @@ otherwise do not mention it.
 - Tools: suggest an outside MCP server only when the goal needs context Tares does not hold \
 (deploys, tickets, code); enabled false, url empty unless the person gave one, can_act true when \
 it can change things.
+- Slack: when the goal asks to be told or messaged in Slack, set slack true on the agent whose finding should be posted. Tares posts it to a channel itself; never suggest a Slack MCP server for that, and never ask for a channel: the person picks it.
 - Skills: at most 2, only when the goal implies house rules or vocabulary.
 - Every sentence is plain words for someone who is not an engineer: no jargon, no em dashes."""
 
@@ -532,22 +538,25 @@ def _filter_problems(filters: list) -> list[str]:
     return out
 
 
-def normalize(raw, store, catalog, prev: dict | None = None) -> tuple[dict, list[str]]:
+def normalize(raw, store, catalog, prev: dict | None = None,
+              draft: str | None = None) -> tuple[dict, list[str]]:
     """(plan, errors). The plan comes back in canonical shape: names made unique against the
     catalog (references follow a rename), configs normalized, knobs applied, sentences and the
-    summary derived. `errors` are plain sentences; empty means the plan applies as it is."""
-    plan, probs = _normalize(raw, store, catalog, prev)
+    summary derived. `errors` are plain sentences; empty means the plan applies as it is.
+    `draft`: the draft project the plan is for (its own name is not taken)."""
+    plan, probs = _normalize(raw, store, catalog, prev, draft)
     return plan, probs.texts()
 
 
-def check(raw, store, catalog) -> tuple[dict, list[dict]]:
+def check(raw, store, catalog, draft: str | None = None) -> tuple[dict, list[dict]]:
     """(plan, problems) for the console: the plan normalized exactly as apply normalizes it, and
     what stops it from applying, per item ({where, message}). No model call."""
-    plan, probs = _normalize(raw, store, catalog, None)
+    plan, probs = _normalize(raw, store, catalog, None, draft)
     return plan, probs.public()
 
 
-def _normalize(raw, store, catalog, prev: dict | None) -> tuple[dict, _Problems]:
+def _normalize(raw, store, catalog, prev: dict | None,
+               draft: str | None = None) -> tuple[dict, _Problems]:
     probs = _Problems()
     if not isinstance(raw, dict):
         probs.add("plan", "The plan is not an object.")
@@ -565,7 +574,7 @@ def _normalize(raw, store, catalog, prev: dict | None) -> tuple[dict, _Problems]
     name = " ".join(str(plan.get("name") or "").split())[:80]
     if not name:
         probs.add("plan", "The plan has no project name.")
-    taken_projects = {p["name"] for p in store.list_projects()}
+    taken_projects = {p["name"] for p in store.list_projects() if p["id"] != draft}
     if name in taken_projects:
         n = 2
         while f"{name} {n}" in taken_projects:
@@ -623,8 +632,14 @@ def _normalize(raw, store, catalog, prev: dict | None) -> tuple[dict, _Problems]
                           label)
             else:
                 try:
-                    # a label the model gave neither a field nor a fixed value reads the event
-                    # field of its own name (label service -> field service)
+                    # a label the model gave as a bare word, or with neither a field nor a fixed
+                    # value, reads the event field of its own name (label service -> field
+                    # service)
+                    if isinstance(spec["config"], dict) and isinstance(spec["config"].get("labels"), list):
+                        spec["config"]["labels"] = [
+                            {"name": lb.strip(), "field": lb.strip()}
+                            if isinstance(lb, str) and lb.strip() else lb
+                            for lb in spec["config"]["labels"]]
                     for lb in (spec["config"].get("labels") or []) if isinstance(spec["config"], dict) else []:
                         if isinstance(lb, dict) and lb.get("name") and not lb.get("field") \
                                 and lb.get("const") in (None, ""):
@@ -643,8 +658,12 @@ def _normalize(raw, store, catalog, prev: dict | None) -> tuple[dict, _Problems]
         sample = w.get("sample")
         w["sample"] = sample if isinstance(sample, dict) and spec.get("mode") == "push" else None
         kind = f"a new {spec['label']} source" if spec.get("label") else "a new source"
+        # an existing source by what a person calls it (its repository, host, table), not its
+        # internal name
+        known = catalog_sources.get(w["name"]) if w["existing"] else None
         w["sentence"] = " ".join(str(w.get("sentence") or "").split()) or (
-            f"{w['name']}, a source already on Tares" if w["existing"] else f"{w['name']}, {kind}")
+            f"{G.source_title(known) if known else w['name']}, a source already on Tares"
+            if w["existing"] else f"{w['name']}, {kind}")
         watches.append(w)
     if not watches:
         probs.add("watches", "The plan watches nothing: add a source.")
@@ -846,6 +865,9 @@ def _normalize(raw, store, catalog, prev: dict | None) -> tuple[dict, _Problems]
         a["prompt"] = str(a.get("prompt") or "").strip()
         a["mcp_servers"] = list(dict.fromkeys(tool_map.get(str(x), str(x))
                                               for x in a.get("mcp_servers") or []))
+        # Slack: Tares posts the agent's findings to the channel the person picks
+        a["slack_channel"] = str(a.get("slack_channel") or "").strip()
+        a["slack"] = bool(a.get("slack")) or bool(a["slack_channel"])
         hs = []
         for h in a.get("handoffs") or []:
             if isinstance(h, dict):
@@ -880,6 +902,14 @@ def _normalize(raw, store, catalog, prev: dict | None) -> tuple[dict, _Problems]
             for x in a["mcp_servers"]:
                 if x not in known_servers:
                     plain.append(f"It uses the tool {x}, which is not in this plan.")
+            if a["slack"]:
+                if not a["slack_channel"]:
+                    plain.append("Pick the Slack channel it posts to.")
+                else:
+                    try:
+                        validate_slack_channel(a["slack_channel"])
+                    except ValueError as e:
+                        plain.append(f"{str(e)[:1].upper()}{str(e)[1:]}.")
             for msg in plain:
                 probs.add(where, msg, label)
             if plain or a["trigger"] not in trig_dicts:
@@ -894,6 +924,8 @@ def _normalize(raw, store, catalog, prev: dict | None) -> tuple[dict, _Problems]
                 probs.add(where, _plain(e), label)
         for a in agents:
             a["sentence"] = agent_sentence(a, agents, trigs, phr_sources, len(wakes))
+            if a["slack"] and a["enabled"]:
+                a["sentence"] += " It posts what it finds to Slack."
 
     own = plan.get("own_agent")
     if who == "own":
@@ -944,14 +976,34 @@ def _context(store, catalog, existing_sources: bool) -> str:
     return out
 
 
+def read_words(name: str, args: dict | None) -> str:
+    """One of the planner's reads, as the person watching the planning sees it."""
+    if name == "source_fields":
+        return f"Looked at what {str((args or {}).get('name') or 'a source')} sends"
+    return {"list_sources": "Looked at the sources on Tares",
+            "list_connectors": "Looked at the kinds of source",
+            "list_templates": "Looked at the templates"}.get(name, "Looked something up")
+
+
+def _say(progress, text: str, running: bool = False) -> None:
+    """Tell whoever watches the planning what it is doing now (`running`: until the next step)."""
+    if progress is not None:
+        try:
+            progress(text, running)
+        except Exception as e:  # noqa: BLE001 — reporting never breaks the planning
+            print(f"setup: progress: {type(e).__name__}: {e}")
+
+
 async def _run_model(provider, model: str, convo: list, read_tool, tracer, usage: dict,
-                     forced_only: bool = False) -> tuple[dict, object]:
+                     forced_only: bool = False, progress=None,
+                     writing: str = "Writing the plan") -> tuple[dict, object]:
     """Model calls until propose_plan comes back: reads first when the model wants them, the
     last call forced to propose_plan. Returns (the plan it proposed, that reply)."""
     tools = read_tools() + [PLAN_TOOL]
     rounds = 1 if forced_only else MAX_ROUNDS
     for i in range(rounds):
         last = i == rounds - 1
+        _say(progress, writing if i == 0 else f"{writing}, with what it looked up", running=True)
         reply = await provider.complete(model=model, system=SYSTEM, tools=tools, messages=convo,
                                         max_tokens=8000, tracer=tracer,
                                         tool_choice="propose_plan" if last else "any")
@@ -964,6 +1016,7 @@ async def _run_model(provider, model: str, convo: list, read_tool, tracer, usage
         for c in reply.tool_calls:
             ok, text = await read_tool(c.name, c.arguments or {})
             results.append((c.id, text if ok else f"error: {text}"))
+            _say(progress, read_words(c.name, c.arguments if isinstance(c.arguments, dict) else {}))
         if results:
             convo.append(tool_message(results))
         else:
@@ -973,15 +1026,15 @@ async def _run_model(provider, model: str, convo: list, read_tool, tracer, usage
 
 async def model_plan(provider, model: str, first_message: str, store, catalog, read_tool,
                      tracer=None, on_usage=None, prev: dict | None = None,
-                     who: str | None = None) -> dict:
+                     who: str | None = None, progress=None) -> dict:
     """The plan from the model: generate, normalize, and on errors one retry with them. Raises
     SetupError(422) when the second plan is still invalid. `who`: the choice the person made,
-    which the plan must keep."""
+    which the plan must keep. `progress(text, running)` hears each step as it happens."""
     from . import tracing as _tracing
     with _tracing.run_span(tracer, "project-setup", kind="CHAIN", agent="project-setup") as obs:
         obs.set_input(first_message)
         plan = await _model_plan(provider, model, first_message, store, catalog, read_tool,
-                                 tracer, on_usage, prev, who)
+                                 tracer, on_usage, prev, who, progress)
         obs.set_output(json.dumps(plan, default=str)[:4000])
         return plan
 
@@ -994,11 +1047,14 @@ def _check(raw, store, catalog, prev, who) -> tuple[dict, list]:
 
 
 async def _model_plan(provider, model, first_message, store, catalog, read_tool, tracer,
-                      on_usage, prev, who) -> dict:
+                      on_usage, prev, who, progress=None) -> dict:
     usage = empty_usage()
     convo = [{"role": "user", "content": first_message}]
+    writing = "Changing the plan" if prev else "Writing the plan"
     try:
-        raw, (reply, call) = await _run_model(provider, model, convo, read_tool, tracer, usage)
+        raw, (reply, call) = await _run_model(provider, model, convo, read_tool, tracer, usage,
+                                              progress=progress, writing=writing)
+        _say(progress, "Checking the plan", running=True)
         plan, errors = _check(raw, store, catalog, prev, who)
         if errors:
             convo.append(tool_message([(call.id, "The plan cannot be applied:\n- "
@@ -1006,7 +1062,10 @@ async def _model_plan(provider, model, first_message, store, catalog, read_tool,
                                         + "\nCall propose_plan again with the whole plan, "
                                           "fixed.")]))
             raw, _ = await _run_model(provider, model, convo, read_tool, tracer, usage,
-                                      forced_only=True)
+                                      forced_only=True, progress=progress,
+                                      writing=f"Fixing {len(errors)} thing"
+                                              f"{'s' if len(errors) != 1 else ''} the check found")
+            _say(progress, "Checking the plan again", running=True)
             plan, errors = _check(raw, store, catalog, prev, who)
             # still not right: the plan opens anyway when there is something to show, and the
             # plan screen names each problem on its card for the person to fix in place
@@ -1027,6 +1086,14 @@ async def _model_plan(provider, model, first_message, store, catalog, read_tool,
                 on_usage(usage)
             except Exception as e:  # metering never breaks the setup
                 print(f"setup: usage record failed: {type(e).__name__}: {e}")
+
+
+def context_words(catalog) -> str:
+    """What the planner starts from, for the first step the person sees."""
+    n_src = sum(1 for c in catalog.sources.values() if not SPECS.get(c.connector, {}).get("internal"))
+    n_kind = sum(1 for sp in SPECS.values() if not sp.get("internal"))
+    return (f"Read what is on this Tares: {n_src} source{'s' if n_src != 1 else ''} and "
+            f"{n_kind} kinds of source")
 
 
 def plan_message(goal: str, who: str | None, existing_sources: bool, store, catalog) -> str:
@@ -1050,19 +1117,35 @@ _STEP_WORDS = {"project": "creating the project", "sources": "adding the sources
                "key": "making your agent's key"}
 
 
-def apply(store, engine, plan: dict, make_key) -> tuple[str, dict | None]:
+def apply(store, engine, plan: dict, make_key, draft: str | None = None) -> tuple[str, dict | None]:
     """Create the project and its objects from a normalized plan, in one go: sources, tools, know
     how, triggers, agents (or, for the person's own agent, a project key). Returns (project id,
-    the new key or None). A failing step undoes everything this call made and raises
+    the new key or None). With `draft`, the draft project becomes the project (same id). A
+    failing step undoes everything this call made (a draft stays the draft it was) and raises
     SetupError naming the step."""
     from .projects.base import PlannedObject, ProjectError
     step = "project"
-    try:
-        proj = engine.create("custom", {"objects": []}, name=plan["name"], goal=plan["goal"])
-    except ProjectError as e:
-        raise SetupError(409 if "already exists" in str(e) else 400,
-                         f"Setting up stopped while creating the project: {e}") from e
-    uid = proj["id"]
+    kept = None   # the draft as it was, to put back when a step fails
+    if draft:
+        row = store.get_project(draft)
+        if row is None or row.get("status") != DRAFT:
+            raise SetupError(409, "This draft was already set up or deleted.")
+        other = store.get_project_by_name(plan["name"])
+        if other is not None and other["id"] != draft:
+            raise SetupError(409, f"Setting up stopped while creating the project: a project "
+                                  f"named {plan['name']!r} already exists")
+        kept = (row, store.get_project_setup(draft))
+        store.update_project(draft, name=plan["name"], goal=plan["goal"], status="active",
+                             params={"objects": []})
+        store.log_project(draft, "create", "set up from the draft")
+        uid = draft
+    else:
+        try:
+            proj = engine.create("custom", {"objects": []}, name=plan["name"], goal=plan["goal"])
+        except ProjectError as e:
+            raise SetupError(409 if "already exists" in str(e) else 400,
+                             f"Setting up stopped while creating the project: {e}") from e
+        uid = proj["id"]
     made: list = []      # PlannedObjects this call created, for the undo
     objects: list = []   # the custom project's {kind, name} list
     key = None
@@ -1128,6 +1211,8 @@ def apply(store, engine, plan: dict, make_key) -> tuple[str, dict | None]:
                         # on the trigger it runs when the project wakes; a handoff-only agent
                         # is left off for it and runs when another hands off
                         "enabled": bool(a["on_trigger"])}
+                if a.get("slack") and a.get("slack_channel"):
+                    spec["slack_channel"] = a["slack_channel"]
                 if a.get("model"):
                     spec["model"] = a["model"]
                 if a.get("provider"):
@@ -1147,6 +1232,11 @@ def apply(store, engine, plan: dict, make_key) -> tuple[str, dict | None]:
             engine._delete_objects(made, purge_events=False, uid=uid)
             store.delete_project(uid)   # revokes a key made here too
             store.normalize_projects()  # a reused source left in no project goes home
+            if kept is not None:        # the draft comes back as it was
+                row, setup = kept
+                store.create_project(uid, row["template"], row["name"], row.get("params") or {},
+                                     status=DRAFT, goal=row.get("goal"))
+                store.set_project_setup(uid, setup)
             engine._do_reload()
         except Exception as undo:  # noqa: BLE001
             print(f"setup: undo after a failed apply: {type(undo).__name__}: {undo}")

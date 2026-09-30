@@ -87,10 +87,14 @@ function Machinery({ plan }: { plan: Plan }) {
   );
 }
 
-export function PlanStep({ plan, setPlan, base, setBase, onBack, onApplied }: {
+export function PlanStep({ projectId, plan, setPlan, base, setBase, onBack, onAdjust, onApplied }: {
+  /** The draft project this plan is for. */
+  projectId: string;
   plan: Plan; setPlan: (p: Plan) => void;
   base: Baseline; setBase: (b: Baseline) => void;
   onBack: () => void;
+  /** Change the plan as said in plain words: the draft is planned again, shown as it happens. */
+  onAdjust: (instruction: string, plan: Plan) => Promise<void>;
   onApplied: (r: Awaited<ReturnType<typeof api.applySetup>>) => void;
 }) {
   const [instruction, setInstruction] = useState("");
@@ -120,7 +124,7 @@ export function PlanStep({ plan, setPlan, base, setBase, onBack, onApplied }: {
     const at = rev;
     const t = window.setTimeout(async () => {
       try {
-        const r = await api.checkSetup(planRef.current);
+        const r = await api.checkSetup(planRef.current, projectId);
         if (revRef.current !== at) return;     // edited since: a newer check is on its way
         const merged = mergeDerived(planRef.current, r.plan);
         setPlan(merged);
@@ -148,17 +152,14 @@ export function PlanStep({ plan, setPlan, base, setBase, onBack, onApplied }: {
     const text = instruction.trim();
     if (!text || busy) return;
     setAdjusting(true); setAdjustErr(undefined);
-    try {
-      const r = await api.adjustSetup(plan, text);
-      edit(r.plan); setBase(baselineOf(r.plan)); setInstruction("");
-    } catch (e) { setAdjustErr(errText(e)); }
-    setAdjusting(false);
+    try { await onAdjust(text, plan); }
+    catch (e) { setAdjustErr(errText(e)); setAdjusting(false); }
   };
 
   const apply = async () => {
     if (busy || problems.length || stale) return;
     setApplying(true); setApplyErr(undefined);
-    try { onApplied(await api.applySetup({ ...plan, name: plan.name.trim() || plan.goal })); }
+    try { onApplied(await api.applySetup({ ...plan, name: plan.name.trim() || plan.goal }, projectId)); }
     catch (e) { setApplyErr(errText(e)); setApplying(false); }
   };
 
@@ -180,7 +181,7 @@ export function PlanStep({ plan, setPlan, base, setBase, onBack, onApplied }: {
           <button type="button" className="linklike su-small" onClick={onBack} disabled={busy}>Change the goal</button>
         </p>
         {plan.summary && <p>{plan.summary}</p>}
-        <p className="su-sub">Nothing runs until you say so. Change any part in place, or say what to change below.</p>
+        <p className="su-sub">Nothing runs until you say so. Change any part in place, or say what to change below. Your changes are kept as a draft, so you can leave and finish it later from Projects.</p>
       </div>
 
       <label className="field su-name">

@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { api } from "../../api";
-import type { Plan } from "../../types";
 import { errStatus, errText } from "./common";
 
-// Step 1: the goal in the person's own words and who does the work. Planning is one call; the
-// wait says what is happening, and a missing model provider says where to add one.
+// Step 1: the goal in the person's own words and who does the work. "Plan it" hands both to the
+// page (a new draft project, or the draft planned again); the planning itself is shown on the
+// draft's page, step by step, and a missing model provider says where to add one.
 
 const EXAMPLES = [
   "Catch checkout outages early and find the root cause",
@@ -17,33 +16,24 @@ const EXAMPLES = [
 
 export type Who = "tares" | "own";
 
-export function GoalStep({ goal, setGoal, who, setWho, onPlanned }: {
+export function GoalStep({ goal, setGoal, who, setWho, onSubmit, onCancel }: {
   goal: string; setGoal: (g: string) => void;
   who: Who; setWho: (w: Who) => void;
-  onPlanned: (plan: Plan) => void;
+  onSubmit: (goal: string, who: Who) => Promise<void>;
+  /** Back to the plan the draft already has, unchanged. */
+  onCancel?: () => void;
 }) {
   const box = useRef<HTMLTextAreaElement>(null);
   const [busy, setBusy] = useState(false);
-  const [phase, setPhase] = useState<"reading" | "planning">("reading");
   const [err, setErr] = useState<{ text: string; noProvider: boolean }>();
   useEffect(() => { box.current?.focus(); }, []);
-
-  // One request does both; the first seconds are the planner reading the sources and templates
-  // this cell has, the rest is writing the plan.
-  useEffect(() => {
-    if (!busy) return;
-    setPhase("reading");
-    const t = window.setTimeout(() => setPhase("planning"), 3000);
-    return () => window.clearTimeout(t);
-  }, [busy]);
 
   const plan = async () => {
     const g = goal.replace(/\s+/g, " ").trim();
     if (!g || busy) return;
     setBusy(true); setErr(undefined);
     try {
-      const r = await api.planSetup({ goal: g, who });
-      onPlanned(r.plan);
+      await onSubmit(g, who);
     } catch (e) {
       setErr({ text: errText(e), noProvider: errStatus(e) === 409 });
       setBusy(false);
@@ -95,12 +85,12 @@ export function GoalStep({ goal, setGoal, who, setWho, onPlanned }: {
 
         <div className="btnrow">
           <button type="submit" className="primary su-cta" disabled={busy || !goal.trim()}>
-            {busy ? "Planning…" : "Plan it"}
+            {busy ? "Starting…" : "Plan it"}
           </button>
+          {onCancel && (
+            <button type="button" className="su-cta" onClick={onCancel} disabled={busy}>Keep the current plan</button>
+          )}
         </div>
-        <p className="su-live" role="status" aria-live="polite">
-          {busy && (phase === "reading" ? "Reading your sources…" : "Planning…")}
-        </p>
       </form>
 
       {err && (

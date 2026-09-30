@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Navigate, useParams } from "react-router-dom";
 
 import { api } from "../api";
 import { ErrorState, usePolling } from "../components/bits";
@@ -22,6 +22,8 @@ export default function ProjectDetail() {
 
   if (error && !s) return <ErrorState error={error} what="this project" onRetry={reload} />;
   if (!s || s.id !== id) return <div className="dim">loading…</div>;
+  // a draft has no page yet: it opens where its setup stopped
+  if (s.status === "draft") return <Navigate to={`/projects/${encodeURIComponent(id)}/setup`} replace />;
   return (
     <>
       {error && <ErrorState error={error} what="the latest state" onRetry={reload} />}
