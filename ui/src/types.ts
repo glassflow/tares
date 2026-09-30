@@ -226,6 +226,7 @@ export interface Trigger {
   sources: string[];
   filters?: TriggerFilter[];
   key_field?: string | null;
+  description?: string | null;   // what wakes it in plain words, follows "When"; empty = said from the rule
   condition: TriggerCondition;
   emit: Record<string, unknown>;
   cooldown: string;
@@ -677,6 +678,7 @@ export interface PlanCondition {
 export interface PlanWake {
   key: string; name: string; sources: string[]; filters: TriggerFilter[];
   key_field: string | null; condition: PlanCondition;
+  description?: string | null;  // what wakes the project in plain words, follows "When"
   cooldown: string | null; window: string | null;
   sentence: string;
   cooldown_sentence?: string | null;

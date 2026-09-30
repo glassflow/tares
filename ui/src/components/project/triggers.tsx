@@ -157,6 +157,7 @@ function TriggerConfig({ t, ctx }: { t: Trigger; ctx: Ctx }) {
   const fired = lastFired(ctx, t.name);
   return (
     <Facts rows={[
+      ["in plain words", t.description ? <span>{t.description}</span> : <span className="help">none; the project page says it from the condition</span>],
       ["sources", (t.sources ?? []).map((x) => (
         ctx.mySources.some((m) => m.name === x)
           ? <VLink key={x} v={{ kind: "source", name: x }} className="chip mono">{x}</VLink>

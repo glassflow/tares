@@ -132,6 +132,7 @@ export default function TriggerEditor({ initial, prefill, project, onSaved, onCa
       : t.condition;
     return {
       name: t.name.trim(), sources, filters, key_field: (t.key_field ?? "").trim() || null,
+      description: (t.description ?? "").trim(),
       condition, emit: t.emit, cooldown: t.cooldown,
       ...(projectId ? { project: projectId } : {}),
     };
@@ -156,6 +157,16 @@ export default function TriggerEditor({ initial, prefill, project, onSaved, onCa
         <span className="lbl">name</span>
         <input type="text" value={t.name} disabled={!isNew} placeholder="e.g. error_spike"
                onChange={(e) => setT({ ...t, name: e.target.value })} />
+      </label>
+
+      <label className="field">
+        <span className="lbl">in plain words (optional)</span>
+        <input type="text" value={t.description ?? ""} maxLength={160}
+               placeholder="e.g. an alert fires for the checkout service"
+               onChange={(e) => setT({ ...t, description: e.target.value })} />
+        <span className="help">
+          what happens, as it would follow "When". The project page says this instead of the condition.
+        </span>
       </label>
 
       <div className="field">

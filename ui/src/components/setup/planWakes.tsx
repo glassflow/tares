@@ -158,6 +158,7 @@ function WakeEditor({ wake, ctx, onSave, onCancel }: {
   const [cooldown, setCooldown] = useState(String(knob("cooldown_minutes") ?? minutesOf(wake?.cooldown, 10)));
   const [filters, setFilters] = useState<TriggerFilter[]>(wake?.filters ?? []);
   const [keyField, setKeyField] = useState(wake?.key_field ?? "");
+  const [description, setDescription] = useState(wake?.description ?? "");
 
   const watched = plan.watches.filter((w) => sources.includes(w.name));
   const fields = useFieldChoices(watched, cell.connectors);
@@ -202,6 +203,7 @@ function WakeEditor({ wake, ctx, onSave, onCancel }: {
       key, name, sources, condition, knobs,
       filters: filters.map((f) => ({ ...f, field: f.field.trim() })),
       key_field: mode === "schedule" ? "" : keyField,
+      description: description.trim(),
       cooldown: `${num(cooldown)}m`, window: wake?.window ?? "15m",
       sentence: wake?.sentence ?? "", cooldown_sentence: wake?.cooldown_sentence ?? null,
     });
@@ -313,6 +315,14 @@ function WakeEditor({ wake, ctx, onSave, onCancel }: {
           </button>
         </div>
       </fieldset>
+
+      <label className="field">
+        <span className="lbl">Say it in plain words (optional)</span>
+        <input type="text" value={description} maxLength={160}
+               placeholder="e.g. an alert fires for the checkout service"
+               onChange={(e) => setDescription(e.target.value)} />
+        <span className="help">What happens, as it would follow "When". The project page says this instead of the numbers.</span>
+      </label>
 
       {mode === "event" && (
         <label className="field su-num-field">

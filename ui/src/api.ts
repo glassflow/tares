@@ -499,7 +499,7 @@ export const api = {
 
 // What a trigger is saved from. `project` omitted = the default project.
 export type TriggerBody = Pick<Trigger, "name" | "sources" | "filters" | "condition" | "emit" | "cooldown">
-  & { project?: string; key_field?: string | null };
+  & { project?: string; key_field?: string | null; description?: string };
 
 export type AgentBody = {
   name: string; trigger: string; prompt: string; project?: string;
