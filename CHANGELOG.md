@@ -5,6 +5,32 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.38.0-rc.3] - 2026-09-30
+
+Third release candidate: fixes from testing rc.2 on a live cell.
+
+### Fixed
+- The first start after an upgrade that fills template trigger descriptions no longer crashes
+  (`RuntimeError: no running event loop`): the fill re-reads the catalog without starting sources.
+- A project whose own agent connects with its project key and checks in (never subscribing a
+  webhook) counts as having an agent: health no longer says "No agent is set up", the Setup page
+  lists the agent, and the project sentence says it sees what happened when it checks in. Until the
+  key is used, health warns that the agent has not connected yet.
+- Agents the guided setup plans are told to finish with `conclude`, so their results carry a
+  headline and a next step. A headline or summary derived from a note skips the narration it opens
+  with ("I have a complete picture.").
+- A practice run on a source Tares already had starts from the newest event the wake-up's filters
+  let through, not the newest event of any entity, and its timeline reaches back to that event.
+- "Looked at today" leaves out firings no agent was on.
+- The own-agent check in the guided setup accepts a key made in place of the first one, and no
+  longer mentions subscribing for an agent that checks in; that key's finding answers a practice
+  firing too.
+- Console: unknown addresses show a not-found page and `/views` goes to the projects; the pause
+  dialog warns when a source is shared with another project; the delete dialog lists skills;
+  "Marked as handled" no longer shows a machine id; the paused banner no longer repeats "Paused";
+  the redirect for a missing agent, trigger or firing reads correctly; going from one source page
+  straight to another shows the new source.
+
 ## [1.38.0-rc.2] - 2026-09-30
 
 Second release candidate: plain descriptions on triggers, so the project sentence says what wakes it.
