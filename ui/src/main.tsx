@@ -5,29 +5,21 @@ import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom"
 import App from "./App";
 import AuthGate from "./components/AuthGate";
 import AgentActivity, { ConnectPage } from "./pages/Activity";
-import Deliveries from "./pages/Deliveries";
-import Agents from "./pages/Agents";
-import AgentDetail from "./pages/AgentDetail";
-import AgentNew from "./pages/AgentNew";
 import Ask from "./pages/Ask";
 import CatalogExport from "./pages/CatalogExport";
 import CatalogImport from "./pages/CatalogImport";
-import DispatchDetail from "./pages/DispatchDetail";
 import Explore from "./pages/Explore";
 import SourceClaudeCode from "./pages/SourceClaudeCode";
 import SourceDetail from "./pages/SourceDetail";
-import TriggerDetail from "./pages/TriggerDetail";
-import TriggerNew from "./pages/TriggerNew";
 import SourceDiscover from "./pages/SourceDiscover";
 import SourceNew from "./pages/SourceNew";
 import Security from "./pages/Security";
 import Home from "./pages/Home";
-import McpServers from "./pages/McpServers";
 import Sources from "./pages/Sources";
-import TriggersPage from "./pages/Triggers";
 import Projects from "./pages/Projects";
 import ProjectTemplates from "./pages/ProjectNew";
 import ProjectDetail from "./pages/ProjectDetail";
+import { AgentRedirect, DispatchRedirect, FiringsRedirect, NewInProjectRedirect, TriggerRedirect } from "./pages/Redirects";
 import ProjectSetup from "./pages/ProjectSetup";
 import ProjectNewCustom from "./pages/ProjectNewCustom";
 import ProjectNewGeneric from "./pages/ProjectNewGeneric";
@@ -80,23 +72,25 @@ const router = createBrowserRouter([
       { path: "sources/:name", element: <SourceDetail /> },
       { path: "organize", element: <Navigate to="/ask" replace /> },
       { path: "explore", element: <Explore /> },
-      { path: "triggers", element: <TriggersPage /> },
-      { path: "triggers/new", element: <TriggerNew /> },
-      { path: "triggers/:name", element: <TriggerDetail /> },
+      // triggers, agents, firings and MCP servers live in their project now (Advanced setup);
+      // the old addresses land on the same thing there (Slack links /agents and /dispatches)
+      { path: "triggers", element: <Navigate to="/projects" replace /> },
+      { path: "triggers/new", element: <NewInProjectRedirect kind="triggers" /> },
+      { path: "triggers/:name", element: <TriggerRedirect /> },
       { path: "connect", element: <ConnectPage /> },
       { path: "reads", element: <AgentActivity /> },
-      { path: "firings", element: <Deliveries /> },
+      { path: "firings", element: <FiringsRedirect /> },
       // /deliveries was this page's name before the firing/delivery/dispatch words settled
       { path: "deliveries", element: <Navigate to="/firings" replace /> },
       // TR-137 renames: /activity split into /reads + /deliveries (dispatches live with their
       // subscribers now); /security is /settings.
       { path: "activity", element: <ActivityRedirect /> },
       { path: "security", element: <Navigate to="/settings" replace /> },
-      { path: "dispatches/:id", element: <DispatchDetail /> },
-      { path: "agents", element: <Agents /> },
-      { path: "mcp-servers", element: <McpServers /> },
-      { path: "agents/new", element: <AgentNew /> },
-      { path: "agents/:name", element: <AgentDetail /> },
+      { path: "dispatches/:id", element: <DispatchRedirect /> },
+      { path: "agents", element: <Navigate to="/projects" replace /> },
+      { path: "mcp-servers", element: <Navigate to="/projects" replace /> },
+      { path: "agents/new", element: <NewInProjectRedirect kind="agents" /> },
+      { path: "agents/:name", element: <AgentRedirect /> },
       { path: "ask", element: <Ask /> },
       { path: "settings", element: <Security /> },
       // legacy paths → new homes (bookmarks, the old Entities/Activity/Catalog nav). Catalog

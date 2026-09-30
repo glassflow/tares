@@ -5,7 +5,7 @@ import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { api, auth } from "./api";
 import CommandPalette from "./components/CommandPalette";
 import {
-  Activity, Bolt, Chat, ChevronRight, Database, Filter, GitHub, Grid, Lock, Moon,
+  Activity, Chat, ChevronRight, Database, GitHub, Grid, Lock, Moon,
   Settings, SignOut, Sun, Terminal, Zap,
 } from "./components/icons";
 import { applyTheme, currentTheme, type Theme } from "./theme";
@@ -34,10 +34,6 @@ const NAV_GROUPS: { section: string; items: NavItem[] }[] = [
   ] },
   { section: "Catalog", items: [
     { to: "/sources", label: "Sources", icon: Database },
-    { to: "/triggers", label: "Triggers", icon: Bolt },
-    { to: "/agents", label: "Tares agents", icon: Chat },
-    { to: "/firings", label: "Firings", icon: Filter },
-    { to: "/mcp-servers", label: "MCP servers", icon: Terminal },
     { to: "/explore", label: "Explore", icon: Activity },
   ] },
   { section: "Agent access", items: [

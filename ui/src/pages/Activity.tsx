@@ -238,7 +238,7 @@ function Connect({ tab }: { tab: ConnectTab }) {
           ].join("\n")} />
           <p className="help" style={{ whiteSpace: "normal" }}>
             (Don&rsquo;t have an agent of your own? A built-in{" "}
-            <Link to="/agents">Tares agent</Link> runs inside Tares on a trigger firing, no
+            <Link to="/projects">Tares agent</Link> runs inside Tares on a trigger firing, no
             endpoint needed.) Every delivery is JSON shaped like:
           </p>
           <CodeBlock title="what your endpoint receives on each firing" code={JSON.stringify({
@@ -260,8 +260,8 @@ function Connect({ tab }: { tab: ConnectTab }) {
           {triggers && triggers.length > 0 ? (
             <>
               <p className="help" style={{ whiteSpace: "normal" }}>
-                Wire it on the trigger&rsquo;s page: open <Link to="/triggers">Triggers</Link>,
-                pick the trigger, and paste your endpoint there. From a script, the same action is
+                Wire it in the trigger&rsquo;s project: open <Link to="/projects">the project</Link>,
+                then Setup, Advanced setup, Settings, Subscribers, and add your endpoint there. From a script, the same action is
                 (needs a <span className="mono">read</span>-scoped{" "}
                 <Link to="/settings">API key</Link>):
               </p>
@@ -270,7 +270,7 @@ function Connect({ tab }: { tab: ConnectTab }) {
           ) : (
             <p className="help" style={{ whiteSpace: "normal" }}>
               This instance has no triggers yet, so there is nothing to subscribe to; create one
-              under <Link to="/triggers">Triggers</Link> (a condition over some of a project's sources), then come back
+              in <Link to="/projects">a project</Link> (a condition over some of its sources), then come back
               here.
             </p>
           )}

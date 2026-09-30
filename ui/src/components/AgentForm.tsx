@@ -278,7 +278,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
         {mcpAvail === undefined ? <span className="dim">loading…</span>
           : mcpAvail.length === 0 ? (
             <span className="help">
-              none in this project yet. Add one under <Link to="/mcp-servers">MCP servers</Link>, then
+              none in this project yet. Add one under <Link to={projectId ? `/projects/${encodeURIComponent(projectId)}?view=settings:mcp` : "/projects"}>MCP servers</Link>, then
               pick it here.
             </span>
           ) : (
@@ -301,7 +301,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
                         onChange={(name) => { if (name) toggleMcp(name, true); }} />
               )}
               <span className="help">
-                manage connections under <Link to="/mcp-servers">MCP servers</Link>
+                manage connections under <Link to={projectId ? `/projects/${encodeURIComponent(projectId)}?view=settings:mcp` : "/projects"}>MCP servers</Link>
               </span>
             </>
           )}

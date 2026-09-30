@@ -25,7 +25,7 @@ export function McpView({ ctx }: { ctx: Ctx }) {
       )}
       {ctx.mcpNames.length > 0 ? (
         <p style={{ margin: "4px 0 0" }}>
-          {ctx.mcpNames.map((n) => <Link key={n} to="/mcp-servers" className="chip mono">{n}</Link>)}
+          {ctx.mcpNames.map((n) => <span key={n} className="chip mono">{n}</span>)}
         </p>
       ) : !adding && (
         <div className="empty">None in this project. Add an MCP server to give its agents tools beyond Tares.</div>
