@@ -5,6 +5,10 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.38.0-rc.2] - 2026-09-30
+
+Second release candidate: plain descriptions on triggers, so the project sentence says what wakes it.
+
 ### Added
 - A trigger can say what wakes it in plain words: an optional `description`, one line of at most
   160 characters phrased to follow "When" ("an alert fires for the checkout service"). The project
