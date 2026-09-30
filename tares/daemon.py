@@ -31,7 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel, model_validator
 
-from .config import (SLACK_URL_PREFIX, CatalogError, agent_url, export_db_to_yaml,
+from .config import (SLACK_URL_PREFIX, CatalogError, agent_url, catalog_from_db, export_db_to_yaml,
                      validate_mcp_server_dict,
                      import_yaml_to_db, slack_channel_from_url, slack_url,
                      validate_agent_dict, validate_slack_channel, validate_source_dict,
@@ -514,7 +514,10 @@ def make_app() -> FastAPI:
     projects.fill_template_goals()
     # and the triggers a template planned get its plain-words description (once)
     if projects.fill_template_trigger_descriptions():
-        runtime.reload_catalog()
+        # re-read the catalog only: nothing runs yet (the sources start in lifespan), and a
+        # reload that restarts sources needs a running event loop (it crashed 1.38.0-rc.2's first
+        # start on a cell with template projects)
+        runtime.catalog = catalog_from_db(store)
     _seed_project(store, projects)
 
     def _otlp_source_for(header: str | None) -> str:
