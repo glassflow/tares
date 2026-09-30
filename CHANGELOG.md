@@ -5,6 +5,10 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.38.0-rc.1] - 2026-09-30
+
+Release candidate: projects are the unit, the goal-first project page and the guided setup, for testing on a cell before 1.38.0.
+
 ### Added
 - Every cell has a default project. It is created at start when missing and holds everything no
   other project does: a source, trigger, agent or MCP server made without naming a project, and

@@ -8,8 +8,8 @@
 set -euo pipefail
 
 VERSION="${1:-}"
-if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "usage: scripts/release.sh <version>   e.g. 0.0.2" >&2
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+  echo "usage: scripts/release.sh <version>   e.g. 0.0.2, or 0.0.2-rc.1 for a release candidate" >&2
   exit 1
 fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
