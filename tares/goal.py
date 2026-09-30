@@ -169,6 +169,22 @@ _KIND_NOUNS = {"github": "GitHub repos", "webhook": "webhooks", "loki": "Loki st
                "docker": "container log streams", "claude_code": "Claude Code session feeds"}
 
 
+def agent_words(name: str) -> str:
+    """How a sentence names an agent: its name, or for a long generated one
+    (ctx_glassflow_tares_context_maintainer) its last word, "the maintainer agent"."""
+    name = str(name or "")
+    if len(name) <= 24:
+        return name
+    last = re.split(r"[_\-]+", name.strip("_-"))[-1] or name
+    return f"the {last} agent"
+
+
+def _cap(s: str) -> str:
+    """A sentence that opens with "the maintainer agent" starts upper case; one that opens with an
+    agent's own name keeps it as written."""
+    return "The" + s[3:] if s.startswith("the ") else s
+
+
 def source_title(cfg) -> str:
     """What a person calls a source: the repo it watches, the host it reads, the table; its
     name when nothing better is known (internal names like ctx_org_repo stay on the setup page)."""
@@ -225,14 +241,17 @@ def condition_clause(trig, sources: dict) -> str:
     one = len(names) == 1 or srcs.startswith("any of")
     filt = filters_words(trig.filters)
     label = entity_label(trig, sources)
-    per = f" for one {label}" if label else ""
+    per = f" for one {label}" if label and label not in srcs else ""
     window = _window_words(c.window)
+    kinds = {getattr(sources.get(n), "connector", "") for n in names}
     pred = _predicate(c.predicate)
     if pred is None:
         return f"{srcs} {'meets' if one else 'meet'} {c.predicate} over {window}{per}"
     op, n = pred
     if c.aggregate == "count":
         if op == ">" and n == 0:
+            if kinds == {"github"}:
+                return f"a commit{filt} lands in {srcs}{per}"
             return f"an event{filt} arrives on {srcs}{per}"
         if op == "==" and n == 0:
             what = f"no events{filt}"
@@ -306,8 +325,8 @@ def _agent_sentence(a: dict, parts: dict, sources: dict) -> tuple[str, str]:
     by = parts["targets"].get(a["name"]) or []
     if a["enabled"] or not by:
         if a["enabled"]:
-            return f"{a['name']} looks first.", "trigger"
-        return f"{a['name']} is turned off.", "trigger"
+            return _cap(f"{agent_words(a['name'])} looks first."), "trigger"
+        return _cap(f"{agent_words(a['name'])} is turned off."), "trigger"
     trig_by_name = {t.name: t for t in parts["triggers"]}
     clauses = []
     for frm, h in by:
@@ -318,8 +337,8 @@ def _agent_sentence(a: dict, parts: dict, sources: dict) -> tuple[str, str]:
         except (ValueError, KeyError, IndexError):
             cd = _handoff_cooldown(h)
         per = f"at most once per {label} every {cd}" if label else f"at most once every {cd}"
-        clauses.append(f"when {frm['name']} concludes {h.get('verdict')}, {per}")
-    return f"{a['name']} digs in {' or '.join(clauses)}.", "handoff"
+        clauses.append(f"when {agent_words(frm['name'])} concludes {h.get('verdict')}, {per}")
+    return _cap(f"{agent_words(a['name'])} digs in {' or '.join(clauses)}."), "handoff"
 
 
 def outline_sentence(parts: dict, sources: dict) -> str:
@@ -336,7 +355,7 @@ def outline_sentence(parts: dict, sources: dict) -> str:
         first = by_trigger.get(t.name) or []
         lead = _lead(t, sources)
         if first:
-            names = [a["name"] for a in first]
+            names = [agent_words(a["name"]) for a in first]
             s = f"{lead}, {join_words(names)} {'looks' if len(names) == 1 else 'look'} first."
         elif parts["external"]:
             s = f"{lead}, the agents that joined the project are told."
@@ -352,8 +371,8 @@ def outline_sentence(parts: dict, sources: dict) -> str:
                 if edge in seen:
                     continue
                 seen.add(edge)
-                subject = "it" if depth == 1 and len(first) == 1 else a["name"]
-                s += f" If {subject} concludes {h.get('verdict')}, {h.get('agent')} digs in."
+                subject = "it" if depth == 1 and len(first) == 1 else agent_words(a["name"])
+                s += f" If {subject} concludes {h.get('verdict')}, {agent_words(h.get('agent'))} digs in."
                 nxt = agents_by_name.get(h.get("agent"))
                 if nxt is not None:
                     queue.append((nxt, depth + 1))
