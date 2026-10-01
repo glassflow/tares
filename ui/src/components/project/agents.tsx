@@ -113,7 +113,8 @@ export function AgentView({ ctx, name }: { ctx: Ctx; name: string }) {
     : <Link to={`/agents/${encodeURIComponent(n)}`} className="mono">{n}</Link>);
   const toggle = async () => {
     try {
-      if (agent.enabled) await api.disableBuiltinAgent(name); else await api.enableBuiltinAgent(name);
+      // on or off in this project (its wiring); the agent's other projects are left alone
+      if (agent.enabled) await api.disableBuiltinAgent(name, ctx.id); else await api.enableBuiltinAgent(name, ctx.id);
       ctx.refresh();
     } catch (e) { ctx.fail(e); }
   };
@@ -179,7 +180,7 @@ export function AgentView({ ctx, name }: { ctx: Ctx; name: string }) {
         ] as ([string, React.ReactNode] | null)[]).filter((r): r is [string, React.ReactNode] => r !== null)} />
       )}
       <h3 style={{ margin: "20px 0 8px" }}>Runs</h3>
-      <RunsPanel name={name} agent={agent} from={from}
+      <RunsPanel name={name} agent={agent} from={from} project={ctx.id}
                  focusDispatch={ctx.params.get("dispatch") ?? undefined}
                  focusRun={ctx.params.get("run") ?? undefined}
                  openRun={openRun} setOpenRun={setOpenRun} />

@@ -39,19 +39,18 @@ export default function ProjectNewCustom() {
     let cancelled = false;
     (async () => {
       try {
-        const [sources, triggers, agents, mcp, projects, current] = await Promise.all([
-          api.sources(), api.triggers(), api.builtinAgents(), api.mcpServers(), api.projects(),
+        const [sources, triggers, agents, mcp, current] = await Promise.all([
+          api.sources(), api.triggers(), api.builtinAgents(), api.mcpServers(),
           editId ? api.project(editId) : Promise.resolve(undefined),
         ]);
         if (cancelled) return;
         const mine = current?.id;
-        const dflt = projects.projects.find((p) => p.default)?.id;
-        const free = (rows: { name: string; owned_by?: string | null; project?: string }[]) =>
-          rows.map((r) => ({ name: r.name, ownedBy: r.project ?? r.owned_by }))
-              .filter((r) => !r.ownedBy || r.ownedBy === mine || r.ownedBy === dflt);
+        // every part on the cell can be used (P-TR-216: parts are shared between projects)
+        const any = (rows: { name: string; owned_by?: string | null }[]) =>
+          rows.map((r) => ({ name: r.name, ownedBy: r.owned_by }));
         const byKind: Record<ProjectObjectKind, Choice[]> = {
-          source: sources.map((r) => ({ name: r.name, ownedBy: r.owned_by })), trigger: free(triggers),
-          agent: free(agents.agents), mcp_server: free(mcp.servers as McpServer[]),
+          source: any(sources), trigger: any(triggers),
+          agent: any(agents.agents), mcp_server: any(mcp.servers as McpServer[]),
         };
         // an object of this project that was deleted by hand is still on its list: show it as
         // missing so saving does not silently drop it

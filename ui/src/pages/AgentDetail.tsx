@@ -357,9 +357,10 @@ const RUN_FILTER_LABELS: Record<string, string> = { "": "all runs", ok: "success
  *  The newest page is polled; older pages are fetched once with an offset and kept until the
  *  filter changes. A run that lands while paging shifts the offsets by one, so the two are
  *  merged by id. */
-export function RunsPanel({ name, agent, from = [], focusDispatch, focusRun, openRun, setOpenRun }: {
+export function RunsPanel({ name, agent, from = [], focusDispatch, focusRun, openRun, setOpenRun, project }: {
   name: string;
   agent: BuiltinAgent;
+  project?: string;                    // only the runs that belong to this project
   from?: string[];                     // agents that hand off to this one
   focusDispatch?: string;
   focusRun?: string;
@@ -370,7 +371,7 @@ export function RunsPanel({ name, agent, from = [], focusDispatch, focusRun, ope
   const [older, setOlder] = useState<AgentRun[]>([]);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const { data: head, error, reload } = usePolling(() => api.builtinAgentRuns(name, RUNS_PAGE, 0, filter), 10000);
+  const { data: head, error, reload } = usePolling(() => api.builtinAgentRuns(name, RUNS_PAGE, 0, filter, project), 10000);
   useEffect(() => { setOlder([]); setHasMore(true); reload(); }, [filter]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const seen = new Set<string>();
@@ -380,7 +381,7 @@ export function RunsPanel({ name, agent, from = [], focusDispatch, focusRun, ope
     if (!runs) return;
     setLoadingMore(true);
     try {
-      const page = await api.builtinAgentRuns(name, RUNS_PAGE, runs.length, filter);
+      const page = await api.builtinAgentRuns(name, RUNS_PAGE, runs.length, filter, project);
       setOlder((o) => [...o, ...page]);
       setHasMore(page.length >= RUNS_PAGE);
     } catch { setHasMore(false); }

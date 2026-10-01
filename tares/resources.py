@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 from . import goal as G
-from .config import agent_url
 from .connectors import SPECS
 
 KINDS = ("sources", "triggers", "agents", "tools", "skills", "keys")
@@ -90,7 +89,7 @@ def list_resources(store, catalog, runtime_health: dict | None = None, now=None)
     for a in sorted(store.list_catalog_agents(), key=lambda a: a["name"]):
         runs = store.list_agent_runs(a["name"], limit=1)
         last = runs[0] if runs else None
-        on = store.subscription_by_url(agent_url(a["name"])) is not None
+        on = store.agent_enabled(a["name"])   # some project's wiring wakes it
         model = a.get("model") or "the default model"
         agents.append({
             "name": a["name"],

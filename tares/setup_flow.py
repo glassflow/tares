@@ -128,6 +128,9 @@ PLAN_SCHEMA = {"type": "object", "properties": {
     "agents": {"type": "array", "description": "Tares agents (who tares), at most 3",
                "items": {"type": "object", "properties": {
                    "key": {"type": "string", "description": "a1, a2, ..."},
+                   "existing": {"type": "boolean",
+                                "description": "true: an agent already on Tares (by its exact "
+                                               "name), used as it is; this project only wires it"},
                    "name": {"type": "string", "description": "short kebab-case"},
                    "trigger": {"type": "string", "description": "a wake name in this plan"},
                    "on_trigger": {"type": "boolean",
@@ -208,6 +211,9 @@ otherwise do not mention it.
 - Tools: suggest an outside MCP server only when the goal needs context Tares does not hold \
 (deploys, tickets, code); enabled false, url empty unless the person gave one, can_act true when \
 it can change things.
+- Reuse what is on Tares: an existing source (existing true), an existing tool (its exact name),
+  an existing agent when one already does the job (existing true, its exact name; its
+  instructions stay as they are). Parts are shared between projects.
 - Slack: when the goal asks to be told or messaged in Slack, set slack true on the agent whose finding should be posted. Tares posts it to a channel itself; never suggest a Slack MCP server for that, and never ask for a channel: the person picks it.
 - Skills: at most 2, only when the goal implies house rules or vocabulary.
 - Every sentence is plain words for someone who is not an engineer: no jargon, no em dashes."""
@@ -822,9 +828,13 @@ def _normalize(raw, store, catalog, prev: dict | None,
     taken = {a["name"] for a in store.list_catalog_agents()}
     agents, names = [], []
     raw_agents = [x for x in plan.get("agents") or [] if isinstance(x, dict)]
+    catalog_agents = {x["name"]: x for x in store.list_catalog_agents()}
     for i, a in enumerate(raw_agents):
         orig = str(a.get("name") or "").strip()
-        nm = _unique(slug(orig) or f"agent-{i + 1}", taken)
+        if a.get("existing") and orig in catalog_agents:
+            nm = orig   # an agent already on Tares: used as it is, wired by this project
+        else:
+            nm = _unique(slug(orig) or f"agent-{i + 1}", taken)
         taken.add(nm)
         names.append(nm)
         agent_map.setdefault(orig, nm)
@@ -848,6 +858,14 @@ def _normalize(raw, store, catalog, prev: dict | None,
             a["trigger"] = wake_names[0]
         a["optional"] = bool(a.get("optional", False))
         a["enabled"] = bool(a.get("enabled", True))
+        a["existing"] = bool(a.get("existing")) and a["name"] in catalog_agents
+        if a["existing"]:
+            # its definition is the agent's own; the plan says only how this project wires it
+            have = catalog_agents[a["name"]]
+            a["prompt"] = have.get("prompt") or ""
+            a["model"] = have.get("model") or None
+            a["provider"] = have.get("provider") or None
+            a["mcp_servers"] = list(have.get("mcp_servers") or [])
         a["model"] = (str(a["model"]).strip() or None) if a.get("model") else None
         a["provider"] = (str(a["provider"]).strip() or None) if a.get("provider") else None
         a["prompt"] = str(a.get("prompt") or "").strip()
@@ -961,6 +979,14 @@ def _context(store, catalog, existing_sources: bool) -> str:
     out += "\n\nExisting sources:\n" + ("\n".join(srcs) if srcs else
                                         ("- none" if existing_sources else
                                          "- do not reuse any; plan new sources"))
+    if existing_sources:
+        from urllib.parse import urlsplit
+        tools = [f"- {m['name']}: MCP server at {urlsplit(m['url']).hostname or m['url']}"
+                 for m in store.list_mcp_servers()]
+        agents = [f"- {a['name']}: {' '.join(str(a.get('prompt') or '').split())[:140]}"
+                  for a in store.list_catalog_agents()]
+        out += "\n\nExisting tools:\n" + ("\n".join(tools) if tools else "- none")
+        out += "\n\nExisting agents:\n" + ("\n".join(agents) if agents else "- none")
     return out
 
 
@@ -1189,9 +1215,16 @@ def apply(store, engine, plan: dict, make_key, draft: str | None = None) -> tupl
         if plan["who"] == "tares":
             step = "agents"
             live = [a for a in plan["agents"] if a["enabled"]]
-            names = {a["name"] for a in live}
+            names = {a["name"] for a in live} | {x["name"] for x in store.list_catalog_agents()}
             objs = []
-            for a in live:
+            for a in [x for x in live if x.get("existing")]:
+                # an agent already on Tares: this project uses it and wires it (P-TR-216)
+                store.put_in_project("agent", a["name"], uid)
+                store.wire_agent(a["name"], uid, a["trigger"],
+                                 [h for h in a["handoffs"] if h["agent"] in names])
+                store.set_agent_enabled(a["name"], bool(a["on_trigger"]), project=uid)
+                objects.append({"kind": "agent", "name": a["name"]})
+            for a in [x for x in live if not x.get("existing")]:
                 spec = {"name": a["name"], "trigger": a["trigger"],
                         "prompt": with_conclude(a["prompt"], a["handoffs"]),
                         "mcp_servers": [s for s in a["mcp_servers"] if s in usable_tools],

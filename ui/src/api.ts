@@ -160,25 +160,31 @@ export const api = {
   pauseTrigger: (name: string) => request(`/api/triggers/${name}/pause`, { method: "POST" }),
   resumeTrigger: (name: string) => request(`/api/triggers/${name}/resume`, { method: "POST" }),
   // ── Tares agents: a first look when a trigger fires (managed under /builtin) ──
-  builtinAgents: () =>
+  // with a project: each agent's trigger, handoffs and on/off are that project's wiring
+  builtinAgents: (project?: string) =>
     request<{ agents: BuiltinAgent[]; key_configured: boolean; key_source: string;
               models: string[]; default_model: string; slack_workspace: boolean;
               providers: ModelProvider[]; default_provider: string | null;
               default_models: Record<string, string>;   // per provider id, what "" resolves to
               default_max_rounds: number; default_max_rounds_with_mcp: number;
               max_rounds_limit: number;
-              presets: AgentPreset[] }>("/api/agents/builtin"),
+              presets: AgentPreset[] }>(`/api/agents/builtin${project ? `?project=${encodeURIComponent(project)}` : ""}`),
   createBuiltinAgent: (body: AgentBody) =>
     request<{ ok: boolean; enabled: boolean }>("/api/agents/builtin",
       { method: "POST", body: JSON.stringify(body) }),
   updateBuiltinAgent: (name: string, body: AgentBody) =>
     request(`/api/agents/builtin/${name}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteBuiltinAgent: (name: string) => request(`/api/agents/builtin/${name}`, { method: "DELETE" }),
-  enableBuiltinAgent: (name: string) => request(`/api/agents/builtin/${name}/enable`, { method: "POST" }),
-  disableBuiltinAgent: (name: string) => request(`/api/agents/builtin/${name}/disable`, { method: "POST" }),
-  builtinAgentRuns: (name: string, limit = 20, offset = 0, status = "") =>
+  // on or off in one project (its wiring); enable without one: the project that made it
+  enableBuiltinAgent: (name: string, project?: string) =>
+    request(`/api/agents/builtin/${name}/enable${project ? `?project=${encodeURIComponent(project)}` : ""}`, { method: "POST" }),
+  disableBuiltinAgent: (name: string, project?: string) =>
+    request(`/api/agents/builtin/${name}/disable${project ? `?project=${encodeURIComponent(project)}` : ""}`, { method: "POST" }),
+  // with a project: the runs that belong to it (its wiring started them)
+  builtinAgentRuns: (name: string, limit = 20, offset = 0, status = "", project?: string) =>
     request<AgentRun[]>(`/api/agents/builtin/${encodeURIComponent(name)}/runs?limit=${limit}&offset=${offset}`
-      + (status ? `&status=${encodeURIComponent(status)}` : "")),
+      + (status ? `&status=${encodeURIComponent(status)}` : "")
+      + (project ? `&project=${encodeURIComponent(project)}` : "")),
   rerunAgentRun: (name: string, runId: string) =>
     request<{ ok: boolean; run_id: string }>(
       `/api/agents/builtin/${encodeURIComponent(name)}/runs/${encodeURIComponent(runId)}/rerun`,

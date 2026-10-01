@@ -111,7 +111,8 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   useEffect(() => {
     let live = true;
     api.builtinAgents().then((r) => {
-      if (live) setPeers(r.agents.filter((a) => (!projectId || a.project === projectId)).map((a) => a.name));
+      // any agent on the cell can take a handoff (P-TR-216: parts are shared)
+      if (live) setPeers(r.agents.map((a) => a.name));
     }).catch(() => { if (live) setPeers([]); });
     return () => { live = false; };
   }, [projectId]);
@@ -159,9 +160,9 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   const [mcpAvail, setMcpAvail] = useState<{ name: string; url: string }[]>();
   useEffect(() => {
     let live = true;
-    // only the project's own servers: an agent may use MCP servers of its project
+    // any MCP server on the cell (P-TR-216: parts are shared)
     api.mcpServers().then((r) => {
-      if (live) setMcpAvail(r.servers.filter((m) => !projectId || !m.project || m.project === projectId));
+      if (live) setMcpAvail(r.servers);
     }).catch(() => { if (live) setMcpAvail([]); });
     return () => { live = false; };
   }, [projectId]);

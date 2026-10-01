@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { api, type SlackChannels } from "../../api";
 import type {
   AgentPreset, ConnectorSpec, McpServer, ModelProvider, Plan, PlanWatch, PlanWake, Project,
-  SetupProblem, Source,
+  Resources, SetupProblem, Source,
 } from "../../types";
 
 // Plan edits the Plan step makes in place, and what it reads from the cell to offer choices.
@@ -149,6 +149,8 @@ export interface CellData {
   defaultModels?: Record<string, string>;
   /** The Slack channels the cell's bot can post to (reason says why there are none). */
   slack?: SlackChannels;
+  /** Every part on the cell with the projects that use it (the All resources read). */
+  resources?: Resources;
 }
 
 export function useCellData(): CellData {
@@ -160,6 +162,7 @@ export function useCellData(): CellData {
     api.connectors().then((connectors) => put({ connectors })).catch(() => {});
     api.mcpServers().then((r) => put({ servers: r.servers })).catch(() => {});
     api.projects().then((r) => put({ projects: r.projects })).catch(() => {});
+    api.resources().then((resources) => put({ resources })).catch(() => {});
     api.slackChannels().then((slack) => put({ slack }))
       .catch(() => put({ slack: { channels: [], reason: "error" } }));
     api.builtinAgents().then((r) => put({
@@ -230,3 +233,36 @@ export function useFieldChoices(watches: PlanWatch[], connectors?: Record<string
  *  the button that opened it). */
 export const focusSoon = (id: string) =>
   window.requestAnimationFrame(() => document.getElementById(id)?.focus());
+
+/** A name a person knows for an MCP server's address: GitHub for api.githubcopilot.com, else
+ *  the host. */
+const KNOWN_HOSTS: [RegExp, string][] = [
+  [/githubcopilot\.com$|github\.com$/, "GitHub"], [/slack\.com$/, "Slack"], [/linear\.app$/, "Linear"],
+  [/atlassian\.(com|net)$/, "Atlassian"], [/sentry\.io$/, "Sentry"], [/notion\.(so|com)$/, "Notion"],
+];
+export function toolTitle(url: string): { title: string; host: string } {
+  let host = url;
+  try { host = new URL(url).hostname; } catch { /* not a URL: show it as it is */ }
+  const known = KNOWN_HOSTS.find(([re]) => re.test(host));
+  return { title: known ? known[1] : host, host };
+}
+
+/** The MCP servers on the cell grouped by address: servers at the same URL are one tool (made
+ *  once per project before parts were shared). The first of a group is the one to attach: one
+ *  with credentials set, else the first by name. */
+export interface ToolGroup { url: string; title: string; host: string; servers: string[]; pick: string; usedBy: string[] }
+export function toolGroups(cell: CellData, exclude: Set<string>): ToolGroup[] {
+  const used = new Map((cell.resources?.tools ?? []).map((t) => [t.name, t]));
+  const groups = new Map<string, ToolGroup>();
+  for (const m of [...(cell.servers ?? [])].sort((a, b) => a.name.localeCompare(b.name))) {
+    if (exclude.has(m.name)) continue;
+    const url = m.url.trim().replace(/\/+$/, "").toLowerCase();
+    const g = groups.get(url) ?? { url: m.url, ...toolTitle(m.url), servers: [], pick: m.name, usedBy: [] };
+    g.servers.push(m.name);
+    const row = used.get(m.name);
+    if (row?.state === "set" && used.get(g.pick)?.state !== "set") g.pick = m.name;
+    for (const u of row?.used_by ?? []) if (!g.usedBy.includes(u.name)) g.usedBy.push(u.name);
+    groups.set(url, g);
+  }
+  return [...groups.values()];
+}

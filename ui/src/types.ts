@@ -263,6 +263,7 @@ export interface BuiltinAgent {
   owned_by?: string | null;
   customized?: boolean;
   stats?: AgentStats;
+  projects?: string[];         // every project that uses it (P-TR-216: parts are shared)
 }
 
 // When a run concludes a finding with `verdict`, `agent` (in the same project) is started on the
@@ -689,6 +690,7 @@ export interface PlanWake {
 }
 export interface PlanAgent {
   key: string; name: string;
+  existing?: boolean;           // an agent already on Tares: used as it is, this project only wires it
   trigger: string | null; on_trigger: boolean;
   prompt: string; model: string | null;
   provider?: string | null;     // a provider id from Settings; empty = the cell default

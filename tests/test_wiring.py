@@ -141,6 +141,23 @@ async def main():
         tl_b = (await cx.get(f"/api/projects/{b}/timeline")).json()["threads"]
         eq("Beta's timeline: its firing only", [t.get("trigger") for t in tl_b], ["watch_b"])
 
+        print("== an agent's runs and stats on a project are that project's ==")
+        rows = (await cx.get("/api/agents/builtin", params={"project": b})).json()["agents"]
+        lk = next(x for x in rows if x["name"] == "looker")
+        eq("Beta sees its own wiring and one run", (lk["trigger"], lk["enabled"], lk["stats"]["runs"]),
+           ("watch_b", True, 1))
+        runs_b = (await cx.get("/api/agents/builtin/looker/runs", params={"project": b})).json()
+        eq("its runs list is Beta's", [r["key"] for r in runs_b], ["cart"])
+        r = await cx.post("/api/projects", json={"template": "custom", "name": "Gamma",
+                                                 "objects": [{"kind": "agent", "name": "rca_b"}]})
+        g = r.json()["id"]
+        ck("a project that takes in an agent another made does not copy its handoffs",
+           r.status_code == 201 and not store.list_handoffs(project=g)
+           and store.list_wakes(project=g, agent="rca_b")[0]["enabled"] is False,
+           (store.list_handoffs(project=g), store.list_wakes(project=g)))
+        await cx.delete(f"/api/projects/{g}")
+        ck("deleting it keeps rca_b (Beta made it)", store.get_catalog_agent("rca_b") is not None)
+
         print("== the same wiring in two projects: one run, shown in both ==")
         r = await cx.put("/api/triggers/watch_a", json={**trigger("watch_a", "a", b)})
         ck("Beta uses watch_a too", r.status_code == 200

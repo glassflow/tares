@@ -1741,7 +1741,7 @@ class Store:
             self.con.execute("UPDATE agent_runs SET delivery = ?, delivery_error = ? WHERE id = ?",
                              [delivery, error, run_id])
 
-    def agent_stats(self) -> dict[str, dict]:
+    def agent_stats(self, project: str | None = None) -> dict[str, dict]:
         """Per-agent lifetime aggregates for the console, one grouped query. `finished` excludes
         `running` and `capped` (a capped run made no model call), so the success rate reflects
         runs that actually concluded or tried to. Cost sums skip NULL rows (historical runs and
@@ -1756,7 +1756,10 @@ class Store:
                 "sum(cost_usd), sum(input_tokens), sum(output_tokens), "
                 "count(*) FILTER (WHERE status IN ('ok', 'empty', 'failed', 'exhausted') "
                 "                 AND cost_usd IS NULL) "
-                "FROM agent_runs GROUP BY agent"
+                "FROM agent_runs "
+                # with a project: only the runs that belong to it (P-TR-216)
+                + ("WHERE id IN (SELECT run_id FROM run_projects WHERE project = ?) "
+                   if project else "") + "GROUP BY agent", [project] if project else []
             ).fetchall()
         return {
             r[0]: {"runs": int(r[1]), "ok": int(r[2]), "finished": int(r[3]),
@@ -1967,7 +1970,12 @@ class Store:
                                "(agent = ? AND kind = 'wake' OR from_agent = ?) LIMIT 1",
                                [project, name, name]).fetchone()
         if not has:
-            self._wire_owner(name, project, r[0], json.loads(r[1]) if r[1] else [])
+            # the project that made it starts from its own handoffs; another project that takes
+            # it in wires its own (it may not have the agents those name)
+            maker = self.con.execute("SELECT owned_by FROM catalog_agents WHERE name = ?",
+                                     [name]).fetchone()
+            mine = bool(maker) and maker[0] == project
+            self._wire_owner(name, project, r[0], (json.loads(r[1]) if r[1] else []) if mine else None)
 
     def claim_owned_by(self, kind: str, name: str, project_id: str) -> bool:
         """Take ownership only if the object is unowned or already this project's; returns whether
@@ -2293,11 +2301,11 @@ class Store:
                     if not readers:
                         self._drop_rows("source", name, [default])
             else:
-                # the default project holds only what no other project does
+                # the default project holds what no other project does ("whatever was made outside
+                # another project"): a part another project takes leaves it, with the default
+                # project's wiring of it, so what ran there runs on in the project it joined
                 leaving_default = uid != default and default in self._rows_for(kind, name)
                 if leaving_default:
-                    # it was in the default project only for want of another: it moves, with the
-                    # default project's wiring of it
                     self._drop_rows(kind, name, [default])
                     if kind == "agent":
                         self.con.execute(

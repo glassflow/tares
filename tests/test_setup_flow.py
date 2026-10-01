@@ -979,6 +979,41 @@ async def main():
         r = await cx.delete(f"/api/projects/{bad_}")
         ck("a draft deletes like any project", r.status_code in (200, 204), r.text)
 
+        print("== reuse: an agent already on Tares, wired by a second project ==")
+        msg = S.plan_message("Watch checkout", "tares", True, store, runtime.catalog)
+        ck("the planner is told the tools and agents already on Tares",
+           "Existing tools:" in msg and "Existing agents:" in msg and "checkout-triage" in msg,
+           msg[-600:])
+        R = plan_with(name="Reuse test", tools=[], skills=[], notes=[])
+        R["watches"] = [{"key": "w1", "existing": True, "name": "checkout-errors"}]
+        R["wakes"] = [{**GOOD["wakes"][0], "name": "reuse-spike", "sources": ["checkout-errors"]}]
+        R["agents"] = [{"key": "a1", "existing": True, "name": "checkout-triage",
+                        "trigger": "reuse-spike", "on_trigger": True, "prompt": "",
+                        "handoffs": [], "mcp_servers": [], "sentence": "", "optional": False,
+                        "enabled": True}]
+        rp, errs = S.normalize(R, store, runtime.catalog)
+        eq("an existing agent keeps its name and its own instructions",
+           (errs, rp["agents"][0]["name"], rp["agents"][0]["existing"],
+            rp["agents"][0]["prompt"] == store.get_catalog_agent("checkout-triage")["prompt"]),
+           ([], "checkout-triage", True, True))
+        n_agents = len(store.list_catalog_agents())
+        r = await cx.post("/api/setup/apply", json={"plan": rp})
+        ck("apply -> 201", r.status_code == 201, r.text[:300])
+        ruid = r.json()["project"]["id"]
+        eq("no copy of the agent is made", len(store.list_catalog_agents()), n_agents)
+        ck("it is in both projects", sorted(store.projects_using("agent", "checkout-triage"))
+           == sorted([uid, ruid]), store.projects_using("agent", "checkout-triage"))
+        eq("the new project wires it to its own wake-up, on",
+           store.list_wakes(project=ruid, agent="checkout-triage"),
+           [{"project": ruid, "trigger": "reuse-spike", "agent": "checkout-triage", "enabled": True}])
+        ck("the first project's wiring is unchanged",
+           store.list_wakes(project=uid, agent="checkout-triage")[0]["trigger"]
+           == "checkout-error-spike")
+        r = await cx.delete(f"/api/projects/{ruid}")
+        ck("deleting the second project keeps the shared agent",
+           r.status_code == 200 and store.get_catalog_agent("checkout-triage") is not None,
+           r.text[:300])
+
         print("== auth ==")
         r = await anon.post("/api/setup/plan", json={"goal": "x"})
         eq("no credential: 401", r.status_code, 401)

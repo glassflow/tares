@@ -6,7 +6,7 @@ import { SkillEditor } from "../SkillsPanel";
 import type { Plan, PlanTool, SkillSummary } from "../../types";
 import { Switch, errText, parseSkillMd } from "./common";
 import { EditorFrame, ItemActions, Problems } from "./planBits";
-import { newKey } from "./planEdit";
+import { newKey, toolGroups } from "./planEdit";
 import type { CardCtx } from "./plan";
 
 // Card 4, Know-how: the skills the agents follow, each switched on or off, edited, removed;
@@ -198,7 +198,8 @@ export function ToolsSection({ ctx }: { ctx: CardCtx }) {
     closeEditor(`su-edit-tools.${key}`);
   };
   const inPlan = new Set(plan.tools.map((t) => t.name));
-  const attachable = (cell.servers ?? []).filter((m) => !inPlan.has(m.name));
+  // by address: two servers at the same URL are one tool to a person
+  const attachable = toolGroups(cell, inPlan).filter((g) => !g.servers.some((n) => inPlan.has(n)));
 
   return (
     <section className="su-tools" aria-labelledby="su-tools-h">
@@ -230,14 +231,17 @@ export function ToolsSection({ ctx }: { ctx: CardCtx }) {
             {cell.servers === undefined ? <p className="help">Reading the tools on Tares…</p>
               : attachable.length === 0 ? <p className="help">Every tool on Tares is in the plan already, or there is none yet.</p> : (
                 <ul className="su-copy-list">
-                  {attachable.map((m) => (
-                    <li key={m.name}>
-                      <span className="su-item-what mono">{m.name}</span>
-                      <span className="help mono su-break">{m.url}</span>
-                      <button type="button" className="su-small" aria-label={`Attach ${m.name}`}
+                  {attachable.map((g) => (
+                    <li key={g.url}>
+                      <span className="su-item-what">{g.title}{g.title !== g.host && <span className="help"> ({g.host})</span>}</span>
+                      <span className="help">
+                        {g.usedBy.length ? `Used by ${g.usedBy.join(", ")}.` : "No project uses it yet."}
+                        {g.servers.length > 1 && ` One tool, set up ${g.servers.length} times at the same address; this project uses ${g.pick}.`}
+                      </span>
+                      <button type="button" className="su-small" aria-label={`Attach ${g.title}`}
                               onClick={() => {
                                 const key = newKey("t", plan.tools.map((t) => t.key));
-                                addTool({ key, name: m.name, url: m.url, why: "", can_act: false, enabled: true, existing: true });
+                                addTool({ key, name: g.pick, url: g.url, why: "", can_act: false, enabled: true, existing: true });
                                 closeEditor(`su-edit-tools.${key}`);
                               }}>Attach</button>
                     </li>

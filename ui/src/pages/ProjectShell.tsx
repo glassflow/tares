@@ -61,7 +61,8 @@ export default function ProjectShell({ s, id, reload, template }: {
     .map((x) => x.name);
   const { data: specs } = usePolling(() => api.connectors(), 600000);
   const { data: triggers, reload: reloadTriggers } = usePolling(() => api.triggers(), 10000);
-  const { data: agentsData, reload: reloadAgents } = usePolling(() => api.builtinAgents(), 10000);
+  // the agents as this project wires them (P-TR-216: trigger, handoffs and on/off are its own)
+  const { data: agentsData, reload: reloadAgents } = usePolling(() => api.builtinAgents(id), 10000);
   const { data: mcp, reload: reloadMcp } = usePolling(() => api.mcpServers(), 30000);
   const { data: projects } = usePolling(() => api.projects(), 30000);
   const { data: dispatches, reload: reloadDispatches } = usePolling(() => api.dispatches(100), 10000);
@@ -75,7 +76,7 @@ export default function ProjectShell({ s, id, reload, template }: {
   const mySources = (sources ?? []).filter((x) => names("source").includes(x.name) || (x.projects ?? []).includes(id));
   const myTriggers = (triggers ?? []).filter((x) => names("trigger").includes(x.name) || x.project === id);
   const agentNames = [...new Set([...names("agent"),
-    ...(agentsData?.agents ?? []).filter((a) => a.project === id).map((a) => a.name)])];
+    ...(agentsData?.agents ?? []).filter((a) => (a.projects ?? []).includes(id)).map((a) => a.name)])];
   const myAgents = (agentsData?.agents ?? []).filter((a) => agentNames.includes(a.name));
   const mcpNames = [...new Set([...names("mcp_server"),
     ...(mcp?.servers ?? []).filter((m) => m.project === id).map((m) => m.name)])];

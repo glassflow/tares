@@ -74,6 +74,7 @@ export function AgentsCard({ ctx }: { ctx: CardCtx }) {
                 </Switch>
               : <span className="su-item-what">{a.sentence || a.name}</span>}
             {a.optional && !a.enabled && <span className="help">Off: it will not be set up.</span>}
+            {a.existing && <span className="help">Already on Tares, shared with the projects that use it. This project only says when it runs and whom it hands over to.</span>}
             {a.mcp_servers.length > 0 && <span className="help">Can use {a.mcp_servers.map(toolLabel).join(", ")}.</span>}
             {a.slack && a.enabled && (
               <div className="field su-slack">
@@ -232,6 +233,7 @@ function AgentEditor({ agent, ctx, onSave, onCancel }: {
     slack, slack_channel: slack ? channel : "",
     handoffs: handoffs.map((h) => ({ verdict: h.verdict.trim().toLowerCase(), agent: h.agent, cooldown: `${Number(h.minutes)}m` })),
     sentence: agent?.sentence ?? "", optional: agent?.optional ?? false, enabled: agent?.enabled ?? true,
+    ...(agent?.existing ? { existing: true } : {}),
   });
   const setHandoff = (i: number, patch: Partial<HandoffRow>) =>
     setHandoffs((cur) => cur.map((h, j) => (j === i ? { ...h, ...patch } : h)));
@@ -239,6 +241,25 @@ function AgentEditor({ agent, ctx, onSave, onCancel }: {
   return (
     <EditorFrame title={agent ? `Change ${agent.name}` : "Add an agent"} onSave={save} onCancel={onCancel}
                  canSave={!bad} note={bad && <p className="help">{bad}</p>}>
+      {!agent && (cell.resources?.agents ?? []).some((x) => !plan.agents.some((a) => a.name === x.name)) && (
+        <div className="field">
+          <span className="lbl">Use one already on Tares</span>
+          <ul className="su-copy-list">
+            {(cell.resources?.agents ?? []).filter((x) => !plan.agents.some((a) => a.name === x.name)).map((x) => (
+              <li key={x.name}>
+                <span className="su-item-what mono">{x.name}</span>
+                <span className="help">{x.used_by.length ? `Used by ${x.used_by.map((u) => u.name).join(", ")}.` : "No project uses it yet."}</span>
+                <button type="button" className="su-small" aria-label={`Use ${x.name}`}
+                        onClick={() => onSave({
+                          key, name: x.name, existing: true, trigger: plan.wakes[0]?.name ?? null, on_trigger: true,
+                          prompt: "", provider: null, model: null, mcp_servers: [], handoffs: [],
+                          sentence: "", optional: false, enabled: true,
+                        })}>Use it</button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {!agent && (cell.presets?.length ?? 0) > 0 && (
         <div className="field">
           <span className="lbl">Start from</span>
@@ -274,6 +295,9 @@ function AgentEditor({ agent, ctx, onSave, onCancel }: {
         </div>
       )}
 
+      {agent?.existing ? (
+        <p className="help">Its instructions, model and tools are the agent's own, shared with every project that uses it; change them on its page after setting up.</p>
+      ) : (<>
       <label className="field">
         <span className="lbl">Instructions</span>
         <textarea rows={10} className="mono" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
@@ -304,6 +328,7 @@ function AgentEditor({ agent, ctx, onSave, onCancel }: {
           ))}
         </fieldset>
       )}
+      </>)}
 
       <div className="field">
         <label className="su-check">

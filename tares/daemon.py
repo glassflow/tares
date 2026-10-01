@@ -2013,14 +2013,19 @@ def make_app() -> FastAPI:
         no key configured is the common case on a fresh install and looks identical to "disabled"
         without this."""
         provider, origin = resolve_provider(store)
-        stats = store.agent_stats()
+        in_project = _resolve_project(project, default=False) if project else None
+        # with a project: its runs only (P-TR-216: an agent's runs belong to the projects whose
+        # wiring started them)
+        stats = store.agent_stats(in_project)
         zero = {"runs": 0, "ok": 0, "finished": 0, "avg_duration_ms": None,
                 "cost_usd": None, "input_tokens": 0, "output_tokens": 0, "uncosted_runs": 0}
         rows = []
         # with ?project=: each agent's trigger, handoffs and on/off are that project's wiring
-        in_project = _resolve_project(project, default=False) if project else None
+        mine = ("id IN (SELECT run_id FROM run_projects WHERE project = ?)", [in_project]) \
+            if in_project else ("", None)
         for a in store.list_catalog_agents(in_project):
-            runs = store.list_agent_runs(a["name"], limit=1)
+            runs = store.list_agent_runs(a["name"], limit=1, where_sql=mine[0],
+                                         where_params=mine[1])
             rows.append({"name": a["name"], "trigger": a["trigger"], "prompt": a["prompt"],
                          "stats": stats.get(a["name"]) or zero,
                          "slack_configured": bool(a.get("slack_webhook")),
@@ -2191,7 +2196,8 @@ def make_app() -> FastAPI:
     _RUN_STATUSES = {"running", "ok", "empty", "failed", "capped", "exhausted"}
 
     @app.get("/api/agents/builtin/{name}/runs")
-    async def builtin_agent_runs(name: str, limit: int = 50, offset: int = 0, status: str = ""):
+    async def builtin_agent_runs(name: str, limit: int = 50, offset: int = 0, status: str = "",
+                                 project: str | None = None):
         """The operational record — status, duration, errors. Distinct from findings, which are
         events on the entity's timeline; a failed run must never look like a conclusion.
         `status` narrows to one run status; `offset` pages (a capped agent's list is mostly
@@ -2200,8 +2206,13 @@ def make_app() -> FastAPI:
             _err(KeyError(f"unknown agent {name!r}"), 404)
         if status and status not in _RUN_STATUSES:
             _err(ValueError(f"status must be one of {', '.join(sorted(_RUN_STATUSES))}"), 400)
+        # with a project: the runs that belong to it (P-TR-216)
+        uid = _resolve_project(project, default=False) if project else None
         return store.list_agent_runs(name, limit=min(max(1, limit), 200), offset=offset,
-                                     status=status or None)
+                                     status=status or None,
+                                     where_sql="id IN (SELECT run_id FROM run_projects WHERE "
+                                               "project = ?)" if uid else "",
+                                     where_params=[uid] if uid else None)
 
     # ── the Anthropic key: a stored key wins, env is the fallback ────────────
     @app.get("/api/settings/anthropic-key")
