@@ -186,6 +186,7 @@ function AgentEditor({ agent, ctx, onSave, onCancel }: {
   // agents already on the cell, not in the plan yet: picked from a list, shown one at a time
   const reusable = (cell.resources?.agents ?? []).filter((x) => !plan.agents.some((a) => a.name === x.name));
   const [reuse, setReuse] = useState("");
+  const [template, setTemplate] = useState("");
   const picked = reusable.find((x) => x.name === reuse);
   const [key] = useState(() => agent?.key ?? newKey("a", plan.agents.map((a) => a.key)));
   const [name, setName] = useState(agent?.name ?? "");
@@ -269,16 +270,18 @@ function AgentEditor({ agent, ctx, onSave, onCancel }: {
       )}
       {!agent && (cell.presets?.length ?? 0) > 0 && (
         <div className="field">
-          <span className="lbl">Start from</span>
-          <div className="su-chips">
-            {cell.presets!.map((p) => (
-              <button type="button" key={p.id} className="su-chip"
-                      onClick={() => {
-                        setPrompt(p.prompt);
-                        if (!nm) setName(uniqueName(kebab(p.label) || "agent", plan.agents.map((a) => a.name)));
-                      }}>{p.label}</button>
-            ))}
-          </div>
+          <span className="lbl">{reusable.length ? "Or start from a template" : "Start from a template"}</span>
+          <Picker value={template} options={["", ...cell.presets!.map((p) => p.id)]}
+                  labels={{ "": "Pick a template", ...Object.fromEntries(cell.presets!.map((p) => [p.id, p.label])) }}
+                  ariaLabel="Agent template"
+                  onChange={(id) => {
+                    setTemplate(id);
+                    const p = cell.presets!.find((x) => x.id === id);
+                    if (!p) return;
+                    // the template fills the instructions, and the name while none is typed
+                    setPrompt(p.prompt);
+                    if (!nm) setName(uniqueName(kebab(p.label) || "agent", plan.agents.map((a) => a.name)));
+                  }} />
         </div>
       )}
       <label className="field">
