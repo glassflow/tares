@@ -183,6 +183,10 @@ function AgentEditor({ agent, ctx, onSave, onCancel }: {
   agent?: PlanAgent; ctx: CardCtx; onSave: (a: PlanAgent) => void; onCancel: () => void;
 }) {
   const { plan, cell } = ctx;
+  // agents already on the cell, not in the plan yet: picked from a list, shown one at a time
+  const reusable = (cell.resources?.agents ?? []).filter((x) => !plan.agents.some((a) => a.name === x.name));
+  const [reuse, setReuse] = useState("");
+  const picked = reusable.find((x) => x.name === reuse);
   const [key] = useState(() => agent?.key ?? newKey("a", plan.agents.map((a) => a.key)));
   const [name, setName] = useState(agent?.name ?? "");
   const [onTrigger, setOnTrigger] = useState(agent?.on_trigger ?? true);
@@ -241,23 +245,26 @@ function AgentEditor({ agent, ctx, onSave, onCancel }: {
   return (
     <EditorFrame title={agent ? `Change ${agent.name}` : "Add an agent"} onSave={save} onCancel={onCancel}
                  canSave={!bad} note={bad && <p className="help">{bad}</p>}>
-      {!agent && (cell.resources?.agents ?? []).some((x) => !plan.agents.some((a) => a.name === x.name)) && (
+      {!agent && reusable.length > 0 && (
         <div className="field">
           <span className="lbl">Use one already on Tares</span>
-          <ul className="su-copy-list">
-            {(cell.resources?.agents ?? []).filter((x) => !plan.agents.some((a) => a.name === x.name)).map((x) => (
-              <li key={x.name}>
-                <span className="su-item-what mono">{x.name}</span>
-                <span className="help">{x.used_by.length ? `Used by ${x.used_by.map((u) => u.name).join(", ")}.` : "No project uses it yet."}</span>
-                <button type="button" className="su-small" aria-label={`Use ${x.name}`}
+          <Picker value={reuse} options={["", ...reusable.map((x) => x.name)]}
+                  labels={{ "": "Pick an agent" }} ariaLabel="Agent already on Tares" onChange={setReuse} />
+          {picked && (
+            <div className="su-reuse-card">
+              <span className="su-item-what mono">{picked.name}</span>
+              <span className="help">{picked.what}</span>
+              <span className="help">{picked.used_by.length ? `Used by ${picked.used_by.map((u) => u.name).join(", ")}.` : "No project uses it yet."}</span>
+              <div className="btnrow">
+                <button type="button" className="su-small"
                         onClick={() => onSave({
-                          key, name: x.name, existing: true, trigger: plan.wakes[0]?.name ?? null, on_trigger: true,
+                          key, name: picked.name, existing: true, trigger: plan.wakes[0]?.name ?? null, on_trigger: true,
                           prompt: "", provider: null, model: null, mcp_servers: [], handoffs: [],
                           sentence: "", optional: false, enabled: true,
                         })}>Use it</button>
-              </li>
-            ))}
-          </ul>
+              </div>
+            </div>
+          )}
         </div>
       )}
       {!agent && (cell.presets?.length ?? 0) > 0 && (
