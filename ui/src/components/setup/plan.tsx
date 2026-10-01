@@ -170,7 +170,10 @@ export function PlanStep({ projectId, plan, setPlan, base, setBase, onBack, onAd
     ...plan.watches.map((w) => `watches.${w.key}`), ...plan.wakes.map((w) => `wakes.${w.key}`),
     ...(tares ? plan.agents.map((a) => `agents.${a.key}`) : []),
     ...(tares ? plan.tools.map((t) => `tools.${t.key}`) : []), ...plan.skills.map((s) => `skills.${s.key}`)]);
-  const planWide = problems.filter((p) => !shown.has(p.where)).map((p) => p.message);
+  // a problem about a part the plan no longer shows (the Tares agents, right after switching to
+  // your own agent, until the next check) belongs nowhere: it is not plan-wide
+  const gone = (where: string) => (!tares && /^(agents|tools)\./.test(where)) || (tares && where === "own_agent");
+  const planWide = problems.filter((p) => !shown.has(p.where) && !gone(p.where)).map((p) => p.message);
 
   return (
     <section className="su-section" aria-labelledby="su-plan-h">
