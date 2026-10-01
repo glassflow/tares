@@ -29,7 +29,7 @@ export default function CatalogImport() {
         <div>
           <p className="subtitle" style={{ marginBottom: 4 }}><Link to="/sources">Sources</Link> ›</p>
           <h1>Import catalog</h1>
-          <p className="subtitle">paste a catalog YAML; sources, triggers, agents and MCP servers</p>
+          <p className="subtitle">Paste a catalog YAML with sources, triggers, agents and MCP servers.</p>
         </div>
       </div>
 

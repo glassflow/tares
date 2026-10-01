@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 
 import { api } from "../api";
-import { ErrorState, TimeAgo, usePolling } from "../components/bits";
+import { ErrorState, TimeAgo, projectGoal, usePolling } from "../components/bits";
 import type { Project } from "../types";
 
 // Projects are the unit: a named set of sources, triggers, agents and MCP servers with one page.
@@ -27,8 +27,8 @@ export default function Projects() {
         <div>
           <h1>Projects</h1>
           <p className="subtitle">
-            what you set up and look after in Tares: a named set of sources, triggers and agents
-            with one page. The Default project holds whatever was made outside another one.
+            Each project is a goal and the sources, wake-ups and agents that work toward it. The
+            Default project holds whatever was made outside another one.
           </p>
         </div>
         <span className="btnrow">
@@ -50,7 +50,7 @@ export default function Projects() {
         <table>
           <thead>
             <tr>
-              <th>name</th><th>project</th><th>status</th><th>objects</th><th>updated</th>
+              <th>name</th><th>goal</th><th>status</th><th>objects</th><th>updated</th>
               <th aria-label="actions" />
             </tr>
           </thead>
@@ -65,7 +65,7 @@ export default function Projects() {
                 <tr key={u.id}>
                   <td><Link to={to}><strong>{u.name}</strong></Link>
                     {u.default && <span className="chip" style={{ marginLeft: 8 }}>default</span>}</td>
-                  <td>{u.status === "draft" ? "Guided setup" : u.template_title}</td>
+                  <td className="help"><span className="proj-goal">{projectGoal(u)}</span></td>
                   <td>
                     <span className={`badge ${statusClass(u.status)}`}>{u.status}</span>
                     {missing > 0 && <span className="help" style={{ marginLeft: 6 }}>{missing} missing</span>}

@@ -768,7 +768,8 @@ export interface ProjectSetup {
 // GET /api/resources: every part on the cell, each with the projects that use it (TR-351)
 export interface ResourceRow {
   name: string;
-  what: string;                 // what it is, in plain words (a GitHub source: its repository)
+  title?: string;               // what a person calls it, when plainer than the name (a GitHub source: its repository)
+  what: string;                 // what it is, in plain words
   state: string;                // receiving / silent / error / paused / waiting; active / paused; on / off; set / no credentials; used / never used
   detail?: string | null;
   kind?: string; kind_label?: string;     // sources: the connector

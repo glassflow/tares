@@ -193,7 +193,12 @@ def source_title(cfg) -> str:
     for key in ("repo", "repository", "table", "container", "project"):
         v = c.get(key)
         if isinstance(v, str) and v.strip():
-            return v.strip()
+            v = v.strip().rstrip("/")
+            if key in ("repo", "repository") and "://" in v:   # a pasted URL: owner/name of it
+                parts = v.split("://", 1)[1].split("/")[1:3]
+                if len(parts) == 2 and all(parts):
+                    v = "/".join(parts).removesuffix(".git")
+            return v
     url = c.get("url") or c.get("base_url")
     if isinstance(url, str) and "://" in url:
         from urllib.parse import urlsplit
@@ -251,6 +256,8 @@ def condition_clause(trig, sources: dict) -> str:
     op, n = pred
     if c.aggregate == "count":
         if op == ">" and n == 0:
+            if kinds == {"finding"}:
+                return _finding_clause(trig, label)
             if kinds == {"github"}:
                 return f"a commit{filt} lands in {srcs}{per}"
             return f"an event{filt} arrives on {srcs}{per}"
@@ -267,6 +274,26 @@ def condition_clause(trig, sources: dict) -> str:
     what = f"the {agg} {c.field or 'value'}" + (f" of events{filt}" if filt else "")
     span = "over" if op == "==" else "in"   # "is 0 over 1 hour", "goes above 5 in 1 minute"
     return f"{what} {prep} {srcs} {_AGG_VERBS[op]} {_num(n)} {span} {window}{per}"
+
+
+def _finding_clause(trig, label: str | None) -> str:
+    """A wake-up on another agent's findings, as a person says it: "watcher flags a service for a
+    closer look", not "an event matching agent = watcher and verdict = investigate arrives on
+    findings". Filters other than the agent and the verdict follow as they are."""
+    eq = {f.get("field"): f.get("value") for f in trig.filters or []
+          if isinstance(f, dict) and f.get("op") in ("=", "==", "eq")}
+    rest = [f for f in trig.filters or [] if not (isinstance(f, dict)
+            and f.get("field") in ("agent", "verdict") and f.get("field") in eq)]
+    who = agent_words(eq["agent"]) if eq.get("agent") else "an agent"
+    thing = f"a {label}" if label else "something"
+    verdict = str(eq.get("verdict") or "")
+    if verdict == "investigate":
+        out = f"{who} flags {thing} for a closer look"
+    elif verdict:
+        out = f'{who} concludes "{verdict}" on {thing}'
+    else:
+        out = f"{who} reports a finding on {thing}"
+    return out + (f", for findings{filters_words(rest)}" if rest else "")
 
 
 def schedule_words(trig) -> str:
@@ -402,7 +429,7 @@ def _agent_sentence(a: dict, parts: dict, sources: dict) -> tuple[str, str]:
     return _cap(f"{agent_words(a['name'])} digs in {' or '.join(clauses)}."), "handoff"
 
 
-def outline_sentence(parts: dict, sources: dict) -> str:
+def outline_sentence(parts: dict, sources: dict, paused: bool = False) -> str:
     triggers = [t for t in parts["triggers"] if not t.paused] or parts["triggers"]
     if not triggers:
         return "Nothing wakes this project yet: it has no trigger."
@@ -421,7 +448,9 @@ def outline_sentence(parts: dict, sources: dict) -> str:
         elif parts["external"]:
             s = f"{lead}, {outside_words(parts['outside'])}."
         else:
-            s = f"{lead}, no agent is turned on to look yet."
+            # a paused project has its agents off: they come back with it, not "yet"
+            s = (f"{lead}, its agents look once you resume the project." if paused
+                 else f"{lead}, but no agent is on to look.")
         # the handoff chain, breadth first; "it" when one agent looked first
         seen = set()
         queue = [(a, 1) for a in first]
@@ -515,10 +544,28 @@ def _health_for(runtime_health: dict, store, names: list) -> dict:
 
 
 # ── outline ──────────────────────────────────────────────────────────────────
-def _chain_order(agents: list[dict]) -> list[dict]:
+def _follows(parts: dict, sources: dict) -> dict[str, str]:
+    """agent -> the agent whose findings wake it: its trigger reads only findings, filtered to
+    that agent (watcher -> rca-from-watcher), so it comes after it in the order of the work."""
+    trig_by_name = {t.name: t for t in parts["triggers"]}
+    out = {}
+    for a in parts["agents"]:
+        t = trig_by_name.get(a.get("trigger"))
+        if t is None or not t.sources or not all(
+                getattr(sources.get(n), "connector", "") == "finding" for n in t.sources):
+            continue
+        frm = next((f.get("value") for f in t.filters or []
+                    if isinstance(f, dict) and f.get("field") == "agent"), None)
+        if frm and frm != a["name"]:
+            out[a["name"]] = str(frm)
+    return out
+
+
+def _chain_order(agents: list[dict], follows: dict[str, str] | None = None) -> list[dict]:
     """In the order the work happens: the agents a trigger wakes first, each followed by the
-    agents it hands off to (depth first), then any left over."""
+    agents it hands off to or that its findings wake (depth first), then any left over."""
     by_name = {a["name"]: a for a in agents}
+    follows = {k: v for k, v in (follows or {}).items() if v in by_name}
     out: list[dict] = []
 
     def visit(a):
@@ -528,9 +575,12 @@ def _chain_order(agents: list[dict]) -> list[dict]:
         for h in a["handoffs"]:
             if h["agent"] in by_name:
                 visit(by_name[h["agent"]])
+        for n, frm in follows.items():
+            if frm == a["name"]:
+                visit(by_name[n])
 
     for a in agents:
-        if a["runs_on"] == "trigger":
+        if a["runs_on"] == "trigger" and a["name"] not in follows:
             visit(a)
     for a in agents:
         visit(a)
@@ -561,13 +611,14 @@ def outline(store, catalog, uid: str, runtime_health: dict | None = None, now=No
                        "handoffs": [{"verdict": h.get("verdict"), "agent": h.get("agent"),
                                      "cooldown": _handoff_cooldown(h)}
                                     for h in a.get("handoffs") or []]})
-    agents = _chain_order(agents)
+    agents = _chain_order(agents, _follows(parts, sources))
     loads = store.skill_loads([a["name"] for a in parts["agents"]], days=7)
     skills = [{"name": sk["name"], "description": sk["description"],
                "loaded_by": loads.get(sk["name"], [])} for sk in store.list_skills(uid)]
     outside = [{"name": o["name"], "sentence": outside_sentence(o), "joined": o["joined"]}
                for o in parts["outside"]]
-    return {"sentence": outline_sentence(parts, sources), "watches": watches, "wakes": wakes,
+    paused = (store.get_project(uid) or {}).get("status") == "paused"
+    return {"sentence": outline_sentence(parts, sources, paused), "watches": watches, "wakes": wakes,
             "agents": agents, "outside": outside, "skills": skills}
 
 

@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "../api";
 import { Search, Settings as SettingsIco } from "../components/icons";
-import { ErrorState, Picker, StatusBadge, TimeAgo, formatBytes, usePolling } from "../components/bits";
+import { ErrorState, InternalName, Picker, StatusBadge, TimeAgo, formatBytes, sourceTitle, usePolling } from "../components/bits";
 import { ProjectLink } from "../components/ProjectBadge";
 
 // Gear dropdown next to "Add source" — catalog import/export, each on its own page.
@@ -75,7 +75,8 @@ export default function Sources() {
       return (status === "all" || st === status) &&
         (connector === "all" || s.connector === connector) &&
         (project === "all" || (project === "none" ? !memberOf(s).length : memberOf(s).includes(project))) &&
-        (!needle || s.name.toLowerCase().includes(needle) || s.connector.toLowerCase().includes(needle));
+        (!needle || s.name.toLowerCase().includes(needle)
+          || (sourceTitle(s.config) ?? "").toLowerCase().includes(needle) || s.connector.toLowerCase().includes(needle));
     });
   }, [sources, q, status, connector, project]);
 
@@ -84,7 +85,7 @@ export default function Sources() {
       <div className="pagehead">
         <div>
           <h1>Sources</h1>
-          <p className="subtitle">everything Tares ingests; <em>lossless, normalized, one project</em></p>
+          <p className="subtitle">Everything Tares takes in, kept whole and in one shape so agents can read across sources.</p>
         </div>
         <span className="btnrow">
           {caps?.discover_docker !== false && (
@@ -150,7 +151,12 @@ export default function Sources() {
             <tbody>
               {shown.map((s) => (
                 <tr key={s.name} className="clickable" onClick={() => nav(`/sources/${s.name}`)}>
-                  <td className="mono">{s.name}</td>
+                  {(() => {
+                    const title = sourceTitle(s.config);
+                    return title && title !== s.name
+                      ? <td>{title}<InternalName name={s.name} /></td>
+                      : <td className="mono">{s.name}</td>;
+                  })()}
                   <td onClick={(e) => e.stopPropagation()}>
                     {memberOf(s).length
                       ? memberOf(s).map((id, k) => <span key={id}>{k > 0 && ", "}<ProjectLink id={id} /></span>)

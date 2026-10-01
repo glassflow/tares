@@ -148,7 +148,7 @@ export default function Explore() {
   return (
     <>
       <h1>Explore</h1>
-      <p className="subtitle">pick an entity, filter it if you like; read everything matching across every source, <em>one timeline</em></p>
+      <p className="subtitle">Pick an entity and filter it if you like. Everything about it from every source, on one timeline.</p>
 
       {error && <div className="alert error">{error}</div>}
       {!facets.length && !error && (

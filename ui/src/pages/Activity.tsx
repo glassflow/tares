@@ -31,8 +31,8 @@ export function ConnectPage() {
     <>
       <h1>Connect</h1>
       <p className="subtitle">
-        hook an agent up to this Tares; <em>it pulls (MCP), gets pushed (webhook), or calls
-        plain REST</em>
+        Connect an agent to this Tares. It can read over MCP, get events pushed to a webhook, or
+        call the REST API.
       </p>
 
       <div className="tabs">
@@ -52,7 +52,7 @@ export default function AgentActivity() {
   return (
     <>
       <h1>Reads</h1>
-      <p className="subtitle">every read agents made over MCP or the API, newest first</p>
+      <p className="subtitle">Every read agents made over MCP or the API, newest first.</p>
       <Queries />
     </>
   );

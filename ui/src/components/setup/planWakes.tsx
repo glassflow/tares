@@ -34,13 +34,25 @@ function splitAtKnobs(w: PlanWake, base: Baseline, knobs: PlanKnob[]): (string |
   return out;
 }
 
+/** A wake-up on every event: a count above 0 (or at least 1), not a schedule. */
+function everyEvent(w: PlanWake): boolean {
+  const c = w.condition;
+  if (c.every || (c.aggregate && c.aggregate !== "count")) return false;
+  const p = String(c.predicate ?? "").replace(/\s+/g, "");
+  return p === ">0" || p === ">=1";
+}
+
 function WakeSentence({ w, base, onKnob, disabled }: {
   w: PlanWake; base: Baseline; onKnob: (id: string, v: number) => void; disabled?: boolean;
 }) {
   const schedule = !!w.condition.every;
   // the wait after a wake is not in the sentence: it gets a line of its own (a schedule has none)
   const wait = schedule ? undefined : w.knobs.find((k) => k.id === "cooldown_minutes");
-  const inline = w.knobs.filter((k) => k.id !== "cooldown_minutes");
+  // "more than 0 events in 15 minutes" is every event: the count and window say nothing a person
+  // would change, and a "0 events" stepper reads as never, so they stay off the card
+  const every = everyEvent(w);
+  const inline = w.knobs.filter((k) => k.id !== "cooldown_minutes"
+    && !(every && (k.id === "threshold" || k.id === "window_minutes")));
   const parts = inline.length && w.sentence ? splitAtKnobs(w, base, inline) : null;
   const stepper = (k: PlanKnob) => (
     <NumberStepper key={k.id} value={k.value} min={k.min} max={k.max} label={k.label}

@@ -58,7 +58,7 @@ export default function CatalogExport() {
         <div>
           <p className="subtitle" style={{ marginBottom: 4 }}><Link to="/sources">Sources</Link> ›</p>
           <h1>Export catalog</h1>
-          <p className="subtitle">the portable form of your catalog; sources, triggers, agents and projects as YAML</p>
+          <p className="subtitle">Your catalog in a portable form: sources, triggers, agents and projects as YAML.</p>
         </div>
       </div>
 

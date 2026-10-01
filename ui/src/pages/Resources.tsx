@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Link, NavLink, useNavigate, useParams } from "react-router-dom";
 
 import { api } from "../api";
-import { ErrorState, TimeAgo, usePolling } from "../components/bits";
+import { ErrorState, InternalName, TimeAgo, usePolling } from "../components/bits";
+import { toolTitle } from "../components/setup/planEdit";
 import type { ResourceKind, ResourceRow } from "../types";
 
 // All resources (TR-351): every part on the cell, one table per kind, each row with the projects
@@ -19,6 +20,12 @@ const KINDS: { kind: ResourceKind; label: string; what: string }[] = [
 ];
 
 const enc = encodeURIComponent;
+
+/** The row's plain title (a source's repo, a tool's service), or null when the name is all there is. */
+function plainTitle(kind: ResourceKind, r: ResourceRow): string | null {
+  const t = r.title ?? (kind === "tools" && r.url ? toolTitle(r.url).title : null);
+  return t && t !== r.name ? t : null;
+}
 
 /** Where a row opens: the part's own page, in the first project that uses it when it has none. */
 function linkFor(kind: ResourceKind, r: ResourceRow): string | null {
@@ -59,7 +66,7 @@ export default function Resources() {
   const meta = KINDS.find((k) => k.kind === kind)!;
   const rows = (data?.[kind] ?? []).filter((r) =>
     (!loose || r.used_by.length === 0)
-    && (!filter.trim() || `${r.name} ${r.what} ${r.used_by.map((u) => u.name).join(" ")}`
+    && (!filter.trim() || `${r.name} ${plainTitle(kind, r) ?? ""} ${r.what} ${r.used_by.map((u) => u.name).join(" ")}`
       .toLowerCase().includes(filter.trim().toLowerCase())));
   const last = LAST_LABEL[kind];
 
@@ -117,7 +124,11 @@ export default function Resources() {
                     const to = linkFor(kind, r);
                     return (
                       <tr key={`${r.name}:${i}`}>
-                        <td className="mono res-name">{to ? <Link to={to}>{r.name}</Link> : r.name}</td>
+                        {(() => {
+                          const title = plainTitle(kind, r);
+                          if (!title) return <td className="mono res-name">{to ? <Link to={to}>{r.name}</Link> : r.name}</td>;
+                          return <td className="res-name">{to ? <Link to={to}>{title}</Link> : title}<InternalName name={r.name} /></td>;
+                        })()}
                         <td>{r.what}{r.detail && r.state !== "receiving" && <span className="help"> · {r.detail}</span>}</td>
                         <td><span className={`badge ${stateClass(r.state)}`}>{r.state}</span></td>
                         {last && <td style={{ whiteSpace: "nowrap" }}>{lastAt(kind, r)}</td>}

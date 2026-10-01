@@ -171,6 +171,20 @@ def phrasing():
     eq("a total that is exactly a number", G.condition_clause(
         trig(Condition("sum", "== 0", "1h", field="orders"), sources=["api"]), src),
        "the total orders on api is 0 over 1 hour")
+    fsrc = {**src, "findings": SourceCfg("findings", "log", "finding", 5, lab)}
+    after = [{"field": "agent", "op": "eq", "value": "watcher"}]
+    eq("another agent's findings, in plain words", G.wake_sentence(trig(
+        Condition("count", "> 0", "10m"), sources=["findings"], key_field="service",
+        filters=after + [{"field": "verdict", "op": "eq", "value": "investigate"}]), fsrc),
+       "Wakes when watcher flags a service for a closer look.")
+    eq("another agent's findings, any verdict", G.condition_clause(trig(
+        Condition("count", "> 0", "10m"), sources=["findings"], filters=after), fsrc),
+       "watcher reports a finding on a service")
+    eq("a pasted repo URL is titled owner/name", G.source_title(SourceCfg(
+        "ctx_x", "log", "github", 5, {"repo": "https://github.com/acme/shop.git"})), "acme/shop")
+    ag = [{"name": n, "runs_on": "trigger", "handoffs": []} for n in ("rca", "watcher")]
+    eq("an agent woken by another's findings comes after it",
+       [a["name"] for a in G._chain_order(ag, {"rca": "watcher"})], ["watcher", "rca"])
     for label, x in (("sum", total), ("avg", avg)):
         ck(f"no 'events' after the sources ({label})",
            " events " not in G.condition_clause(x, sre) + " ", G.condition_clause(x, sre))

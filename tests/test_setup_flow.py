@@ -796,6 +796,11 @@ async def main():
            (chk["plan"]["tools"][0]["name"], chk["plan"]["tools"][0]["url"],
             chk["plan"]["tools"][0]["existing"]),
            ("deploys-mcp", "https://deploys.example.com/mcp", True))
+        off = copy.deepcopy(attach)
+        off["tools"][0]["enabled"] = False
+        chk = (await cx.post("/api/setup/check", json={"plan": off})).json()
+        ck("a server already on Tares is on: there is nothing to turn on",
+           chk["plan"]["tools"][0]["enabled"], chk["plan"]["tools"])
         # a server another project made can be used here too (P-TR-216: parts are shared)
         other_uid = next(p["id"] for p in store.list_projects()
                          if p["id"] != store.default_project_id())

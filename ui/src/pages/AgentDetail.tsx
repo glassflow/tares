@@ -150,7 +150,7 @@ export default function AgentDetail() {
         <div>
           <h1><span className="mono">{agent.name}</span>{" "}
             <span className="badge">Tares agent</span></h1>
-          <p className="subtitle">a prompt that takes a first look when its trigger fires
+          <p className="subtitle">Takes a first look when a project wakes it
             {(agent.project ?? agent.owned_by) && <> · <ProjectBadge ownedBy={agent.project ?? agent.owned_by} customized={agent.customized} /></>}
           </p>
         </div>

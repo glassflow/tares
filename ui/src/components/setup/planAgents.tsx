@@ -6,7 +6,7 @@ import { Picker } from "../bits";
 import type { PlanAgent, PlanOwnAgent } from "../../types";
 import { Switch } from "./common";
 import { Choice, EditorFrame, ItemActions, Problems } from "./planBits";
-import { kebab, newKey, renameAgent, uniqueName } from "./planEdit";
+import { kebab, newKey, renameAgent, toolTitle, uniqueName } from "./planEdit";
 import type { CardCtx } from "./plan";
 
 // Card 3, who does the work: Tares agents or the person's own agent, switched here too. A Tares
@@ -29,7 +29,8 @@ export function AgentsCard({ ctx }: { ctx: CardCtx }) {
   const addId = "su-add-agents";
   const toolLabel = (name: string) => {
     const t = plan.tools.find((x) => x.name === name);
-    return t && !t.enabled ? `${name} (once you turn it on under Tools)` : name;
+    const title = t?.url ? toolTitle(t.url).title : name;
+    return t && !t.enabled ? `${title} (once you turn it on under Tools)` : title;
   };
   const setWho = (who: "tares" | "own") => edit({
     ...plan, who,
