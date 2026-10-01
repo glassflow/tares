@@ -5,6 +5,25 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.38.0-rc.5] - 2026-10-01
+
+Fifth release candidate: plain names and copy, from a UI review of rc.4.
+
+### Changed
+- Sources show what they watch (glassflow/argus-core) with the internal name small underneath, on
+  Sources, a source's page, All resources and the setup plan; the planning steps name them the
+  same way. A pasted GitHub URL is shown as owner/name. Tools show the service (GitHub).
+- A wake-up on another agent's findings reads in plain words ("watcher flags a service for a
+  closer look"), and Setup lists that agent after the one whose findings wake it.
+- In the setup plan, a wake-up on every event no longer shows a "0 events" count and window; a
+  tool already on Tares is on (Remove drops it) instead of carrying an off switch; the plan's
+  notes are a plain panel, not a warning.
+- Projects and Overview show each project's goal instead of the template it started from.
+- Settings, API keys hides revoked keys behind "Show N revoked"; workspace sign-in keys
+  (`user:<id>`) are labelled as such there and on All resources.
+- A paused project says its agents look once it is resumed; page subtitles are full sentences;
+  a template's panel (the demo stack) takes the full row so its URLs no longer break mid-word.
+
 ## [1.38.0-rc.4] - 2026-10-01
 
 Fourth release candidate: parts are shared between projects, and the guided setup keeps a draft.
