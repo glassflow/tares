@@ -336,7 +336,7 @@ class TriggerIn(BaseModel):
 
 class AgentIn(BaseModel):
     name: str = ""               # required on create; PUT fills it from the path (TR-226)
-    trigger: str
+    trigger: str = ""            # "" = no trigger of its own: only a handoff starts it
     prompt: str
     slack_webhook: str = ""      # legacy per-agent notification path (blank-to-keep on update)
     model: str = ""              # "" = the provider's default model
@@ -1955,10 +1955,11 @@ def make_app() -> FastAPI:
     async def delete_trigger(name: str):
         if name not in {t.name for t in runtime.catalog.triggers}:
             _err(KeyError(f"unknown trigger {name!r}"), 404)
-        store.delete_catalog_trigger(name)
+        # it leaves every project, and the agents it woke stay, without a trigger of their own
+        cleared = store.delete_catalog_trigger(name)
         store.remove_subscriptions_by_trigger(name)
         runtime.reload_catalog()
-        return {"ok": True}
+        return {"ok": True, "agents_without_trigger": cleared}
 
     @app.post("/api/triggers/{name}/pause")
     async def pause_trigger(name: str):
@@ -2139,6 +2140,10 @@ def make_app() -> FastAPI:
         uid = _resolve_project(project, default=False) if project else None
         uid = uid or agent.get("owned_by") or store.default_project_id()
         if not store.list_wakes(project=uid, agent=name):
+            if not agent.get("trigger"):
+                _err(ValueError(f"{name} has no trigger of its own, so there is nothing to turn "
+                                "on: only a handoff starts it. Pick a trigger under Edit to "
+                                "wake it on its own."), 409)
             store.put_in_project("agent", name, uid)
             store.wire_agent(name, uid, agent["trigger"], None)
         return uid

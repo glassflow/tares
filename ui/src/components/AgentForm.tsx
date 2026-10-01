@@ -198,6 +198,18 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
     setBusy(false);
   };
 
+  // The trigger that wakes it on its own, or none: then only a handoff from another agent starts
+  // it (it stays on the projects that hand off to it). A trigger that is gone shows as itself.
+  const triggerPicker = (
+    <>
+      <Picker value={trigger}
+              options={trigger && !triggers.includes(trigger) ? ["", ...triggers, trigger] : ["", ...triggers]}
+              labels={{ "": "No trigger: only a handoff starts it" }}
+              ariaLabel="trigger" onChange={setTrigger} />
+      {!triggers.length && <span className="help">This project has no triggers yet. Without one, only a handoff starts this agent.</span>}
+    </>
+  );
+
   return (
     <div className="panel">
       {err && <div className="alert error">{err}</div>}
@@ -210,24 +222,18 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
           </label>
           <div className="field">
             <span className="lbl">trigger</span>
-            {triggers.length ? (
-              <Picker value={trigger} options={trigger && !triggers.includes(trigger) ? ["", ...triggers, trigger] : ["", ...triggers]}
-                      labels={{ "": "pick the trigger that wakes this agent" }}
-                      ariaLabel="trigger" onChange={setTrigger} />
-            ) : (
-              <span className="help">this project has no triggers yet; add one first</span>
-            )}
+            {triggerPicker}
           </div>
         </div>
       ) : (
-        // Name and trigger are fixed after creation: shown as read-only facts, not fields, so it's
-        // clear they can't be edited here (to move the agent, delete and recreate).
+        // The name is fixed after creation; the trigger can change, or go: an agent without one
+        // is started only by a handoff.
         <table style={{ marginBottom: 12 }}>
           <tbody>
             <tr><td className="help" style={{ width: 120 }}>name</td>
                 <td className="mono">{name} <span className="help">fixed</span></td></tr>
             <tr><td className="help">trigger</td>
-                <td className="mono">{trigger} <span className="help">fixed; delete and recreate to move</span></td></tr>
+                <td>{triggerPicker}</td></tr>
           </tbody>
         </table>
       )}
@@ -429,7 +435,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
 
       <div className="btnrow">
         <button className="primary" onClick={save}
-                disabled={busy || !name.trim() || !trigger.trim() || !prompt.trim()
+                disabled={busy || !name.trim() || !prompt.trim()
                           || (writebackOn && !webhookUrl.trim())
                           || (channelOn && !channel)
                           || handoffs.some(handoffBad) || handoffDup

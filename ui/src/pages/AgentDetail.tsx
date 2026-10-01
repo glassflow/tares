@@ -65,7 +65,8 @@ export function handedBy(all: BuiltinAgent[], name: string): string[] {
 export function WakesOn({ agent, from }: { agent: BuiltinAgent; from: string[] }) {
   const hands = from.length > 0 &&
     <>a handoff from {from.map((n, i) => <span key={n}>{i ? ", " : ""}<span className="mono">{n}</span></span>)}</>;
-  if (!agent.enabled && hands) return hands;
+  if ((!agent.enabled || !agent.trigger) && hands) return hands;
+  if (!agent.trigger) return <>nothing yet</>;
   return <><span className="mono">{agent.trigger}</span> firing{hands && <> or {hands}</>}</>;
 }
 
@@ -156,7 +157,7 @@ export default function AgentDetail() {
         </div>
         {!editing && (
           <span className="btnrow">
-            <button className="primary" onClick={toggle}>{agent.enabled ? "Disable" : "Enable"}</button>
+            {agent.trigger && <button className="primary" onClick={toggle}>{agent.enabled ? "Disable" : "Enable"}</button>}
             <button onClick={() => { setTab("configuration"); setEditing(true); }}>Edit</button>
             <button className="danger" onClick={() => setConfirmDel(true)}>Delete</button>
           </span>
@@ -207,8 +208,9 @@ export default function AgentDetail() {
                   </td>
                 </tr>
                 <tr><td className="help">wakes on</td>
-                    <td><Link to={`/triggers/${encodeURIComponent(agent.trigger)}`} className="mono">{agent.trigger}</Link>
-                        <span className="help"> · the trigger that runs this agent</span></td></tr>
+                    <td>{agent.trigger ? <><Link to={`/triggers/${encodeURIComponent(agent.trigger)}`} className="mono">{agent.trigger}</Link>
+                        <span className="help"> · the trigger that runs this agent</span></>
+                      : <span className="dim">no trigger: only a handoff starts it</span>}</td></tr>
                 <tr><td className="help">writes to</td>
                     <td><Link to="/sources/findings" className="mono">findings</Link>
                         <span className="help"> · one finding per run, on the entity's timeline</span></td></tr>
@@ -288,7 +290,8 @@ export default function AgentDetail() {
             <table>
               <tbody>
                 <tr><td className="help" style={{ width: 150 }}>trigger</td>
-                    <td><Link to={`/triggers/${encodeURIComponent(agent.trigger)}`} className="mono">{agent.trigger}</Link></td></tr>
+                    <td>{agent.trigger ? <Link to={`/triggers/${encodeURIComponent(agent.trigger)}`} className="mono">{agent.trigger}</Link>
+                      : <span className="dim">none: only a handoff starts it</span>}</td></tr>
                 <tr><td className="help">provider</td>
                     <td>{(() => {
                       const eff = data.providers?.find((p) => p.id === (agent.effective_provider ?? data.default_provider));
@@ -420,7 +423,7 @@ export function RunsTable({ runs, runsError, agent, emptyText, focusDispatch, fo
 }) {
   if (runsError) return <ErrorState error={runsError} what="this agent’s runs" />;
   if (!runs?.length) {
-    return <div className="empty">{emptyText ?? <>no runs yet; this agent runs when <span className="mono">{agent.trigger}</span> fires</>}</div>;
+    return <div className="empty">{emptyText ?? (agent.trigger ? <>no runs yet; this agent runs when <span className="mono">{agent.trigger}</span> fires</> : <>no runs yet; a handoff starts this agent</>)}</div>;
   }
   const isFocused = (r: AgentRun) =>
     (!!focusDispatch && r.dispatch_id === focusDispatch) || (!!focusRun && r.id === focusRun);

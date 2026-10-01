@@ -261,7 +261,7 @@ def _trigger_from_dict(t: dict) -> TriggerCfg:
 
 def _agent_from_dict(a: dict, enabled: bool = False) -> AgentCfg:
     return AgentCfg(
-        name=a["name"], trigger=a["trigger"], prompt=a["prompt"],
+        name=a["name"], trigger=a.get("trigger") or "", prompt=a["prompt"],
         slack_webhook=a.get("slack_webhook") or "",
         model=a.get("model") or "",
         provider=a.get("provider") or "",
@@ -738,7 +738,7 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
             if include_secrets and a.get("webhook_token") else {}),
          **({"enabled": True} if a.get("enabled") else {})}
         for a in store.list_catalog_agents()
-        if a["trigger"] in kept_triggers
+        if not a["trigger"] or a["trigger"] in kept_triggers
     ]
 
     doc = {"sources": src_out, "triggers": trig_out}
@@ -1132,12 +1132,14 @@ def check_handoff_targets(name: str, handoffs: list[dict], projects: dict,
 
 def validate_agent_dict(a: dict, trigger_names: set, triggers: dict | None = None,
                         mcp_server_names: set | None = None) -> None:
-    for field in ("name", "trigger", "prompt"):
+    for field in ("name", "prompt"):
         if not str(a.get(field) or "").strip():
             raise CatalogError(f"agent is missing required field {field!r}")
     if not _AGENT_NAME_RE.match(str(a["name"])):
         raise CatalogError(f"agent name {a['name']!r} must be alphanumeric/_/-")
-    if a["trigger"] not in trigger_names:
+    # no trigger of its own is fine: a handoff starts it, or nothing does until it gets one
+    a["trigger"] = str(a.get("trigger") or "").strip()
+    if a["trigger"] and a["trigger"] not in trigger_names:
         raise CatalogError(f"agent {a['name']!r}: unknown trigger {a['trigger']!r}")
     if len(str(a["prompt"])) > MAX_PROMPT_CHARS:
         raise CatalogError(

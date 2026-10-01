@@ -244,6 +244,63 @@ async def main():
            and store.get_catalog_agent("rca_a") is None, json.dumps(body)[:400])
         ck("Alpha's wiring is gone, Beta's stays",
            not store.list_wakes(project=a) and store.list_wakes(project=b, agent="looker"))
+
+        print("== deleting a trigger: it leaves the projects, its agent stays without one ==")
+        await mk("triggers", trigger("esc", "zz", b))
+        await mk("agents/builtin", {"name": "fixer", "trigger": "esc", "prompt": "fix",
+                                    "project": b})
+        r = await cx.put("/api/agents/builtin/looker", json={
+            "project": b, "trigger": "watch_b", "prompt": "look",
+            "handoffs": [{"verdict": "investigate", "agent": "fixer"}]})
+        ck("Beta: looker hands investigate to fixer", r.status_code == 200, r.text)
+        r = await cx.delete("/api/triggers/esc")
+        ck("delete esc -> 200, fixer left without a trigger",
+           r.status_code == 200 and r.json()["agents_without_trigger"] == ["fixer"], r.text)
+        objs = (await cx.get(f"/api/projects/{b}")).json()["objects"]
+        ck("esc is gone from Beta's parts, nothing reads as missing",
+           not any(o["name"] == "esc" for o in objs) and not any(o["missing"] for o in objs),
+           [o for o in objs if o["missing"] or o["name"] == "esc"])
+        fx = store.get_catalog_agent("fixer")
+        ck("fixer is kept, with no trigger and nothing waking it",
+           fx is not None and fx["trigger"] == "" and not store.list_wakes(agent="fixer"))
+        r = await cx.post("/api/agents/builtin/fixer/enable", params={"project": b})
+        eq("turning on an agent without a trigger is refused", r.status_code, 409)
+        r = await cx.put("/api/agents/builtin/fixer", json={"project": b, "trigger": "",
+                                                            "prompt": "fix it"})
+        ck("and it can still be edited", r.status_code == 200, r.text)
+        SCRIPT["looker"] = "investigate"
+        n5 = len(store.list_agent_runs(limit=1000))
+        await cx.post("/ingest/evt", json={"service": "pay2", "team": "b", "msg": "x"})
+        await settle(store, n5 + 1)
+        await asyncio.sleep(0.3)
+        rs = await settle(store, n5 + 1)
+        fixed = [r for r in rs if r["agent"] == "fixer" and r["key"] == "pay2"]
+        ck("a handoff still starts it", len(fixed) == 1 and fixed[0]["woken_by"] == "handoff",
+           [(r["agent"], r["key"], r.get("woken_by")) for r in rs[:5]])
+        SCRIPT["looker"] = "done"
+        r = await cx.put("/api/agents/builtin/fixer", json={"project": b, "trigger": "watch_b",
+                                                            "prompt": "fix it"})
+        ck("given a trigger, it is wired to it", r.status_code == 200
+           and [w["trigger"] for w in store.list_wakes(project=b, agent="fixer")] == ["watch_b"],
+           r.text)
+        r = await cx.put("/api/agents/builtin/fixer", json={"project": b, "trigger": "",
+                                                            "prompt": "fix it"})
+        ck("and taking it away unwires it", r.status_code == 200
+           and not store.list_wakes(project=b, agent="fixer"), r.text)
+        await mk("agents/builtin", {"name": "helper", "prompt": "help", "project": b})
+        ck("an agent can be made without a trigger", store.get_catalog_agent("helper")["trigger"] == "")
+        doc = yaml.safe_load((await cx.get("/api/catalog/export")).text)
+        ck("the export keeps agents without a trigger",
+           {"fixer", "helper"} <= {x["name"] for x in doc.get("agents") or []})
+        # a cell where a trigger was deleted before deletes cleaned up: mended at the next open
+        store.con.execute("UPDATE catalog_agents SET trigger = 'old-esc' WHERE name = 'helper'")
+        store.con.execute("INSERT INTO usecase_objects (usecase_id, kind, key, name, created_at) "
+                          "VALUES (?, 'trigger', 'trigger:old-esc', 'old-esc', now())", [b])
+        store.normalize_projects()
+        objs = (await cx.get(f"/api/projects/{b}")).json()["objects"]
+        ck("an old dangling trigger is mended: off the agent and off the project",
+           store.get_catalog_agent("helper")["trigger"] == ""
+           and not any(o["name"] == "old-esc" for o in objs))
         await cx.aclose()
 
     print("== the upgrade: an agent's subscription becomes its project's wiring ==")
