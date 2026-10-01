@@ -1,0 +1,50 @@
+# The demo api-server (demo/api-server), published so demo/docker-compose.yml runs anywhere
+# without a checkout. Multi-arch because the demo runs on laptops (Apple Silicon) as well as
+# amd64. Built only when its code changes (or by hand), not on every Tares release: the image
+# does not change with Tares.
+name: Publish demo image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "demo/api-server/**"
+      - ".github/workflows/demo-image.yml"
+  workflow_dispatch:
+
+jobs:
+  publish-demo:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/tares-demo-api-server
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: demo/api-server
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=demo
+          cache-to: type=gha,mode=max,scope=demo

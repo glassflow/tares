@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "../api";
-import { usePolling } from "../components/bits";
 import type { ConnectorSpec, Project, Template } from "../types";
 
 // The screen a new cell lands on (TR-257): one question, answered by typing. Shown by Home while
@@ -10,7 +9,7 @@ import type { ConnectorSpec, Project, Template } from "../types";
 //
 // It is a conversation that has not started yet, not a form. As the user types, the screen
 // answers: the connectors they name light up under the box. Nothing here asks the user to know
-// a source from a view. Three doors, one builder: describe it, paste your last incident, or
+// a source from a trigger. Three doors, one builder: describe it, paste your last incident, or
 // start the demo. Templates live behind the sentences; the gallery stays one click away under
 // Projects for people who already know what they want.
 
@@ -47,18 +46,10 @@ const COMMON: string[] = [
 
 
 
-/** Create new (/projects/new): the landing screen loading its own data. */
-export function ProjectNewPage() {
-  const { data: rec } = usePolling(() => api.templates(), 60000);
-  const { data: uc } = usePolling(() => api.projects(), 30000);
-  if (!rec || !uc) return <div className="dim">loading…</div>;
-  return <Landing templates={rec.templates} projects={uc.projects} />;
-}
 
 export default function Landing({ templates, projects }: { templates: Template[]; projects: Project[] }) {
   const navigate = useNavigate();
   const [goal, setGoal] = useState("");
-  const [picked, setPicked] = useState("");   // the template behind the sentence in the box, if any
   const [paste, setPaste] = useState("");
   const [pasting, setPasting] = useState(false);
   const [specs, setSpecs] = useState<Record<string, ConnectorSpec>>({});
@@ -106,15 +97,14 @@ export default function Landing({ templates, projects }: { templates: Template[]
     }
   };
 
+  // the goal-first setup plans it; its planner knows the templates too
   const go = () => {
     if (!goal.trim()) return;
-    // a sentence picked and left as it was names its template; an edited one is free text
-    const tpl = sentences.find((x) => x.template && x.text === goal.trim())?.template ?? picked;
-    navigate("/projects/new/assist", { state: { goal: goal.trim(), template: tpl || undefined } });
+    navigate("/projects/new", { state: { goal: goal.trim() } });
   };
   const goIncident = () => {
     if (!paste.trim()) return;
-    navigate("/projects/new/assist", { state: { goal: paste.trim(), incident: true } });
+    navigate("/projects/new", { state: { goal: `Catch this kind of incident early next time: ${paste.trim()}` } });
   };
 
   return (
@@ -132,7 +122,7 @@ export default function Landing({ templates, projects }: { templates: Template[]
         <label className="landing-q" htmlFor="landing-goal">What do you want to build?</label>
         <textarea id="landing-goal" ref={box} rows={3} value={goal}
                   placeholder="watch my checkout service logs and wake an agent in Slack when payments fail"
-                  onChange={(e) => { setGoal(e.target.value); setPicked(""); }}
+                  onChange={(e) => setGoal(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(); } }} />
         {/* what the screen heard, before anything is pressed */}
         <div className="landing-heard">
@@ -174,7 +164,7 @@ export default function Landing({ templates, projects }: { templates: Template[]
         {sentences.map((s) => (
           <button key={s.text} type="button"
                   className={"starter" + (selected === s.text ? " on" : selected ? " off" : "")}
-                  onClick={() => { setGoal(s.text); setPicked(s.template); box.current?.focus(); }}>
+                  onClick={() => { setGoal(s.text); box.current?.focus(); }}>
             {s.text}
           </button>
         ))}

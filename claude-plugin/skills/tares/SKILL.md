@@ -1,6 +1,6 @@
 ---
 name: tares
-description: Use when you need cross-source context about this project's systems (recent deploys, logs, metrics, entities, correlated timelines), OR when organizing Tares itself — creating sources, labels, and views. Tares is the data plane; read it via the tares MCP tools for one correlated timeline per entity, and author its catalog with the create/derive tools following the rules below.
+description: Use when you need cross-source context about this project's systems (recent deploys, logs, metrics, entities, correlated timelines), OR when organizing Tares itself by creating sources, labels and triggers. Tares is the data plane; read it via the tares MCP tools for one correlated timeline per entity, and author its catalog with the create tools following the rules below.
 ---
 
 # Tares
@@ -15,7 +15,8 @@ When a question needs real context about running systems — "what changed befor
 this service healthy", "what has this customer done recently" — read Tares instead of guessing:
 
 - Start by discovering what's there: `list_sources`, `catalog_list`, `entities`.
-- Read a timeline with `query` (a view + an entity key) or `read` (a `{label: value}` selector).
+- Read a timeline with `read` (a `{label: value}` selector), narrowed to a `project`'s sources or
+  to named `sources` when you know which matter.
 - Treat the timeline as ground truth for *what happened and when*; cite specific events.
 
 This plugin also streams the current Claude Code session into Tares (the `claude_code` source) when
@@ -29,9 +30,9 @@ When the user asks to make this a challenger session (any wording: "challenger s
 challenge the plan when you leave plan mode and every commit you make, and hand you the findings.
 `set_session_flow` with an empty `flow` turns it off.
 
-## Authoring: sources, labels, and views
+## Authoring: sources, labels, and triggers
 
-Tares's data model has three layers — get them right and correlation just works; guess and it
+Tares's data model has three layers. Get them right and correlation just works; guess and it
 silently doesn't:
 
 - **Fields** — the *candidate menu*. A source's raw payload is stored losslessly; `source_fields`
@@ -39,8 +40,9 @@ silently doesn't:
   and top values. Fields are not queryable on their own.
 - **Labels** — the *declared axes* you promote from fields (or a const, or a regex over a field).
   Labels are what you filter, group, key, and correlate by. One label is the **primary key**.
-- **Views** — correlate one or more sources into a per-entity timeline, keyed by a **label** the
-  sources share.
+- **Triggers**: watch one or more sources (narrowed by filters) for a condition, keyed by a
+  **label** the sources share, and wake agents with the correlated timeline. Every trigger belongs
+  to a project (the default project when you name none); its sources join that project.
 
 ### Rule 1 — Labels must come from real fields (never invent one)
 
@@ -58,12 +60,12 @@ label reads from one of three things, all grounded in real data:
 Never name a `field` that isn't in the profile — it extracts nothing. Set labels by creating the
 source (`create_source`) or updating its config with the full `labels` list.
 
-### Rule 2 — Views key/filter on LABELS only, never raw fields
+### Rule 2: triggers key and filter on LABELS only, never raw fields
 
-A view's `key_field` (and any filters) must be a **label the chosen sources expose** — not an
+A trigger's `key_field` (and any filters) must be a **label the chosen sources expose**, not an
 arbitrary payload field. If you want to correlate on something that isn't a label yet, **promote it
-to a label first** (Rule 1), then `derive` the view keyed by that label. Confirm a source's current
-labels with `catalog_describe("source:<name>")` before deriving.
+to a label first** (Rule 1), then `create_trigger` over the sources, keyed by that label. Confirm a
+source's current labels with `catalog_describe("source:<name>")` before creating it.
 
 ### Rule 3 — To match a label across sources, add a NEW label — don't rename
 

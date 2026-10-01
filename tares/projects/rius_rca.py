@@ -8,7 +8,7 @@ server and the write-back webhook POSTs the finding to Rius's callback, keyed by
 Every knob here is the hand-built configuration proven on a live cell on 2026-09-01 (TR-223
 comment: run_7a954505c5c7 and friends — 4/4 green against staging Rius), with the five traps from
 that session baked in:
-  1. the KEY is stamped at ingest by the source's PRIMARY LABEL, never by view.key_field
+  1. the KEY is stamped at ingest by the source's PRIMARY LABEL, never by a trigger's key_field
      (TR-226/TR-228). The entity is the SERVICE (TR-285): a delivery id is new on every firing,
      so a cooldown keyed by it never held and one noisy service woke the agent on every alert;
      keyed by service, one investigation per service per 5 minutes, and the timeline the agent
@@ -28,7 +28,6 @@ from .base import PlannedObject, ProjectError, Template
 from .registry import register
 
 SOURCE = "rius_alerts"
-VIEW = "rius_alerts_view"
 TRIGGER = "rius_alert_fired"
 AGENT = "rius_rca_agent"
 MCP = "rius"
@@ -68,6 +67,7 @@ class RiusRca(Template):
     description = ("Root-cause analysis for a Rius workspace: alert firings flow in, the agent "
                    "investigates over the Rius MCP server, and the report posts back to Rius.")
     tags = ("partner",)
+    GOAL = "Find the root cause of each Rius alert and report it back to Rius."
     # Hidden from the console's template gallery: this template is created by the Rius control
     # plane over the API, not picked by a person browsing cards.
     hidden = True
@@ -135,12 +135,11 @@ class RiusRca(Template):
                         {"name": "rule", "field": "rule"},
                     ],
                 }}),
-            PlannedObject("view", "view", {
-                "name": VIEW, "key_field": "service", "sources": [SOURCE]}),
             # one investigation per service per 5 minutes: a service that keeps alerting does
             # not wake the agent again until the cooldown is over (TR-285)
             PlannedObject("trigger", "trigger", {
-                "name": TRIGGER, "view": VIEW,
+                "name": TRIGGER, "sources": [SOURCE], "key_field": "service",
+                "description": "Rius sends an alert for a service",
                 "condition": {"aggregate": "count", "predicate": "> 0", "window": "5m"},
                 "cooldown": "5m"}),
             PlannedObject("mcp_server", "mcp", {

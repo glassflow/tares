@@ -198,7 +198,17 @@ def main():
                          "yours. Omit for an open local instance.")
     up.set_defaults(func=_up)
 
-    m = sub.add_parser("mcp", help="run the MCP server for remote agents (HTTP transport)")
+    m = sub.add_parser(
+        "mcp", help="run the MCP server for remote agents (HTTP transport)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="joining one project:\n"
+               "  Make a project key on the project page (Setup, Keys) and connect with it, e.g.\n"
+               "    claude mcp add --transport http tares http://localhost:8788/mcp \\\n"
+               "      --header \"Authorization: Bearer <project key>\"\n"
+               "  The key reads that project only and records findings in it. The agent then uses\n"
+               "  list_skills and get_skill, read and stats, list_findings, record_finding, and\n"
+               "  join_project(url) to be woken by the project's triggers. Without auth there are\n"
+               "  no keys: the tools take `project` by name instead.")
     m.add_argument("--transport", default="streamable-http", choices=["stdio", "sse", "streamable-http"])
     m.add_argument("--host", default=os.getenv("TARES_MCP_HOST", "127.0.0.1"))
     m.add_argument("--port", type=int, default=int(os.getenv("TARES_MCP_PORT", "8788")))

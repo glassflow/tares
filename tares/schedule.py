@@ -1,8 +1,8 @@
 """Schedule triggers (TR-320): a trigger that fires on a clock instead of a condition.
 
-A trigger whose condition carries `every` fires once per interval for the whole view, whether or
+A trigger whose condition carries `every` fires once per interval for all its sources, whether or
 not anything matched: a quiet window is information too. The agent it wakes is handed a summary
-of the window, not raw lines, because a busy view is far too big to hand over and the render is
+of the window, not raw lines, because a busy stream is far too big to hand over and the render is
 capped per source anyway: per `summary_by` label, the counts against the window before (the same
 table as the `stats` tool), the totals, and a few recent lines.
 
@@ -15,9 +15,10 @@ import asyncio
 import os
 from datetime import timedelta
 
+from .config import trigger_entity_label
 from .envelope import now_utc
 from .stats import stats_table
-from .views import _render
+from .reads import _render
 
 CLOCK_SECONDS = float(os.getenv("TARES_SCHEDULE_CLOCK_SECONDS", "15"))
 RECENT_LINES_PER_SOURCE = 3
@@ -28,8 +29,8 @@ def is_scheduled(trig) -> bool:
 
 
 def fire_key(trig) -> str:
-    """One firing per tick for the whole view: the view names the tick."""
-    return trig.view
+    """One firing per tick for the whole trigger: the trigger names the tick."""
+    return trig.name
 
 
 def _aware(dt):
@@ -38,20 +39,20 @@ def _aware(dt):
 
 
 def summary(store, catalog, trig) -> str:
-    view = catalog.views[trig.view]
     every = trig.condition.every
     window = f"{int(every)}s" if every % 60 else f"{int(every // 60)}m"
-    labels = trig.condition.summary_by or [view.key_field or "key_value"]
-    entity = view.key_field or "key_value"
-    out = [f"=== scheduled look at view {view.name} · every {window} · "
+    entity = trigger_entity_label(trig, catalog.sources) or "key_value"
+    labels = trig.condition.summary_by or [entity]
+    out = [f"=== scheduled look at {trig.name} ({', '.join(trig.sources)}) · every {window} · "
            f"this window against the one before ===",
-           f"the entities in this view are values of `{entity}`; other labels describe them", ""]
+           f"the entities here are values of `{entity}`; other labels describe them", ""]
     for label in labels:
-        out.append(stats_table(store, view, label, window))
+        out.append(stats_table(store, trig.sources, label, window, filters=trig.filters,
+                               scope=trig.name))
         out.append("")
     since = now_utc() - timedelta(seconds=every)
-    rows = store.read_view_window(view.sources, None, since, cap=RECENT_LINES_PER_SOURCE,
-                                  filters=view.filters)
+    rows = store.read_window(trig.sources, None, since, cap=RECENT_LINES_PER_SOURCE,
+                             filters=trig.filters)
     lines, _ = _render(rows)
     out.append("most recent lines:")
     out += lines or ["(no events in this window)"]
@@ -70,7 +71,7 @@ async def tick(store, catalog, dispatcher, now=None) -> list:
     """Fire every schedule trigger that is due. Returns the names fired."""
     fired = []
     for trig in catalog.triggers:
-        if not is_scheduled(trig) or trig.view not in catalog.views:
+        if not is_scheduled(trig) or not trig.sources:
             continue
         if not due(store, trig, now):
             continue
@@ -80,7 +81,7 @@ async def tick(store, catalog, dispatcher, now=None) -> list:
         try:
             payload = summary(store, catalog, trig)
         except Exception as e:   # a broken summary must not stop the clock; say so in the payload
-            payload = f"(the summary for view {trig.view} failed: {type(e).__name__}: {e})"
+            payload = f"(the summary for {trig.name} failed: {type(e).__name__}: {e})"
         await dispatcher.fire(trig, fire_key(trig), payload)
         fired.append(trig.name)
     return fired

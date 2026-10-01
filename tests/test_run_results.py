@@ -125,9 +125,9 @@ async def run(agent, replies):
     provider = Provider(replies)
 
     async def loop(agent, trigger, key, payload, prov, model, usage, tracer, obs, concluded=None,
-                   produced=None):
+                   produced=None, **kw):
         return await r._loop_with(agent, trigger, key, payload, provider, GitHub(), usage, tracer,
-                                  obs, model=model, concluded=concluded, produced=produced)
+                                  obs, model=model, concluded=concluded, produced=produced, **kw)
 
     async def record(*a, **k):
         return []

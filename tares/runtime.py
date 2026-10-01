@@ -145,7 +145,12 @@ class Runtime:
 
     # ── catalog mutations (already persisted to the store by the caller) ─────
     def reload_catalog(self) -> None:
-        """Re-read views/triggers (and source defs) from the store; restart changed sources."""
+        """Re-read triggers, agents and source defs from the store; restart changed sources.
+        Whatever the change left outside a project (an auto-provisioned source, a trigger written
+        straight to the store) is placed first, so nothing is ever outside one."""
+        normalize = getattr(self.store, "normalize_projects", None)
+        if normalize is not None:
+            normalize()
         new = catalog_from_db(self.store)
         old_sources = self.catalog.sources
         self.catalog = new

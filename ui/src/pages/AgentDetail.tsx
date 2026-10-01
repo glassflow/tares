@@ -17,7 +17,28 @@ import type { AgentRun, BuiltinAgent } from "../types";
 
 type Tab = "overview" | "runs" | "configuration";
 
-function statusBadge(r: AgentRun) {
+/** How a run ended, for an agent that concludes: its verdict (or that it gave none), or that
+ *  there was nothing to report, with the headline beside it. */
+export function OutcomeCell({ r }: { r: AgentRun }) {
+  if (r.status === "running") return <span className="dim">…</span>;
+  if (r.outcome === "no_op") return <span className="badge" title="concluded with nothing to report; no finding was recorded">no finding</span>;
+  if (r.status !== "ok") return <span className="dim">none</span>;
+  return (
+    <span className="run-outcome">
+      {r.verdict
+        ? <span className="chip mono" title="the verdict the agent concluded with">{r.verdict}</span>
+        : <span className="dim" title="a finding without a verdict: no handoff keys off it">no verdict</span>}
+      {r.headline && <span className="run-headline" title={r.headline}>{r.headline}</span>}
+    </span>
+  );
+}
+
+/** The run's status alone, when the outcome has a column of its own. */
+function plainStatus(r: AgentRun) {
+  return r.status === "ok" ? <span className="badge ok">ok</span> : statusBadge(r);
+}
+
+export function statusBadge(r: AgentRun) {
   // a run that concluded with nothing to hand on: a success, but quiet
   if (r.status === "ok" && r.outcome === "no_op")
     return <span className="badge" title="concluded with nothing to report; no finding was recorded">no finding</span>;
@@ -35,7 +56,7 @@ function statusBadge(r: AgentRun) {
 
 /** What a run produced (TR-220), one chip per result, linked when there is somewhere to go.
  *  `limit` keeps the row short; the expanded run lists them all. */
-function ResultChips({ r, limit }: { r: AgentRun; limit?: number }) {
+export function ResultChips({ r, limit }: { r: AgentRun; limit?: number }) {
   const all = r.results ?? [];
   if (!all.length) return null;
   const shown = limit ? all.slice(0, limit) : all;
@@ -53,6 +74,31 @@ function ResultChips({ r, limit }: { r: AgentRun; limit?: number }) {
       </span>
     ))}
     {limit && all.length > limit && <span className="help"> +{all.length - limit}</span>}
+  </>;
+}
+
+/** The agents that hand off to `name` (TR-334). */
+export function handedBy(all: BuiltinAgent[], name: string): string[] {
+  return all.filter((a) => (a.handoffs ?? []).some((h) => h.agent === name)).map((a) => a.name);
+}
+
+/** What wakes an agent: its trigger when it is on, and any agent that hands off to it. */
+export function WakesOn({ agent, from }: { agent: BuiltinAgent; from: string[] }) {
+  const hands = from.length > 0 &&
+    <>a handoff from {from.map((n, i) => <span key={n}>{i ? ", " : ""}<span className="mono">{n}</span></span>)}</>;
+  if ((!agent.enabled || !agent.trigger) && hands) return hands;
+  if (!agent.trigger) return <>nothing yet</>;
+  return <><span className="mono">{agent.trigger}</span> firing{hands && <> or {hands}</>}</>;
+}
+
+/** The project skills a run loaded (TR-332), one chip each. */
+export function SkillChips({ r }: { r: AgentRun }) {
+  return <>
+    {(r.skills ?? []).map((n) => (
+      <span key={n} className="chip mono" title="a skill of the project this run loaded" style={{ marginLeft: 4 }}>
+        <span className="help">skill</span> {n}
+      </span>
+    ))}
   </>;
 }
 
@@ -126,13 +172,13 @@ export default function AgentDetail() {
         <div>
           <h1><span className="mono">{agent.name}</span>{" "}
             <span className="badge">Tares agent</span></h1>
-          <p className="subtitle">a prompt that takes a first look when its trigger fires
-            {agent.owned_by && <> · <ProjectBadge ownedBy={agent.owned_by} customized={agent.customized} /></>}
+          <p className="subtitle">Takes a first look when a project wakes it
+            {(agent.project ?? agent.owned_by) && <> · <ProjectBadge ownedBy={agent.project ?? agent.owned_by} customized={agent.customized} /></>}
           </p>
         </div>
         {!editing && (
           <span className="btnrow">
-            <button className="primary" onClick={toggle}>{agent.enabled ? "Disable" : "Enable"}</button>
+            {agent.trigger && <button className="primary" onClick={toggle}>{agent.enabled ? "Disable" : "Enable"}</button>}
             <button onClick={() => { setTab("configuration"); setEditing(true); }}>Edit</button>
             <button className="danger" onClick={() => setConfirmDel(true)}>Delete</button>
           </span>
@@ -183,8 +229,9 @@ export default function AgentDetail() {
                   </td>
                 </tr>
                 <tr><td className="help">wakes on</td>
-                    <td><Link to={`/triggers/${encodeURIComponent(agent.trigger)}`} className="mono">{agent.trigger}</Link>
-                        <span className="help"> · the trigger that runs this agent</span></td></tr>
+                    <td>{agent.trigger ? <><Link to={`/triggers/${encodeURIComponent(agent.trigger)}`} className="mono">{agent.trigger}</Link>
+                        <span className="help"> · the trigger that runs this agent</span></>
+                      : <span className="dim">no trigger: only a handoff starts it</span>}</td></tr>
                 <tr><td className="help">writes to</td>
                     <td><Link to="/sources/findings" className="mono">findings</Link>
                         <span className="help"> · one finding per run, on the entity's timeline</span></td></tr>
@@ -236,7 +283,7 @@ export default function AgentDetail() {
       )}
 
       {tab === "runs" && (
-        <RunsPanel name={name} agent={agent}
+        <RunsPanel name={name} agent={agent} from={handedBy(data.agents, name)}
                    focusDispatch={focusDispatch} focusRun={focusRun}
                    openRun={openRun} setOpenRun={setOpenRun} />
       )}
@@ -264,7 +311,8 @@ export default function AgentDetail() {
             <table>
               <tbody>
                 <tr><td className="help" style={{ width: 150 }}>trigger</td>
-                    <td><Link to={`/triggers/${encodeURIComponent(agent.trigger)}`} className="mono">{agent.trigger}</Link></td></tr>
+                    <td>{agent.trigger ? <Link to={`/triggers/${encodeURIComponent(agent.trigger)}`} className="mono">{agent.trigger}</Link>
+                      : <span className="dim">none: only a handoff starts it</span>}</td></tr>
                 <tr><td className="help">provider</td>
                     <td>{(() => {
                       const eff = data.providers?.find((p) => p.id === (agent.effective_provider ?? data.default_provider));
@@ -333,9 +381,11 @@ const RUN_FILTER_LABELS: Record<string, string> = { "": "all runs", ok: "success
  *  The newest page is polled; older pages are fetched once with an offset and kept until the
  *  filter changes. A run that lands while paging shifts the offsets by one, so the two are
  *  merged by id. */
-export function RunsPanel({ name, agent, focusDispatch, focusRun, openRun, setOpenRun }: {
+export function RunsPanel({ name, agent, from = [], focusDispatch, focusRun, openRun, setOpenRun, project }: {
   name: string;
   agent: BuiltinAgent;
+  project?: string;                    // only the runs that belong to this project
+  from?: string[];                     // agents that hand off to this one
   focusDispatch?: string;
   focusRun?: string;
   openRun: string | undefined;
@@ -345,7 +395,7 @@ export function RunsPanel({ name, agent, focusDispatch, focusRun, openRun, setOp
   const [older, setOlder] = useState<AgentRun[]>([]);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const { data: head, error, reload } = usePolling(() => api.builtinAgentRuns(name, RUNS_PAGE, 0, filter), 10000);
+  const { data: head, error, reload } = usePolling(() => api.builtinAgentRuns(name, RUNS_PAGE, 0, filter, project), 10000);
   useEffect(() => { setOlder([]); setHasMore(true); reload(); }, [filter]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const seen = new Set<string>();
@@ -355,7 +405,7 @@ export function RunsPanel({ name, agent, focusDispatch, focusRun, openRun, setOp
     if (!runs) return;
     setLoadingMore(true);
     try {
-      const page = await api.builtinAgentRuns(name, RUNS_PAGE, runs.length, filter);
+      const page = await api.builtinAgentRuns(name, RUNS_PAGE, runs.length, filter, project);
       setOlder((o) => [...o, ...page]);
       setHasMore(page.length >= RUNS_PAGE);
     } catch { setHasMore(false); }
@@ -363,7 +413,7 @@ export function RunsPanel({ name, agent, focusDispatch, focusRun, openRun, setOp
   };
   const empty = filter === "ok" ? "no successful runs yet"
     : filter === "failed" ? "no failed runs"
-    : <>no runs yet; this agent runs when <span className="mono">{agent.trigger}</span> fires</>;
+    : <>no runs yet; this agent runs on <WakesOn agent={agent} from={from} /></>;
   return (
     <>
       <div className="btnrow" style={{ marginBottom: 8 }}>
@@ -394,15 +444,17 @@ export function RunsTable({ runs, runsError, agent, emptyText, focusDispatch, fo
 }) {
   if (runsError) return <ErrorState error={runsError} what="this agent’s runs" />;
   if (!runs?.length) {
-    return <div className="empty">{emptyText ?? <>no runs yet; this agent runs when <span className="mono">{agent.trigger}</span> fires</>}</div>;
+    return <div className="empty">{emptyText ?? (agent.trigger ? <>no runs yet; this agent runs when <span className="mono">{agent.trigger}</span> fires</> : <>no runs yet; a handoff starts this agent</>)}</div>;
   }
   const isFocused = (r: AgentRun) =>
     (!!focusDispatch && r.dispatch_id === focusDispatch) || (!!focusRun && r.id === focusRun);
+  // an agent that concludes: how each run ended gets a column, so nobody reads the text for it
+  const outcomes = !!agent.offers_conclude;
   return (
     <table>
       <thead>
         <tr>
-          <th>status</th><th>when</th><th>entity</th><th>model</th>
+          <th>status</th>{outcomes && <th>outcome</th>}<th>when</th><th>entity</th><th>model</th>
           <th className="num">rounds</th><th className="num">tokens</th>
           <th className="num">cost</th><th className="num">duration</th><th />
         </tr>
@@ -413,7 +465,7 @@ export function RunsTable({ runs, runsError, agent, emptyText, focusDispatch, fo
           // A deep-linked run starts open; clicking any row toggles it like the roster table.
           const open = openRun !== undefined ? openRun === r.id : focused;
           return (
-            <RunRow key={r.id} r={r} open={open} focused={focused}
+            <RunRow key={r.id} r={r} open={open} focused={focused} outcomes={outcomes}
                     onToggle={() => setOpenRun(open ? "" : r.id)} />
           );
         })}
@@ -422,8 +474,8 @@ export function RunsTable({ runs, runsError, agent, emptyText, focusDispatch, fo
   );
 }
 
-function RunRow({ r, open, focused, onToggle }: {
-  r: AgentRun; open: boolean; focused: boolean; onToggle: () => void;
+function RunRow({ r, open, focused, onToggle, outcomes = false }: {
+  r: AgentRun; open: boolean; focused: boolean; onToggle: () => void; outcomes?: boolean;
 }) {
   const navigate = useNavigate();
   const [rerunBusy, setRerunBusy] = useState(false);
@@ -463,7 +515,8 @@ function RunRow({ r, open, focused, onToggle }: {
       <tr className="clickable" onClick={onToggle}
           style={focused ? { outline: "2px solid var(--accent)", outlineOffset: -2 } : undefined}
           ref={rowRef}>
-        <td>{statusBadge(r)} {deliveryBadge(r)}<ResultChips r={r} limit={2} /></td>
+        <td>{outcomes ? plainStatus(r) : statusBadge(r)} {deliveryBadge(r)}<ResultChips r={r} limit={2} /><SkillChips r={r} /></td>
+        {outcomes && <td><OutcomeCell r={r} /></td>}
         <td style={{ whiteSpace: "nowrap" }}><TimeAgo ts={r.started_at} /></td>
         <td className="mono">{r.key}</td>
         <td className="mono">{r.model ? <>{r.provider && r.provider !== "anthropic" && <span className="help">{r.provider} / </span>}{r.model}</> : <span className="dim">—</span>}</td>
@@ -482,7 +535,7 @@ function RunRow({ r, open, focused, onToggle }: {
       </tr>
       {open && (
         <tr>
-          <td colSpan={9} style={{ background: "var(--wash, transparent)" }}>
+          <td colSpan={outcomes ? 10 : 9} style={{ background: "var(--wash, transparent)" }}>
             <div style={{ padding: "8px 4px" }}>
               <p className="help" style={{ margin: "0 0 8px", whiteSpace: "normal" }}>
                 {r.dispatch_id
@@ -514,6 +567,13 @@ function RunRow({ r, open, focused, onToggle }: {
                   </button>
                   {rerunErr && <span className="help" style={{ color: "var(--err)" }}>{rerunErr}</span>}
                 </div>
+              )}
+              {outcomes && r.outcome === "finding" && (
+                <p style={{ margin: "0 0 8px", whiteSpace: "normal" }}>
+                  <span className="help">concluded </span>
+                  {r.verdict ? <span className="chip mono">{r.verdict}</span> : <span className="dim">without a verdict</span>}
+                  {r.headline && <strong style={{ marginLeft: 8 }}>{r.headline}</strong>}
+                </p>
               )}
               {r.outcome === "no_op" && (
                 <p className="help" style={{ margin: "0 0 8px", whiteSpace: "normal" }}>

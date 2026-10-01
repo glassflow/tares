@@ -74,3 +74,6 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+          # v1.38.0-rc.1: a pre-release, never shown as the latest release
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}

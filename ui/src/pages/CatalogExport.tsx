@@ -58,7 +58,7 @@ export default function CatalogExport() {
         <div>
           <p className="subtitle" style={{ marginBottom: 4 }}><Link to="/sources">Sources</Link> ›</p>
           <h1>Export catalog</h1>
-          <p className="subtitle">the portable form of your catalog; sources, views and triggers as YAML</p>
+          <p className="subtitle">Your catalog in a portable form: sources, triggers, agents and projects as YAML.</p>
         </div>
       </div>
 
@@ -73,7 +73,7 @@ export default function CatalogExport() {
               </button>
             </div>
             <p className="help" style={{ marginTop: 0 }}>
-              Views and triggers that reference only the selected sources are included automatically.
+              Triggers that read only the selected sources are included automatically.
             </p>
             {sources.length === 0 && <div className="empty">no sources to export</div>}
             {sources.map((s) => (

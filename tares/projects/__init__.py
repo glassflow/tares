@@ -1,7 +1,7 @@
 """Projects: an opinionated entry point on top of the ordinary Tares objects.
 
 A *template* is code (a Template subclass) that declares parameters and turns them into a plan of
-sources, views, triggers, agents and MCP servers in catalog shape. An *instance* is one configured
+sources, triggers, agents and MCP servers in catalog shape. An *instance* is one configured
 run of a template, stored in the DB, that owns the objects it created. Owned objects are ordinary:
 the user sees and edits them on their normal pages; the project page is a representation of them,
 not a lock on them.

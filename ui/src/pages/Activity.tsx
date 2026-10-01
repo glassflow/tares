@@ -31,8 +31,8 @@ export function ConnectPage() {
     <>
       <h1>Connect</h1>
       <p className="subtitle">
-        hook an agent up to this Tares; <em>it pulls (MCP), gets pushed (webhook), or calls
-        plain REST</em>
+        Connect an agent to this Tares. It can read over MCP, get events pushed to a webhook, or
+        call the REST API.
       </p>
 
       <div className="tabs">
@@ -52,7 +52,7 @@ export default function AgentActivity() {
   return (
     <>
       <h1>Reads</h1>
-      <p className="subtitle">every read agents made over MCP or the API, newest first</p>
+      <p className="subtitle">Every read agents made over MCP or the API, newest first.</p>
       <Queries />
     </>
   );
@@ -172,10 +172,10 @@ function Connect({ tab }: { tab: ConnectTab }) {
     (authReq ? `  -H 'Authorization: Bearer ${t}' \\\n` : "") +
     `  -d '{"trigger": "${trig ?? "<trigger>"}", "url": "https://your-agent.example.com/hook"}'`;
   const queryCurl = (t: string) =>
-    `curl -X POST ${origin}/query \\\n` +
+    `curl -X POST ${origin}/read \\\n` +
     `  -H 'Content-Type: application/json' \\\n` +
     (authReq ? `  -H 'Authorization: Bearer ${t}' \\\n` : "") +
-    `  -d '{"view": "<view>", "key": "<entity>", "window": "15m"}'`;
+    `  -d '{"selector": {"service": "<entity>"}, "window": "15m"}'`;
 
   const shownTools = useMemo(() => {
     const needle = toolQ.trim().toLowerCase();
@@ -238,7 +238,7 @@ function Connect({ tab }: { tab: ConnectTab }) {
           ].join("\n")} />
           <p className="help" style={{ whiteSpace: "normal" }}>
             (Don&rsquo;t have an agent of your own? A built-in{" "}
-            <Link to="/agents">Tares agent</Link> runs inside Tares on a trigger firing, no
+            <Link to="/projects">Tares agent</Link> runs inside Tares on a trigger firing, no
             endpoint needed.) Every delivery is JSON shaped like:
           </p>
           <CodeBlock title="what your endpoint receives on each firing" code={JSON.stringify({
@@ -260,8 +260,8 @@ function Connect({ tab }: { tab: ConnectTab }) {
           {triggers && triggers.length > 0 ? (
             <>
               <p className="help" style={{ whiteSpace: "normal" }}>
-                Wire it on the trigger&rsquo;s page: open <Link to="/triggers">Triggers</Link>,
-                pick the trigger, and paste your endpoint there. From a script, the same action is
+                Wire it in the trigger&rsquo;s project: open <Link to="/projects">the project</Link>,
+                then Setup, Advanced setup, Settings, Subscribers, and add your endpoint there. From a script, the same action is
                 (needs a <span className="mono">read</span>-scoped{" "}
                 <Link to="/settings">API key</Link>):
               </p>
@@ -270,7 +270,7 @@ function Connect({ tab }: { tab: ConnectTab }) {
           ) : (
             <p className="help" style={{ whiteSpace: "normal" }}>
               This instance has no triggers yet, so there is nothing to subscribe to; create one
-              under <Link to="/triggers">Triggers</Link> (a condition over a view), then come back
+              in <Link to="/projects">a project</Link> (a condition over some of its sources), then come back
               here.
             </p>
           )}
@@ -362,7 +362,7 @@ function Connect({ tab }: { tab: ConnectTab }) {
       <p className="help" style={{ whiteSpace: "normal" }}>
         Then verify: ask the client <em>&ldquo;Use tares: what are you ingesting right
         now?&rdquo;</em>. It should call <span className="mono">catalog_list</span> and answer with
-        your sources, views, and triggers.
+        your sources, triggers and projects.
       </p>
         </>
       )}
@@ -521,7 +521,7 @@ function Queries() {
     const needle = q.trim().toLowerCase();
     return (data ?? []).filter((row) =>
       (client === "all" || row.client === client) &&
-      (!needle || row.view.toLowerCase().includes(needle) || row.key.toLowerCase().includes(needle) ||
+      (!needle || row.key.toLowerCase().includes(needle) ||
         row.client.toLowerCase().includes(needle)));
   }, [data, q, client]);
 
@@ -532,7 +532,7 @@ function Queries() {
       <div className="toolbar">
         <div className="search-box">
           <Search />
-          <input type="text" className="search" placeholder="Filter by view, key, client…"
+          <input type="text" className="search" placeholder="Filter by what was read, client…"
                  value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
         <div className="seg small" aria-label="client">
@@ -550,13 +550,13 @@ function Queries() {
         </div>
       ) : (
         <table>
-          <thead><tr><th>when</th><th>client</th><th>view</th><th>key</th><th>window</th><th className="num">rows</th></tr></thead>
+          <thead><tr><th>when</th><th>client</th><th>call</th><th>what</th><th>window</th><th className="num">rows</th></tr></thead>
           <tbody>
             {shown.map((row) => (
               <tr key={row.id}>
                 <td style={{ whiteSpace: "nowrap" }}><TimeAgo ts={row.queried_at} /></td>
                 <td><span className={`badge ${row.client === "mcp" ? "agent" : "starting"}`}>{row.client}</span></td>
-                <td className="mono">{row.view}</td>
+                <td className="mono">{row.id.startsWith("s_") ? "stats" : "read"}</td>
                 <td className="mono">{row.key}</td>
                 <td className="mono">{row.window}</td>
                 <td className="num">{row.rows_returned}</td>

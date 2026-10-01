@@ -3,6 +3,424 @@
 Notable changes to Tares (formerly NavFlow). Format follows [Keep a Changelog](https://keepachangelog.com/);
 the project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [1.38.0-rc.8] - 2026-10-01
+
+Eighth release candidate: fixes from a run through every template.
+
+### Changed
+- Guided setup, Try it: the button is "Run it once now" (was "Run a practice spike"), and while
+  the run works its line shows a spinner and the seconds so far.
+- A template's Slack channel (the Challenger workflow's) is picked from the channels the Tares bot
+  is in, like an agent's, instead of typed as an ID.
+- From existing objects: each source in the picker shows what it watches (its repo) and can be
+  found by it; tools show their service.
+- The AI SRE demo and Challenger templates ask for a model provider, not an Anthropic key, and
+  point to What the agents found instead of a Runs list that is no longer on the page.
+- Two sources of a project on the same host (Prometheus metrics and its alerts) are told apart by
+  their kind in Setup and All resources.
+- All resources shows an agent that only a handoff starts as "on handoff", not "off".
+
+## [1.38.0-rc.7] - 2026-10-01
+
+Seventh release candidate: drafts can be deleted.
+
+### Added
+- "Delete draft" on a draft's row in Projects and at the foot of its setup page. Only the draft
+  goes; nothing of it was set up yet.
+
+### Fixed
+- The agent form's trigger menu opened behind the prompt box; it opens over it now.
+
+## [1.38.0-rc.6] - 2026-10-01
+
+Sixth release candidate: how an agent's run ends is a setting, and deleting a part is final.
+
+### Added
+- How it ends, on the agent form: "Ends every run with a conclusion" gives the agent the
+  conclude tool whatever its prompt says, and Tares adds the instructions for it. A run that
+  stops without concluding is asked once more, with conclude the only choice. An agent whose
+  prompt mentions conclude keeps working as before.
+- Verdicts it can give: each a word of your own with when to give it. The conclude tool accepts
+  only these, and a finding must carry one; any other word goes back to the agent to fix within
+  the run. The triage and root-cause presets come with theirs.
+- A handoff's verdict is a dropdown of the agent's verdicts that still takes free text, and the
+  form says when a handoff names a verdict the agent never gives.
+- The runs table has an outcome column for agents that conclude: the verdict, no verdict, or no
+  finding, with the headline beside it; an open run shows the same above its finding.
+- `concludes` and `verdicts` on agents in the API and in catalog export and import.
+
+### Changed
+- An agent can have no trigger of its own: only a handoff starts it. The agent form offers "No
+  trigger", and the trigger can be changed after the agent is made.
+- Deleting a trigger, agent, MCP server or source drops it from every project's list (no
+  "deleted by hand" banner). The agents a deleted trigger woke stay, without a trigger; a deleted
+  MCP server leaves the agents that listed it. Cells where a part was deleted before are mended
+  when Tares starts.
+
+## [1.38.0-rc.5] - 2026-10-01
+
+Fifth release candidate: plain names and copy, from a UI review of rc.4.
+
+### Changed
+- Sources show what they watch (glassflow/argus-core) with the internal name small underneath, on
+  Sources, a source's page, All resources and the setup plan; the planning steps name them the
+  same way. A pasted GitHub URL is shown as owner/name. Tools show the service (GitHub).
+- A wake-up on another agent's findings reads in plain words ("watcher flags a service for a
+  closer look"), and Setup lists that agent after the one whose findings wake it.
+- In the setup plan, a wake-up on every event no longer shows a "0 events" count and window; a
+  tool already on Tares is on (Remove drops it) instead of carrying an off switch; the plan's
+  notes are a plain panel, not a warning.
+- Projects and Overview show each project's goal instead of the template it started from.
+- Settings, API keys hides revoked keys behind "Show N revoked"; workspace sign-in keys
+  (`user:<id>`) are labelled as such there and on All resources.
+- A paused project says its agents look once it is resumed; page subtitles are full sentences;
+  a template's panel (the demo stack) takes the full row so its URLs no longer break mid-word.
+
+## [1.38.0-rc.4] - 2026-10-01
+
+Fourth release candidate: parts are shared between projects, and the guided setup keeps a draft.
+
+### Changed
+- Sources, triggers, agents, MCP servers and skills belong to the cell, and any number of
+  projects use the same one. A project holds its own wiring: which trigger wakes which agent, on
+  or off, and which agent digs in on whose verdict. The same agent can serve two projects, each
+  waking it its own way. A part's `owned_by` now means the project that made it, never a lock.
+- A run belongs to the project whose wiring started it: each project's timeline, results, today
+  totals, spend and an agent's runs and stats on its page show its own runs only. Two projects
+  wiring the same trigger to the same agent run it once, shown in both. A second project's firing
+  or handoff for an agent already running on the same entity joins that run.
+- Pausing a project turns its wiring off; a trigger another running project uses keeps running.
+  Deleting a project keeps every part another project uses (`kept_shared` in the response) and
+  deletes the rest it made. `delete_sources=all` is unchanged.
+- Skills are shared: one skill per cell, used by the projects that pick it. Editing it changes it
+  everywhere; removing it from a project deletes it only when no project uses it. A new skill
+  cannot take the name of one already on the cell.
+- The guided setup starts a draft project on "Plan it": the plan is written in the background
+  and shown step by step as it happens, edits are kept on the draft, and the draft waits on the
+  Projects list ("Finish setting up") until it is set up, under the same id.
+- The setup plan picks a source by kind first (your sources of that kind, or a new one), shows
+  sources and tools by what a person calls them (glassflow/argus-core, GitHub), offers agents,
+  tools and skills already on the cell from a list, and posts findings to Slack itself (a channel
+  picker) instead of suggesting a Slack MCP server.
+
+### Added
+- All resources: a page listing every source, trigger, agent, MCP server, skill and key with the
+  projects that use it (`GET /api/resources`).
+- `wiring:` in the catalog export (each project's wake-ups and handoffs); import restores it.
+- `POST /api/setup/drafts`, `POST /api/projects/{id}/setup/plan`, `PUT /api/projects/{id}/setup`
+  with a plan, `POST /api/projects/{id}/skills/{name}/use`, `GET /api/skills`, and `?project=`
+  on the agent list, its runs and enable/disable.
+
+### Upgrade
+- Once, at the first start: each agent's trigger, handoffs and on/off (its `tares://agent/`
+  subscription) become the wiring of the project that made it, in one transaction; each
+  project's skills become shared skills (the same name with other text keeps both, the second
+  renamed name-2). Runs and firings keep their project.
+
+### Fixed
+- Page header buttons stay beside the title; the setup plan wraps long names inside their card;
+  switching who does the work no longer flashes the other side's problems; the on/off switch
+  looks like one; a plan label given as a bare word reads the field of that name.
+
+## [1.38.0-rc.3] - 2026-09-30
+
+Third release candidate: fixes from testing rc.2 on a live cell.
+
+### Fixed
+- The first start after an upgrade that fills template trigger descriptions no longer crashes
+  (`RuntimeError: no running event loop`): the fill re-reads the catalog without starting sources.
+- A project whose own agent connects with its project key and checks in (never subscribing a
+  webhook) counts as having an agent: health no longer says "No agent is set up", the Setup page
+  lists the agent, and the project sentence says it sees what happened when it checks in. Until the
+  key is used, health warns that the agent has not connected yet.
+- Agents the guided setup plans are told to finish with `conclude`, so their results carry a
+  headline and a next step. A headline or summary derived from a note skips the narration it opens
+  with ("I have a complete picture.").
+- A practice run on a source Tares already had starts from the newest event the wake-up's filters
+  let through, not the newest event of any entity, and its timeline reaches back to that event.
+- "Looked at today" leaves out firings no agent was on.
+- The own-agent check in the guided setup accepts a key made in place of the first one, and no
+  longer mentions subscribing for an agent that checks in; that key's finding answers a practice
+  firing too.
+- Console: unknown addresses show a not-found page and `/views` goes to the projects; the pause
+  dialog warns when a source is shared with another project; the delete dialog lists skills;
+  "Marked as handled" no longer shows a machine id; the paused banner no longer repeats "Paused";
+  the redirect for a missing agent, trigger or firing reads correctly; going from one source page
+  straight to another shows the new source.
+
+## [1.38.0-rc.2] - 2026-09-30
+
+Second release candidate: plain descriptions on triggers, so the project sentence says what wakes it.
+
+### Added
+- A trigger can say what wakes it in plain words: an optional `description`, one line of at most
+  160 characters phrased to follow "When" ("an alert fires for the checkout service"). The project
+  sentence, the "Wakes when" card and the guided setup plan use it instead of the rule's own
+  wording. `POST` and `PUT /api/triggers`, the trigger list, catalog export and import, and the MCP
+  `create_trigger` and `update_trigger` tools take it; an update that leaves it out keeps it, an
+  empty one clears it. The console's trigger editor and the setup wake-up editor have a field for it.
+- The guided setup asks the model for a short plain description of each wake-up and stores it on
+  the trigger.
+- The AI SRE demo's trigger reads "Prometheus fires an alert for the demo service", the Rius RCA
+  trigger "Rius sends an alert for a service", the challenger workflow trigger "a challenger
+  session in Claude Code ends". Projects made from these templates before get the description once
+  at start, when their trigger has none.
+
+### Changed
+- A trigger over a number reads more naturally without a description: "the total alert_active
+  across any of its 3 sources goes above 0 in 1 minute for one service" instead of "the total
+  alert_active of any of its 3 sources events goes above 0 ...".
+
+## [1.38.0-rc.1] - 2026-09-30
+
+Release candidate: projects are the unit, the goal-first project page and the guided setup, for testing on a cell before 1.38.0.
+
+### Added
+- Every cell has a default project. It is created at start when missing and holds everything no
+  other project does: a source, trigger, agent or MCP server made without naming a project, and
+  anything a project lets go of. It cannot be deleted. `GET /api/projects` lists it first, with
+  `default: true`.
+- A trigger, agent or MCP server belongs to exactly one project. `POST /api/triggers`,
+  `/api/agents/builtin`, `/api/mcp-servers` and `/api/sources` take `project` (the default project
+  when it is left out), and the list endpoints report it. An agent runs on a trigger of its own
+  project and uses that project's MCP servers; anything else is refused with a 400 naming it.
+  Moving a trigger to another project (`PUT /api/triggers/{name}` with `project`) takes its agents
+  along.
+- Sources are shared: a source can be in any number of projects. `GET /api/sources` lists them
+  under `projects`. `POST /api/projects/{uid}/sources` adds an existing source to a project and
+  `DELETE /api/projects/{uid}/sources/{name}` takes it out, refused while one of the project's
+  triggers reads it. A trigger's sources always join its project.
+- `POST /read` takes `project` and `sources` to read only those sources. A Tares agent's `read`
+  and `stats` tools cover its project's sources unless it names others.
+- A custom project may start empty and be filled as its objects are made. Saving its object list
+  moves the triggers, agents and MCP servers it names out of the default project (with what they
+  need: an agent's trigger, a trigger's agents and sources) and refuses one that belongs to another
+  project, naming that project.
+- Every agent run records what woke it (`woken_by`: trigger, schedule, manual, rerun, bootstrap
+  or handoff), the run it repeats (`parent_run_id`) and its project. A firing records its
+  trigger's project and, when a finding tripped it, the run that wrote that finding. A finding
+  event carries `run_id` and `dispatch_id` in its payload and labels.
+- `GET /api/projects/{uid}/timeline` lists what happened in a project, newest first, one thread
+  per firing or per run that no firing woke. Each thread holds the firing (trigger, entity, an
+  excerpt of what it carried, where it was delivered) and its runs, and each run holds what it led
+  to: its reruns, and the firings its finding tripped with the runs they woke. A watcher's alert,
+  its finding and the root-cause run that finding started read as one thread. Filters: `trigger`,
+  `agent`, `outcome`, `entity`; page with `before` set to the previous page's `next_before`.
+- Skills: a project holds named instructions (a playbook, a runbook, a house style) its agents load
+  when a task matches. A skill is a name (lowercase letters, digits and dashes), a one-paragraph
+  description of up to 1024 characters and a markdown body of up to 64 KB. When an agent's project
+  has skills, its system prompt ends with a "Skills available in this project" list of names and
+  descriptions, and it gets a `skill` tool that returns a body; a project with none leaves the
+  prompt and tools as they were. A run records the skills it loaded (`skills` on the run), and the
+  runs table shows them. Routes: `GET`/`POST /api/projects/{uid}/skills`,
+  `GET`/`PUT`/`DELETE /api/projects/{uid}/skills/{name}`, and
+  `POST /api/projects/{uid}/skills/upload` with a SKILL.md as the body (front matter with `name`
+  and `description`, then the body). Writing a skill needs the admin scope, reading one the read
+  scope. Skills go with their project when it is deleted, are exported and imported under a
+  top-level `skills:` section (each with its `project` by name), and a template may plan one.
+  The project page has a Skills tab: list with the agents that loaded each skill in the last 7
+  days, new skill with a markdown preview, upload a SKILL.md, edit, delete. Ask never gets skills.
+- Handoffs: an agent names, per verdict, the agent that takes over when it concludes. `handoffs`
+  on an agent is a list of up to ten `{verdict, agent, cooldown}` (the verdict one lowercase word,
+  the agent another agent of the same project, the cooldown a duration, 30m when left out). When
+  a run ends with a finding whose verdict matches one (case does not matter), that agent is
+  started on the concluded entity, handed the finding with a line naming who handed it off, the
+  verdict and the entity. The run is `woken_by: handoff` with the finishing run as its parent, and
+  the project timeline shows it under that run. It runs whether or not the agent is on for its
+  own trigger. A chain stops after three handoffs in a row: the next is a capped run, "handoff
+  chain stopped at depth 3". Within the cooldown for the same agents and entity no run starts and
+  the finishing run's results say "handoff to X skipped: cooldown". An agent already running for
+  the entity, the daily cap and the budget each leave a capped run with the reason. The API and
+  the catalog take and return `handoffs` (an update without the field keeps them, an empty list
+  clears them); a template may plan them. Deleting an agent removes the handoffs to it, and the
+  delete returns `handoffs_removed_from`. The agent form has a "When it concludes" section
+  (verdict, an agent of the project, cooldown), and the project's Setup tab lists each agent's
+  handoffs. A trigger over the findings source still wakes an agent as before; handoffs are the
+  simpler way to chain two agents. The AI-guided builder proposes them: for "one agent looks
+  first, another digs in on its verdict" it proposes the second agent left off for its trigger,
+  then the first with a handoff to it. An agent that only runs on a handoff says so on its page.
+- Project keys: a key that belongs to one project. It reads that project and records findings in
+  it, and nothing else. `POST /api/projects/{uid}/keys {name}` makes one, as does
+  `POST /api/keys {name, project}`; its scopes are `read` and `findings` (a read-only one takes
+  `scopes: ["read"]`). With a project key, `/read` and stats cover the project's sources, and the
+  shared findings and memory sources only with the project's own rows; `/catalog`,
+  `GET /api/projects` and `GET /api/projects/{uid}` show that project only (without its template
+  parameters); its skills, timeline and findings are readable, another project's are not. Every
+  other route answers 403 "this key only reads project <name> and records findings in it",
+  including a route added later, since the routes a project key may use are an explicit list.
+  `GET /api/whoami` names the key's project. Revoking a key removes its subscriptions; deleting
+  the project revokes its keys. Keys are enforced when the instance has `TARES_AUTH_TOKEN`, like
+  every other key.
+- Joining a project: `POST /api/projects/{uid}/subscribe {url}` (a project key or admin) POSTs
+  every firing of every trigger of the project to the URL, the triggers added later included;
+  `DELETE /api/projects/{uid}/subscribe/{sid}` removes it (a project key only its own). A
+  project key cannot point the URL at an internal address (loopback, private ranges, link-local
+  such as cloud metadata); `TARES_WEBHOOK_ALLOW_PRIVATE=1` allows it for a cell whose agents
+  share its network.
+  `POST /api/projects/{uid}/findings {entity, finding, verdict?, label?, headline?, next_step?}` records an external
+  agent's finding under the key's name: it lands on the entity's timeline like a Tares agent's,
+  and shows in the project timeline as a thread of kind `run` with `external: true`.
+  `GET /api/projects/{uid}/findings?entity=&agent=&limit=` lists the project's findings, Tares
+  agents' and external ones, and `POST /api/projects/{uid}/stats {by, window, where?}` counts
+  per label value over the project's sources. `GET /api/projects/{uid}/external-agents` (admin)
+  lists who joined: the webhook (masked), the key, the last delivery.
+- MCP tools for an agent working inside one project: `list_projects`, `join_project(url)`,
+  `stats`, `list_skills`, `get_skill`, `list_findings`, `record_finding` and `project_timeline`.
+  Each takes an optional `project`; with a project key it is implied, otherwise it names the
+  project (an id or a name) and may be left out while there is only one.
+- The project page has a Keys section on Setup (create, the secret shown once, revoke) and an
+  External agents list on the Agents tab (where it delivers, the key, the last delivery, revoke).
+  The Activity tab marks an external agent's finding as recorded from outside Tares.
+- A project has a goal: one line of at most 200 characters saying what it is for.
+  `POST /api/projects` takes `goal`, and `PUT /api/projects/{uid}` with only `goal` sets or clears
+  it on any project, the default one included. The project endpoints and the summary return it,
+  and the catalog export and import carry it. A project made from a template without a goal gets
+  the template's own (every built-in template has one); the AI-guided builder's project card can
+  propose one.
+- `GET /api/projects/{uid}/outline` says how a project works in plain sentences built from its
+  configuration, with no model call: "When checkout-errors gets more than 5 events in 5 minutes
+  for one service, checkout-triage looks first. If it concludes investigate, checkout-rca digs
+  in." It lists what the project watches (with each source's state), when it wakes (with the
+  cooldown), its agents (first look or handed off to) and its skills.
+- An agent's `conclude` takes `headline` (one line, what was found) and `next_step` (what a person
+  should do, empty when nothing needs doing), and agents are told to give both. Runs and finding
+  events carry them. For a run without them they are taken from the note: its heading, bold lead
+  or first sentence, and the text after "Next step:", "Next:" or "Recommendation:".
+- `GET /api/projects/{uid}/results` lists what the agents found, newest first: one result per
+  chain of runs (a triage that handed off is not a result, the run it handed to is), marked
+  `action` or `no_action`, with headline, summary, next step, the agents in the chain, its cost
+  and time, and today's totals (since midnight UTC). External agents' findings are results too.
+  Page with `before`. `GET /api/projects/{uid}/results/{run_id}` adds the full note and the steps
+  that led to it, in plain words. `POST /api/projects/{uid}/results/{run_id}/handled` marks a
+  result handled or clears the mark (admin).
+- `GET /api/projects/{uid}/health` says whether a project is working, needs attention, is paused
+  or is still setting up, in one message, with what needs attention first: sources that fail
+  (several with the same error are one issue), stay silent far longer than usual or never
+  received anything, no agent that can run, no model provider, an agent at its daily cap or
+  budget.
+- A project key may read its project's results, outline and health.
+- Guided project setup. `POST /api/setup/plan {goal, who?, existing_sources?}` answers a whole
+  plan in plain words, written by the cell's model provider through a forced `propose_plan` tool
+  (it may read the connectors, sources, source fields and templates first): what the project
+  watches (new sources, or existing ones reused), when it wakes, who does the work (Tares agents,
+  or the person's own agent joining with a project key), outside tools (MCP servers, off until
+  turned on) and know-how (skills). The plan is checked with the catalog's own validators; a
+  wrong plan gets one retry with the errors, then a 422 with a plain message. No model provider:
+  409. `POST /api/setup/adjust {plan, instruction}` revises it. The numbers a person tunes are
+  knobs (threshold, window, cooldown): the condition, cooldown, sentences and summary are derived
+  from them without the model, so an edited plan applies exactly.
+- `POST /api/setup/apply {plan}` creates the project with its goal and name, then its sources,
+  MCP servers (enabled tools only), skills, triggers and agents (a handoff-only agent left off for
+  its trigger), all owned by the project; a failing step undoes everything and says which step.
+  For the person's own agent it makes a project key (read and findings) instead of agents. The
+  answer says what only the person can do: each source's ingest URL and example event, tools that
+  need a token, and the agent's key (shown once), MCP URL and Claude Code command.
+  `TARES_PUBLIC_URL` sets the address these URLs use (default: the request's), `TARES_MCP_URL`
+  the MCP address (default: that address plus `/mcp`).
+- `GET /api/projects/{uid}/setup` answers the setup step, the plan and live checks: each source
+  waiting, receiving (with the fields seen) or in error, each tool untested, ok or in error (from
+  its last test), and whether the own agent has used its key and subscribed. `PUT` with `{step}`
+  moves the step (connect, try, done). A project lists `setup: {step, practice_run}` when it was
+  set up this way. `POST .../setup/test-event {source}` stores the plan's example event in a push
+  source, labelled `practice=true`, without waking any trigger. All setup routes need admin; a
+  project key cannot reach them.
+- Practice runs. `POST /api/projects/{uid}/setup/practice` runs the first agent that looks once
+  on the example event's entity (woken by `practice`), or, for the person's own agent, sends a
+  practice firing (`practice: true` in the body) to the project's subscriptions; the next finding
+  its key records within 10 minutes is practice. Runs (and firings) carry `practice`; a practice
+  run's handoffs are practice too. Results show them with `practice: true`; today's totals and the
+  daily cap check in health leave them out.
+- `POST /api/setup/check {plan}` (admin, no model call) answers `{plan, problems}`: the plan
+  normalized exactly as apply does it, with the wake-up, cooldown and agent sentences and the
+  summary derived from the plan as it now is, and what stops it from applying per item
+  (`{where: "watches.w1" | "wakes.k1" | "agents.a1" | "tools.t1" | "skills.s1" | "own_agent" |
+  a section | "plan", message}`) in plain words. Apply accepts any plan check accepts. A plan
+  tool may name an MCP server already on the cell (`existing: true`), and a plan agent a
+  `provider`. The apply answer carries the plan as the project keeps it: a secret typed into a
+  new source's settings is left out of the stored plan.
+- The guided setup's Plan screen is editable in place, one part at a time. Watches: change a
+  source for one already on Tares (with its kind and when it last received an event) or a new one
+  (its connector and settings, the source form), remove one or add another; a swapped source
+  follows into the wake-ups that counted it, and a wake-up left with no source is flagged. Wakes
+  when: what to count (events, or the average, highest, lowest or total of a number), the
+  threshold and window, "only when" conditions built from the sources' real fields, counted
+  separately for each of a label, or every so many minutes instead; add or remove a wake-up.
+  Agents: switch between Tares agents and your own agent; each Tares agent's name, when it runs
+  (a wake-up, or only on a handoff), instructions, model, tools and handoffs; add one from the
+  agent presets, or remove one. Your own agent: its name and whether Tares calls its webhook or
+  it checks in. Know-how: copy a skill from another project, or remove one. Tools: attach an MCP
+  server already on Tares. The plan is checked after every edit; problems show next to the part
+  they concern, and "Looks right, set it up" waits until there are none.
+
+### Changed
+- The guided setup's summary is derived from the plan as edited, never the model's own text, and
+  names the person's own agent once: "your agent is told" for a name like "your own agent", "your
+  agent claude-code is told" otherwise (it read "your agent your own agent is told"). A new
+  polled source whose connector takes a secret and has none yet needs a credential; one with its
+  secret filled in needs nothing.
+- The store writes its startup migrations into the database file before serving (a checkpoint).
+  Upgrading a cell from 1.37.0 and then stopping it hard (a pod killed) could otherwise replay the
+  new `agent_runs` columns into a corrupted index: every request then failed with "database has
+  been invalidated" until a restart.
+- Every write needs the admin scope, except `/read`, `/subscribe`, `/unsubscribe`, a project's
+  `stats`, the label preview (a read key), recording a finding (the findings scope) and ingest.
+  A read key could create and delete projects, add MCP servers and GitHub credentials, and pause
+  or repair projects; those now answer 403. A route added later needs admin unless listed.
+- A firing's webhook body carries `project` (the trigger's project id) and `run_ids` (the Tares
+  agent runs the same firing started).
+- `POST /read` with `project` also reads the shared findings and memory sources, only the rows
+  recorded in that project. A finding records its project in its payload.
+- Views are gone. A trigger names the sources it watches, the filters that narrow them and the
+  label its entity is keyed by (`sources`, `filters`, `key_field`; the key defaults to the first
+  source's primary label). `/api/views`, `POST /query` and `POST /derive` answer 404, and a
+  trigger that names a `view` is refused with 400 "views were removed: give the trigger `sources`
+  (and `filters`)". The MCP `query`, `derive` and `update_view` tools are gone: read with `read`,
+  and `create_trigger` / `update_trigger` take `sources`, `filters`, `key_field` and `project`. A
+  Tares agent's `stats` tool counts over sources instead of a view and its `query` tool is gone.
+  In Ask and the project builder, a trigger card names its sources; there is no view card.
+- Deleting a project deletes its triggers, agents and MCP servers, a custom project's too. Its
+  sources stay, since other projects may read them, unless `delete_sources=a,b` names them: each
+  is deleted when no other project uses it, and kept and listed under `kept` when one does. A
+  source left in no project joins the default project. `delete_sources=all` names every source of
+  the project. Callers that relied on a template project taking its sources with it (Rius, for
+  one) now pass `delete_sources=all`.
+- The catalog export names each trigger's `project`, `sources`, `filters` and `key_field`, each
+  agent's and MCP server's `project` and each source's `projects`, and never a `views:` section.
+  The default project is listed under `projects:` only when it has a goal, and only its goal is
+  imported; objects that name it go to the importing cell's own.
+- The project page's Firings tab is now Activity: one row per thread with the agents that ran and
+  how each ended, opening in place to the firing, its deliveries, each run's finding and what the
+  run led to, with filters and "Load older". `?tab=firings` links still open it.
+- The `triage` preset says a finding with verdict investigate hands the entity off. The
+  `rca-from-triage` preset is labelled "Root cause after a handoff" and asks for the key and label
+  of the entity it was handed.
+- `tares status` shows projects instead of views. The activity log of reads reports `scope`
+  (what was read) instead of `view`.
+
+### Upgrade
+- The first start after upgrading folds every view into the triggers that used it: each trigger
+  takes its view's sources, filters and key field, then the views table is dropped. A trigger
+  whose view was already gone is paused with no sources, so it shows up to be fixed or deleted. A
+  schedule trigger keeps its last tick, so it does not fire early.
+- The same start places everything in a project: a trigger with none goes to the default project,
+  an agent with none follows its trigger, an MCP server with none goes to the project whose agents
+  use it (else the default one), a source in no project joins the default one, and a trigger's
+  sources become members of its project. Objects a template or custom project owned stay there;
+  a custom project's list drops its views. The pass runs at every start and changes nothing the
+  second time.
+- Runs and firings from before lineage get their project from their agent's or trigger's owner,
+  when it still exists. What woke them stays unknown.
+- The first start gives each project made from a template its template's goal. Custom projects
+  and the default project start without one. This runs once, so a goal cleared later stays
+  cleared.
+- New columns, added at start: `usecases.setup`, `agent_runs.practice`, `dispatch_log.practice`.
+  Every earlier run and firing reads as not practice.
+- A catalog exported while views existed still imports: each trigger that names a view gets that
+  view's sources, filters and key field, a custom project's view entries are dropped, and objects
+  without a project go to the default project.
+
 ## [1.37.0] - 2026-09-29
 
 ### Added

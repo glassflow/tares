@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { api } from "../api";
-import type { Trigger } from "../types";
+import type { TriggerBody } from "../api";
 
 // Shared proposal-card machinery for the in-app agent (Ask chat and the AI-guided project
 // builder). The agent's propose_* tools stream these as structured cards; every mutation happens
@@ -10,6 +10,9 @@ import type { Trigger } from "../types";
 // `source` and `agent` are build-mode cards (TR-243, TR-246): they arrive only on the builder
 // page, which renders them as prefilled forms rather than through applyProposal, because both
 // need values only the user has (a token, a Slack channel).
+//
+// A trigger names its own sources and filters (and optionally the entity label); applying one
+// passes the project it is made in.
 
 export type LabelSpec = { name: string; field?: string; const?: string; primary?: boolean;
                           type?: "string" | "number";
@@ -17,9 +20,8 @@ export type LabelSpec = { name: string; field?: string; const?: string; primary?
 export type TriggerCondition = { aggregate: string; predicate: string; window: string; field?: string };
 export type Proposal =
   | { id: string; kind: "labels"; source: string; labels: LabelSpec[]; reasoning: string }
-  | { id: string; kind: "view"; name: string; key_field: string; sources: string[];
-      filters?: Array<Record<string, unknown>>; reasoning: string }
-  | { id: string; kind: "trigger"; name: string; view: string; condition: TriggerCondition;
+  | { id: string; kind: "trigger"; name: string; sources: string[];
+      filters?: Array<Record<string, unknown>>; key_field?: string | null; condition: TriggerCondition;
       emit?: { kind?: string; context_window?: string }; cooldown?: string; reasoning: string }
   | { id: string; kind: "source"; name: string; connector: string; poll?: string;
       config?: Record<string, unknown>; needs: string[]; reasoning: string }
@@ -28,9 +30,11 @@ export type Proposal =
   | { id: string; kind: "agent"; name: string; trigger: string; prompt: string; model?: string;
       max_rounds?: number; budget_usd?: number;
       delivery: { kind: "slack" | "webhook" | "none"; url?: string };   // url only when the user typed it
+      handoffs?: { verdict: string; agent: string; cooldown?: string }[];
+      runs_on_trigger?: boolean;                                        // false: only when handed off
       reasoning: string };
 
-// The operators a view filter may use — the set `tares/config.py` validates against on Apply.
+// The operators a trigger filter may use: the set the daemon validates against on Apply.
 const FILTER_OPS = ["eq", "neq", "contains", "gt", "gte", "lt", "lte"];
 
 /** One filter as it will be sent, plus whether it is well-formed.
@@ -52,8 +56,9 @@ export type Decision = "applied" | "skipped" | "error";
 export type DecisionMap = Record<string, { status: Decision; detail?: string }>;
 
 /** Apply one proposal via the normal management APIs. Throws with a readable message. Source
- *  and agent cards are not applied here: they become forms on the builder page. */
-export async function applyProposal(p: Proposal): Promise<void> {
+ *  and agent cards are not applied here: they become forms on the builder page. `project` is the
+ *  project a trigger is made in; omitted, the daemon uses the Default project. */
+export async function applyProposal(p: Proposal, project?: string): Promise<void> {
   if (p.kind === "source" || p.kind === "agent" || p.kind === "project") {
     throw new Error(`a ${p.kind} proposal is completed as a form, not applied as is`);
   }
@@ -63,21 +68,17 @@ export async function applyProposal(p: Proposal): Promise<void> {
       name: src.name, type: src.type, connector: src.connector, poll: src.poll,
       config: { ...src.config, labels: p.labels },
     });
-  } else if (p.kind === "view") {
-    // Upsert: the agent proposes the same way for a new view and an edit to an existing one —
-    // apply as an update when the name already exists (create-only 409'd with "already exists").
-    const body = { name: p.name, key_field: p.key_field,
-                   sources: p.sources, filters: (p.filters ?? []) as never };
-    const exists = (await api.views()).some((v) => v.name === p.name);
-    if (exists) await api.updateView(p.name, body);
-    else await api.createView(body);
   } else {
-    const t = {
-      name: p.name, view: p.view,
+    // Upsert: the agent proposes the same way for a new trigger and an edit to an existing one;
+    // apply as an update when the name already exists (create-only 409s with "already exists").
+    const t: TriggerBody = {
+      name: p.name, sources: p.sources ?? [], filters: (p.filters ?? []) as never,
+      key_field: p.key_field || null,
       condition: p.condition,
       emit: { kind: p.emit?.kind ?? p.name, context_window: p.emit?.context_window ?? "15m" },
       cooldown: p.cooldown ?? "5m",
-    } as Trigger;
+      ...(project ? { project } : {}),
+    };
     const exists = (await api.triggers()).some((x) => x.name === p.name);
     if (exists) await api.updateTrigger(p.name, t);
     else await api.createTrigger(t);
@@ -125,10 +126,10 @@ function NormPreview({ source, label }: { source: string; label: LabelSpec }) {
   );
 }
 
-/** What a proposal is called on its card: "View timeline", "Labels for logs", ... */
+/** What a proposal is called on its card: "Trigger error_spike", "Labels for logs", ... */
 export function proposalTitle(p: Proposal) {
   if (p.kind === "labels") return <>Labels for <span className="mono">{p.source}</span></>;
-  const noun = { view: "View", trigger: "Trigger", source: "Source", agent: "Agent", project: "Project" }[p.kind];
+  const noun = { trigger: "Trigger", source: "Source", agent: "Agent", project: "Project" }[p.kind];
   return <>{noun} <span className="mono">{p.name}</span></>;
 }
 
@@ -178,9 +179,8 @@ export function ProposalCard({ proposal, decision, onApply, onSkip }: {
   );
 }
 
-/** The kind-specific summary of a proposal: the label table, the view's key and filters, the
- *  trigger's condition, a source's connector and prefilled fields, an agent's trigger and
- *  delivery. */
+/** The kind-specific summary of a proposal: the label table, the trigger's sources, filters and
+ *  condition, a source's connector and prefilled fields, an agent's trigger and delivery. */
 export function ProposalBody({ proposal }: { proposal: Proposal }) {
   return (
     <>
@@ -210,10 +210,11 @@ export function ProposalBody({ proposal }: { proposal: Proposal }) {
         </table>
       )}
 
-      {proposal.kind === "view" && (
+      {proposal.kind === "trigger" && (
         <p style={{ margin: "0 0 8px" }}>
-          key <span className="chip mono">{proposal.key_field}</span> over{" "}
-          {proposal.sources.map((s) => <span className="chip mono" key={s}>{s}</span>)}
+          watches{" "}
+          {(proposal.sources ?? []).map((s) => <span className="chip mono" key={s}>{s}</span>)}
+          {proposal.key_field && <> · per <span className="chip mono">{proposal.key_field}</span></>}
           {!!proposal.filters?.length && (
             <> · keeping only{" "}
               {proposal.filters.map((f, i) => {
@@ -235,8 +236,7 @@ export function ProposalBody({ proposal }: { proposal: Proposal }) {
       {proposal.kind === "trigger" && (
         <p style={{ margin: "0 0 8px" }} className="mono">
           {proposal.condition.aggregate}({proposal.condition.field ?? "*"}){" "}
-          {proposal.condition.predicate} over {proposal.condition.window} on{" "}
-          <span className="chip">{proposal.view}</span>
+          {proposal.condition.predicate} over {proposal.condition.window}
           <span className="help" style={{ display: "block", fontFamily: "inherit" }}>
             wakes subscribers with {proposal.emit?.context_window ?? "15m"} of timeline ·
             cooldown {proposal.cooldown ?? "5m"} per entity
@@ -283,12 +283,19 @@ export function ProposalBody({ proposal }: { proposal: Proposal }) {
 
       {proposal.kind === "agent" && (
         <p style={{ margin: "0 0 8px" }}>
-          runs on <span className="chip mono">{proposal.trigger}</span>
+          {proposal.runs_on_trigger === false
+            ? <>runs only when another agent hands off to it</>
+            : <>runs on <span className="chip mono">{proposal.trigger}</span></>}
           {proposal.model && <> · model <span className="chip mono">{proposal.model}</span></>}
           {" · "}
           {proposal.delivery.kind === "slack" ? "posts the finding to a Slack channel you pick"
             : proposal.delivery.kind === "webhook" ? (proposal.delivery.url ? <>posts the finding to <span className="mono">{proposal.delivery.url}</span></> : "posts the finding to a URL you give")
             : "writes the finding onto the timeline only"}
+          {(proposal.handoffs ?? []).map((h) => (
+            <span key={h.verdict + h.agent} style={{ display: "block" }}>
+              on verdict <span className="chip mono">{h.verdict}</span> hands off to <span className="chip mono">{h.agent}</span>
+            </span>
+          ))}
         </p>
       )}
 

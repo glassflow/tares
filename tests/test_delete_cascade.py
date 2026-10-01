@@ -1,9 +1,9 @@
 """Deleting takes dependents along on request, instead of refusing bottom-up.
 
-GET /api/catalog/dependents lists what stops working if an object goes; DELETE on a source or
-view with cascade=true removes those too, in order; DELETE on a custom project with
-`delete=kind:name,...` deletes the chosen objects and releases the rest, refusing a choice that
-leaves something pointing at nothing.
+GET /api/catalog/dependents lists what stops working if an object goes; DELETE on a source with
+cascade=true removes the triggers that read it and their agents too, in order. DELETE on a project
+takes its triggers, agents and MCP servers; `delete_sources=a,b` also deletes those of its sources
+no other project uses, and keeps (and reports) the ones another project still reads.
 
 Run: .venv/bin/python tests/test_delete_cascade.py
 """
@@ -25,7 +25,7 @@ P = F = 0
 
 
 class CascadeTemplate(Template):
-    """Tests only: source -> view -> trigger -> agent under one prefix."""
+    """Tests only: source -> trigger -> agent under one prefix."""
     key = "test_cascade"
     title = "Test cascade"
     PARAMS = {"prefix": {"type": "string", "default": "t"}}
@@ -34,8 +34,8 @@ class CascadeTemplate(Template):
         p = params["prefix"]
         return [
             PlannedObject("source", "src", {**src(f"{p}_src")}),
-            PlannedObject("view", "view", {"name": f"{p}_view", "key_field": "service", "sources": [f"{p}_src"]}),
-            PlannedObject("trigger", "trig", {"name": f"{p}_trig", "view": f"{p}_view",
+            PlannedObject("trigger", "trig", {"name": f"{p}_trig", "sources": [f"{p}_src"],
+                                              "key_field": "service",
                                               "condition": {"aggregate": "count", "predicate": "> 0", "window": "1m"},
                                               "emit": {"kind": "x"}, "cooldown": "1m"}),
             PlannedObject("agent", "agent", {"name": f"{p}_agent", "trigger": f"{p}_trig", "prompt": "look", "enabled": False}),
@@ -58,26 +58,27 @@ def src(name):
                        "labels": [{"name": "service", "field": "service", "primary": True}]}}
 
 
-async def build(cx, prefix):
-    """source -> view -> two triggers -> one agent, all named with the prefix."""
-    assert (await cx.post("/api/sources", json=src(f"{prefix}_src"))).status_code == 201
-    assert (await cx.post("/api/views", json={"name": f"{prefix}_view", "key_field": "service",
-                                              "sources": [f"{prefix}_src"]})).status_code == 201
+async def build(cx, prefix, project=""):
+    """source -> two triggers -> one agent, all named with the prefix, in `project`."""
+    body = {**src(f"{prefix}_src"), **({"project": project} if project else {})}
+    assert (await cx.post("/api/sources", json=body)).status_code == 201
     for t in ("a", "b"):
-        assert (await cx.post("/api/triggers", json={
-            "name": f"{prefix}_trig_{t}", "view": f"{prefix}_view",
+        r = await cx.post("/api/triggers", json={
+            "name": f"{prefix}_trig_{t}", "sources": [f"{prefix}_src"], "project": project,
             "condition": {"aggregate": "count", "predicate": "> 0", "window": "1m"},
-            "emit": {"kind": "x"}, "cooldown": "1m"})).status_code == 201
-    assert (await cx.post("/api/agents/builtin", json={
-        "name": f"{prefix}_agent", "trigger": f"{prefix}_trig_a", "prompt": "look"})).status_code == 201
+            "emit": {"kind": "x"}, "cooldown": "1m"})
+        assert r.status_code == 201, r.text
+    r = await cx.post("/api/agents/builtin", json={
+        "name": f"{prefix}_agent", "trigger": f"{prefix}_trig_a", "prompt": "look", "project": project})
+    assert r.status_code == 201, r.text
 
 
 async def names(cx):
     return {
         "source": {s["name"] for s in (await cx.get("/api/sources")).json()},
-        "view": {v["name"] for v in (await cx.get("/api/views")).json()},
         "trigger": {t["name"] for t in (await cx.get("/api/triggers")).json()},
         "agent": {a["name"] for a in (await cx.get("/api/agents/builtin")).json()["agents"]},
+        "mcp_server": {m["name"] for m in (await cx.get("/api/mcp-servers")).json()["servers"]},
     }
 
 
@@ -91,96 +92,138 @@ async def main():
         await build(cx, "w")
         r = await cx.get("/api/catalog/dependents?kind=source&name=w_src")
         deps = [(d["kind"], d["name"]) for d in r.json()["dependents"]]
-        ck("a source's dependents: agent, then triggers, then view (delete order)",
-           deps == [("agent", "w_agent"), ("trigger", "w_trig_a"), ("trigger", "w_trig_b"), ("view", "w_view")], str(deps))
-        r = await cx.get("/api/catalog/dependents?kind=view&name=w_view")
-        ck("a view's dependents: its triggers and their agents, not itself",
-           {(d["kind"], d["name"]) for d in r.json()["dependents"]}
-           == {("agent", "w_agent"), ("trigger", "w_trig_a"), ("trigger", "w_trig_b")})
+        ck("a source's dependents: agent, then the triggers that read it (delete order)",
+           deps == [("agent", "w_agent"), ("trigger", "w_trig_a"), ("trigger", "w_trig_b")], str(deps))
+        r = await cx.get("/api/catalog/dependents?kind=trigger&name=w_trig_a")
+        ck("a trigger's dependents: its agents, not itself",
+           [(d["kind"], d["name"]) for d in r.json()["dependents"]] == [("agent", "w_agent")], r.text)
         r = await cx.get("/api/catalog/dependents?kind=trigger&name=w_trig_b")
         ck("a trigger with no agent has no dependents", r.json()["dependents"] == [])
+        r = await cx.get("/api/catalog/dependents?kind=view&name=x")
+        ck("kind view -> 400 (views were removed)", r.status_code == 400)
         r = await cx.get("/api/catalog/dependents?kind=nope&name=x")
         ck("unknown kind -> 400", r.status_code == 400)
 
         print("== source delete: refuse, then cascade ==")
         r = await cx.delete("/api/sources/w_src")
-        ck("without cascade -> 409 naming the view", r.status_code == 409 and "w_view" in r.text, r.text)
+        ck("without cascade -> 409 naming the triggers", r.status_code == 409 and "w_trig_a" in r.text
+           and "w_trig_b" in r.text, r.text)
         r = await cx.delete("/api/sources/w_src?cascade=true")
         ck("with cascade -> 200 listing what went",
-           r.status_code == 200 and set(r.json()["deleted"]) == {"agent:w_agent", "trigger:w_trig_a", "trigger:w_trig_b", "view:w_view"}, r.text)
+           r.status_code == 200 and set(r.json()["deleted"]) == {"agent:w_agent", "trigger:w_trig_a", "trigger:w_trig_b"}, r.text)
         n = await names(cx)
-        ck("source, view, triggers and agent are all gone",
-           not ({"w_src"} & n["source"] or {"w_view"} & n["view"] or {"w_trig_a", "w_trig_b"} & n["trigger"] or {"w_agent"} & n["agent"]), str(n))
+        ck("source, triggers and agent are all gone",
+           not ({"w_src"} & n["source"] or {"w_trig_a", "w_trig_b"} & n["trigger"] or {"w_agent"} & n["agent"]), str(n))
         subs = (await cx.get("/api/subscriptions")).json()
         ck("no subscription left behind", not any("w_" in (s.get("trigger") or "") for s in subs), str(subs))
 
-        print("== view delete: cascade ==")
-        await build(cx, "v")
-        r = await cx.delete("/api/views/v_view")
-        ck("without cascade -> 409", r.status_code == 409, r.text)
-        r = await cx.delete("/api/views/v_view?cascade=true")
-        ck("with cascade -> 200", r.status_code == 200 and len(r.json()["deleted"]) == 3, r.text)
-        n = await names(cx)
-        ck("source stays, view and its triggers and agent go",
-           "v_src" in n["source"] and "v_view" not in n["view"] and not {"v_trig_a", "v_trig_b"} & n["trigger"] and "v_agent" not in n["agent"], str(n))
+        print("== a shared source: cascade reaches every project's triggers ==")
+        r = await cx.post("/api/projects", json={"template": "custom", "name": "V1", "objects": []})
+        v1 = r.json()["id"]
+        r = await cx.post("/api/projects", json={"template": "custom", "name": "V2", "objects": []})
+        v2 = r.json()["id"]
+        await build(cx, "v", project=v1)
+        r = await cx.post("/api/triggers", json={
+            "name": "v_other", "sources": ["v_src"], "project": v2,
+            "condition": {"aggregate": "count", "predicate": "> 0", "window": "1m"}})
+        ck("a second project's trigger over the same source", r.status_code == 201, r.text)
+        src_row = next(s for s in (await cx.get("/api/sources")).json() if s["name"] == "v_src")
+        ck("the source is in both projects", sorted(src_row["projects"]) == sorted([v1, v2]),
+           str(src_row["projects"]))
+        r = await cx.delete("/api/sources/v_src?cascade=true")
+        ck("cascade takes the triggers of both projects",
+           r.status_code == 200 and set(r.json()["deleted"]) == {"agent:v_agent", "trigger:v_trig_a",
+                                                                 "trigger:v_trig_b", "trigger:v_other"}, r.text)
+        for uid in (v1, v2):
+            await cx.delete(f"/api/projects/{uid}")
 
-        print("== custom project delete: pick what goes ==")
-        await build(cx, "p")
-        objects = [{"kind": "source", "name": "p_src"}, {"kind": "view", "name": "p_view"},
-                   {"kind": "trigger", "name": "p_trig_a"}, {"kind": "trigger", "name": "p_trig_b"},
-                   {"kind": "agent", "name": "p_agent"}]
-        r = await cx.post("/api/projects", json={"template": "custom", "name": "P", "objects": objects})
-        ck("custom project owns the five", r.status_code == 201 and len(r.json()["objects"]) == 5, r.text)
+        print("== project delete: its triggers, agents and MCP servers go, sources on request ==")
+        r = await cx.post("/api/projects", json={"template": "custom", "name": "P", "objects": []})
         uid = r.json()["id"]
-        r = await cx.delete(f"/api/projects/{uid}?delete=view:p_view")
-        ck("a pick whose dependents stay is refused by name",
-           r.status_code == 400 and "p_trig_a" in r.text, r.text)
+        await build(cx, "p", project=uid)
+        r = await cx.post("/api/mcp-servers", json={"name": "p_mcp", "url": "https://example.invalid/m",
+                                                    "project": uid})
+        ck("an MCP server in the project", r.status_code == 201 and r.json()["project"] == uid, r.text)
+        r = await cx.get(f"/api/projects/{uid}")
+        ck("the project lists its five objects",
+           sorted((o["kind"], o["name"]) for o in r.json()["objects"])
+           == [("agent", "p_agent"), ("mcp_server", "p_mcp"), ("source", "p_src"),
+               ("trigger", "p_trig_a"), ("trigger", "p_trig_b")], r.text[:400])
+        r = await cx.delete(f"/api/projects/{uid}?delete_sources=nope")
+        ck("naming a source that is not the project's is refused",
+           r.status_code == 400 and "nope" in r.text, r.text)
         ck("the project is untouched after the refusal", (await cx.get(f"/api/projects/{uid}")).status_code == 200)
-        r = await cx.delete(f"/api/projects/{uid}?delete=agent:p_agent,trigger:p_trig_a")
-        ck("a consistent pick deletes those and releases the rest",
-           r.status_code == 200 and set(r.json()["deleted"]) == {"agent:p_agent", "trigger:p_trig_a"}
-           and set(r.json()["released"]) == {"source:p_src", "view:p_view", "trigger:p_trig_b"}, r.text)
+        r = await cx.delete(f"/api/projects/{uid}")
+        ck("without delete_sources: triggers, agent and MCP server go, the source is released",
+           r.status_code == 200
+           and set(r.json()["deleted"]) == {"agent:p_agent", "trigger:p_trig_a", "trigger:p_trig_b", "mcp_server:p_mcp"}
+           and r.json()["released"] == ["source:p_src"] and r.json()["kept"] == [], r.text)
         n = await names(cx)
-        ck("deleted are gone, released remain and are unowned",
-           "p_agent" not in n["agent"] and "p_trig_a" not in n["trigger"] and "p_trig_b" in n["trigger"]
-           and "p_src" in n["source"] and not next(s for s in (await cx.get("/api/sources")).json() if s["name"] == "p_src").get("owned_by"))
+        default = next(p["id"] for p in (await cx.get("/api/projects")).json()["projects"] if p["default"])
+        ck("the released source remains, in the default project, with no creator",
+           "p_src" in n["source"] and "p_agent" not in n["agent"] and "p_mcp" not in n["mcp_server"]
+           and next(s for s in (await cx.get("/api/sources")).json() if s["name"] == "p_src")["projects"] == [default]
+           and not next(s for s in (await cx.get("/api/sources")).json() if s["name"] == "p_src").get("owned_by"),
+           str(n))
+        subs = (await cx.get("/api/subscriptions")).json()
+        ck("no subscription left behind", not any("p_" in (s.get("trigger") or "") for s in subs), str(subs))
 
-        await build(cx, "q")
-        r = await cx.post("/api/projects", json={"template": "custom", "name": "Q", "objects": [
-            {"kind": "source", "name": "q_src"}, {"kind": "view", "name": "q_view"},
-            {"kind": "trigger", "name": "q_trig_a"}, {"kind": "trigger", "name": "q_trig_b"}, {"kind": "agent", "name": "q_agent"}]})
+        r = await cx.post("/api/projects", json={"template": "custom", "name": "Q", "objects": []})
         uid = r.json()["id"]
-        r = await cx.delete(f"/api/projects/{uid}?delete=source:q_src,view:q_view,trigger:q_trig_a,trigger:q_trig_b,agent:q_agent&purge_events=true")
-        ck("select all deletes everything", r.status_code == 200 and len(r.json()["deleted"]) == 5 and r.json()["released"] == [], r.text)
+        await build(cx, "q", project=uid)
+        await cx.post("/ingest/q_src", json={"service": "x", "msg": "hi"})
+        r = await cx.delete(f"/api/projects/{uid}?delete_sources=q_src&purge_events=true")
+        ck("delete_sources deletes the source no other project uses",
+           r.status_code == 200 and "source:q_src" in r.json()["deleted"] and r.json()["released"] == []
+           and r.json()["purged_events"] >= 1, r.text)
         n = await names(cx)
         ck("nothing named q_ remains", not any(x.startswith("q_") for k in n.values() for x in k), str(n))
-        r = await cx.delete(f"/api/projects/{uid}?delete=source:nope")
+        r = await cx.delete(f"/api/projects/{uid}")
         ck("deleted project -> 404", r.status_code == 404)
 
-        print("== custom project delete: none keeps everything ==")
-        await build(cx, "k")
-        r = await cx.post("/api/projects", json={"template": "custom", "name": "K", "objects": [{"kind": "source", "name": "k_src"}]})
-        uid = r.json()["id"]
-        r = await cx.delete(f"/api/projects/{uid}?delete=none")
-        ck("delete=none releases, deletes nothing", r.status_code == 200 and r.json()["deleted"] == [] and r.json()["released"] == ["source:k_src"], r.text)
+        print("== a source another project uses is kept and reported ==")
+        r = await cx.post("/api/projects", json={"template": "custom", "name": "K", "objects": []})
+        k = r.json()["id"]
+        await build(cx, "k", project=k)
+        r = await cx.post("/api/projects", json={"template": "custom", "name": "K2",
+                                                 "objects": [{"kind": "source", "name": "k_src"}]})
+        k2 = r.json()["id"]
+        r = await cx.delete(f"/api/projects/{k}?delete_sources=k_src")
+        ck("the shared source is kept and listed under kept",
+           r.status_code == 200 and r.json()["kept"] == ["k_src"] and "source:k_src" not in r.json()["deleted"], r.text)
+        src_row = next(s for s in (await cx.get("/api/sources")).json() if s["name"] == "k_src")
+        ck("it stays in the other project", src_row["projects"] == [k2], str(src_row["projects"]))
+        await cx.delete(f"/api/projects/{k2}?delete_sources=k_src")
+        ck("deleting the last project that uses it can take it", "k_src" not in (await names(cx))["source"])
 
-        print("== template project delete: unpicked objects stay ==")
+        print("== template project delete ==")
         r = await cx.post("/api/projects", json={"template": "test_cascade", "name": "T", "params": {}})
         ck("test template project created", r.status_code == 201, r.text[:200])
         uid = r.json()["id"]
-        # keep the source (and so its view and trigger, which need it): pick only the agent
-        r = await cx.delete(f"/api/projects/{uid}?delete=agent:t_agent")
-        ck("template project: picked agent goes, the rest is released",
-           r.status_code == 200 and r.json()["deleted"] == ["agent:t_agent"]
-           and set(r.json()["released"]) == {"source:t_src", "view:t_view", "trigger:t_trig"}, r.text[:300])
+        r = await cx.delete(f"/api/projects/{uid}?delete_sources=none")
+        ck("template project, delete_sources=none: trigger and agent go, the source is released",
+           r.status_code == 200 and set(r.json()["deleted"]) == {"agent:t_agent", "trigger:t_trig"}
+           and r.json()["released"] == ["source:t_src"], r.text[:300])
         n = await names(cx)
-        ck("kept source exists and is unowned", "t_src" in n["source"]
-           and not next(x for x in (await cx.get("/api/sources")).json() if x["name"] == "t_src").get("owned_by"))
+        ck("kept source exists, in the default project", "t_src" in n["source"]
+           and next(x for x in (await cx.get("/api/sources")).json() if x["name"] == "t_src")["projects"] == [default])
         r = await cx.post("/api/projects", json={"template": "test_cascade", "name": "T2", "params": {"prefix": "u"}})
         uid = r.json()["id"]
-        r = await cx.delete(f"/api/projects/{uid}")
-        ck("template project without picks still takes everything",
-           r.status_code == 200 and len(r.json()["deleted"]) == 4 and r.json()["released"] == [], r.text[:300])
+        r = await cx.delete(f"/api/projects/{uid}?delete_sources=u_src")
+        ck("template project with its source named takes everything",
+           r.status_code == 200 and len(r.json()["deleted"]) == 3 and r.json()["released"] == [], r.text[:300])
+        r = await cx.post("/api/projects", json={"template": "test_cascade", "name": "T3", "params": {}})
+        ck("the released source can be planned again by a new project", r.status_code == 201, r.text[:300])
+        r = await cx.post("/api/projects", json={"template": "test_cascade", "name": "T4", "params": {"prefix": "w"}})
+        r = await cx.delete(f"/api/projects/{r.json()['id']}")
+        ck("template project, no choice given: its sources are kept",
+           r.status_code == 200 and "source:w_src" not in r.json()["deleted"]
+           and r.json()["released"] == ["source:w_src"], r.text[:300])
+        r = await cx.post("/api/projects", json={"template": "test_cascade", "name": "T5", "params": {"prefix": "v"}})
+        r = await cx.delete(f"/api/projects/{r.json()['id']}?delete_sources=all")
+        ck("delete_sources=all deletes every source of the project",
+           r.status_code == 200 and "source:v_src" in r.json()["deleted"] and r.json()["released"] == [],
+           r.text[:300])
 
         await cx.aclose()
     print(f"\n{P} passed, {F} failed")

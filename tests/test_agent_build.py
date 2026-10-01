@@ -39,13 +39,13 @@ def names(tools):
 
 print("== toolsets ==")
 ck("ask mode is the read tools plus the catalog cards",
-   names(agent.tools_for()) == READ | {"propose_labels", "propose_view", "propose_trigger"},
+   names(agent.tools_for()) == READ | {"propose_labels", "propose_trigger"},
    str(names(agent.tools_for())))
 ck("ask mode never offers the build-only cards",
    not names(agent.tools_for()) & {"propose_source", "propose_agent"})
 expected = {
     "sources": {"propose_source", "propose_project"},
-    "watch": {"propose_view", "propose_labels", "propose_trigger"},
+    "watch": {"propose_labels", "propose_trigger"},
     "agent": {"propose_agent"},
 }
 for step, cards in expected.items():
@@ -84,7 +84,15 @@ ck("every proposal tool requires reasoning",
 ck("every proposal tool maps to a card kind",
    set(agent._PROPOSAL_KIND) == ALL_PROPOSALS, str(set(agent._PROPOSAL_KIND) ^ ALL_PROPOSALS))
 ck("card kinds are the object kinds the console knows",
-   set(agent._PROPOSAL_KIND.values()) == {"labels", "view", "trigger", "source", "agent", "project"})
+   set(agent._PROPOSAL_KIND.values()) == {"labels", "trigger", "source", "agent", "project"})
+tr = next(t for t in agent.PROPOSAL_TOOLS if t["name"] == "propose_trigger")["input_schema"]
+ck("propose_trigger names sources (and filters, key_field), never a view",
+   "sources" in tr["required"] and "view" not in tr["properties"]
+   and tr["properties"]["sources"]["type"] == "array"
+   and tr["properties"]["filters"]["items"]["properties"]["op"]["enum"][0] == "eq"
+   and "key_field" in tr["properties"], str(tr["required"]))
+ck("the read tools read, they do not query a view",
+   "read" in READ and "query" not in READ and "propose_view" not in ALL_PROPOSALS)
 
 print("== prompts ==")
 base, build = agent.system_prompt(), agent.system_prompt("build")
@@ -121,8 +129,64 @@ async def main():
             httpx.AsyncClient = real_client
         ck("no triggers on a fresh cell -> empty list, not None", have == [], repr(have))
         await cx.aclose()
+    await handoff_cards()
     print(f"\n{P} passed, {F} failed")
     raise SystemExit(1 if F else 0)
+
+
+async def handoff_cards():
+    """An agent card may hand off only to an agent that exists or was proposed earlier in the
+    same reply; the target card goes first."""
+    print("== agent cards with a handoff ==")
+    from tares.models import ModelReply, ToolCall
+
+    def card(cid, name, handoffs=None, runs=True):
+        a = {"name": name, "trigger": "spike", "prompt": "p", "delivery": {"kind": "none"},
+             "reasoning": "r", "runs_on_trigger": runs}
+        if handoffs:
+            a["handoffs"] = handoffs
+        return ToolCall(id=cid, name="propose_agent", arguments=a)
+
+    class Stub:
+        def __init__(self, calls):
+            self.replies = [ModelReply(text="", tool_calls=calls, usage={}),
+                            ModelReply(text="done", tool_calls=[], usage={})]
+            self.results = []
+
+        async def stream(self, *, messages, **kw):
+            last = messages[-1]
+            if last.get("role") == "tool":
+                self.results.extend(r["content"] for r in last["results"])
+            yield self.replies.pop(0)
+
+    async def run(calls):
+        stub = Stub(calls)
+        lines = [l async for l in agent._run_agent(stub, [{"role": "user", "content": "x"}], None,
+                                                   {}, None, None, agent._tracing.Observation(None),
+                                                   "build", "agent")]
+        cards = [l for l in lines if '"type": "proposal"' in l]
+        return cards, stub.results
+
+    real_t, real_a = agent._trigger_names, agent._agent_names
+
+    async def triggers(h):
+        return ["spike"]
+
+    async def agents(h):
+        return ["already-there"]
+    agent._trigger_names, agent._agent_names = triggers, agents
+    try:
+        hand = [{"verdict": "investigate", "agent": "rca"}]
+        cards, res = await run([card("a", "triage", hand)])
+        ck("a handoff to an agent that does not exist shows no card",
+           not cards and any("no agent named rca" in r for r in res), str(res))
+        cards, res = await run([card("a", "rca", runs=False), card("b", "triage", hand)])
+        ck("the target proposed first in the same reply: both cards show",
+           len(cards) == 2 and '"runs_on_trigger": false' in cards[0], str(res))
+        cards, res = await run([card("a", "triage", [{"verdict": "x", "agent": "already-there"}])])
+        ck("a handoff to an existing agent shows the card", len(cards) == 1, str(res))
+    finally:
+        agent._trigger_names, agent._agent_names = real_t, real_a
 
 
 asyncio.run(main())

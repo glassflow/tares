@@ -1,6 +1,6 @@
 """Prometheus connector — polls the instant-query API, one Envelope per result series.
 
-Stores every non-null sample (lossless); the view and triggers decide what's interesting.
+Stores every non-null sample (lossless); the triggers decide what's interesting.
 
 `discover()` is deterministic (no LLM) and drives a pick-don't-write flow: the user chooses *which
 metrics* to ingest (by name pattern or by label) and *which labels* become Tares labels — never

@@ -56,3 +56,10 @@ export default function ProjectBadge({ ownedBy, customized, compact }: {
     </span>
   );
 }
+
+/** A project's name as a link to its page: the Project column of the global lists. */
+export function ProjectLink({ id }: { id: string | null | undefined }) {
+  const uc = useProjectName(id);
+  if (!id) return <span className="dim">none</span>;
+  return <Link to={`/projects/${encodeURIComponent(id)}`}>{uc?.name ?? id}</Link>;
+}

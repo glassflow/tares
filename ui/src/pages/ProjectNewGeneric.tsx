@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
+import type { SlackChannels } from "../api";
 import { Picker } from "../components/bits";
+import { SlackPick } from "../components/SlackPick";
 import type { Project, Template, RecipeParam } from "../types";
 
 // The fallback wizard: a form rendered straight from a template's PARAMS, for templates without a
@@ -59,6 +61,16 @@ export default function ProjectNewGeneric() {
     setDetectBusy(false);
   };
   const [models, setModels] = useState<string[]>([]);
+  // the channels the Slack bot is in, read only for a template with a slack_channel param
+  const [slack, setSlack] = useState<SlackChannels>();
+  const wantsSlack = !!template && "slack_channel" in template.params;
+  useEffect(() => {
+    if (!wantsSlack) return;
+    let live = true;
+    api.slackChannels().then((sc) => { if (live) setSlack(sc); })
+      .catch(() => { if (live) setSlack({ channels: [], reason: "error" } as SlackChannels); });
+    return () => { live = false; };
+  }, [wantsSlack]);
   const [defaultModel, setDefaultModel] = useState("");
   const [keyStatus, setKeyStatus] = useState<{ configured: boolean; source: string }>();
   const [keyInput, setKeyInput] = useState("");
@@ -183,7 +195,15 @@ export default function ProjectNewGeneric() {
             <span className="lbl">name</span>
             <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
           </label>
-          {Object.entries(template.params).map(([k, p]) => (
+          {Object.entries(template.params).map(([k, p]) => k === "slack_channel" ? (
+            // picked from the channels the bot is in, like an agent's channel
+            <div className="field" key={k}>
+              <span className="lbl">{p.label ?? k}</span>
+              <SlackPick slack={slack} value={vals[k] ?? ""} emptyLabel="No channel: the console only"
+                         onChange={(v) => setVals({ ...vals, [k]: v })} />
+              {p.help && <span className="help">{p.help}</span>}
+            </div>
+          ) : (
             <label className="field" key={k}>
               <span className="lbl">{p.label ?? k}{p.required && <span className="req"> *</span>}</span>
               {p.type === "bool" ? (

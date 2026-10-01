@@ -1,14 +1,17 @@
 import type {
   AgentInfo,
-  ApiKey,
-  CatalogDescribe, CatalogList, ConnectorSpec, DiscoverProposal, DispatchDetail, DispatchLogEntry, Entity, EnvScan,
-  AgentPreset, AgentRun, BuiltinAgent,
+  ApiKey, ExternalAgent,
+  CatalogDescribe, ConnectorSpec, DiscoverProposal, DispatchDetail, DispatchLogEntry, Entity, EnvScan,
+  AgentPreset, AgentRun, BuiltinAgent, Handoff,
   GithubCredential,
   LabelFacet, ModelUsage, QueryLogEntry,
-  McpServer, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
+  McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
+  ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults,
+  Skill, SkillSummary,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
-  TimelineEventRow, Trigger, View, ModelProvider, ModelProviders,
+  TimelineEventRow, Trigger, ModelProvider, ModelProviders,
 } from "./types";
+import type { TimelineThread } from "./components/ProjectActivity";
 
 const TOKEN_KEY = "tares_token";
 export const auth = {
@@ -42,6 +45,13 @@ export type SlackChannels = {
   detail?: string;
 };
 
+/** A failed call: the daemon's plain message, plus the HTTP status for the few places that act on
+ *  it (setup planning says "add a model provider" on a 409). */
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) { super(message); this.status = status; }
+}
+
 function unauthorized() {
   auth.clear();
   window.dispatchEvent(new Event("tares-auth-required"));
@@ -68,7 +78,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* non-JSON error body */
     }
-    throw new Error(detail);
+    throw new ApiError(detail, res.status);
   }
   return res.json() as Promise<T>;
 }
@@ -120,7 +130,7 @@ export const api = {
     request<{ ok: boolean; purged_events: number; deleted: string[] }>(
       `/api/sources/${encodeURIComponent(name)}?purge_events=${purge}&cascade=${cascade}`, { method: "DELETE" }),
   // what else goes if an object is deleted, in delete order
-  dependents: (kind: "source" | "view" | "trigger", name: string) =>
+  dependents: (kind: "source" | "trigger", name: string) =>
     request<{ dependents: { kind: ProjectObjectKind; name: string }[] }>(
       `/api/catalog/dependents?kind=${kind}&name=${encodeURIComponent(name)}`),
   pauseSource: (name: string) => request(`/api/sources/${name}/pause`, { method: "POST" }),
@@ -141,42 +151,40 @@ export const api = {
               results: { from: string; to: string; events: number }[] }>(
       "/api/labels/preview", { method: "POST", body: JSON.stringify({ source, label }) }),
 
-  views: () => request<View[]>("/api/views"),
-  createView: (body: View) =>
-    request("/api/views", { method: "POST", body: JSON.stringify(body) }),
-  updateView: (name: string, body: View) =>
-    request(`/api/views/${name}`, { method: "PUT", body: JSON.stringify(body) }),
-  deleteView: (name: string, cascade = false) =>
-    request<{ ok: boolean; deleted: string[] }>(`/api/views/${encodeURIComponent(name)}?cascade=${cascade}`, { method: "DELETE" }),
-
   triggers: () => request<Trigger[]>("/api/triggers"),
-  createTrigger: (body: Trigger) =>
+  createTrigger: (body: TriggerBody) =>
     request("/api/triggers", { method: "POST", body: JSON.stringify(body) }),
-  updateTrigger: (name: string, body: Trigger) =>
+  updateTrigger: (name: string, body: TriggerBody) =>
     request(`/api/triggers/${name}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteTrigger: (name: string) => request(`/api/triggers/${name}`, { method: "DELETE" }),
   pauseTrigger: (name: string) => request(`/api/triggers/${name}/pause`, { method: "POST" }),
   resumeTrigger: (name: string) => request(`/api/triggers/${name}/resume`, { method: "POST" }),
   // ── Tares agents: a first look when a trigger fires (managed under /builtin) ──
-  builtinAgents: () =>
+  // with a project: each agent's trigger, handoffs and on/off are that project's wiring
+  builtinAgents: (project?: string) =>
     request<{ agents: BuiltinAgent[]; key_configured: boolean; key_source: string;
               models: string[]; default_model: string; slack_workspace: boolean;
               providers: ModelProvider[]; default_provider: string | null;
               default_models: Record<string, string>;   // per provider id, what "" resolves to
               default_max_rounds: number; default_max_rounds_with_mcp: number;
               max_rounds_limit: number;
-              presets: AgentPreset[] }>("/api/agents/builtin"),
-  createBuiltinAgent: (body: { name: string; trigger: string; prompt: string; slack_webhook?: string; slack_webhook_clear?: boolean; model?: string; provider?: string; slack_channel?: string; webhook_url?: string; webhook_token?: string; mcp_servers?: string[]; max_rounds?: number | null; budget_usd?: number | null }) =>
+              presets: AgentPreset[] }>(`/api/agents/builtin${project ? `?project=${encodeURIComponent(project)}` : ""}`),
+  createBuiltinAgent: (body: AgentBody) =>
     request<{ ok: boolean; enabled: boolean }>("/api/agents/builtin",
       { method: "POST", body: JSON.stringify(body) }),
-  updateBuiltinAgent: (name: string, body: { name: string; trigger: string; prompt: string; slack_webhook?: string; slack_webhook_clear?: boolean; model?: string; provider?: string; slack_channel?: string; webhook_url?: string; webhook_token?: string; mcp_servers?: string[]; max_rounds?: number | null; budget_usd?: number | null }) =>
+  updateBuiltinAgent: (name: string, body: AgentBody) =>
     request(`/api/agents/builtin/${name}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteBuiltinAgent: (name: string) => request(`/api/agents/builtin/${name}`, { method: "DELETE" }),
-  enableBuiltinAgent: (name: string) => request(`/api/agents/builtin/${name}/enable`, { method: "POST" }),
-  disableBuiltinAgent: (name: string) => request(`/api/agents/builtin/${name}/disable`, { method: "POST" }),
-  builtinAgentRuns: (name: string, limit = 20, offset = 0, status = "") =>
+  // on or off in one project (its wiring); enable without one: the project that made it
+  enableBuiltinAgent: (name: string, project?: string) =>
+    request(`/api/agents/builtin/${name}/enable${project ? `?project=${encodeURIComponent(project)}` : ""}`, { method: "POST" }),
+  disableBuiltinAgent: (name: string, project?: string) =>
+    request(`/api/agents/builtin/${name}/disable${project ? `?project=${encodeURIComponent(project)}` : ""}`, { method: "POST" }),
+  // with a project: the runs that belong to it (its wiring started them)
+  builtinAgentRuns: (name: string, limit = 20, offset = 0, status = "", project?: string) =>
     request<AgentRun[]>(`/api/agents/builtin/${encodeURIComponent(name)}/runs?limit=${limit}&offset=${offset}`
-      + (status ? `&status=${encodeURIComponent(status)}` : "")),
+      + (status ? `&status=${encodeURIComponent(status)}` : "")
+      + (project ? `&project=${encodeURIComponent(project)}` : "")),
   rerunAgentRun: (name: string, runId: string) =>
     request<{ ok: boolean; run_id: string }>(
       `/api/agents/builtin/${encodeURIComponent(name)}/runs/${encodeURIComponent(runId)}/rerun`,
@@ -261,6 +269,7 @@ export const api = {
   // when it can't list them — `reason` says why the list is empty — so a workspace we can't read
   // stays a fallback to typing the channel in, not an error the console has to render.
   slackChannels: () => request<SlackChannels>("/api/slack/channels"),
+  resources: () => request<Resources>("/api/resources"),
 
   agents: () => request<{ agents: AgentInfo[] }>("/api/agents"),
   unsubscribe: (subscription_id: string) =>
@@ -273,10 +282,10 @@ export const api = {
   // ── MCP connections: external tool servers agents can opt into ──
   mcpServers: () => request<{ servers: McpServer[] }>("/api/mcp-servers"),
   createMcpServer: (body: { name: string; url: string; auth_header?: string; auth_value?: string;
-                            headers?: Record<string, string> }) =>
+                            headers?: Record<string, string>; project?: string }) =>
     request<{ ok: boolean }>("/api/mcp-servers", { method: "POST", body: JSON.stringify(body) }),
   updateMcpServer: (name: string, body: { name: string; url: string; auth_header?: string; auth_value?: string;
-                                          headers?: Record<string, string> }) =>
+                                          headers?: Record<string, string>; project?: string }) =>
     request<{ ok: boolean }>(`/api/mcp-servers/${encodeURIComponent(name)}`,
       { method: "PUT", body: JSON.stringify(body) }),
   deleteMcpServer: (name: string) =>
@@ -317,21 +326,122 @@ export const api = {
     request<{ ok: boolean; source: string }>("/remember", { method: "POST", body: JSON.stringify(body) }),
   projectSummary: (id: string) =>
     request<ProjectSummary>(`/api/projects/${encodeURIComponent(id)}/summary`),
+  // the project's threads, newest first; page with `before` = the previous page's next_before
+  projectTimeline: (id: string, q: { trigger?: string; agent?: string; outcome?: string;
+                                     entity?: string; before?: string | null; limit?: number } = {}) =>
+    request<{ threads: TimelineThread[]; next_before: string | null }>(
+      `/api/projects/${encodeURIComponent(id)}/timeline?` + new URLSearchParams(
+        Object.entries(q).filter(([, v]) => v != null && v !== "").map(([k, v]) => [k, String(v)])).toString()),
   // template "custom" takes `objects` ({kind, name} each) instead of params
+  // `goal`: one line, <= 200 chars; a template's own goal applies when it is left out
   createProject: (body: { template: string; name?: string; params?: Record<string, unknown>;
-                          objects?: { kind: ProjectObjectKind; name: string }[] }) =>
+                          objects?: { kind: ProjectObjectKind; name: string }[]; goal?: string }) =>
     request<Project>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
+  // a body with only `goal` works on every project, the default one included; "" or null clears it
   updateProject: (id: string, body: { params?: Record<string, unknown>; name?: string;
-                                      objects?: { kind: ProjectObjectKind; name: string }[] }) =>
+                                      objects?: { kind: ProjectObjectKind; name: string }[];
+                                      goal?: string | null }) =>
     request<Project & { report?: ProjectUpdateReport }>(`/api/projects/${encodeURIComponent(id)}`,
       { method: "PUT", body: JSON.stringify(body) }),
-  // `deleteObjects`: the project's objects to delete along with it; the rest are released and
-  // stay. Omit for the default (a template project takes everything, a custom one keeps everything).
-  deleteProject: (id: string, purgeEvents = false, deleteObjects?: { kind: ProjectObjectKind; name: string }[]) =>
-    request<{ ok: boolean; deleted?: string[]; released?: string[]; purged_events?: number }>(
+  // The goal-first page: the setup in plain sentences, what the agents concluded, and whether the
+  // project is working. All computed by the daemon, no model call.
+  projectOutline: (id: string) =>
+    request<ProjectOutline>(`/api/projects/${encodeURIComponent(id)}/outline`),
+  // newest first; page with `before` = the previous page's next_before
+  projectResults: (id: string, q: { limit?: number; before?: string | null } = {}) =>
+    request<ProjectResults>(
+      `/api/projects/${encodeURIComponent(id)}/results?` + new URLSearchParams(
+        Object.entries(q).filter(([, v]) => v != null && v !== "").map(([k, v]) => [k, String(v)])).toString()),
+  projectResult: (id: string, runId: string) =>
+    request<ProjectResultDetail>(`/api/projects/${encodeURIComponent(id)}/results/${encodeURIComponent(runId)}`),
+  // the response body is not relied on: the page refetches the result after it
+  setResultHandled: (id: string, runId: string, handled: boolean) =>
+    request<unknown>(`/api/projects/${encodeURIComponent(id)}/results/${encodeURIComponent(runId)}/handled`,
+      { method: "POST", body: JSON.stringify({ handled }) }),
+  projectHealth: (id: string) =>
+    request<ProjectHealth>(`/api/projects/${encodeURIComponent(id)}/health`),
+  // Triggers, agents and MCP servers always go with the project. `deleteSources`: which of its
+  // sources to delete too; one another project still uses is kept (and reported) either way.
+  deleteProject: (id: string, purgeEvents = false, deleteSources: string[] = []) =>
+    request<{ ok: boolean; deleted?: string[]; released?: string[]; kept?: string[]; purged_events?: number }>(
       `/api/projects/${encodeURIComponent(id)}?purge_events=${purgeEvents}`
-      + (deleteObjects === undefined ? "" : `&delete=${encodeURIComponent(deleteObjects.length ? deleteObjects.map((o) => `${o.kind}:${o.name}`).join(",") : "none")}`),
+      + `&delete_sources=${encodeURIComponent(deleteSources.length ? deleteSources.join(",") : "none")}`,
       { method: "DELETE" }),
+  // Sources are shared: a project lists the ones it uses. Removing one is refused while a trigger
+  // of the project reads it.
+  addProjectSource: (id: string, name: string) =>
+    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/sources`,
+      { method: "POST", body: JSON.stringify({ name }) }),
+  removeProjectSource: (id: string, name: string) =>
+    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/sources/${encodeURIComponent(name)}`,
+      { method: "DELETE" }),
+  // Project keys and the external agents that joined a project (TR-335, TR-336). A project key
+  // reads that project only and records findings in it; its secret is in the create response only.
+  projectKeys: (id: string) =>
+    request<{ keys: ApiKey[]; enforced: boolean }>(`/api/projects/${encodeURIComponent(id)}/keys`),
+  createProjectKey: (id: string, name: string) =>
+    request<{ id: string; name: string; scopes: string[]; secret: string; project: string }>(
+      `/api/projects/${encodeURIComponent(id)}/keys`, { method: "POST", body: JSON.stringify({ name }) }),
+  externalAgents: (id: string) =>
+    request<{ agents: ExternalAgent[] }>(`/api/projects/${encodeURIComponent(id)}/external-agents`),
+  unsubscribeProject: (id: string, sid: string) =>
+    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/subscribe/${encodeURIComponent(sid)}`,
+      { method: "DELETE" }),
+  // A project's skills (TR-332). Upload takes a SKILL.md as it is: front matter, then the body.
+  skills: (id: string) => request<SkillSummary[]>(`/api/projects/${encodeURIComponent(id)}/skills`),
+  skill: (id: string, name: string) =>
+    request<Skill>(`/api/projects/${encodeURIComponent(id)}/skills/${encodeURIComponent(name)}`),
+  // skills are shared (P-TR-216): every skill on Tares, and a project using one of them
+  cellSkills: () =>
+    request<{ name: string; description: string; used_by: { id: string; name: string }[] }[]>("/api/skills"),
+  useSkill: (id: string, name: string) =>
+    request<Skill>(`/api/projects/${encodeURIComponent(id)}/skills/${encodeURIComponent(name)}/use`,
+      { method: "POST" }),
+  createSkill: (id: string, body: { name: string; description: string; body: string }) =>
+    request<Skill>(`/api/projects/${encodeURIComponent(id)}/skills`,
+      { method: "POST", body: JSON.stringify(body) }),
+  updateSkill: (id: string, name: string, body: { description?: string; body?: string }) =>
+    request<Skill>(`/api/projects/${encodeURIComponent(id)}/skills/${encodeURIComponent(name)}`,
+      { method: "PUT", body: JSON.stringify(body) }),
+  deleteSkill: (id: string, name: string) =>
+    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/skills/${encodeURIComponent(name)}`,
+      { method: "DELETE" }),
+  uploadSkill: (id: string, text: string) =>
+    request<Skill & { created: boolean }>(`/api/projects/${encodeURIComponent(id)}/skills/upload`,
+      { method: "POST", body: text, headers: { "content-type": "text/markdown" } }),
+  // ── Goal-first setup: plan from a goal, adjust in plain words, apply, then connect and try ──
+  planSetup: (body: { goal: string; who?: "tares" | "own"; existing_sources?: boolean }) =>
+    request<{ plan: Plan }>("/api/setup/plan", { method: "POST", body: JSON.stringify(body) }),
+  adjustSetup: (plan: Plan, instruction: string) =>
+    request<{ plan: Plan }>("/api/setup/adjust", { method: "POST", body: JSON.stringify({ plan, instruction }) }),
+  checkSetup: (plan: Plan, project?: string) =>
+    request<{ plan: Plan; problems: SetupProblem[] }>("/api/setup/check",
+      { method: "POST", body: JSON.stringify({ plan, project }) }),
+  applySetup: (plan: Plan, project?: string) =>
+    request<{ project: Project; plan: Plan; connect: SetupConnect }>("/api/setup/apply",
+      { method: "POST", body: JSON.stringify({ plan, project }) }),
+  // a draft project: made on "Plan it", planned in the background, kept while it is edited
+  createDraft: (body: { goal: string; who?: "tares" | "own" }) =>
+    request<{ project: Project }>("/api/setup/drafts", { method: "POST", body: JSON.stringify(body) }),
+  replanDraft: (id: string, body: { goal?: string; who?: "tares" | "own"; instruction?: string; plan?: Plan }) =>
+    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/setup/plan`,
+      { method: "POST", body: JSON.stringify(body) }),
+  saveDraftPlan: (id: string, plan: Plan) =>
+    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/setup`,
+      { method: "PUT", body: JSON.stringify({ plan }) }),
+  projectSetup: (id: string) =>
+    request<ProjectSetup>(`/api/projects/${encodeURIComponent(id)}/setup`),
+  setSetupStep: (id: string, step: SetupStep) =>
+    request<unknown>(`/api/projects/${encodeURIComponent(id)}/setup`,
+      { method: "PUT", body: JSON.stringify({ step }) }),
+  // ingests the plan's example event into a push source, marked practice=true
+  sendSetupTestEvent: (id: string, source: string) =>
+    request<unknown>(`/api/projects/${encodeURIComponent(id)}/setup/test-event`,
+      { method: "POST", body: JSON.stringify({ source }) }),
+  // Tares agents answer run_id; an own agent answers dispatch_id
+  runSetupPractice: (id: string) =>
+    request<{ run_id?: string; dispatch_id?: string }>(`/api/projects/${encodeURIComponent(id)}/setup/practice`,
+      { method: "POST" }),
   pauseProject: (id: string, sources = false) =>
     request<Project>(`/api/projects/${encodeURIComponent(id)}/pause`, { method: "POST", body: JSON.stringify({ sources }) }),
   resumeProject: (id: string) =>
@@ -370,31 +480,20 @@ export const api = {
   // TARES_MAX_DB_SIZE — see the Usage type before rendering any of it.
   usage: () => request<Usage>("/api/usage"),
 
-  catalog: () => request<CatalogList>("/catalog"),
   describe: (handle: string) => request<CatalogDescribe>(`/catalog/${handle}`),
 
   entities: (label?: string) =>
     request<{ labels?: LabelFacet[]; label?: string; sources?: string[]; values?: Entity[] }>(
       label ? `/api/entities?label=${encodeURIComponent(label)}` : "/api/entities"),
 
-  // Raw label-native read across ALL sources — no view. `selector` is a {label: value}
-  // conjunction (strict AND). Returns the rendered payload, contributing sources, and structured
-  // rows (each with its per-event labels, for the console timeline).
-  read: (selector: Record<string, string>, window: string) =>
+  // Label-native read. `selector` is a {label: value} conjunction (strict AND). Without `project`
+  // or `sources` it reads every source; either narrows which sources are read. Returns the
+  // rendered payload, contributing sources, and structured rows (each with its per-event labels,
+  // for the console timeline).
+  read: (selector: Record<string, string>, window: string, scope?: { project?: string; sources?: string[] }) =>
     request<{ payload: string; count: number; sources: string[]; rows: TimelineEventRow[] }>("/read", {
       method: "POST",
-      body: JSON.stringify({ selector, window, client: "ui" }),
-    }),
-
-  runQuery: (view: string, key: string, window: string) =>
-    request<{ payload: string; rows: TimelineEventRow[] }>("/query", {
-      method: "POST",
-      body: JSON.stringify({ view, key, window, client: "ui" }),
-    }),
-  runQueryWhere: (view: string, where: Record<string, string>, window: string) =>
-    request<{ payload: string; rows: TimelineEventRow[] }>("/query", {
-      method: "POST",
-      body: JSON.stringify({ view, where, window, client: "ui" }),
+      body: JSON.stringify({ selector, window, client: "ui", ...(scope ?? {}) }),
     }),
 
   // Defaults match the agent/MCP call: all sources, secrets omitted. The UI passes options.
@@ -411,13 +510,25 @@ export const api = {
     return res.text();
   },
   importYaml: (yaml: string, mode: "merge" | "replace") =>
-    request<{ sources: number; views: number; triggers: number; agents: number;
+    request<{ sources: number; triggers: number; agents: number;
               mcp_servers: number;
-              names: { sources: string[]; views: string[]; triggers: string[];
+              names: { sources: string[]; triggers: string[];
                        agents: string[]; mcp_servers: string[] } }>("/api/catalog/import", {
       method: "POST",
       body: JSON.stringify({ yaml, mode }),
     }),
+};
+
+// What a trigger is saved from. `project` omitted = the default project.
+export type TriggerBody = Pick<Trigger, "name" | "sources" | "filters" | "condition" | "emit" | "cooldown">
+  & { project?: string; key_field?: string | null; description?: string };
+
+export type AgentBody = {
+  name: string; trigger: string; prompt: string; project?: string;
+  slack_webhook?: string; slack_webhook_clear?: boolean; model?: string; provider?: string;
+  slack_channel?: string; webhook_url?: string; webhook_token?: string; mcp_servers?: string[];
+  max_rounds?: number | null; budget_usd?: number | null; webhook_key_label?: string;
+  handoffs?: Handoff[];
 };
 
 export type AgentLimits = {

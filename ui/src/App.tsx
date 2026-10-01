@@ -5,7 +5,7 @@ import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { api, auth } from "./api";
 import CommandPalette from "./components/CommandPalette";
 import {
-  Activity, Bolt, Book, Chat, ChevronRight, Database, Filter, GitHub, Grid, Lock, Moon,
+  Activity, Chat, ChevronRight, Database, GitHub, Grid, Lock, Moon,
   Settings, SignOut, Sun, Terminal, Zap,
 } from "./components/icons";
 import { applyTheme, currentTheme, type Theme } from "./theme";
@@ -24,7 +24,7 @@ type NavItem = {
 
 // Two named groups. Projects are the product, so they sit at the top with Overview and Ask;
 // everything a project is made of is one flat Catalog group ordered along the pipeline
-// (sources feed views, views wake triggers, triggers run agents, agents leave firings).
+// (sources feed triggers, triggers run agents, agents leave firings).
 // The old Data / Automate split was mechanism vocabulary and is gone.
 const NAV_GROUPS: { section: string; items: NavItem[] }[] = [
   { section: "", items: [
@@ -34,12 +34,8 @@ const NAV_GROUPS: { section: string; items: NavItem[] }[] = [
   ] },
   { section: "Catalog", items: [
     { to: "/sources", label: "Sources", icon: Database },
-    { to: "/views", label: "Views", icon: Book },
-    { to: "/triggers", label: "Triggers", icon: Bolt },
-    { to: "/agents", label: "Tares agents", icon: Chat },
-    { to: "/firings", label: "Firings", icon: Filter },
-    { to: "/mcp-servers", label: "MCP servers", icon: Terminal },
     { to: "/explore", label: "Explore", icon: Activity },
+    { to: "/resources", label: "All resources", icon: Grid },
   ] },
   { section: "Agent access", items: [
     { to: "/connect", label: "Connect", icon: Terminal },
@@ -50,7 +46,6 @@ const NAV_GROUPS: { section: string; items: NavItem[] }[] = [
 const SECTION_LABEL: Record<string, string> = {
   sources: "Sources",
   explore: "Explore",
-  views: "Views",
   triggers: "Triggers",
   agents: "Tares agents",
   firings: "Firings",
@@ -61,6 +56,7 @@ const SECTION_LABEL: Record<string, string> = {
   ask: "Ask",
   settings: "Settings",
   projects: "Projects",
+  resources: "All resources",
 };
 
 type Crumb = { label: string; to?: string; mono?: boolean };
@@ -69,7 +65,7 @@ type Crumb = { label: string; to?: string; mono?: boolean };
  *  so second-level pages link back to their own list (/sources/:name → Sources) rather than to
  *  the root the way they did when Sources *was* the root. */
 function useCrumbs(): Crumb[] {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const parts = pathname.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
   const projectId = parts[0] === "projects" && parts.length > 1 && parts[1] !== "new" ? decodeURIComponent(parts[1]) : undefined;
   const projectName = useProjectName(projectId);
@@ -90,7 +86,21 @@ function useCrumbs(): Crumb[] {
   if (parts[0] === "projects" && parts.length > 1) {
     const sub = decodeURIComponent(parts[1]);
     // the path carries the instance id; show its name once /api/projects has answered
-    const last: Crumb = sub === "new" ? { label: "Set up" } : { label: projectName?.name ?? "\u2026" };
+    const last: Crumb = sub === "new" ? { label: "New project" } : { label: projectName?.name ?? "\u2026" };
+    // the guided setup of a project that exists: Projects > name > Set up
+    if (sub !== "new" && parts[2] === "setup") {
+      return [{ label: "Projects", to: "/projects" }, { ...last, to: `/projects/${encodeURIComponent(sub)}` },
+              { label: "Set up" }];
+    }
+    // past the project's Overview: a result, How it works, or the full setup
+    const q = new URLSearchParams(search);
+    // old ?tab= and ?session= links land in the full setup too
+    const kind = sub === "new" ? undefined
+      : q.get("view")?.split(":")[0] || (q.get("tab") || q.get("session") ? "setup" : undefined);
+    if (kind && kind !== "overview") {
+      const here = kind === "result" ? "Result" : kind === "how" ? "Setup" : "Advanced setup";
+      return [{ label: "Projects", to: "/projects" }, { ...last, to: `/projects/${encodeURIComponent(sub)}` }, { label: here }];
+    }
     return [{ label: "Projects", to: "/projects" }, last];
   }
 

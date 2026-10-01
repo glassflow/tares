@@ -61,7 +61,8 @@ export default function SourceDiscover() {
         <button onClick={run} disabled={loading || busy}>rescan</button>
       </div>
       <p className="subtitle">
-        scan the local Docker environment and set up everything Tares can ingest; you just confirm
+        Scan the local Docker environment and set up everything Tares can take in. You confirm
+        before anything is made.
       </p>
 
       {loading && <div className="empty">scanning Docker…</div>}
@@ -123,7 +124,7 @@ export default function SourceDiscover() {
                     <span className="help">
                       created {created} of {Object.keys(results).length}
                       {failed ? `, ${failed} failed; fix and retry` : ""} ·{" "}
-                      <a href="#" onClick={(e) => { e.preventDefault(); nav("/sources"); }}>view sources</a>
+                      <a href="#" onClick={(e) => { e.preventDefault(); nav("/sources"); }}>see sources</a>
                     </span>
                   )}
                 </>

@@ -2,7 +2,7 @@
 
 Collapsed form of the design doc's Trigger Engine: instead of a stream consumer with windowed
 state in JetStream KV, we evaluate each condition as a SQL aggregate over the DuckDB window. On a
-match (not in cooldown) we render the view and dispatch it. Expand path: move the window in-memory
+match (not in cooldown) we render the trigger's sources for the entity and dispatch that. Expand path: move the window in-memory
 and evaluate on the in-flight batch to decouple latency from the poll interval.
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ from datetime import timezone
 
 from .config import Catalog
 from .envelope import now_utc
-from .views import parse_window, resolve_query
+from .reads import parse_window, resolve_trigger
 
 _OPS = {">=": operator.ge, "<=": operator.le, "==": operator.eq, ">": operator.gt, "<": operator.lt}
 
@@ -65,15 +65,15 @@ def _envelope_fire_key(group_by: list, env) -> str | None:
 
 
 def clear_cooldowns(store, catalog: Catalog, source: str, envelopes: list) -> list:
-    """Drop the cooldown state for the keys `envelopes` would fire under, on every trigger whose
-    view reads `source`. Returns the [(trigger, key)] cleared.
+    """Drop the cooldown state for the keys `envelopes` would fire under, on every trigger that
+    reads `source`. Returns the [(trigger, key)] cleared.
 
     The ingest path calls this for a delivery marked X-Tares-Bypass-Cooldown, so the evaluation
     that follows it fires for a key that is still cooling down (Rius asking for one alert's
     analysis on demand). It does not switch the cooldown off: that firing writes its usual
     `set_fired`, so the next unmarked event for the key waits the full interval again.
 
-    Two deliberate imprecisions, both erring towards clearing: a view `filters` clause that would
+    Two deliberate imprecisions, both erring towards clearing: a trigger `filters` clause that would
     exclude the event is not applied, and a label whose value is not a string is rendered by
     Python rather than by the store's JSON extraction."""
     cleared = []
@@ -81,8 +81,7 @@ def clear_cooldowns(store, catalog: Catalog, source: str, envelopes: list) -> li
         # a schedule trigger has no cooldown per key to clear: its clock decides (TR-320)
         if getattr(trig, "paused", False) or getattr(trig.condition, "every", None):
             continue
-        view = catalog.views.get(trig.view)
-        if view is None or source not in view.sources:
+        if source not in trig.sources:
             continue
         group_by = _group_by(trig.condition)
         for key in sorted({k for e in envelopes
@@ -90,6 +89,19 @@ def clear_cooldowns(store, catalog: Catalog, source: str, envelopes: list) -> li
             store.clear_fired(trig.name, key)
             cleared.append((trig.name, key))
     return cleared
+
+
+def _finding_run(store, catalog, trig, key, where, since) -> str | None:
+    """When the trigger reads a findings source, the run whose finding tripped it: the newest
+    finding for the entity in the condition window that names its run. None otherwise, and on any
+    error, since this only places the firing on the project timeline."""
+    try:
+        sources = getattr(catalog, "sources", None) or {}
+        if not any(getattr(sources.get(s), "type", None) == "finding" for s in trig.sources):
+            return None
+        return store.finding_run(trig.sources, key, since, filters=trig.filters, where=where)
+    except Exception:
+        return None
 
 
 _catchups: dict = {}   # trigger name -> pending asyncio task for a debounced re-evaluation
@@ -104,7 +116,7 @@ def cancel_catchups() -> None:
 
 def _schedule_catchup(name: str, delay: float, store, catalog, dispatcher, eval_state) -> None:
     """Re-evaluate `name` once the debounce interval has passed, unless a catch-up is already
-    pending. Evaluates without an affected-source filter so every key of the view is considered.
+    pending. Evaluates without an affected-source filter so every key of the trigger is considered.
     The catalog is re-read at fire time through `dispatcher.runtime` when available, so a trigger
     edited or a project created inside the interval is evaluated as it is then, not as it was."""
     if name in _catchups and not _catchups[name].done():
@@ -142,7 +154,7 @@ async def eval_triggers(store, catalog: Catalog, dispatcher, affected_sources=No
 
 async def _eval_triggers(store, catalog: Catalog, dispatcher, affected_sources=None,
                          eval_state: dict | None = None, only: str | None = None) -> list:
-    """Evaluate every trigger whose view touches an affected source. Returns [(trigger, key)] fired.
+    """Evaluate every trigger that reads an affected source. Returns [(trigger, key)] fired.
     `only` restricts the pass to one trigger (the debounce catch-up).
 
     `eval_state` is a caller-owned {trigger_name: last_eval_datetime} map for debouncing across ticks;
@@ -156,15 +168,16 @@ async def _eval_triggers(store, catalog: Catalog, dispatcher, affected_sources=N
         # trigger fires on the clock in schedule.py, never on ingest (TR-320).
         if getattr(trig, "paused", False) or getattr(trig.condition, "every", None):
             continue
-        view = catalog.views[trig.view]
-        if affected_sources and not (set(view.sources) & set(affected_sources)):
+        if not trig.sources:   # folded from a view that was gone: paused, but never evaluable
+            continue
+        if affected_sources and not (set(trig.sources) & set(affected_sources)):
             continue
 
         c = trig.condition
         # Debounce: skip if this trigger was evaluated within min(window, _DEBOUNCE_SECONDS) ago.
         # The first evaluation of a trigger always runs (no prior state). A skipped evaluation is
         # not dropped: it is re-run once the interval is over (see _schedule_catchup), otherwise
-        # two sources of the same view that ingest within one interval leave the second one
+        # two sources of the same trigger that ingest within one interval leave the second one
         # unevaluated until the next ingest, by which time a short window has slid past its events.
         if eval_state is not None:
             interval = min(parse_window(c.window).total_seconds(), _DEBOUNCE_SECONDS)
@@ -178,8 +191,8 @@ async def _eval_triggers(store, catalog: Catalog, dispatcher, affected_sources=N
         group_by = _group_by(c)
         legacy = group_by == ["key_value"]
         since = now_utc() - parse_window(c.window)
-        per_group = store.aggregate(view.sources, c.field, c.aggregate, since,
-                                    filters=view.filters, group_by=group_by)
+        per_group = store.aggregate(trig.sources, c.field, c.aggregate, since,
+                                    filters=trig.filters, group_by=group_by)
 
         for grp, value in per_group.items():
             try:
@@ -211,10 +224,12 @@ async def _eval_triggers(store, catalog: Catalog, dispatcher, affected_sources=N
             # Detection uses the (narrow) condition window; the attached context is wider so the
             # woken agent gets the correlating deploy/config, not just the spike that tripped it.
             ctx_window = trig.emit.get("context_window", "15m")
-            payload = resolve_query(store, catalog, trig.view,
-                                    key=(fire_key if legacy else None),
-                                    window=ctx_window, where=where)
-            await dispatcher.fire(trig, fire_key, payload)
+            payload = resolve_trigger(store, trig, key=(fire_key if legacy else None),
+                                      window=ctx_window, where=where)
+            cause = _finding_run(store, catalog, trig, fire_key if legacy else None, where,
+                                 since)
+            await dispatcher.fire(trig, fire_key, payload,
+                                  **({"parent_run_id": cause} if cause else {}))
             fired.append((trig.name, fire_key))
 
     return fired

@@ -55,10 +55,13 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARES_INGEST_PAUSE_PCT` | share of the limit at which ingest is refused (507) and polls pause; default 95 |
 | `TARES_SLACK_BOT_TOKEN`, `TARES_SLACK_SIGNING_SECRET` | the Slack surface |
 | `TARES_SEED_PROJECT` | template of the project to seed on first boot (`TARES_SEED_USECASE` still read) |
+| `TARES_WEBHOOK_ALLOW_PRIVATE` | let a project key subscribe a webhook on an internal address (loopback, private, link-local); off by default |
 | `TARES_AGENT_DAILY_CAP` | runs per Tares agent per day (default 50); a value saved under Settings, Agents wins over it |
 | `TARES_TRACING_ENABLED` | agent tracing on/off (a console setting wins over it) |
 | `TARES_TRACING_PROVIDER`, `TARES_TRACING_ENDPOINT` | `rius` (endpoint preset) or `otlp` (any OTLP/HTTP endpoint) |
 | `TARES_TRACING_API_KEY`, `TARES_TRACING_HEADERS` | bearer key, or `k=v,k2=v2` headers for the exporter |
+| `TARES_PUBLIC_URL` | the address people reach the cell at, for the ingest URLs the guided setup shows; default the request's own |
+| `TARES_MCP_URL` | the MCP address the guided setup gives an outside agent; default `TARES_PUBLIC_URL` plus `/mcp` |
 | `TARES_INSTANCE_NAME` | prefix of the trace `service.name` (`<instance>/<agent>`); default the hostname |
 
 `grep -rhoE "TARES_[A-Z_]+" tares/*.py | sort -u` is the authoritative list.

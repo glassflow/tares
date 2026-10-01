@@ -1,0 +1,691 @@
+# A catalog exported while views existed, kept to prove the legacy import: a views:
+# section, triggers that name a view, a findings handoff, a schedule trigger, two
+# template projects and a custom project that lists views. Names are made up.
+sources:
+- name: ctx_acme_orbit_context_acme_atlas_canary
+  connector: github
+  poll: 60s
+  config:
+    repo: acme/atlas-canary
+    branch: main
+    credential: orbit-github-token
+    labels:
+    - name: repo
+      field: repo
+      primary: true
+    - name: author
+      field: author
+    - name: branch
+      field: branch
+- name: ctx_acme_orbit_context_acme_atlas_charts
+  connector: github
+  poll: 60s
+  config:
+    repo: acme/atlas-charts
+    branch: main
+    credential: orbit-github-token
+    labels:
+    - name: repo
+      field: repo
+      primary: true
+    - name: author
+      field: author
+    - name: branch
+      field: branch
+- name: ctx_acme_orbit_context_acme_atlas_core
+  connector: github
+  poll: 60s
+  config:
+    repo: acme/atlas-core
+    branch: main
+    credential: orbit-github-token
+    labels:
+    - name: repo
+      field: repo
+      primary: true
+    - name: author
+      field: author
+    - name: branch
+      field: branch
+- name: ctx_acme_orbit_context_acme_atlas_ui
+  connector: github
+  poll: 60s
+  config:
+    repo: acme/atlas-ui
+    branch: main
+    credential: orbit-github-token
+    labels:
+    - name: repo
+      field: repo
+      primary: true
+    - name: author
+      field: author
+    - name: branch
+      field: branch
+- name: ctx_acme_orbit_context_acme_orbit_mcp
+  connector: github
+  poll: 60s
+  config:
+    repo: acme/orbit-mcp
+    branch: main
+    credential: orbit-github-token
+    labels:
+    - name: repo
+      field: repo
+      primary: true
+    - name: author
+      field: author
+    - name: branch
+      field: branch
+- name: ctx_acme_orbit_context_acme_orbit_sdk_python
+  connector: github
+  poll: 60s
+  config:
+    repo: acme/orbit-sdk-python
+    branch: main
+    credential: orbit-github-token
+    labels:
+    - name: repo
+      field: repo
+      primary: true
+    - name: author
+      field: author
+    - name: branch
+      field: branch
+- name: ctx_acme_orbit_context_acme_orbit_sdk_typescript
+  connector: github
+  poll: 60s
+  config:
+    repo: acme/orbit-sdk-typescript
+    branch: main
+    credential: orbit-github-token
+    labels:
+    - name: repo
+      field: repo
+      primary: true
+    - name: author
+      field: author
+    - name: branch
+      field: branch
+- name: ctx_acme_tares_context_acme_acme_docs
+  connector: github
+  poll: 60s
+  config:
+    repo: acme/acme-docs
+    branch: main
+    credential: tares-github-token
+    labels:
+    - name: repo
+      field: repo
+      primary: true
+    - name: author
+      field: author
+    - name: branch
+      field: branch
+- name: ctx_acme_tares_context_acme_tares
+  connector: github
+  poll: 60s
+  config:
+    repo: acme/tares
+    branch: main
+    credential: tares-github-token
+    labels:
+    - name: repo
+      field: repo
+      primary: true
+    - name: author
+      field: author
+    - name: branch
+      field: branch
+- name: ctx_acme_tares_context_acme_tares_cloud
+  connector: github
+  poll: 60s
+  config:
+    repo: acme/tares-cloud
+    branch: main
+    credential: tares-github-token
+    labels:
+    - name: repo
+      field: repo
+      primary: true
+    - name: author
+      field: author
+    - name: branch
+      field: branch
+- name: ctx_acme_tares_context_acme_tares_cookbooks
+  connector: github
+  poll: 60s
+  config:
+    repo: acme/tares-cookbooks
+    branch: main
+    credential: tares-github-token
+    labels:
+    - name: repo
+      field: repo
+      primary: true
+    - name: author
+      field: author
+    - name: branch
+      field: branch
+- name: ctx_acme_tares_context_acme_tares_website
+  connector: github
+  poll: 60s
+  config:
+    repo: acme/tares-website
+    branch: main
+    credential: tares-github-token
+    labels:
+    - name: repo
+      field: repo
+      primary: true
+    - name: author
+      field: author
+    - name: branch
+      field: branch
+- name: docs-github
+  connector: github
+  poll: 15m
+  config:
+    repo: https://github.com/acme/acme-docs
+    credential: tares-github-token
+    labels:
+    - name: repo
+      field: repo
+      primary: true
+    - name: author
+      field: author
+    - name: branch
+      field: branch
+- name: findings
+  connector: finding
+  poll: 5s
+  config: {}
+- name: acme-docs
+  connector: vercel
+  poll: 5s
+  config:
+    labels:
+    - name: path
+      field: path
+      primary: true
+    - name: project
+      field: project
+    - name: environment
+      field: environment
+    - name: source
+      field: source
+    - name: host
+      field: host
+    - name: branch
+      field: branch
+    - name: status_code
+      field: path
+      pattern: ^(?!\d{3}$).*
+      replace: ''
+      map:
+        '200': '200'
+        '301': '301'
+        '302': '302'
+        '404': '404'
+        '500': '500'
+- name: orbit-prod
+  connector: otlp
+  poll: 5s
+  config:
+    labels:
+    - name: service
+      field: resourceAttributes.service.name
+      primary: true
+    - name: nginx_status_code
+      field: text
+      pattern: ^.*(?:"\w+ \S+ HTTP/\d\.\d" |"status":)(\d{3})\b.*$
+      replace: $1
+      type: number
+    - name: status_code_text
+      field: text
+      pattern: ^.*(?:"\w+ \S+ HTTP/\d\.\d" |"status":)(\d{3})\b.*$
+      replace: $1
+      type: string
+views:
+- name: atlas-status-codes
+  key_field: service
+  sources:
+  - orbit-prod
+  filters:
+  - field: service
+    op: eq
+    value: atlas
+  - field: nginx_status_code
+    op: gte
+    value: 400
+- name: ctx_acme_orbit_context_repo_activity
+  key_field: repo
+  sources:
+  - ctx_acme_orbit_context_acme_atlas_ui
+  - ctx_acme_orbit_context_acme_atlas_core
+  - ctx_acme_orbit_context_acme_atlas_charts
+  - ctx_acme_orbit_context_acme_orbit_sdk_python
+  - ctx_acme_orbit_context_acme_orbit_sdk_typescript
+  - ctx_acme_orbit_context_acme_orbit_mcp
+  - ctx_acme_orbit_context_acme_atlas_canary
+- name: ctx_acme_tares_context_repo_activity
+  key_field: repo
+  sources:
+  - ctx_acme_tares_context_acme_tares_cloud
+  - ctx_acme_tares_context_acme_tares
+  - ctx_acme_tares_context_acme_acme_docs
+  - ctx_acme_tares_context_acme_tares_website
+  - ctx_acme_tares_context_acme_tares_cookbooks
+- name: docs-404-requests
+  key_field: path
+  sources:
+  - acme-docs
+  filters:
+  - field: status_code
+    op: eq
+    value: '404'
+- name: nginx-404s
+  key_field: service
+  sources:
+  - orbit-prod
+  filters:
+  - field: service
+    op: eq
+    value: ingress-nginx
+  - field: nginx_status_code
+    op: gte
+    value: 400
+- name: watch
+  key_field: service
+  sources:
+  - orbit-prod
+  - acme-docs
+- name: watcher-investigate
+  key_field: service
+  sources:
+  - findings
+  filters:
+  - field: agent
+    op: eq
+    value: watcher
+  - field: verdict
+    op: eq
+    value: investigate
+triggers:
+- name: atlas-errors
+  view: atlas-status-codes
+  condition:
+    aggregate: count
+    predicate: '> 10'
+    window: 10m
+    field: nginx_status_code
+  emit:
+    kind: ''
+    context_window: 15m
+  cooldown: 5m
+- name: ctx_acme_orbit_context_changes
+  view: ctx_acme_orbit_context_repo_activity
+  condition:
+    aggregate: count
+    predicate: '> 0'
+    window: 5m
+    group_by:
+    - key_value
+  emit:
+    kind: code_change
+    attach_view: true
+    context_window: 30m
+  cooldown: 5m
+  paused: true
+- name: ctx_acme_tares_context_changes
+  view: ctx_acme_tares_context_repo_activity
+  condition:
+    aggregate: count
+    predicate: '> 0'
+    window: 2m
+    group_by:
+    - key_value
+  emit:
+    kind: code_change
+    attach_view: true
+    context_window: 30m
+  cooldown: 5m
+  paused: true
+- name: nginx-4xx-5xx-spike
+  view: nginx-404s
+  condition:
+    aggregate: count
+    predicate: '>= 50'
+    window: 10m
+    field: nginx_status_code
+  emit:
+    kind: nginx_error_spike
+    context_window: 30m
+  cooldown: 15m
+- name: watch
+  view: watch
+  condition:
+    every: 10m
+    summary_by:
+    - service
+    - nginx_status_code
+    - path
+  emit: {}
+  cooldown: 5m
+- name: watcher-escalate
+  view: watcher-investigate
+  condition:
+    aggregate: count
+    predicate: '> 0'
+    window: 15m
+  emit: {}
+  cooldown: 30m
+agents:
+- name: ctx_acme_orbit_context_maintainer
+  trigger: ctx_acme_orbit_context_changes
+  prompt: 'You maintain the shared context repository `acme/orbit-context` (branch
+    `main`, pages under `/`) for the team. Its pages tell teammates and agents working
+    in other repos what each repository does and how it is used. Your input is the
+    attached timeline of recent commits to `one of the source repositories (the timeline
+    says which)`; the source repositories are: `acme/atlas-ui`, `acme/atlas-core`,
+    `acme/atlas-charts`, `acme/orbit-sdk-python`, `acme/orbit-sdk-typescript`,
+    `acme/orbit-mcp`, `acme/atlas-canary`.
+
+
+    Steps:
+
+    1. For each commit in the timeline call `github__get_commit` on its repository
+    and sha to see the diff. If the diff comes back truncated, fetch the specific
+    files you need with `github__get_file_contents` at that sha instead of guessing.
+
+    2. Decide whether the change alters anything a teammate or an agent working in
+    another repo must know: public interfaces, APIs and contracts, config and environment
+    variables, data schemas, deployment or runtime behaviour, dependencies between
+    repos, conventions. Ignore pure refactors, tests, formatting and version bumps
+    unless they change behaviour.
+
+    3. Read `<repo-name>.md` (repo-name is the part after the slash) with `github__get_file_contents`
+    from `acme/orbit-context` on `main`; if it does not exist, create it from
+    the page template below. Read `README.md` (the index) the same way and keep it
+    listing every repository page.
+
+    4. When writing with `github__create_or_update_file`, pass the complete new file
+    text in `content` (plain text, not base64), the file''s current `sha` when it
+    exists, `branch`, `path` and a `message`; if a call fails, read the error and
+    fix the arguments rather than retrying the same call. Rewrite only the sections
+    the change affects. Keep facts that still hold, drop what the diff makes false,
+    add what is new. Every claim carries the short sha of the commit it comes from,
+    like (abc1234). Keep the page short and factual; no filler.
+
+    5. Write the changed pages with `github__create_or_update_file` on a branch named
+    `tares/context-<repo-name>-<YYYYMMDD>` in `acme/orbit-context` (create the
+    branch from `main` with `github__create_branch` if it does not exist; if a pull
+    request from that branch is already open, add your commit to the same branch and
+    do not open another). Then open one pull request against `main` with `github__create_pull_request`,
+    titled `context: <repo-name>` and a body listing the commits (sha and first line)
+    it reflects.
+
+    6. If nothing needs updating, do not write anything; say why.
+
+
+    Finish with a finding for the timeline: what changed in the context repo and the
+    pull request or commit link, or "no update needed" with the reason. Keep the finding
+    under 12 lines. The finding is your final message and nothing else: do your reasoning
+    through tool calls, and only write the finding once you have decided; never narrate
+    what you are about to check.
+
+
+    Style, everywhere you write (pages, PR titles and bodies, the finding): plain
+    sentences, no em dashes; use a comma, a colon or a full stop instead.
+
+
+    Page template for `<repo-name>.md`:
+
+    # <repo-name>
+
+    Purpose: one paragraph.
+
+    ## How to run
+
+    ## Interfaces (APIs, events, CLIs)
+
+    ## Configuration
+
+    ## Data
+
+    ## Depends on / used by
+
+    ## Recent changes
+
+    - <date> <sha> one line
+
+
+    Index template for `README.md`: a title, one sentence saying Tares keeps these
+    pages current, then one line per repository linking its page.'
+  mcp_servers:
+  - ctx_acme_orbit_context_github
+  max_rounds: 15
+- name: ctx_acme_tares_context_maintainer
+  trigger: ctx_acme_tares_context_changes
+  prompt: 'You maintain the shared context repository `acme/tares-context` (branch
+    `main`, pages under `/`) for the team. Its pages tell teammates and agents working
+    in other repos what each repository does and how it is used. Your input is the
+    attached timeline of recent commits to `one of the source repositories (the timeline
+    says which)`; the source repositories are: `acme/tares-cloud`, `acme/tares`,
+    `acme/acme-docs`, `acme/tares-website`, `acme/tares-cookbooks`.
+
+
+    Steps:
+
+    1. For each commit in the timeline call `github__get_commit` on its repository
+    and sha to see the diff. If the diff comes back truncated, fetch the specific
+    files you need with `github__get_file_contents` at that sha instead of guessing.
+
+    2. Decide whether the change alters anything a teammate or an agent working in
+    another repo must know: public interfaces, APIs and contracts, config and environment
+    variables, data schemas, deployment or runtime behaviour, dependencies between
+    repos, conventions. Ignore pure refactors, tests, formatting and version bumps
+    unless they change behaviour.
+
+    3. The context repo already has its own pages under `/` on `main` (the team''s
+    layout, not one page per repository). First list that folder with `github__get_file_contents`
+    on the folder path, read the index or README if there is one, then read the page
+    or pages that cover what the commit changed. Look first for statements the change
+    makes false or outdated (a version, a default, a name, a path, a ''still to do''
+    note) and correct those where they are; only then add anything new. Update those
+    pages in place, keeping their structure, headings and voice. Create a new page
+    only when nothing existing covers the topic, name it like its neighbours, and
+    add it to the index if the repo keeps one. Never create a parallel set of per-repository
+    pages next to the team''s own.
+
+    4. When writing with `github__create_or_update_file`, pass the complete new file
+    text in `content` (plain text, not base64), the file''s current `sha` when it
+    exists, `branch`, `path` and a `message`; if a call fails, read the error and
+    fix the arguments rather than retrying the same call. Rewrite only the sections
+    the change affects. Keep facts that still hold, drop what the diff makes false,
+    add what is new. Every claim carries the short sha of the commit it comes from,
+    like (abc1234). Keep the page short and factual; no filler.
+
+    5. Write the changed pages with `github__create_or_update_file` on a branch named
+    `tares/context-<repo-name>-<YYYYMMDD>` in `acme/tares-context` (create the
+    branch from `main` with `github__create_branch` if it does not exist; if a pull
+    request from that branch is already open, add your commit to the same branch and
+    do not open another). Then open one pull request against `main` with `github__create_pull_request`,
+    titled `context: <repo-name>` and a body listing the commits (sha and first line)
+    it reflects.
+
+    6. If nothing needs updating, do not write anything; say why.
+
+
+    Finish with a finding for the timeline: what changed in the context repo and the
+    pull request or commit link, or "no update needed" with the reason. Keep the finding
+    under 12 lines. The finding is your final message and nothing else: do your reasoning
+    through tool calls, and only write the finding once you have decided; never narrate
+    what you are about to check.
+
+
+    Style, everywhere you write (pages, PR titles and bodies, the finding): plain
+    sentences, no em dashes; use a comma, a colon or a full stop instead.
+
+
+    When you do create a page, match the existing pages in shape; when in doubt, short
+    sections with a purpose paragraph, how it is used, configuration, and a recent
+    changes list with short shas.'
+  mcp_servers:
+  - ctx_acme_tares_context_github
+  max_rounds: 18
+- name: debug-my-errors
+  trigger: nginx-4xx-5xx-spike
+  prompt: "You are an SRE taking the first look when an error condition trips on a\
+    \ running service. You are handed the correlated timeline (logs, metrics, deploys,\
+    \ commits) for the affected entity \u2014 that is your primary evidence.\n\nDiagnose\
+    \ the most likely root cause: look for what changed (a deploy, a commit, a config\
+    \ value) just before the errors began, and connect it to the failure signature\
+    \ in the logs. If the timeline is insufficient, read a wider window (1h) once\
+    \ before concluding.\n\nProduce a tight incident note: 1) what is failing and\
+    \ since when, 2) most likely cause with the specific evidence lines, 3) suggested\
+    \ next action. Do not speculate beyond the evidence; say what you'd need if inconclusive.\
+    \ Your final message is recorded on this entity's timeline."
+  slack_channel: C0000000000
+- name: rca-from-watcher
+  trigger: watcher-escalate
+  prompt: 'You are an SRE doing root-cause analysis. A triage agent flagged the entity
+    you were woken for as worth a closer look; you are handed its finding (the numbers
+    that moved and why), not the logs. Fetch the evidence yourself: read the entity''s
+    timeline over the last hour, use stats to see which labels moved and since when,
+    and use any other tools you have (an MCP server for traces, for example).
+
+
+    Establish what is failing and since when, what changed just before it started,
+    and the most likely cause, grounded in what the tools returned. If the evidence
+    shows it is not a real problem, or it is already over, say so.
+
+
+    Always end with the conclude tool: outcome finding; verdict rca, or resolved if
+    it was noise or is already over; key and label exactly as in the triage finding
+    (its label is shown on the finding''s line, for example service=checkout or path=/docs/x);
+    summary is a short incident note that opens with one sentence stating your conclusion
+    (it is what a chat notification shows), then: 1) what is failing and since when,
+    2) the most likely cause with the evidence, 3) the suggested next action.'
+  model: claude-sonnet-5
+  slack_channel: C0000000000
+  budget_usd: 10.0
+  enabled: true
+- name: watcher
+  trigger: watch
+  prompt: 'You watch a system on a schedule. Every few minutes you are handed a summary
+    of one view''s last window: for each label, the count per value now against the
+    window before, and a few recent lines. Most windows are normal. Your job is to
+    say so quickly, or to flag the one entity that needs a closer look.
+
+
+    Rule first: consider only values that grew at least 3x and by at least 50 events
+    since the window before, or that are new with at least 50 events. Ignore routine
+    noise such as uptime probes and health checks, and values that only went down
+    or are gone. If nothing meets the rule, the window is normal.
+
+
+    Then judgment: among the values that meet the rule, decide whether one looks like
+    a problem (errors, 4xx or 5xx codes, failures, a sudden new source of traffic).
+    If you need more detail, call stats with a `where` or a different label, or read
+    a few lines; keep it to one or two calls.
+
+
+    Always end with the conclude tool:
+
+    - outcome no_op, with a one-line reason, when nothing needs a closer look;
+
+    - outcome finding with verdict investigate when something does: key is the entity
+    that looks off, label is the entity label the summary names (for example service),
+    and summary names the numbers that moved (now, before, change) and why it looks
+    like a problem.
+
+    Name the entity, not the symptom. If what moved is a status code or another attribute,
+    find which entity carries it (stats by the entity label with a `where` on that
+    attribute, for example by service where code=404) and name that entity.
+
+    Flag at most one entity per run, the most serious one.'
+  model: claude-haiku-4-5-20251001
+  budget_usd: 25.0
+  enabled: true
+mcp_servers:
+- name: ctx_acme_orbit_context_github
+  url: https://api.githubcopilot.com/mcp/
+  auth_header: Authorization
+  auth_value: credential:github/orbit-github-token
+  headers:
+    X-MCP-Toolsets: repos,pull_requests
+- name: ctx_acme_tares_context_github
+  url: https://api.githubcopilot.com/mcp/
+  auth_header: Authorization
+  auth_value: credential:github/tares-github-token
+  headers:
+    X-MCP-Toolsets: repos,pull_requests
+projects:
+- template: shared_code_context
+  name: tares-context-agent
+  params:
+    credential: tares-github-token
+    source_repos:
+    - repo: acme/tares-cloud
+      branch: main
+    - repo: acme/tares
+      branch: main
+    - repo: acme/acme-docs
+      branch: main
+    - repo: acme/tares-website
+      branch: main
+    - repo: acme/tares-cookbooks
+      branch: main
+    context_repo: acme/tares-context
+    context_path: ''
+    layout: existing
+    bootstrap: false
+    trigger: every_commit
+    write_mode: pull_request
+    model: claude-opus-5
+    max_rounds: 12
+    context_branch: main
+- template: shared_code_context
+  name: Orbit shared context
+  params:
+    credential: orbit-github-token
+    source_repos:
+    - repo: acme/atlas-ui
+      branch: main
+    - repo: acme/atlas-core
+      branch: main
+    - repo: acme/atlas-charts
+      branch: main
+    - repo: acme/orbit-sdk-python
+      branch: main
+    - repo: acme/orbit-sdk-typescript
+      branch: main
+    - repo: acme/orbit-mcp
+      branch: main
+    - repo: acme/atlas-canary
+      branch: main
+    context_repo: acme/orbit-context
+    context_path: ''
+    layout: per_repo
+    bootstrap: true
+    trigger: every_commit
+    write_mode: pull_request
+    context_branch: main
+    max_rounds: 20
+    model: ''
+- template: custom
+  name: Orbit-prod-sre
+  objects:
+  - kind: source
+    name: orbit-prod
+  - kind: view
+    name: atlas-status-codes
+  - kind: view
+    name: nginx-404s
+  - kind: trigger
+    name: atlas-errors
+  - kind: trigger
+    name: nginx-4xx-5xx-spike
+  - kind: agent
+    name: debug-my-errors

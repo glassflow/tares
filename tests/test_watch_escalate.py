@@ -1,7 +1,7 @@
 """Watch then escalate, end to end through the daemon (TR-320, TR-321, TR-322).
 
-A schedule trigger ticks on a view, a triage agent (the `triage` preset) is handed the window's
-summary and concludes `investigate` on one entity, a findings view filtered to that verdict wakes a
+A schedule trigger ticks on a source, a triage agent (the `triage` preset) is handed the window's
+summary and concludes `investigate` on one entity, a trigger over findings filtered to that verdict wakes a
 root-cause agent (the `rca-from-triage` preset), and its note lands on the same entity. On the next
 tick, triage concludes `no_op` and nothing escalates.
 
@@ -60,7 +60,7 @@ class Stub(BaseHTTPRequestHandler):
             if step == 0:
                 TRIAGE_TICKS.append(body["messages"][0]["content"])
                 content = [{"type": "tool_use", "id": "t1", "name": "stats",
-                            "input": {"view": "watch", "by": "code", "where": {"service": "ui"},
+                            "input": {"by": "code", "where": {"service": "ui"},
                                       "window": "1m"}}]
             elif len(TRIAGE_TICKS) == 1:
                 content = [{"type": "tool_use", "id": "t2", "name": "conclude", "input": {
@@ -100,20 +100,22 @@ async def until(fn, tries=120, every=0.5):
 def guard_checks():
     """The findings loop guard lets a handoff through and nothing else."""
     from tares.config import CatalogError, validate_agent_dict
-    trig = {"escalate": {"name": "escalate", "view": "f"}}
-
-    def ok(agent, filters):
+    def ok(agent, filters, sources=("findings",)):
+        trig = {"escalate": {"name": "escalate", "sources": list(sources), "filters": filters}}
         try:
             validate_agent_dict({"name": agent, "trigger": "escalate", "prompt": "p"}, {"escalate"},
-                                trig, {"f": {"name": "f", "sources": ["findings"], "filters": filters}})
+                                trig)
             return True
         except CatalogError:
             return False
     print("== the findings loop guard ==")
-    check("a view over all findings is still refused", not ok("rca", []))
-    check("a view over the agent's own findings is refused",
+    check("a trigger over all findings is still refused", not ok("rca", []))
+    check("a trigger over findings and another source is refused too",
+          not ok("rca", [], sources=("logs", "findings")))
+    check("a trigger over the agent's own findings is refused",
           not ok("rca", [{"field": "agent", "op": "eq", "value": "rca"}]))
-    check("a view over another agent's findings is a handoff, allowed",
+    check("a trigger that does not read findings is fine", ok("rca", [], sources=("logs",)))
+    check("a trigger over another agent's findings is a handoff, allowed",
           ok("rca", [{"field": "agent", "op": "eq", "value": "watcher"},
                      {"field": "verdict", "op": "eq", "value": "investigate"}]))
 
@@ -128,14 +130,12 @@ async def main():
             "        - {name: service, field: service, primary: true}\n"
             "        - {name: code, field: code}\n"
             "  - name: findings\n    connector: finding\n    poll: 5s\n    config: {}\n"
-            "views:\n"
-            "  - {name: watch, key_field: service, sources: [logs]}\n"
-            "  - name: triage-investigate\n    key_field: service\n    sources: [findings]\n"
+            "triggers:\n"
+            "  - name: escalate\n    sources: [findings]\n    key_field: service\n"
             "    filters:\n"
             "      - {field: agent, op: eq, value: watcher}\n"
             "      - {field: verdict, op: eq, value: investigate}\n"
-            "triggers:\n"
-            "  - name: escalate\n    view: triage-investigate\n    cooldown: 30m\n"
+            "    cooldown: 30m\n"
             "    condition: {aggregate: count, predicate: '> 0', window: 5m}\n")
     Stub.timeout = 5
     threading.Thread(target=HTTPServer(("127.0.0.1", int(STUB_PORT)), Stub).serve_forever,
@@ -167,7 +167,7 @@ async def main():
                                           ("rca", "escalate", "rca-from-triage")):
                 if name == "watcher":
                     r = await cx.post(f"{B}/api/triggers", json={
-                        "name": "watch-tick", "view": "watch",
+                        "name": "watch-tick", "sources": ["logs"], "key_field": "service",
                         "condition": {"every": "1m", "summary_by": ["service", "code"]}})
                     check("schedule trigger created over the API", r.status_code == 201, r.text[:200])
                 r = await cx.post(f"{B}/api/agents/builtin", json={

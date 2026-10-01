@@ -6,11 +6,10 @@ import type { ProjectObjectKind } from "../types";
 export type Dependent = { kind: ProjectObjectKind; name: string };
 
 // Inside a delete dialog: what else stops working if this object goes, and the choice to take
-// it along. Deleting a source used to be refused with "remove it from those views first", which
-// sent the user bottom-up through three pages; now the dialog lists the views, triggers and
-// agents that depend on it and, on yes, the delete cascades in the right order.
+// it along. The dialog lists the triggers and agents that depend on it and, on yes, the delete
+// cascades in the right order.
 export default function Dependents({ kind, name, cascade, onChange }: {
-  kind: "source" | "view" | "trigger"; name: string;
+  kind: "source" | "trigger"; name: string;
   cascade: boolean; onChange: (cascade: boolean, deps: Dependent[]) => void;
 }) {
   const [deps, setDeps] = useState<Dependent[]>();

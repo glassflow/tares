@@ -3,9 +3,9 @@
 Stateless: every tool call becomes one HTTP call to taresd. This is the only Tares surface the
 agent sees.
 
-Two tool groups: the READ surface (query/catalog/list_*) and the WRITE/SETUP surface
-(subscribe/derive/remember/discover_*/create_source/…), which lets an agent author views and wire
-up its own data sources. The design doc keeps admin ops off the MCP surface; exposing them here is a
+Two tool groups: the READ surface (read/catalog/list_*) and the WRITE/SETUP surface
+(subscribe/remember/discover_*/create_source/create_trigger/…), which lets an agent wire up its own
+data sources and the triggers over them, inside a project. The design doc keeps admin ops off the MCP surface; exposing them here is a
 deliberate MVP test of agent-operable onboarding (no auth — the proxy talks to the local daemon).
 """
 from __future__ import annotations
@@ -46,73 +46,83 @@ def writable():
 
 
 @mcp.tool()
-async def query(view: str, key: str = "", window: str = "15m",
-                where: dict | None = None, include_payload: bool = False) -> str:
-    """Pull one correlated, time-ordered view of everything that happened to an entity over a
-    window (metrics, logs, config, deploys, alerts) — already merged. Prefer this over many small
-    reads. Select the entity with `key` (the primary key) OR `where`, a {label: value} map on any
-    named label, e.g. {"env": "prod"} or {"env": "prod", "app": "ui"}. Use catalog_describe to
-    see a source's labels. Set `include_payload` when you need each event's full lossless record
-    (not just the one-line summary) — the return becomes JSON {timeline, events[]} where each event
-    carries a `raw` field."""
-    body = {"view": view, "window": window, "client": "mcp", "include_payload": include_payload}
-    if where:
-        body["where"] = where
-    if key:
-        body["key"] = key
+async def read(selector: dict, window: str = "15m", include_payload: bool = False,
+               project: str = "", sources: list[str] | None = None) -> str:
+    """Read one correlated, time-ordered timeline of everything matching `selector` across all
+    sources, or only a `project`'s sources, or only the `sources` you name. `selector` is a
+    {label: value} conjunction, matched with strict AND, e.g. {"repo": "frontend"} or
+    {"service": "api-server", "endpoint": "/login"}. An event matches only if it carries every
+    named label with that value, so adding a label narrows and removing one widens. Use this to
+    investigate any entity on the fly; once you know which sources matter, create_trigger() over
+    them. Set `include_payload` when the one-line summaries aren't enough and you need each
+    event's full lossless record: the return becomes JSON {timeline, events[]} where each event
+    carries `raw`. With a project key the read covers that project only, its findings
+    included."""
+    body = {"selector": selector, "window": window, "client": "mcp",
+            "include_payload": include_payload}
+    if project:
+        body["project"] = project
+    if sources:
+        body["sources"] = sources
     async with _cx(30) as cx:
-        r = await cx.post(f"{TARESD}/query", json=body)
+        r = await cx.post(f"{TARESD}/read", json=body)
     data = r.json()
+    if r.status_code >= 400:
+        return r.text
     if include_payload:
         return json.dumps({"timeline": data["payload"], "events": data["rows"]}, default=str)
     return data["payload"]
 
 
-@mcp.tool()
-async def read(selector: dict, window: str = "15m", include_payload: bool = False) -> str:
-    """Read one correlated, time-ordered timeline of everything matching `selector` across ALL
-    sources — no view needed. `selector` is a {label: value} conjunction, matched with strict AND,
-    e.g. {"project": "frontend"} or {"service": "api-server", "endpoint": "/login"}. An event
-    matches only if it carries every named label with that value, so adding a label narrows and
-    removing one widens. Use this to investigate any entity on the fly; once you know which sources
-    matter, save the slice with derive() to create a reusable view you can attach triggers to. Set
-    `include_payload` when the one-line summaries aren't enough and you need each event's full
-    lossless record — the return becomes JSON {timeline, events[]} where each event carries `raw`."""
-    async with _cx(30) as cx:
-        r = await cx.post(f"{TARESD}/read",
-                          json={"selector": selector, "window": window, "client": "mcp",
-                                "include_payload": include_payload})
-    data = r.json()
-    if include_payload:
-        return json.dumps({"timeline": data["payload"], "events": data["rows"]}, default=str)
-    return data["payload"]
+def _trigger_body(name: str, sources: list[str], condition: dict, filters, key_field: str,
+                  emit, cooldown: str, project: str, description: str | None = None) -> dict:
+    body = {"name": name, "sources": sources, "filters": filters or [],
+            "key_field": key_field, "condition": condition, "emit": emit or {},
+            "cooldown": cooldown}
+    if project:
+        body["project"] = project
+    if description is not None:
+        body["description"] = description
+    return body
 
 
 @writable()
-async def create_trigger(name: str, view: str, condition: dict,
-                         emit: dict | None = None, cooldown: str = "5m") -> str:
-    """Create a trigger — a condition Tares evaluates continuously over a view; when it trips,
-    subscribed agents are woken with the correlated timeline. `condition` is
-    {aggregate: any|avg|count|max|min|sum, field: numeric field to aggregate (omit for count),
-    predicate: e.g. '> 1.0' / '>= 5' / '== 0', window: detection window e.g. '1m'}. `emit` is
-    {kind: what a firing is called e.g. error_spike, context_window: timeline the woken agent
-    receives e.g. '15m'}. The view must exist (catalog_describe it to confirm the numeric field).
-    Wire agents to it with subscribe()."""
-    body = {"name": name, "view": view, "condition": condition,
-            "emit": emit or {}, "cooldown": cooldown}
+async def create_trigger(name: str, sources: list[str], condition: dict,
+                         filters: list[dict] | None = None, key_field: str = "",
+                         emit: dict | None = None, cooldown: str = "5m",
+                         project: str = "", description: str | None = None) -> str:
+    """Create a trigger: a condition Tares evaluates continuously over one or more sources; when
+    it trips, subscribed agents are woken with the correlated timeline. `sources` names the
+    sources it watches (at least one). `filters` [{field, op, value}] (ops: eq, neq, contains, gt,
+    lt, gte, lte) narrows them. `key_field` is the entity label (default: the primary label of the
+    first source). `condition` is {aggregate: any|avg|count|max|min|sum, field: numeric label to
+    aggregate (omit for count), predicate: e.g. '> 1.0' / '>= 5' / '== 0', window: detection
+    window e.g. '1m'}. `emit` is {kind: what a firing is called e.g. error_spike, context_window:
+    timeline the woken agent receives e.g. '15m'}. `project` is the project id the trigger belongs
+    to (default: the default project); its sources join that project. `description` (optional)
+    says in one plain line what wakes it, phrased to follow "When", e.g. "an alert fires in the
+    checkout service"; the project page uses it instead of the rule's own wording (at most 160
+    characters, one line). catalog_describe a source to confirm its labels first. Wire agents
+    to it with subscribe()."""
+    body = _trigger_body(name, sources, condition, filters, key_field, emit, cooldown, project,
+                         description)
     async with _cx(10) as cx:
         r = await cx.post(f"{TARESD}/api/triggers", json=body)
     return r.text
 
 
 @writable()
-async def update_trigger(name: str, view: str, condition: dict,
-                         emit: dict | None = None, cooldown: str = "5m") -> str:
-    """Edit an EXISTING trigger in place: replace its view, condition, emit, and cooldown. Create
-    new triggers with create_trigger() — this only updates one that already exists (renaming isn't
-    supported, so keep `name` the same). See create_trigger for the condition/emit shape."""
-    body = {"name": name, "view": view, "condition": condition,
-            "emit": emit or {}, "cooldown": cooldown}
+async def update_trigger(name: str, sources: list[str], condition: dict,
+                         filters: list[dict] | None = None, key_field: str = "",
+                         emit: dict | None = None, cooldown: str = "5m",
+                         project: str = "", description: str | None = None) -> str:
+    """Edit an EXISTING trigger in place: replace its sources, filters, key_field, condition,
+    emit and cooldown, and move it to another `project` when given. Create new triggers with
+    create_trigger(); this only updates one that already exists (renaming isn't supported, so
+    keep `name` the same). `description` left out keeps the current one, "" clears it. See
+    create_trigger for the shapes."""
+    body = _trigger_body(name, sources, condition, filters, key_field, emit, cooldown, project,
+                         description)
     async with _cx(10) as cx:
         r = await cx.put(f"{TARESD}/api/triggers/{name}", json=body)
     return r.text
@@ -128,7 +138,7 @@ async def subscribe(trigger: str, url: str) -> str:
 
 @mcp.tool()
 async def catalog_list() -> str:
-    """List available sources, views, and triggers."""
+    """List available sources, triggers and projects."""
     async with _cx(10) as cx:
         r = await cx.get(f"{TARESD}/catalog")
     return r.text
@@ -137,40 +147,11 @@ async def catalog_list() -> str:
 @mcp.tool()
 async def catalog_describe(handle: str) -> str:
     """Describe one catalog entry in full: schema (event types + typed fields, inferred from
-    stored events), freshness, lineage, and sample records. Handles look like source:logs,
-    view:service_timeline, trigger:error_spike. Use this to discover field names before
-    writing a derive() or querying an unfamiliar view."""
+    stored events), freshness, lineage, and sample records. Handles look like source:logs or
+    trigger:error_spike. Use this to discover label names before creating a trigger or reading
+    an unfamiliar source."""
     async with _cx(10) as cx:
         r = await cx.get(f"{TARESD}/catalog/{handle}")
-    return r.text
-
-
-@writable()
-async def derive(sources: list[str], key_field: str, name: str = "",
-                 filters: list[dict] | None = None) -> str:
-    """Propose a new view shaped the way YOU want to read: pick the sources to correlate, what
-    the key means, and optional filters [{field, op, value}] (ops: eq, neq, contains, gt, lt,
-    gte, lte) to narrow it. Returns a handle immediately queryable with query(). Use
-    catalog_describe first to learn the available fields."""
-    body = {"sources": sources, "key_field": key_field, "filters": filters or [],
-            "client": "mcp"}
-    if name:
-        body["name"] = name
-    async with _cx(10) as cx:
-        r = await cx.post(f"{TARESD}/derive", json=body)
-    return r.text
-
-
-@writable()
-async def update_view(name: str, sources: list[str], key_field: str = "",
-                      filters: list[dict] | None = None) -> str:
-    """Edit an EXISTING view in place: replace its sources, key_field, and filters. Create new
-    views with derive() — this only updates one that already exists (renaming isn't supported, so
-    keep `name` the same). filters are [{field, op, value}] (ops: eq, neq, contains, gt, lt, gte,
-    lte). Use catalog_describe first to learn the available fields."""
-    body = {"name": name, "key_field": key_field, "sources": sources, "filters": filters or []}
-    async with _cx(10) as cx:
-        r = await cx.put(f"{TARESD}/api/views/{name}", json=body)
     return r.text
 
 
@@ -243,14 +224,18 @@ async def test_source(name: str, connector: str, config: dict, poll: str = "5s")
 
 
 @writable()
-async def create_source(name: str, connector: str, config: dict, poll: str = "5s") -> str:
+async def create_source(name: str, connector: str, config: dict, poll: str = "5s",
+                        project: str = "") -> str:
     """Create a data source so Tares starts ingesting it immediately (no restart). `config` is
     the connector's config (see list_connectors / discover_source); push connectors ignore `poll`.
-    Returns {ok, name} or an error detail. After creating, use list_sources to watch it ingest and
-    catalog_describe("source:<name>") to see its labels."""
+    `project` is the project id the source joins (default: the default project); other projects
+    can use it too. Returns {ok, name} or an error detail. After creating, use list_sources to
+    watch it ingest and catalog_describe("source:<name>") to see its labels."""
+    body = {"name": name, "connector": connector, "poll": poll, "config": config}
+    if project:
+        body["project"] = project
     async with _cx(15) as cx:
-        r = await cx.post(f"{TARESD}/api/sources",
-                          json={"name": name, "connector": connector, "poll": poll, "config": config})
+        r = await cx.post(f"{TARESD}/api/sources", json=body)
     return r.text
 
 
@@ -271,6 +256,161 @@ async def source_fields(name: str, limit: int = 500) -> str:
     invent one). The `labels` block echoes the source's current declared axes."""
     async with _cx(15) as cx:
         r = await cx.get(f"{TARESD}/api/sources/{name}/fields", params={"limit": limit})
+    return r.text
+
+
+# ── joining a project (TR-336): an outside agent works inside one project ────
+# With a project key the project is implied (the key reads that one only). With any other
+# credential, or none on an open instance, `project` names it (an id or a name); it may be left
+# out while there is only one project.
+
+async def _project_id(cx, project: str = "") -> tuple[str | None, str | None]:
+    """(project id, None) or (None, the reason to tell the agent)."""
+    project = (project or "").strip()
+    r = await cx.get(f"{TARESD}/api/whoami")
+    who = r.json() if r.status_code == 200 else {}
+    if who.get("project"):
+        if project and project not in (who["project"], who.get("project_name")):
+            return None, (f"this key reads project {who.get('project_name') or who['project']} "
+                          "only; leave project out")
+        return who["project"], None
+    r = await cx.get(f"{TARESD}/api/projects")
+    if r.status_code >= 400:
+        return None, r.text
+    found = r.json().get("projects") or []
+    if project:
+        hit = next((p for p in found if project in (p["id"], p["name"])), None)
+        if hit is None:
+            return None, f"no project {project!r}; list_projects shows the ones there are"
+        return hit["id"], None
+    if len(found) == 1:
+        return found[0]["id"], None
+    return None, ("name the project, one of: " + ", ".join(p["name"] for p in found)
+                  if found else "there is no project yet")
+
+
+@mcp.tool()
+async def list_projects() -> str:
+    """List the projects you can work in: id, name, template and status. With a project key it is
+    the one project the key belongs to."""
+    async with _cx(10) as cx:
+        r = await cx.get(f"{TARESD}/api/projects")
+    if r.status_code >= 400:
+        return r.text
+    return json.dumps([{k: p.get(k) for k in ("id", "name", "template", "status")}
+                       for p in r.json().get("projects") or []], default=str)
+
+
+@mcp.tool()
+async def join_project(url: str, project: str = "") -> str:
+    """Join a project: Tares POSTs every firing of every trigger in the project to `url` (your
+    agent's webhook), the triggers added later included. The body carries dispatch_id, trigger,
+    project, key (the entity), fired_at, payload (the timeline) and run_ids (the Tares agents it
+    woke). Returns the subscription id."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/subscribe", json={"url": url})
+    return r.text
+
+
+@mcp.tool()
+async def stats(by: str, window: str = "30m", where: dict | None = None, top: int = 20,
+                sources: list[str] | None = None, project: str = "") -> str:
+    """Counts per value of the label `by` over the project's sources, the last `window` against
+    the window before, largest change first. `where` {label: value} narrows the events counted,
+    `sources` narrows the sources. Use it to see what moved before reading one entity."""
+    body = {"by": by, "window": window, "top": top}
+    if where:
+        body["where"] = where
+    if sources:
+        body["sources"] = sources
+    async with _cx(30) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/stats", json=body)
+    return r.json()["stats"] if r.status_code == 200 else r.text
+
+
+@mcp.tool()
+async def list_skills(project: str = "") -> str:
+    """List the project's skills: name and description. Load one with get_skill before relying
+    on it, only when your task matches its description."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/skills")
+    if r.status_code >= 400:
+        return r.text
+    return json.dumps([{"name": s["name"], "description": s["description"]} for s in r.json()])
+
+
+@mcp.tool()
+async def get_skill(name: str, project: str = "") -> str:
+    """The instructions of one of the project's skills, as markdown."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/skills/{name}")
+    return r.json()["body"] if r.status_code == 200 else r.text
+
+
+@mcp.tool()
+async def list_findings(entity: str = "", agent: str = "", limit: int = 20,
+                        project: str = "") -> str:
+    """The findings recorded in the project, newest first: its Tares agents' and the ones
+    external agents recorded. `entity` and `agent` narrow them. Read them before concluding, so
+    you build on what is known instead of repeating it."""
+    params = {"limit": limit, **({"entity": entity} if entity else {}),
+              **({"agent": agent} if agent else {})}
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/findings", params=params)
+    return json.dumps(r.json()["findings"], default=str) if r.status_code == 200 else r.text
+
+
+@mcp.tool()
+async def record_finding(entity: str, finding: str, verdict: str = "", label: str = "",
+                         project: str = "", headline: str = "", next_step: str = "") -> str:
+    """Record what you concluded about an entity (a service, a repo, a customer) in the project.
+    It lands on the entity's timeline next to the Tares agents' findings and in the project's
+    activity, under your key's name. `finding` is markdown; `verdict` one lowercase word (for
+    example rca or resolved); `label` the label the entity is a value of when it is not the
+    project's usual one (for example service). `headline` is one line (at most 100 characters)
+    saying what you found, and `next_step` what a person should do (empty when nothing needs
+    doing): both show on the project's Overview."""
+    body = {"entity": entity, "finding": finding}
+    if headline:
+        body["headline"] = headline
+    if next_step:
+        body["next_step"] = next_step
+    if verdict:
+        body["verdict"] = verdict
+    if label:
+        body["label"] = label
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/findings", json=body)
+    return r.text
+
+
+@mcp.tool()
+async def project_timeline(limit: int = 20, project: str = "") -> str:
+    """What happened in the project, newest first: each firing with the runs it woke and their
+    findings, and the findings recorded without a firing (external agents' among them)."""
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/timeline", params={"limit": limit})
     return r.text
 
 
