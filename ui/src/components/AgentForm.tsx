@@ -240,7 +240,8 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
       ) : (
         // The name is fixed after creation; the trigger can change, or go: an agent without one
         // is started only by a handoff.
-        <table style={{ marginBottom: 12 }}>
+        // overflow visible: the trigger picker's menu opens below the table, not clipped by it
+        <table style={{ marginBottom: 12, overflow: "visible" }}>
           <tbody>
             <tr><td className="help" style={{ width: 120 }}>name</td>
                 <td className="mono">{name} <span className="help">fixed</span></td></tr>
