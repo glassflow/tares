@@ -523,6 +523,10 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
             uid = _resolve_project(store, sk["project"]) if sk["project"] \
                 else store.default_project_id()
             store.upsert_skill(uid, sk["name"], sk["description"], sk["body"])
+            for ref in sk.get("used_by") or []:
+                other = _resolve_project(store, ref)
+                if other is not None:
+                    store.use_skill(other, sk["name"])
 
     return {"sources": len(sources), "triggers": len(triggers),
             "agents": len(agents), "mcp_servers": len(mcp_servers), "projects": len(projects),
@@ -557,7 +561,9 @@ def _validated_skills(raw) -> list[dict]:
         if (project, name) in seen:
             raise CatalogError(f"skill {name!r} appears twice for project {project or 'Default'!r}")
         seen.add((project, name))
-        out.append({"project": project, "name": name, "description": description, "body": body})
+        used_by = [str(x).strip() for x in sk.get("used_by") or [] if str(x).strip()]
+        out.append({"project": project, "name": name, "description": description, "body": body,
+                    "used_by": used_by})
     return out
 
 
@@ -773,9 +779,16 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
         doc["projects"] = uc_out
     # Skills belong to a project, not to a source: a full export carries them, a partial one
     # (a subset of sources) does not.
-    skill_out = [{"project": _pname(sk["project"]), "name": sk["name"],
-                  "description": sk["description"], "body": sk["body"]}
-                 for sk in store.list_all_skills() if _pname(sk["project"])]
+    # a skill once, by the project that made it (else its first user), with the others using it
+    skill_out = []
+    for sk in store.list_all_skills():
+        users = [n for n in (_pname(p) for p in sk.get("projects") or []) if n]
+        home = _pname(sk["project"]) if _pname(sk["project"]) in users else (users[0] if users else None)
+        if home is None:
+            continue
+        others = [n for n in users if n != home]
+        skill_out.append({"project": home, "name": sk["name"], "description": sk["description"],
+                          "body": sk["body"], **({"used_by": others} if others else {})})
     if skill_out and want is None:
         doc["skills"] = skill_out
     # the wiring every project holds (P-TR-216): what wakes which agent, who digs in on what

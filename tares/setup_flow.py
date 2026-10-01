@@ -165,6 +165,9 @@ PLAN_SCHEMA = {"type": "object", "properties": {
     "skills": {"type": "array", "description": "know-how, at most 2",
                "items": {"type": "object", "properties": {
                    "key": _S, "name": {"type": "string", "description": "lowercase-dashed"},
+                   "existing": {"type": "boolean",
+                                "description": "true: a skill already on Tares (its exact name), "
+                                               "used as it is"},
                    "description": _S, "body": {"type": "string", "description": "markdown"},
                    "enabled": {"type": "boolean"}},
                    "required": ["key", "name", "description", "body"]}},
@@ -212,6 +215,7 @@ otherwise do not mention it.
 (deploys, tickets, code); enabled false, url empty unless the person gave one, can_act true when \
 it can change things.
 - Reuse what is on Tares: an existing source (existing true), an existing tool (its exact name),
+  an existing skill when it fits (existing true, its exact name),
   an existing agent when one already does the job (existing true, its exact name; its
   instructions stay as they are). Parts are shared between projects.
 - Slack: when the goal asks to be told or messaged in Slack, set slack true on the agent whose finding should be posted. Tares posts it to a channel itself; never suggest a Slack MCP server for that, and never ask for a channel: the person picks it.
@@ -728,12 +732,24 @@ def _normalize(raw, store, catalog, prev: dict | None,
 
     # skills
     skills, seen_skills = [], set()
+    on_cell = {x["name"]: x for x in store.list_all_skills()}
     for i, sk in enumerate(x for x in plan.get("skills") or [] if isinstance(x, dict)):
         sk = dict(sk)
         sk["key"] = str(sk.get("key") or f"s{i + 1}")
-        sk["name"] = _unique(slug(sk.get("name")) or f"skill-{i + 1}", seen_skills)
-        seen_skills.add(sk["name"])
         sk["enabled"] = bool(sk.get("enabled", True))
+        orig = str(sk.get("name") or "").strip()
+        if sk.get("existing") and orig in on_cell and orig not in seen_skills:
+            # a skill already on Tares (shared, P-TR-216): used as it is
+            have = on_cell[orig]
+            sk.update(name=orig, existing=True, description=have["description"], body=have["body"])
+            seen_skills.add(orig)
+            skills.append(sk)
+            continue
+        sk["existing"] = False
+        # a new skill never takes the name of one on Tares: that one is shared, and would change
+        # for every project that uses it
+        sk["name"] = _unique(slug(orig) or f"skill-{i + 1}", seen_skills | set(on_cell))
+        seen_skills.add(sk["name"])
         try:
             _n, sk["description"], sk["body"] = _skills.validate(sk["name"], sk.get("description"),
                                                                  sk.get("body"))
@@ -986,6 +1002,8 @@ def _context(store, catalog, existing_sources: bool) -> str:
         agents = [f"- {a['name']}: {' '.join(str(a.get('prompt') or '').split())[:140]}"
                   for a in store.list_catalog_agents()]
         out += "\n\nExisting tools:\n" + ("\n".join(tools) if tools else "- none")
+        sks = [f"- {x['name']}: {x['description']}" for x in store.list_all_skills()]
+        out += "\n\nExisting skills:\n" + ("\n".join(sks) if sks else "- none")
         out += "\n\nExisting agents:\n" + ("\n".join(agents) if agents else "- none")
     return out
 
@@ -1193,10 +1211,13 @@ def apply(store, engine, plan: dict, make_key, draft: str | None = None) -> tupl
         usable_tools = {t["name"] for t in plan["tools"] if t["enabled"]}
 
         step = "skills"
+        for s in plan["skills"]:
+            if s["enabled"] and s.get("existing"):
+                store.use_skill(uid, s["name"])   # shared: this project uses it too
         objs = [PlannedObject("skill", f"skill:{s['name']}",
                               {"name": s["name"], "description": s["description"],
                                "body": s["body"]})
-                for s in plan["skills"] if s["enabled"]]
+                for s in plan["skills"] if s["enabled"] and not s.get("existing")]
         made += objs
         engine._apply(uid, objs)
 

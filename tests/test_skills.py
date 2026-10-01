@@ -198,28 +198,36 @@ async def api():
         ck("upload that is not UTF-8 -> 400", r.status_code == 400, r.text)
 
         print("== export / import ==")
-        await cx.post(f"/api/projects/{p2}/skills", json={"name": "triage", "description": "Pay.",
-                                                           "body": "pay body"})
+        # skills are shared (P-TR-216): Payments uses Checkout's triage instead of its own copy
+        r = await cx.post(f"/api/projects/{p2}/skills", json={"name": "triage", "description": "Pay.",
+                                                               "body": "pay body"})
+        ck("a second skill of a name already on Tares -> 409, use it instead",
+           r.status_code == 409 and "already on Tares" in r.text, r.text)
+        r = await cx.post(f"/api/projects/{p2}/skills/triage/use")
+        ck("Payments uses Checkout's triage", r.status_code == 200
+           and r.json()["body"] == "# Steps\n\n1. look", r.text)
         text = (await cx.get("/api/catalog/export")).text
         doc = yaml.safe_load(text)
         got = {(s["project"], s["name"]): s for s in doc.get("skills") or []}
-        ck("export lists every skill with its project by name",
-           set(got) == {("Checkout", "triage"), ("Checkout", "triage-notes"),
-                        ("Payments", "triage")}, str(set(got)))
-        ck("export carries description and body",
-           got[("Payments", "triage")]["body"] == "pay body"
-           and got[("Checkout", "triage")]["description"] == "Triage, revised.", str(got))
+        ck("export lists every skill once, by the project that made it",
+           set(got) == {("Checkout", "triage"), ("Checkout", "triage-notes")}, str(set(got)))
+        ck("export carries description, body and who else uses it",
+           got[("Checkout", "triage")]["description"] == "Triage, revised."
+           and got[("Checkout", "triage")]["used_by"] == ["Payments"], str(got))
         ck("a partial export carries no skills",
            "skills" not in yaml.safe_load((await cx.get("/api/catalog/export?sources=x")).text))
-        await cx.delete(f"{base}/triage")
+        r = await cx.delete(f"{base}/triage")
+        ck("Checkout stops using it; Payments still does, so it stays",
+           r.json().get("kept_for") == [p2] and (await cx.get(f"/api/projects/{p2}/skills/triage")).status_code == 200,
+           r.text)
         await cx.put(f"/api/projects/{p2}/skills/triage", json={"body": "changed"})
         r = await cx.post("/api/catalog/import", json={"yaml": text, "mode": "merge"})
-        ck("import -> 200 counting skills", r.status_code == 200 and r.json()["skills"] == 3, r.text)
+        ck("import -> 200 counting skills", r.status_code == 200 and r.json()["skills"] == 2, r.text)
         r = await cx.get(f"{base}/triage")
-        ck("a deleted skill comes back", r.status_code == 200
+        ck("Checkout uses it again, set back to the file", r.status_code == 200
            and r.json()["body"] == "# Steps\n\n1. look", r.text)
         r = await cx.get(f"/api/projects/{p2}/skills/triage")
-        ck("an edited skill is set back to the file", r.json()["body"] == "pay body", r.text)
+        ck("and Payments sees the same skill", r.json()["body"] == "# Steps\n\n1. look", r.text)
         bad = yaml.safe_dump({"skills": [{"project": "Nowhere", "name": "x", "description": "d",
                                           "body": "b"}]})
         r = await cx.post("/api/catalog/import", json={"yaml": bad, "mode": "merge"})

@@ -34,7 +34,7 @@ export function SkillView({ ctx, name }: { ctx: Ctx; name: string }) {
       <ViewHead title={<span className="mono">{data.name}</span>} sub={data.description}>
         {!editing && <>
           <button className="primary" onClick={() => setEditing(true)}>Edit</button>
-          <button className="danger" onClick={() => setConfirmDel(true)}>Delete</button>
+          <button className="danger" onClick={() => setConfirmDel(true)}>Remove</button>
         </>}
       </ViewHead>
       {editing ? (
@@ -55,8 +55,8 @@ export function SkillView({ ctx, name }: { ctx: Ctx; name: string }) {
         </>
       )}
       {confirmDel && (
-        <ConfirmDialog title={`Delete skill ${name}?`} danger confirmLabel="Delete"
-          message="The project's agents stop seeing it from their next run. Runs that loaded it keep the record."
+        <ConfirmDialog title={`Remove skill ${name} from this project?`} danger confirmLabel="Remove"
+          message="The project's agents stop seeing it from their next run. Other projects that use it keep it; it is deleted when no project uses it. Runs that loaded it keep the record."
           onCancel={() => setConfirmDel(false)}
           onConfirm={async () => {
             setConfirmDel(false);

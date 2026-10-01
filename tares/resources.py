@@ -108,12 +108,11 @@ def list_resources(store, catalog, runtime_health: dict | None = None, now=None)
 
     skills = []
     for sk in store.list_all_skills():
-        pid = sk.get("project")
         skills.append({
             "name": sk["name"], "what": sk.get("description") or "",
             "state": "active",
-            "used_by": [{"id": pid, "name": projects[pid]}] if pid in projects else []})
-    skills.sort(key=lambda s: (s["name"], s["used_by"][0]["name"] if s["used_by"] else ""))
+            "used_by": sorted(({"id": p, "name": projects[p]} for p in sk.get("projects") or []
+                               if p in projects), key=lambda x: x["name"].lower())})
 
     keys = []
     for k in store.list_api_keys():

@@ -3531,8 +3531,29 @@ def make_app() -> FastAPI:
         if store.get_skill(uid, name) is not None:
             _err(ValueError(f"this project already has a skill named {name!r}; edit it "
                             "instead"), 409)
+        if store.get_skill(None, name) is not None:
+            # skills are shared (P-TR-216): one by that name is already on Tares
+            _err(ValueError(f"a skill named {name!r} is already on Tares; use it, or give "
+                            "this one another name"), 409)
         store.upsert_skill(uid, name, description, text)
         return _skill_or_404(uid, name)
+
+    @app.post("/api/projects/{uid}/skills/{name}/use")
+    async def use_skill(uid: str, name: str):
+        """The project uses a skill already on Tares (shared: an edit shows in every project
+        that uses it)."""
+        _skill_project(uid)
+        if not store.use_skill(uid, name):
+            _err(KeyError(f"there is no skill named {name!r} on Tares"), 404)
+        return _skill_or_404(uid, name)
+
+    @app.get("/api/skills")
+    async def list_cell_skills():
+        """Every skill on Tares, with the projects that use it (no bodies)."""
+        names = {p["id"]: p["name"] for p in store.list_projects()}
+        return [{"name": sk["name"], "description": sk["description"],
+                 "used_by": [{"id": p, "name": names.get(p, p)} for p in sk["projects"]]}
+                for sk in store.list_all_skills()]
 
     @app.put("/api/projects/{uid}/skills/{name}")
     async def update_skill(uid: str, name: str, body: dict = Body(...)):
@@ -3550,10 +3571,13 @@ def make_app() -> FastAPI:
 
     @app.delete("/api/projects/{uid}/skills/{name}")
     async def delete_skill(uid: str, name: str):
+        """The project stops using the skill; it is deleted when no other project uses it."""
         _skill_project(uid)
+        others = [p for p in store.skill_users(name) if p != uid]
         if not store.delete_skill(uid, name):
             _err(KeyError(f"project has no skill named {name!r}"), 404)
-        return {"ok": True, "deleted": name}
+        return {"ok": True, "deleted": name if not others else None, "removed": name,
+                "kept_for": others}
 
     @app.post("/api/projects/{uid}/skills/upload")
     async def upload_skill(uid: str, request: Request):

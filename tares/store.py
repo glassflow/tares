@@ -271,6 +271,17 @@ CREATE TABLE IF NOT EXISTS dispatch_projects (
   project     TEXT,
   PRIMARY KEY (dispatch_id, project)
 );
+-- Skills shared by the cell (P-TR-216): one row per skill, and the projects that use one list it
+-- in usecase_objects (kind 'skill'). `made_by`: the project that wrote it. The per-project
+-- `skills` table below is what they were before: read once by the upgrade, then left alone.
+CREATE TABLE IF NOT EXISTS shared_skills (
+  name        TEXT PRIMARY KEY,
+  description TEXT,
+  body        TEXT,
+  made_by     TEXT,
+  created_at  TIMESTAMPTZ,
+  updated_at  TIMESTAMPTZ
+);
 CREATE TABLE IF NOT EXISTS skills (
   project     TEXT,
   name        TEXT,
@@ -582,6 +593,7 @@ class Store:
             self._normalize_projects()
             self._lineage_upgrade()
             self._wiring_upgrade()
+            self._skills_upgrade()
             self._init_source_stats()
             self._init_entity_counts()
             # Write the upgrade into the database file now. Left in the WAL, the new columns on
@@ -742,6 +754,43 @@ class Store:
         self.con.execute("BEGIN TRANSACTION")
         try:
             self._wiring_move()
+            self.con.execute("COMMIT")
+        except Exception:
+            self.con.execute("ROLLBACK")
+            raise
+
+    def _skills_upgrade(self) -> None:
+        """Once per database: the skills each project kept become skills of the cell that those
+        projects use. Two projects' skills of the same name and text are one skill; the same name
+        with different text keeps both, the second named name-2 (and so on)."""
+        if self.con.execute("SELECT 1 FROM settings WHERE key = 'skills_shared'").fetchone():
+            return
+        self.con.execute("BEGIN TRANSACTION")
+        try:
+            for project, name, desc, body, c, u in self.con.execute(
+                    "SELECT project, name, description, body, created_at, updated_at FROM skills "
+                    "ORDER BY created_at, project").fetchall():
+                use, n = name, 2
+                while True:
+                    have = self.con.execute("SELECT body FROM shared_skills WHERE name = ?",
+                                            [use]).fetchone()
+                    if have is None or have[0] == body:
+                        break
+                    use, n = f"{name}-{n}", n + 1
+                if have is None:
+                    self.con.execute("INSERT INTO shared_skills (name, description, body, made_by, "
+                                     "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                                     [use, desc, body, project, c, u])
+                if use != name:   # the project's own row follows the new name
+                    self.con.execute("UPDATE usecase_objects SET name = ? WHERE usecase_id = ? "
+                                     "AND kind = 'skill' AND name = ?", [use, project, name])
+                self.con.execute(
+                    "INSERT INTO usecase_objects (usecase_id, kind, key, name, customized, "
+                    "created_at) SELECT ?, 'skill', ?, ?, FALSE, ? WHERE NOT EXISTS (SELECT 1 FROM "
+                    "usecase_objects WHERE usecase_id = ? AND kind = 'skill' AND name = ?)",
+                    [project, f"skill:{use}", use, c or now_utc(), project, use])
+            self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
+                             "('skills_shared', '1', ?) ON CONFLICT (key) DO NOTHING", [now_utc()])
             self.con.execute("COMMIT")
         except Exception:
             self.con.execute("ROLLBACK")
@@ -2079,13 +2128,13 @@ class Store:
 
     def delete_project(self, uid: str) -> None:
         with self._lock:
-            self.con.execute("DELETE FROM skills WHERE project = ?", [uid])
             # its keys stop working and nothing is delivered for it any more (TR-335)
             self.con.execute("UPDATE api_keys SET revoked_at = ? WHERE project = ? "
                              "AND revoked_at IS NULL", [now_utc(), uid])
             self.con.execute("DELETE FROM subscriptions WHERE project = ?", [uid])
             self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ?", [uid])
             self.con.execute("DELETE FROM project_wiring WHERE project = ?", [uid])
+            self._forget_unused_skills()   # a skill another project uses stays
             self.con.execute("DELETE FROM usecase_log WHERE usecase_id = ?", [uid])
             self.con.execute("DELETE FROM usecases WHERE id = ?", [uid])
 
@@ -2122,51 +2171,95 @@ class Store:
             self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = ? "
                              "AND key = ?", [uid, kind, key])
 
-    # ── skills (TR-332): per project, validated by tares/skills.py before they get here ──
+    # ── skills (TR-332): parts of the cell (P-TR-216), used by projects; validated by
+    # tares/skills.py before they get here ──
     def list_skills(self, project: str) -> list[dict]:
-        """A project's skills without their bodies: name, description, updated_at, size (bytes
-        of the body)."""
+        """The skills a project uses, without their bodies: name, description, updated_at, size
+        (bytes of the body)."""
         with self._lock:
             rows = self.con.execute(
-                "SELECT name, description, updated_at, octet_length(encode(body)) FROM skills "
-                "WHERE project = ? ORDER BY name", [project]).fetchall()
+                "SELECT DISTINCT s.name, s.description, s.updated_at, octet_length(encode(s.body)) "
+                "FROM shared_skills s JOIN usecase_objects o ON o.kind = 'skill' AND o.name = s.name "
+                "WHERE o.usecase_id = ? ORDER BY s.name", [project]).fetchall()
         return [{"name": r[0], "description": r[1], "updated_at": r[2], "size": int(r[3] or 0)}
                 for r in rows]
 
     def list_all_skills(self) -> list[dict]:
-        """Every skill with its body and project id, for the catalog export."""
+        """Every skill on the cell with its body, the project that made it (`project`) and the
+        projects that use it (`projects`)."""
         with self._lock:
-            rows = self.con.execute("SELECT project, name, description, body FROM skills "
-                                    "ORDER BY project, name").fetchall()
-        return [{"project": r[0], "name": r[1], "description": r[2], "body": r[3]} for r in rows]
+            rows = self.con.execute("SELECT name, description, body, made_by FROM shared_skills "
+                                    "ORDER BY name").fetchall()
+            users = self.con.execute("SELECT name, usecase_id FROM usecase_objects WHERE "
+                                     "kind = 'skill' GROUP BY name, usecase_id").fetchall()
+        by: dict[str, list] = {}
+        for n, u in users:
+            by.setdefault(n, []).append(u)
+        return [{"project": r[3], "name": r[0], "description": r[1], "body": r[2],
+                 "projects": sorted(by.get(r[0], []))} for r in rows]
 
-    def get_skill(self, project: str, name: str) -> dict | None:
+    def get_skill(self, project: str | None, name: str) -> dict | None:
+        """A skill the project uses (any project, with None)."""
         with self._lock:
+            if project is not None and not self.con.execute(
+                    "SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND kind = 'skill' "
+                    "AND name = ?", [project, name]).fetchone():
+                return None
             r = self.con.execute(
-                "SELECT name, description, body, created_at, updated_at FROM skills "
-                "WHERE project = ? AND name = ?", [project, name]).fetchone()
+                "SELECT name, description, body, created_at, updated_at FROM shared_skills "
+                "WHERE name = ?", [name]).fetchone()
         return ({"name": r[0], "description": r[1], "body": r[2], "created_at": r[3],
                  "updated_at": r[4]} if r else None)
 
+    def _use_skill(self, project: str, name: str) -> bool:
+        """The project uses the skill; True when it did not before. Lock held."""
+        if self.con.execute("SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND kind = 'skill' "
+                            "AND name = ?", [project, name]).fetchone():
+            return False
+        self.con.execute("INSERT INTO usecase_objects (usecase_id, kind, key, name, customized, "
+                         "created_at) VALUES (?, 'skill', ?, ?, FALSE, ?) ON CONFLICT DO NOTHING",
+                         [project, f"skill:{name}", name, now_utc()])
+        return True
+
+    def use_skill(self, project: str, name: str) -> bool:
+        """A skill already on the cell, used by one more project. False when there is no such
+        skill; the project already using it is fine."""
+        with self._lock:
+            if not self.con.execute("SELECT 1 FROM shared_skills WHERE name = ?", [name]).fetchone():
+                return False
+            self._use_skill(project, name)
+        return True
+
     def upsert_skill(self, project: str, name: str, description: str, body: str) -> bool:
-        """Create or replace. Returns True when the skill is new."""
+        """Create or replace the skill (shared: every project that uses it sees the change), and
+        have the project use it. Returns True when the project did not have it before."""
         ts = now_utc()
         with self._lock:
-            new = self.con.execute("SELECT 1 FROM skills WHERE project = ? AND name = ?",
-                                   [project, name]).fetchone() is None
             self.con.execute(
-                "INSERT INTO skills (project, name, description, body, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (project, name) DO UPDATE SET "
+                "INSERT INTO shared_skills (name, description, body, made_by, created_at, "
+                "updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (name) DO UPDATE SET "
                 "description = excluded.description, body = excluded.body, "
-                "updated_at = excluded.updated_at", [project, name, description, body, ts, ts])
-        return new
+                "updated_at = excluded.updated_at", [name, description, body, project, ts, ts])
+            return self._use_skill(project, name)
 
     def delete_skill(self, project: str, name: str) -> bool:
+        """The project stops using the skill; the skill goes when no project uses it any more.
+        Returns whether the project had it."""
         with self._lock:
-            gone = self.con.execute("SELECT 1 FROM skills WHERE project = ? AND name = ?",
-                                    [project, name]).fetchone() is not None
-            self.con.execute("DELETE FROM skills WHERE project = ? AND name = ?", [project, name])
-        return gone
+            had = self.con.execute("SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND "
+                                   "kind = 'skill' AND name = ?", [project, name]).fetchone()
+            self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = 'skill' "
+                             "AND name = ?", [project, name])
+            self._forget_unused_skills()
+        return had is not None
+
+    def _forget_unused_skills(self) -> None:
+        """Skills no project uses any more go. Lock held."""
+        self.con.execute("DELETE FROM shared_skills WHERE name NOT IN (SELECT name FROM "
+                         "usecase_objects WHERE kind = 'skill')")
+
+    def skill_users(self, name: str) -> list[str]:
+        return self.projects_using("skill", name)
 
     def mark_skill_customized(self, project: str, name: str) -> None:
         """A skill a template planned was edited by hand: a re-plan keeps the edit."""

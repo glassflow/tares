@@ -1,10 +1,10 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { api } from "../api";
 import ConfirmDialog from "./ConfirmDialog";
-import { ErrorState, TimeAgo, formatBytes, usePolling } from "./bits";
+import { ErrorState, Picker, TimeAgo, formatBytes, usePolling } from "./bits";
 import type { SkillSummary } from "../types";
 
 // A project's skills (TR-332): instructions the project's agents load by name. Every agent here
@@ -132,6 +132,22 @@ export default function SkillsPanel({ project, onOpenAgent, onOpenSkill, onChang
   const fileRef = useRef<HTMLInputElement>(null);
 
   const fail = (e: unknown) => setErr(String((e as Error).message ?? e));
+  // a skill already on Tares, used by this project too (skills are shared)
+  const [using, setUsing] = useState(false);
+  const [cell, setCell] = useState<{ name: string; description: string; used_by: { id: string; name: string }[] }[]>();
+  const [pick, setPick] = useState("");
+  useEffect(() => {
+    if (!using) return;
+    api.cellSkills().then(setCell).catch((e) => { setCell([]); fail(e); });
+  }, [using]);
+  const mine = new Set((data ?? []).map((s) => s.name));
+  const free = (cell ?? []).filter((s) => !mine.has(s.name));
+  const picked = free.find((s) => s.name === pick);
+  const use = async (name: string) => {
+    setErr(undefined);
+    try { await api.useSkill(project, name); setMsg(`This project now uses ${name}.`); setUsing(false); setPick(""); reload(); }
+    catch (e) { fail(e); }
+  };
 
   const upload = async (file: File | undefined) => {
     if (!file) return;
@@ -182,6 +198,9 @@ export default function SkillsPanel({ project, onOpenAgent, onOpenSkill, onChang
         </div>
         {!formOpen && (
           <span className="btnrow">
+            <button type="button" onClick={() => { setErr(undefined); setMsg(undefined); setUsing(!using); }}>
+              Use one already on Tares
+            </button>
             <button type="button" onClick={() => fileRef.current?.click()}>Upload SKILL.md</button>
             <button type="button" className="primary"
                     onClick={() => { setErr(undefined); setMsg(undefined); setNewOpen(true); }}>
@@ -195,6 +214,24 @@ export default function SkillsPanel({ project, onOpenAgent, onOpenSkill, onChang
 
       {err && <div className="alert error">{err}</div>}
       {msg && <p className="help" style={{ margin: "0 0 10px" }}>{msg}</p>}
+      {using && !formOpen && (
+        <div className="field" style={{ marginBottom: 12, maxWidth: 640 }}>
+          <span className="lbl">Skill already on Tares</span>
+          {cell === undefined ? <p className="help">Reading the skills on Tares…</p>
+            : free.length === 0 ? <p className="help">There is no other skill on Tares yet.</p> : (
+              <Picker value={pick} options={["", ...free.map((s) => s.name)]} labels={{ "": "Pick a skill" }}
+                      ariaLabel="Skill already on Tares" onChange={setPick} />
+            )}
+          {picked && (
+            <div className="su-reuse-card">
+              <span className="su-item-what mono">{picked.name}</span>
+              {picked.description && <span className="help">{picked.description}</span>}
+              <span className="help">{picked.used_by.length ? `Used by ${picked.used_by.map((u) => u.name).join(", ")}.` : "No project uses it yet."} It is shared: a change shows in every project that uses it.</span>
+              <div className="btnrow"><button type="button" onClick={() => use(picked.name)}>Use it</button></div>
+            </div>
+          )}
+        </div>
+      )}
 
       {editing ? (
         <SkillEditor key={editing.name} project={project} initial={editing}
@@ -232,8 +269,8 @@ export default function SkillsPanel({ project, onOpenAgent, onOpenSkill, onChang
       ))}
 
       {confirmDel && (
-        <ConfirmDialog title={`Delete skill ${confirmDel}?`} danger confirmLabel="Delete"
-                       message="The project's agents stop seeing it from their next run. Runs that loaded it keep the record."
+        <ConfirmDialog title={`Remove skill ${confirmDel} from this project?`} danger confirmLabel="Remove"
+                       message="The project's agents stop seeing it from their next run. Other projects that use it keep it; it is deleted when no project uses it. Runs that loaded it keep the record."
                        onConfirm={() => remove(confirmDel)} onCancel={() => setConfirmDel(undefined)} />
       )}
     </>
@@ -268,7 +305,7 @@ function SkillRow({ sk, open, body, folds, onToggle, onEdit, onDelete, onOpenAge
         <td style={{ verticalAlign: "top" }} onClick={(e) => e.stopPropagation()}>
           <div className="btnrow" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
             <button onClick={onEdit}>Edit</button>
-            <button className="danger" onClick={onDelete}>Delete</button>
+            <button className="danger" onClick={onDelete}>Remove</button>
           </div>
         </td>
       </tr>

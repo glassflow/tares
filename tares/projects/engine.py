@@ -555,8 +555,9 @@ class Engine:
                 for src in o.spec.get("sources") or []:
                     self.store.put_in_project("source", src, uid)
         for o, (name, description, body) in skills:
-            self.store.upsert_skill(uid, name, description, body)
+            # the planned row first, so the project uses the skill under the plan's key
             self.store.upsert_project_object(uid, "skill", o.key, name)
+            self.store.upsert_skill(uid, name, description, body)
 
     # ── custom projects: adopt and release instead of create and delete ─────
     def _adopt(self, uid: str, objs: list[PlannedObject], existing: dict) -> None:
@@ -640,7 +641,9 @@ class Engine:
         self._delete_objects(gone, purge_events=False, uid=uid)
 
     def _update_custom(self, uid: str, inst: dict, params: dict, plan: list[PlannedObject]) -> dict:
-        existing = {(o["kind"], o["key"]): o for o in self.store.list_project_objects(uid)}
+        # a skill is used through the project's skills, not its object list (P-TR-216)
+        existing = {(o["kind"], o["key"]): o for o in self.store.list_project_objects(uid)
+                    if o["kind"] != "skill"}
         planned = {(o.kind, o.key) for o in plan}
         added = [o for o in plan if (o.kind, o.key) not in existing]
         removed = [PlannedObject(k, key, {"name": o["name"]})

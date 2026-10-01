@@ -707,7 +707,10 @@ export interface PlanTool {
   key: string; name: string; url: string; why: string; can_act: boolean; enabled: boolean;
   existing?: boolean;           // an MCP server already on the cell, used as it is
 }
-export interface PlanSkill { key: string; name: string; description: string; body: string; enabled: boolean }
+export interface PlanSkill {
+  key: string; name: string; description: string; body: string; enabled: boolean;
+  existing?: boolean;           // a skill already on Tares: used as it is (shared), not copied
+}
 export interface Plan {
   goal: string;
   name: string;

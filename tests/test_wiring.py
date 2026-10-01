@@ -269,6 +269,26 @@ async def main():
        [("investigate", "other")])
     ck("the old subscription is gone",
        not any("tares://agent/" in s["url"] for s in st.list_all_subscriptions()))
+
+    print("== the upgrade: each project's skills become skills of the cell ==")
+    p2 = "uc_other00001"
+    st.create_project(p2, "custom", "Other", {"objects": []})
+    st.con.execute("DELETE FROM shared_skills")
+    st.con.execute("DELETE FROM usecase_objects WHERE kind = 'skill'")
+    for proj, name, body in ((uid, "codes", "E42 is a decline"), (p2, "codes", "E42 is a decline"),
+                             (uid, "runbook", "restart it"), (p2, "runbook", "page someone")):
+        st.con.execute("INSERT INTO skills (project, name, description, body, created_at, "
+                       "updated_at) VALUES (?, ?, 'd', ?, now(), now())", [proj, name, body])
+    st.con.execute("DELETE FROM settings WHERE key = 'skills_shared'")
+    st.con.close()
+    st = Store(path)
+    eq("the same skill in two projects is one, used by both",
+       sorted(st.projects_using("skill", "codes")), sorted([uid, p2]))
+    eq("the same name with other text keeps both, the second renamed",
+       ({x["name"] for x in st.list_skills(uid)} >= {"runbook"},
+        [x["name"] for x in st.list_skills(p2) if x["name"].startswith("runbook")],
+        st.get_skill(p2, "runbook-2")["body"]),
+       (True, ["runbook-2"], "page someone"))
     st.con.close()
 
 

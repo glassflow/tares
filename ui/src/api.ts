@@ -391,6 +391,12 @@ export const api = {
   skills: (id: string) => request<SkillSummary[]>(`/api/projects/${encodeURIComponent(id)}/skills`),
   skill: (id: string, name: string) =>
     request<Skill>(`/api/projects/${encodeURIComponent(id)}/skills/${encodeURIComponent(name)}`),
+  // skills are shared (P-TR-216): every skill on Tares, and a project using one of them
+  cellSkills: () =>
+    request<{ name: string; description: string; used_by: { id: string; name: string }[] }[]>("/api/skills"),
+  useSkill: (id: string, name: string) =>
+    request<Skill>(`/api/projects/${encodeURIComponent(id)}/skills/${encodeURIComponent(name)}/use`,
+      { method: "POST" }),
   createSkill: (id: string, body: { name: string; description: string; body: string }) =>
     request<Skill>(`/api/projects/${encodeURIComponent(id)}/skills`,
       { method: "POST", body: JSON.stringify(body) }),

@@ -62,6 +62,7 @@ export function KnowHowCard({ ctx }: { ctx: CardCtx }) {
                          onSaved={() => closeEditor(editId)} onCancel={() => closeEditor(editId)} />
           );
         }
+        const drop = () => { edit({ ...plan, skills: plan.skills.filter((x) => x.key !== s.key) }); closeEditor("su-add-skills"); };
         return (
           <div className="su-item" key={s.key}>
             <Switch checked={s.enabled} disabled={busy}
@@ -69,9 +70,16 @@ export function KnowHowCard({ ctx }: { ctx: CardCtx }) {
               <span className="su-item-what mono">{s.name}</span>
             </Switch>
             {s.description && <span className="help">{s.description}</span>}
-            <ItemActions id={editId} what={s.name} changeLabel="Edit" disabled={busy || !!open}
-                         onChange={() => { setMsg(undefined); setErr(undefined); openEditor(id); }}
-                         onRemove={() => { edit({ ...plan, skills: plan.skills.filter((x) => x.key !== s.key) }); closeEditor("su-add-skills"); }} />
+            {s.existing ? (
+              <>
+                <span className="help">Already on Tares, shared with the projects that use it; change it on its own page.</span>
+                <ItemActions id={editId} what={s.name} changeLabel="Remove" disabled={busy || !!open} onChange={drop} />
+              </>
+            ) : (
+              <ItemActions id={editId} what={s.name} changeLabel="Edit" disabled={busy || !!open}
+                           onChange={() => { setMsg(undefined); setErr(undefined); openEditor(id); }}
+                           onRemove={drop} />
+            )}
             <Problems list={probs[id]} />
           </div>
         );
@@ -80,20 +88,22 @@ export function KnowHowCard({ ctx }: { ctx: CardCtx }) {
         <SkillEditor onSubmit={(sk) => { edit(putSkill(plan, sk)[0]); }}
                      onSaved={() => closeEditor("su-add-skills")} onCancel={() => closeEditor("su-add-skills")} />
       )}
-      {open === "skills.copy" && (
-        <CopySkill ctx={ctx} onCopy={(sk) => {
-          const [next, added] = putSkill(plan, sk);
-          edit(next);
-          setMsg(`${added ? "Copied" : "Replaced"} ${sk.name}.`);
-        }} onDone={() => closeEditor("su-copy-skills")} />
+      {open === "skills.use" && (
+        <UseSkill ctx={ctx} onUse={(name, description) => {
+          edit({ ...plan, skills: [...plan.skills, {
+            key: newKey("s", plan.skills.map((s) => s.key)), name, description, body: "",
+            enabled: true, existing: true }] });
+          setMsg(`The project will use ${name}.`);
+          closeEditor("su-use-skills");
+        }} onDone={() => closeEditor("su-use-skills")} />
       )}
       {!editingHere && (
         <div className="su-card-actions">
           <button type="button" id="su-add-skills" disabled={busy || !!open}
                   onClick={() => { setMsg(undefined); setErr(undefined); openEditor("skills.new"); }}>Add a skill</button>
           <button type="button" disabled={busy || !!open} onClick={() => fileRef.current?.click()}>Upload SKILL.md</button>
-          <button type="button" id="su-copy-skills" disabled={busy || !!open}
-                  onClick={() => { setMsg(undefined); setErr(undefined); openEditor("skills.copy"); }}>Copy from another project</button>
+          <button type="button" id="su-use-skills" disabled={busy || !!open}
+                  onClick={() => { setMsg(undefined); setErr(undefined); openEditor("skills.use"); }}>Use one already on Tares</button>
         </div>
       )}
       <input ref={fileRef} type="file" accept=".md,text/markdown,text/plain" className="sr-only" tabIndex={-1}
@@ -104,58 +114,32 @@ export function KnowHowCard({ ctx }: { ctx: CardCtx }) {
   );
 }
 
-/** Pick a project, then copy any of its skills into the plan (name, description and body). */
-function CopySkill({ ctx, onCopy, onDone }: { ctx: CardCtx; onCopy: (sk: Sk) => void; onDone: () => void }) {
-  const projects = ctx.cell.projects;
-  const [pid, setPid] = useState("");
-  const [skills, setSkills] = useState<SkillSummary[]>();
-  const [err, setErr] = useState<string>();
-  const [copying, setCopying] = useState<string>();
-  useEffect(() => {
-    if (!pid) { setSkills(undefined); return; }
-    let live = true;
-    setSkills(undefined); setErr(undefined);
-    api.skills(pid).then((s) => { if (live) setSkills(s); })
-      .catch((e) => { if (live) { setSkills([]); setErr(errText(e)); } });
-    return () => { live = false; };
-  }, [pid]);
-  const copy = async (name: string) => {
-    setCopying(name); setErr(undefined);
-    try {
-      const sk = await api.skill(pid, name);
-      onCopy({ name: sk.name, description: sk.description, body: sk.body });
-    } catch (e) { setErr(errText(e)); }
-    setCopying(undefined);
-  };
-  const labels: Record<string, string> = { "": "pick a project" };
-  for (const p of projects ?? []) labels[p.id] = p.name;
-  const taken = new Set(ctx.plan.skills.map((s) => s.name));
+/** A skill already on Tares, picked by name (skills are shared: the project uses it as it is). */
+function UseSkill({ ctx, onUse, onDone }: { ctx: CardCtx; onUse: (name: string, description: string) => void; onDone: () => void }) {
+  const all = ctx.cell.resources?.skills;
+  const free = (all ?? []).filter((x) => !ctx.plan.skills.some((s) => s.name === x.name));
+  const [pick, setPick] = useState("");
+  const picked = free.find((x) => x.name === pick);
   return (
-    <EditorFrame title="Copy a skill from another project" onCancel={onDone}>
-      {projects === undefined ? <p className="help">Reading the projects…</p>
-        : projects.length === 0 ? <p className="help">There are no other projects yet.</p> : (
+    <EditorFrame title="Use a skill already on Tares" onCancel={onDone}>
+      {all === undefined ? <p className="help">Reading the skills on Tares…</p>
+        : free.length === 0 ? <p className="help">There is no other skill on Tares yet.</p> : (
           <div className="field">
-            <span className="lbl">Project</span>
-            <Picker value={pid} options={["", ...projects.map((p) => p.id)]} labels={labels} ariaLabel="Project" onChange={setPid} />
+            <span className="lbl">Skill</span>
+            <Picker value={pick} options={["", ...free.map((x) => x.name)]} labels={{ "": "Pick a skill" }}
+                    ariaLabel="Skill already on Tares" onChange={setPick} />
+            {picked && (
+              <div className="su-reuse-card">
+                <span className="su-item-what mono">{picked.name}</span>
+                {picked.what && <span className="help">{picked.what}</span>}
+                <span className="help">{picked.used_by.length ? `Used by ${picked.used_by.map((u) => u.name).join(", ")}.` : "No project uses it yet."}</span>
+                <div className="btnrow">
+                  <button type="button" className="su-small" onClick={() => onUse(picked.name, picked.what)}>Use it</button>
+                </div>
+              </div>
+            )}
           </div>
         )}
-      {pid && skills === undefined && <p className="help">Reading its skills…</p>}
-      {pid && skills?.length === 0 && !err && <p className="help">This project has no skills.</p>}
-      {skills && skills.length > 0 && (
-        <ul className="su-copy-list">
-          {skills.map((s) => (
-            <li key={s.name}>
-              <span className="su-item-what mono">{s.name}</span>
-              {s.description && <span className="help">{s.description}</span>}
-              <button type="button" className="su-small" disabled={!!copying} aria-label={`Copy ${s.name}`}
-                      onClick={() => copy(s.name)}>
-                {copying === s.name ? "Copying…" : taken.has(s.name) ? "Copy again" : "Copy"}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {err && <p className="su-err" role="alert">{err}</p>}
     </EditorFrame>
   );
 }

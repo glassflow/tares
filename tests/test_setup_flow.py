@@ -783,11 +783,15 @@ async def main():
         attach["tools"] = [{"key": "t5", "name": "deploys-mcp", "existing": True, "url": "",
                             "why": "", "can_act": False, "enabled": True}]
         attach["agents"][0]["mcp_servers"] = ["deploys-mcp"]
-        attach["skills"] = [{"key": "s7", "name": "checkout-error-codes",
-                             "description": "What the checkout error codes mean.",
-                             "body": "# Codes\n\nE42 is a declined card.", "enabled": True}]
+        # a skill already on Tares is used as it is (shared, P-TR-216), not copied
+        attach["skills"] = [{"key": "s7", "name": "checkout-error-codes", "existing": True,
+                             "description": "", "body": "", "enabled": True}]
         chk = (await cx.post("/api/setup/check", json={"plan": attach})).json()
-        eq("an attached server and a copied skill: no problems", chk["problems"], [])
+        eq("an attached server and a skill already on Tares: no problems", chk["problems"], [])
+        ck("the skill keeps its name and its own text",
+           chk["plan"]["skills"][0]["name"] == "checkout-error-codes"
+           and chk["plan"]["skills"][0]["existing"] and chk["plan"]["skills"][0]["body"],
+           chk["plan"]["skills"])
         eq("the attached server keeps its name and address",
            (chk["plan"]["tools"][0]["name"], chk["plan"]["tools"][0]["url"],
             chk["plan"]["tools"][0]["existing"]),
@@ -859,8 +863,13 @@ async def main():
             "and a verdict (dig when it needs a closer look).", [("dig", "1h")], ["deploys-mcp"]))
         dig = store.get_catalog_agent(chk["plan"]["agents"][2]["name"])
         eq("the added agent is on the schedule", dig["trigger"], t2["name"])
-        eq("the copied skill is the project's", [s["name"] for s in store.list_skills(euid)],
+        eq("the project uses the skill already on Tares", [s["name"] for s in store.list_skills(euid)],
            ["checkout-error-codes"])
+        ck("and it is shared, not copied",
+           euid in store.projects_using("skill", "checkout-error-codes")
+           and len(store.projects_using("skill", "checkout-error-codes")) > 1,
+           (store.projects_using("skill", "checkout-error-codes"),
+            [x["name"] for x in store.list_all_skills()]))
         eq("the attached server is not created again",
            [m["name"] for m in store.list_mcp_servers()].count("deploys-mcp"), 1)
 
