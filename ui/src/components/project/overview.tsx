@@ -195,7 +195,7 @@ function FinishSetup({ id }: { id: string }) {
   if (setup.step === "try" && setup.practice_run) return null;
   const own = setup.plan?.who === "own";
   const message = setup.step === "try"
-    ? "Run a practice spike to see a result before a real one."
+    ? "Run it once now to see a result before a real one arrives."
     : own ? "Connect your agent so it is woken when this project needs it."
     : "Connect your data so the agents have something to look at.";
   return (

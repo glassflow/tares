@@ -6,7 +6,7 @@ import { ResultCard } from "../project/overview";
 import type { AgentRun, Plan, ProjectResult, ProjectResultDetail, SetupChecks } from "../../types";
 import { errText } from "./common";
 
-// Step 4: a practice spike, so the person sees a result before a real one. Tares agents: the
+// Step 4: one practice run ("Run it once now"), so the person sees a result before a real one. Tares agents: the
 // first agent woken by a trigger runs on the example event, and its chain concludes as usual.
 // Own agent: a practice wake-up goes to its subscriptions and the result is the finding it
 // records next. Either way the result is marked practice and left out of today's totals.
@@ -95,7 +95,7 @@ export function TryStep({ projectId, plan, ownCheck, onBackToConnect, onFinish, 
         <p className="su-sub">
           {own
             ? "Send your agent a practice wake-up from the example event, so you see a finding before a real one. It is marked as practice and left out of today's totals."
-            : "Run a practice spike from the example event, so you see a result before a real one. It uses your model provider like a real run, is marked as practice and is left out of today's totals."}
+            : "Runs the agent on the latest event, so you see a result before a real one arrives. It uses your model provider like a real run, is marked as practice and is left out of today's totals."}
         </p>
       </div>
 
@@ -112,7 +112,7 @@ export function TryStep({ projectId, plan, ownCheck, onBackToConnect, onFinish, 
       {(phase === "idle" || phase === "starting") && (!own ? !!first : true) && (
         <div>
           <button type="button" className="primary su-cta" onClick={start} disabled={phase === "starting"}>
-            {phase === "starting" ? "Starting…" : "Run a practice spike"}
+            {phase === "starting" ? "Starting…" : "Run it once now"}
           </button>
         </div>
       )}

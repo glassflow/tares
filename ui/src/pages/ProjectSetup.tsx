@@ -15,7 +15,7 @@ import type { Plan, ProjectSetup as SetupData, SetupConnect } from "../types";
 // Setting up a project, goal first (contract: setup-flow-contract.md, "Console"). It mirrors the
 // running page: the person states a goal, sees the whole plan in plain words, adjusts it,
 // confirms once, then does only what only they can do (connect data, their own agent, tools),
-// optionally runs a practice spike, and lands on the Overview.
+// optionally runs it once as practice, and lands on the Overview.
 //   /projects/new           the Goal; "Plan it" makes a draft project and goes to its page
 //   /projects/:id/setup     a draft: its planning as it happens, then the Plan, edits kept on the
 //                           draft; once set up: Connect and Try it, resumed where it stopped

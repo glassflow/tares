@@ -1623,7 +1623,7 @@ pre.payload {
   .gf-result-title { font-size: 22px; }
 }
 
-/* the Practice badge (a result from setup's practice spike) and the "Finish setting up" banner */
+/* the Practice badge (a result from setup's practice run) and the "Finish setting up" banner */
 .gf-badge.practice { background: var(--slate-soft); color: var(--slate); }
 .gf-health.gf-finish { background: var(--warn-soft); border-color: var(--warn); }
 .gf-health.gf-finish .gf-health-dot { background: var(--warn); }
