@@ -5,6 +5,17 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.38.0-rc.7] - 2026-10-01
+
+Seventh release candidate: drafts can be deleted.
+
+### Added
+- "Delete draft" on a draft's row in Projects and at the foot of its setup page. Only the draft
+  goes; nothing of it was set up yet.
+
+### Fixed
+- The agent form's trigger menu opened behind the prompt box; it opens over it now.
+
 ## [1.38.0-rc.6] - 2026-10-01
 
 Sixth release candidate: how an agent's run ends is a setting, and deleting a part is final.
