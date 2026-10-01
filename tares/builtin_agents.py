@@ -572,6 +572,12 @@ class AgentRunner:
                 and (now_utc() - last).total_seconds() < cooldown:
             return f"handoff to {to} skipped: cooldown"
         self.store.set_fired(state, key, now_utc())
+        # the target already running for this entity for another project: the run going on is
+        # for this project too, not a second one (P-TR-216)
+        going = self._inflight_run.get((to, key))
+        if going and set(target["projects"]) - set(self.store.run_projects(going)):
+            self.store.add_run_projects(going, target["projects"])
+            return None
         run_id = "run_" + uuid.uuid4().hex[:12]
         trigger_name = target["trigger"]
         self.store.start_agent_run(run_id, to, trigger_name, "", key,

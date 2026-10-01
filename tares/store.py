@@ -737,6 +737,17 @@ class Store:
         with no lock needed (the store is being opened)."""
         if self.con.execute("SELECT 1 FROM settings WHERE key = 'wiring_moved'").fetchone():
             return
+        # one transaction: a crash part-way leaves the subscriptions (the on/off record) as they
+        # were, and the next start does the whole upgrade again
+        self.con.execute("BEGIN TRANSACTION")
+        try:
+            self._wiring_move()
+            self.con.execute("COMMIT")
+        except Exception:
+            self.con.execute("ROLLBACK")
+            raise
+
+    def _wiring_move(self) -> None:
         default = self._ensure_default_project()
         projects = {r[0] for r in self.con.execute("SELECT id FROM usecases").fetchall()}
         on = {r[0][len(AGENT_PREFIX):] for r in self.con.execute(
@@ -769,7 +780,6 @@ class Store:
                         "cooldown, created_at) VALUES (?, 'handoff', ?, ?, ?, ?, ?)",
                         [project, name, h["agent"], str(h["verdict"]).lower(),
                          h.get("cooldown") or None, ts])
-        self.con.execute("DELETE FROM subscriptions WHERE url LIKE ?", [AGENT_PREFIX + "%"])
         self.con.execute("INSERT INTO run_projects (run_id, project) SELECT id, project "
                          "FROM agent_runs WHERE project IS NOT NULL ON CONFLICT DO NOTHING")
         self.con.execute("INSERT INTO dispatch_projects (dispatch_id, project) SELECT dispatch_id, "
@@ -781,6 +791,8 @@ class Store:
             self.con.execute(stmt)
         self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
                          "('wiring_moved', '1', ?) ON CONFLICT (key) DO NOTHING", [ts])
+        # last: the old on/off record goes only with the marker that says it was carried over
+        self.con.execute("DELETE FROM subscriptions WHERE url LIKE ?", [AGENT_PREFIX + "%"])
 
     # ── wiring: what each project wakes, and who digs in on whose verdict (P-TR-216) ──
     def list_wakes(self, project: str | None = None, trigger: str | None = None,
