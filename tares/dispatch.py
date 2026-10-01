@@ -3,12 +3,12 @@
 The dispatch body carries the rendered trigger payload, so the agent boots already holding the
 correlated timeline (zero reads to begin). At-least-once; subscribers dedupe on `dispatch_id`.
 
-Three kinds of subscriber, ONE mechanism: an external agent's webhook (POST), a Tares agent
-(run in-process), and a Slack channel. All three are ordinary subscription rows — a Tares
-agent's URL uses the tares://agent/ scheme, a channel's uses slack://channel/ — so all three are
-logged as deliveries and appear identically in the roster, a trigger's woken-agents list, and
-recent firings. The in-process runs are dispatched without awaiting: an investigation takes
-minutes and must not delay a webhook delivery on the same trigger.
+Who a firing reaches: the Tares agents the projects' wiring wakes on the trigger (run
+in-process, once per agent for every project that wires it, P-TR-216), and the subscriptions:
+an external agent's webhook (POST) or a Slack channel (slack://channel/). All are logged as
+deliveries and appear identically in a trigger's woken-agents list and recent firings. The
+in-process runs are dispatched without awaiting: an investigation takes minutes and must not
+delay a webhook delivery on the same trigger.
 """
 from __future__ import annotations
 
@@ -36,16 +36,29 @@ class Dispatcher:
                    parent_run_id: str | None = None) -> None:
         """`parent_run_id` is the run whose finding tripped this firing, when a trigger reads
         findings: the project timeline puts the firing under that run (TR-331)."""
-        project = getattr(trigger, "project", None)
+        # the projects this firing belongs to: those that use the trigger and are running
+        # (P-TR-216); the trigger's maker first when it is one of them
+        projects = self.store.active_projects_using("trigger", trigger.name)
+        maker = getattr(trigger, "project", None)
+        if maker in projects:
+            projects = [maker] + [p for p in projects if p != maker]
+        project = projects[0] if projects else None
         subs = list(self.store.list_subscriptions(trigger.name))
-        if project:
-            # subscriptions to the whole project (an external agent that joined it, TR-336): every
-            # trigger of it, the ones added after the subscription included. A URL subscribed both
-            # ways is delivered to once.
-            urls = {url for _sid, _t, url in subs}
-            subs += [(s["subscription_id"], trigger.name, s["url"])
-                     for s in self.store.list_project_subscriptions(project)
-                     if s["url"] not in urls]
+        urls = {url for _sid, _t, url in subs}
+        for p in projects:
+            # subscriptions to a whole project (an external agent that joined it, TR-336): every
+            # trigger of it, the ones added after the subscription included. A URL subscribed
+            # more than one way is delivered to once.
+            for s in self.store.list_project_subscriptions(p):
+                if s["url"] not in urls:
+                    urls.add(s["url"])
+                    subs.append((s["subscription_id"], trigger.name, s["url"]))
+        # the Tares agents the projects' wiring wakes on this trigger: each runs once, for every
+        # project that wires it
+        wakes: dict[str, list[str]] = {}
+        for w in self.store.list_wakes(trigger=trigger.name):
+            if w["enabled"] and w["project"] in projects:
+                wakes.setdefault(w["agent"], []).append(w["project"])
         woken_by = "schedule" if getattr(trigger.condition, "every", None) else "trigger"
         kind = trigger.emit.get("kind", trigger.name)
         dispatch_id = uuid.uuid4().hex
@@ -53,6 +66,7 @@ class Dispatcher:
             "dispatch_id": dispatch_id,
             "trigger": trigger.name,
             "project": project,
+            "projects": projects,
             "kind": kind,
             "key": key,
             "fired_at": now_utc().isoformat(),
@@ -64,11 +78,11 @@ class Dispatcher:
         # (ok/error) when the run finishes, so `delivered` here is the synchronous count (external
         # only); list_dispatches computes the live total including agents.
         run_ids = []
-        for sid, _trig, url in subs:
-            agent_name = agent_name_from_url(url)
-            if agent_name is not None and self.agents is not None:
-                rid = self.agents.deliver(agent_name, sid, trigger.name, key, payload, dispatch_id,
-                                          woken_by=woken_by)
+        for agent_name, ps in wakes.items():
+            if self.agents is not None:
+                rid = self.agents.deliver(agent_name, f"wire:{agent_name}", trigger.name, key,
+                                          payload, dispatch_id, woken_by=woken_by,
+                                          projects=sorted(ps, key=projects.index))
                 if rid:
                     run_ids.append(rid)
         body["run_ids"] = run_ids
@@ -86,9 +100,10 @@ class Dispatcher:
                 delivered += 1
         # log every firing, even with zero subscribers — the UI shows what would have woken agents
         self.store.log_dispatch(dispatch_id, trigger.name, key, kind,
-                                len(subs), delivered, payload,
+                                len(subs) + len(wakes), delivered, payload,
                                 project=project,
                                 parent_run_id=parent_run_id)
+        self.store.add_dispatch_projects(dispatch_id, projects)
 
     async def _post(self, url: str, body: dict, attempts: int = 5) -> tuple[bool, str | None]:
         """Deliver to one subscriber. Returns (ok, error): ok only on a 2xx. A 4xx is a definitive

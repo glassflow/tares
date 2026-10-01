@@ -338,10 +338,9 @@ def catalog_from_db(store) -> Catalog:
 
     triggers = [_trigger_from_dict(t) for t in store.list_catalog_triggers()]
 
-    # enabled is derived: an agent is enabled exactly when it has a subscription to its trigger.
-    enabled_urls = {s["url"] for s in store.all_subscriptions()}
-    agents = [_agent_from_dict(a, enabled=agent_url(a["name"]) in enabled_urls)
-              for a in store.list_catalog_agents()]
+    # enabled is derived: an agent is on when some project's wiring wakes it (P-TR-216)
+    on = {w["agent"] for w in store.list_wakes() if w["enabled"]}
+    agents = [_agent_from_dict(a, enabled=a["name"] in on) for a in store.list_catalog_agents()]
 
     return Catalog(sources=sources, triggers=triggers, agents=agents)
 
@@ -463,15 +462,9 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
                                    # absent keeps what is stored (see upsert_catalog_agent)
                                    handoffs=(normalize_handoffs(a["name"], a["handoffs"])
                                              if "handoffs" in a else None))
-        # enabled ⟺ a subscription to the trigger. Reflect the document's state so an enabled agent
-        # round-trips: add the internal subscription if enabled, remove it if not.
-        url = agent_url(a["name"])
-        if bool(a.get("enabled", False)):
-            if not store.subscription_by_url(url):
-                store.add_subscription("sub_" + uuid.uuid4().hex[:8], a["trigger"], url,
-                                       created_by="tares")
-        else:
-            store.remove_subscription_by_url(url)
+        # on/off belongs to the wiring of the project the agent is in; applied once it is placed
+        # (below, or by the engine that applies a template)
+        _turn_on_where_placed(store, a)
 
     for m in mcp_servers:
         # blank-to-keep for the secret: a YAML without auth_value (an export without secrets
@@ -520,6 +513,10 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
         # everything the document left without a project lands in the default project, and a
         # trigger's sources join its project (the same pass the store runs at every start)
         store.normalize_projects()
+        for a in agents:
+            _turn_on_where_placed(store, a)
+        # the wiring each project holds, as exported; it wins over the agents' own fields
+        _import_wiring(store, raw.get("wiring") or [])
         # skills last: the projects they name exist now, and a skill in the document wins over
         # the one a template planned under the same name
         for sk in skills:
@@ -587,6 +584,35 @@ def _resolve_project(store, ref: str) -> str | None:
         return ref
     p = store.get_project_by_name(ref)
     return p["id"] if p else None
+
+
+def _turn_on_where_placed(store, a: dict) -> None:
+    """An imported agent's `enabled`, on its wiring in the project that made it (nothing yet
+    when it is not placed)."""
+    row = store.get_catalog_agent(a["name"])
+    if row and row.get("owned_by"):
+        store.set_agent_enabled(a["name"], bool(a.get("enabled", False)), project=row["owned_by"])
+
+
+def _import_wiring(store, wiring: list) -> None:
+    """`wiring:` from an export: [{project, wake, agent, enabled}] and [{project, agent, verdict,
+    to, cooldown}], by project name. A row naming a project or part that is not here is skipped."""
+    by_name = {p["name"]: p["id"] for p in store.list_projects()}
+    hands: dict[tuple, list] = {}
+    for w in wiring:
+        if not isinstance(w, dict):
+            continue
+        uid = by_name.get(str(w.get("project") or ""))
+        if uid is None:
+            continue
+        if w.get("wake") and w.get("agent"):
+            store.set_wake(uid, str(w["wake"]), str(w["agent"]), bool(w.get("enabled", False)))
+        elif w.get("agent") and w.get("verdict") and w.get("to"):
+            hands.setdefault((uid, str(w["agent"])), []).append(
+                {"verdict": str(w["verdict"]), "agent": str(w["to"]),
+                 **({"cooldown": str(w["cooldown"])} if w.get("cooldown") else {})})
+    for (uid, agent), hs in hands.items():
+        store.set_handoffs(uid, agent, hs)
 
 
 def _place_imported(store, sources, triggers, agents, mcp_servers, only_existing: bool,
@@ -669,7 +695,6 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
     # can post to the channel), so it's omitted unless secrets are explicitly requested — same rule
     # as connector secrets above; the operator re-enters it on the target. enabled is derived from
     # the presence of the agent's internal subscription.
-    enabled_urls = {s["url"] for s in store.all_subscriptions()}
     # MCP connections: the URL and header name are configuration, the value is a credential —
     # same rule as every other secret here.
     # A `credential:github/<name>` reference is not a secret (the token lives in the credential),
@@ -705,7 +730,7 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
             if include_secrets and a.get("slack_webhook") else {}),
          **({"webhook_token": a["webhook_token"]}
             if include_secrets and a.get("webhook_token") else {}),
-         **({"enabled": True} if agent_url(a["name"]) in enabled_urls else {})}
+         **({"enabled": True} if a.get("enabled") else {})}
         for a in store.list_catalog_agents()
         if a["trigger"] in kept_triggers
     ]
@@ -736,10 +761,10 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
             # only objects that are in the sections above and still this project's: one deleted
             # by hand (or recreated under another project) would make the file fail to import.
             # A source is shared, so membership, not its creator, says whether it is still here.
+            # membership, not the maker, says whether a part is still here (P-TR-216)
             objs = [o for o in (u["params"].get("objects") or [])
                     if o.get("name") in owner.get(o.get("kind"), {})
-                    and (u["id"] in members.get(o["name"], []) if o.get("kind") == "source"
-                         else owner[o["kind"]][o["name"]] in (None, u["id"]))]
+                    and u["id"] in store.projects_using(o["kind"], o["name"])]
             uc_out.append({"template": "custom", "name": u["name"], **goal, "objects": objs})
         else:
             uc_out.append({"template": u["template"], "name": u["name"], **goal,
@@ -753,6 +778,17 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
                  for sk in store.list_all_skills() if _pname(sk["project"])]
     if skill_out and want is None:
         doc["skills"] = skill_out
+    # the wiring every project holds (P-TR-216): what wakes which agent, who digs in on what
+    if want is None:
+        wiring_out = [{"project": _pname(w["project"]), "wake": w["trigger"], "agent": w["agent"],
+                       **({"enabled": True} if w["enabled"] else {})}
+                      for w in store.list_wakes() if _pname(w["project"])]
+        wiring_out += [{"project": _pname(h["project"]), "agent": h["from_agent"],
+                        "verdict": h["verdict"], "to": h["agent"],
+                        **({"cooldown": h["cooldown"]} if h.get("cooldown") else {})}
+                       for h in store.list_handoffs() if _pname(h["project"])]
+        if wiring_out:
+            doc["wiring"] = wiring_out
     return yaml.safe_dump(doc, sort_keys=False, default_flow_style=False)
 
 
@@ -1077,10 +1113,8 @@ def check_handoff_targets(name: str, handoffs: list[dict], projects: dict,
         if h["agent"] not in projects:
             raise CatalogError(f"agent {name!r}: the handoff on verdict {h['verdict']!r} names "
                                f"an unknown agent {h['agent']!r}")
-        theirs = projects[h["agent"]]
-        if own_project and theirs and theirs != own_project:
-            raise CatalogError(f"agent {name!r}: {h['agent']!r} is in another project; an agent "
-                               "hands off only to agents of its own project")
+        # any agent on the cell may take a handoff (P-TR-216: parts are shared; the project
+        # whose wiring holds the handoff runs it)
 
 
 def validate_agent_dict(a: dict, trigger_names: set, triggers: dict | None = None,

@@ -1,6 +1,6 @@
 """Handoffs (TR-334): an agent names, per verdict, the agent that takes over when it concludes.
 
-Covers validation through the API (self, another project, unknown agent, bad verdict, more than
+Covers validation through the API (self, unknown agent, bad verdict, more than
 ten, bad cooldown), the runtime (a matching verdict starts the target on the concluded entity with
 woken_by=handoff and the parent run, case-insensitively; other verdicts and no_op do not), the
 input the target is handed, the depth cap, the cooldown note on the parent run, the daily cap and
@@ -136,8 +136,12 @@ async def main():
 
         ok_, d = await bad([{"verdict": "investigate", "agent": "triage"}], "itself")
         ck("an agent cannot hand off to itself", ok_, d)
-        ok_, d = await bad([{"verdict": "investigate", "agent": "other"}], "another project")
-        ck("a handoff to another project's agent is refused", ok_, d)
+        # parts are shared (P-TR-216): any agent on the cell can take a handoff
+        r = await cx.post("/api/agents/builtin", json={
+            "name": "triage", "trigger": "watch", "prompt": "look", "project": a,
+            "handoffs": [{"verdict": "investigate", "agent": "other"}]})
+        ck("a handoff to an agent another project made is allowed", r.status_code == 201, r.text)
+        await cx.delete("/api/agents/builtin/triage")
         ok_, d = await bad([{"verdict": "investigate", "agent": "ghost"}], "unknown agent")
         ck("a handoff to an unknown agent is refused", ok_, d)
         ok_, d = await bad([{"verdict": "look closer", "agent": "rca"}], "one word")
@@ -169,7 +173,10 @@ async def main():
            r.text)
         r = await cx.put("/api/agents/builtin/other", json={
             "trigger": "beta_watch", "prompt": "look", "handoffs": [{"verdict": "x", "agent": "rca"}]})
-        ck("an update to another project's agent is refused", r.status_code == 400, r.text)
+        ck("an update to an agent of another project is that project's wiring",
+           r.status_code == 200 and [(h["verdict"], h["agent"]) for h in
+                                     store.list_handoffs(project=b, from_agent="other")] == [("x", "rca")],
+           r.text)
         # only triage wakes on the trigger; the others run when handed off (or run by hand)
         r = await cx.post("/api/agents/builtin/triage/enable")
         assert r.status_code == 200, r.text
@@ -325,7 +332,7 @@ async def main():
         print("== deleting the target ==")
         r = await cx.delete("/api/agents/builtin/rca")
         ck("the delete says which agents lost a handoff",
-           r.status_code == 200 and r.json().get("handoffs_removed_from") == ["triage"], r.text)
+           r.status_code == 200 and r.json().get("handoffs_removed_from") == ["other", "triage"], r.text)
         ck("the handoff to it is gone, the others stay",
            [h["agent"] for h in store.get_catalog_agent("triage")["handoffs"]] == ["rca2", "capt"],
            str(store.get_catalog_agent("triage")["handoffs"]))

@@ -92,6 +92,15 @@ def prompt_section(skills: list[dict]) -> str:
             "matches its description.")
 
 
+def load_from(store, projects: list, name, available: list[str]) -> str:
+    """`load` over several projects: the first that has the skill (a run for two projects)."""
+    for p in [x for x in projects if x]:
+        sk = store.get_skill(p, str(name or "").strip()) if name else None
+        if sk is not None:
+            return sk["body"]
+    return load(store, (projects or [None])[0], name, available)
+
+
 def load(store, project: str, name, available: list[str]) -> str:
     """The body the `skill` tool returns; an unknown name is an error that lists the names."""
     name = str(name or "").strip()

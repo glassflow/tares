@@ -802,7 +802,8 @@ def make_app() -> FastAPI:
         shared = sorted(n for n, c in runtime.catalog.sources.items()
                         if c.connector in _SHARED_CONNECTORS)
         members = [s for s in store.project_sources(uid) if s in runtime.catalog.sources]
-        agents = [a["name"] for a in store.list_catalog_agents() if a.get("owned_by") == uid]
+        agents = [a["name"] for a in store.list_catalog_agents()
+                  if uid in store.projects_using("agent", a["name"])]
         return (sorted(set(members) | set(shared)),
                 {"sources": shared, "project": uid, "agents": agents})
 
@@ -897,7 +898,7 @@ def make_app() -> FastAPI:
                              "projects": [pk]} for n in names],
                 "triggers": [{"name": t.name, "project": t.project, "sources": t.sources,
                               "key_field": t.key_field}
-                             for t in runtime.catalog.triggers if t.project == pk],
+                             for t in runtime.catalog.triggers if pk in store.projects_using("trigger", t.name)],
                 "projects": [{"id": pk, "name": p.get("name"), "template": p.get("template")}],
             }
         return {
@@ -962,7 +963,7 @@ def make_app() -> FastAPI:
         if pk:
             # a project key describes its project's own sources and triggers; the shared findings
             # and memory sources hold other projects' rows too, so they are read, not described
-            mine = ({t.name for t in runtime.catalog.triggers if t.project == pk}
+            mine = ({t.name for t in runtime.catalog.triggers if pk in store.projects_using("trigger", t.name)}
                     if kind == "trigger" else
                     {s for s in store.project_sources(pk)
                      if s in runtime.catalog.sources
@@ -976,7 +977,7 @@ def make_app() -> FastAPI:
         edges = [e for e in _lineage_edges() if handle in (e["from"], e["to"])]
         if pk:
             project_triggers = {f"trigger:{t.name}" for t in runtime.catalog.triggers
-                                if t.project == pk}
+                                if pk in store.projects_using("trigger", t.name)}
             edges = [e for e in edges if e["to"] in project_triggers]
 
         if kind == "source":
@@ -1438,8 +1439,7 @@ def make_app() -> FastAPI:
         gone = []
         for d in dependents(store, kind, name):
             if d["kind"] == "agent":
-                store.remove_subscription_by_url(agent_url(d["name"]))
-                store.delete_catalog_agent(d["name"])
+                store.delete_catalog_agent(d["name"])   # with its wiring in every project
             elif d["kind"] == "trigger":
                 store.delete_catalog_trigger(d["name"])
                 store.remove_subscriptions_by_trigger(d["name"])
@@ -1700,14 +1700,8 @@ def make_app() -> FastAPI:
         except CatalogError as e:
             _err(e)
         value = body.auth_value or existing.get("auth_value", "")   # blank-to-keep
+        # a project named joins it as a user; the server stays in its other projects (P-TR-216)
         uid = _resolve_project(body.project, default=False)
-        if uid and uid != existing.get("owned_by"):
-            # the agents that use it are in its project; moving it away would strand them
-            users = [a["name"] for a in store.list_catalog_agents()
-                     if name in (a.get("mcp_servers") or []) and a.get("owned_by") != uid]
-            if users:
-                _err(ValueError(f"MCP server {name!r} is used by agents {users} of its current "
-                                "project; move or change them first"), 400)
         store.upsert_mcp_server(name, body.url.strip(), body.auth_header.strip(),
                                 _check_credential_ref(value), _clean_headers(body.headers))
         store.mark_customized("mcp_server", name)
@@ -1917,25 +1911,12 @@ def make_app() -> FastAPI:
         return normalize_trigger_description(body.description)
 
     def _place_trigger(name: str, uid: str, sources: list[str]) -> None:
-        """Put the trigger in `uid`, with its sources as members. Its agents come along, since an
-        agent is always in its trigger's project; one that uses an MCP server from elsewhere
-        stops the move (400), naming both."""
-        current = next((t for t in store.list_catalog_triggers() if t["name"] == name), None)
-        moving = current is not None and current.get("owned_by") not in (None, uid)
-        agents = [a for a in store.list_catalog_agents() if a["trigger"] == name]
-        if moving:
-            servers = {m["name"]: m.get("owned_by") for m in store.list_mcp_servers()}
-            for a in agents:
-                for srv in a.get("mcp_servers") or []:
-                    if servers.get(srv) not in (None, uid):
-                        _err(ValueError(f"agent {a['name']!r} on this trigger uses MCP server "
-                                        f"{srv!r} from another project; move it first"), 400)
+        """Put the trigger in `uid`, with its sources as members. It stays in the other projects
+        that use it (P-TR-216); one that was in the default project only for want of another
+        moves, with the default project's wiring of it."""
         store.put_in_project("trigger", name, uid)
         for src in sources:
             store.put_in_project("source", src, uid)
-        if moving:
-            for a in agents:
-                store.put_in_project("agent", a["name"], uid)
 
     @app.post("/api/triggers", status_code=201)
     async def create_trigger(body: TriggerIn):
@@ -1999,13 +1980,14 @@ def make_app() -> FastAPI:
     # Definitions live under /api/agents/builtin; the roster of everything a trigger wakes (these
     # PLUS external subscribers) is /api/agents. A Tares agent is "enabled" exactly when it has a
     # subscription to its trigger — the same wiring an external agent has.
-    def _agent_enabled(name: str) -> bool:
-        return store.subscription_by_url(agent_url(name)) is not None
+    def _agent_enabled(name: str, project: str | None = None) -> bool:
+        """On: some wake-up wakes it (in `project`, or in any project)."""
+        return store.agent_enabled(name, project)
 
     def _agent_payload(body: AgentIn, uid: str, name: str = "") -> dict:
         """Validate against the live catalog, including the loop guard (an agent may not be woken by
-        the findings source it writes into) and the project rule: an agent's trigger and MCP
-        servers are in the agent's own project."""
+        the findings source it writes into). Any trigger, MCP server and handoff target on the
+        cell will do (P-TR-216: parts are shared); the project's wiring says how it uses them."""
         triggers = {t["name"]: t for t in store.list_catalog_triggers()}
         servers = {m["name"]: m for m in store.list_mcp_servers()}
         raw = {**body.model_dump(exclude={"project"}), **({"name": name} if name else {})}
@@ -2013,16 +1995,8 @@ def make_app() -> FastAPI:
             validate_agent_dict(raw, set(triggers), triggers, set(servers))
         except CatalogError as e:
             _err(e)
-        trig = triggers[body.trigger]
-        if trig.get("owned_by") != uid:
-            _err(ValueError(f"trigger {body.trigger!r} is in another project; an agent runs on a "
-                            "trigger of its own project"), 400)
-        for srv in body.mcp_servers:
-            if servers[srv].get("owned_by") != uid:
-                _err(ValueError(f"MCP server {srv!r} is in another project; an agent uses the MCP "
-                                "servers of its own project"), 400)
         if body.handoffs is not None:
-            # the targets: agents that exist, in this agent's project (TR-334)
+            # the targets: agents that exist (TR-334)
             try:
                 raw["handoffs"] = normalize_handoffs(raw["name"], body.handoffs)
                 check_handoff_targets(raw["name"], raw["handoffs"],
@@ -2034,7 +2008,7 @@ def make_app() -> FastAPI:
         return raw
 
     @app.get("/api/agents/builtin")
-    async def list_builtin_agents():
+    async def list_builtin_agents(project: str | None = None):
         """Tares agent definitions plus the state the UI needs to explain why one isn't running:
         no key configured is the common case on a fresh install and looks identical to "disabled"
         without this."""
@@ -2043,7 +2017,9 @@ def make_app() -> FastAPI:
         zero = {"runs": 0, "ok": 0, "finished": 0, "avg_duration_ms": None,
                 "cost_usd": None, "input_tokens": 0, "output_tokens": 0, "uncosted_runs": 0}
         rows = []
-        for a in store.list_catalog_agents():
+        # with ?project=: each agent's trigger, handoffs and on/off are that project's wiring
+        in_project = _resolve_project(project, default=False) if project else None
+        for a in store.list_catalog_agents(in_project):
             runs = store.list_agent_runs(a["name"], limit=1)
             rows.append({"name": a["name"], "trigger": a["trigger"], "prompt": a["prompt"],
                          "stats": stats.get(a["name"]) or zero,
@@ -2063,8 +2039,9 @@ def make_app() -> FastAPI:
                          "daily_cap": a.get("daily_cap"),
                          "handoffs": a.get("handoffs") or [],
                          "effective_max_rounds": effective_max_rounds(a),
-                         "enabled": _agent_enabled(a["name"]), "updated_at": a.get("updated_at"),
-                         "project": a.get("owned_by"),
+                         "enabled": a["enabled"], "updated_at": a.get("updated_at"),
+                         "project": in_project or a.get("owned_by"),
+                         "projects": store.projects_using("agent", a["name"]),
                          "owned_by": a.get("owned_by"), "customized": bool(a.get("customized")),
                          "last_run": runs[0] if runs else None})
         plist = providers_mod.list_providers(store)
@@ -2094,7 +2071,7 @@ def make_app() -> FastAPI:
                                    webhook_key_label=body.webhook_key_label,
                                    provider=body.provider.strip(),
                                    handoffs=raw.get("handoffs") or [])
-        store.put_in_project("agent", body.name, uid)
+        store.put_in_project("agent", body.name, uid, creator=True)
         runtime.reload_catalog()
         return {"ok": True, "enabled": False, "project": uid,
                 "note": "agents start disabled; enable it to run on the next firing"}
@@ -2118,7 +2095,12 @@ def make_app() -> FastAPI:
         wtoken = body.webhook_token or (existing.get("webhook_token", "") if body.webhook_url else "")
         # model, channel and webhook URL are not secrets: the form always shows the stored value,
         # so what the body says is what the user wants — including blank (removed).
-        store.upsert_catalog_agent(name, body.trigger, body.prompt, hook,
+        # The trigger and handoffs are the project's wiring (P-TR-216): edited from another
+        # project than its maker, the agent's own fields stay and that project's wiring changes.
+        maker = existing.get("owned_by")
+        here = uid == maker or not maker
+        store.upsert_catalog_agent(name, body.trigger if here else store.get_catalog_agent(name)["trigger"],
+                                   body.prompt, hook,
                                    body.model, body.slack_channel,
                                    body.webhook_url, wtoken, body.mcp_servers, body.max_rounds,
                                    body.budget_usd, webhook_key_label=body.webhook_key_label,
@@ -2126,15 +2108,11 @@ def make_app() -> FastAPI:
                                    # the form has no daily cap field; keep what a project set
                                    daily_cap=existing.get("daily_cap"),
                                    # absent (None) keeps the stored handoffs
-                                   handoffs=raw.get("handoffs"))
+                                   handoffs=raw.get("handoffs") if here else None)
         store.mark_customized("agent", name)
         store.put_in_project("agent", name, uid)
-        # if the trigger changed while enabled, re-point the subscription so the agent fires on the
-        # new trigger (the subscription, not the definition, is what the dispatcher reads).
-        if body.trigger != existing["trigger"] and _agent_enabled(name):
-            store.remove_subscription_by_url(agent_url(name))
-            store.add_subscription("sub_" + uuid.uuid4().hex[:8], body.trigger,
-                                   agent_url(name), created_by="tares")
+        if not here:
+            store.wire_agent(name, uid, body.trigger, raw.get("handoffs"))
         runtime.reload_catalog()
         return {"ok": True}
 
@@ -2142,34 +2120,48 @@ def make_app() -> FastAPI:
     async def delete_builtin_agent(name: str):
         if store.get_catalog_agent(name) is None:
             _err(KeyError(f"unknown agent {name!r}"), 404)
-        store.remove_subscription_by_url(agent_url(name))   # unwire before dropping the definition
-        # the agents that handed off to it lose that handoff (the store drops it with the agent)
-        handed = [a["name"] for a in store.list_catalog_agents()
-                  if any(h.get("agent") == name for h in a.get("handoffs") or [])]
+        # the agents that handed off to it lose that handoff, in every project (the store drops
+        # its wiring with the agent)
+        handed = sorted({h["from_agent"] for h in store.list_handoffs() if h["agent"] == name})
         store.delete_catalog_agent(name)
         runtime.reload_catalog()
         return {"ok": True, "handoffs_removed_from": handed}
 
+    def _wired_project(name: str, project: str | None) -> str:
+        """The project an agent is turned on or off in: the one named, else the one that made
+        it. The agent joins it, wired with its own trigger, when it is not wired there yet."""
+        agent = store.get_catalog_agent(name)
+        uid = _resolve_project(project, default=False) if project else None
+        uid = uid or agent.get("owned_by") or store.default_project_id()
+        if not store.list_wakes(project=uid, agent=name):
+            store.put_in_project("agent", name, uid)
+            store.wire_agent(name, uid, agent["trigger"], None)
+        return uid
+
     @app.post("/api/agents/builtin/{name}/enable")
-    async def enable_builtin_agent(name: str):
+    async def enable_builtin_agent(name: str, project: str | None = None):
+        """On in a project (the one named, else the one that made it): its wake-ups there wake
+        it. Idempotent."""
         agent = store.get_catalog_agent(name)
         if agent is None:
             _err(KeyError(f"unknown agent {name!r}"), 404)
         if providers_mod.resolve_for_agent(store, agent)[0] is None:
             _err(ValueError("no model provider configured; add one under Settings, or set "
                             "ANTHROPIC_API_KEY, before enabling an agent"))
-        # enable = subscribe to the trigger (the same wiring an external agent has). Idempotent.
-        if not _agent_enabled(name):
-            store.add_subscription("sub_" + uuid.uuid4().hex[:8], agent["trigger"],
-                                   agent_url(name), created_by="tares")
-        return {"ok": True, "enabled": True}
+        uid = _wired_project(name, project)
+        store.set_agent_enabled(name, True, project=uid)
+        runtime.reload_catalog()
+        return {"ok": True, "enabled": True, "project": uid}
 
     @app.post("/api/agents/builtin/{name}/disable")
-    async def disable_builtin_agent(name: str):
+    async def disable_builtin_agent(name: str, project: str | None = None):
+        """Off in a project (the one named), or everywhere when none is named."""
         if store.get_catalog_agent(name) is None:
             _err(KeyError(f"unknown agent {name!r}"), 404)
-        store.remove_subscription_by_url(agent_url(name))
-        return {"ok": True, "enabled": False}
+        uid = _resolve_project(project, default=False) if project else None
+        store.set_agent_enabled(name, False, project=uid)
+        runtime.reload_catalog()
+        return {"ok": True, "enabled": False, **({"project": uid} if uid else {})}
 
     @app.post("/api/agents/builtin/{name}/runs/{run_id}/rerun", status_code=201)
     async def rerun_builtin_agent(name: str, run_id: str):
@@ -2189,7 +2181,9 @@ def make_app() -> FastAPI:
             d = store.get_dispatch(run["dispatch_id"])
             payload = (d or {}).get("payload") or ""
         rid = dispatcher.agents.run_now(name, run["trigger"], run["key"], payload,
-                                        woken_by="rerun", parent_run_id=run_id)
+                                        woken_by="rerun", parent_run_id=run_id,
+                                        # a rerun belongs where the run it repeats did
+                                        project=run.get("project"))
         if rid is None:
             _err(ValueError(f"the agent is already running for {run['key']!r}"), 409)
         return {"ok": True, "run_id": rid, "rerun_of": run_id}
@@ -2683,7 +2677,14 @@ def make_app() -> FastAPI:
         appear here identically — wiring (triggers), delivery health, recent wakes."""
         stats = store.delivery_stats()
         agents: dict[str, dict] = {}
-        for sub in store.all_subscriptions():
+        from .config import agent_url as _agent_url
+        # a Tares agent is woken by the projects' wiring (P-TR-216): each wake-up that is on reads
+        # as its subscription here, so the roster shows Tares and external agents alike
+        wired = [{"subscription_id": f"wire:{w['agent']}", "trigger": w["trigger"],
+                  "url": _agent_url(w["agent"]), "created_at": None, "project": w["project"],
+                  "created_by": "tares"}
+                 for w in store.list_wakes() if w["enabled"]]
+        for sub in [*store.all_subscriptions(), *wired]:
             norm = sub["url"].rstrip("/")
             a = agents.get(norm)
             if a is None:
@@ -2767,7 +2768,8 @@ def make_app() -> FastAPI:
                 "goal": p.get("goal"),
                 "status": p.get("status"), "created_at": p.get("created_at"),
                 "sources": names,
-                "triggers": sorted(t.name for t in runtime.catalog.triggers if t.project == uid),
+                "triggers": sorted(t.name for t in runtime.catalog.triggers
+                                   if uid in store.projects_using("trigger", t.name)),
                 "skills": [s["name"] for s in store.list_skills(uid)]}
 
     @app.get("/api/projects")
@@ -2967,7 +2969,7 @@ def make_app() -> FastAPI:
         """{"handled": true|false}: mark a result handled by the caller, or clear the mark."""
         _project_or_404(uid)
         run = store.get_agent_run(run_id)
-        if run is None or run.get("project") != uid:
+        if run is None or uid not in store.run_projects(run_id):
             _err(KeyError(f"project has no run {run_id!r}"), 404)
         handled = (body or {}).get("handled")
         if not isinstance(handled, bool):
@@ -3401,7 +3403,8 @@ def make_app() -> FastAPI:
         subscriptions ({dispatch_id}). Practice results are shown, never counted."""
         setup = _setup_or_404(uid)
         plan = setup.get("plan") or {}
-        triggers = sorted((t for t in runtime.catalog.triggers if t.project == uid),
+        triggers = sorted((t for t in runtime.catalog.triggers
+                           if uid in store.projects_using("trigger", t.name)),
                           key=lambda t: t.name)
         if not triggers:
             _err(ValueError("this project has no trigger to practice with"), 409)
@@ -3425,7 +3428,9 @@ def make_app() -> FastAPI:
                           "practice_kind": "own", "practice_finding": None})
             store.set_project_setup(uid, setup)
             return {"dispatch_id": dispatch_id, "delivered": delivered, "subscribers": len(subs)}
-        agents = {a["name"]: a for a in store.list_catalog_agents() if a.get("owned_by") == uid}
+        # the project's agents as this project wires them
+        agents = {a["name"]: a for a in store.list_catalog_agents(uid)
+                  if uid in store.projects_using("agent", a["name"])}
         first = next((a for a in plan.get("agents") or []
                       if a.get("enabled", True) and a.get("on_trigger", True)
                       and a.get("name") in agents), None)
@@ -3437,7 +3442,7 @@ def make_app() -> FastAPI:
             _err(ValueError(f"{first['name']} has no trigger to practice with"), 409)
         key, payload = await _practice_input(uid, setup, trig)
         rid = dispatcher.agents.run_now(first["name"], trig.name, key, payload,
-                                        woken_by="practice", practice=True)
+                                        woken_by="practice", practice=True, project=uid)
         if rid is None:
             _err(ValueError(f"{first['name']} is already working on {key}; try again when it "
                             "is done"), 409)
@@ -3467,15 +3472,14 @@ def make_app() -> FastAPI:
         store.set_project_setup(uid, setup)
 
     def _record_tool_test(name: str, ok: bool, n_tools: int, error: str | None) -> None:
-        """A tool's last test, kept on the guided setup of the project that owns it."""
-        server = store.get_mcp_server(name) or {}
-        uid = server.get("owned_by")
-        setup = store.get_project_setup(uid) if uid else None
-        if setup is None:
-            return
-        setup.setdefault("tool_tests", {})[name] = {"ok": ok, "tools": n_tools, "error": error,
-                                                    "at": now_utc().isoformat()}
-        store.set_project_setup(uid, setup)
+        """A tool's last test, kept on the guided setup of each project that uses it."""
+        for uid in store.projects_using("mcp_server", name):
+            setup = store.get_project_setup(uid)
+            if setup is None:
+                continue
+            setup.setdefault("tool_tests", {})[name] = {"ok": ok, "tools": n_tools,
+                                                        "error": error, "at": now_utc().isoformat()}
+            store.set_project_setup(uid, setup)
 
     # ── a project's skills (TR-332): instructions its agents load by name ─────
     def _skill_project(uid: str) -> dict:
@@ -3495,7 +3499,8 @@ def make_app() -> FastAPI:
         """The project's skills, with the agents of the project that loaded each one in the
         last 7 days (`loaded_by`)."""
         _skill_project(uid)
-        agents = [a["name"] for a in store.list_catalog_agents() if a.get("owned_by") == uid]
+        agents = [a["name"] for a in store.list_catalog_agents()
+                  if uid in store.projects_using("agent", a["name"])]
         loads = store.skill_loads(agents, days=7)
         return [{**sk, "loaded_by": loads.get(sk["name"], [])} for sk in store.list_skills(uid)]
 
@@ -3709,7 +3714,7 @@ def make_app() -> FastAPI:
         if label is None:
             from .config import trigger_entity_label
             trig = next((t for t in sorted(runtime.catalog.triggers, key=lambda t: t.name)
-                         if t.project == uid), None)
+                         if uid in store.projects_using("trigger", t.name)), None)
             label = trigger_entity_label(trig, runtime.catalog.sources) if trig else None
         ident = getattr(request.state, "credential", None)
         if ident:   # the key's name (a project key's always)

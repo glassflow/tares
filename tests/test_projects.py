@@ -296,38 +296,39 @@ async def main():
             check("the source joined the trigger's project and stays in the default one "
                   "(a default trigger still reads it)",
                   sorted(src["loose"]["projects"]) == sorted([did, uid]), str(src["loose"]["projects"]))
+            # parts are shared (P-TR-216): an agent may use any trigger and MCP server on the
+            # cell; the project it is made in wires it
             r = await cx.post("/api/agents/builtin", json={"name": "wrong", "trigger": "t_trigger",
                                                            "prompt": "x"})
-            check("an agent in the default project on another project's trigger -> 400",
-                  r.status_code == 400 and "project" in r.text, r.text)
+            check("an agent in the default project on another project's trigger -> 201",
+                  r.status_code == 201 and r.json()["project"] == did, r.text)
+            check("the default project wires it to that trigger, off",
+                  st.list_wakes(agent="wrong") == [{"project": did, "trigger": "t_trigger",
+                                                    "agent": "wrong", "enabled": False}],
+                  str(st.list_wakes(agent="wrong")))
             r = await cx.post("/api/agents/builtin", json={"name": "right", "trigger": "loose_t",
                                                            "prompt": "x", "mcp_servers": ["t_mcp"]})
-            check("an agent using another project's MCP server -> 400",
-                  r.status_code == 400 and "MCP server" in r.text, r.text)
-            r = await cx.post("/api/agents/builtin", json={"name": "right", "trigger": "cross",
+            check("an agent using another project's MCP server -> 201", r.status_code == 201, r.text)
+            r = await cx.post("/api/agents/builtin", json={"name": "right2", "trigger": "cross",
                                                            "prompt": "x", "project": uid,
                                                            "mcp_servers": ["t_mcp"]})
-            check("an agent in its trigger's project with that project's MCP server -> 201",
+            check("an agent made in a project -> 201, in that project",
                   r.status_code == 201 and r.json()["project"] == uid, r.text)
             r = await cx.post("/api/mcp-servers", json={"name": "m_default", "url": "https://example.invalid/d"})
             check("an MCP server created without a project -> the default project",
                   r.status_code == 201 and r.json()["project"] == did, r.text)
-            r = await cx.put("/api/triggers/cross", json={"name": "cross", "project": did,
-                                                          "sources": ["t_ui", "loose"], "condition": COND})
-            check("moving a trigger whose agent uses its project's MCP server -> 400",
-                  r.status_code == 400 and "t_mcp" in r.text, r.text)
-            r = await cx.put("/api/agents/builtin/right", json={"trigger": "cross", "prompt": "x"})
+            r = await cx.put("/api/agents/builtin/right2", json={"trigger": "cross", "prompt": "x"})
             check("an agent edit keeps its project", r.status_code == 200, r.text)
             r = await cx.put("/api/triggers/cross", json={"name": "cross", "project": did,
                                                           "sources": ["t_ui", "loose"], "condition": COND})
-            check("moving a trigger to another project -> 200", r.status_code == 200, r.text)
-            ag = {a["name"]: a for a in (await cx.get("/api/agents/builtin")).json()["agents"]}
-            check("its agent came along", ag["right"]["project"] == did, str(ag["right"]["project"]))
-            inst = (await cx.get(f"/api/projects/{uid}")).json()
-            check("the old project no longer lists them",
-                  not any(o["name"] in ("cross", "right") for o in inst["objects"]),
-                  json.dumps(inst["objects"])[:300])
-            await cx.delete("/api/agents/builtin/right")
+            check("putting a trigger in another project -> 200", r.status_code == 200, r.text)
+            check("it is in both projects now",
+                  sorted(st.projects_using("trigger", "cross")) == sorted([uid, did]),
+                  str(st.projects_using("trigger", "cross")))
+            check("its agent stays in its project",
+                  st.projects_using("agent", "right2") == [uid], str(st.projects_using("agent", "right2")))
+            for n in ("wrong", "right", "right2"):
+                await cx.delete(f"/api/agents/builtin/{n}")
             await cx.delete("/api/triggers/cross")
 
             print("== sources are shared ==")
@@ -344,8 +345,9 @@ async def main():
                   r.status_code == 400 and "loose_t" in r.text, r.text)
             await cx.delete("/api/triggers/loose_t")
             r = await cx.delete(f"/api/projects/{did}/sources/loose")
-            check("remove a source from the default project while another project has it -> 200",
-                  r.status_code == 200, r.text)
+            check("with its default trigger gone, the default project let go of the source by "
+                  "itself (another project has it)",
+                  r.status_code == 404 and st.projects_using("source", "loose") == [uid], r.text)
             r = await cx.delete(f"/api/projects/{uid}/sources/loose")
             check("removing it from its last project sends it back to the default one",
                   r.status_code == 200 and next(s for s in (await cx.get("/api/sources")).json()
@@ -465,13 +467,16 @@ async def main():
             t = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}["free_trigger"]
             check("an imported trigger with no project is in the default project", t["project"] == did, str(t))
             from tares.config import agent_url
-            check("free_agent is subscribed", st.subscription_by_url(agent_url("free_agent")) is not None)
+            check("free_agent is on", st.agent_enabled("free_agent"))
             objs = [{"kind": "source", "name": "free_src"}, {"kind": "trigger", "name": "free_trigger"},
                     {"kind": "agent", "name": "free_agent"}]
-            r = await cx.post("/api/projects", json={"template": "custom", "name": "mine",
-                                                     "objects": objs + [{"kind": "trigger", "name": "t_trigger"}]})
-            check("a trigger of another project is refused, naming it",
-                  r.status_code == 400 and "belongs" in r.text and "demo one" in r.text, r.text[:200])
+            r = await cx.post("/api/projects", json={"template": "custom", "name": "shared-trial",
+                                                     "objects": [{"kind": "trigger", "name": "t_trigger"}]})
+            check("a trigger another project made can be used by a custom project (shared)",
+                  r.status_code == 201 and uid in st.projects_using("trigger", "t_trigger"), r.text[:200])
+            r = await cx.delete(f"/api/projects/{r.json()['id']}")
+            check("deleting it leaves the trigger where it was made",
+                  r.status_code == 200 and st.projects_using("trigger", "t_trigger") == [uid], r.text[:200])
             r = await cx.post("/api/projects", json={"template": "custom", "name": "mine",
                                                      "objects": objs + [{"kind": "trigger", "name": "ghost"}]})
             check("a missing object is refused", r.status_code == 400 and "does not exist" in r.text, r.text[:200])
@@ -535,15 +540,16 @@ async def main():
             check("a paused trigger taken in", r.status_code == 200, r.text[:200])
             r = await cx.post(f"/api/projects/{cid}/pause")
             check("pause remembers only the trigger that was on", r.json()["params"]["resume_triggers"] == ["free_trigger"], r.text[:300])
-            check("pause unsubscribes the agent and pauses the trigger", r.json()["status"] == "paused"
-                  and st.subscription_by_url(agent_url("free_agent")) is None
+            check("pause turns the agent off here and pauses the trigger", r.json()["status"] == "paused"
+                  and not st.agent_enabled("free_agent", cid)
                   and next(t for t in (await cx.get("/api/triggers")).json() if t["name"] == "free_trigger")["paused"])
             r = await cx.post(f"/api/projects/{cid}/pause")
-            check("a second pause keeps the remembered agents", r.json()["params"]["resume_agents"] == ["free_agent"], r.text[:300])
+            check("a second pause keeps the remembered wiring",
+                  r.json()["params"]["resume_wakes"] == [["free_trigger", "free_agent"]], r.text[:300])
             r = await cx.post(f"/api/projects/{cid}/resume")
-            check("resume re-subscribes the agent", r.json()["status"] == "active"
-                  and st.subscription_by_url(agent_url("free_agent")) is not None
-                  and "resume_agents" not in r.json()["params"], r.text[:300])
+            check("resume turns the agent back on here", r.json()["status"] == "active"
+                  and st.agent_enabled("free_agent", cid)
+                  and "resume_wakes" not in r.json()["params"], r.text[:300])
             trs = {t["name"]: t["paused"] for t in (await cx.get("/api/triggers")).json()}
             check("resume unpauses only the trigger that was on", trs["free_trigger"] is False and trs["off_trigger"] is True, str(trs))
             r = await cx.put(f"/api/projects/{cid}", json={"objects": objs})
@@ -558,15 +564,15 @@ async def main():
                                                            "prompt": "say hi", "project": cid})
             check("an agent created on the paused project's trigger", r.status_code == 201, r.text[:200])
             r = await cx.put(f"/api/projects/{cid}", json={"objects": objs})
-            check("dropping an agent whose trigger stays is refused",
-                  r.status_code == 400 and "free_agent2" in r.text, r.text[:300])
-            r = await cx.put(f"/api/projects/{cid}", json={"objects": objs + [{"kind": "agent", "name": "free_agent2"}]})
-            check("the edit that keeps it is fine and the remembered agents are unchanged",
-                  r.status_code == 200 and r.json()["params"]["resume_agents"] == ["free_agent"], r.text[:300])
+            check("dropping an agent whose trigger stays is fine (parts are shared): it leaves, "
+                  "with its wiring here", r.status_code == 200
+                  and cid not in st.projects_using("agent", "free_agent2")
+                  and not st.list_wakes(project=cid, agent="free_agent2"), r.text[:300])
+            check("the remembered wiring is unchanged",
+                  r.json()["params"]["resume_wakes"] == [["free_trigger", "free_agent"]], r.text[:300])
             await cx.post(f"/api/projects/{cid}/resume")
-            check("resume re-subscribes only what was on",
-                  st.subscription_by_url(agent_url("free_agent")) is not None
-                  and st.subscription_by_url(agent_url("free_agent2")) is None)
+            check("resume turns on only what was on",
+                  st.agent_enabled("free_agent", cid) and not st.agent_enabled("free_agent2"))
             await cx.delete("/api/agents/builtin/free_agent2")
             await cx.put(f"/api/projects/{cid}", json={"objects": objs})
             # a same-name object recreated by hand and claimed elsewhere is not released by us
@@ -578,58 +584,42 @@ async def main():
             await cx.post("/api/mcp-servers", json={"name": "lost_mcp", "url": "https://example.invalid/b"})
             r = await cx.post("/api/projects", json={"template": "custom", "name": "claimer",
                                                      "objects": [{"kind": "mcp_server", "name": "lost_mcp"}]})
-            check("the recreated mcp server now belongs to another project", r.status_code == 201, r.text[:300])
+            check("another project uses the recreated mcp server too", r.status_code == 201, r.text[:300])
             claimer = r.json().get("id")
             got = (await cx.get(f"/api/projects/{cid}")).json()
-            check("the lost object shows as missing on the original project",
-                  next(o for o in got["objects"] if o["name"] == "lost_mcp")["missing"], json.dumps(got["objects"])[:300])
+            check("parts are shared (P-TR-216): the original project still has it, not missing",
+                  not next(o for o in got["objects"] if o["name"] == "lost_mcp")["missing"]
+                  and sorted(st.projects_using("mcp_server", "lost_mcp")) == sorted([cid, claimer]),
+                  json.dumps(got["objects"])[:300])
             y = (await cx.get("/api/catalog/export")).text
             doc = _yaml.safe_load(y)
-            mine_exp = next(u for u in doc["projects"] if u["name"] == "mine")
-            check("export leaves the lost object out of the original project",
-                  not any(o["name"] == "lost_mcp" for o in mine_exp["objects"])
-                  and any(o["name"] == "lost_mcp" for o in next(u for u in doc["projects"] if u["name"] == "claimer")["objects"]),
-                  json.dumps(doc["projects"])[:400])
-            r = await cx.put(f"/api/projects/{cid}", json={"objects": objs})
-            m = next(x for x in (await cx.get("/api/mcp-servers")).json()["servers"] if x["name"] == "lost_mcp")
-            check("releasing a lost object leaves the new owner's ownership alone",
-                  r.status_code == 200 and m["project"] == claimer, r.text[:200])
+            check("export lists it in both projects",
+                  all(any(o["name"] == "lost_mcp" for o in next(u for u in doc["projects"]
+                                                              if u["name"] == n)["objects"])
+                      for n in ("mine", "claimer")), json.dumps(doc["projects"])[:400])
             r = await cx.delete(f"/api/projects/{claimer}")
-            check("deleting a project deletes its MCP server",
-                  r.status_code == 200 and "mcp_server:lost_mcp" in r.json()["deleted"]
-                  and not any(x["name"] == "lost_mcp" for x in (await cx.get("/api/mcp-servers")).json()["servers"]),
-                  r.text[:200])
-            # an object deleted by hand and recreated under the same name sits in the default
-            # project; an edit that still lists it takes it back
-            await cx.post("/api/mcp-servers", json={"name": "lost_mcp", "url": "https://example.invalid/c"})
-            r = await cx.put(f"/api/projects/{cid}", json={"objects": objs + [{"kind": "mcp_server", "name": "lost_mcp"}]})
-            await cx.delete("/api/mcp-servers/lost_mcp")
-            await cx.post("/api/mcp-servers", json={"name": "lost_mcp", "url": "https://example.invalid/d"})
-            r = await cx.put(f"/api/projects/{cid}", json={"objects": objs + [{"kind": "mcp_server", "name": "lost_mcp"}]})
-            m = next(x for x in (await cx.get("/api/mcp-servers")).json()["servers"] if x["name"] == "lost_mcp")
-            check("a recreated object in the default project is reclaimed by the edit",
-                  r.status_code == 200 and r.json()["report"]["reclaimed"] == ["mcp_server:lost_mcp"] and m["project"] == cid,
+            check("deleting a project keeps a part another project uses, and says so",
+                  r.status_code == 200 and "mcp_server:lost_mcp" not in r.json()["deleted"]
+                  and {"kind": "mcp_server", "name": "lost_mcp", "project": cid} in r.json()["kept_shared"]
+                  and any(x["name"] == "lost_mcp" for x in (await cx.get("/api/mcp-servers")).json()["servers"]),
                   r.text[:300])
             r = await cx.put(f"/api/projects/{cid}", json={"objects": objs})
             await cx.delete("/api/mcp-servers/lost_mcp")
-            # edit: drop the trigger (its agent goes with it), add an mcp server
+            # edit: take an mcp server in, drop the trigger (the agent stays, unwired here)
             r = await cx.post("/api/mcp-servers", json={"name": "free_mcp", "url": "https://example.invalid/mcp"})
             check("free mcp server created", r.status_code in (200, 201), r.text[:200])
-            r = await cx.put(f"/api/projects/{cid}", json={"objects": objs[1:] + [{"kind": "mcp_server", "name": "free_mcp"}]})
-            check("dropping a source a staying trigger reads is refused",
-                  r.status_code == 400 and "free_trigger" in r.text, r.text[:200])
-            r = await cx.put(f"/api/projects/{cid}", json={"objects": [objs[0], objs[2], {"kind": "mcp_server", "name": "free_mcp"}]})
-            check("dropping a trigger whose agent stays is refused",
-                  r.status_code == 400 and "free_agent" in r.text, r.text[:300])
-            r = await cx.put(f"/api/projects/{cid}", json={"objects": objs[:1] + [{"kind": "mcp_server", "name": "free_mcp"}]})
-            check("edit releases the trigger with its agent and takes the mcp server in", r.status_code == 200
-                  and sorted(r.json()["report"]["released"]) == ["agent:free_agent", "trigger:free_trigger"]
-                  and r.json()["report"]["added"] == ["mcp_server:free_mcp"], r.text[:300])
-            ag = next(x for x in (await cx.get("/api/agents/builtin")).json()["agents"] if x["name"] == "free_agent")
-            check("the released agent still exists, in the default project and still subscribed",
-                  ag["project"] == did and st.subscription_by_url(agent_url("free_agent")) is not None, str(ag["project"]))
             r = await cx.put(f"/api/projects/{cid}", json={"objects": objs + [{"kind": "mcp_server", "name": "free_mcp"}]})
-            check("taking the trigger and agent back in", r.status_code == 200, r.text[:300])
+            check("edit takes the mcp server in", r.status_code == 200
+                  and r.json()["report"]["added"] == ["mcp_server:free_mcp"], r.text[:300])
+            r = await cx.put(f"/api/projects/{cid}", json={"objects": [objs[0], objs[2], {"kind": "mcp_server", "name": "free_mcp"}]})
+            check("dropping a trigger whose agent stays is fine: only the trigger leaves", r.status_code == 200
+                  and r.json()["report"]["released"] == ["trigger:free_trigger"], r.text[:300])
+            check("the released trigger goes to the default project, the agent is not woken here",
+                  st.projects_using("trigger", "free_trigger") == [did]
+                  and not st.list_wakes(project=cid, agent="free_agent"),
+                  str((st.projects_using("trigger", "free_trigger"), st.list_wakes(agent="free_agent"))))
+            r = await cx.put(f"/api/projects/{cid}", json={"objects": objs + [{"kind": "mcp_server", "name": "free_mcp"}]})
+            check("taking the trigger back in", r.status_code == 200, r.text[:300])
             y = (await cx.get("/api/catalog/export")).text
             check("export writes the object list for a custom project",
                   "template: custom" in y and "objects:" in y and "free_mcp" in y, y[-500:])

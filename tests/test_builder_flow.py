@@ -93,9 +93,11 @@ async def main():
         ck("trigger in the project", trig["checkout_errors"].get("project") == uid)
         ck("agent in the project and enabled", ag["checkout_sre"].get("project") == uid
            and ag["checkout_sre"]["enabled"] is True, str(ag["checkout_sre"]))
-        ck("the agent is subscribed to its trigger, not to a URL the builder made up",
-           any(s.get("trigger") == "checkout_errors" and "tares://agent/checkout_sre" in s.get("url", "")
-               for s in (await cx.get("/api/subscriptions")).json()))
+        ck("the project wakes the agent on its trigger (its wiring), not a URL the builder made up",
+           app.state.store.list_wakes(project=uid, agent="checkout_sre")
+           == [{"project": uid, "trigger": "checkout_errors", "agent": "checkout_sre", "enabled": True}]
+           and not any("checkout_sre" in s.get("url", "")
+                       for s in (await cx.get("/api/subscriptions")).json()))
         r = await cx.get(f"/api/projects/{uid}/summary")
         ck("summary renders (runs, triggers)", r.status_code == 200 and "triggers" in r.json(), r.text[:200])
 

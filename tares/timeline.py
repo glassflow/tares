@@ -91,7 +91,9 @@ def _build(store, project: str, roots: list, scheduled: set) -> list[dict]:
     for _level in range(MAX_DEPTH):
         if pending_firings:
             ids = [t["id"] for t in pending_firings]
-            for r in store.runs_where("dispatch_id", ids):
+            # only the runs that belong to this project: a firing two projects share woke
+            # each project's own agents (P-TR-216)
+            for r in store.runs_where("dispatch_id", ids, project=project):
                 if r["id"] in seen_runs:
                     continue
                 seen_runs.add(r["id"])

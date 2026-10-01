@@ -672,7 +672,6 @@ def _normalize(raw, store, catalog, prev: dict | None,
 
     # tools
     servers = {m["name"]: m for m in store.list_mcp_servers()}
-    default_uid = store.default_project_id()
     tool_map: dict[str, str] = {}
     tools, taken_tools = [], set()
     for i, t in enumerate(x for x in plan.get("tools") or [] if isinstance(x, dict)):
@@ -697,26 +696,15 @@ def _normalize(raw, store, catalog, prev: dict | None,
         else:
             nm = slug(orig) or f"tool-{i + 1}"
             found = servers.get(nm)
-            # an MCP server of that name already registered is reused when the plan names no
-            # other address for it
-            free = found is not None and found.get("owned_by") in (None, "", default_uid)
-            if found is not None and t["url"] in ("", found["url"]) and free:
+            # an MCP server of that name already on the cell is reused (parts are shared,
+            # P-TR-216) when the plan names no other address for it
+            if found is not None and t["url"] in ("", found["url"]):
                 t["url"] = found["url"]
                 t["existing"] = True
             else:
-                # another project's server of that name: this project gets its own, same address
-                if found is not None and not t["url"]:
-                    t["url"] = found["url"]
                 nm = _unique(nm, set(servers) | taken_tools)
                 t["existing"] = False
-        # an MCP server belongs to one project: one already on Tares moves into this project when
-        # it is unowned or in the default project, never out of another project that uses it
-        if t["existing"] and t["enabled"] and found is not None:
-            owner = found.get("owned_by")
-            if owner and owner != default_uid:
-                other = (store.get_project(owner) or {}).get("name") or owner
-                probs.add(where, f"{nm} belongs to the project {other}; add a new one here, or "
-                                 "turn it off.", f"Tool {nm}")
+        # an MCP server already on the cell joins this project too; it stays in the others
         taken_tools.add(nm)
         tool_map.setdefault(orig, nm)
         t["name"] = nm

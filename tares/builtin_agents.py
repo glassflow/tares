@@ -311,6 +311,14 @@ HEADLINE_MAX = 100
 NEXT_STEP_MAX = 300
 
 
+def for_projects(agent: dict, projects: list[str]) -> dict:
+    """The agent as it runs for `projects` (P-TR-216: the projects whose wiring started the run;
+    none given: the project that made it). `owned_by` becomes the first of them, the project the
+    run is filed under first; `projects` is all of them (skills and sources come from them)."""
+    ps = [p for p in dict.fromkeys(projects or []) if p] or [p for p in [agent.get("owned_by")] if p]
+    return {**agent, "owned_by": ps[0] if ps else agent.get("owned_by"), "projects": ps}
+
+
 def offers_conclude(agent: dict) -> bool:
     return CONCLUDE in (agent.get("prompt") or "")
 
@@ -382,6 +390,9 @@ class AgentRunner:
         # (agent, key) currently running. Dispatch is at-least-once, so a retried delivery would
         # otherwise run the same investigation twice and pay for it twice.
         self._inflight: set[tuple[str, str]] = set()
+        # the run going on for each (agent, key): a second project's firing for the same agent and
+        # entity joins it instead of starting another (P-TR-216)
+        self._inflight_run: dict[tuple[str, str], str] = {}
         # Runs live in this process, so nothing can still be running from a previous one: any row
         # left `running` is an orphan from a daemon that was killed mid-run. Left alone it stays
         # running forever and keeps counting toward the daily cap.
@@ -389,9 +400,10 @@ class AgentRunner:
         if reaped:
             print(f"taresd: reaped {reaped} interrupted agent run(s)")
 
-    # ── entry point (called by the dispatcher, once per internal subscription) ─
+    # ── entry point (called by the dispatcher, once per agent a firing wakes) ─
     def deliver(self, agent_name: str, subscription_id: str, trigger_name: str, key: str,
-                payload: str, dispatch_id: str, woken_by: str = "trigger") -> str | None:
+                payload: str, dispatch_id: str, woken_by: str = "trigger",
+                projects: list[str] | None = None) -> str | None:
         """Wake a Tares agent for one firing. Logs a pending delivery immediately, then runs the
         agent in the background. Never raises and never blocks — a run must not break the dispatch.
         Returns the id the run will have (the webhook body of the same firing names it), or None
@@ -404,12 +416,17 @@ class AgentRunner:
         # pending delivery: the firing already "reached" the agent; whether it concludes is async.
         self.store.log_delivery(dispatch_id, subscription_id, agent_url(agent_name), None)
         if (agent["name"], key) in self._inflight:   # at-least-once dedupe
+            going = self._inflight_run.get((agent["name"], key))
+            if going and projects:
+                # another project woke it for the same entity: the run going on is for it too
+                self.store.add_run_projects(going, projects)
             self.store.update_delivery(dispatch_id, subscription_id, True,
                                        "deduped (already running)")
             return None
         run_id = "run_" + uuid.uuid4().hex[:12]
         task = asyncio.create_task(self._guarded(agent, subscription_id, trigger_name, key,
-                                                 payload, dispatch_id, woken_by, run_id=run_id))
+                                                 payload, dispatch_id, woken_by, run_id=run_id,
+                                                 projects=projects))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return run_id
@@ -417,19 +434,22 @@ class AgentRunner:
     # ── manual and bootstrap runs (no firing behind them) ────────────────────
     def run_now(self, agent_name: str, trigger_name: str, key: str, payload: str,
                 woken_by: str = "manual", parent_run_id: str | None = None,
-                practice: bool = False) -> str | None:
+                practice: bool = False, project: str | None = None) -> str | None:
         """Run an agent once outside a firing (a project bootstrapping its first pages, a manual
         re-run). Same run record, same caps and dedupe as a firing; no delivery row, since there is
         no dispatch. `woken_by` and `parent_run_id` are the run's lineage: manual, bootstrap, or a
         rerun of the parent. `practice` marks a run the guided setup's "Try it" started: it and the
         handoffs it leads to are shown as practice and never counted. Returns the run id, or None
         when the agent does not exist or is already running for this key."""
-        agent = self.store.get_catalog_agent(agent_name)
+        agent = self.store.get_catalog_agent(agent_name, project)
         if agent is None or (agent_name, key) in self._inflight:
             return None
+        # the project it was started from (a project page, its practice), else its maker
+        agent = for_projects(agent, [project] if project else [])
         run_id = "run_" + uuid.uuid4().hex[:12]
         marker = (agent_name, key)
         self._inflight.add(marker)
+        self._inflight_run[marker] = run_id
         async def go():
             t0 = time.monotonic()
             status = "failed"
@@ -441,6 +461,7 @@ class AgentRunner:
                 print(f"[agent {agent_name}] {detail}")
             finally:
                 self._inflight.discard(marker)
+                self._inflight_run.pop(marker, None)
             metrics.agent_run(agent_name, status, time.monotonic() - t0)
             if status == "ok":
                 self._hand_off(agent, run_id)
@@ -449,11 +470,13 @@ class AgentRunner:
             self._spawn(go)
         except RuntimeError:
             self._inflight.discard(marker)
+            self._inflight_run.pop(marker, None)
             raise
         self.store.start_agent_run(run_id, agent_name, trigger_name, "", key,
                                    prompt_hash(agent["prompt"]), effective_max_rounds(agent),
                                    woken_by=woken_by, parent_run_id=parent_run_id,
                                    project=agent.get("owned_by"), practice=practice)
+        self.store.add_run_projects(run_id, agent["projects"])
         return run_id
 
     def attach_loop(self) -> None:
@@ -486,16 +509,22 @@ class AgentRunner:
         concluded = self.__dict__.get("_concluded", {}).pop(run_id, None)
         try:
             current = self.store.get_catalog_agent(agent["name"]) or agent
-            handoffs = current.get("handoffs") or []
-            if not handoffs:
-                return
             run = self.store.get_agent_run(run_id)
             if not run or run.get("status") != "ok" or run.get("outcome") != "finding":
                 return
             verdict = str(run.get("verdict") or "").strip().lower()
-            matches = [h for h in handoffs
-                       if verdict and str(h.get("verdict") or "").strip().lower() == verdict]
-            if not matches:
+            if not verdict:
+                return
+            # the handoffs each project the run belongs to wires (P-TR-216); a target two
+            # projects hand off to on the same verdict runs once, for both
+            projects = self.store.run_projects(run_id) or [p for p in [run.get("project")] if p]
+            by_target: dict[str, tuple[dict, list[str]]] = {}
+            for p in projects:
+                for h in self.store.list_handoffs(project=p, from_agent=agent["name"]):
+                    if str(h.get("verdict") or "").strip().lower() == verdict:
+                        h0, ps = by_target.setdefault(h["agent"], (h, []))
+                        ps.append(p)
+            if not by_target:
                 return
             key, label = concluded or (run["key"], None)
             if not label:
@@ -503,8 +532,8 @@ class AgentRunner:
                     label = self._entity_label(run.get("trigger") or current["trigger"])
                 except Exception:
                     label = None
-            notes = [n for n in (self._start_handoff(current, run, h, verdict, key, label)
-                                 for h in matches) if n]
+            notes = [n for n in (self._start_handoff(current, run, h, verdict, key, label, ps)
+                                 for h, ps in by_target.values()) if n]
             if notes:
                 self.store.set_run_results(run_id, _results.merge(
                     list(run.get("results") or [])
@@ -525,15 +554,15 @@ class AgentRunner:
         return depth
 
     def _start_handoff(self, agent: dict, parent: dict, h: dict, verdict: str, key: str,
-                       label: str | None) -> str | None:
+                       label: str | None, projects: list[str] | None = None) -> str | None:
         """Start one handoff, or record why it did not start. Returns a note for the parent run's
-        results when nothing was recorded as a run (cooldown, a target that is gone)."""
+        results when nothing was recorded as a run (cooldown, a target that is gone). The run
+        belongs to `projects`: the projects whose wiring holds this handoff."""
         to = h["agent"]
-        target = self.store.get_catalog_agent(to)
+        target = self.store.get_catalog_agent(to, (projects or [None])[0])
         if target is None:
             return f"handoff to {to} skipped: no such agent"
-        if (target.get("owned_by") or None) != (agent.get("owned_by") or None):
-            return f"handoff to {to} skipped: it is in another project"
+        target = for_projects(target, projects or [])
         state = handoff_state(agent["name"], to)
         cooldown = parse_duration(h.get("cooldown") or "30m")
         last = self.store.last_fired(state, key)
@@ -551,6 +580,7 @@ class AgentRunner:
                                    project=target.get("owned_by"),
                                    # a practice run's handoff is practice too
                                    practice=bool(parent.get("practice")))
+        self.store.add_run_projects(run_id, target["projects"])
         if self._handoff_depth(parent) >= MAX_HANDOFF_DEPTH:
             self.store.finish_agent_run(run_id, "capped", error=HANDOFF_STOPPED)
             metrics.agent_run(to, "capped", 0.0)
@@ -563,6 +593,7 @@ class AgentRunner:
             return None
         payload = handoff_input(agent["name"], verdict, key, label, parent.get("finding") or "")
         self._inflight.add(marker)
+        self._inflight_run[marker] = run_id
 
         async def go():
             t0 = time.monotonic()
@@ -576,6 +607,7 @@ class AgentRunner:
                 print(f"[agent {to}] {detail}")
             finally:
                 self._inflight.discard(marker)
+                self._inflight_run.pop(marker, None)
             metrics.agent_run(to, status, time.monotonic() - t0)
             if status == "ok":
                 self._hand_off(target, run_id)
@@ -584,6 +616,7 @@ class AgentRunner:
             self._spawn(go)
         except RuntimeError as e:
             self._inflight.discard(marker)
+            self._inflight_run.pop(marker, None)
             self.store.finish_agent_run(run_id, "failed", error=str(e))
         return None
 
@@ -627,16 +660,22 @@ class AgentRunner:
 
     async def _guarded(self, agent: dict, subscription_id: str, trigger_name: str, key: str,
                        payload: str, dispatch_id: str, woken_by: str = "trigger",
-                       run_id: str | None = None) -> None:
+                       run_id: str | None = None, projects: list[str] | None = None) -> None:
+        agent = for_projects(agent, projects or [])
         marker = (agent["name"], key)
         if marker in self._inflight:   # at-least-once dedupe
+            going = self._inflight_run.get(marker)
+            if going:
+                self.store.add_run_projects(going, agent["projects"])
             self.store.update_delivery(dispatch_id, subscription_id, True, "deduped (already running)")
             return
         self._inflight.add(marker)
         run_id = run_id or "run_" + uuid.uuid4().hex[:12]
+        self._inflight_run[marker] = run_id
         self.store.start_agent_run(run_id, agent["name"], trigger_name, dispatch_id, key,
                                    prompt_hash(agent["prompt"]), effective_max_rounds(agent),
                                    woken_by=woken_by, project=agent.get("owned_by"))
+        self.store.add_run_projects(run_id, agent["projects"])
         t0 = time.monotonic()
         try:
             status, error = await self._run(agent, trigger_name, key, payload, run_id,
@@ -648,6 +687,7 @@ class AgentRunner:
             print(f"[agent {agent['name']}] {detail}")
         finally:
             self._inflight.discard(marker)
+            self._inflight_run.pop(marker, None)
         metrics.agent_run(agent["name"], status, time.monotonic() - t0)
         if status == "ok":
             self._hand_off(agent, run_id)
@@ -1028,7 +1068,8 @@ class AgentRunner:
                             out = f"concluded: {outcome['outcome']}"
                         elif name == _skills.TOOL and skills:
                             wanted = str((tc.arguments or {}).get("name") or "").strip()
-                            out = _skills.load(self.store, agent["owned_by"], wanted, skill_names)
+                            out = _skills.load_from(self.store, agent.get("projects")
+                                                   or [agent.get("owned_by")], wanted, skill_names)
                             if wanted not in skills_loaded:
                                 skills_loaded.append(wanted)
                         elif toolbox.owns(name):
@@ -1068,10 +1109,15 @@ class AgentRunner:
         return "", rounds, tool_calls, external_used, True, last_text
 
     def _project_skills(self, agent: dict) -> list[dict]:
-        """The skills of the agent's project (name, description); an agent sees only its own
-        project's."""
-        uid = agent.get("owned_by")
-        return self.store.list_skills(uid) if uid else []
+        """The skills of the projects the run is for (name, description), the first project's
+        version of a name shared by two; an agent sees only those projects' know-how."""
+        out, seen = [], set()
+        for uid in agent.get("projects") or [p for p in [agent.get("owned_by")] if p]:
+            for sk in self.store.list_skills(uid):
+                if sk["name"] not in seen:
+                    seen.add(sk["name"])
+                    out.append(sk)
+        return out
 
     def _is_scheduled(self, trigger_name: str) -> bool:
         """Whether the run was woken by a schedule trigger (TR-320), which ticks for all its
@@ -1096,11 +1142,12 @@ class AgentRunner:
                 raise KeyError(f"unknown sources {unknown} (available: "
                                f"{', '.join(sorted(catalog.sources))})")
             return list(named)
-        agent = self.store.get_catalog_agent(agent_name) or {}
-        uid = agent.get("owned_by")
-        if not uid:
+        # the sources of every project that uses the agent (P-TR-216: it may serve several)
+        uids = self.store.projects_using("agent", agent_name)
+        if not uids:
             return sorted(catalog.sources)
-        return [s for s in self.store.project_sources(uid) if s in catalog.sources]
+        mine = {s for uid in uids for s in self.store.project_sources(uid)}
+        return sorted(s for s in mine if s in catalog.sources)
 
     def _tool(self, agent_name: str, name: str, args: dict) -> str:
         """The two reads, in-process. No HTTP hop and no credential: a Tares agent IS Tares, so
@@ -1179,6 +1226,7 @@ class AgentRunner:
         run_id = "run_" + uuid.uuid4().hex[:12]
         self.store.start_agent_run(run_id, agent_label, "", "", key, "", None,
                                    woken_by="external", project=project)
+        self.store.add_run_projects(run_id, [project])
         await self._ingest_finding(agent_label, "", key, finding, "", verdict=verdict,
                                    label=label, run_id=run_id, project=project,
                                    headline=headline, next_step=next_step)

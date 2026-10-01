@@ -351,9 +351,9 @@ async def main():
         eq("triage hands off to root cause", [(h["verdict"], h["agent"])
                                               for h in triage.get("handoffs") or []],
            [("investigate", "checkout-rca")])
-        ck("triage is on for the trigger, root cause is left off",
-           store.subscription_by_url("tares://agent/checkout-triage") is not None
-           and store.subscription_by_url("tares://agent/checkout-rca") is None)
+        ck("triage is on for the trigger in this project, root cause is left off",
+           store.agent_enabled("checkout-triage", uid)
+           and not store.agent_enabled("checkout-rca", uid))
         eq("MCP servers from enabled tools only", (store.get_mcp_server("github") or {}).get(
             "owned_by"), uid)
         ck("the tool left off is not created", store.get_mcp_server("pager") is None)
@@ -792,14 +792,12 @@ async def main():
            (chk["plan"]["tools"][0]["name"], chk["plan"]["tools"][0]["url"],
             chk["plan"]["tools"][0]["existing"]),
            ("deploys-mcp", "https://deploys.example.com/mcp", True))
-        # a server another project owns is not taken from it
+        # a server another project made can be used here too (P-TR-216: parts are shared)
         other_uid = next(p["id"] for p in store.list_projects()
                          if p["id"] != store.default_project_id())
         store.set_owned_by("mcp_server", "deploys-mcp", other_uid)
         probs = (await cx.post("/api/setup/check", json={"plan": attach})).json()["problems"]
-        ck("a server another project owns cannot be attached",
-           any(p["where"] == "tools.t5" and "belongs to the project" in p["message"] for p in probs),
-           probs)
+        eq("a server another project made can be attached", probs, [])
         store.set_owned_by("mcp_server", "deploys-mcp", store.default_project_id())
         moved = copy.deepcopy(attach)
         moved["name"] = "Attach test"

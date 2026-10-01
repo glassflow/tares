@@ -16,6 +16,9 @@ from datetime import datetime
 import duckdb
 
 from .envelope import Envelope, now_utc
+
+# the URL a Tares agent's subscription had before the wiring moved onto projects (config.agent_url)
+AGENT_PREFIX = "tares://agent/"
 from .reads import parse_window
 
 _SCHEMA = """
@@ -240,6 +243,34 @@ CREATE TABLE IF NOT EXISTS usecase_log (
 );
 -- Skills (TR-332): instructions a project's agents load by name when a task matches the
 -- description. `project` is the project id. Deleted with the project (tares/skills.py).
+-- The wiring a project holds (P-TR-216): parts belong to the cell, and each project says how it
+-- uses them. kind 'wake': in `project`, trigger `trigger` wakes agent `agent` (`enabled`: on in
+-- this project). kind 'handoff': in `project`, when `from_agent` concludes `verdict`, `agent`
+-- digs in, at most once per `cooldown` per entity. An agent wired in two projects runs once per
+-- firing, for both.
+CREATE TABLE IF NOT EXISTS project_wiring (
+  project    TEXT,
+  kind       TEXT,
+  trigger    TEXT,
+  agent      TEXT,
+  from_agent TEXT,
+  verdict    TEXT,
+  cooldown   TEXT,
+  enabled    BOOLEAN,
+  created_at TIMESTAMPTZ
+);
+-- Which projects a run and a firing belong to: the projects whose wiring started them. The
+-- `project` column on agent_runs and dispatch_log stays as the first of them.
+CREATE TABLE IF NOT EXISTS run_projects (
+  run_id  TEXT,
+  project TEXT,
+  PRIMARY KEY (run_id, project)
+);
+CREATE TABLE IF NOT EXISTS dispatch_projects (
+  dispatch_id TEXT,
+  project     TEXT,
+  PRIMARY KEY (dispatch_id, project)
+);
 CREATE TABLE IF NOT EXISTS skills (
   project     TEXT,
   name        TEXT,
@@ -550,6 +581,7 @@ class Store:
             self._migrate_claude_code_repo_label()
             self._normalize_projects()
             self._lineage_upgrade()
+            self._wiring_upgrade()
             self._init_source_stats()
             self._init_entity_counts()
             # Write the upgrade into the database file now. Left in the WAL, the new columns on
@@ -690,8 +722,228 @@ class Store:
             "UPDATE dispatch_log SET project = t.owned_by FROM catalog_triggers t "
             "WHERE dispatch_log.project IS NULL AND t.name = dispatch_log.trigger "
             "AND t.owned_by IS NOT NULL")
+        # and the project rows the timeline reads (P-TR-216)
+        self.con.execute("INSERT INTO run_projects (run_id, project) SELECT id, project "
+                         "FROM agent_runs WHERE project IS NOT NULL ON CONFLICT DO NOTHING")
+        self.con.execute("INSERT INTO dispatch_projects (dispatch_id, project) SELECT dispatch_id, "
+                         "project FROM dispatch_log WHERE project IS NOT NULL ON CONFLICT DO NOTHING")
         self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
                          "('lineage_backfilled', '1', ?) ON CONFLICT (key) DO NOTHING", [now_utc()])
+
+    def _wiring_upgrade(self) -> None:
+        """Once per database (P-TR-216): the wiring an agent carried itself (its trigger, its
+        handoffs, and on/off as a tares://agent/ subscription) becomes the wiring of the project
+        that made it; those subscriptions go. Runs and firings get their project rows. Called
+        with no lock needed (the store is being opened)."""
+        if self.con.execute("SELECT 1 FROM settings WHERE key = 'wiring_moved'").fetchone():
+            return
+        default = self._ensure_default_project()
+        projects = {r[0] for r in self.con.execute("SELECT id FROM usecases").fetchall()}
+        on = {r[0][len(AGENT_PREFIX):] for r in self.con.execute(
+            "SELECT url FROM subscriptions WHERE url LIKE ?", [AGENT_PREFIX + "%"]).fetchall()}
+        ts = now_utc()
+        for name, trig, owner, raw in self.con.execute(
+                "SELECT name, trigger, owned_by, handoffs FROM catalog_agents").fetchall():
+            project = owner if owner in projects else default
+            # the store's placement pass may have wired it already (off): keep that row, carry
+            # on/off over
+            if trig:
+                if self.con.execute("SELECT 1 FROM project_wiring WHERE kind = 'wake' AND "
+                                    "project = ? AND trigger = ? AND agent = ?",
+                                    [project, trig, name]).fetchone():
+                    self.con.execute("UPDATE project_wiring SET enabled = ? WHERE kind = 'wake' "
+                                     "AND project = ? AND trigger = ? AND agent = ?",
+                                     [name in on, project, trig, name])
+                else:
+                    self.con.execute(
+                        "INSERT INTO project_wiring (project, kind, trigger, agent, enabled, "
+                        "created_at) VALUES (?, 'wake', ?, ?, ?, ?)",
+                        [project, trig, name, name in on, ts])
+            has_handoffs = self.con.execute(
+                "SELECT 1 FROM project_wiring WHERE kind = 'handoff' AND project = ? AND "
+                "from_agent = ?", [project, name]).fetchone()
+            for h in (json.loads(raw) if raw else []) if not has_handoffs else []:
+                if isinstance(h, dict) and h.get("agent") and h.get("verdict"):
+                    self.con.execute(
+                        "INSERT INTO project_wiring (project, kind, from_agent, agent, verdict, "
+                        "cooldown, created_at) VALUES (?, 'handoff', ?, ?, ?, ?, ?)",
+                        [project, name, h["agent"], str(h["verdict"]).lower(),
+                         h.get("cooldown") or None, ts])
+        self.con.execute("DELETE FROM subscriptions WHERE url LIKE ?", [AGENT_PREFIX + "%"])
+        self.con.execute("INSERT INTO run_projects (run_id, project) SELECT id, project "
+                         "FROM agent_runs WHERE project IS NOT NULL ON CONFLICT DO NOTHING")
+        self.con.execute("INSERT INTO dispatch_projects (dispatch_id, project) SELECT dispatch_id, "
+                         "project FROM dispatch_log WHERE project IS NOT NULL ON CONFLICT DO NOTHING")
+        for stmt in ("CREATE INDEX IF NOT EXISTS ix_wiring_trigger ON project_wiring(trigger)",
+                     "CREATE INDEX IF NOT EXISTS ix_wiring_project ON project_wiring(project)",
+                     "CREATE INDEX IF NOT EXISTS ix_run_projects_project ON run_projects(project)",
+                     "CREATE INDEX IF NOT EXISTS ix_dispatch_projects_project ON dispatch_projects(project)"):
+            self.con.execute(stmt)
+        self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
+                         "('wiring_moved', '1', ?) ON CONFLICT (key) DO NOTHING", [ts])
+
+    # ── wiring: what each project wakes, and who digs in on whose verdict (P-TR-216) ──
+    def list_wakes(self, project: str | None = None, trigger: str | None = None,
+                   agent: str | None = None) -> list[dict]:
+        """Wake rows ({project, trigger, agent, enabled}), filtered by any of the arguments."""
+        where, args = [], []
+        for col, v in (("project", project), ("trigger", trigger), ("agent", agent)):
+            if v is not None:
+                where.append(f"{col} = ?")
+                args.append(v)
+        sql = "SELECT project, trigger, agent, enabled FROM project_wiring WHERE kind = 'wake'"
+        sql += "".join(f" AND {w}" for w in where) + " ORDER BY created_at, agent"
+        with self._lock:
+            rows = self.con.execute(sql, args).fetchall()
+        return [{"project": r[0], "trigger": r[1], "agent": r[2], "enabled": bool(r[3])}
+                for r in rows]
+
+    def set_wake(self, project: str, trigger: str, agent: str, enabled: bool | None = None) -> None:
+        """In `project`, `trigger` wakes `agent`. `enabled` None keeps what the row had (a new row
+        starts off): wiring an agent is not turning it on."""
+        with self._lock:
+            row = self.con.execute(
+                "SELECT enabled FROM project_wiring WHERE kind = 'wake' AND project = ? "
+                "AND trigger = ? AND agent = ?", [project, trigger, agent]).fetchone()
+            if row is not None:
+                if enabled is not None:
+                    self.con.execute(
+                        "UPDATE project_wiring SET enabled = ? WHERE kind = 'wake' AND project = ? "
+                        "AND trigger = ? AND agent = ?", [enabled, project, trigger, agent])
+                return
+            self.con.execute(
+                "INSERT INTO project_wiring (project, kind, trigger, agent, enabled, created_at) "
+                "VALUES (?, 'wake', ?, ?, ?, ?)", [project, trigger, agent, bool(enabled), now_utc()])
+
+    def remove_wakes(self, project: str | None = None, trigger: str | None = None,
+                     agent: str | None = None) -> int:
+        """Drop wake rows matching every given argument (at least one). Returns how many."""
+        if project is None and trigger is None and agent is None:
+            raise ValueError("remove_wakes needs a project, trigger or agent")
+        where, args = ["kind = 'wake'"], []
+        for col, v in (("project", project), ("trigger", trigger), ("agent", agent)):
+            if v is not None:
+                where.append(f"{col} = ?")
+                args.append(v)
+        with self._lock:
+            n = self.con.execute(f"SELECT count(*) FROM project_wiring WHERE {' AND '.join(where)}",
+                                 args).fetchone()[0]
+            self.con.execute(f"DELETE FROM project_wiring WHERE {' AND '.join(where)}", args)
+        return int(n)
+
+    def set_agent_enabled(self, agent: str, enabled: bool, project: str | None = None) -> int:
+        """Turn an agent on or off: in one project, or in every project that wires it. Returns
+        how many wake rows it touched (0: the agent is wired nowhere, so there is nothing to
+        turn on)."""
+        where, args = "kind = 'wake' AND agent = ?", [agent]
+        if project is not None:
+            where += " AND project = ?"
+            args.append(project)
+        with self._lock:
+            n = self.con.execute(f"SELECT count(*) FROM project_wiring WHERE {where}",
+                                 args).fetchone()[0]
+            self.con.execute(f"UPDATE project_wiring SET enabled = ? WHERE {where}",
+                             [enabled, *args])
+        return int(n)
+
+    def agent_enabled(self, agent: str, project: str | None = None) -> bool:
+        """Whether some wake-up (in `project`, or in any project) wakes the agent."""
+        return any(w["enabled"] for w in self.list_wakes(project=project, agent=agent))
+
+    def list_handoffs(self, project: str | None = None,
+                      from_agent: str | None = None) -> list[dict]:
+        """Handoff rows ({project, from_agent, agent, verdict, cooldown})."""
+        sql = ("SELECT project, from_agent, agent, verdict, cooldown FROM project_wiring "
+               "WHERE kind = 'handoff'")
+        args = []
+        if project is not None:
+            sql += " AND project = ?"
+            args.append(project)
+        if from_agent is not None:
+            sql += " AND from_agent = ?"
+            args.append(from_agent)
+        with self._lock:
+            rows = self.con.execute(sql + " ORDER BY created_at, verdict", args).fetchall()
+        return [{"project": r[0], "from_agent": r[1], "agent": r[2], "verdict": r[3],
+                 "cooldown": r[4]} for r in rows]
+
+    def set_handoffs(self, project: str, from_agent: str, handoffs: list[dict]) -> None:
+        """Replace what `from_agent` hands off to in `project` ({verdict, agent, cooldown})."""
+        ts = now_utc()
+        with self._lock:
+            self.con.execute("DELETE FROM project_wiring WHERE kind = 'handoff' AND project = ? "
+                             "AND from_agent = ?", [project, from_agent])
+            for h in handoffs or []:
+                if h.get("agent") and h.get("verdict"):
+                    self.con.execute(
+                        "INSERT INTO project_wiring (project, kind, from_agent, agent, verdict, "
+                        "cooldown, created_at) VALUES (?, 'handoff', ?, ?, ?, ?, ?)",
+                        [project, from_agent, h["agent"], str(h["verdict"]).lower(),
+                         h.get("cooldown") or None, ts])
+
+    def remove_wiring(self, project: str | None = None, agent: str | None = None,
+                      trigger: str | None = None) -> None:
+        """Forget wiring: a project's (deleted), an agent's (deleted: its wakes and every handoff
+        from or to it), a trigger's (deleted: its wakes)."""
+        with self._lock:
+            if project is not None:
+                self.con.execute("DELETE FROM project_wiring WHERE project = ?", [project])
+            if agent is not None:
+                self.con.execute("DELETE FROM project_wiring WHERE agent = ? OR from_agent = ?",
+                                 [agent, agent])
+            if trigger is not None:
+                self.con.execute("DELETE FROM project_wiring WHERE kind = 'wake' AND trigger = ?",
+                                 [trigger])
+
+    def rename_in_wiring(self, kind: str, old: str, new: str) -> None:
+        with self._lock:
+            if kind == "trigger":
+                self.con.execute("UPDATE project_wiring SET trigger = ? WHERE trigger = ?", [new, old])
+            else:
+                self.con.execute("UPDATE project_wiring SET agent = ? WHERE agent = ?", [new, old])
+                self.con.execute("UPDATE project_wiring SET from_agent = ? WHERE from_agent = ?",
+                                 [new, old])
+
+    # which projects a run or a firing belongs to
+    def add_run_projects(self, run_id: str, projects) -> None:
+        with self._lock:
+            for p in dict.fromkeys(x for x in projects or [] if x):
+                self.con.execute("INSERT INTO run_projects (run_id, project) VALUES (?, ?) "
+                                 "ON CONFLICT DO NOTHING", [run_id, p])
+
+    def run_projects(self, run_id: str) -> list[str]:
+        with self._lock:
+            return [r[0] for r in self.con.execute(
+                "SELECT project FROM run_projects WHERE run_id = ? ORDER BY project",
+                [run_id]).fetchall()]
+
+    def add_dispatch_projects(self, dispatch_id: str, projects) -> None:
+        with self._lock:
+            for p in dict.fromkeys(x for x in projects or [] if x):
+                self.con.execute("INSERT INTO dispatch_projects (dispatch_id, project) VALUES (?, ?) "
+                                 "ON CONFLICT DO NOTHING", [dispatch_id, p])
+
+    def dispatch_projects(self, dispatch_id: str) -> list[str]:
+        with self._lock:
+            return [r[0] for r in self.con.execute(
+                "SELECT project FROM dispatch_projects WHERE dispatch_id = ? ORDER BY project",
+                [dispatch_id]).fetchall()]
+
+    def active_projects_using(self, kind: str, name: str) -> list[str]:
+        """projects_using, without the paused projects and the drafts: the ones a firing of the
+        part reaches."""
+        with self._lock:
+            status = {r[0]: r[1] for r in self.con.execute(
+                "SELECT id, status FROM usecases").fetchall()}
+        return [p for p in self.projects_using(kind, name)
+                if status.get(p) not in ("paused", "draft", None)]
+
+    def projects_using(self, kind: str, name: str) -> list[str]:
+        """The projects whose object list has this part (any kind), oldest membership first."""
+        with self._lock:
+            return [r[0] for r in self.con.execute(
+                "SELECT usecase_id FROM usecase_objects WHERE kind = ? AND name = ? "
+                "GROUP BY usecase_id ORDER BY min(created_at)", [kind, name]).fetchall()]
 
     def ping(self) -> None:
         """Cheapest possible liveness probe for /health — proves the connection still answers.
@@ -1118,6 +1370,8 @@ class Store:
     def delete_catalog_trigger(self, name: str) -> None:
         with self._lock:
             self.con.execute("DELETE FROM catalog_triggers WHERE name = ?", [name])
+            self.con.execute("DELETE FROM project_wiring WHERE kind = 'wake' AND trigger = ?",
+                             [name])
 
     def clear_catalog(self) -> None:
         with self._lock:
@@ -1125,6 +1379,7 @@ class Store:
             self.con.execute("DELETE FROM catalog_triggers")
             self.con.execute("DELETE FROM catalog_agents")
             self.con.execute("DELETE FROM mcp_servers")
+            self.con.execute("DELETE FROM project_wiring")
 
     # ── Tares agents (a prompt attached to a trigger; enabled ⟺ subscribed) ──
     def upsert_catalog_agent(self, name: str, trigger: str, prompt: str,
@@ -1164,8 +1419,59 @@ class Store:
                  webhook_key_label or "", provider or "", daily_cap,
                  None if handoffs is None else json.dumps(handoffs), ts, ts],
             )
+            # the agent's trigger and handoffs are the wiring of the project that made it
+            # (P-TR-216); one not placed yet is wired when it is (_wire_owner)
+            row = self.con.execute("SELECT owned_by FROM catalog_agents WHERE name = ?",
+                                   [name]).fetchone()
+            if row and row[0]:
+                self._wire_owner(name, row[0], trigger, handoffs)
 
-    def list_catalog_agents(self) -> list[dict]:
+    def wire_agent(self, name: str, project: str, trigger: str | None,
+                   handoffs: list[dict] | None) -> None:
+        """`project`'s wiring of the agent: the wake-up that wakes it there (on/off kept) and,
+        when given, what it hands off to there."""
+        with self._lock:
+            self._wire_owner(name, project, trigger, handoffs)
+
+    def _wire_owner(self, name: str, project: str, trigger: str | None,
+                    handoffs: list[dict] | None) -> None:
+        """The agent's own trigger and handoffs as `project`'s wiring: the project's wake row for
+        the agent follows the trigger (keeping on/off), handoffs (None: keep) replace the
+        project's. Called with the lock held."""
+        if trigger:
+            rows = self.con.execute(
+                "SELECT trigger, enabled FROM project_wiring WHERE kind = 'wake' AND project = ? "
+                "AND agent = ?", [project, name]).fetchall()
+            if not rows:
+                self.con.execute(
+                    "INSERT INTO project_wiring (project, kind, trigger, agent, enabled, created_at) "
+                    "VALUES (?, 'wake', ?, ?, FALSE, ?)", [project, trigger, name, now_utc()])
+            elif not any(t == trigger for t, _on in rows):
+                # one wake-up in this project: the agent's trigger changed, its row follows
+                if len(rows) == 1:
+                    self.con.execute(
+                        "UPDATE project_wiring SET trigger = ? WHERE kind = 'wake' AND project = ? "
+                        "AND agent = ?", [trigger, project, name])
+                else:
+                    self.con.execute(
+                        "INSERT INTO project_wiring (project, kind, trigger, agent, enabled, "
+                        "created_at) VALUES (?, 'wake', ?, ?, FALSE, ?)",
+                        [project, trigger, name, now_utc()])
+        if handoffs is not None:
+            self.con.execute("DELETE FROM project_wiring WHERE kind = 'handoff' AND project = ? "
+                             "AND from_agent = ?", [project, name])
+            for h in handoffs:
+                if isinstance(h, dict) and h.get("agent") and h.get("verdict"):
+                    self.con.execute(
+                        "INSERT INTO project_wiring (project, kind, from_agent, agent, verdict, "
+                        "cooldown, created_at) VALUES (?, 'handoff', ?, ?, ?, ?, ?)",
+                        [project, name, h["agent"], str(h["verdict"]).lower(),
+                         h.get("cooldown") or None, now_utc()])
+
+    def list_catalog_agents(self, project: str | None = None) -> list[dict]:
+        """Every agent. `trigger`, `handoffs` and `enabled` are its wiring in `project`, or by
+        default in the project that made it (P-TR-216: the wiring belongs to the project; an
+        agent wired nowhere keeps the trigger and handoffs it was defined with)."""
         with self._lock:
             rows = self.con.execute(
                 "SELECT name, trigger, prompt, slack_webhook, model, slack_channel, "
@@ -1173,23 +1479,44 @@ class Store:
                 "webhook_key_label, provider, daily_cap, handoffs "
                 "FROM catalog_agents ORDER BY name"
             ).fetchall()
-        return [
-            {"name": r[0], "trigger": r[1], "prompt": r[2], "slack_webhook": r[3] or "",
-             "model": r[4] or "", "slack_channel": r[5] or "",
-             "webhook_url": r[6] or "", "webhook_token": r[7] or "",
-             "mcp_servers": json.loads(r[8]) if r[8] else [], "updated_at": r[9],
-             "max_rounds": r[10], "budget_usd": r[11], "owned_by": r[12], "customized": bool(r[13]),
-             "webhook_key_label": r[14] or "", "provider": r[15] or "", "daily_cap": r[16],
-             "handoffs": json.loads(r[17]) if r[17] else []}
-            for r in rows
-        ]
+            wiring = self.con.execute(
+                "SELECT project, kind, trigger, agent, from_agent, verdict, cooldown, enabled "
+                "FROM project_wiring ORDER BY created_at").fetchall()
+        wakes: dict[tuple, list] = {}
+        hands: dict[tuple, list] = {}
+        for p, kind, trig, agent, frm, verdict, cooldown, enabled in wiring:
+            if kind == "wake":
+                wakes.setdefault((p, agent), []).append((trig, bool(enabled)))
+            else:
+                hands.setdefault((p, frm), []).append(
+                    {"verdict": verdict, "agent": agent, **({"cooldown": cooldown} if cooldown else {})})
+        out = []
+        for r in rows:
+            where = project or r[12]
+            w = wakes.get((where, r[0])) or []
+            on = [t for t, e in w if e]
+            out.append({
+                "name": r[0], "trigger": (on or [t for t, _e in w] or [r[1]])[0],
+                "triggers": [t for t, _e in w], "prompt": r[2], "slack_webhook": r[3] or "",
+                "model": r[4] or "", "slack_channel": r[5] or "",
+                "webhook_url": r[6] or "", "webhook_token": r[7] or "",
+                "mcp_servers": json.loads(r[8]) if r[8] else [], "updated_at": r[9],
+                "max_rounds": r[10], "budget_usd": r[11], "owned_by": r[12], "customized": bool(r[13]),
+                "webhook_key_label": r[14] or "", "provider": r[15] or "", "daily_cap": r[16],
+                "handoffs": hands.get((where, r[0]), [] if w or (where, r[0]) in hands
+                                      else (json.loads(r[17]) if r[17] else [])),
+                "enabled": bool(on)})
+        return out
 
-    def get_catalog_agent(self, name: str) -> dict | None:
-        return next((a for a in self.list_catalog_agents() if a["name"] == name), None)
+    def get_catalog_agent(self, name: str, project: str | None = None) -> dict | None:
+        return next((a for a in self.list_catalog_agents(project) if a["name"] == name), None)
 
     def delete_catalog_agent(self, name: str) -> None:
         with self._lock:
             self.con.execute("DELETE FROM catalog_agents WHERE name = ?", [name])
+            # its wiring in every project: what wakes it, and handoffs from and to it
+            self.con.execute("DELETE FROM project_wiring WHERE agent = ? OR from_agent = ?",
+                             [name, name])
             self.con.execute("DELETE FROM agent_runs WHERE agent = ?", [name])
             # a handoff to the agent goes with it (TR-334): the agents that handed off to it
             # keep their other handoffs
@@ -1219,6 +1546,9 @@ class Store:
                 [run_id, agent, trigger, dispatch_id, key, prompt_hash, now_utc(), max_rounds,
                  woken_by, parent_run_id or None, project or None, bool(practice)],
             )
+            if project:   # the run belongs to its project (more join with add_run_projects)
+                self.con.execute("INSERT INTO run_projects (run_id, project) VALUES (?, ?) "
+                                 "ON CONFLICT DO NOTHING", [run_id, project])
 
     def finish_agent_run(self, run_id: str, status: str, rounds: int = 0, tool_calls: int = 0,
                          finding: str | None = None, error: str | None = None,
@@ -1314,7 +1644,8 @@ class Store:
         sql = f"{column} IN ({', '.join(['?'] * len(values))})"
         params = list(values)
         if project is not None:
-            sql += " AND project = ?"
+            # the runs that belong to the project (P-TR-216: its wiring started them)
+            sql += " AND id IN (SELECT run_id FROM run_projects WHERE project = ?)"
             params.append(project)
         return list(reversed(self.list_agent_runs(limit=100000, where_sql=sql,
                                                   where_params=params)))
@@ -1323,7 +1654,9 @@ class Store:
                          limit: int = 50) -> list[dict]:
         """The findings recorded in a project, newest first: its Tares agents' runs that
         concluded with one, and external agents' findings (TR-336)."""
-        sql, params = "project = ? AND status = 'ok' AND outcome = 'finding'", [project]
+        sql = ("id IN (SELECT run_id FROM run_projects WHERE project = ?) AND status = 'ok' "
+               "AND outcome = 'finding'")
+        params = [project]
         if entity:
             sql += " AND key_value = ?"
             params.append(entity)
@@ -1359,15 +1692,17 @@ class Store:
         (a trigger whose agents are all off still fires). Practice threads are left out."""
         with self._lock:
             r = self.con.execute(
-                "SELECT (SELECT count(*) FROM dispatch_log d WHERE project = ? AND fired_at >= ? "
+                "WITH pr AS (SELECT run_id FROM run_projects WHERE project = ?), "
+                "pd AS (SELECT dispatch_id FROM dispatch_projects WHERE project = ?) "
+                "SELECT (SELECT count(*) FROM dispatch_log d WHERE dispatch_id IN (SELECT * FROM pd) "
+                "        AND fired_at >= ? "
                 "        AND NOT COALESCE(practice, FALSE) AND COALESCE(subscribers, 0) > 0 "
-                "        AND NOT EXISTS (SELECT 1 FROM agent_runs p WHERE p.id = d.parent_run_id "
-                "                        AND p.project = d.project)) + "
-                "       (SELECT count(*) FROM agent_runs r WHERE project = ? AND started_at >= ? "
+                "        AND NOT COALESCE(d.parent_run_id IN (SELECT * FROM pr), FALSE)) + "
+                "       (SELECT count(*) FROM agent_runs r WHERE id IN (SELECT * FROM pr) "
+                "        AND started_at >= ? "
                 "        AND COALESCE(dispatch_id, '') = '' AND NOT COALESCE(practice, FALSE) "
-                "        AND NOT EXISTS (SELECT 1 FROM agent_runs p WHERE p.id = r.parent_run_id "
-                "                        AND p.project = r.project))",
-                [project, since, project, since]).fetchone()
+                "        AND NOT COALESCE(r.parent_run_id IN (SELECT * FROM pr), FALSE))",
+                [project, project, since, since]).fetchone()
         return int(r[0] or 0) if r else 0
 
     def project_spend_since(self, project: str, since) -> float:
@@ -1375,7 +1710,8 @@ class Store:
         left out."""
         with self._lock:
             r = self.con.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM agent_runs "
-                                 "WHERE project = ? AND started_at >= ? "
+                                 "WHERE id IN (SELECT run_id FROM run_projects WHERE project = ?) "
+                                 "AND started_at >= ? "
                                  "AND NOT COALESCE(practice, FALSE)", [project, since]).fetchone()
         return float(r[0] or 0) if r else 0.0
 
@@ -1617,6 +1953,21 @@ class Store:
         with self._lock:
             self.con.execute(f"UPDATE {table} SET owned_by = ?, customized = FALSE WHERE name = ?",
                              [project_id, name])
+            if kind == "agent" and project_id:
+                self._wire_from_definition(name, project_id)
+
+    def _wire_from_definition(self, name: str, project: str) -> None:
+        """An agent placed in a project that does not wire it yet takes the trigger and handoffs
+        it was defined with as that project's wiring (off until turned on). Lock held."""
+        r = self.con.execute("SELECT trigger, handoffs FROM catalog_agents WHERE name = ?",
+                             [name]).fetchone()
+        if r is None:
+            return
+        has = self.con.execute("SELECT 1 FROM project_wiring WHERE project = ? AND "
+                               "(agent = ? AND kind = 'wake' OR from_agent = ?) LIMIT 1",
+                               [project, name, name]).fetchone()
+        if not has:
+            self._wire_owner(name, project, r[0], json.loads(r[1]) if r[1] else [])
 
     def claim_owned_by(self, kind: str, name: str, project_id: str) -> bool:
         """Take ownership only if the object is unowned or already this project's; returns whether
@@ -1714,6 +2065,7 @@ class Store:
                              "AND revoked_at IS NULL", [now_utc(), uid])
             self.con.execute("DELETE FROM subscriptions WHERE project = ?", [uid])
             self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ?", [uid])
+            self.con.execute("DELETE FROM project_wiring WHERE project = ?", [uid])
             self.con.execute("DELETE FROM usecase_log WHERE usecase_id = ?", [uid])
             self.con.execute("DELETE FROM usecases WHERE id = ?", [uid])
 
@@ -1917,61 +2269,74 @@ class Store:
 
     def put_in_project(self, kind: str, name: str, uid: str, key: str | None = None,
                        creator: bool = False) -> None:
-        """Place an object in project `uid`. A trigger, agent or MCP server moves: it leaves the
-        custom and default projects it was listed in (a template project keeps its planned row,
-        which then reads as missing there, like any object that is gone from its plan). A source
-        joins `uid` and stays in its other projects; `creator` also records `uid` as the project
-        that created it."""
+        """Put a part in project `uid` (P-TR-216: parts belong to the cell; a project uses them,
+        any number of projects the same part). It stays in its other projects. The default
+        project only holds what no other project does: a part that was there for want of
+        another project leaves it, and the default project's wiring of it comes along (a source
+        stays while a default trigger still reads it). `creator` records `uid` as the project
+        that made it; a part with no maker takes `uid`."""
         table = self._OWNED_TABLES[kind]
         with self._lock:
+            default = self._ensure_default_project()
+            row = self.con.execute(f"SELECT owned_by FROM {table} WHERE name = ?",
+                                   [name]).fetchone()
+            owner = row[0] if row else None
             if kind == "source":
                 if creator:
                     self.con.execute(f"UPDATE {table} SET owned_by = ? WHERE name = ?", [uid, name])
-                # the default project holds what no other project does: a source joining another
-                # project leaves it, unless a trigger of the default project still reads it
-                default = self._ensure_default_project()
                 if uid != default and default in self._rows_for("source", name):
+                    # a trigger of the default project still reads it: it stays there too
                     readers = [r[0] for r in self.con.execute(
-                        "SELECT sources FROM catalog_triggers WHERE owned_by = ?",
-                        [default]).fetchall() if name in json.loads(r[0] or "[]")]
+                        "SELECT t.name, t.sources FROM catalog_triggers t JOIN usecase_objects o "
+                        "ON o.kind = 'trigger' AND o.name = t.name AND o.usecase_id = ?",
+                        [default]).fetchall() if name in json.loads(r[1] or "[]")]
                     if not readers:
                         self._drop_rows("source", name, [default])
             else:
-                recipes = self._recipes()
-                # it leaves the project it is in now: a template keeps a planned row (it reads as
-                # missing there), a row that was only placed there goes. A row in some other
-                # project is how that project shows an object it lost; it stays.
-                row = self.con.execute(f"SELECT owned_by FROM {table} WHERE name = ?",
-                                       [name]).fetchone()
-                current = {row[0] if row else None, self._ensure_default_project()}
-                others = [u for u, key in self.con.execute(
-                    "SELECT usecase_id, key FROM usecase_objects WHERE kind = ? AND name = ?",
-                    [kind, name]).fetchall()
-                    if u != uid and u in current
-                    and (recipes.get(u) in ("custom", "default") or key.startswith("+"))]
-                self._drop_rows(kind, name, others)
-                self.con.execute(f"UPDATE {table} SET owned_by = ? WHERE name = ? "
-                                 f"AND owned_by IS DISTINCT FROM ?", [uid, name, uid])
+                # the default project holds only what no other project does
+                leaving_default = uid != default and default in self._rows_for(kind, name)
+                if leaving_default:
+                    # it was in the default project only for want of another: it moves, with the
+                    # default project's wiring of it
+                    self._drop_rows(kind, name, [default])
+                    if kind == "agent":
+                        self.con.execute(
+                            "UPDATE project_wiring SET project = ? WHERE project = ? AND "
+                            "(agent = ? OR from_agent = ?)", [uid, default, name, name])
+                    elif kind == "trigger":
+                        self.con.execute(
+                            "UPDATE project_wiring SET project = ? WHERE project = ? AND "
+                            "kind = 'wake' AND trigger = ?", [uid, default, name])
+                if creator or owner is None or (leaving_default and owner in (None, default)):
+                    self.con.execute(f"UPDATE {table} SET owned_by = ? WHERE name = ?", [uid, name])
+                if kind == "agent":
+                    self._wire_from_definition(name, uid)
             self._add_row(uid, kind, name, key)
 
     def remove_from_project(self, kind: str, name: str, uid: str) -> None:
-        """Drop an object from a project. A source left in no project joins the default one; a
-        trigger, agent or MCP server leaving its project also goes to the default one (every
-        object is in a project)."""
+        """Take a part out of a project, with that project's wiring of it. A part left in no
+        project joins the default one; a part whose maker leaves it gets another project that
+        uses it as its maker."""
         with self._lock:
             self._drop_rows(kind, name, [uid])
+            if kind == "agent":
+                self.con.execute("DELETE FROM project_wiring WHERE project = ? AND "
+                                 "(agent = ? OR from_agent = ?)", [uid, name, name])
+            elif kind == "trigger":
+                self.con.execute("DELETE FROM project_wiring WHERE project = ? AND kind = 'wake' "
+                                 "AND trigger = ?", [uid, name])
             default = self._ensure_default_project()
             table = self._OWNED_TABLES[kind]
             exists = self.con.execute(f"SELECT owned_by FROM {table} WHERE name = ?",
                                       [name]).fetchone()
             if exists is None:
                 return
-            if kind == "source":
-                if not self._rows_for("source", name):
-                    self._add_row(default, "source", name)
-            elif exists[0] == uid:
-                self.con.execute(f"UPDATE {table} SET owned_by = ? WHERE name = ?", [default, name])
+            left = self._rows_for(kind, name)
+            if not left:
                 self._add_row(default, kind, name)
+                left = [default]
+            if kind != "source" and exists[0] == uid:
+                self.con.execute(f"UPDATE {table} SET owned_by = ? WHERE name = ?", [left[0], name])
 
     def source_memberships(self) -> dict[str, list[str]]:
         """{source name: [project ids it is in]}, for every source with a membership."""
@@ -2044,7 +2409,13 @@ class Store:
             # a row elsewhere is left alone: it is how a project shows an object it lost (one
             # deleted by hand and recreated, which lands here unowned), and how an edit that
             # still lists it takes it back
+            # an agent placed here for the first time (just imported, in no project yet) takes
+            # its own trigger and handoffs as its project's wiring; one already in a project is
+            # wired as that project says, even when it says nothing
+            first = kind == "agent" and not self._rows_for("agent", name)
             self._add_row(owner, kind, name)
+            if first:
+                self._wire_from_definition(name, owner)
         existing = {r[0] for r in self.con.execute("SELECT name FROM catalog_sources").fetchall()}
         for name, (_owner, srcs) in triggers.items():
             for src in srcs:
@@ -2053,6 +2424,14 @@ class Store:
         for src in existing:
             if not self._rows_for("source", src):
                 self._add_row(default, "source", src)
+        # the default project holds only what no other project does: a source another project
+        # has and no default trigger reads leaves it
+        default_reads = {src for (name, (_o, srcs)) in triggers.items()
+                         if default in self._rows_for("trigger", name) for src in srcs}
+        for src in existing:
+            rows = self._rows_for("source", src)
+            if default in rows and len(rows) > 1 and src not in default_reads:
+                self._drop_rows("source", src, [default])
 
     def log_project(self, uid: str, action: str, detail: str = "") -> None:
         with self._lock:
@@ -2205,6 +2584,9 @@ class Store:
                 [dispatch_id, trigger, key, kind, now_utc(), subscribers, delivered, payload,
                  project or None, parent_run_id or None, bool(practice)],
             )
+            if project:   # the firing belongs to its project (more join with add_dispatch_projects)
+                self.con.execute("INSERT INTO dispatch_projects (dispatch_id, project) VALUES (?, ?) "
+                                 "ON CONFLICT DO NOTHING", [dispatch_id, project])
 
     # ── project timeline (TR-331): the store's side is indexed lookups only ──
     def timeline_roots(self, project: str, before: datetime | None, limit: int) -> list[tuple]:
@@ -2215,20 +2597,21 @@ class Store:
         b = "AND {col} < ? " if before is not None else ""
         args = [before] if before is not None else []
         with self._lock:
+            # the firings and runs that belong to the project (P-TR-216)
             return self.con.execute(
+                "WITH pr AS (SELECT run_id FROM run_projects WHERE project = ?), "
+                "pd AS (SELECT dispatch_id FROM dispatch_projects WHERE project = ?) "
                 "SELECT * FROM ("
                 "SELECT 'firing' AS kind, dispatch_id AS id, fired_at AS ts FROM dispatch_log d "
-                f"WHERE project = ? {b.format(col='fired_at')}"
-                "AND NOT EXISTS (SELECT 1 FROM agent_runs p WHERE p.id = d.parent_run_id "
-                "                AND p.project = d.project) "
+                f"WHERE dispatch_id IN (SELECT * FROM pd) {b.format(col='fired_at')}"
+                "AND NOT COALESCE(d.parent_run_id IN (SELECT * FROM pr), FALSE) "
                 "UNION ALL "
                 "SELECT 'run', id, started_at FROM agent_runs r "
-                f"WHERE project = ? {b.format(col='started_at')}"
+                f"WHERE id IN (SELECT * FROM pr) {b.format(col='started_at')}"
                 "AND COALESCE(dispatch_id, '') = '' "
-                "AND NOT EXISTS (SELECT 1 FROM agent_runs p WHERE p.id = r.parent_run_id "
-                "                AND p.project = r.project)"
+                "AND NOT COALESCE(r.parent_run_id IN (SELECT * FROM pr), FALSE)"
                 ") ORDER BY ts DESC, id DESC LIMIT ?",
-                [project, *args, project, *args, int(limit)]).fetchall()
+                [project, project, *args, *args, int(limit)]).fetchall()
 
     def dispatches_where(self, column: str, values: list, project: str | None = None) -> list[dict]:
         """Firings by dispatch_id or by the run that tripped them, oldest first."""
@@ -2239,7 +2622,7 @@ class Store:
                f"WHERE {column} IN ({', '.join(['?'] * len(values))})")
         params = list(values)
         if project is not None:
-            sql += " AND project = ?"
+            sql += " AND dispatch_id IN (SELECT dispatch_id FROM dispatch_projects WHERE project = ?)"
             params.append(project)
         with self._lock:
             rows = self.con.execute(sql + " ORDER BY fired_at", params).fetchall()

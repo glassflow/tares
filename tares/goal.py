@@ -317,12 +317,12 @@ def _internal(connector: str) -> bool:
 def _parts(store, catalog, uid: str) -> dict:
     """The project's triggers (config objects), agents (catalog rows with `enabled`), sources
     (names, internal ones left out) and whether outside agents joined it."""
-    triggers = sorted((t for t in catalog.triggers if t.project == uid), key=lambda t: t.name)
-    agents = []
-    for a in store.list_catalog_agents():
-        if a.get("owned_by") != uid:
-            continue
-        agents.append({**a, "enabled": store.subscription_by_url(agent_url(a["name"])) is not None})
+    # the parts the project uses and its own wiring of them (P-TR-216): an agent's trigger,
+    # handoffs and on/off are this project's
+    triggers = sorted((t for t in catalog.triggers
+                       if uid in store.projects_using("trigger", t.name)), key=lambda t: t.name)
+    used = {o["name"] for o in store.list_project_objects(uid) if o["kind"] == "agent"}
+    agents = [a for a in store.list_catalog_agents(uid) if a["name"] in used]
     names = [n for n in store.project_sources(uid)
              if n in catalog.sources and not _internal(catalog.sources[n].connector)]
     targets: dict[str, list] = {}
@@ -877,16 +877,18 @@ def project_results(store, uid: str, limit: int = 20, before=None, scheduled: se
     return {"results": results, "next_before": next_before, "today": today}
 
 
-def _root_of(store, run: dict) -> tuple | None:
-    """The (kind, id, at) root of the timeline thread a run sits in, by the same rules as
-    store.timeline_roots."""
+def _root_of(store, run: dict, uid: str | None = None) -> tuple | None:
+    """The (kind, id, at) root of the timeline thread a run sits in, in project `uid`, by the
+    same rules as store.timeline_roots (a parent counts when it belongs to the project too)."""
+    def mine(r):
+        return (uid in store.run_projects(r["id"])) if uid else True
     cur, seen = run, set()
     while cur is not None and cur["id"] not in seen:
         seen.add(cur["id"])
         pid = cur.get("parent_run_id")
         if pid:
             p = store.get_agent_run(pid)
-            if p is not None and p.get("project") == cur.get("project"):
+            if p is not None and mine(p):
                 cur = p
                 continue
         if cur.get("dispatch_id"):
@@ -896,7 +898,7 @@ def _root_of(store, run: dict) -> tuple | None:
             d = ds[0]
             if d.get("parent_run_id"):
                 p = store.get_agent_run(d["parent_run_id"])
-                if p is not None and p.get("project") == d.get("project"):
+                if p is not None and mine(p):
                     cur = p
                     continue
             return ("firing", d["dispatch_id"], d["fired_at"])
@@ -1007,11 +1009,11 @@ def result_detail(store, catalog, uid: str, run_id: str, scheduled: set | None =
     """The result a run wrote, with the full note and the steps. KeyError when the run is not
     in the project or wrote no result."""
     run = store.get_agent_run(run_id)
-    if run is None or run.get("project") != uid:
+    if run is None or uid not in store.run_projects(run_id):
         raise KeyError(f"project has no run {run_id!r}")
     if not _concluding(run):
         raise KeyError(f"run {run_id!r} wrote no result")
-    root = _root_of(store, run)
+    root = _root_of(store, run, uid)
     threads = _timeline._build(store, uid, [root], scheduled or set()) if root else []
     thread = threads[0] if threads else {"id": run_id, "kind": "run", "at": run["started_at"],
                                          "entity": run.get("key"), "runs": []}

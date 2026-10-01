@@ -66,12 +66,9 @@ class Engine:
             if o["kind"] not in existing:   # a kind that no longer exists (a folded view)
                 continue
             row = existing[o["kind"]].get(o["name"])
-            # an object deleted by hand and recreated under another project, or moved to one, is
-            # lost to this one: missing, and nothing here acts on it any more. A source is shared,
-            # so its creator says nothing about whether it is still here.
-            lost = (o["kind"] != "source" and row is not None
-                    and row.get("owned_by") not in (None, uid))
-            objects.append({**o, "missing": row is None or lost,
+            # parts belong to the cell and any number of projects use them (P-TR-216): one is
+            # missing here only when it no longer exists
+            objects.append({**o, "missing": row is None,
                             "customized": bool(row and row.get("customized")) or o["customized"]})
         template = _safe_template(inst["template"])
         # `recipe` mirrors `template` for pre-1.14 clients; dropped two releases after 1.14
@@ -132,9 +129,10 @@ class Engine:
         self.store.log_project(uid, "create", f"{len(plan)} objects planned")
         before = self._existing_names(uid)
         try:
-            # a custom project shares sources rather than taking them
-            self._check_ownership(uid, [o for o in plan if not (_is_custom(template.key)
-                                                             and o.kind == "source")], before)
+            # a custom project uses parts that exist (shared, P-TR-216); a template reconfigures
+            # what it plans, so it never takes a part another project made
+            if not _is_custom(template.key):
+                self._check_ownership(uid, plan, before)
             if _is_custom(template.key):
                 self._adopt(uid, plan, before)
             else:
@@ -280,74 +278,77 @@ class Engine:
         return n
 
     def pause(self, uid: str, sources: bool = False) -> dict:
-        """Triggers off, agents unsubscribed; sources keep ingesting unless `sources` is set, in
-        which case the project's sources that are running are paused too (polling stops, pushes
-        are refused) and remembered, so resume brings back exactly those: a source paused by hand
-        before stays paused."""
+        """The project's wiring stops: its agents are turned off here and remembered, so resume
+        brings back exactly what was on. A trigger stops only when no other running project uses
+        it (P-TR-216: parts are shared; pausing one project leaves the others alone). Sources
+        keep ingesting unless `sources` is set, in which case the project's running sources are
+        paused too and remembered (a source paused by hand before stays paused)."""
         inst = self._require(uid)
         objects = self._live_objects(uid)
-        if _adopted(inst["template"]) and inst["status"] != "paused":
-            # no planned version says which agents were on: remember it for resume (a repeated
-            # pause finds nothing on and must not forget the first answer)
-            on = [o["name"] for o in objects if o["kind"] == "agent"
-                  and self.store.subscription_by_url(agent_url(o["name"]))]
+        params = dict(inst["params"])
+        if inst["status"] != "paused":
+            # a repeated pause finds nothing on and must not forget the first answer
+            params["resume_wakes"] = [[w["trigger"], w["agent"]]
+                                      for w in self.store.list_wakes(project=uid) if w["enabled"]]
             paused = {t["name"] for t in self.store.list_catalog_triggers() if t.get("paused")}
-            live = [o["name"] for o in objects if o["kind"] == "trigger" and o["name"] not in paused]
-            self.store.update_project(uid, params={**inst["params"], "resume_agents": on,
-                                                   "resume_triggers": live})
-        for o in objects:
-            if o["kind"] == "trigger":
-                self.store.set_trigger_paused(o["name"], True)
-            elif o["kind"] == "agent":
-                self.store.remove_subscription_by_url(agent_url(o["name"]))
+            mine = [o["name"] for o in objects if o["kind"] == "trigger" and o["name"] not in paused
+                    and not [p for p in self.store.active_projects_using("trigger", o["name"])
+                             if p != uid]]
+            params["resume_triggers"] = mine
+            params.pop("resume_agents", None)
+            for name in mine:
+                self.store.set_trigger_paused(name, True)
+        for w in self.store.list_wakes(project=uid):
+            if w["enabled"]:
+                self.store.set_wake(uid, w["trigger"], w["agent"], enabled=False)
         paused_sources: list[str] = []
         if sources:
             running = {s["name"] for s in self.store.list_catalog_sources() if not s["paused"]}
             paused_sources = [o["name"] for o in objects if o["kind"] == "source" and o["name"] in running]
             for name in paused_sources:
                 self.store.set_source_paused(name, True)
-            inst = self._require(uid)   # params may have just been rewritten above
-            self.store.update_project(uid, params={**inst["params"], "paused_sources": paused_sources})
-        self.store.update_project(uid, status="paused")
+            params["paused_sources"] = paused_sources
+        self.store.update_project(uid, params=params, status="paused")
         n = len(paused_sources)
-        self.store.log_project(uid, "paused", "triggers paused, agents unsubscribed; "
+        self.store.log_project(uid, "paused", "agents off in this project; "
                                + (f"{n} source{'s' if n != 1 else ''} paused" if sources else "sources keep ingesting"))
         self._do_reload()
         return self.get(uid)
 
     def resume(self, uid: str) -> dict:
         inst = self._require(uid)
-        template = get_template(inst["template"])
-        plan = {(o.kind, o.key): o for o in template.plan(template.validate(inst["params"]))}
-        adopted = _adopted(inst["template"])
-        resume_agents = set(inst["params"].get("resume_agents") or []) if adopted else set()
-        resume_triggers = set(inst["params"].get("resume_triggers") or []) if adopted else set()
-        for o in self._live_objects(uid):
-            if o["kind"] == "trigger":
-                # a custom project's trigger that the user had paused before stays paused
-                if not adopted or o["name"] in resume_triggers:
-                    self.store.set_trigger_paused(o["name"], False)
-            elif o["kind"] == "agent":
-                spec = plan.get(("agent", o["key"]))
-                agent = self.store.get_catalog_agent(o["name"])
-                wanted = (o["name"] in resume_agents) if adopted else bool(
-                    spec is not None and spec.spec.get("enabled", False))
-                if agent and wanted:
-                    url = agent_url(o["name"])
-                    if not self.store.subscription_by_url(url):
-                        self.store.add_subscription("sub_" + uuid.uuid4().hex[:8],
-                                                    agent["trigger"], url, created_by="tares")
+        params = dict(inst["params"])
+        if "resume_wakes" in params:
+            for trig, agent in params.get("resume_wakes") or []:
+                self.store.set_wake(uid, trig, agent, enabled=True)
+            for name in params.get("resume_triggers") or []:
+                self.store.set_trigger_paused(name, False)
+        else:
+            # paused before the wiring moved onto projects: what the pause remembered then
+            template = get_template(inst["template"])
+            plan = {(o.kind, o.key): o for o in template.plan(template.validate(params))}
+            adopted = _adopted(inst["template"])
+            resume_agents = set(params.get("resume_agents") or []) if adopted else set()
+            resume_triggers = set(params.get("resume_triggers") or []) if adopted else set()
+            for o in self._live_objects(uid):
+                if o["kind"] == "trigger":
+                    if not adopted or o["name"] in resume_triggers:
+                        self.store.set_trigger_paused(o["name"], False)
+                elif o["kind"] == "agent":
+                    spec = plan.get(("agent", o["key"]))
+                    wanted = (o["name"] in resume_agents) if adopted else bool(
+                        spec is not None and spec.spec.get("enabled", False))
+                    if wanted:
+                        self.store.set_agent_enabled(o["name"], True, project=uid)
         # the sources this pause stopped come back; one paused by hand before is left alone
-        paused_sources = list(inst["params"].get("paused_sources") or [])
+        paused_sources = list(params.get("paused_sources") or [])
         live_sources = {o["name"] for o in self._live_objects(uid) if o["kind"] == "source"}
         for name in paused_sources:
             if name in live_sources:
                 self.store.set_source_paused(name, False)
-        if adopted or paused_sources:
-            drop = ("resume_agents", "resume_triggers") if adopted else ()
-            self.store.update_project(uid, params={k: v for k, v in inst["params"].items()
-                                                   if k not in drop and k != "paused_sources"})
-        self.store.update_project(uid, status="active")
+        drop = ("resume_agents", "resume_triggers", "resume_wakes", "paused_sources")
+        self.store.update_project(uid, params={k: v for k, v in params.items() if k not in drop},
+                                  status="active")
         if paused_sources:
             n = len(paused_sources)
             self.store.log_project(uid, "resumed", f"{n} source{'s' if n != 1 else ''} resumed")
@@ -376,15 +377,26 @@ class Engine:
         if unknown:
             raise ProjectError("not this project's sources: " + ", ".join(unknown))
         existing = self._existing_names()
-        # only what is still this project's goes: an object moved elsewhere since is left alone
-        going = [PlannedObject(o["kind"], o["key"], {"name": o["name"]}) for o in rows
-                 if o["kind"] in _SOLE
-                 and (existing[o["kind"]].get(o["name"]) or {}).get("owned_by") == uid]
+        # what this project made goes, unless another project uses it too (P-TR-216: then it
+        # stays, made by one of those); what it only used is never touched
+        going, shared = [], []
+        for o in rows:
+            if o["kind"] not in _SOLE:
+                continue
+            if (existing[o["kind"]].get(o["name"]) or {}).get("owned_by") != uid:
+                continue
+            others = [p for p in self.store.projects_using(o["kind"], o["name"]) if p != uid]
+            if others:
+                shared.append((o["kind"], o["name"], others[0]))
+            else:
+                going.append(PlannedObject(o["kind"], o["key"], {"name": o["name"]}))
         self._delete_objects(going, purge_events=False)
         # firings go with the events: a purged project leaves no history behind its triggers
         purged_firings = sum(self.store.purge_dispatches(o.name)
                              for o in going if o.kind == "trigger") if purge_events else 0
         self.store.delete_project(uid)
+        for kind, name, other in shared:
+            self.store.set_owned_by(kind, name, other)
         # the sources it created and leaves behind have no creator any more
         for n in members:
             if (existing["source"].get(n) or {}).get("owned_by") == uid:
@@ -402,6 +414,8 @@ class Engine:
                 "deleted": [f"{o.kind}:{o.name}" for o in going]
                 + [f"source:{n}" for n in deleted_sources],
                 "kept": kept,
+                # parts it made that another project uses: they stay, made by that project
+                "kept_shared": [{"kind": k, "name": n, "project": p} for k, n, p in shared],
                 "released": [f"source:{n}" for n in members if n not in deleted_sources],
                 "purged_events": purged, "purged_firings": purged_firings}
 
@@ -420,7 +434,8 @@ class Engine:
         if name not in self.store.project_sources(uid):
             raise KeyError(f"source {name!r} is not in this project")
         users = [t["name"] for t in self.store.list_catalog_triggers()
-                 if t.get("owned_by") == uid and name in (t.get("sources") or [])]
+                 if uid in self.store.projects_using("trigger", t["name"])
+                 and name in (t.get("sources") or [])]
         if users:
             raise ProjectError(f"source {name!r} is read by this project's trigger"
                                f"{'s' if len(users) != 1 else ''} {', '.join(users)}; change "
@@ -529,6 +544,10 @@ class Engine:
             if not (o.kind == "source" and o.name in had):
                 self.store.set_owned_by(o.kind, o.name, uid)
             self.store.put_in_project(o.kind, o.name, uid, key=o.key)
+            if o.kind == "agent":
+                # on or off is this project's wiring (P-TR-216)
+                self.store.set_agent_enabled(o.name, bool(o.spec.get("enabled", False)),
+                                             project=uid)
         # a trigger's sources are members of its project, planned or not (the findings source a
         # handoff trigger reads, say)
         for o in plan:
@@ -549,7 +568,6 @@ class Engine:
         for o in objs:
             if o.name not in existing[o.kind]:
                 raise ProjectError(f"{o.kind} {o.name!r} does not exist")
-        self._check_ownership(uid, [o for o in objs if o.kind != "source"], existing)
         done: list[PlannedObject] = []
         # sources last: a source leaves the default project only once no trigger there reads it,
         # which is known after the triggers have moved
@@ -567,25 +585,18 @@ class Engine:
             raise
 
     def _closure(self, uid: str, taken: list[tuple[str, str]], existing: dict) -> list:
-        """What else must come into project `uid` with `taken`: an agent's trigger and MCP
-        servers, a trigger's agents, a trigger's sources. Raises when one of them belongs to
-        another project (not the default one), naming it."""
-        default = self.default_id()
+        """What else must come into project `uid` with `taken` for it to work there: an agent's
+        trigger (its wiring here) and MCP servers, a trigger's sources. Parts are shared
+        (P-TR-216), so this only adds membership; nothing leaves another project."""
         have = set(taken)
         out: list[tuple[str, str]] = []
         queue = list(taken)
+        mine = {(o["kind"], o["name"]) for o in self.store.list_project_objects(uid)}
 
-        def need(kind, name, why):
-            if (kind, name) in have:
+        def need(kind, name):
+            if not name or (kind, name) in have or (kind, name) in mine:
                 return
-            row = existing[kind].get(name)
-            if row is None:
-                return
-            if kind != "source" and row.get("owned_by") not in (None, uid, default):
-                raise ProjectError(f"{why} {kind} {name!r}, which belongs to another project "
-                                   f"({self._project_label(row['owned_by'])}); add or move it "
-                                   "first")
-            if kind != "source" and row.get("owned_by") == uid:
+            if existing[kind].get(name) is None:
                 return
             have.add((kind, name))
             out.append((kind, name))
@@ -595,58 +606,19 @@ class Engine:
             kind, name = queue.pop(0)
             row = existing[kind].get(name) or {}
             if kind == "agent":
-                need("trigger", row.get("trigger"), f"agent {name!r} runs on")
+                need("trigger", row.get("trigger"))
                 for srv in row.get("mcp_servers") or []:
-                    need("mcp_server", srv, f"agent {name!r} uses")
+                    need("mcp_server", srv)
             elif kind == "trigger":
-                for a in existing["agent"].values():
-                    if a.get("trigger") == name:
-                        need("agent", a["name"], f"trigger {name!r} wakes")
                 for src in row.get("sources") or []:
-                    need("source", src, f"trigger {name!r} reads")
+                    need("source", src)
         return out
 
     def _release_closure(self, uid: str, removed: list[PlannedObject], plan: list[PlannedObject],
                          current: dict) -> list[PlannedObject]:
-        """What a custom project's edit lets go of, whole: a released trigger takes this
-        project's agents on it along (an agent is always in its trigger's project). Refused,
-        naming both, when what stays needs what goes: an agent whose trigger stays, an MCP server
-        an agent that stays uses, a source a trigger that stays reads."""
-        staying = {(o.kind, o.name) for o in plan}
-        going = {(o.kind, o.name) for o in removed}
-        out = list(removed)
-        for o in removed:
-            if o.kind == "trigger":
-                for a in current["agent"].values():
-                    if (a.get("trigger") == o.name and a.get("owned_by") == uid
-                            and ("agent", a["name"]) not in going):
-                        if ("agent", a["name"]) in staying:
-                            raise ProjectError(f"agent {a['name']!r} stays but runs on trigger "
-                                               f"{o.name!r}; release both or keep both")
-                        going.add(("agent", a["name"]))
-                        out.append(PlannedObject("agent", f"agent:{a['name']}",
-                                                 {"name": a["name"]}))
-        for kind, name in sorted(going):
-            if kind == "agent":
-                trig = (current["agent"].get(name) or {}).get("trigger")
-                if ("trigger", trig) in staying:
-                    raise ProjectError(f"agent {name!r} runs on trigger {trig!r}, which stays in "
-                                       "this project; an agent is always in its trigger's project")
-            elif kind == "mcp_server":
-                users = [a["name"] for a in current["agent"].values()
-                         if name in (a.get("mcp_servers") or []) and ("agent", a["name"]) in staying]
-                if users:
-                    raise ProjectError(f"MCP server {name!r} is used by agent"
-                                       f"{'s' if len(users) != 1 else ''} {', '.join(users)}, "
-                                       "which stay in this project")
-            elif kind == "source":
-                users = [t["name"] for t in current["trigger"].values()
-                         if name in (t.get("sources") or []) and ("trigger", t["name"]) in staying]
-                if users:
-                    raise ProjectError(f"source {name!r} is read by trigger"
-                                       f"{'s' if len(users) != 1 else ''} {', '.join(users)}, "
-                                       "which stay in this project")
-        return out
+        """What a custom project's edit lets go of: exactly what it names. Parts are shared and
+        the wiring that used a released part goes with it (remove_from_project)."""
+        return list(removed)
 
     def _release(self, uid: str, objs: list[PlannedObject]) -> None:
         """Let go of objects; they stay exactly as they are and move to the default project (a
@@ -679,6 +651,7 @@ class Engine:
         default = self.default_id()
         reclaim = [o for o in plan if (o.kind, o.key) in existing and o.kind != "source"
                    and (row := current[o.kind].get(o.name)) is not None
+                   and uid not in self.store.projects_using(o.kind, o.name)
                    and row.get("owned_by") in (None, default)]
         added = added + reclaim
         removed = self._release_closure(uid, removed, plan, current)
@@ -686,7 +659,6 @@ class Engine:
         for o in added:
             if o.name not in current[o.kind]:
                 raise ProjectError(f"{o.kind} {o.name!r} does not exist")
-        self._check_ownership(uid, [o for o in added if o.kind != "source"], current)
         try:
             self._release(uid, removed)
             self._adopt(uid, added, self._existing_names())
@@ -697,27 +669,19 @@ class Engine:
             self.store.log_project(uid, "update_failed", _errtext(e))
             self._do_reload()
             raise
-        resume_agents = list(inst["params"].get("resume_agents") or [])
-        resume_triggers = list(inst["params"].get("resume_triggers") or [])
+        keep = {}
         if inst["status"] == "paused":
-            # additions join a paused project paused: triggers off, agents unsubscribed and
-            # remembered, so resume brings back exactly what was on. An agent that was already
-            # off when added stays off on resume: the user disabled it on its own page, and a
-            # project resume must not undo that (enable it there).
-            paused_now = {t["name"] for t in self.store.list_catalog_triggers() if t.get("paused")}
-            for o in added:
-                if o.kind == "trigger":
-                    if o.name not in paused_now:
-                        resume_triggers.append(o.name)
-                    self.store.set_trigger_paused(o.name, True)
-                elif o.kind == "agent" and self.store.subscription_by_url(agent_url(o.name)):
-                    self.store.remove_subscription_by_url(agent_url(o.name))
-                    resume_agents.append(o.name)
+            # additions join a paused project paused: their wiring here is off and remembered,
+            # so resume brings back exactly what was on
+            resume_wakes = [list(x) for x in inst["params"].get("resume_wakes") or []]
+            for w in self.store.list_wakes(project=uid):
+                if w["enabled"]:
+                    resume_wakes.append([w["trigger"], w["agent"]])
+                    self.store.set_wake(uid, w["trigger"], w["agent"], enabled=False)
             gone = {o.name for o in removed}
-            resume_agents = [a for a in resume_agents if a not in gone]
-            resume_triggers = [t for t in resume_triggers if t not in gone]
-        keep = ({"resume_agents": resume_agents, "resume_triggers": resume_triggers}
-                if inst["status"] == "paused" else {})
+            keep = {"resume_wakes": [x for x in resume_wakes if x[0] not in gone and x[1] not in gone],
+                    "resume_triggers": [t for t in inst["params"].get("resume_triggers") or []
+                                        if t not in gone]}
         # the adoption above may have pulled in what the objects need: the stored list is the
         # truth, the params only add the pause bookkeeping
         objects = (self.store.get_project(uid) or {}).get("params", {}).get("objects") \
@@ -745,8 +709,7 @@ class Engine:
                 if o.kind != kind:
                     continue
                 if kind == "agent":
-                    s.remove_subscription_by_url(agent_url(o.name))
-                    s.delete_catalog_agent(o.name)
+                    s.delete_catalog_agent(o.name)   # its wiring in every project goes with it
                 elif kind == "trigger":
                     s.delete_catalog_trigger(o.name)
                     s.remove_subscriptions_by_trigger(o.name)
@@ -782,7 +745,10 @@ def dependents(store, kind: str, name: str) -> list[dict]:
     trigger_names = [name] if kind == "trigger" else []
     if kind == "source":
         trigger_names = [t["name"] for t in triggers if name in (t.get("sources") or [])]
-    agent_names = [a["name"] for a in agents if a.get("trigger") in trigger_names]
+    # the agents any project's wiring wakes on those triggers, and those defined on them
+    woken = {w["agent"] for t in trigger_names for w in store.list_wakes(trigger=t)}
+    agent_names = [a["name"] for a in agents if a.get("trigger") in trigger_names
+                   or a["name"] in woken]
     for n in agent_names:
         add("agent", n)
     for n in trigger_names:
