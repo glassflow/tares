@@ -957,7 +957,9 @@ def validate_source_dict(s: dict) -> None:
     _validate_labels(s)
 
 
-_FILTER_OPS = {"eq", "neq", "contains", "gt", "lt", "gte", "lte"}
+# `in`: the value is a list, the label matches any of them (one GitHub source, several repos)
+_FILTER_OPS = {"eq", "neq", "contains", "gt", "lt", "gte", "lte", "in"}
+MAX_IN_VALUES = 100
 _FILTER_FIELD_RE = re.compile(r"^[A-Za-z0-9_.]+$")   # dots: raw payload fields (OTLP et al.)
 
 
@@ -982,6 +984,10 @@ def validate_filters(filters, owner: str) -> None:
             except (TypeError, ValueError):
                 raise CatalogError(
                     f"{owner}: filter op {f['op']!r} needs a numeric value")
+        if f["op"] == "in" and (not isinstance(f["value"], list) or not f["value"]
+                                or len(f["value"]) > MAX_IN_VALUES):
+            raise CatalogError(
+                f"{owner}: filter op 'in' needs a list of 1 to {MAX_IN_VALUES} values")
 
 
 MAX_TRIGGER_DESCRIPTION = 160

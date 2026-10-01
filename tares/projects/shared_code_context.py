@@ -7,9 +7,16 @@ context repo so it never goes stale. The context repo is the source of truth; th
 to it through GitHub's hosted MCP server, registered by the template with the same stored credential
 the sources use.
 
-Objects one instance owns (all names prefixed `ctx_<slug>_`): one `github` commits source per
-source repo, one trigger over all of them that fires on any new commit (batched per repo),
-one MCP server (GitHub, toolsets repos + pull_requests), one Tares agent subscribed to the trigger.
+What it creates depends on the credential, never on a setting the person picks:
+
+* a personal token: one `github` source per source repo (polled), one trigger over all of them.
+* a GitHub App: no sources. The App's one webhook source (every repo of every installation) is
+  used as it is, and the trigger narrows it to the source repos (`repo in [...]`). The App source
+  is a shared part of the cell; this project uses it, never owns it.
+
+Either way: one trigger (every commit to the default branch, or every merged pull request,
+batched per repo or per PR), one MCP server (GitHub, toolsets repos + pull_requests) and one Tares
+agent woken by the trigger; all names prefixed `ctx_<slug>_`.
 """
 from __future__ import annotations
 
@@ -24,23 +31,22 @@ MAX_REPOS = 50
 _REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 TRIGGERS = {
-    # only this one is offered today; "every merged PR" needs the github_webhook connector and
-    # "daily" needs scheduled triggers, so both stay out of PARAMS until they exist
     "every_commit": {"label": "every commit to the branch (batched per repo)",
                      "window": "5m", "cooldown": "5m"},
+    # pull request events come from the App's webhooks, or from a token source's PR polling
+    "every_merged_pr": {"label": "every merged pull request",
+                        "window": "5m", "cooldown": "5m"},
 }
 WRITE_MODES = ("pull_request", "commit_to_branch")
 LAYOUTS = ("existing", "per_repo")
 
 PROMPT = """You maintain the shared context repository `{context_repo}` (branch `{context_branch}`, \
 pages under `{context_dir}`) for the team. Its pages tell teammates and agents working in other repos \
-what each repository does and how it is used. Your input is the attached timeline of recent commits \
+what each repository does and how it is used. Your input is the attached timeline of recent {changes} \
 to `{repo_hint}`; the source repositories are: {source_repos}.
 
 Steps:
-1. For each commit in the timeline call `github__get_commit` on its repository and sha to see the \
-diff. If the diff comes back truncated, fetch the specific files you need with \
-`github__get_file_contents` at that sha instead of guessing.
+1. {read_step}
 2. Decide whether the change alters anything a teammate or an agent working in another repo must \
 know: public interfaces, APIs and contracts, config and environment variables, data schemas, \
 deployment or runtime behaviour, dependencies between repos, conventions. Ignore pure refactors, \
@@ -99,6 +105,21 @@ short sections with a purpose paragraph, how it is used, configuration, and a re
 with short shas.
 """
 
+# Step 1 of the prompt: how to read what changed, by what the timeline holds.
+READ_COMMITS = ("For each commit in the timeline call `github__get_commit` on its repository and "
+                "sha to see the diff. If the diff comes back truncated, fetch the specific files "
+                "you need with `github__get_file_contents` at that sha instead of guessing.")
+READ_PUSHES = ("Each event in the timeline is a push to a repository's default branch; its payload "
+               "lists the commits. Call `github__get_commit` on the repository and each commit's id "
+               "(at least the head commit) to see the diff. If a diff comes back truncated, fetch "
+               "the specific files you need with `github__get_file_contents` at that sha instead "
+               "of guessing.")
+READ_PRS = ("Each event in the timeline is a merged pull request (`repo`, `number` and `title` are "
+            "on the event). Call `github__get_pull_request` and `github__get_pull_request_files` on "
+            "its repository and number to see what it changed. If a patch comes back truncated, "
+            "fetch the specific files you need with `github__get_file_contents` at the merge commit "
+            "instead of guessing.")
+
 WRITE_PR = ("Write the changed pages with `github__create_or_update_file` on a branch named "
             "`tares/context-<repo-name>-<YYYYMMDD>` in `{context_repo}` (create the branch from "
             "`{context_branch}` with `github__create_branch` if it does not exist; if a pull request "
@@ -148,7 +169,8 @@ class SharedCodeContext(Template):
     PARAMS = {
         "credential": {"type": "string", "required": True, "label": "GitHub credential",
                        "help": "name of a stored GitHub credential (Settings > GitHub); read on the "
-                               "source repos, write on the context repo"},
+                               "source repos, write on the context repo. With the GitHub App, "
+                               "changes arrive as they happen and no source is created per repo"},
         "source_repos": {"type": "list", "required": True, "label": "Source repositories",
                          "help": "the repositories whose commits feed the context, as "
                                  "[{repo: owner/name, branch: main}] (branch optional: the repo's "
@@ -238,9 +260,22 @@ class SharedCodeContext(Template):
         return p
 
     def preflight(self, params: dict, store) -> None:
-        if store.get_github_credential(params["credential"]) is None:
+        """The credential must exist. For a GitHub App, record its webhook source in the params
+        (`app_source`), which plan() reads: the project then uses that one shared source instead of
+        creating a polled source per repo. Kept in the stored params so a later re-plan agrees."""
+        cred = store.get_github_credential(params["credential"])
+        if cred is None:
             raise ProjectError(f"GitHub credential {params['credential']!r} not found; add it "
                                "under Settings > GitHub first")
+        params.pop("app_source", None)
+        if cred.get("kind") in ("app", "app_broker"):
+            src = next((s["name"] for s in store.list_catalog_sources()
+                        if s["connector"] == "github_app"
+                        and (s.get("config") or {}).get("credential") == params["credential"]), None)
+            if src is None:
+                raise ProjectError(f"GitHub App {params['credential']!r} has no webhook source; "
+                                   "recreate it under Settings > GitHub")
+            params["app_source"] = src
 
     # ── plan ─────────────────────────────────────────────────────────────────
     def names(self, params: dict) -> dict:
@@ -255,22 +290,41 @@ class SharedCodeContext(Template):
         n = self.names(params)
         cred = params["credential"]
         objs: list[PlannedObject] = []
-        source_names = []
-        for item in params["source_repos"]:
-            repo = item["repo"]
-            name = self.source_name(params, repo)
-            source_names.append(name)
-            config = {"repo": repo, "credential": cred, "limit": 20,
-                      "labels": [{"name": "repo", "field": "repo", "primary": True},
-                                 {"name": "author", "field": "author"},
-                                 {"name": "branch", "field": "branch"}]}
-            if item.get("branch"):
-                config["branch"] = item["branch"]
-            objs.append(PlannedObject("source", f"source:{repo}", {
-                "name": name, "connector": "github", "poll": "60s", "config": config}))
+        repos = [item["repo"] for item in params["source_repos"]]
+        merged_prs = params["trigger"] == "every_merged_pr"
+        filters: list[dict] = []
+        if params.get("app_source"):
+            # the GitHub App: its one webhook source carries every repo; the trigger narrows it
+            source_names = [params["app_source"]]
+            filters = [{"field": "repo", "op": "in", "value": repos}]
+            if merged_prs:
+                filters += [{"field": "event_type", "op": "eq", "value": "pull_request"},
+                            {"field": "action", "op": "eq", "value": "merged"}]
+            else:
+                filters += [{"field": "event_type", "op": "eq", "value": "push"},
+                            {"field": "on_default_branch", "op": "eq", "value": "true"}]
+        else:
+            source_names = []
+            for item in params["source_repos"]:
+                repo = item["repo"]
+                name = self.source_name(params, repo)
+                source_names.append(name)
+                config = {"repo": repo, "credential": cred, "limit": 20,
+                          "labels": [{"name": "repo", "field": "repo", "primary": True},
+                                     {"name": "author", "field": "author"},
+                                     {"name": "branch", "field": "branch"}]}
+                if item.get("branch"):
+                    config["branch"] = item["branch"]
+                objs.append(PlannedObject("source", f"source:{repo}", {
+                    "name": name, "connector": "github", "poll": "60s", "config": config}))
+            # a token source polls pull requests too (TR-164): a merge is a pull_request event
+            filters = ([{"field": "event_type", "op": "eq", "value": "pull_request"},
+                        {"field": "action", "op": "eq", "value": "merged"}] if merged_prs
+                       else [{"field": "event_type", "op": "eq", "value": "commit"}])
         trig = TRIGGERS[params["trigger"]]
         objs.append(PlannedObject("trigger", "trigger", {
             "name": n["trigger"], "sources": source_names, "key_field": "repo",
+            "filters": filters,
             "condition": {"aggregate": "count", "predicate": "> 0", "window": trig["window"],
                           "group_by": ["key_value"]},
             "emit": {"kind": "code_change", "context_window": "30m"},
@@ -294,7 +348,14 @@ class SharedCodeContext(Template):
         per_repo = params.get("layout", "existing") == "per_repo"
         layout = (LAYOUT_PER_REPO if per_repo else LAYOUT_EXISTING).format(**fmt)
         templates = (TEMPLATES_PER_REPO if per_repo else TEMPLATES_EXISTING).format(**fmt)
+        if params.get("trigger") == "every_merged_pr":
+            read, changes = READ_PRS, "merged pull requests"
+        elif params.get("app_source"):
+            read, changes = READ_PUSHES, "pushes"
+        else:
+            read, changes = READ_COMMITS, "commits"
         return PROMPT.format(
+            read_step=read, changes=changes,
             repo_hint="one of the source repositories (the timeline says which)",
             source_repos=", ".join(f"`{r['repo']}`" for r in params["source_repos"]),
             write_instructions=write.format(**fmt), layout_instructions=layout,

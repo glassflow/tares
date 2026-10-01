@@ -277,6 +277,28 @@ class Engine:
         self.store.set_setting("template_trigger_descriptions_filled", "1")
         return n
 
+    def fill_github_commit_filters(self) -> int:
+        """Once, on the upgrade that taught `github` (token) sources to report pull requests:
+        every trigger reading only such sources and not filtering on `event_type` gets
+        `event_type = commit`, so it keeps meaning exactly what it meant (those sources used to
+        carry nothing but commits) instead of waking on pull requests too."""
+        if self.store.get_setting("github_commit_filters_filled"):
+            return 0
+        github = {s["name"] for s in self.store.list_catalog_sources() if s["connector"] == "github"}
+        n = 0
+        for t in self.store.list_catalog_triggers():
+            srcs = t.get("sources") or []
+            if not srcs or not set(srcs) <= github:
+                continue
+            if any(f.get("field") == "event_type" for f in t.get("filters") or []):
+                continue
+            self.store.set_trigger_filters(
+                t["name"], [{"field": "event_type", "op": "eq", "value": "commit"}]
+                + list(t.get("filters") or []))
+            n += 1
+        self.store.set_setting("github_commit_filters_filled", "1")
+        return n
+
     def pause(self, uid: str, sources: bool = False) -> dict:
         """The project's wiring stops: its agents are turned off here and remembered, so resume
         brings back exactly what was on. A trigger stops only when no other running project uses

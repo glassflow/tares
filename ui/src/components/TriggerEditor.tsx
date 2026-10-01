@@ -16,12 +16,24 @@ import type { ConnectorSpec, Source, Trigger, TriggerFilter } from "../types";
 // catalog schema), because that's what aggregates can actually compute over.
 
 const AGGREGATES = ["max", "min", "sum", "avg", "count", "any"];
-const OPS: TriggerFilter["op"][] = ["eq", "neq", "gt", "lt", "gte", "lte", "contains"];
+const OPS: TriggerFilter["op"][] = ["eq", "neq", "in", "gt", "lt", "gte", "lte", "contains"];
 const OP_LABELS: Record<string, string> = {
   eq: "equals", neq: "is not", gt: "greater than", lt: "less than",
-  gte: "at least", lte: "at most", contains: "contains",
+  gte: "at least", lte: "at most", contains: "contains", in: "is one of",
 };
 const NUMERIC_OPS = new Set(["gt", "lt", "gte", "lte"]);
+// What a GitHub source's events carry (the GitHub event contract), offered as filter values. A
+// token source polls commits and pull request state only; the App's webhooks carry everything.
+const GH_APP_VALUES: Record<string, string[]> = {
+  event_type: ["pull_request", "push", "pull_request_review", "pull_request_review_comment",
+               "issues", "issue_comment", "release", "workflow_run"],
+  action: ["opened", "synchronize", "merged", "closed", "reopened", "ready_for_review",
+           "submitted", "created", "published", "completed", "pushed"],
+};
+const GH_TOKEN_VALUES: Record<string, string[]> = {
+  event_type: ["commit", "pull_request"],
+  action: ["opened", "merged", "closed"],
+};
 
 export default function TriggerEditor({ initial, prefill, project, onSaved, onCancel }: {
   initial?: Trigger;            // absent = create
@@ -39,7 +51,8 @@ export default function TriggerEditor({ initial, prefill, project, onSaved, onCa
     cooldown: "5m",
   });
   const [fRows, setFRows] = useState(
-    (initial?.filters ?? []).map((f) => ({ field: f.field, op: f.op as string, value: String(f.value) })));
+    (initial?.filters ?? []).map((f) => ({ field: f.field, op: f.op as string,
+                                          value: Array.isArray(f.value) ? f.value.join(", ") : String(f.value) })));
   const [all, setAll] = useState<Source[]>([]);
   const [pick, setPick] = useState("");
   const [outside, setOutside] = useState(false);
@@ -57,6 +70,13 @@ export default function TriggerEditor({ initial, prefill, project, onSaved, onCa
   }, []);
 
   const srcTypes = useMemo(() => Object.fromEntries(all.map((s) => [s.name, s.connector])), [all]);
+  // GitHub sources selected: filter values come from the event contract, not free text
+  const ghValues = useMemo(() => {
+    const kinds = new Set(sources.map((s) => srcTypes[s]));
+    if (kinds.has("github_app")) return GH_APP_VALUES;
+    if (kinds.has("github")) return GH_TOKEN_VALUES;
+    return undefined;
+  }, [sources, srcTypes]);
   // with no project known (an older daemon), every source counts as the project's own
   const members = useMemo(() => all.filter((s) => !projectId || !s.projects || s.projects.includes(projectId))
     .map((s) => s.name), [all, projectId]);
@@ -89,7 +109,10 @@ export default function TriggerEditor({ initial, prefill, project, onSaved, onCa
       const raw = new Set<string>();
       for (const p of profiles) for (const f of p?.fields ?? []) raw.add(f.name);
       setLabelOpts((shared.length ? shared : [...union]).sort());
-      setFilterOpts([...[...union].sort(), ...[...raw].filter((n) => !union.has(n)).sort()]);
+      // GitHub events are told apart by event_type (a built-in column, not a label): offer it first
+      const github = sources.some((n) => ["github", "github_app"].includes(all.find((s) => s.name === n)?.connector ?? ""));
+      setFilterOpts([...(github ? ["event_type"] : []), ...[...union].sort(),
+                     ...[...raw].filter((n) => !union.has(n) && n !== "event_type").sort()]);
       const nums = new Set<string>();
       for (const d of descs) {
         for (const [fname, ftype] of Object.entries(d?.schema?.fields ?? {})) {
@@ -124,7 +147,8 @@ export default function TriggerEditor({ initial, prefill, project, onSaved, onCa
   const toSave = (): TriggerBody => {
     const filters: TriggerFilter[] = fRows.filter((r) => r.field.trim())
       .map((r) => ({ field: r.field.trim(), op: r.op as TriggerFilter["op"],
-                     value: NUMERIC_OPS.has(r.op) && r.value.trim() !== "" && !isNaN(Number(r.value))
+                     value: r.op === "in" ? r.value.split(",").map((v) => v.trim()).filter(Boolean)
+                       : NUMERIC_OPS.has(r.op) && r.value.trim() !== "" && !isNaN(Number(r.value))
                        ? Number(r.value) : r.value }));
     const condition = scheduled
       ? { every: t.condition.every, aggregate: "count", predicate: "> 0", window: t.condition.every!,
@@ -226,8 +250,15 @@ export default function TriggerEditor({ initial, prefill, project, onSaved, onCa
             <Picker value={r.op} style={{ maxWidth: 150 }} ariaLabel="filter operator"
                     options={OPS} labels={OP_LABELS}
                     onChange={(v) => setFRows(fRows.map((x, j) => j === i ? { ...x, op: v } : x))} />
-            <input type="text" className="mono" style={{ maxWidth: 180 }} placeholder="value" value={r.value}
-                   onChange={(e) => setFRows(fRows.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} />
+            {ghValues?.[r.field.trim()] && r.op !== "in" ? (
+              <Combo value={r.value} options={ghValues[r.field.trim()]} placeholder="value"
+                     style={{ maxWidth: 180, flex: 1 }}
+                     onChange={(v) => setFRows(fRows.map((x, j) => j === i ? { ...x, value: v } : x))} />
+            ) : (
+              <input type="text" className="mono" style={{ maxWidth: 180 }}
+                     placeholder={r.op === "in" ? "a, b, c" : "value"} value={r.value}
+                     onChange={(e) => setFRows(fRows.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} />
+            )}
             <button type="button" className="danger" aria-label="remove filter"
                     onClick={() => setFRows(fRows.filter((_, j) => j !== i))}>×</button>
           </div>

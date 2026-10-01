@@ -87,6 +87,9 @@ LOGIN_URL = os.getenv("TARES_LOGIN_URL", "").strip()
 # out to it so a user never has to know the control plane exists to find them. Unset for
 # self-host: no link. Public, non-secret, surfaced on /health next to login_url.
 WORKSPACE_URL = os.getenv("TARES_WORKSPACE_URL", "").strip()
+# Cloud only: where "Connect GitHub" sends the browser (the control plane's install flow for the
+# GlassFlow-owned App, TR-166). Set, Settings > GitHub offers it instead of "Create GitHub App".
+GITHUB_CONNECT_URL = os.getenv("TARES_GITHUB_CONNECT_URL", "").strip()
 # The Anthropic key for the in-app Ask agent (and Tares agents) is resolved at request time via
 # resolve_anthropic_headers(store): Resolve headers from the console-stored key,
 # then ANTHROPIC_AUTH_TOKEN, then ANTHROPIC_API_KEY.
@@ -540,7 +543,10 @@ def make_app() -> FastAPI:
     # projects made from a template before goals existed get the template's goal (once)
     projects.fill_template_goals()
     # and the triggers a template planned get its plain-words description (once)
-    if projects.fill_template_trigger_descriptions():
+    filled = projects.fill_template_trigger_descriptions()
+    # triggers on GitHub token sources keep meaning "a commit" now that those report PRs (once)
+    filled += projects.fill_github_commit_filters()
+    if filled:
         # re-read the catalog only: nothing runs yet (the sources start in lifespan), and a
         # reload that restarts sources needs a running event loop (it crashed 1.38.0-rc.2's first
         # start on a cell with template projects)
@@ -810,6 +816,8 @@ def make_app() -> FastAPI:
             body["login_url"] = LOGIN_URL
         if WORKSPACE_URL:
             body["workspace_url"] = WORKSPACE_URL
+        if GITHUB_CONNECT_URL:
+            body["github_connect_url"] = GITHUB_CONNECT_URL
         return body
 
     def _resolve_project(ref: str, default: bool = True) -> str | None:

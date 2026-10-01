@@ -60,7 +60,7 @@ export default function Landing({ templates, projects }: { templates: Template[]
   // what the screen heard: installed connectors the words point at, and where the finding goes
   const heard = useMemo(() => {
     const out: string[] = [];
-    for (const [re, key] of WORDS) if (re.test(goal) && specs[key] && !specs[key].internal && !out.includes(key)) out.push(key);
+    for (const [re, key] of WORDS) if (re.test(goal) && specs[key] && !specs[key].internal && !specs[key].credential_managed && !out.includes(key)) out.push(key);
     return out;
   }, [goal, specs]);
   const delivery = useMemo(() => DELIVERY.filter(([re]) => re.test(goal)).map(([, d]) => d), [goal]);

@@ -12,7 +12,7 @@ against a token source keeps working when the person switches to the App.
   one sequence); everything else keys `owner/repo`.
 * labels: `repo`, `action` (a closed PR that merged reads `merged`), `number`, `author`, `branch`,
   `base`, `state`, `draft`, `sha`, `url`, `title`, `conclusion`, `release_tag`, `workflow`,
-  `commits`. A label with no value for an event is simply absent.
+  `commits`, `on_default_branch`. A label with no value for an event is simply absent.
 """
 from __future__ import annotations
 
@@ -41,6 +41,7 @@ CONTRACT_LABELS = [
     {"name": "release_tag", "help": "release tag, e.g. v1.7.1"},
     {"name": "workflow", "help": "workflow name"},
     {"name": "commits", "help": "commits in a push"},
+    {"name": "on_default_branch", "help": "pushes: true when pushed to the repo's default branch"},
 ]
 
 
@@ -154,9 +155,11 @@ def build(event: str, payload: dict) -> dict | None:
         head = p.get("head_commit") or {}
         branch = _ref_branch(p.get("ref", ""))
         who = _login(p.get("pusher")) or (p.get("pusher") or {}).get("name") or sender
+        default = (p.get("repository") or {}).get("default_branch") or ""
         labels = _clean({"repo": repo, "action": "pushed", "author": who, "branch": branch,
                          "sha": p.get("after"), "url": p.get("compare"),
-                         "commits": len(commits)})
+                         "commits": len(commits),
+                         "on_default_branch": (branch == default) if default else None})
         n = len(commits)
         text = (f"push {n} commit{'s' if n != 1 else ''} to {branch} by {who}: "
                 f"{_short(head.get('message', ''))}")

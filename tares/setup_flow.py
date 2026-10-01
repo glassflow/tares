@@ -484,7 +484,9 @@ def needs_for(connector: str, config: dict | None) -> str:
     if spec.get("mode") == "push":
         return "send"
     secrets = [f["name"] for f in spec.get("fields") or [] if f.get("secret")]
-    if secrets and not any((config or {}).get(n) for n in secrets):
+    # a stored credential named on the source (GitHub's `credential`) stands in for its secret
+    if secrets and not (config or {}).get("credential") \
+            and not any((config or {}).get(n) for n in secrets):
         return "credential"
     return "none"
 

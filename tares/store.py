@@ -484,6 +484,12 @@ def _filter_sql(filters) -> tuple[str, list]:
         if op == "contains":
             clauses.append(f"{expr} ILIKE ?")
             params.append(f"%{value}%")
+        elif op == "in":
+            values = [str(v) for v in (value if isinstance(value, list) else [value])]
+            if not values:
+                raise ValueError("filter op 'in' needs at least one value")
+            clauses.append(f"{expr} IN ({', '.join('?' * len(values))})")
+            params.extend(values)
         elif op in _FILTER_OPS:
             clauses.append(f"{expr} {_FILTER_OPS[op]} ?")
             params.append(float(value) if numeric else str(value))
@@ -1404,6 +1410,11 @@ class Store:
                  key_field or "", json.dumps(condition), json.dumps(emit), cooldown, ts, ts,
                  description or None],
             )
+
+    def set_trigger_filters(self, name: str, filters: list) -> None:
+        with self._lock:
+            self.con.execute("UPDATE catalog_triggers SET filters = ? WHERE name = ?",
+                             [json.dumps(filters or []), name])
 
     def set_trigger_description(self, name: str, description: str | None) -> None:
         with self._lock:

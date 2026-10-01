@@ -122,7 +122,12 @@ export function agoWords(ts: string | null | undefined): string | null {
 }
 
 export const offeredConnector = (id: string, spec: ConnectorSpec) =>
-  !spec.internal && id !== "claude_code" && id !== "memory";
+  !spec.internal && !spec.credential_managed && id !== "claude_code" && id !== "memory";
+
+/** A source counts as a kind's when its connector is that kind, or is the managed variant of it:
+ *  the GitHub App source (`github_app`) is a GitHub source, so the person sees one GitHub. */
+export const ofSameKind = (connector: string, kind: string) =>
+  connector === kind || (kind === "github" && connector === "github_app");
 
 /** What a new source needs from the person: sending to it (push), a credential (a polled source
  *  whose connector takes a secret and has none yet), or nothing. The backend's needs_for. */
@@ -130,7 +135,8 @@ export function needsFor(spec: ConnectorSpec | undefined, config: Record<string,
   if (!spec) return "none";
   if (spec.mode === "push") return "send";
   const secrets = spec.fields.filter((f) => f.secret).map((f) => f.name);
-  return secrets.length && !secrets.some((n) => !!config[n]) ? "credential" : "none";
+  // a stored credential named on the source (GitHub's `credential`) stands in for its secret
+  return secrets.length && !config.credential && !secrets.some((n) => !!config[n]) ? "credential" : "none";
 }
 
 /** What the plan offers to pick from, read from the cell once: its sources, connectors, MCP

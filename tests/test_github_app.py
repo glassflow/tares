@@ -266,6 +266,28 @@ async def unit():
     wf = gh.build("workflow_run", fixture("workflow_run.json"))
     check("workflow run: conclusion label and failed text",
           wf["labels"].get("conclusion") == "failure" and "failed" in wf["text"], wf["text"])
+    push = gh.build("push", fixture("push.json"))
+    check("push to the default branch says so", push["labels"].get("on_default_branch") == "true",
+          str(push["labels"]))
+
+    print("== the `in` filter and GitHub trigger sentences ==")
+    from tares.store import _filter_sql
+    from tares.config import CatalogError, validate_filters
+    sql, params = _filter_sql([{"field": "repo", "op": "in", "value": ["acme/app", "acme/lib"]}])
+    check("in -> IN (?, ?) on the label", "IN (?, ?)" in sql and params == ["acme/app", "acme/lib"],
+          f"{sql} {params}")
+    try:
+        validate_filters([{"field": "repo", "op": "in", "value": "acme/app"}], "trigger 't'")
+        check("in with a non-list value refused", False)
+    except CatalogError:
+        check("in with a non-list value refused", True)
+    from tares import goal
+    w = goal._github_event_words([{"field": "event_type", "op": "eq", "value": "pull_request"},
+                                  {"field": "action", "op": "eq", "value": "merged"},
+                                  {"field": "repo", "op": "in", "value": ["acme/app", "acme/lib"]}])
+    check("a GitHub trigger is said by its event",
+          w[0] == "a pull request is merged" and goal.filters_words(w[1])
+          == " matching repo one of acme/app, acme/lib", str(w))
 
 
 async def daemon():
@@ -474,6 +496,29 @@ async def daemon():
                   polled.event_type == hook["event_type"] and polled.key_value == hook["key"]
                   and all(str(polled.labels.get(k)) == str(hook["labels"].get(k)) for k in same),
                   f"{polled.labels} vs {hook['labels']}")
+
+            print("== upgrade: triggers on token sources keep meaning a commit ==")
+            r = await cx.post("/api/sources", json={"name": "old_repo", "connector": "github",
+                                                    "poll": "60s", "config": {"repo": "acme/app",
+                                                                              "credential": "pat"}})
+            check("token source created", r.status_code in (200, 201), r.text)
+            for tname, filters in (("old_any", []), ("old_pr", [{"field": "event_type", "op": "eq",
+                                                                  "value": "pull_request"}])):
+                r = await cx.post("/api/triggers", json={
+                    "name": tname, "sources": ["old_repo"], "filters": filters,
+                    "condition": {"aggregate": "count", "predicate": "> 0", "window": "5m"}})
+            store.set_setting("github_commit_filters_filled", None)
+            from tares.projects import Engine
+            n = Engine(store).fill_github_commit_filters()
+            trigs = {t["name"]: t for t in store.list_catalog_triggers()}
+            check("an unfiltered trigger on a token source gets event_type = commit",
+                  trigs["old_any"]["filters"] == [{"field": "event_type", "op": "eq",
+                                                   "value": "commit"}], str(trigs["old_any"]))
+            check("a trigger already naming its event type is left alone; App triggers too",
+                  trigs["old_pr"]["filters"][0]["value"] == "pull_request"
+                  and trigs["pr_merged"]["filters"][0]["value"] == "pull_request" and n == 1,
+                  f"{n} {trigs['old_pr']['filters']}")
+            check("the upgrade runs once", Engine(store).fill_github_commit_filters() == 0)
 
 
 async def main():
