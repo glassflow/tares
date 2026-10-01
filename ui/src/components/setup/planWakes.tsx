@@ -47,7 +47,10 @@ function WakeSentence({ w, base, onKnob, disabled }: {
                    onChange={(v) => { if (!disabled) onKnob(k.id, v); }} />
   );
   const waitLine = wait && (
-    <p className="su-wake su-wake-then">Then waits {stepper(wait)} minutes before waking again.</p>
+    <p className="su-wake-then">
+      <span className="su-wake-then-lead">Then waits before waking again</span>
+      <span className="su-knob-row">{stepper(wait)} <span>minutes</span></span>
+    </p>
   );
   if (parts) {
     return (

@@ -1693,7 +1693,13 @@ pre.payload {
 .su-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .su-wake { font-weight: 600; line-height: 2.4; overflow-wrap: anywhere; }
 .su-wake .su-num { margin: 0 4px; vertical-align: middle; }
-.su-knob-row { display: inline-flex; align-items: center; gap: 8px; }
+.su-knob-row { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; max-width: 100%; }
+/* the cooldown: its words above the stepper, so a narrow card never breaks the sentence mid-way */
+.su-wake-then { display: flex; flex-direction: column; gap: 6px; font-weight: 600; }
+.su-wake-then-lead { color: var(--ink-soft); font-weight: 500; }
+/* nothing in a card is wider than the card: a long name (an internal source name) wraps */
+.su-item > * { max-width: 100%; }
+.su-item .help { overflow-wrap: anywhere; }
 
 .su-num { display: inline-flex; align-items: center; gap: 4px; }
 .su-num button { width: 36px; height: 36px; padding: 0; font-size: 16px; background: var(--input-bg); }
