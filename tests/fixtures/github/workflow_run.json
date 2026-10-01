@@ -1,0 +1,34 @@
+{
+ "action": "completed",
+ "workflow_run": {
+  "name": "CI",
+  "conclusion": "failure",
+  "status": "completed",
+  "head_branch": "main",
+  "head_sha": "abc999",
+  "html_url": "https://github.com/acme/app/actions/runs/1",
+  "actor": {
+   "login": "alice"
+  },
+  "updated_at": "2026-10-01T10:05:00Z"
+ },
+ "repository": {
+  "id": 1,
+  "full_name": "acme/app",
+  "name": "app",
+  "owner": {
+   "login": "acme"
+  },
+  "private": true,
+  "html_url": "https://github.com/acme/app",
+  "default_branch": "main"
+ },
+ "installation": {
+  "id": 101,
+  "node_id": "x"
+ },
+ "sender": {
+  "login": "alice",
+  "type": "User"
+ }
+}

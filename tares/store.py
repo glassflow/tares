@@ -297,6 +297,8 @@ CREATE TABLE IF NOT EXISTS skills (
 _MIGRATIONS = [
     "ALTER TABLE events ADD COLUMN IF NOT EXISTS labels JSON",
     "ALTER TABLE catalog_sources ADD COLUMN IF NOT EXISTS ingest_key TEXT",
+    # a GitHub App or broker credential's fields (app id, key, installations); token kind: empty
+    "ALTER TABLE github_credentials ADD COLUMN IF NOT EXISTS config JSON",
     "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS created_by TEXT",
     # No DEFAULT here on purpose: DuckDB re-applies an ADD COLUMN … DEFAULT on every boot even when
     # the column already exists, which would reset paused=TRUE back to FALSE each restart. Existing
@@ -1283,8 +1285,10 @@ class Store:
         return r[0] if r else None
 
     def delete_cursor(self, source: str) -> None:
+        # a source may keep secondary cursors as `<source>#<what>` (GitHub: `#prs`); they go too
         with self._lock:
-            self.con.execute("DELETE FROM cursors WHERE source = ?", [source])
+            self.con.execute("DELETE FROM cursors WHERE source = ? OR starts_with(source, ?)",
+                             [source, source + "#"])
 
     def set_cursor(self, source: str, cursor: str) -> None:
         with self._lock:
@@ -2558,30 +2562,56 @@ class Store:
                 "ORDER BY logged_at DESC LIMIT ?", [uid, limit]).fetchall()
         return [{"at": r[0], "action": r[1], "detail": r[2]} for r in rows]
     # ── GitHub credentials: a token stored once, referenced by sources and MCP servers ──
-    # The token is held verbatim like every other connector secret; redaction is the API's job.
+    # The token (and an App's private key) is held verbatim like every other connector secret;
+    # redaction is the API's job. `config` holds the kind-specific fields: for `app` the app id,
+    # private key, webhook secret and installations; for `app_broker` the broker URL and secret.
     def list_github_credentials(self) -> list[dict]:
         with self._lock:
             rows = self.con.execute(
-                "SELECT name, kind, token, api_url, account, created_at, updated_at "
+                "SELECT name, kind, token, api_url, account, created_at, updated_at, config "
                 "FROM github_credentials ORDER BY name").fetchall()
-        return [{"name": r[0], "kind": r[1] or "token", "token": r[2] or "",
-                 "api_url": r[3] or "", "account": r[4] or "",
-                 "created_at": r[5], "updated_at": r[6]} for r in rows]
+        out = []
+        for r in rows:
+            try:
+                cfg = json.loads(r[7]) if r[7] else {}
+            except (TypeError, ValueError):
+                cfg = {}
+            out.append({"name": r[0], "kind": r[1] or "token", "token": r[2] or "",
+                        "api_url": r[3] or "", "account": r[4] or "",
+                        "created_at": r[5], "updated_at": r[6],
+                        "config": cfg if isinstance(cfg, dict) else {}})
+        return out
 
     def get_github_credential(self, name: str) -> dict | None:
         return next((c for c in self.list_github_credentials() if c["name"] == name), None)
 
     def upsert_github_credential(self, name: str, token: str, kind: str = "token",
-                                 api_url: str = "", account: str = "") -> None:
+                                 api_url: str = "", account: str = "",
+                                 config: dict | None = None) -> None:
+        """Create or replace a credential. `config` None keeps the stored one (a token rotation
+        does not wipe an App's installations); pass {} to clear it."""
         ts = now_utc()
         with self._lock:
+            if config is None:
+                row = self.con.execute("SELECT config FROM github_credentials WHERE name = ?",
+                                       [name]).fetchone()
+                cfg_json = row[0] if row and row[0] else None
+            else:
+                cfg_json = json.dumps(config) if config else None
             self.con.execute(
                 "INSERT INTO github_credentials (name, kind, token, api_url, account, "
-                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "created_at, updated_at, config) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (name) DO UPDATE SET kind = excluded.kind, token = excluded.token, "
                 "api_url = excluded.api_url, account = excluded.account, "
-                "updated_at = excluded.updated_at",
-                [name, kind, token or "", api_url or "", account or "", ts, ts])
+                "updated_at = excluded.updated_at, config = excluded.config",
+                [name, kind, token or "", api_url or "", account or "", ts, ts, cfg_json])
+
+    def update_github_credential_config(self, name: str, config: dict) -> None:
+        """Replace only the kind-specific fields (an installation added or removed by a webhook)."""
+        with self._lock:
+            self.con.execute(
+                "UPDATE github_credentials SET config = ?, updated_at = ? WHERE name = ?",
+                [json.dumps(config) if config else None, now_utc(), name])
 
     def delete_github_credential(self, name: str) -> None:
         with self._lock:

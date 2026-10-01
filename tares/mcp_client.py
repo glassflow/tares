@@ -29,22 +29,21 @@ def _headers(server: dict) -> dict:
     return out
 
 
-def resolve_servers(store, servers: list[dict]) -> list[dict]:
+async def resolve_servers(store, servers: list[dict]) -> list[dict]:
     """Copies of the server rows with `auth_value: credential:github/<name>` replaced by
-    `Bearer <token>` from the stored credential, resolved now so a rotated token is used on the
+    `Bearer <token>` from the stored credential, resolved now so a rotated token (or, for a GitHub
+    App, a freshly minted installation token; a run is far shorter than its hour) is used on the
     next connect. An unknown credential leaves the value empty and the connect fails with a
     named reason (a down or unauthenticated server is skipped by the run, not fatal)."""
-    from .github_credentials import credential_name, is_credential_ref, resolve_github_token
+    from .github_credentials import get_token, is_credential_ref
     out = []
     for s in servers:
         s = dict(s)
         if is_credential_ref(s.get("auth_value")):
-            token = resolve_github_token(store, s["auth_value"])
-            if token:
-                s["auth_value"] = f"Bearer {token}"
-            else:
-                s["_auth_error"] = (f"GitHub credential {credential_name(s['auth_value'])!r} "
-                                    "not found (Settings > GitHub)")
+            try:
+                s["auth_value"] = f"Bearer {await get_token(store, s['auth_value'])}"
+            except ValueError as e:
+                s["_auth_error"] = str(e)
                 s["auth_value"] = ""
         out.append(s)
     return out

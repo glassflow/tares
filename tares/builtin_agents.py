@@ -966,8 +966,8 @@ class AgentRunner:
         # must not lose the run.
         from .mcp_client import RemoteToolbox, resolve_servers
         selected = set(agent.get("mcp_servers") or [])
-        servers = resolve_servers(self.store, [m for m in self.store.list_mcp_servers()
-                                               if m["name"] in selected])
+        servers = await resolve_servers(self.store, [m for m in self.store.list_mcp_servers()
+                                                     if m["name"] in selected])
         async with RemoteToolbox(servers) as toolbox:
             for failure in toolbox.failures:
                 print(f"[agent {agent['name']}] mcp connect failed; {failure}")
