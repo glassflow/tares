@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 
 import { api } from "../../api";
-import { Picker } from "../bits";
+import { InternalName, Picker } from "../bits";
 import { SkillEditor } from "../SkillsPanel";
 import type { Plan, PlanTool, SkillSummary } from "../../types";
 import { Switch, errText, parseSkillMd } from "./common";
 import { EditorFrame, ItemActions, Problems } from "./planBits";
-import { newKey, toolGroups } from "./planEdit";
+import { newKey, toolGroups, toolTitle } from "./planEdit";
 import type { CardCtx } from "./plan";
 
 // Card 4, Know-how: the skills the agents follow, each switched on or off, edited, removed;
@@ -188,16 +188,19 @@ export function ToolsSection({ ctx }: { ctx: CardCtx }) {
   return (
     <section className="su-tools" aria-labelledby="su-tools-h">
       <h2 id="su-tools-h" className="su-h2">Tools the agents can use</h2>
-      <p className="help">Outside services the agents can call, through MCP. Each stays off until you turn it on.</p>
+      <p className="help">Outside services the agents can call, through MCP. A new one stays off until you turn it on.</p>
       {plan.tools.length === 0 && <p className="help">None in the plan.</p>}
       {plan.tools.length > 0 && (
         <ul className="su-tool-list">
           {plan.tools.map((t) => (
             <li key={t.key} className="su-tool">
-              <Switch checked={t.enabled} onChange={(on) => setTool(t.key, { enabled: on })} disabled={busy}>
-                <span className="su-item-what mono">{t.name}</span>
-              </Switch>
-              {t.existing && <span className="help">Already on Tares, used as it is.</span>}
+              {t.existing
+                ? <span className="su-item-what">{toolTitle(t.url).title}</span>
+                : <Switch checked={t.enabled} onChange={(on) => setTool(t.key, { enabled: on })} disabled={busy}>
+                    <span className="su-item-what">{t.url ? toolTitle(t.url).title : t.name}</span>
+                  </Switch>}
+              <InternalName name={t.name} />
+              {t.existing && <span className="help">Already set up on Tares, so it is on. Remove it if the agents should not use it.</span>}
               {t.why && <span>{whyText(t.why)}</span>}
               {t.can_act && <span className="su-warn">It can make changes, not only read. Turn it on only if the agents should act.</span>}
               {t.enabled && !t.url && <span className="help">You add its address in the next step.</span>}

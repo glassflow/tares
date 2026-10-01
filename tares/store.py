@@ -363,6 +363,10 @@ _MIGRATIONS = [
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS skills JSON",
     # TR-334: [{verdict, agent, cooldown}], the agents this one hands a finding to by verdict
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS handoffs JSON",
+    # how a run ends: always with the conclude tool (`concludes`), and the verdicts it may give,
+    # [{verdict, when}], the only ones the tool accepts when there are any
+    "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS concludes BOOLEAN",
+    "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS verdicts JSON",
     # Which key paid for a ledger row ("env:ANTHROPIC_API_KEY" | "console") — the boundary a
     # hosted trial's enforcement counts against. Rows from before attribution stay NULL (unknown).
     "ALTER TABLE model_usage ADD COLUMN IF NOT EXISTS key_source TEXT",
@@ -1386,6 +1390,7 @@ class Store:
     def delete_catalog_source(self, name: str) -> None:
         with self._lock:
             self.con.execute("DELETE FROM catalog_sources WHERE name = ?", [name])
+            self._forget_part("source", name)
 
     def set_source_paused(self, name: str, paused: bool) -> None:
         with self._lock:
@@ -1450,11 +1455,20 @@ class Store:
                 [paused, now_utc(), name],
             )
 
-    def delete_catalog_trigger(self, name: str) -> None:
+    def delete_catalog_trigger(self, name: str) -> list[str]:
+        """Delete a trigger: what it woke stops being woken by it, it leaves every project's list
+        of parts, and an agent that had it as its own trigger keeps going without one (a handoff
+        still starts it). Returns those agents."""
         with self._lock:
             self.con.execute("DELETE FROM catalog_triggers WHERE name = ?", [name])
             self.con.execute("DELETE FROM project_wiring WHERE kind = 'wake' AND trigger = ?",
                              [name])
+            self._forget_part("trigger", name)
+            agents = [r[0] for r in self.con.execute(
+                "SELECT name FROM catalog_agents WHERE trigger = ?", [name]).fetchall()]
+            self.con.execute("UPDATE catalog_agents SET trigger = '', updated_at = ? "
+                             "WHERE trigger = ?", [now_utc(), name])
+        return agents
 
     def clear_catalog(self) -> None:
         with self._lock:
@@ -1475,17 +1489,20 @@ class Store:
                              webhook_key_label: str | None = None,
                              provider: str | None = None,
                              daily_cap: int | None = None,
-                             handoffs: list[dict] | None = None) -> None:
-        # handoffs: None keeps what is stored (a caller that does not know about them, such as a
-        # template re-plan, must not wipe them); [] clears
+                             handoffs: list[dict] | None = None,
+                             concludes: bool | None = None,
+                             verdicts: list[dict] | None = None) -> None:
+        # handoffs, concludes, verdicts: None keeps what is stored (a caller that does not know
+        # about them, such as a template re-plan, must not wipe them); [] / False clears
         ts = now_utc()
         with self._lock:
             self.con.execute(
                 "INSERT INTO catalog_agents "
                 "(name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, max_rounds, budget_usd, "
-                "webhook_key_label, provider, daily_cap, handoffs, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "webhook_key_label, provider, daily_cap, handoffs, concludes, verdicts, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (name) DO UPDATE SET trigger = excluded.trigger, "
                 "prompt = excluded.prompt, slack_webhook = excluded.slack_webhook, "
                 "model = excluded.model, slack_channel = excluded.slack_channel, "
@@ -1495,12 +1512,16 @@ class Store:
                 "webhook_key_label = excluded.webhook_key_label, "
                 "provider = excluded.provider, daily_cap = excluded.daily_cap, "
                 "handoffs = COALESCE(excluded.handoffs, catalog_agents.handoffs), "
+                "concludes = COALESCE(excluded.concludes, catalog_agents.concludes), "
+                "verdicts = COALESCE(excluded.verdicts, catalog_agents.verdicts), "
                 "updated_at = excluded.updated_at",
                 [name, trigger, prompt, slack_webhook or "", model or "",
                  slack_channel or "", webhook_url or "", webhook_token or "",
                  json.dumps(mcp_servers or []), max_rounds, budget_usd,
                  webhook_key_label or "", provider or "", daily_cap,
-                 None if handoffs is None else json.dumps(handoffs), ts, ts],
+                 None if handoffs is None else json.dumps(handoffs),
+                 None if concludes is None else bool(concludes),
+                 None if verdicts is None else json.dumps(verdicts), ts, ts],
             )
             # the agent's trigger and handoffs are the wiring of the project that made it
             # (P-TR-216); one not placed yet is wired when it is (_wire_owner)
@@ -1521,7 +1542,12 @@ class Store:
         """The agent's own trigger and handoffs as `project`'s wiring: the project's wake row for
         the agent follows the trigger (keeping on/off), handoffs (None: keep) replace the
         project's. Called with the lock held."""
-        if trigger:
+        if trigger == "":
+            # no trigger of its own any more: nothing wakes it in this project (a handoff still
+            # starts it). None means "leave the wake-up as it is".
+            self.con.execute("DELETE FROM project_wiring WHERE kind = 'wake' AND project = ? "
+                             "AND agent = ?", [project, name])
+        elif trigger:
             rows = self.con.execute(
                 "SELECT trigger, enabled FROM project_wiring WHERE kind = 'wake' AND project = ? "
                 "AND agent = ?", [project, name]).fetchall()
@@ -1559,7 +1585,7 @@ class Store:
             rows = self.con.execute(
                 "SELECT name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, updated_at, max_rounds, budget_usd, owned_by, customized, "
-                "webhook_key_label, provider, daily_cap, handoffs "
+                "webhook_key_label, provider, daily_cap, handoffs, concludes, verdicts "
                 "FROM catalog_agents ORDER BY name"
             ).fetchall()
             wiring = self.con.execute(
@@ -1588,6 +1614,7 @@ class Store:
                 "webhook_key_label": r[14] or "", "provider": r[15] or "", "daily_cap": r[16],
                 "handoffs": hands.get((where, r[0]), [] if w or (where, r[0]) in hands
                                       else (json.loads(r[17]) if r[17] else [])),
+                "concludes": bool(r[18]), "verdicts": json.loads(r[19]) if r[19] else [],
                 "enabled": bool(on)})
         return out
 
@@ -1601,6 +1628,7 @@ class Store:
             self.con.execute("DELETE FROM project_wiring WHERE agent = ? OR from_agent = ?",
                              [name, name])
             self.con.execute("DELETE FROM agent_runs WHERE agent = ?", [name])
+            self._forget_part("agent", name)
             # a handoff to the agent goes with it (TR-334): the agents that handed off to it
             # keep their other handoffs
             rows = self.con.execute("SELECT name, handoffs FROM catalog_agents "
@@ -2024,8 +2052,18 @@ class Store:
                  ts, ts])
 
     def delete_mcp_server(self, name: str) -> None:
+        """Delete an MCP server: it leaves every project's list of parts and every agent's
+        tools, so no agent is left naming a server that is gone."""
         with self._lock:
             self.con.execute("DELETE FROM mcp_servers WHERE name = ?", [name])
+            self._forget_part("mcp_server", name)
+            for agent, raw in self.con.execute(
+                    "SELECT name, mcp_servers FROM catalog_agents "
+                    "WHERE mcp_servers IS NOT NULL").fetchall():
+                listed = json.loads(raw) if raw else []
+                if name in listed:
+                    self.con.execute("UPDATE catalog_agents SET mcp_servers = ? WHERE name = ?",
+                                     [json.dumps([x for x in listed if x != name]), agent])
 
     # ── projects (templates instantiated with params; they own ordinary catalog objects) ──
     _OWNED_TABLES = {"source": "catalog_sources",
@@ -2397,6 +2435,12 @@ class Store:
                 self._custom_objects(uid, lambda objs: [
                     o for o in objs if not (o.get("kind") == kind and o.get("name") == name)])
 
+    def _forget_part(self, kind: str, name: str) -> None:
+        """A part deleted from the cell leaves every project's list of parts: deleting it was
+        the choice, not something to repair. Called with the lock held."""
+        self._drop_rows(kind, name, set(self._rows_for(kind, name))
+                        | {u for u, r in self._recipes().items() if r == "custom"})
+
     def _rows_for(self, kind: str, name: str) -> list[str]:
         return [r[0] for r in self.con.execute(
             "SELECT DISTINCT usecase_id FROM usecase_objects WHERE kind = ? AND name = ?",
@@ -2513,6 +2557,19 @@ class Store:
             if recipe == "custom":
                 self._custom_objects(uid, lambda objs: [o for o in objs
                                                         if o.get("kind") != "view"])
+
+        # a deleted part is gone from every project (deleting it was the choice), and an agent
+        # whose trigger was deleted keeps going without one; this also mends cells where a delete
+        # happened before deletes did both
+        self.con.execute("UPDATE catalog_agents SET trigger = '' WHERE trigger IS NULL OR "
+                         "(trigger <> '' AND trigger NOT IN (SELECT name FROM catalog_triggers))")
+        for kind, table in self._OWNED_TABLES.items():
+            gone = [r[0] for r in self.con.execute(
+                f"SELECT DISTINCT name FROM usecase_objects WHERE kind = ? "
+                f"AND name NOT IN (SELECT name FROM {table})", [kind]).fetchall()]
+            for name in gone:
+                self._drop_rows(kind, name, set(self._rows_for(kind, name))
+                                | {u for u, r in recipes.items() if r == "custom"})
 
         def valid(owner):
             return owner if owner in recipes else None

@@ -140,7 +140,7 @@ export function TriggerView({ ctx, name }: { ctx: Ctx; name: string }) {
 
       {confirmDel && (
         <ConfirmDialog title={`Delete trigger ${t.name}?`}
-          message="Nothing will fire on this condition any more; its subscribers stop being woken. This can't be undone."
+          message="It leaves every project and stops waking agents. The agents it woke stay; a handoff still starts them, and you can give them another trigger. This can't be undone."
           confirmLabel="Delete" danger
           onConfirm={async () => {
             setConfirmDel(false);

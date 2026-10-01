@@ -3,7 +3,7 @@ import { Fragment, useEffect, useState } from "react";
 import { api, type AgentLimits, type TracingStatus } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { Close } from "../components/icons";
-import { Picker, TimeAgo } from "../components/bits";
+import { InternalName, Picker, TimeAgo, keyTitle } from "../components/bits";
 import type { ApiKey, GithubAppTest, GithubCredential, ModelProvider, ModelProviders } from "../types";
 
 // Four distinct credential concepts, one box each:
@@ -42,7 +42,7 @@ export default function Security() {
   return (
     <>
       <h1>Settings</h1>
-      <p className="subtitle">access mode, API keys, model providers, agent limits, the instance credentials (GitHub, Slack) and agent tracing</p>
+      <p className="subtitle">Who can get in, API keys, model providers, agent limits, GitHub and Slack credentials, and agent tracing.</p>
       {workspaceUrl && (
         <div className="alert" style={{ marginBottom: 14 }}>
           <strong>Users, the Slack app, plan and storage</strong> are managed in your workspace, not
@@ -986,6 +986,7 @@ function ApiKeysPanel() {
   const [minted, setMinted] = useState<{ name: string; secret: string }>();
   const [revoking, setRevoking] = useState<ApiKey>();
   const [creating, setCreating] = useState(false);
+  const [showRevoked, setShowRevoked] = useState(false);
 
   const load = () => api.keys().then((r) => { setKeys(r.keys); setEnforced(r.enforced); })
     .catch((e) => setErr(String((e as Error).message ?? e)));
@@ -1028,12 +1029,14 @@ function ApiKeysPanel() {
       )}
 
       {keys && keys.length > 0 ? (
+        <>
         <table style={{ marginBottom: 14 }}>
           <thead><tr><th>name</th><th>scopes</th><th>key</th><th>created</th><th>last used</th><th></th></tr></thead>
           <tbody>
-            {keys.map((k) => (
+            {/* live keys first; revoked ones only on request, they are history */}
+            {[...keys.filter((k) => !k.revoked_at), ...(showRevoked ? keys.filter((k) => k.revoked_at) : [])].map((k) => (
               <tr key={k.id} style={k.revoked_at ? { opacity: 0.45 } : undefined}>
-                <td>{k.name}</td>
+                <td>{keyTitle(k.name) ? <>{keyTitle(k.name)}<InternalName name={k.name} /></> : k.name}</td>
                 <td>{k.scopes.map((s) => <span className="chip" key={s} title={SCOPE_HELP[s]}>{s}</span>)}
                   {k.project && <span className="help"> · project {projectNames[k.project] ?? k.project} only</span>}</td>
                 <td className="mono">{k.prefix}…</td>
@@ -1048,6 +1051,12 @@ function ApiKeysPanel() {
             ))}
           </tbody>
         </table>
+        {keys.some((k) => k.revoked_at) && (
+          <button type="button" className="linklike" onClick={() => setShowRevoked((v) => !v)}>
+            {showRevoked ? "Hide revoked keys" : `Show ${keys.filter((k) => k.revoked_at).length} revoked`}
+          </button>
+        )}
+        </>
       ) : (
         <p className="help">no keys yet; <strong>Create key</strong> to issue one for a producer or agent.</p>
       )}

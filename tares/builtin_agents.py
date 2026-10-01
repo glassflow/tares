@@ -176,6 +176,9 @@ PRESETS = {
     # through a handoff on that verdict (TR-334) or a trigger over findings (TR-322).
     "triage": {
         "label": "Triage (on a schedule)",
+        "concludes": True,
+        "verdicts": [{"verdict": "investigate",
+                      "when": "one entity looks like a problem and needs a closer look"}],
         "prompt": (
             "You watch a system on a schedule. Every few minutes you are handed a summary of "
             "the last window of the sources you watch: for each label, the count per value now "
@@ -207,6 +210,9 @@ PRESETS = {
     # logs, so it fetches its own evidence.
     "rca-from-triage": {
         "label": "Root cause after a handoff",
+        "concludes": True,
+        "verdicts": [{"verdict": "rca", "when": "you found what is failing and why"},
+                     {"verdict": "resolved", "when": "it was noise, or it is already over"}],
         "prompt": (
             "You are an SRE doing root-cause analysis. A triage agent flagged the entity you were "
             "woken for as worth a closer look and handed it to you; you are given its finding (the "
@@ -320,7 +326,47 @@ def for_projects(agent: dict, projects: list[str]) -> dict:
 
 
 def offers_conclude(agent: dict) -> bool:
-    return CONCLUDE in (agent.get("prompt") or "")
+    """The agent gets the conclude tool: it is set to (`concludes`), or its prompt names it (the
+    older way, kept so prompts written for it work as they did)."""
+    return bool(agent.get("concludes")) or CONCLUDE in (agent.get("prompt") or "")
+
+
+def verdict_words(agent: dict) -> list[str]:
+    """The verdicts the agent may give; empty: any word, or none."""
+    return [str(v.get("verdict")) for v in agent.get("verdicts") or [] if v.get("verdict")]
+
+
+def conclude_def(agent: dict) -> dict:
+    """The conclude tool as this agent sees it: with verdicts set, `verdict` is a choice of
+    exactly those words, each with what it means, and a finding must carry one."""
+    words = verdict_words(agent)
+    if not words:
+        return CONCLUDE_DEF
+    meanings = "; ".join(f"{v['verdict']}: {v['when']}" if v.get("when") else v["verdict"]
+                         for v in agent.get("verdicts") or [])
+    d = json.loads(json.dumps(CONCLUDE_DEF))
+    d["input_schema"]["properties"]["verdict"] = {
+        "type": "string", "enum": words,
+        "description": f"required with a finding, exactly one of these: {meanings}"}
+    return d
+
+
+# Added to the system prompt of an agent set to conclude (`concludes`), so its own prompt only
+# says how to do the job; the verdicts follow when it has them.
+CONCLUDE_SETUP = (
+    "\n\nEnd every run with the conclude tool, called once as your last step: outcome no_op, "
+    "with a one-line reason as the summary, when there is nothing to hand on; outcome finding, "
+    "with the finding as the summary, when there is.")
+
+
+def conclude_instructions(agent: dict) -> str:
+    """What the system prompt says about ending a run, for an agent offered conclude."""
+    out = CONCLUDE_SETUP if agent.get("concludes") else ""
+    if verdict_words(agent):
+        out += ("\n\nA finding carries exactly one verdict, one of these words:\n"
+                + "\n".join(f"- {v['verdict']}" + (f": {v['when']}" if v.get("when") else "")
+                             for v in agent.get("verdicts") or []))
+    return out + CONCLUDE_GUIDANCE
 
 
 def _one_line(text, limit: int) -> str | None:
@@ -331,16 +377,22 @@ def _one_line(text, limit: int) -> str | None:
     return t or None
 
 
-def parse_conclude(args: dict) -> tuple[dict | None, str | None]:
-    """The `conclude` call as an outcome, or the error the model gets back to try again."""
+def parse_conclude(args: dict, verdicts: list[str] | None = None) -> tuple[dict | None, str | None]:
+    """The `conclude` call as an outcome, or the error the model gets back to try again.
+    `verdicts`: the only ones a finding may carry, and it must carry one (none given: any)."""
     outcome = str(args.get("outcome") or "").strip().lower()
     summary = str(args.get("summary") or "").strip()
     if outcome not in ("finding", "no_op"):
         return None, "outcome must be finding or no_op"
     if outcome == "finding" and not summary:
         return None, "a finding needs a summary"
+    verdict = str(args.get("verdict") or "").strip().lower() or None
+    if verdicts and outcome == "finding" and verdict not in verdicts:
+        return None, ((f"verdict {verdict!r} is not one of yours" if verdict
+                       else "a finding needs a verdict")
+                      + "; give exactly one of: " + ", ".join(verdicts))
     return {"outcome": outcome, "summary": summary,
-            "verdict": str(args.get("verdict") or "").strip().lower() or None,
+            "verdict": verdict,
             "key": str(args.get("key") or "").strip() or None,
             "label": str(args.get("label") or "").strip() or None,
             "headline": _one_line(args.get("headline"), HEADLINE_MAX),
@@ -991,9 +1043,12 @@ class AgentRunner:
         # the model loads it. None in the project: prompt and tools exactly as before.
         skills = self._project_skills(agent)
         skill_names = [sk["name"] for sk in skills]
-        system = (agent["prompt"] + (CONCLUDE_GUIDANCE if offers_conclude(agent) else "")
+        system = (agent["prompt"] + (conclude_instructions(agent) if offers_conclude(agent) else "")
                   + (_skills.prompt_section(skills) if skills else ""))
-        tools = (TOOL_DEFS + ([CONCLUDE_DEF] if offers_conclude(agent) else [])
+        # set to conclude: the run may not end without it (asked for it once more, below)
+        must_conclude = bool(agent.get("concludes"))
+        verdicts = verdict_words(agent)
+        tools = (TOOL_DEFS + ([conclude_def(agent)] if offers_conclude(agent) else [])
                  + ([_skills.TOOL_DEF] if skills else []) + toolbox.tool_defs)
         max_rounds = effective_max_rounds(agent)
         external_used: list[str] = []
@@ -1025,12 +1080,34 @@ class AgentRunner:
             obs.set_input(messages[0]["content"])
         model = model or agent.get("model") or MODEL
 
-        async def call(with_tools: bool):
+        async def call(with_tools: bool, tool_choice: str | None = None):
             reply = await provider.complete(model=model, system=system, tools=tools,
                                             messages=messages, max_tokens=MAX_TOKENS,
-                                            tools_allowed=with_tools, tracer=tracer)
+                                            tools_allowed=with_tools, tracer=tracer,
+                                            **({"tool_choice": tool_choice} if tool_choice else {}))
             add_usage(usage, reply.usage)
             return reply
+
+        async def require_conclude(ask: str) -> bool:
+            """An agent set to conclude stopped without it: ask once, with conclude the only
+            choice, and once more if that call was not valid. True when it concluded."""
+            messages.append({"role": "user", "content": ask})
+            for _attempt in range(2):
+                try:
+                    reply = await call(True, CONCLUDE)
+                except ModelError:
+                    return False
+                tc = next((c for c in reply.tool_calls if _canonical_tool(c.name, tools) == CONCLUDE),
+                          None)
+                if tc is None:
+                    return False
+                messages.append(reply.as_message())
+                outcome, err = parse_conclude(tc.arguments or {}, verdicts)
+                if not err:
+                    concluded.update(outcome)
+                    return True
+                messages.append(tool_message([(tc.id, f"tool error: ValueError: {err}")]))
+            return False
 
         for rounds in range(1, max_rounds + 1):
             reply = await call(True)
@@ -1052,6 +1129,9 @@ class AgentRunner:
                 last_text = text
 
             if not calls:
+                if must_conclude and await require_conclude(
+                        "End the run now with the conclude tool."):
+                    return concluded["summary"], rounds, tool_calls + 1, external_used, False, ""
                 return text, rounds, tool_calls, external_used, False, ""
 
             results = []
@@ -1066,7 +1146,7 @@ class AgentRunner:
                             raise ValueError(f"unknown tool {tc.name!r}; the tools are: "
                                              + ", ".join(t["name"] for t in tools))
                         if name == CONCLUDE:
-                            outcome, err = parse_conclude(tc.arguments or {})
+                            outcome, err = parse_conclude(tc.arguments or {}, verdicts)
                             if err:
                                 raise ValueError(err)
                             if not concluded:
@@ -1101,10 +1181,15 @@ class AgentRunner:
         # Budget exhausted with tool calls still pending. Ask once more, tools disabled, for a
         # conclusion from what it has (this is the +1 call). If it concludes, that is the
         # finding; if not, the run is `exhausted` and the last text is kept as a partial note.
-        messages.append({"role": "user", "content": (
-            "You have used your round budget. Do not call any more tools. Conclude now from "
-            "the evidence you already have; if it is inconclusive, say what you found so far "
-            "and what you would look at next.")})
+        budget_note = ("You have used your round budget. Do not call any more tools. Conclude now "
+                       "from the evidence you already have; if it is inconclusive, say what you "
+                       "found so far and what you would look at next.")
+        if must_conclude:
+            # the conclusion is still the conclude tool, the one call it may make now
+            if await require_conclude(budget_note + " Use the conclude tool."):
+                return concluded["summary"], rounds, tool_calls + 1, external_used, False, ""
+            return "", rounds, tool_calls, external_used, True, last_text
+        messages.append({"role": "user", "content": budget_note})
         try:
             reply = await call(False)
         except ModelError:

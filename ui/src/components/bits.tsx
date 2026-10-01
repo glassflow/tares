@@ -223,3 +223,44 @@ export function conditionText(c: TriggerCondition): string {
   }
   return `${c.aggregate}(${c.field || "*"}) ${c.predicate} over ${c.window}`;
 }
+
+/** What a person calls a source: the repo it watches, the table, the host it reads; null when its
+ *  settings say nothing plainer than its name (then the name is the title). Mirrors the daemon's
+ *  goal.source_title, so a pasted https://github.com/owner/name shows as owner/name. */
+export function sourceTitle(config: Record<string, unknown> | null | undefined): string | null {
+  const c = config || {};
+  for (const key of ["repo", "repository", "table", "container", "project"]) {
+    const v = c[key];
+    if (typeof v !== "string" || !v.trim()) continue;
+    let t = v.trim().replace(/\/+$/, "");
+    if ((key === "repo" || key === "repository") && t.includes("://")) {
+      const parts = t.split("://")[1].split("/").slice(1, 3);
+      if (parts.length === 2 && parts[0] && parts[1]) t = parts.join("/").replace(/\.git$/, "");
+    }
+    return t;
+  }
+  const url = c.url ?? c.base_url;
+  if (typeof url === "string" && url.includes("://")) {
+    try { return new URL(url).hostname || null; } catch { return null; }
+  }
+  return null;
+}
+
+/** A part's internal name, shown small under its plain title for whoever needs it (logs, the API). */
+export function InternalName({ name }: { name: string }) {
+  return <span className="internal-name">{name}</span>;
+}
+
+/** A plainer name for a key whose name a person did not choose: the workspace mints one per member
+ *  for signing in to the console, named user:<id>. null for a key someone named. */
+export function keyTitle(name: string): string | null {
+  return name.startsWith("user:") ? "Console sign-in for a workspace member" : null;
+}
+
+/** What a project is for, in a list: its goal; for the Default project, what it holds. The
+ *  template it started from says nothing to a person ("From existing objects"). */
+export function projectGoal(p: { goal?: string | null; default?: boolean; status?: string }): string {
+  if (p.goal?.trim()) return p.goal.trim();
+  if (p.default) return "Holds whatever was made outside another project.";
+  return p.status === "draft" ? "Being set up" : "No goal set";
+}

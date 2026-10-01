@@ -252,7 +252,7 @@ export default function ProjectNewSharedContext() {
         <div>
           <h1>{editId ? `Edit ${existing?.name ?? "project"}` : template?.title ?? "Shared code context"}</h1>
           <p className="subtitle">
-            {template?.description ?? "pick the repos that are the sources of context and the repo that holds it; Tares keeps it current"}
+            {template?.description ?? "Pick the repos the context comes from and the repo that holds it. Tares keeps it current."}
           </p>
         </div>
       </div>

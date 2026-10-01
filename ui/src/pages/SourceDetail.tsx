@@ -7,7 +7,7 @@ import Dependents from "../components/Dependents";
 import { ProjectLink } from "../components/ProjectBadge";
 import IngestEndpoint from "../components/IngestEndpoint";
 import SourceForm from "../components/SourceForm";
-import { ErrorState, StatusBadge, TimeAgo, ruleSummary, usePolling } from "../components/bits";
+import { ErrorState, InternalName, StatusBadge, TimeAgo, ruleSummary, sourceTitle, usePolling } from "../components/bits";
 import type { ConnectorSpec, Source } from "../types";
 
 export default function SourceDetail() {
@@ -49,7 +49,12 @@ export default function SourceDetail() {
     <>
       <div className="pagehead">
         <div>
-          <h1><span className="mono">{source.name}</span></h1>
+          {(() => {
+            const title = sourceTitle(source.config);
+            return title && title !== source.name
+              ? <h1>{title}<InternalName name={source.name} /></h1>
+              : <h1>{source.name}</h1>;
+          })()}
           <p className="subtitle">
             {spec?.label ?? source.connector}
             {(source.projects ?? []).length > 0 && (
@@ -72,7 +77,7 @@ export default function SourceDetail() {
       <div className="cards">
         <div className="card"><div className="k">status</div><div className="v"><StatusBadge status={h?.status} /></div></div>
         <div className="card"><div className="k">events stored</div><div className="v">{(h?.events_total ?? 0).toLocaleString()}</div></div>
-        <div className="card"><div className="k">since daemon start</div><div className="v">{h?.events_since_start ?? 0} <small>events / {h?.polls ?? 0} polls</small></div></div>
+        <div className="card"><div className="k">since Tares restarted</div><div className="v">{h?.events_since_start ?? 0} <small>events from {h?.polls ?? 0} {h?.polls === 1 ? "check" : "checks"}</small></div></div>
         <div className="card"><div className="k">last ingest</div><div className="v" style={{ fontSize: 15 }}><TimeAgo ts={h?.last_ingest} /></div></div>
       </div>
 

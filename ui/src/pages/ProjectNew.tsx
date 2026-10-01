@@ -76,7 +76,7 @@ export default function ProjectTemplates() {
         <div>
           <h1>Templates</h1>
           <p className="subtitle">
-            the step-by-step path: answer a few questions and Tares creates the objects behind it,
+            The step-by-step path: answer a few questions and Tares creates the parts behind it,
             each visible and editable on its own page. Or assemble one from objects you already
             have. To describe what you need in your own words instead, <Link to="/projects/new">create a project</Link>.
           </p>

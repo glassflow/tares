@@ -61,7 +61,8 @@ export default function SourceDiscover() {
         <button onClick={run} disabled={loading || busy}>rescan</button>
       </div>
       <p className="subtitle">
-        scan the local Docker environment and set up everything Tares can ingest; you just confirm
+        Scan the local Docker environment and set up everything Tares can take in. You confirm
+        before anything is made.
       </p>
 
       {loading && <div className="empty">scanning Docker…</div>}

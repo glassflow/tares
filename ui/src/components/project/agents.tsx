@@ -119,13 +119,18 @@ export function AgentView({ ctx, name }: { ctx: Ctx; name: string }) {
     } catch (e) { ctx.fail(e); }
   };
   const handoffOnly = !agent.enabled && from.length > 0;
+  const noTrigger = !agent.trigger;   // nothing wakes it on its own; only a handoff starts it
   return (
     <>
       <ViewHead title={<><span className="mono">{agent.name}</span>{" "}
-                         {agent.enabled ? <span className="badge ok">on</span> : <span className="badge">off</span>}</>}
-                sub={<>Runs on <WakesOn agent={agent} from={from} />.{handoffOnly && " Its trigger is off, so only a handoff starts it."}</>}>
+                         {noTrigger ? (from.length > 0 && <span className="badge ok">on handoff</span>)
+                           : agent.enabled ? <span className="badge ok">on</span> : <span className="badge">off</span>}</>}
+                sub={noTrigger
+                  ? (from.length > 0 ? <>Only <WakesOn agent={agent} from={from} /> starts it.</>
+                    : <>Nothing starts it yet: it has no trigger, and no agent hands off to it.</>)
+                  : <>Runs on <WakesOn agent={agent} from={from} />.{handoffOnly && " Its trigger is off, so only a handoff starts it."}</>}>
         {!editing && <>
-          <button onClick={toggle}>{agent.enabled ? "Disable" : "Enable"}</button>
+          {!noTrigger && <button onClick={toggle}>{agent.enabled ? "Disable" : "Enable"}</button>}
           <button className="primary" onClick={() => setEditing(true)}>Edit</button>
           <button className="danger" onClick={() => setConfirmDel(true)}>Delete</button>
         </>}
@@ -135,13 +140,13 @@ export function AgentView({ ctx, name }: { ctx: Ctx; name: string }) {
       )}
       {editing ? (
         <AgentForm initial={agent}
-                   triggers={[...new Set([agent.trigger, ...ctx.triggers.map((t) => t.name)])]}
+                   triggers={[...new Set([agent.trigger, ...ctx.triggers.map((t) => t.name)])].filter(Boolean)}
                    {...formProps(d)}
                    onSaved={() => { setEditing(false); ctx.refresh(); }}
                    onCancel={() => setEditing(false)} />
       ) : (
         <Facts rows={([
-          ["trigger", <>{ctx.triggers.some((t) => t.name === agent.trigger)
+          ["trigger", noTrigger ? <span className="dim">none; pick one under Edit to wake it on its own</span> : <>{ctx.triggers.some((t) => t.name === agent.trigger)
               ? <VLink v={{ kind: "trigger", name: agent.trigger }} className="chip mono">{agent.trigger}</VLink>
               : <Link to={`/triggers/${encodeURIComponent(agent.trigger)}`} className="chip mono">{agent.trigger}</Link>}
             {!agent.enabled && <span className="help"> · off; enable the agent to run on it</span>}</>],
@@ -155,6 +160,15 @@ export function AgentView({ ctx, name }: { ctx: Ctx; name: string }) {
                   <span className="help"> · once per entity per {h.cooldown}</span>
                 </div>))
             : <span className="dim">no handoffs</span>],
+          ["how it ends", agent.concludes
+            ? <>{(agent.verdicts ?? []).length
+                  ? <>a conclusion, verdict one of {(agent.verdicts ?? []).map((v) => (
+                      <span key={v.verdict} className="chip mono" title={v.when || undefined} style={{ marginRight: 4 }}>{v.verdict}</span>))}</>
+                  : "a conclusion, any verdict or none"}
+                <span className="help"> · or nothing to report</span></>
+            : agent.offers_conclude
+              ? <span className="help">a conclusion when it calls one (its prompt mentions conclude); else its last message</span>
+              : <span className="help">its last message is the finding</span>],
           ["model", <><span className="mono">{agent.model || d.default_models?.[agent.effective_provider ?? ""] || d.default_model}</span>
             {!agent.model && <span className="help"> · provider default</span>}
             <span className="help"> · up to {agent.effective_max_rounds} rounds</span>

@@ -1,6 +1,6 @@
 [project]
 name = "tares"
-version = "1.38.0-rc.4"
+version = "1.38.0-rc.6"
 description = "A self-hostable data plane for AI agents: ingest events, store them losslessly, and serve one correlated read of any entity over MCP."
 readme = "README.md"
 license = "MIT"

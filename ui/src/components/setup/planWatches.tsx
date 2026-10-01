@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import SourceForm from "../SourceForm";
+import { InternalName, sourceTitle } from "../bits";
 import type { PlanWatch } from "../../types";
 import { Choice, EditorFrame, ItemActions, Problems } from "./planBits";
 import {
@@ -36,11 +37,12 @@ export function WatchesCard({ ctx }: { ctx: CardCtx }) {
             <span className="su-item-what">{w.sentence || w.name}</span>
             <span className="help">
               {cell.connectors?.[w.connector]?.label && `${cell.connectors[w.connector].label}. `}
-              {w.existing ? `Already on Tares as ${w.name}.`
+              {w.existing ? "Already on Tares."
                 : w.needs === "send" ? "You connect it in the next step."
                 : w.needs === "credential" ? "Needs a credential; you add it in the next step."
                 : "Tares connects it for you."}
             </span>
+            {w.existing && w.name && <InternalName name={w.name} />}
             <ItemActions id={editId} what={w.name || "this source"} disabled={busy || !!open}
                          onChange={() => openEditor(id)}
                          onRemove={() => { edit(removeWatch(plan, w.key)); closeEditor(addId); }} />
@@ -76,8 +78,7 @@ const NEW = "__new__";
  *  a name like ctx_glassflow_rius_argus_core tells a person less than glassflow/argus-core. */
 function whatItReads(s: NonNullable<CellData["sources"]>[number]): string | null {
   if (s.connector === "github_app") return "every repository the GitHub App is installed on";
-  const repo = s.config?.repo;
-  return typeof repo === "string" && repo.trim() ? repo.trim() : null;
+  return sourceTitle(s.config);
 }
 
 /** A source in the plan changed or added, kind first: the kind the plan needs (a GitHub source

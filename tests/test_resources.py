@@ -3,7 +3,7 @@ that use it.
 
 Covers: a source in two projects lists both; a trigger and an agent list the project they are
 in; a part in the default project lists it; a revoked key and a draft project are left out; the
-GitHub source shows its repository as what it is.
+GitHub source is titled by its repository.
 
 Run: .venv/bin/python tests/test_resources.py
 """
@@ -73,7 +73,7 @@ async def main():
         used = lambda row: sorted(u["name"] for u in row["used_by"])  # noqa: E731
         ck("a source two projects read lists both",
            used(src["repo_commits"]) == sorted([default["name"], "Checkout"]), src["repo_commits"])
-        ck("a GitHub source says its repository", src["repo_commits"]["what"] == "acme/shop",
+        ck("a GitHub source says its repository", src["repo_commits"]["title"] == "acme/shop",
            src["repo_commits"])
         trig = {t["name"]: t for t in res["triggers"]}
         ck("a trigger lists its project", used(trig["checkout_spike"]) == ["Checkout"],

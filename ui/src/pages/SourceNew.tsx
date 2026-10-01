@@ -97,7 +97,7 @@ export default function SourceNew() {
       <div className="pagehead">
         <div>
           <h1>Add source</h1>
-          <p className="subtitle">pick a connector, configure it, save; <em>no restart needed</em></p>
+          <p className="subtitle">Pick a connector, fill in its settings and save. No restart needed.</p>
           {project && <p className="help">joins <ProjectBadge ownedBy={project} compact /></p>}
         </div>
         {!connector && !created && (

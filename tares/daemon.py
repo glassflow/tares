@@ -36,14 +36,14 @@ from .config import (SLACK_URL_PREFIX, CatalogError, agent_url, catalog_from_db,
                      validate_mcp_server_dict,
                      import_yaml_to_db, slack_channel_from_url, slack_url,
                      validate_agent_dict, validate_slack_channel, validate_source_dict,
-                     check_handoff_targets, normalize_handoffs,
+                     check_handoff_targets, normalize_handoffs, normalize_verdicts,
                      validate_trigger_dict, normalize_trigger_description, VIEWS_REMOVED,
                      _source_from_dict)
 from .connectors import (SPECS, normalize_config, redact_config, restore_secrets,
                          source_type_for)
 from .dispatch import Dispatcher
 from .envelope import now_utc
-from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL,
+from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_conclude,
                              MAX_ROUNDS as AGENT_MAX_ROUNDS,
                              MAX_ROUNDS_LIMIT as AGENT_MAX_ROUNDS_LIMIT,
                              MAX_ROUNDS_WITH_MCP as AGENT_MAX_ROUNDS_WITH_MCP,
@@ -349,7 +349,7 @@ class TriggerIn(BaseModel):
 
 class AgentIn(BaseModel):
     name: str = ""               # required on create; PUT fills it from the path (TR-226)
-    trigger: str
+    trigger: str = ""            # "" = no trigger of its own: only a handoff starts it
     prompt: str
     slack_webhook: str = ""      # legacy per-agent notification path (blank-to-keep on update)
     model: str = ""              # "" = the provider's default model
@@ -366,6 +366,10 @@ class AgentIn(BaseModel):
     # [{verdict, agent, cooldown}]: who takes over when a run concludes with that verdict
     # (TR-334); None = none on create, unchanged on update
     handoffs: list[dict] | None = None
+    # how a run ends: always with the conclude tool, and the verdicts it may give
+    # ([{verdict, when}]); None = off / none on create, unchanged on update
+    concludes: bool | None = None
+    verdicts: list[dict] | None = None
 
 
 class ImportReq(BaseModel):
@@ -2236,10 +2240,11 @@ def make_app() -> FastAPI:
     async def delete_trigger(name: str):
         if name not in {t.name for t in runtime.catalog.triggers}:
             _err(KeyError(f"unknown trigger {name!r}"), 404)
-        store.delete_catalog_trigger(name)
+        # it leaves every project, and the agents it woke stay, without a trigger of their own
+        cleared = store.delete_catalog_trigger(name)
         store.remove_subscriptions_by_trigger(name)
         runtime.reload_catalog()
-        return {"ok": True}
+        return {"ok": True, "agents_without_trigger": cleared}
 
     @app.post("/api/triggers/{name}/pause")
     async def pause_trigger(name: str):
@@ -2274,6 +2279,7 @@ def make_app() -> FastAPI:
         raw = {**body.model_dump(exclude={"project"}), **({"name": name} if name else {})}
         try:
             validate_agent_dict(raw, set(triggers), triggers, set(servers))
+            raw["verdicts"] = normalize_verdicts(raw["name"], body.verdicts)
         except CatalogError as e:
             _err(e)
         if body.handoffs is not None:
@@ -2324,6 +2330,11 @@ def make_app() -> FastAPI:
                          "budget_usd": a.get("budget_usd"),
                          "daily_cap": a.get("daily_cap"),
                          "handoffs": a.get("handoffs") or [],
+                         "concludes": bool(a.get("concludes")),
+                         "verdicts": a.get("verdicts") or [],
+                         # it gets the conclude tool (set to, or its prompt names it): its runs
+                         # end with an outcome and a verdict worth a column of their own
+                         "offers_conclude": offers_conclude(a),
                          "effective_max_rounds": effective_max_rounds(a),
                          "enabled": a["enabled"], "updated_at": a.get("updated_at"),
                          "project": in_project or a.get("owned_by"),
@@ -2356,7 +2367,9 @@ def make_app() -> FastAPI:
                                    body.max_rounds, body.budget_usd,
                                    webhook_key_label=body.webhook_key_label,
                                    provider=body.provider.strip(),
-                                   handoffs=raw.get("handoffs") or [])
+                                   handoffs=raw.get("handoffs") or [],
+                                   concludes=bool(body.concludes),
+                                   verdicts=raw.get("verdicts") or [])
         store.put_in_project("agent", body.name, uid, creator=True)
         runtime.reload_catalog()
         return {"ok": True, "enabled": False, "project": uid,
@@ -2394,7 +2407,10 @@ def make_app() -> FastAPI:
                                    # the form has no daily cap field; keep what a project set
                                    daily_cap=existing.get("daily_cap"),
                                    # absent (None) keeps the stored handoffs
-                                   handoffs=raw.get("handoffs") if here else None)
+                                   handoffs=raw.get("handoffs") if here else None,
+                                   concludes=body.concludes,
+                                   verdicts=(raw.get("verdicts") if body.verdicts is not None
+                                             else None))
         store.mark_customized("agent", name)
         store.put_in_project("agent", name, uid)
         if not here:
@@ -2420,6 +2436,10 @@ def make_app() -> FastAPI:
         uid = _resolve_project(project, default=False) if project else None
         uid = uid or agent.get("owned_by") or store.default_project_id()
         if not store.list_wakes(project=uid, agent=name):
+            if not agent.get("trigger"):
+                _err(ValueError(f"{name} has no trigger of its own, so there is nothing to turn "
+                                "on: only a handoff starts it. Pick a trigger under Edit to "
+                                "wake it on its own."), 409)
             store.put_in_project("agent", name, uid)
             store.wire_agent(name, uid, agent["trigger"], None)
         return uid

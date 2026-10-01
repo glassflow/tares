@@ -189,7 +189,7 @@ export default function ProjectShell({ s, id, reload, template }: {
               {pn.rows.map((row) => (
                 <tr key={row.label}>
                   <td className="help">{row.label}</td>
-                  <td className={row.mono ? "mono" : undefined} style={{ wordBreak: "break-all" }}>
+                  <td className={row.mono ? "mono" : undefined} style={{ overflowWrap: "anywhere" }}>
                     {row.url
                       ? <a href={row.url} target="_blank" rel="noreferrer">{String(row.value)}</a>
                       : String(row.value)}

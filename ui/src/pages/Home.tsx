@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api";
-import { ErrorState, TimeAgo, fmtCost, fmtTokens, formatBytes, usePolling } from "../components/bits";
+import { ErrorState, TimeAgo, fmtCost, fmtTokens, formatBytes, projectGoal, usePolling } from "../components/bits";
 import Landing from "./Landing";
 import type { ModelUsage, Usage, Project } from "../types";
 
@@ -287,7 +287,7 @@ function ProjectsPanel({ projects }: { projects: Project[] }) {
             return (
               <tr key={u.id}>
                 <td><Link to={`/projects/${encodeURIComponent(u.id)}`}><strong>{u.name}</strong></Link></td>
-                <td className="help">{u.template_title}</td>
+                <td className="help"><span className="proj-goal">{projectGoal(u)}</span></td>
                 <td>
                   <span className={`badge ${u.status === "active" ? "ok" : u.status === "paused" ? "paused" : "error"}`}>{u.status}</span>
                   {missing > 0 && <span className="help" style={{ marginLeft: 6 }}>{missing} missing</span>}

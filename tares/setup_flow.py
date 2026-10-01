@@ -431,7 +431,7 @@ def summary(plan: dict, trigs: dict, sources: dict) -> str:
             continue
         first = [a for a in agents if a.get("trigger") == w["name"] and a.get("on_trigger", True)]
         if not first:
-            out.append(f"{lead}, no agent is turned on to look yet.")
+            out.append(f"{lead}, but no agent is on to look.")
             continue
         names = [a["name"] for a in first]
         s = f"{lead}, {G.join_words(names)} {'looks' if len(names) == 1 else 'look'} first."
@@ -716,7 +716,10 @@ def _normalize(raw, store, catalog, prev: dict | None,
             else:
                 nm = _unique(nm, set(servers) | taken_tools)
                 t["existing"] = False
-        # an MCP server already on the cell joins this project too; it stays in the others
+        # an MCP server already on the cell joins this project too; it stays in the others. It
+        # is on: someone set it up already, so there is nothing to turn on (Remove drops it)
+        if t["existing"]:
+            t["enabled"] = True
         taken_tools.add(nm)
         tool_map.setdefault(orig, nm)
         t["name"] = nm
@@ -1010,10 +1013,13 @@ def _context(store, catalog, existing_sources: bool) -> str:
     return out
 
 
-def read_words(name: str, args: dict | None) -> str:
-    """One of the planner's reads, as the person watching the planning sees it."""
+def read_words(name: str, args: dict | None, sources: dict | None = None) -> str:
+    """One of the planner's reads, as the person watching the planning sees it: a source by what
+    it watches (the repo, the host), not its internal name, when `sources` knows it."""
     if name == "source_fields":
-        return f"Looked at what {str((args or {}).get('name') or 'a source')} sends"
+        src = str((args or {}).get("name") or "")
+        cfg = (sources or {}).get(src)
+        return f"Looked at what {G.source_title(cfg) if cfg else (src or 'a source')} sends"
     return {"list_sources": "Looked at the sources on Tares",
             "list_connectors": "Looked at the kinds of source",
             "list_templates": "Looked at the templates"}.get(name, "Looked something up")
@@ -1030,7 +1036,8 @@ def _say(progress, text: str, running: bool = False) -> None:
 
 async def _run_model(provider, model: str, convo: list, read_tool, tracer, usage: dict,
                      forced_only: bool = False, progress=None,
-                     writing: str = "Writing the plan") -> tuple[dict, object]:
+                     writing: str = "Writing the plan",
+                     sources: dict | None = None) -> tuple[dict, object]:
     """Model calls until propose_plan comes back: reads first when the model wants them, the
     last call forced to propose_plan. Returns (the plan it proposed, that reply)."""
     tools = read_tools() + [PLAN_TOOL]
@@ -1050,7 +1057,8 @@ async def _run_model(provider, model: str, convo: list, read_tool, tracer, usage
         for c in reply.tool_calls:
             ok, text = await read_tool(c.name, c.arguments or {})
             results.append((c.id, text if ok else f"error: {text}"))
-            _say(progress, read_words(c.name, c.arguments if isinstance(c.arguments, dict) else {}))
+            _say(progress, read_words(c.name, c.arguments if isinstance(c.arguments, dict) else {},
+                                      sources))
         if results:
             convo.append(tool_message(results))
         else:
@@ -1087,7 +1095,8 @@ async def _model_plan(provider, model, first_message, store, catalog, read_tool,
     writing = "Changing the plan" if prev else "Writing the plan"
     try:
         raw, (reply, call) = await _run_model(provider, model, convo, read_tool, tracer, usage,
-                                              progress=progress, writing=writing)
+                                              progress=progress, writing=writing,
+                                              sources=catalog.sources)
         _say(progress, "Checking the plan", running=True)
         plan, errors = _check(raw, store, catalog, prev, who)
         if errors:
@@ -1097,6 +1106,7 @@ async def _model_plan(provider, model, first_message, store, catalog, read_tool,
                                           "fixed.")]))
             raw, _ = await _run_model(provider, model, convo, read_tool, tracer, usage,
                                       forced_only=True, progress=progress,
+                                      sources=catalog.sources,
                                       writing=f"Fixing {len(errors)} thing"
                                               f"{'s' if len(errors) != 1 else ''} the check found")
             _say(progress, "Checking the plan again", running=True)

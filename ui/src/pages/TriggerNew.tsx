@@ -13,8 +13,8 @@ export default function TriggerNew() {
     <>
       <h1>New trigger</h1>
       <p className="subtitle">
-        a condition Tares evaluates continuously over some of a project's sources; when it trips,
-        subscribed agents are woken with the correlated timeline
+        A condition Tares checks all the time over some of a project's sources. When it is met, the
+        agents it wakes get the timeline of what happened.
       </p>
       {project && <p className="help">in <ProjectBadge ownedBy={project} compact /></p>}
       <TriggerEditor project={project}

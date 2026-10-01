@@ -57,7 +57,8 @@ def _host(url: str | None) -> str:
 
 def list_resources(store, catalog, runtime_health: dict | None = None, now=None) -> dict:
     """{sources, triggers, agents, tools, skills, keys}: each a list of rows with `name`, `what`
-    (what it is in plain words), `state` and `used_by` ([{id, name}])."""
+    (what it is in plain words), `state` and `used_by` ([{id, name}]); `title` where a person
+    knows the part by something plainer than its internal name (a source's repo)."""
     now = now or datetime.now(timezone.utc)
     members = _members(store)
     projects = {p["id"]: p["name"] for p in store.list_projects() if p.get("status") != "draft"}
@@ -71,8 +72,9 @@ def list_resources(store, catalog, runtime_health: dict | None = None, now=None)
         st = G.source_state(store, cfg, health.get(name), now)
         title = G.source_title(cfg)
         sources.append({
-            "name": name, "kind": cfg.connector, "kind_label": spec.get("label") or cfg.connector,
-            "what": title if title != name else (spec.get("label") or cfg.connector),
+            "name": name, "title": title, "kind": cfg.connector,
+            "kind_label": spec.get("label") or cfg.connector,
+            "what": spec.get("label") or cfg.connector,
             "state": st["state"], "detail": st["detail"], "last_event_at": st["last_event_at"],
             "used_by": _with(members, "source", name, None, projects)})
 
@@ -120,7 +122,11 @@ def list_resources(store, catalog, runtime_health: dict | None = None, now=None)
             continue
         pid = k.get("project")
         keys.append({
-            "name": k["name"], "what": ("Project key: reads the project and records findings"
+            "name": k["name"],
+            # the workspace mints one key per member for the console, named user:<id>
+            **({"title": "Console sign-in for a workspace member"}
+               if k["name"].startswith("user:") else {}),
+            "what": ("Project key: reads the project and records findings"
                                         if pid else f"Cell key: {', '.join(sorted(k['scopes']))}"),
             "prefix": k.get("prefix"),
             "state": "used" if k.get("last_used_at") else "never used",
