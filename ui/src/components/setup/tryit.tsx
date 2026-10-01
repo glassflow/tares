@@ -5,6 +5,7 @@ import { api } from "../../api";
 import { ResultCard } from "../project/overview";
 import type { AgentRun, Plan, ProjectResult, ProjectResultDetail, SetupChecks } from "../../types";
 import { errText } from "./common";
+import { useSeconds } from "./planning";
 
 // Step 4: one practice run ("Run it once now"), so the person sees a result before a real one. Tares agents: the
 // first agent woken by a trigger runs on the example event, and its chain concludes as usual.
@@ -30,11 +31,14 @@ export function TryStep({ projectId, plan, ownCheck, onBackToConnect, onFinish, 
   const [runId, setRunId] = useState<string>();
   const [result, setResult] = useState<ProjectResult>();
   const [detail, setDetail] = useState<ProjectResultDetail>();
+  const [startedAt, setStartedAt] = useState<string>();
   const started = useRef(0);
+  const secs = useSeconds(phase === "waiting" || phase === "slow" ? startedAt : undefined);
 
   const start = async () => {
     setPhase("starting"); setErr(undefined); setResult(undefined); setDetail(undefined);
     started.current = Date.now();
+    setStartedAt(new Date().toISOString());
     try {
       const r = await api.runSetupPractice(projectId);
       setRunId(r.run_id);
@@ -120,8 +124,19 @@ export function TryStep({ projectId, plan, ownCheck, onBackToConnect, onFinish, 
       {tried && (
         <div className="su-section">
           <ol className="su-progress" aria-live="polite">
-            {!detail && !result && <li>{waitingText}</li>}
-            {detail?.steps.map((st, i) => <li key={i}>{st.text}</li>)}
+            {!detail && !result && (
+              // a spinner and the seconds so far: it is working, not stuck
+              <li className={phase === "stopped" ? "stopped" : "running"}>
+                <span className="su-progress-mark" aria-hidden="true" />
+                <span>
+                  {waitingText}
+                  {phase !== "stopped" && <span className="help"> · {secs} s</span>}
+                </span>
+              </li>
+            )}
+            {detail?.steps.map((st, i) => (
+              <li key={i} className="done"><span className="su-progress-mark" aria-hidden="true" /><span>{st.text}</span></li>
+            ))}
             {phase === "slow" && <li>No result yet. It lands on the project page when it arrives.</li>}
           </ol>
           {result && (
