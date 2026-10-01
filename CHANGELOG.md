@@ -5,6 +5,52 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.38.0-rc.4] - 2026-10-01
+
+Fourth release candidate: parts are shared between projects, and the guided setup keeps a draft.
+
+### Changed
+- Sources, triggers, agents, MCP servers and skills belong to the cell, and any number of
+  projects use the same one. A project holds its own wiring: which trigger wakes which agent, on
+  or off, and which agent digs in on whose verdict. The same agent can serve two projects, each
+  waking it its own way. A part's `owned_by` now means the project that made it, never a lock.
+- A run belongs to the project whose wiring started it: each project's timeline, results, today
+  totals, spend and an agent's runs and stats on its page show its own runs only. Two projects
+  wiring the same trigger to the same agent run it once, shown in both. A second project's firing
+  or handoff for an agent already running on the same entity joins that run.
+- Pausing a project turns its wiring off; a trigger another running project uses keeps running.
+  Deleting a project keeps every part another project uses (`kept_shared` in the response) and
+  deletes the rest it made. `delete_sources=all` is unchanged.
+- Skills are shared: one skill per cell, used by the projects that pick it. Editing it changes it
+  everywhere; removing it from a project deletes it only when no project uses it. A new skill
+  cannot take the name of one already on the cell.
+- The guided setup starts a draft project on "Plan it": the plan is written in the background
+  and shown step by step as it happens, edits are kept on the draft, and the draft waits on the
+  Projects list ("Finish setting up") until it is set up, under the same id.
+- The setup plan picks a source by kind first (your sources of that kind, or a new one), shows
+  sources and tools by what a person calls them (glassflow/argus-core, GitHub), offers agents,
+  tools and skills already on the cell from a list, and posts findings to Slack itself (a channel
+  picker) instead of suggesting a Slack MCP server.
+
+### Added
+- All resources: a page listing every source, trigger, agent, MCP server, skill and key with the
+  projects that use it (`GET /api/resources`).
+- `wiring:` in the catalog export (each project's wake-ups and handoffs); import restores it.
+- `POST /api/setup/drafts`, `POST /api/projects/{id}/setup/plan`, `PUT /api/projects/{id}/setup`
+  with a plan, `POST /api/projects/{id}/skills/{name}/use`, `GET /api/skills`, and `?project=`
+  on the agent list, its runs and enable/disable.
+
+### Upgrade
+- Once, at the first start: each agent's trigger, handoffs and on/off (its `tares://agent/`
+  subscription) become the wiring of the project that made it, in one transaction; each
+  project's skills become shared skills (the same name with other text keeps both, the second
+  renamed name-2). Runs and firings keep their project.
+
+### Fixed
+- Page header buttons stay beside the title; the setup plan wraps long names inside their card;
+  switching who does the work no longer flashes the other side's problems; the on/off switch
+  looks like one; a plan label given as a bare word reads the field of that name.
+
 ## [1.38.0-rc.3] - 2026-09-30
 
 Third release candidate: fixes from testing rc.2 on a live cell.
