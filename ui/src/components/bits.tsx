@@ -171,16 +171,18 @@ export function Picker({ value, onChange, options, labels, className, style, dis
 
 /** Input with styled suggestions — replaces native <datalist> (which can't be themed).
  *  Free text stays allowed; suggestions filter as you type. */
-export function Combo({ value, onChange, options, placeholder, style, className, hints, hintClass }: {
+export function Combo({ value, onChange, options, placeholder, style, className, hints, hintClass, matchHints }: {
   value: string; onChange: (v: string) => void; options: string[];
   placeholder?: string; style?: React.CSSProperties; className?: string;
   hints?: Record<string, string>;   // per-option annotation, right-aligned (e.g. coverage, a type tag)
   hintClass?: string;               // className for the annotation (default "dim"; "chip" for a tag)
+  matchHints?: boolean;             // typing also finds an option by its annotation (a source by its repo)
 }) {
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0);
   const needle = value.trim().toLowerCase();
-  const shown = options.filter((o) => !needle || o.toLowerCase().includes(needle));
+  const shown = options.filter((o) => !needle || o.toLowerCase().includes(needle)
+    || (matchHints && !!hints?.[o]?.toLowerCase().includes(needle)));
 
   const pick = (o: string) => { onChange(o); setOpen(false); };
 

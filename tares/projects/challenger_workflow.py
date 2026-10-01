@@ -75,8 +75,8 @@ class ChallengerWorkflow(Template):
 
     PARAMS = {
         "slack_channel": {"type": "string", "default": "", "label": "Slack channel",
-                          "help": "post each session summary to this channel id (needs the Slack "
-                                  "surface set up); empty = console only"},
+                          "help": "where each session summary is posted; no channel keeps it "
+                                  "in the console only"},
         "model": {"type": "string", "default": "", "label": "Model",
                   "help": "model for the summarizer (empty = the instance default)"},
     }
