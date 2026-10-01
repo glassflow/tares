@@ -89,6 +89,13 @@ async def main():
         ck("a draft uses nothing", not any(u["name"] == "A draft" for rows in res.values()
                                            for r_ in rows for u in r_["used_by"]))
         ck("the secret of a key is never in it", k["secret"] not in str(res))
+        before = {kind: sorted(r_["name"] for r_ in rows) for kind, rows in res.items()}
+        r = await cx.delete("/api/projects/uc_draft00001")
+        after = {kind: sorted(r_["name"] for r_ in rows)
+                 for kind, rows in (await cx.get("/api/resources")).json().items()}
+        ck("a draft can be deleted, and every part stays",
+           r.status_code == 200 and store.get_project("uc_draft00001") is None and after == before,
+           r.text[:200])
         await cx.aclose()
 
 

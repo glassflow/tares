@@ -7,6 +7,7 @@ import { Stepper, errText, type FlowStep } from "../components/setup/common";
 import { ConnectStep } from "../components/setup/connect";
 import { GoalStep, type Who } from "../components/setup/goal";
 import { PlanStep, baselineOf, type Baseline } from "../components/setup/plan";
+import { DeleteDraft } from "../components/setup/deleteDraft";
 import { PlanningView } from "../components/setup/planning";
 import { TryStep } from "../components/setup/tryit";
 import type { Plan, ProjectSetup as SetupData, SetupConnect } from "../types";
@@ -186,6 +187,10 @@ function ResumeSetup({ id }: { id: string }) {
       <div className="su">
         <DraftSetup id={id} data={data} reload={reload}
                     onApplied={(r) => { setConnect(r.connect); setAppliedPlan(r.plan); setStep("connect"); reload(); }} />
+        <div className="btnrow su-draft-delete">
+          <DeleteDraft id={id} name={data.plan?.name || data.goal || "this project"}
+                       onDeleted={() => navigate("/projects")} />
+        </div>
       </div>
     );
   }

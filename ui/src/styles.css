@@ -1817,3 +1817,5 @@ pre.payload {
 /* a run's outcome: its verdict chip, then the headline on one line */
 .run-outcome { display: inline-flex; align-items: center; gap: 6px; max-width: 360px; }
 .run-headline { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* a draft's own delete, under its setup and away from the plan's buttons */
+.su-draft-delete { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--line); }
