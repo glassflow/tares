@@ -224,12 +224,17 @@ async def main():
             check("hand delete of an owned trigger is allowed", r.status_code == 200, r.text)
             inst = (await cx.get(f"/api/projects/{uid}")).json()
             miss = {o["key"]: o["missing"] for o in inst["objects"]}
-            check("instance reports the trigger missing", miss.get("trigger") is True, str(miss))
+            check("deleting it was the choice: the trigger leaves the project's list, not missing",
+                  "trigger" not in miss, str(miss))
+            check("its agent stays, without a trigger",
+                  st.get_catalog_agent("t_agent")["trigger"] == "", str(st.get_catalog_agent("t_agent")))
             r = await cx.post(f"/api/projects/{uid}/repair", json={"key": "trigger"})
             check("repair -> 200", r.status_code == 200, r.text)
             trig = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}
             check("trigger re-created in the project", trig.get("t_trigger", {}).get("project") == uid,
                   str(list(trig)))
+            check("and the template's agent has it back", st.get_catalog_agent("t_agent")["trigger"]
+                  == "t_trigger", str(st.get_catalog_agent("t_agent")))
 
             print("== pause / resume ==")
             r = await cx.post(f"/api/projects/{uid}/pause")
@@ -587,16 +592,20 @@ async def main():
             check("another project uses the recreated mcp server too", r.status_code == 201, r.text[:300])
             claimer = r.json().get("id")
             got = (await cx.get(f"/api/projects/{cid}")).json()
-            check("parts are shared (P-TR-216): the original project still has it, not missing",
-                  not next(o for o in got["objects"] if o["name"] == "lost_mcp")["missing"]
-                  and sorted(st.projects_using("mcp_server", "lost_mcp")) == sorted([cid, claimer]),
+            check("the hand delete took it off the original project; the recreated one is the "
+                  "claimer's only",
+                  not any(o["name"] == "lost_mcp" for o in got["objects"])
+                  and st.projects_using("mcp_server", "lost_mcp") == [claimer],
                   json.dumps(got["objects"])[:300])
+            # parts are shared (P-TR-216): the original project takes it in again, next to the claimer
+            r = await cx.put(f"/api/projects/{cid}", json={"objects": objs + [{"kind": "mcp_server", "name": "lost_mcp"}]})
             y = (await cx.get("/api/catalog/export")).text
             doc = _yaml.safe_load(y)
             check("export lists it in both projects",
-                  all(any(o["name"] == "lost_mcp" for o in next(u for u in doc["projects"]
-                                                              if u["name"] == n)["objects"])
-                      for n in ("mine", "claimer")), json.dumps(doc["projects"])[:400])
+                  r.status_code == 200
+                  and all(any(o["name"] == "lost_mcp" for o in next(u for u in doc["projects"]
+                                                                  if u["name"] == n)["objects"])
+                          for n in ("mine", "claimer")), json.dumps(doc["projects"])[:400])
             r = await cx.delete(f"/api/projects/{claimer}")
             check("deleting a project keeps a part another project uses, and says so",
                   r.status_code == 200 and "mcp_server:lost_mcp" not in r.json()["deleted"]
