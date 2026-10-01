@@ -182,6 +182,14 @@ def phrasing():
        "watcher reports a finding on a service")
     eq("a pasted repo URL is titled owner/name", G.source_title(SourceCfg(
         "ctx_x", "log", "github", 5, {"repo": "https://github.com/acme/shop.git"})), "acme/shop")
+    rows = [{"title": "demo-prometheus.example", "description": "Prometheus"},
+            {"title": "demo-prometheus.example", "description": "Prometheus alerts"},
+            {"title": "glassflow/tares", "description": "GitHub commits"}]
+    G.tell_apart(rows, "title", "description")
+    eq("two sources on one host are told apart by kind, a unique one is left alone",
+       [r["title"] for r in rows],
+       ["Prometheus, demo-prometheus.example", "Prometheus alerts, demo-prometheus.example",
+        "glassflow/tares"])
     ag = [{"name": n, "runs_on": "trigger", "handoffs": []} for n in ("rca", "watcher")]
     eq("an agent woken by another's findings comes after it",
        [a["name"] for a in G._chain_order(ag, {"rca": "watcher"})], ["watcher", "rca"])

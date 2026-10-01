@@ -41,7 +41,7 @@ function linkFor(kind: ResourceKind, r: ResourceRow): string | null {
 }
 
 function stateClass(state: string): string {
-  if (["receiving", "active", "on", "set", "used"].includes(state)) return "ok";
+  if (["receiving", "active", "on", "on handoff", "set", "used"].includes(state)) return "ok";
   if (["error", "no credentials"].includes(state)) return "error";
   return "paused";
 }
@@ -130,7 +130,7 @@ export default function Resources() {
                           return <td className="res-name">{to ? <Link to={to}>{title}</Link> : title}<InternalName name={r.name} /></td>;
                         })()}
                         <td>{r.what}{r.detail && r.state !== "receiving" && <span className="help"> · {r.detail}</span>}</td>
-                        <td><span className={`badge ${stateClass(r.state)}`}>{r.state}</span></td>
+                        <td style={{ whiteSpace: "nowrap" }}><span className={`badge ${stateClass(r.state)}`}>{r.state}</span></td>
                         {last && <td style={{ whiteSpace: "nowrap" }}>{lastAt(kind, r)}</td>}
                         <td>
                           {r.used_by.length === 0 ? <span className="dim">no project</span>

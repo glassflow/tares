@@ -241,6 +241,18 @@ def source_title(cfg) -> str:
     return cfg.name
 
 
+def tell_apart(rows: list[dict], title: str, kind: str) -> None:
+    """Rows that would read the same (two sources on one host: Prometheus metrics and its
+    alerts) get their kind in front of the title, "Prometheus alerts, demo-prometheus.example",
+    so a person can tell them apart. In place."""
+    seen: dict[str, int] = {}
+    for r in rows:
+        seen[r[title]] = seen.get(r[title], 0) + 1
+    for r in rows:
+        if seen[r[title]] > 1 and r.get(kind):
+            r[title] = f"{r[kind]}, {r[title]}"
+
+
 def sources_words(names: list, sources: dict) -> str:
     """The sources a sentence names: one or two short names as they are; more, or long ones,
     counted by kind ("any of 5 GitHub repos"), since the names belong on the setup page."""
@@ -638,6 +650,7 @@ def outline(store, catalog, uid: str, runtime_health: dict | None = None, now=No
                         "description": SPECS.get(cfg.connector, {}).get("label") or cfg.connector,
                         "state": st["state"], "last_event_at": st["last_event_at"],
                         "detail": st["detail"]})
+    tell_apart(watches, "title", "description")
     wakes = [{"trigger": t.name, "sentence": wake_sentence(t, sources),
               "cooldown_sentence": cooldown_sentence(t, sources), "paused": bool(t.paused)}
              for t in parts["triggers"]]

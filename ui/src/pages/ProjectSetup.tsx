@@ -7,6 +7,7 @@ import { Stepper, errText, type FlowStep } from "../components/setup/common";
 import { ConnectStep } from "../components/setup/connect";
 import { GoalStep, type Who } from "../components/setup/goal";
 import { PlanStep, baselineOf, type Baseline } from "../components/setup/plan";
+import { DeleteDraft } from "../components/setup/deleteDraft";
 import { PlanningView } from "../components/setup/planning";
 import { TryStep } from "../components/setup/tryit";
 import type { Plan, ProjectSetup as SetupData, SetupConnect } from "../types";
@@ -14,7 +15,7 @@ import type { Plan, ProjectSetup as SetupData, SetupConnect } from "../types";
 // Setting up a project, goal first (contract: setup-flow-contract.md, "Console"). It mirrors the
 // running page: the person states a goal, sees the whole plan in plain words, adjusts it,
 // confirms once, then does only what only they can do (connect data, their own agent, tools),
-// optionally runs a practice spike, and lands on the Overview.
+// optionally runs it once as practice, and lands on the Overview.
 //   /projects/new           the Goal; "Plan it" makes a draft project and goes to its page
 //   /projects/:id/setup     a draft: its planning as it happens, then the Plan, edits kept on the
 //                           draft; once set up: Connect and Try it, resumed where it stopped
@@ -186,6 +187,10 @@ function ResumeSetup({ id }: { id: string }) {
       <div className="su">
         <DraftSetup id={id} data={data} reload={reload}
                     onApplied={(r) => { setConnect(r.connect); setAppliedPlan(r.plan); setStep("connect"); reload(); }} />
+        <div className="btnrow su-draft-delete">
+          <DeleteDraft id={id} name={data.plan?.name || data.goal || "this project"}
+                       onDeleted={() => navigate("/projects")} />
+        </div>
       </div>
     );
   }

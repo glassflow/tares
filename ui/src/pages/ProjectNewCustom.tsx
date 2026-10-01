@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
-import { Combo } from "../components/bits";
+import { Combo, sourceTitle } from "../components/bits";
+import { toolTitle } from "../components/setup/planEdit";
 import type { McpServer, Project, ProjectObjectKind } from "../types";
 
 // A project assembled by hand: name it, pick the objects it is made of, Start. Nothing is created.
@@ -12,7 +13,9 @@ import type { McpServer, Project, ProjectObjectKind } from "../types";
 // deleted.
 
 type Pick = { kind: ProjectObjectKind; name: string };
-type Choice = { name: string; ownedBy: string | null | undefined; missing?: boolean };
+// `title`: what a person knows the part by when it is plainer than its name (a source's repo, a
+// tool's service), shown beside the name and searchable
+type Choice = { name: string; ownedBy: string | null | undefined; missing?: boolean; title?: string };
 
 const KINDS: { kind: ProjectObjectKind; label: string }[] = [
   { kind: "source", label: "Sources" },
@@ -48,9 +51,13 @@ export default function ProjectNewCustom() {
         // every part on the cell can be used (P-TR-216: parts are shared between projects)
         const any = (rows: { name: string; owned_by?: string | null }[]) =>
           rows.map((r) => ({ name: r.name, ownedBy: r.owned_by }));
+        const titled = (c: Choice, title: string | null) => (title && title !== c.name ? { ...c, title } : c);
         const byKind: Record<ProjectObjectKind, Choice[]> = {
-          source: any(sources), trigger: any(triggers),
-          agent: any(agents.agents), mcp_server: any(mcp.servers as McpServer[]),
+          source: any(sources).map((c, i) => titled(c, sourceTitle(sources[i].config))),
+          trigger: any(triggers),
+          agent: any(agents.agents),
+          mcp_server: any(mcp.servers as McpServer[]).map((c, i) =>
+            titled(c, toolTitle((mcp.servers as McpServer[])[i].url).title)),
         };
         // an object of this project that was deleted by hand is still on its list: show it as
         // missing so saving does not silently drop it
@@ -135,6 +142,7 @@ export default function ProjectNewCustom() {
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
                   {chosen.map((c) => (
                     <span key={c.name} className="chip">
+                      {c.title && <span style={{ marginRight: 6 }}>{c.title}</span>}
                       <span className="mono">{c.name}</span>
                       {c.missing && <span className="badge error" style={{ marginLeft: 6 }}>missing</span>}
                       <button type="button" aria-label={`remove ${c.name}`} title="remove from the project"
@@ -145,7 +153,8 @@ export default function ProjectNewCustom() {
                 </div>
               )}
               {free.length > 0 ? (
-                <Combo value={adding[k.kind] ?? ""} options={free}
+                <Combo value={adding[k.kind] ?? ""} options={free} matchHints
+                       hints={Object.fromEntries(all.filter((c) => c.title).map((c) => [c.name, c.title!]))}
                        placeholder={`add a ${k.label.toLowerCase().replace(/s$/, "")}…`}
                        onChange={(v) => {
                          if (free.includes(v)) { toggle({ kind: k.kind, name: v }); setAdding({ ...adding, [k.kind]: "" }); }

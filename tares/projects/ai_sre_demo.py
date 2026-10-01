@@ -103,10 +103,10 @@ class AiSreDemo(Template):
                     "docker compose up -d"},
         {"title": "Check it is alive",
          "command": "curl -s localhost:8080/api/stats\ncurl -s 'localhost:9090/api/v1/query?query=up'"},
-        {"title": "Give the agent a key", "check": "anthropic_key",
-         "text": "The incident-first-look agent is a real agent: it needs an Anthropic key. Set one here "
-                 "or under Settings > Anthropic (or ANTHROPIC_API_KEY before tares up). Without one its "
-                 "runs log \"no key\"."},
+        {"title": "Give the agent a model provider", "check": "anthropic_key",
+         "text": "The incident-first-look agent is a real agent: it needs a model provider. Add one "
+                 "under Settings, Model providers (or set ANTHROPIC_API_KEY before tares up). Without "
+                 "one its runs stop with \"no model provider\"."},
     ]
 
     ACTIONS = [
@@ -167,12 +167,12 @@ class AiSreDemo(Template):
             "an agent that writes the first incident note back onto the timeline",
         ]
         if _hosted():
-            return {"you": ["give the agent an Anthropic key",
+            return {"you": ["make sure a model provider is set (Settings, Model providers)",
                             "cause an incident from the project page, or wait: the shared demo "
                             "stack breaks itself every 30 minutes"],
                     "tares": tares}
         return {"you": ["start the demo stack with docker compose",
-                        "give the agent an Anthropic key",
+                        "make sure a model provider is set (Settings, Model providers)",
                         "cause an incident from the project page"],
                 "tares": tares}
 
@@ -363,7 +363,7 @@ class AiSreDemo(Template):
             raise ProjectError(f"api-server answered {r.status_code} for {scenario}")
         msg = ("fault cleared; the alert resolves within about a minute" if scenario == "clear"
                else f"{scenario} injected; in about 30 seconds the alert fires, the trigger wakes the "
-                    f"agent, and its run appears under Runs below")
+                    f"agent, and its finding appears below under What the agents found")
         return {"scenario": scenario, "message": msg}
 
     # ── summary ──────────────────────────────────────────────────────────────

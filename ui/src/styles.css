@@ -1623,7 +1623,7 @@ pre.payload {
   .gf-result-title { font-size: 22px; }
 }
 
-/* the Practice badge (a result from setup's practice spike) and the "Finish setting up" banner */
+/* the Practice badge (a result from setup's practice run) and the "Finish setting up" banner */
 .gf-badge.practice { background: var(--slate-soft); color: var(--slate); }
 .gf-health.gf-finish { background: var(--warn-soft); border-color: var(--warn); }
 .gf-health.gf-finish .gf-health-dot { background: var(--warn); }
@@ -1817,3 +1817,5 @@ pre.payload {
 /* a run's outcome: its verdict chip, then the headline on one line */
 .run-outcome { display: inline-flex; align-items: center; gap: 6px; max-width: 360px; }
 .run-headline { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* a draft's own delete, under its setup and away from the plan's buttons */
+.su-draft-delete { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--line); }

@@ -75,8 +75,8 @@ class ChallengerWorkflow(Template):
 
     PARAMS = {
         "slack_channel": {"type": "string", "default": "", "label": "Slack channel",
-                          "help": "post each session summary to this channel id (needs the Slack "
-                                  "surface set up); empty = console only"},
+                          "help": "where each session summary is posted; no channel keeps it "
+                                  "in the console only"},
         "model": {"type": "string", "default": "", "label": "Model",
                   "help": "model for the summarizer (empty = the instance default)"},
     }
@@ -89,9 +89,9 @@ class ChallengerWorkflow(Template):
         {"title": "Install the challenger",
          "text": "Codex runs on your laptop and is billed to your OpenAI account; Tares never calls it.",
          "command": "npm install -g @openai/codex\ncodex login"},
-        {"title": "Give the summarizer a key", "check": "anthropic_key",
-         "text": "The summarizer is a real agent: it needs an Anthropic key. Set one here or under "
-                 "Settings > Anthropic."},
+        {"title": "Give the summarizer a model provider", "check": "anthropic_key",
+         "text": "The summarizer is a real agent: it needs a model provider. Add one under "
+                 "Settings, Model providers."},
         {"title": "Start a challenger session",
          "text": "In any Claude Code session say \"make this a challenger session\" or type "
                  "/tares:challenger. Claude marks the session; the plan and every commit get "
@@ -173,7 +173,7 @@ class ChallengerWorkflow(Template):
             raise ProjectError("the agent runner is not available")
         run_id = agents.run_now(AGENT, TRIGGER, session, f"summarize session {session} on request")
         return {"session": session, "run_id": run_id,
-                "message": f"summarizer started on session {session}; its finding appears under Runs"}
+                "message": f"summarizer started on session {session}; its summary appears under What the agents found"}
 
     # ── summary (the project page) ──────────────────────────────────────────
     def summary(self, instance: dict, store) -> dict:

@@ -9,7 +9,7 @@ import type { SetupPlanning } from "../../types";
 // page says is what is going on. The draft is already a project: the person can leave and
 // come back from the Projects list.
 
-function useSeconds(since: string | undefined): number {
+export function useSeconds(since: string | undefined): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!since) return;

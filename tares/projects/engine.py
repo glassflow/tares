@@ -501,8 +501,15 @@ class Engine:
                      if o["kind"] == target.kind and o["key"] == target.key), None)
         if prev and prev["name"] != target.name:
             self._retire(uid, [PlannedObject(target.kind, target.key, {"name": prev["name"]})])
-        self._check_ownership(uid, [target], self._existing_names(uid))
-        self._apply(uid, [target])
+        objs = [target]
+        if target.kind == "trigger":
+            # deleting the trigger left the agents it woke without one: a trigger re-created
+            # from the plan gives them back to it
+            lost = {a["name"] for a in self.store.list_catalog_agents() if not a.get("trigger")}
+            objs += [o for o in plan if o.kind == "agent" and o.name in lost
+                     and o.spec.get("trigger") == target.name]
+        self._check_ownership(uid, objs, self._existing_names(uid))
+        self._apply(uid, objs)
         self._do_reload()
         self.store.log_project(uid, "repaired", f"{target.kind}:{target.name}")
         return self.get(uid)

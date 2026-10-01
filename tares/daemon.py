@@ -3710,7 +3710,7 @@ def make_app() -> FastAPI:
 
     @app.post("/api/projects/{uid}/setup/practice")
     async def setup_practice(uid: str):
-        """A practice spike: the first agent that looks runs once on the example event's entity
+        """A practice run ("Run it once now"): the first agent that looks runs once on the example event's entity
         ({run_id}), or, for the person's own agent, a practice firing goes to the project's
         subscriptions ({dispatch_id}). Practice results are shown, never counted."""
         setup = _setup_or_404(uid)

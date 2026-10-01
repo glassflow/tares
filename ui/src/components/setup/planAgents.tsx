@@ -5,6 +5,7 @@ import type { SlackChannels } from "../../api";
 import { Picker } from "../bits";
 import type { PlanAgent, PlanOwnAgent } from "../../types";
 import { Switch } from "./common";
+import { SlackPick } from "../SlackPick";
 import { Choice, EditorFrame, ItemActions, Problems } from "./planBits";
 import { kebab, newKey, renameAgent, toolTitle, uniqueName } from "./planEdit";
 import type { CardCtx } from "./plan";
@@ -119,37 +120,6 @@ export function AgentsCard({ ctx }: { ctx: CardCtx }) {
       ))}
     </li>
   );
-}
-
-/** The Slack channel an agent posts to: the channels the cell's bot is in, or why there are none
- *  (Slack not connected: where to connect it; the list unavailable: type the channel's ID). */
-function SlackPick({ slack, value, onChange, disabled }: {
-  slack: SlackChannels | undefined; value: string; onChange: (id: string) => void; disabled?: boolean;
-}) {
-  if (!slack) return <p className="help">Reading your Slack channels…</p>;
-  if (slack.reason === "no_token") {
-    return (
-      <p className="help">
-        Slack is not connected to Tares yet. <Link to="/settings">Connect it under Settings, Slack</Link>, then pick the channel here.
-      </p>
-    );
-  }
-  if (!slack.channels.length) {
-    return (
-      <label className="field">
-        <span className="help">
-          {slack.reason === "missing_scope" ? "Tares cannot list your channels." : "No channel to pick from: invite the Tares bot to a channel, or type its ID."}
-        </span>
-        <input type="text" value={value} placeholder="C0123456789" disabled={disabled} aria-label="Slack channel ID"
-               onChange={(e) => onChange(e.target.value.trim())} />
-      </label>
-    );
-  }
-  const options = ["", ...slack.channels.map((c) => c.id)];
-  if (value && !options.includes(value)) options.push(value);
-  const labels: Record<string, string> = { "": "Pick a channel" };
-  for (const c of slack.channels) labels[c.id] = c.is_private ? `${c.name} (private)` : `#${c.name}`;
-  return <Picker value={value} options={options} labels={labels} ariaLabel="Slack channel" onChange={onChange} disabled={disabled} />;
 }
 
 function OwnAgentEditor({ own, onSave, onCancel }: {

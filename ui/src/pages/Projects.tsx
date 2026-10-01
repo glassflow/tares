@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 
 import { api } from "../api";
 import { ErrorState, TimeAgo, projectGoal, usePolling } from "../components/bits";
+import { DeleteDraft } from "../components/setup/deleteDraft";
 import type { Project } from "../types";
 
 // Projects are the unit: a named set of sources, triggers, agents and MCP servers with one page.
@@ -81,6 +82,7 @@ export default function Projects() {
                   <td>
                     <div className="btnrow" style={{ justifyContent: "flex-end" }}>
                       <Link className="btn" to={to}>{u.status === "draft" ? "Finish setting up" : "Open"}</Link>
+                      {u.status === "draft" && <DeleteDraft id={u.id} name={u.name} onDeleted={reloadInst} />}
                     </div>
                   </td>
                 </tr>
