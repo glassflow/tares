@@ -5,6 +5,32 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.38.0-rc.6] - 2026-10-01
+
+Sixth release candidate: how an agent's run ends is a setting, and deleting a part is final.
+
+### Added
+- How it ends, on the agent form: "Ends every run with a conclusion" gives the agent the
+  conclude tool whatever its prompt says, and Tares adds the instructions for it. A run that
+  stops without concluding is asked once more, with conclude the only choice. An agent whose
+  prompt mentions conclude keeps working as before.
+- Verdicts it can give: each a word of your own with when to give it. The conclude tool accepts
+  only these, and a finding must carry one; any other word goes back to the agent to fix within
+  the run. The triage and root-cause presets come with theirs.
+- A handoff's verdict is a dropdown of the agent's verdicts that still takes free text, and the
+  form says when a handoff names a verdict the agent never gives.
+- The runs table has an outcome column for agents that conclude: the verdict, no verdict, or no
+  finding, with the headline beside it; an open run shows the same above its finding.
+- `concludes` and `verdicts` on agents in the API and in catalog export and import.
+
+### Changed
+- An agent can have no trigger of its own: only a handoff starts it. The agent form offers "No
+  trigger", and the trigger can be changed after the agent is made.
+- Deleting a trigger, agent, MCP server or source drops it from every project's list (no
+  "deleted by hand" banner). The agents a deleted trigger woke stay, without a trigger; a deleted
+  MCP server leaves the agents that listed it. Cells where a part was deleted before are mended
+  when Tares starts.
+
 ## [1.38.0-rc.5] - 2026-10-01
 
 Fifth release candidate: plain names and copy, from a UI review of rc.4.
