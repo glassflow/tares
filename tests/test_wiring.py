@@ -278,6 +278,9 @@ async def main():
         ck("a handoff still starts it", len(fixed) == 1 and fixed[0]["woken_by"] == "handoff",
            [(r["agent"], r["key"], r.get("woken_by")) for r in rs[:5]])
         SCRIPT["looker"] = "done"
+        rows = (await cx.get("/api/resources")).json()["agents"]
+        eq("All resources: an agent only a handoff starts is on handoff, not off",
+           next(x["state"] for x in rows if x["name"] == "fixer"), "on handoff")
         r = await cx.put("/api/agents/builtin/fixer", json={"project": b, "trigger": "watch_b",
                                                             "prompt": "fix it"})
         ck("given a trigger, it is wired to it", r.status_code == 200

@@ -78,6 +78,8 @@ def list_resources(store, catalog, runtime_health: dict | None = None, now=None)
             "state": st["state"], "detail": st["detail"], "last_event_at": st["last_event_at"],
             "used_by": _with(members, "source", name, None, projects)})
 
+    G.tell_apart(sources, "title", "kind_label")
+
     triggers = []
     owners = {t["name"]: t.get("owned_by") for t in store.list_catalog_triggers()}
     for t in sorted(catalog.triggers, key=lambda t: t.name):
@@ -88,6 +90,8 @@ def list_resources(store, catalog, runtime_health: dict | None = None, now=None)
             "used_by": _with(members, "trigger", t.name, owners.get(t.name), projects)})
 
     agents = []
+    # an agent no wake-up wakes still runs when another agent hands off to it
+    handed = {h["agent"] for h in store.list_handoffs()}
     for a in sorted(store.list_catalog_agents(), key=lambda a: a["name"]):
         runs = store.list_agent_runs(a["name"], limit=1)
         last = runs[0] if runs else None
@@ -96,7 +100,7 @@ def list_resources(store, catalog, runtime_health: dict | None = None, now=None)
         agents.append({
             "name": a["name"],
             "what": f"Tares agent on {model}" + (f", woken by {a['trigger']}" if a.get("trigger") else ""),
-            "state": "on" if on else "off",
+            "state": "on" if on else "on handoff" if a["name"] in handed else "off",
             "last_run_at": _iso(last.get("started_at")) if last else None,
             "last_run_status": last.get("status") if last else None,
             "used_by": _with(members, "agent", a["name"], a.get("owned_by"), projects)})
