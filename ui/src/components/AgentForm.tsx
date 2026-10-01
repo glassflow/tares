@@ -5,8 +5,8 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import type { SlackChannels } from "../api";
 import type { ModelProvider } from "../types";
-import { Picker } from "./bits";
-import type { AgentPreset, BuiltinAgent, Handoff } from "../types";
+import { Combo, Picker } from "./bits";
+import type { AgentPreset, BuiltinAgent, Handoff, Verdict } from "../types";
 
 const VERDICT_RE = /^[a-z0-9][a-z0-9_-]*$/;
 const DURATION_RE = /^\d+(\.\d+)?[smhd]$/;
@@ -107,6 +107,9 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   const [advancedOpen, setAdvancedOpen] = useState(!!initial?.max_rounds || !!initial?.budget_usd);
   // When it concludes: verdict -> the project agent that takes over (TR-334)
   const [handoffs, setHandoffs] = useState<Handoff[]>(initial?.handoffs ?? []);
+  // How a run ends: always with conclude, and the verdicts it may give (its words, each with when)
+  const [concludes, setConcludes] = useState(!!initial?.concludes);
+  const [verdicts, setVerdicts] = useState<Verdict[]>(initial?.verdicts ?? []);
   const [peers, setPeers] = useState<string[]>();
   useEffect(() => {
     let live = true;
@@ -123,6 +126,13 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
     || (!!h.cooldown.trim() && !DURATION_RE.test(h.cooldown.trim()));
   const handoffKey = (h: Handoff) => `${h.verdict.trim().toLowerCase()}\u0000${h.agent}`;
   const handoffDup = handoffs.some((h, i) => handoffs.findIndex((o) => handoffKey(o) === handoffKey(h)) !== i);
+  const setVerdict = (i: number, patch: Partial<Verdict>) =>
+    setVerdicts((cur) => cur.map((v, j) => (j === i ? { ...v, ...patch } : v)));
+  const word = (v: Verdict) => v.verdict.trim().toLowerCase();
+  const verdictBad = (v: Verdict, i: number) => !VERDICT_RE.test(word(v)) || word(v) === "no_op"
+    || verdicts.findIndex((o) => word(o) === word(v)) !== i;
+  // the words its handoffs can key on; none listed: any word
+  const verdictWords = concludes ? verdicts.map(word).filter((w) => VERDICT_RE.test(w)) : [];
 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
@@ -189,6 +199,8 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
       budget_usd: budget.trim() ? Number(budget) : null,
       handoffs: handoffs.map((h) => ({ verdict: h.verdict.trim().toLowerCase(), agent: h.agent,
                                       cooldown: h.cooldown.trim() || "30m" })),
+      concludes,
+      verdicts: concludes ? verdicts.map((v) => ({ verdict: word(v), when: (v.when ?? "").trim() })) : [],
     };
     try {
       if (isNew) await api.createBuiltinAgent(body);
@@ -249,7 +261,10 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
         <div className="btnrow" style={{ marginBottom: 8 }}>
           <span className="help" style={{ alignSelf: "center" }}>start from:</span>
           {presets.map((p) => (
-            <button key={p.id} onClick={() => setPrompt(p.prompt)}>{p.label}</button>
+            <button key={p.id} onClick={() => {
+              setPrompt(p.prompt);
+              if (p.concludes !== undefined) { setConcludes(!!p.concludes); setVerdicts(p.verdicts ?? []); }
+            }}>{p.label}</button>
           ))}
         </div>
       )}
@@ -366,6 +381,55 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
       </div>
 
       <div className="field">
+        <h3 style={{ margin: "10px 0 2px", fontSize: 16 }}>How it ends</h3>
+        <label className="su-check">
+          <input type="checkbox" checked={concludes} onChange={(e) => setConcludes(e.target.checked)} />
+          <span>Ends every run with a conclusion</span>
+        </label>
+        <span className="help" style={{ display: "block", margin: "2px 0 8px" }}>
+          {concludes
+            ? "Each run ends with nothing to report, or a finding with a verdict. If the agent stops without one, Tares asks it again."
+            : prompt.includes("conclude")
+              ? "Its prompt mentions conclude, so it can already end with one; tick this to make it required and to set its verdicts."
+              : "Off: the agent's last message is its finding, with no verdict."}
+        </span>
+        {concludes && (
+          <>
+            <span className="lbl">Verdicts it can give</span>
+            {verdicts.length > 0 && (
+              <div className="kv-rows verdict-rows" style={{ margin: "4px 0 8px" }}>
+                {verdicts.map((v, i) => (
+                  <div key={i} className="verdict-row">
+                    <input type="text" className="mono" value={v.verdict} placeholder="one word, e.g. investigate"
+                           aria-label="verdict" onChange={(e) => setVerdict(i, { verdict: e.target.value })} />
+                    <input type="text" value={v.when ?? ""} placeholder="when to give it, e.g. a service looks broken"
+                           aria-label="when to give it" onChange={(e) => setVerdict(i, { when: e.target.value })} />
+                    <button type="button" aria-label="remove this verdict"
+                            onClick={() => setVerdicts((cur) => cur.filter((_, j) => j !== i))}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {verdicts.length < 10 && (
+              <button type="button" onClick={() => setVerdicts((cur) => [...cur, { verdict: "", when: "" }])}>
+                Add a verdict
+              </button>
+            )}
+            <span className="help" style={{ display: "block", marginTop: 4 }}>
+              {verdicts.length
+                ? "A finding must carry one of these; any other word goes back to the agent to fix. Nothing to report is always possible."
+                : "None listed: a finding can carry any verdict, or none."}
+            </span>
+            {verdicts.some(verdictBad) && (
+              <span className="help" style={{ display: "block", marginTop: 4 }}>
+                each verdict is one word (letters, digits, dashes), listed once, and not no_op
+              </span>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="field">
         <h3 style={{ margin: "10px 0 2px", fontSize: 16 }}>When it concludes</h3>
         <span className="help" style={{ display: "block", margin: "0 0 10px" }}>
           when a run ends with a finding of this verdict, the agent you pick takes over on the same
@@ -376,8 +440,8 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
           <div className="kv-rows" style={{ marginBottom: 8 }}>
             {handoffs.map((h, i) => (
               <div key={i} className="handoff-row">
-                <input type="text" className="mono" value={h.verdict} placeholder="verdict, e.g. investigate"
-                       aria-label="verdict" onChange={(e) => setHandoff(i, { verdict: e.target.value })} />
+                <Combo value={h.verdict} className="mono" placeholder="verdict, e.g. investigate"
+                       options={verdictWords} onChange={(v) => setHandoff(i, { verdict: v })} />
                 <Picker value={h.agent} ariaLabel="agent that takes over"
                         options={["", ...others, ...(h.agent && !others.includes(h.agent) ? [h.agent] : [])]}
                         labels={{ "": others.length ? "pick an agent…" : "no other agent in this project yet" }}
@@ -397,6 +461,12 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
                   onClick={() => setHandoffs((cur) => [...cur, { verdict: "", agent: others.length === 1 ? others[0] : "", cooldown: "30m" }])}>
             Add a handoff
           </button>
+        )}
+        {verdictWords.length > 0 && handoffs.some((h) => h.verdict.trim() && !verdictWords.includes(h.verdict.trim().toLowerCase())) && (
+          <span className="help" style={{ display: "block", marginTop: 4 }}>
+            {name.trim() || "this agent"} never gives {handoffs.filter((h) => h.verdict.trim() && !verdictWords.includes(h.verdict.trim().toLowerCase()))
+              .map((h) => h.verdict.trim().toLowerCase()).join(", ")}; add it to its verdicts above, or that handoff never runs
+          </span>
         )}
         {handoffs.some(handoffBad) && (
           <span className="help" style={{ display: "block", marginTop: 4 }}>
@@ -435,7 +505,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
 
       <div className="btnrow">
         <button className="primary" onClick={save}
-                disabled={busy || !name.trim() || !prompt.trim()
+                disabled={busy || !name.trim() || !prompt.trim() || (concludes && verdicts.some(verdictBad))
                           || (writebackOn && !webhookUrl.trim())
                           || (channelOn && !channel)
                           || handoffs.some(handoffBad) || handoffDup

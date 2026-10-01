@@ -257,6 +257,9 @@ export interface BuiltinAgent {
   max_rounds: number | null;   // model rounds per run; null = the default for its shape
   budget_usd?: number | null;  // lifetime spend cap in USD; null = no budget
   handoffs?: Handoff[];        // who takes over when a run concludes with a verdict (TR-334)
+  concludes?: boolean;         // every run ends with the conclude tool, whatever the prompt says
+  verdicts?: Verdict[];        // the only verdicts it may give; empty: any word, or none
+  offers_conclude?: boolean;   // it gets the conclude tool (set to, or its prompt names it)
   effective_max_rounds: number;   // the cap its next run will be held to
   updated_at?: string;
   last_run?: AgentRun | null;
@@ -316,6 +319,7 @@ export interface AgentRun {
   // how the run ended on purpose (TR-318): "no_op" left no finding; null on older runs
   outcome?: "finding" | "no_op" | null;
   verdict?: string | null;
+  headline?: string | null;    // the one-line conclusion, when the agent gave one
   // what the run produced (TR-220), read off its tool calls and deliveries; [] when nothing
   results?: RunResult[];
   // the project skills the run loaded (TR-332), in order; [] when none
@@ -367,7 +371,12 @@ export interface AgentPreset {
   id: string;
   label: string;
   prompt: string;
+  concludes?: boolean;          // the preset ends every run with conclude
+  verdicts?: Verdict[];         // and gives these verdicts
 }
+
+/** A verdict an agent may give when it concludes with a finding, and when to give it. */
+export interface Verdict { verdict: string; when?: string }
 
 export interface QueryLogEntry {
   id: string;   // r_ = a read, s_ = a stats call

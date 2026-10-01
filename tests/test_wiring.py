@@ -292,6 +292,37 @@ async def main():
         doc = yaml.safe_load((await cx.get("/api/catalog/export")).text)
         ck("the export keeps agents without a trigger",
            {"fixer", "helper"} <= {x["name"] for x in doc.get("agents") or []})
+        print("== how a run ends: set on the agent, kept through export and import ==")
+        vs = [{"verdict": "Page-Oncall", "when": "users are hurt now"}, {"verdict": "ignore"}]
+        r = await cx.put("/api/agents/builtin/helper", json={"project": b, "prompt": "help",
+                                                             "concludes": True, "verdicts": vs})
+        ck("saved", r.status_code == 200, r.text)
+        row = next(x for x in (await cx.get("/api/agents/builtin", params={"project": b})).json()["agents"]
+                   if x["name"] == "helper")
+        eq("read back: on, its verdicts lowercased, offered conclude",
+           (row["concludes"], row["verdicts"], row["offers_conclude"]),
+           (True, [{"verdict": "page-oncall", "when": "users are hurt now"}, {"verdict": "ignore"}], True))
+        r = await cx.put("/api/agents/builtin/helper", json={"project": b, "prompt": "help"})
+        h = store.get_catalog_agent("helper")
+        ck("an update that does not mention them keeps them",
+           r.status_code == 200 and h["concludes"] and len(h["verdicts"]) == 2, r.text)
+        for bad, why in (([{"verdict": "two words"}], "not one word"),
+                         ([{"verdict": "no_op"}], "no_op"),
+                         ([{"verdict": "x"}, {"verdict": "X"}], "twice")):
+            r = await cx.put("/api/agents/builtin/helper", json={"project": b, "prompt": "help",
+                                                                 "verdicts": bad})
+            eq(f"a verdict list is refused: {why}", r.status_code, 400)
+        y = (await cx.get("/api/catalog/export")).text
+        ha = next(x for x in yaml.safe_load(y)["agents"] if x["name"] == "helper")
+        ck("the export carries them", ha.get("concludes") is True and len(ha.get("verdicts") or []) == 2,
+           str(ha))
+        await cx.put("/api/agents/builtin/helper", json={"project": b, "prompt": "help",
+                                                         "concludes": False, "verdicts": []})
+        r = await cx.post("/api/catalog/import", json={"yaml": y, "mode": "merge"})
+        h = store.get_catalog_agent("helper")
+        ck("and an import restores them", r.status_code == 200 and h["concludes"]
+           and [v["verdict"] for v in h["verdicts"]] == ["page-oncall", "ignore"], r.text[:200])
+
         # a cell where a trigger was deleted before deletes cleaned up: mended at the next open
         store.con.execute("UPDATE catalog_agents SET trigger = 'old-esc' WHERE name = 'helper'")
         store.con.execute("INSERT INTO usecase_objects (usecase_id, kind, key, name, created_at) "

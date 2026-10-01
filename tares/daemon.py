@@ -35,14 +35,14 @@ from .config import (SLACK_URL_PREFIX, CatalogError, agent_url, catalog_from_db,
                      validate_mcp_server_dict,
                      import_yaml_to_db, slack_channel_from_url, slack_url,
                      validate_agent_dict, validate_slack_channel, validate_source_dict,
-                     check_handoff_targets, normalize_handoffs,
+                     check_handoff_targets, normalize_handoffs, normalize_verdicts,
                      validate_trigger_dict, normalize_trigger_description, VIEWS_REMOVED,
                      _source_from_dict)
 from .connectors import (SPECS, normalize_config, redact_config, restore_secrets,
                          source_type_for)
 from .dispatch import Dispatcher
 from .envelope import now_utc
-from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL,
+from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_conclude,
                              MAX_ROUNDS as AGENT_MAX_ROUNDS,
                              MAX_ROUNDS_LIMIT as AGENT_MAX_ROUNDS_LIMIT,
                              MAX_ROUNDS_WITH_MCP as AGENT_MAX_ROUNDS_WITH_MCP,
@@ -353,6 +353,10 @@ class AgentIn(BaseModel):
     # [{verdict, agent, cooldown}]: who takes over when a run concludes with that verdict
     # (TR-334); None = none on create, unchanged on update
     handoffs: list[dict] | None = None
+    # how a run ends: always with the conclude tool, and the verdicts it may give
+    # ([{verdict, when}]); None = off / none on create, unchanged on update
+    concludes: bool | None = None
+    verdicts: list[dict] | None = None
 
 
 class ImportReq(BaseModel):
@@ -1994,6 +1998,7 @@ def make_app() -> FastAPI:
         raw = {**body.model_dump(exclude={"project"}), **({"name": name} if name else {})}
         try:
             validate_agent_dict(raw, set(triggers), triggers, set(servers))
+            raw["verdicts"] = normalize_verdicts(raw["name"], body.verdicts)
         except CatalogError as e:
             _err(e)
         if body.handoffs is not None:
@@ -2044,6 +2049,11 @@ def make_app() -> FastAPI:
                          "budget_usd": a.get("budget_usd"),
                          "daily_cap": a.get("daily_cap"),
                          "handoffs": a.get("handoffs") or [],
+                         "concludes": bool(a.get("concludes")),
+                         "verdicts": a.get("verdicts") or [],
+                         # it gets the conclude tool (set to, or its prompt names it): its runs
+                         # end with an outcome and a verdict worth a column of their own
+                         "offers_conclude": offers_conclude(a),
                          "effective_max_rounds": effective_max_rounds(a),
                          "enabled": a["enabled"], "updated_at": a.get("updated_at"),
                          "project": in_project or a.get("owned_by"),
@@ -2076,7 +2086,9 @@ def make_app() -> FastAPI:
                                    body.max_rounds, body.budget_usd,
                                    webhook_key_label=body.webhook_key_label,
                                    provider=body.provider.strip(),
-                                   handoffs=raw.get("handoffs") or [])
+                                   handoffs=raw.get("handoffs") or [],
+                                   concludes=bool(body.concludes),
+                                   verdicts=raw.get("verdicts") or [])
         store.put_in_project("agent", body.name, uid, creator=True)
         runtime.reload_catalog()
         return {"ok": True, "enabled": False, "project": uid,
@@ -2114,7 +2126,10 @@ def make_app() -> FastAPI:
                                    # the form has no daily cap field; keep what a project set
                                    daily_cap=existing.get("daily_cap"),
                                    # absent (None) keeps the stored handoffs
-                                   handoffs=raw.get("handoffs") if here else None)
+                                   handoffs=raw.get("handoffs") if here else None,
+                                   concludes=body.concludes,
+                                   verdicts=(raw.get("verdicts") if body.verdicts is not None
+                                             else None))
         store.mark_customized("agent", name)
         store.put_in_project("agent", name, uid)
         if not here:

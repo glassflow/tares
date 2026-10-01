@@ -361,6 +361,10 @@ _MIGRATIONS = [
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS skills JSON",
     # TR-334: [{verdict, agent, cooldown}], the agents this one hands a finding to by verdict
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS handoffs JSON",
+    # how a run ends: always with the conclude tool (`concludes`), and the verdicts it may give,
+    # [{verdict, when}], the only ones the tool accepts when there are any
+    "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS concludes BOOLEAN",
+    "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS verdicts JSON",
     # Which key paid for a ledger row ("env:ANTHROPIC_API_KEY" | "console") — the boundary a
     # hosted trial's enforcement counts against. Rows from before attribution stay NULL (unknown).
     "ALTER TABLE model_usage ADD COLUMN IF NOT EXISTS key_source TEXT",
@@ -1463,17 +1467,20 @@ class Store:
                              webhook_key_label: str | None = None,
                              provider: str | None = None,
                              daily_cap: int | None = None,
-                             handoffs: list[dict] | None = None) -> None:
-        # handoffs: None keeps what is stored (a caller that does not know about them, such as a
-        # template re-plan, must not wipe them); [] clears
+                             handoffs: list[dict] | None = None,
+                             concludes: bool | None = None,
+                             verdicts: list[dict] | None = None) -> None:
+        # handoffs, concludes, verdicts: None keeps what is stored (a caller that does not know
+        # about them, such as a template re-plan, must not wipe them); [] / False clears
         ts = now_utc()
         with self._lock:
             self.con.execute(
                 "INSERT INTO catalog_agents "
                 "(name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, max_rounds, budget_usd, "
-                "webhook_key_label, provider, daily_cap, handoffs, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "webhook_key_label, provider, daily_cap, handoffs, concludes, verdicts, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (name) DO UPDATE SET trigger = excluded.trigger, "
                 "prompt = excluded.prompt, slack_webhook = excluded.slack_webhook, "
                 "model = excluded.model, slack_channel = excluded.slack_channel, "
@@ -1483,12 +1490,16 @@ class Store:
                 "webhook_key_label = excluded.webhook_key_label, "
                 "provider = excluded.provider, daily_cap = excluded.daily_cap, "
                 "handoffs = COALESCE(excluded.handoffs, catalog_agents.handoffs), "
+                "concludes = COALESCE(excluded.concludes, catalog_agents.concludes), "
+                "verdicts = COALESCE(excluded.verdicts, catalog_agents.verdicts), "
                 "updated_at = excluded.updated_at",
                 [name, trigger, prompt, slack_webhook or "", model or "",
                  slack_channel or "", webhook_url or "", webhook_token or "",
                  json.dumps(mcp_servers or []), max_rounds, budget_usd,
                  webhook_key_label or "", provider or "", daily_cap,
-                 None if handoffs is None else json.dumps(handoffs), ts, ts],
+                 None if handoffs is None else json.dumps(handoffs),
+                 None if concludes is None else bool(concludes),
+                 None if verdicts is None else json.dumps(verdicts), ts, ts],
             )
             # the agent's trigger and handoffs are the wiring of the project that made it
             # (P-TR-216); one not placed yet is wired when it is (_wire_owner)
@@ -1552,7 +1563,7 @@ class Store:
             rows = self.con.execute(
                 "SELECT name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, updated_at, max_rounds, budget_usd, owned_by, customized, "
-                "webhook_key_label, provider, daily_cap, handoffs "
+                "webhook_key_label, provider, daily_cap, handoffs, concludes, verdicts "
                 "FROM catalog_agents ORDER BY name"
             ).fetchall()
             wiring = self.con.execute(
@@ -1581,6 +1592,7 @@ class Store:
                 "webhook_key_label": r[14] or "", "provider": r[15] or "", "daily_cap": r[16],
                 "handoffs": hands.get((where, r[0]), [] if w or (where, r[0]) in hands
                                       else (json.loads(r[17]) if r[17] else [])),
+                "concludes": bool(r[18]), "verdicts": json.loads(r[19]) if r[19] else [],
                 "enabled": bool(on)})
         return out
 

@@ -138,6 +138,8 @@ class AgentCfg:
     max_rounds: int | None = None   # model rounds per run; None = default for the agent's shape
     budget_usd: float | None = None  # lifetime spend cap in USD; None = no budget
     daily_cap: int | None = None     # runs per rolling 24h; None = the instance-wide cap
+    concludes: bool = False   # every run ends with the conclude tool, whatever the prompt says
+    verdicts: list = dc_field(default_factory=list)   # [{verdict, when}]: the only ones it may give
     enabled: bool = False
 
 
@@ -273,6 +275,8 @@ def _agent_from_dict(a: dict, enabled: bool = False) -> AgentCfg:
         max_rounds=(int(a["max_rounds"]) if a.get("max_rounds") not in (None, "") else None),
         budget_usd=(float(a["budget_usd"]) if a.get("budget_usd") not in (None, "") else None),
         daily_cap=(int(a["daily_cap"]) if a.get("daily_cap") not in (None, "") else None),
+        concludes=bool(a.get("concludes")),
+        verdicts=normalize_verdicts(a["name"], a.get("verdicts")),
         enabled=bool(a.get("enabled", enabled)),
     )
 
@@ -461,7 +465,10 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
                                               if a.get("daily_cap") not in (None, "") else None),
                                    # absent keeps what is stored (see upsert_catalog_agent)
                                    handoffs=(normalize_handoffs(a["name"], a["handoffs"])
-                                             if "handoffs" in a else None))
+                                             if "handoffs" in a else None),
+                                   concludes=(bool(a["concludes"]) if "concludes" in a else None),
+                                   verdicts=(normalize_verdicts(a["name"], a["verdicts"])
+                                             if "verdicts" in a else None))
         # on/off belongs to the wiring of the project the agent is in; applied once it is placed
         # (below, or by the engine that applies a template)
         _turn_on_where_placed(store, a)
@@ -732,6 +739,8 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
          **({"budget_usd": a["budget_usd"]} if a.get("budget_usd") else {}),
          **({"daily_cap": a["daily_cap"]} if a.get("daily_cap") else {}),
          **({"handoffs": a["handoffs"]} if a.get("handoffs") else {}),
+         **({"concludes": True} if a.get("concludes") else {}),
+         **({"verdicts": a["verdicts"]} if a.get("verdicts") else {}),
          **({"slack_webhook": a["slack_webhook"]}
             if include_secrets and a.get("slack_webhook") else {}),
          **({"webhook_token": a["webhook_token"]}
@@ -1076,6 +1085,42 @@ MAX_AGENT_ROUNDS = 24   # upper bound for a per-agent max_rounds (see builtin_ag
 MAX_HANDOFFS = 10
 HANDOFF_COOLDOWN = "30m"
 _VERDICT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+MAX_VERDICTS = 10
+VERDICT_WHEN_MAX = 300
+
+
+def normalize_verdicts(name: str, verdicts) -> list[dict]:
+    """The verdicts an agent may give, as [{verdict, when}]: each one word (lowercased), unique,
+    not no_op (the built-in "nothing to report"), with an optional sentence saying when to give
+    it. At most ten. The conclude tool then accepts only these."""
+    if verdicts in (None, ""):
+        return []
+    if not isinstance(verdicts, list):
+        raise CatalogError(f"agent {name!r}: verdicts must be a list of {{verdict, when}}")
+    if len(verdicts) > MAX_VERDICTS:
+        raise CatalogError(f"agent {name!r}: at most {MAX_VERDICTS} verdicts")
+    out, seen = [], set()
+    for v in verdicts:
+        if isinstance(v, str):
+            v = {"verdict": v}
+        if not isinstance(v, dict):
+            raise CatalogError(f"agent {name!r}: each verdict is a mapping of verdict and when")
+        word = str(v.get("verdict") or "").strip().lower()
+        if not word or not _VERDICT_RE.match(word):
+            raise CatalogError(f"agent {name!r}: a verdict is one word, such as investigate "
+                               f"(got {v.get('verdict')!r})")
+        if word == "no_op":
+            raise CatalogError(f"agent {name!r}: no_op is always there (nothing to report); "
+                               "it is not a verdict to list")
+        if word in seen:
+            raise CatalogError(f"agent {name!r}: the verdict {word!r} is listed twice")
+        seen.add(word)
+        when = " ".join(str(v.get("when") or "").split())
+        if len(when) > VERDICT_WHEN_MAX:
+            raise CatalogError(f"agent {name!r}: what {word!r} means is longer than "
+                               f"{VERDICT_WHEN_MAX} characters")
+        out.append({"verdict": word, **({"when": when} if when else {})})
+    return out
 
 
 def normalize_handoffs(name: str, raw) -> list[dict]:
@@ -1207,6 +1252,7 @@ def validate_agent_dict(a: dict, trigger_names: set, triggers: dict | None = Non
             raise CatalogError(f"agent {a['name']!r}: daily_cap must be above zero "
                                "(or empty for the instance-wide cap)")
     normalize_handoffs(str(a["name"]), a.get("handoffs"))
+    normalize_verdicts(str(a["name"]), a.get("verdicts"))
 
     # Loop guard: a Tares agent writes a finding into the `findings` source. If its trigger
     # watches that source, its own finding re-fires the trigger, which runs the agent again,

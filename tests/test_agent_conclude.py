@@ -38,9 +38,15 @@ class Provider:
     def __init__(self, replies):
         self.replies = list(replies)
         self.offered = []
+        self.defs = []       # the tool definitions of each call
+        self.systems = []    # the system prompt of each call
+        self.choices = []    # the tool_choice of each call (None: the model's choice)
 
     async def complete(self, *, tools, **kw):
         self.offered.append([t["name"] for t in tools])
+        self.defs.append(tools)
+        self.systems.append(kw.get("system") or "")
+        self.choices.append(kw.get("tool_choice"))
         return self.replies.pop(0)
 
 
@@ -170,6 +176,45 @@ async def main():
     status, err, fin, rec, _p, _o = await run(PLAIN, [reply("svc is fine")])
     check("finding recorded on the woken key",
           rec == [{"key": "ingress-nginx", "finding": "svc is fine", "verdict": None, "label": None}], str(rec))
+
+    print("== set to conclude, with its own verdicts ==")
+    SET = {"name": "triager", "prompt": "Look at the window.", "concludes": True,
+           "verdicts": [{"verdict": "page-oncall", "when": "users are hurt now"},
+                        {"verdict": "ignore"}]}
+    status, err, fin, rec, prov, _o = await run(SET, [
+        reply(calls=[conclude(outcome="finding", summary="checkout down", verdict="page-oncall")])])
+    check("offered conclude though its prompt never names it", "conclude" in prov.offered[0],
+          str(prov.offered))
+    vdef = next(t for t in prov.defs[0] if t["name"] == "conclude")["input_schema"]["properties"]["verdict"]
+    check("the verdict is a choice of exactly its words, each with what it means",
+          vdef.get("enum") == ["page-oncall", "ignore"] and "users are hurt now" in vdef["description"],
+          str(vdef))
+    check("the system prompt tells it to end with conclude and lists the verdicts",
+          "End every run with the conclude tool" in prov.systems[0]
+          and "- page-oncall: users are hurt now" in prov.systems[0], prov.systems[0][-400:])
+    check("its verdict is recorded", fin.get("verdict") == "page-oncall" and rec[0]["verdict"] == "page-oncall",
+          str(fin))
+    status, err, fin, rec, prov, _o = await run(SET, [
+        reply(calls=[conclude(outcome="finding", summary="checkout down", verdict="escalate")]),
+        reply(calls=[conclude(outcome="finding", summary="checkout down")]),
+        reply(calls=[conclude(outcome="finding", summary="checkout down", verdict="ignore")])])
+    check("a word not on its list, then no verdict, each go back to the model",
+          fin.get("verdict") == "ignore" and len(prov.offered) == 3, str(fin))
+    check("parse: a listed verdict is required on a finding, not on no_op",
+          ba.parse_conclude({"outcome": "finding", "summary": "x"}, ["a"])[1] is not None
+          and ba.parse_conclude({"outcome": "no_op", "summary": "x"}, ["a"])[1] is None)
+    status, err, fin, rec, prov, _o = await run(SET, [
+        reply("all calm, I think"),
+        reply(calls=[conclude(outcome="no_op", summary="all calm")])])
+    check("it stopped without concluding: asked again with conclude the only choice",
+          prov.choices[-1] == "conclude" and fin.get("outcome") == "no_op" and rec == [],
+          f"{prov.choices} {fin}")
+    status, err, fin, rec, prov, _o = await run({**SET, "verdicts": []}, [
+        reply(calls=[conclude(outcome="finding", summary="odd spike", verdict="whatever")])])
+    check("set to conclude without verdicts: any word goes", fin.get("verdict") == "whatever", str(fin))
+    status, err, fin, rec, prov, _o = await run(WATCHER, [reply("calm")])
+    check("a prompt-only agent that stops without concluding is not pushed (as before)",
+          len(prov.offered) == 1 and rec and rec[0]["finding"] == "calm", str(rec))
 
     print("== a verdict label is selectable in a view ==")
     path = os.path.join(tempfile.mkdtemp(), "t.duckdb")

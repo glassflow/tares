@@ -160,6 +160,15 @@ export function AgentView({ ctx, name }: { ctx: Ctx; name: string }) {
                   <span className="help"> · once per entity per {h.cooldown}</span>
                 </div>))
             : <span className="dim">no handoffs</span>],
+          ["how it ends", agent.concludes
+            ? <>{(agent.verdicts ?? []).length
+                  ? <>a conclusion, verdict one of {(agent.verdicts ?? []).map((v) => (
+                      <span key={v.verdict} className="chip mono" title={v.when || undefined} style={{ marginRight: 4 }}>{v.verdict}</span>))}</>
+                  : "a conclusion, any verdict or none"}
+                <span className="help"> · or nothing to report</span></>
+            : agent.offers_conclude
+              ? <span className="help">a conclusion when it calls one (its prompt mentions conclude); else its last message</span>
+              : <span className="help">its last message is the finding</span>],
           ["model", <><span className="mono">{agent.model || d.default_models?.[agent.effective_provider ?? ""] || d.default_model}</span>
             {!agent.model && <span className="help"> · provider default</span>}
             <span className="help"> · up to {agent.effective_max_rounds} rounds</span>
