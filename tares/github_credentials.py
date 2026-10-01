@@ -56,7 +56,8 @@ def resolve_github_token(store, ref: str | None) -> str | None:
     return cred.get("token") or None
 
 
-async def get_token(store, ref: str | None, repo: str | None = None) -> str:
+async def get_token(store, ref: str | None, repo: str | None = None,
+                    min_life: int | None = None) -> str:
     """A token for the credential named by `ref`, whatever its kind: the stored personal token, or
     an installation token (the installation covering `repo`, or the only one). Raises ValueError
     with a message that names the cause, for the caller to surface (a source's last error, an MCP
@@ -66,8 +67,8 @@ async def get_token(store, ref: str | None, repo: str | None = None) -> str:
     if not cred:
         raise ValueError(f"GitHub credential {name!r} not found (Settings > GitHub)")
     if is_app(cred):
-        from .github_app import token_for
-        return await token_for(cred, repo)
+        from .github_app import REFRESH_MARGIN, token_for
+        return await token_for(cred, repo, min_life or REFRESH_MARGIN)
     if not cred.get("token"):
         raise ValueError(f"GitHub credential {name!r} has no token (Settings > GitHub)")
     return cred["token"]

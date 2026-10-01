@@ -137,8 +137,9 @@ def _bypass_cooldown(request: Request) -> bool:
 SLACK_EVENTS_PATH = "/api/slack/events"
 
 # Where GitHub sends the browser back during "Create GitHub App" and after an install. A redirect
-# carries no Tares token, so these two GETs are public to the auth middleware and authenticated by
-# the signed `state` they must carry (github_app.verify_state) instead.
+# carries no Tares token, so these two GETs are public to the auth middleware. The creation callback
+# needs our signed `state`; the install callback needs the state, or an installation on the App
+# owner's account (see github_app_installed).
 GITHUB_APP_CALLBACKS = ("/api/integrations/github/apps/callback",
                         "/api/integrations/github/apps/installed")
 
@@ -1829,6 +1830,10 @@ def make_app() -> FastAPI:
         source (Default project until a project uses it)."""
         existing = _gh_app_source(name)
         if existing:
+            if ingest_key and runtime.catalog.sources[existing].ingest_key != ingest_key:
+                # an App recreated under the same name: its hook URL carries the new key
+                store.set_source_ingest_key(existing, ingest_key)
+                runtime.reload_catalog()
             return existing
         src = "github" if "github" not in runtime.catalog.sources else \
             "github_" + re.sub(r"[^A-Za-z0-9_]", "_", name)
@@ -1967,7 +1972,10 @@ def make_app() -> FastAPI:
         a token per installation and count its repos. The proof the whole chain works."""
         try:
             if cred["kind"] == "app":
-                insts = await _gh_app.list_installations(cred)
+                # keep what is known or on the owner's account; a stranger's install of a public
+                # App is not ours (see github_app_installed)
+                insts = [i for i in await _gh_app.list_installations(cred)
+                         if _gh_app.may_add_installation(cred, i["id"], i["account"])]
                 cfg = {**(cred.get("config") or {}), "installations": insts}
                 store.update_github_credential_config(cred["name"], cfg)
                 cred = {**cred, "config": cfg}
@@ -2085,16 +2093,23 @@ def make_app() -> FastAPI:
                 named = data.get("cred") if data.get("op") == "install" else None
             except ValueError:
                 named = None
-        # The installation must belong to one of our Apps: GET /app/installations/{id} signed as
-        # each App succeeds only for its own. That proof is the gate, state or not (an install
-        # started on GitHub's own App page comes back without our state).
-        apps = [c for c in store.list_github_credentials() if c.get("kind") == "app"]
-        apps.sort(key=lambda c: c["name"] != named)
+        # Two gates. The installation must belong to one of our Apps (GET /app/installations/{id}
+        # signed as each App succeeds only for its own). And someone allowed here must have asked
+        # for it: our signed state (the install link is admin-only), or, for an install started on
+        # GitHub's own page, the App owner's account or one already known. Without the second, a
+        # stranger installing a public App would join this cell.
+        apps = [c for c in store.list_github_credentials() if c.get("kind") == "app"
+                and (named is None or c["name"] == named)]
         for cred in apps:
             try:
                 inst = await _gh_app.get_installation(cred, installation_id)
             except ValueError:
                 continue
+            if named is None and not _gh_app.may_add_installation(cred, installation_id,
+                                                                  inst.get("account", "")):
+                return _gh_settings({"error": f"installation on {inst.get('account')!r} was not "
+                                              f"added: start it from Settings > GitHub "
+                                              f"(Install / Add an organization)"})
             store.update_github_credential_config(cred["name"],
                                                   _gh_app.with_installation(cred, inst))
             if inst.get("account") and not cred.get("account"):

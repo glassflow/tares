@@ -157,17 +157,19 @@ def _parse_exp(s) -> float:
         return time.time() + 3000      # GitHub says one hour; assume a little less
 
 
-async def installation_token(cred: dict, installation_id: int) -> str:
-    """An installation token for `installation_id`, cached until five minutes before it expires.
-    Raises ValueError naming the cause (bad key, not installed, broker down)."""
+async def installation_token(cred: dict, installation_id: int,
+                             min_life: int = REFRESH_MARGIN) -> str:
+    """An installation token for `installation_id` with at least `min_life` seconds left (cached
+    until then; an MCP connection that keeps one token for a whole run asks for more). Raises
+    ValueError naming the cause (bad key, not installed, broker down)."""
     key = (cred["name"], int(installation_id))
     hit = _tokens.get(key)
-    if hit and hit[1] - time.time() > REFRESH_MARGIN:
+    if hit and hit[1] - time.time() > min_life:
         return hit[0]
     lock = _locks.setdefault(key, asyncio.Lock())
     async with lock:
         hit = _tokens.get(key)      # a refresh that finished while this one waited
-        if hit and hit[1] - time.time() > REFRESH_MARGIN:
+        if hit and hit[1] - time.time() > min_life:
             return hit[0]
         tok, exp = await _mint(cred, int(installation_id))
         if hit:
@@ -213,7 +215,7 @@ def forget_repos(name: str, installation_id: int | None = None) -> None:
         _repos.pop(key, None)
 
 
-async def token_for(cred: dict, repo: str | None = None) -> str:
+async def token_for(cred: dict, repo: str | None = None, min_life: int = REFRESH_MARGIN) -> str:
     """The token to use for `repo` (owner/name): the installation that covers it, or the only
     installation when there is one. Raises ValueError when there is none or the choice is unclear."""
     insts = installations(cred)
@@ -221,7 +223,7 @@ async def token_for(cred: dict, repo: str | None = None) -> str:
         raise ValueError(f"GitHub App credential {cred['name']!r} is not installed anywhere yet; "
                          "install it on GitHub (Settings > GitHub)")
     if len(insts) == 1:
-        return await installation_token(cred, insts[0]["id"])
+        return await installation_token(cred, insts[0]["id"], min_life)
     if repo:
         owner = repo.split("/", 1)[0].lower()
         by_owner = [i for i in insts if str(i.get("account") or "").lower() == owner]
@@ -231,7 +233,7 @@ async def token_for(cred: dict, repo: str | None = None) -> str:
             except ValueError:
                 continue
             if repo.lower() in names:
-                return await installation_token(cred, inst["id"])
+                return await installation_token(cred, inst["id"], min_life)
         raise ValueError(f"no installation of GitHub App credential {cred['name']!r} covers {repo}")
     raise ValueError(f"GitHub App credential {cred['name']!r} is installed on several accounts "
                      f"({', '.join(str(i.get('account') or i['id']) for i in insts)}); "
@@ -279,6 +281,16 @@ def _inst_row(i: dict) -> dict:
     return {"id": int(i.get("id") or 0), "account": acct.get("login") or "",
             "account_type": acct.get("type") or "", "repository_selection":
             i.get("repository_selection") or ""}
+
+
+def may_add_installation(cred: dict, installation_id: int, account: str) -> bool:
+    """Whether an installation reported by a webhook or a resync may join the credential without
+    a person having started it here: it is already known, or it is on the App owner's account.
+    Anything else (a stranger installing a public App) needs our install link (signed state)."""
+    if any(i["id"] == int(installation_id) for i in installations(cred)):
+        return True
+    owner = str((cred.get("config") or {}).get("owner") or "").lower()
+    return bool(owner) and owner == str(account or "").lower()
 
 
 def with_installation(cred: dict, inst: dict) -> dict:
@@ -372,7 +384,7 @@ def verify_state(store, state: str) -> dict:
     except ValueError:
         raise ValueError("missing or malformed state")
     want = hmac.new(_state_secret(store), raw.encode(), hashlib.sha256).hexdigest()[:32]
-    if not hmac.compare_digest(want, sig):
+    if not hmac.compare_digest(want.encode(), sig.encode("utf-8", "replace")):
         raise ValueError("state signature does not match")
     try:
         data = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))

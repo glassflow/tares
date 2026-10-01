@@ -176,6 +176,11 @@ async def unit():
     a = await ga.installation_token(cred, 101)
     b = await ga.installation_token(cred, 101)
     check("near expiry -> refreshed", a != b, f"{a} {b}")
+    STATE["exp_in"] = 900            # 15 minutes left: fine for a poll, not for an MCP run
+    ga.forget("u1")
+    p1 = await ga.installation_token(cred, 101)
+    m1 = await ga.installation_token(cred, 101, min_life=1200)
+    check("an MCP run asks for 20 minutes of life: a 15-minute token is replaced", p1 != m1, f"{p1} {m1}")
     STATE["exp_in"] = 3600
     ga.forget("u1")
     t = await ga.token_for(cred, "other/site")
@@ -274,8 +279,10 @@ async def unit():
     from tares.store import _filter_sql
     from tares.config import CatalogError, validate_filters
     sql, params = _filter_sql([{"field": "repo", "op": "in", "value": ["acme/app", "acme/lib"]}])
-    check("in -> IN (?, ?) on the label", "IN (?, ?)" in sql and params == ["acme/app", "acme/lib"],
-          f"{sql} {params}")
+    check("in -> lower(label) IN (?, ?), case-insensitive",
+          "lower(" in sql and "IN (?, ?)" in sql and params == ["acme/app", "acme/lib"], f"{sql} {params}")
+    sql2, params2 = _filter_sql([{"field": "repo", "op": "in", "value": ["Acme/App"]}])
+    check("a typed repo in another case still matches", params2 == ["acme/app"], str(params2))
     try:
         validate_filters([{"field": "repo", "op": "in", "value": "acme/app"}], "trigger 't'")
         check("in with a non-list value refused", False)
@@ -361,15 +368,28 @@ async def daemon():
                   "error=" in r.headers["location"], r.headers.get("location"))
             r = await anon.get("/api/integrations/github/apps/installed",
                                params={"installation_id": 101, "setup_action": "install"})
-            check("install callback (no state, no key) proves ownership and records it",
+            check("install callback, no state: on the App owner's account -> recorded",
                   "event=installed" in r.headers["location"]
                   and [i["id"] for i in store.get_github_credential("acme-app")["config"]["installations"]] == [101],
                   r.headers.get("location"))
+            r = await anon.get("/api/integrations/github/apps/installed",
+                               params={"installation_id": 202, "setup_action": "install"})
+            check("install callback, no state, a stranger's account -> not added",
+                  "error=" in r.headers["location"] and 202 not in
+                  [i["id"] for i in store.get_github_credential("acme-app")["config"]["installations"]],
+                  r.headers.get("location"))
             r = await cx.post("/api/integrations/github/acme-app/test")
-            check("Test: resyncs installations, counts repos",
-                  r.json().get("ok") and {i["id"] for i in r.json()["installations"]} == {101, 202}
-                  and next(i for i in r.json()["installations"] if i["id"] == 101)["repos"] == 2,
-                  r.text)
+            check("Test: resync keeps only known/owner installations, counts repos",
+                  r.json().get("ok") and {i["id"] for i in r.json()["installations"]} == {101}
+                  and r.json()["installations"][0]["repos"] == 2, r.text)
+            link = (await cx.get("/api/integrations/github/acme-app/install")).json()["url"]
+            st = parse_qs(urlsplit(link).query)["state"][0]
+            r = await anon.get("/api/integrations/github/apps/installed",
+                               params={"installation_id": 202, "setup_action": "install", "state": st})
+            check("install callback with our state (Add an organization) -> added",
+                  "event=installed" in r.headers["location"] and {101, 202} ==
+                  {i["id"] for i in store.get_github_credential("acme-app")["config"]["installations"]},
+                  r.headers.get("location"))
             r = await cx.get("/api/integrations/github/acme-app/repos")
             check("repos across installations", {x["full_name"] for x in r.json()["repos"]}
                   == {"acme/app", "acme/lib", "other/site"}, r.text)
@@ -425,6 +445,23 @@ async def daemon():
                 "SELECT count(*) FROM dispatch_log WHERE trigger = 'pr_merged'").fetchone()[0]
             check("trigger filtered to action=merged fired once", fired == 1, str(fired))
 
+            r = await anon.post(f"/ingest/{ingest_key}", content=b"{}", headers={
+                "X-GitHub-Event": "ping", "X-Hub-Signature-256": "sha256=éé".encode()})
+            check("non-ASCII signature -> 401, not 500", r.status_code == 401, r.text)
+            stranger = {"action": "created", "installation": {"id": 404, "account": {"login": "evil"}}}
+            r = await deliver("installation", stranger, "d-evil")
+            check("a stranger's install (signed, public App) is not added",
+                  404 not in [i["id"] for i in store.get_github_credential("acme-app")["config"]["installations"]],
+                  str(store.get_github_credential("acme-app")["config"]["installations"]))
+            early = {**fixture("issues.json"), "installation": {"id": 303}}
+            r = await deliver("issues", early, "d-early")
+            check("an event before its installation is known -> dropped", r.json()["ingested"] == 0, r.text)
+            r = await deliver("installation", {"action": "created", "installation": {
+                "id": 303, "account": {"login": "acme"}}}, "d-inst303")
+            r = await deliver("issues", early, "d-early")
+            check("GitHub's redelivery of that event is stored, not deduped",
+                  r.json()["ingested"] == 1, r.text)
+
             r = await deliver("installation", {"action": "deleted", "installation": {
                 "id": 202, "account": {"login": "other"}}}, "d-un")
             check("uninstall delivery removes the installation",
@@ -434,7 +471,7 @@ async def daemon():
             r = await cx.get("/api/integrations/github")
             row = next(c for c in r.json()["credentials"] if c["name"] == "acme-app")
             check("row shows deliveries and refusals",
-                  row["deliveries"]["stored"] == 2 and row["deliveries"]["rejected_signature"] == 2,
+                  row["deliveries"]["stored"] == 3 and row["deliveries"]["rejected_signature"] == 3,
                   str(row.get("deliveries")))
 
             print("== a manually entered App and a broker credential ==")

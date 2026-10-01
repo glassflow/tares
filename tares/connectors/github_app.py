@@ -65,6 +65,11 @@ class GithubAppConnector(Connector):
         cred = self._cred() or {}
         return "github", str((cred.get("config") or {}).get("webhook_secret") or "")
 
+    @staticmethod
+    def _may_add(cred: dict, iid, account: str) -> bool:
+        from ..github_app import may_add_installation
+        return may_add_installation(cred, int(iid), account)
+
     def _known_installation(self, cred: dict, iid) -> bool:
         from ..github_app import installations
         return any(i["id"] == int(iid) for i in installations(cred))
@@ -85,6 +90,15 @@ class GithubAppConnector(Connector):
                 print(f"[github_app {self.cfg.name}] installation {iid} removed (uninstalled)")
             else:
                 acct = inst.get("account") or {}
+                if not self._may_add(cred, iid, acct.get("login") or ""):
+                    # a stranger installed a public App: every delivery is signed with the same
+                    # secret, so the signature says nothing about who. Not ours unless it is the
+                    # App owner's account or came through our install link (the callback).
+                    _stats(self.cfg.name)["unknown_installation"] += 1
+                    print(f"[github_app {self.cfg.name}] installation {iid} on "
+                          f"{acct.get('login')!r} not added: not the App owner's account; "
+                          "use Install / Add an organization in Settings > GitHub")
+                    return
                 row = {"id": int(iid), "account": acct.get("login") or "",
                        "account_type": acct.get("type") or "",
                        "repository_selection": inst.get("repository_selection") or "",
@@ -104,7 +118,7 @@ class GithubAppConnector(Connector):
         st["last_at"], st["last_event"] = time.time(), event or None
         if not isinstance(payload, dict) or not event or event == "ping":
             return []
-        if delivery and self._duplicate(delivery):
+        if delivery and self._seen(delivery):
             st["duplicates"] += 1
             return []
         cred = self._cred()
@@ -124,18 +138,19 @@ class GithubAppConnector(Connector):
         env = self._envelope(stored)
         if env is None:
             return []
+        if delivery:
+            # remembered only now: a delivery dropped above (an installation not known yet, a
+            # missing credential) is taken when GitHub redelivers it
+            _seen.setdefault(self.cfg.name, OrderedDict())[delivery] = time.time()
         st["stored"] += 1
         return [env]
 
-    def _duplicate(self, delivery: str) -> bool:
+    def _seen(self, delivery: str) -> bool:
         seen = _seen.setdefault(self.cfg.name, OrderedDict())
         now = time.time()
         while seen and (now - next(iter(seen.values())) > DEDUPE_SECONDS or len(seen) > DEDUPE_MAX):
             seen.popitem(last=False)
-        if delivery in seen:
-            return True
-        seen[delivery] = now
-        return False
+        return delivery in seen
 
     def label_context(self, payload: dict | None) -> dict:
         p = payload or {}

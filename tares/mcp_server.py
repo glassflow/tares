@@ -93,7 +93,7 @@ async def create_trigger(name: str, sources: list[str], condition: dict,
                          project: str = "", description: str | None = None) -> str:
     """Create a trigger: a condition Tares evaluates continuously over one or more sources; when
     it trips, subscribed agents are woken with the correlated timeline. `sources` names the
-    sources it watches (at least one). `filters` [{field, op, value}] (ops: eq, neq, contains, gt,
+    sources it watches (at least one). `filters` [{field, op, value}] (ops: eq, neq, in (a list), contains, gt,
     lt, gte, lte) narrows them. `key_field` is the entity label (default: the primary label of the
     first source). `condition` is {aggregate: any|avg|count|max|min|sum, field: numeric label to
     aggregate (omit for count), predicate: e.g. '> 1.0' / '>= 5' / '== 0', window: detection

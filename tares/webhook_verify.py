@@ -56,7 +56,7 @@ def verify(scheme: str, secret: str, body: bytes, headers: dict, header: str | N
         got = got[len("sha256="):]
     elif got.lower().startswith("sha256="):
         got = got[len("sha256="):]
-    if not hmac.compare_digest(want, got.lower()):
+    if not hmac.compare_digest(want.encode(), got.lower().encode("utf-8", "replace")):
         return f"{scheme} signature does not match"
     if scheme == "linear":
         try:

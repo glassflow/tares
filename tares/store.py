@@ -488,8 +488,9 @@ def _filter_sql(filters) -> tuple[str, list]:
             values = [str(v) for v in (value if isinstance(value, list) else [value])]
             if not values:
                 raise ValueError("filter op 'in' needs at least one value")
-            clauses.append(f"{expr} IN ({', '.join('?' * len(values))})")
-            params.extend(values)
+            # case-insensitive: GitHub names (owner/repo) are, and a typed list rarely matches case
+            clauses.append(f"lower({expr}) IN ({', '.join('?' * len(values))})")
+            params.extend(v.lower() for v in values)
         elif op in _FILTER_OPS:
             clauses.append(f"{expr} {_FILTER_OPS[op]} ?")
             params.append(float(value) if numeric else str(value))
@@ -1361,6 +1362,12 @@ class Store:
                 "ingest_key = COALESCE(catalog_sources.ingest_key, excluded.ingest_key)",
                 [name, type_, connector, poll, json.dumps(config), paused, ts, ts, ik],
             )
+
+    def set_source_ingest_key(self, name: str, ingest_key: str) -> None:
+        """Replace a push source's ingest key (a GitHub App recreated for an existing source)."""
+        with self._lock:
+            self.con.execute("UPDATE catalog_sources SET ingest_key = ? WHERE name = ?",
+                             [ingest_key, name])
 
     def list_catalog_sources(self) -> list[dict]:
         with self._lock:

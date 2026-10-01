@@ -129,7 +129,7 @@ def _iso(dt):
 
 # ── trigger phrasing ─────────────────────────────────────────────────────────
 _FILTER_WORDS = {"eq": "=", "neq": "is not", "gt": "above", "lt": "below", "gte": "at least",
-                 "lte": "at most", "contains": "containing"}
+                 "lte": "at most", "contains": "containing", "in": "one of"}
 _COUNT_WORDS = {">": "more than", ">=": "at least", "<": "fewer than", "<=": "at most",
                 "==": "exactly"}
 _AGG_WORDS = {"avg": "average", "sum": "total", "max": "highest", "min": "lowest",
