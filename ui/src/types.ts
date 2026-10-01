@@ -759,3 +759,20 @@ export interface ProjectSetup {
   checks: SetupChecks | null;
   connect: SetupConnect | null; // what Connect shows; the own agent's key is never in it
 }
+
+// GET /api/resources: every part on the cell, each with the projects that use it (TR-351)
+export interface ResourceRow {
+  name: string;
+  what: string;                 // what it is, in plain words (a GitHub source: its repository)
+  state: string;                // receiving / silent / error / paused / waiting; active / paused; on / off; set / no credentials; used / never used
+  detail?: string | null;
+  kind?: string; kind_label?: string;     // sources: the connector
+  last_event_at?: string | null;          // sources
+  last_fired_at?: string | null;          // wake-ups
+  last_run_at?: string | null; last_run_status?: string | null;   // agents
+  url?: string | null;                    // tools
+  prefix?: string | null; last_used_at?: string | null;           // keys
+  used_by: { id: string; name: string }[];
+}
+export type ResourceKind = "sources" | "triggers" | "agents" | "tools" | "skills" | "keys";
+export type Resources = Record<ResourceKind, ResourceRow[]>;

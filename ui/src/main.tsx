@@ -20,6 +20,7 @@ import ProjectTemplates from "./pages/ProjectNew";
 import ProjectDetail from "./pages/ProjectDetail";
 import { AgentRedirect, DispatchRedirect, FiringsRedirect, NewInProjectRedirect, NotFound, SourceByName, TriggerRedirect } from "./pages/Redirects";
 import ProjectSetup from "./pages/ProjectSetup";
+import Resources from "./pages/Resources";
 import ProjectNewCustom from "./pages/ProjectNewCustom";
 import ProjectNewGeneric from "./pages/ProjectNewGeneric";
 import ProjectNewSharedContext from "./pages/ProjectNewSharedContext";
@@ -71,6 +72,8 @@ const router = createBrowserRouter([
       { path: "sources/:name", element: <SourceByName /> },
       { path: "organize", element: <Navigate to="/ask" replace /> },
       { path: "explore", element: <Explore /> },
+      { path: "resources", element: <Resources /> },
+      { path: "resources/:kind", element: <Resources /> },
       // triggers, agents, firings and MCP servers live in their project now (Advanced setup);
       // the old addresses land on the same thing there (Slack links /agents and /dispatches)
       { path: "triggers", element: <Navigate to="/projects" replace /> },

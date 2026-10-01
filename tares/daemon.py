@@ -1653,6 +1653,14 @@ def make_app() -> FastAPI:
             out[k] = str(v).strip()
         return out
 
+    @app.get("/api/resources")
+    async def list_all_resources():
+        """Every part on the cell (sources, wake-ups, agents, tools, skills, project keys), each
+        with the projects that use it: the All resources page."""
+        from . import resources as resources_mod
+        return await asyncio.to_thread(resources_mod.list_resources, store, runtime.catalog,
+                                       runtime.health_snapshot())
+
     @app.get("/api/mcp-servers")
     async def list_mcp_servers():
         return {"servers": [_mcp_row(m) for m in store.list_mcp_servers()]}

@@ -1490,6 +1490,11 @@ pre.payload {
 .pnav-dot.paused { background: var(--warn); }
 .pnav-hint { flex: 0 0 auto; font-family: var(--font-sans); font-size: 11px; font-weight: 400; color: var(--ink-faint); }
 .pnav-select { display: none; }
+/* All resources (pages/Resources.tsx) */
+.res-filters { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 12px; }
+.res-filters input[type="search"] { flex: 1 1 260px; max-width: 420px; }
+.res-name { overflow-wrap: anywhere; max-width: 280px; }
+.table-scroll { overflow-x: auto; }
 .pv-head { margin-bottom: 12px; }
 .pv-facts td:first-child { width: 150px; white-space: nowrap; vertical-align: top; }
 .pv-panels { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; margin-bottom: 18px; }

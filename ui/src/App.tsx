@@ -35,6 +35,7 @@ const NAV_GROUPS: { section: string; items: NavItem[] }[] = [
   { section: "Catalog", items: [
     { to: "/sources", label: "Sources", icon: Database },
     { to: "/explore", label: "Explore", icon: Activity },
+    { to: "/resources", label: "All resources", icon: Grid },
   ] },
   { section: "Agent access", items: [
     { to: "/connect", label: "Connect", icon: Terminal },
@@ -55,6 +56,7 @@ const SECTION_LABEL: Record<string, string> = {
   ask: "Ask",
   settings: "Settings",
   projects: "Projects",
+  resources: "All resources",
 };
 
 type Crumb = { label: string; to?: string; mono?: boolean };

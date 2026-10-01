@@ -5,7 +5,7 @@ import type {
   AgentPreset, AgentRun, BuiltinAgent, Handoff,
   GithubCredential,
   LabelFacet, ModelUsage, QueryLogEntry,
-  McpServer, Plan, ProjectSetup, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
+  McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults,
   Skill, SkillSummary,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
@@ -263,6 +263,7 @@ export const api = {
   // when it can't list them — `reason` says why the list is empty — so a workspace we can't read
   // stays a fallback to typing the channel in, not an error the console has to render.
   slackChannels: () => request<SlackChannels>("/api/slack/channels"),
+  resources: () => request<Resources>("/api/resources"),
 
   agents: () => request<{ agents: AgentInfo[] }>("/api/agents"),
   unsubscribe: (subscription_id: string) =>
