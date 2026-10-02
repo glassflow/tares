@@ -125,6 +125,11 @@ def fake_github(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         STATE.setdefault("checks", []).append(body)
         return httpx.Response(201, json={"id": 9, "html_url": "https://github.com/acme/app/runs/9"})
+    if path == "/repos/acme/app/contents":
+        return httpx.Response(200, json=[{"name": "README.md", "type": "file"},
+                                         {"name": "docker-compose.yml", "type": "file"}])
+    if path == "/repos/acme/app/readme":
+        return httpx.Response(200, text="# acme app\nThe checkout service.")
     if path == "/repos/acme/app/pulls":
         return httpx.Response(200, json=STATE["pulls"])
     return httpx.Response(404, json={"message": "Not Found"})
@@ -571,6 +576,40 @@ async def daemon():
                   any("GitHub App's source" in e for e in errs), str(errs))
             check("the planner is told how GitHub events are named",
                   "action merged" in setup_flow.SYSTEM and "github_app source" in setup_flow.SYSTEM)
+
+            print("== a plan grounded in their repositories (TR-262) ==")
+            r = await cx.get("/api/setup/github-suggestion")
+            body = r.json()
+            check("suggestion endpoint without a model provider: available, repos, no sentence",
+                  body["available"] and body["suggestion"] is None and "acme/app (private)" in body["repos"],
+                  str(body))
+            lines = await setup_flow.github_repo_lines(store)
+            msg = setup_flow.plan_message("watch my code", "tares", True, store, runtime.catalog, github=lines)
+            check("the planner's first message lists their repositories",
+                  "Their GitHub repositories" in msg and "- acme/app (private)" in msg, msg[-300:])
+            check("the planner can read one repository when GitHub is connected, not otherwise",
+                  any(t["name"] == "github_repo" for t in setup_flow.read_tools(True))
+                  and not any(t["name"] == "github_repo" for t in setup_flow.read_tools()))
+            ok, text = await setup_flow.read_github_repo(store, "acme/app")
+            check("github_repo: root files and README", ok and "docker-compose.yml" in text
+                  and "checkout service" in text, text[:200])
+
+            class FakeReply:
+                text = '"Review every merged pull request in acme/app"'
+                usage = {}
+
+            class FakeProvider:
+                calls = 0
+
+                async def complete(self, **kw):
+                    FakeProvider.calls += 1
+                    return FakeReply()
+            store.set_setting(setup_flow.SUGGEST_SETTING, None)
+            one = await setup_flow.github_suggestion(store, FakeProvider(), "m")
+            two = await setup_flow.github_suggestion(store, FakeProvider(), "m")
+            check("one sentence from the repos, cached (one model call for two opens)",
+                  one["suggestion"] == "Review every merged pull request in acme/app"
+                  and two["suggestion"] == one["suggestion"] and FakeProvider.calls == 1, str(one))
 
             print("== agents on GitHub (TR-165) ==")
             r = await cx.post("/api/integrations/github/acme-app/mcp", json={"write": True})

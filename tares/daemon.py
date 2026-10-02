@@ -3365,6 +3365,8 @@ def make_app() -> FastAPI:
         """The planner's read tools, answered by this daemon's own routes in process."""
         paths = {"list_connectors": "/api/connectors", "list_sources": "/api/sources",
                  "list_templates": "/api/projects/templates"}
+        if name == "github_repo":
+            return await setup_flow.read_github_repo(store, str(args.get("repo") or ""))
         if name == "source_fields":
             path = f"/api/sources/{str(args.get('name') or '')}/fields"
         elif name in paths:
@@ -3391,6 +3393,29 @@ def make_app() -> FastAPI:
         except setup_flow.SetupError as e:
             _setup_err(e)
 
+    @app.get("/api/setup/github-suggestion")
+    async def setup_github_suggestion():
+        """The guided setup's opening line when GitHub is connected (TR-262): one goal grounded
+        in the person's newest repositories, cached a day. {available: false} without GitHub;
+        {suggestion: null} when no model provider is set up (the page just leaves it out)."""
+        if not store.list_github_credentials():
+            return {"available": False, "suggestion": None, "repos": []}
+        provider, _origin = resolve_provider(store)
+        if provider is None:
+            return {"available": True, "suggestion": None,
+                    "repos": await setup_flow.github_repo_lines(store, limit=8)}
+        pid = providers_mod.default_id(store)
+        model = providers_mod.default_model_for(store, pid)
+        try:
+            out = await setup_flow.github_suggestion(
+                store, provider, model,
+                on_usage=lambda u: _record_ask_usage(model, u, key_source=_origin,
+                                                     kind=provider.kind, provider_id=pid))
+        except Exception as e:  # noqa: BLE001 — the page works without it
+            print(f"setup: github suggestion failed: {type(e).__name__}: {e}")
+            return {"available": True, "suggestion": None, "repos": []}
+        return {"available": True, **out}
+
     @app.post("/api/setup/plan")
     async def setup_plan(body: dict = Body(...)):
         """{goal, who?, existing_sources?} -> {plan}: the whole project in plain words, written
@@ -3404,9 +3429,10 @@ def make_app() -> FastAPI:
         who = body.get("who") or None
         if who not in (None, "tares", "own"):
             _err(ValueError("who is tares or own"))
+        gh_repos = await setup_flow.github_repo_lines(store)
         plan = await _setup_generate(setup_flow.plan_message(
-            goal, who, body.get("existing_sources", True) is not False, store, runtime.catalog),
-            who=who)
+            goal, who, body.get("existing_sources", True) is not False, store, runtime.catalog,
+            github=gh_repos), who=who)
         return {"plan": plan}
 
     @app.post("/api/setup/adjust")
@@ -3541,7 +3567,8 @@ def make_app() -> FastAPI:
         store.log_project(uid, "draft", "planning from the goal")
         store.set_project_setup(uid, {"step": "plan", "goal": goal, "who": who, "plan": None,
                                       "practice_run": None})
-        _start_planning(uid, setup_flow.plan_message(goal, who, True, store, runtime.catalog),
+        _start_planning(uid, setup_flow.plan_message(goal, who, True, store, runtime.catalog,
+                                                     github=await setup_flow.github_repo_lines(store)),
                         None, who)
         return {"project": projects.get(uid)}
 
@@ -3579,7 +3606,8 @@ def make_app() -> FastAPI:
         setup.update(goal=goal, who=who, plan=None)
         store.set_project_setup(uid, setup)
         store.update_project(uid, goal=goal)
-        _start_planning(uid, setup_flow.plan_message(goal, who, True, store, runtime.catalog),
+        _start_planning(uid, setup_flow.plan_message(goal, who, True, store, runtime.catalog,
+                                                     github=await setup_flow.github_repo_lines(store)),
                         None, who)
         return {"ok": True}
 

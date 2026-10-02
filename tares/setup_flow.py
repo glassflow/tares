@@ -180,9 +180,68 @@ PLAN_TOOL = {"name": "propose_plan",
              "input_schema": PLAN_SCHEMA}
 
 
-def read_tools() -> list:
+# TR-262: a plan grounded in the person's repositories when GitHub is connected
+GITHUB_REPO_TOOL = {
+    "name": "github_repo",
+    "description": ("Read one of the person's GitHub repositories (owner/name, from the list in "
+                    "the first message): its README and the files at its root (a compose file "
+                    "names the services, a README names the stack). Only what the files say."),
+    "input_schema": {"type": "object", "properties": {"repo": {"type": "string"}},
+                     "required": ["repo"]},
+}
+GITHUB_REPOS_SHOWN = 20
+
+
+def read_tools(github: bool = False) -> list:
+    """The planner's reads; `github` (a GitHub credential is stored) adds github_repo."""
     from .agent import TOOLS
-    return [t for t in TOOLS if t["name"] in READ_TOOL_NAMES]
+    return [t for t in TOOLS if t["name"] in READ_TOOL_NAMES] + ([GITHUB_REPO_TOOL] if github else [])
+
+
+async def github_repo_lines(store, limit: int = GITHUB_REPOS_SHOWN) -> list[str]:
+    """The person's repositories, most recently pushed first, from every stored GitHub
+    credential: what the plan and the opening suggestion are grounded in. Best effort and quick:
+    a credential that cannot list its repos is skipped, never an error."""
+    import asyncio
+    from .github_credentials import list_repos_for
+    seen: dict[str, dict] = {}
+    for cred in store.list_github_credentials():
+        try:
+            repos = await asyncio.wait_for(list_repos_for(cred), timeout=10)
+        except Exception:  # noqa: BLE001
+            continue
+        for r in repos:
+            seen.setdefault(r["full_name"], r)
+    ordered = sorted(seen.values(), key=lambda r: r.get("pushed_at") or "", reverse=True)
+    return [r["full_name"] + (" (private)" if r.get("private") else "") for r in ordered[:limit]]
+
+
+async def read_github_repo(store, repo: str) -> tuple[bool, str]:
+    """The github_repo read: README (capped) and the root's file names, with whichever stored
+    credential can read the repository."""
+    import httpx
+    from .github_credentials import get_token, resolve_api_url
+    repo = str(repo or "").strip().strip("/")
+    if repo.count("/") != 1:
+        return False, "repo must be owner/name"
+    for cred in store.list_github_credentials():
+        try:
+            token = await get_token(store, cred["name"], repo)
+        except ValueError:
+            continue
+        api = (resolve_api_url(store, cred["name"]) or "https://api.github.com").rstrip("/")
+        h = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
+             "Authorization": f"Bearer {token}"}
+        async with httpx.AsyncClient(timeout=15) as cx:
+            root = await cx.get(f"{api}/repos/{repo}/contents", headers=h)
+            if root.status_code != 200:
+                continue
+            names = [e.get("name") for e in root.json() if isinstance(e, dict)]
+            readme = await cx.get(f"{api}/repos/{repo}/readme",
+                                  headers={**h, "Accept": "application/vnd.github.raw+json"})
+        text = readme.text[:4000] if readme.status_code == 200 else "(no README)"
+        return True, f"Files at the root: {', '.join(names[:60])}\n\nREADME:\n{text}"
+    return False, f"no GitHub credential on this Tares can read {repo}"
 
 
 SYSTEM = """You plan a Tares project from a person's goal. Tares collects events from sources, \
@@ -1026,6 +1085,8 @@ def read_words(name: str, args: dict | None, sources: dict | None = None) -> str
         src = str((args or {}).get("name") or "")
         cfg = (sources or {}).get(src)
         return f"Looked at what {G.source_title(cfg) if cfg else (src or 'a source')} sends"
+    if name == "github_repo":
+        return f"Read {str((args or {}).get('repo') or 'a repository')} on GitHub"
     return {"list_sources": "Looked at the sources on Tares",
             "list_connectors": "Looked at the kinds of source",
             "list_templates": "Looked at the templates"}.get(name, "Looked something up")
@@ -1043,10 +1104,10 @@ def _say(progress, text: str, running: bool = False) -> None:
 async def _run_model(provider, model: str, convo: list, read_tool, tracer, usage: dict,
                      forced_only: bool = False, progress=None,
                      writing: str = "Writing the plan",
-                     sources: dict | None = None) -> tuple[dict, object]:
+                     sources: dict | None = None, github: bool = False) -> tuple[dict, object]:
     """Model calls until propose_plan comes back: reads first when the model wants them, the
     last call forced to propose_plan. Returns (the plan it proposed, that reply)."""
-    tools = read_tools() + [PLAN_TOOL]
+    tools = read_tools(github) + [PLAN_TOOL]
     rounds = 1 if forced_only else MAX_ROUNDS
     for i in range(rounds):
         last = i == rounds - 1
@@ -1099,10 +1160,11 @@ async def _model_plan(provider, model, first_message, store, catalog, read_tool,
     usage = empty_usage()
     convo = [{"role": "user", "content": first_message}]
     writing = "Changing the plan" if prev else "Writing the plan"
+    github = bool(store.list_github_credentials())   # github_repo only when it can answer
     try:
         raw, (reply, call) = await _run_model(provider, model, convo, read_tool, tracer, usage,
                                               progress=progress, writing=writing,
-                                              sources=catalog.sources)
+                                              sources=catalog.sources, github=github)
         _say(progress, "Checking the plan", running=True)
         plan, errors = _check(raw, store, catalog, prev, who)
         if errors:
@@ -1112,7 +1174,7 @@ async def _model_plan(provider, model, first_message, store, catalog, read_tool,
                                           "fixed.")]))
             raw, _ = await _run_model(provider, model, convo, read_tool, tracer, usage,
                                       forced_only=True, progress=progress,
-                                      sources=catalog.sources,
+                                      sources=catalog.sources, github=github,
                                       writing=f"Fixing {len(errors)} thing"
                                               f"{'s' if len(errors) != 1 else ''} the check found")
             _say(progress, "Checking the plan again", running=True)
@@ -1146,11 +1208,52 @@ def context_words(catalog) -> str:
             f"{n_kind} kinds of source")
 
 
-def plan_message(goal: str, who: str | None, existing_sources: bool, store, catalog) -> str:
+SUGGEST_SYSTEM = """You suggest ONE goal for a Tares project from the names (and READMEs) of a \
+person's GitHub repositories. Tares watches events (pull requests, pushes, CI runs, deploys, \
+alerts) and wakes AI agents that look into them. Write one sentence the person could type as their \
+goal, naming one real repository, in plain words, under 140 characters, no em dashes. Ground it in \
+what the names and files say; never claim more. Answer with the sentence only."""
+SUGGEST_TTL = 24 * 3600
+SUGGEST_SETTING = "setup_github_suggestion"
+
+
+async def github_suggestion(store, provider, model: str, on_usage=None) -> dict:
+    """{suggestion, repos}: the opening line of the guided setup when GitHub is connected. One
+    short model call over the newest repositories (and the first one's README), cached a day so
+    opening the page does not spend on every visit."""
+    import time as _t
+    repos = await github_repo_lines(store, limit=8)
+    if not repos:
+        return {"suggestion": None, "repos": []}
+    key = "|".join(repos)
+    try:
+        cached = json.loads(store.get_setting(SUGGEST_SETTING) or "{}")
+    except ValueError:
+        cached = {}
+    if cached.get("key") == key and _t.time() - float(cached.get("at") or 0) < SUGGEST_TTL:
+        return {"suggestion": cached.get("suggestion"), "repos": repos}
+    ok, readme = await read_github_repo(store, repos[0].split(" ")[0])
+    msg = ("Repositories:\n" + "\n".join(f"- {r}" for r in repos)
+           + (f"\n\nThe newest one, {repos[0].split(' ')[0]}:\n{readme[:2500]}" if ok else ""))
+    reply = await provider.complete(model=model, system=SUGGEST_SYSTEM, tools=[],
+                                    messages=[{"role": "user", "content": msg}], max_tokens=200,
+                                    tools_allowed=False)
+    if on_usage is not None:
+        on_usage(reply.usage)
+    text = " ".join((reply.text or "").split()).strip().strip('"')
+    text = scrub(text)[:200] or None
+    store.set_setting(SUGGEST_SETTING, json.dumps({"key": key, "at": _t.time(), "suggestion": text}))
+    return {"suggestion": text, "repos": repos}
+
+
+def plan_message(goal: str, who: str | None, existing_sources: bool, store, catalog,
+                 github: list[str] | None = None) -> str:
     who_line = {"tares": "Tares agents do the work (who tares).",
                 "own": "The person's own agent does the work (who own)."}.get(
         who or "", "Pick who does the work: Tares agents unless the goal says otherwise.")
-    return (f"Goal: {goal}\n{who_line}\n\n{_context(store, catalog, existing_sources)}")
+    gh = ("\n\nTheir GitHub repositories (most recently pushed first; github_repo reads one):\n"
+          + "\n".join(f"- {r}" for r in github)) if github else ""
+    return (f"Goal: {goal}\n{who_line}\n\n{_context(store, catalog, existing_sources)}{gh}")
 
 
 def adjust_message(plan: dict, instruction: str) -> str:

@@ -423,6 +423,9 @@ export const api = {
   // ── Goal-first setup: plan from a goal, adjust in plain words, apply, then connect and try ──
   planSetup: (body: { goal: string; who?: "tares" | "own"; existing_sources?: boolean }) =>
     request<{ plan: Plan }>("/api/setup/plan", { method: "POST", body: JSON.stringify(body) }),
+  // the guided setup's opening line from the person's GitHub repositories (TR-262)
+  setupGithubSuggestion: () =>
+    request<{ available: boolean; suggestion: string | null; repos: string[] }>("/api/setup/github-suggestion"),
   adjustSetup: (plan: Plan, instruction: string) =>
     request<{ plan: Plan }>("/api/setup/adjust", { method: "POST", body: JSON.stringify({ plan, instruction }) }),
   checkSetup: (plan: Plan, project?: string) =>
