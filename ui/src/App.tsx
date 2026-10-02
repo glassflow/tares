@@ -3,7 +3,9 @@ import { useProjectName } from "./components/ProjectBadge";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { api, auth } from "./api";
+import { useCloud } from "./cloud";
 import CommandPalette from "./components/CommandPalette";
+import WorkspaceSwitcher from "./components/WorkspaceSwitcher";
 import {
   Activity, Chat, ChevronRight, Database, GitHub, Grid, Lock, Moon,
   Settings, SignOut, Sun, Terminal, Zap,
@@ -157,18 +159,22 @@ export default function App() {
   // Cloud only: the control-plane workspace this cell belongs to. Users, plan, storage and the
   // Slack app are managed there; the link is the missing half of Settings (TR-142). Self-host
   // sets no TARES_WORKSPACE_URL and never sees it.
-  const [workspaceUrl, setWorkspaceUrl] = useState<string>();
+  // With TARES_WORKSPACES_URL as well (TR-370), the top left is a workspace switcher and this
+  // link moves into it; an older control plane that only sets the workspace URL keeps it here.
+  const cloud = useCloud();
+  const workspaceUrl = cloud.switcher ? undefined : cloud.health?.workspace_url || undefined;
   useEffect(() => {
     api.capabilities().then((c) => setVersion(c.version ?? null)).catch(() => {});
-    api.health().then((h) => setWorkspaceUrl(h.workspace_url || undefined)).catch(() => {});
   }, []);
   return (
     <>
       <nav className="sidebar">
-        <div className="brand">
-          <img className="brand-mark" src="/tares-mark.svg" alt="Tares" />
-          <span className="brand-word">tares</span>
-        </div>
+        {cloud.switcher ? <WorkspaceSwitcher cloud={cloud} /> : (
+          <div className="brand">
+            <img className="brand-mark" src="/tares-mark.svg" alt="Tares" />
+            <span className="brand-word">tares</span>
+          </div>
+        )}
 
         {NAV_GROUPS.map(({ section, items }) => (
           <div className="nav-group" key={section}>

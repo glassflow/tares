@@ -4,6 +4,7 @@ import { api, type AgentLimits, type TracingStatus } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { Close } from "../components/icons";
 import { InternalName, Picker, TimeAgo, keyTitle } from "../components/bits";
+import { type Cloud, cloudLink, useCloud } from "../cloud";
 import type { ApiKey, GithubAppTest, GithubCredential, ModelProvider, ModelProviders } from "../types";
 
 // Four distinct credential concepts, one box each:
@@ -23,46 +24,143 @@ const TABS: { key: SettingsTab; label: string }[] = [
   { key: "observability", label: "Observability" },
 ];
 
+// Coming back from a Tares Cloud connect page (contract §3): `cloud` says what happened and
+// `cloud_detail` may add a sentence to show as is. Shown once, on the tab it belongs to.
+const CLOUD_BACK: Record<string, { tab?: SettingsTab; text: string; kind: "ok" | "error" | "" }> = {
+  "github-connected": { tab: "github", kind: "ok",
+    text: "GitHub is connected. Events from the repositories you picked arrive here as they happen." },
+  "github-repos": { tab: "github", kind: "ok",
+    text: "Repositories saved. Events from them arrive here as they happen." },
+  "github-disconnected": { tab: "github", kind: "",
+    text: "GitHub is disconnected. Its events no longer reach this workspace." },
+  "slack-connected": { tab: "slack", kind: "ok",
+    text: "Slack is connected. Triggers and agents can post to its channels, and your team can ask Tares with /tares ask." },
+  "slack-disconnected": { tab: "slack", kind: "",
+    text: "Slack is disconnected. Nothing is posted to it any more." },
+  error: { kind: "error", text: "That did not work. Nothing was changed." },
+  cancelled: { kind: "", text: "Cancelled. Nothing was changed." },
+};
+
 export default function Security() {
-  // Cloud only (TR-142): the half of "settings" a user comes here looking for that lives in the
-  // control plane, named and linked, so nobody has to know the control plane exists.
-  const [workspaceUrl, setWorkspaceUrl] = useState<string>();
-  useEffect(() => {
-    api.health().then((h) => setWorkspaceUrl(h.workspace_url || undefined)).catch(() => {});
-  }, []);
+  const [cloudBack] = useState(() => {
+    const q = new URLSearchParams(window.location.search);
+    const m = CLOUD_BACK[q.get("cloud") ?? ""];
+    return m ? { ...m, detail: q.get("cloud_detail") ?? "" } : undefined;
+  });
   const [tab, setTab] = useState<SettingsTab>(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
-    return (TABS.find((x) => x.key === t)?.key ?? "access");
+    return cloudBack?.tab ?? (TABS.find((x) => x.key === t)?.key ?? "access");
   });
+  const [backTab] = useState(tab);   // the tab the cloud message belongs to
+  useEffect(() => {   // the message is shown once; a reload starts clean
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("cloud") && !url.searchParams.has("cloud_detail")) return;
+    url.searchParams.delete("cloud"); url.searchParams.delete("cloud_detail");
+    url.searchParams.set("tab", backTab);
+    window.history.replaceState(null, "", url.toString());
+  }, []);
   const pick = (t: SettingsTab) => {
     setTab(t);
     const url = new URL(window.location.href); url.searchParams.set("tab", t);
     window.history.replaceState(null, "", url.toString());
   };
+  const cloud = useCloud();
+  const slackConnectUrl = cloud.health?.slack_connect_url;
   return (
     <>
       <h1>Settings</h1>
       <p className="subtitle">Who can get in, API keys, model providers, agent limits, GitHub and Slack credentials, and agent tracing.</p>
-      {workspaceUrl && (
-        <div className="alert" style={{ marginBottom: 14 }}>
-          <strong>Users, the Slack app, plan and storage</strong> are managed in your workspace, not
-          here. The Slack <em>bot token</em> below is what this instance posts with; installing the
-          app into your Slack happens in the workspace.{" "}
-          <a href={workspaceUrl}>Open workspace ↗</a>
-        </div>
-      )}
       <div className="tabs">
         {TABS.map((t) => (
           <button key={t.key} className={tab === t.key ? "active" : ""} onClick={() => pick(t.key)}>{t.label}</button>
         ))}
       </div>
+      {cloudBack && tab === backTab && (
+        <div className={"alert" + (cloudBack.kind ? ` ${cloudBack.kind}` : "")} role="status">
+          {cloudBack.kind === "error" && cloudBack.detail ? cloudBack.detail
+            : <>{cloudBack.text}{cloudBack.detail && <> {cloudBack.detail}</>}</>}
+        </div>
+      )}
       {tab === "access" && <><AccessPanel /><ApiKeysPanel /></>}
       {tab === "anthropic" && <ProvidersPanel />}
       {tab === "agents" && <AgentLimitsPanel />}
-      {tab === "github" && <GithubPanel />}
-      {tab === "slack" && <><SlackTokenPanel /><SlackSigningSecretPanel /></>}
+      {tab === "github" && <GithubPanel cloud={cloud} />}
+      {tab === "slack" && (!cloud.ready ? <div className="muted">loading…</div>
+        : slackConnectUrl ? <SlackCloudPanel cloud={cloud} connectUrl={slackConnectUrl} />
+        : <><SlackTokenPanel /><SlackSigningSecretPanel /></>)}
       {tab === "observability" && <TracingPanel />}
     </>
+  );
+}
+
+/** Who may connect, when this person may not (TR-367): the control plane lets only the
+ *  workspace's owner connect and disconnect GitHub and Slack. */
+function OwnerOnly({ cloud, what }: { cloud: Cloud; what: string }) {
+  const email = cloud.current?.owner_email;
+  return (
+    <p className="help">
+      {email ? <>Only the workspace owner, <strong>{email}</strong>, can connect {what}.</>
+        : <>Only the workspace owner can connect {what}.</>}
+    </p>
+  );
+}
+
+/** The repositories a Tares Cloud App row follows: names without the owner when it is the
+ *  installation's account, the first three and a count, every full name on hover. */
+function RepoNames({ repos, account }: { repos: string[]; account: string }) {
+  const own = account.toLowerCase();
+  const names = repos.map((r) => {
+    const [owner, name] = r.split("/");
+    return owner.toLowerCase() === own && name ? name : r;
+  });
+  const shown = names.slice(0, 3).join(", ");
+  return (
+    <span className="mono" title={repos.join("\n")}>
+      {shown}{names.length > 3 && <span className="help"> and {names.length - 3} more</span>}
+    </span>
+  );
+}
+
+// Slack on Tares Cloud (TR-364): the control plane runs the Slack install and pushes the bot
+// token, signing secret and team name here, so instead of two paste boxes this is one Connect /
+// Disconnect, both links to the control plane that come back to this tab.
+function SlackCloudPanel({ cloud, connectUrl }: { cloud: Cloud; connectUrl: string }) {
+  const [st, setSt] = useState<Awaited<ReturnType<typeof api.slackTokenStatus>>>();
+  const [err, setErr] = useState<string>();
+  useEffect(() => {
+    api.slackTokenStatus().then(setSt).catch((e) => setErr(String((e as Error).message ?? e)));
+  }, []);
+  const canConnect = cloud.isOwner !== false;
+  return (
+    <div className="panel">
+      <h2 style={{ marginTop: 0 }}>Slack</h2>
+      {err && <div className="alert error">{err}</div>}
+      {!st ? (!err && <div className="muted">loading…</div>) : st.configured ? (
+        <>
+          <p style={{ margin: "0 0 6px" }}>
+            <strong>{st.team?.name ? `Connected to ${st.team.name}` : "Connected"}</strong>
+          </p>
+          <p className="help" style={{ marginTop: 0 }}>
+            Triggers and agents post what they find to the channels you pick, and your team can
+            ask Tares from any channel with <code>/tares ask</code>. Invite the app to a channel in
+            Slack before posting to it.
+          </p>
+          {canConnect
+            ? <a className="btn danger" href={cloudLink(connectUrl, { action: "disconnect" }, "slack")}>Disconnect</a>
+            : <OwnerOnly cloud={cloud} what="Slack" />}
+        </>
+      ) : (
+        <>
+          <p className="help" style={{ marginTop: 0 }}>
+            Connect Slack to have triggers and agents post what they find to a channel, and to let
+            your team ask Tares from Slack with <code>/tares ask</code>.
+          </p>
+          {canConnect
+            ? <a className="btn primary" href={cloudLink(connectUrl, {}, "slack")}>Connect Slack</a>
+            : <OwnerOnly cloud={cloud} what="Slack" />}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -72,7 +170,13 @@ export default function Security() {
 //     act as the App. On Tares Cloud the App is GlassFlow's and "Connect GitHub" replaces "Create".
 //   * a personal token: polls the repositories you add for commits and pull requests.
 // Same write-only contract as the other credentials: no token, key or secret ever comes back.
-function GithubPanel() {
+//
+// On Tares Cloud (github_connect_url set) a "GitHub App (Tares Cloud)" row is a link the control
+// plane holds: picking repositories and disconnecting happen on its pages, which push the result
+// back here, so this console links to them instead of changing the local copy (TR-366, TR-372).
+function GithubPanel({ cloud }: { cloud: Cloud }) {
+  const connectUrl = cloud.health?.github_connect_url || undefined;
+  const canConnect = cloud.isOwner !== false;   // unknown: show, the control plane checks
   const [creds, setCreds] = useState<GithubCredential[]>();
   const [err, setErr] = useState<string>();
   const [adding, setAdding] = useState<"" | "token" | "app">("");
@@ -82,7 +186,6 @@ function GithubPanel() {
   const [org, setOrg] = useState("");
   const [appName, setAppName] = useState("");
   const [publicUrl, setPublicUrl] = useState(window.location.origin);
-  const [connectUrl, setConnectUrl] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [tests, setTests] = useState<Record<string, { busy?: boolean } & Partial<GithubAppTest>>>({});
   const [confirmDelete, setConfirmDelete] = useState<GithubCredential>();
@@ -100,7 +203,6 @@ function GithubPanel() {
       .catch((e) => setErr(String((e as Error).message ?? e)));
   useEffect(() => {
     load();
-    api.health().then((h) => setConnectUrl(h.github_connect_url || undefined)).catch(() => {});
     if (back.event || back.error) {      // the message is shown once; a reload starts clean
       const url = new URL(window.location.href);
       for (const k of ["event", "error", "github", "account", "detail"]) url.searchParams.delete(k);
@@ -179,7 +281,7 @@ function GithubPanel() {
         {!adding && (
           <div className="btnrow">
             {connectUrl
-              ? <a className="btn primary" href={connectUrl}>Connect GitHub</a>
+              ? canConnect && <a className="btn primary" href={cloudLink(connectUrl, {}, "github")}>Connect GitHub</a>
               : <button className="primary" onClick={() => { setAdding("app"); setName("github-app"); }}>Create GitHub App</button>}
             <button onClick={() => { setAdding("token"); setName(""); }}>Add a personal token</button>
           </div>
@@ -192,6 +294,7 @@ function GithubPanel() {
         you add for commits and pull requests opened, merged or closed. Either one is picked by
         name on sources and MCP servers, and no token or key is ever shown again.
       </p>
+      {connectUrl && !canConnect && <OwnerOnly cloud={cloud} what="GitHub" />}
 
       {back.error && <div className="alert error">GitHub: {back.error}</div>}
       {back.event === "created" && (
@@ -286,7 +389,7 @@ function GithubPanel() {
 
       {!creds ? <div className="muted">loading…</div>
         : creds.length === 0 ? (
-          !adding && <div className="empty">Nothing connected yet. Create the GitHub App, or add a personal token.</div>
+          !adding && <div className="empty">Nothing connected yet. {connectUrl ? "Connect GitHub" : "Create the GitHub App"}, or add a personal token.</div>
         ) : (
           <table>
             <thead><tr><th>name</th><th>connects as</th><th>events</th><th>used by</th><th aria-label="actions" /></tr></thead>
@@ -296,6 +399,12 @@ function GithubPanel() {
                 const uses = c.sources.length + c.mcp_servers.length;
                 const insts = c.installations ?? [];
                 const d = c.deliveries;
+                // a Tares Cloud App row on a cell that knows where the control plane's pages are
+                const cloudApp = c.kind === "app_broker" && !!connectUrl;
+                const iid = insts[0]?.id;
+                const repos = c.repositories ?? [];
+                const repoLink = (params: Record<string, string>) =>
+                  cloudLink(connectUrl!, { installation: String(iid), ...params }, "github");
                 return (
                   <Fragment key={c.name}>
                     <tr>
@@ -305,7 +414,10 @@ function GithubPanel() {
                         {isApp(c) ? (
                           <>GitHub App{c.broker && " (Tares Cloud)"}{insts.length > 0
                             ? <> on <span className="mono">{insts.map((i) => i.account || i.id).join(", ")}</span></>
-                            : <span className="dim">, not installed yet</span>}</>
+                            : <span className="dim">, not installed yet</span>}
+                            {cloudApp && (repos.length > 0
+                              ? <>: <RepoNames repos={repos} account={insts[0]?.account || c.account} /></>
+                              : <span className="dim">, no repositories picked yet</span>)}</>
                         ) : (
                           <>token{c.account && <> of <span className="mono">{c.account}</span></>}</>
                         )}
@@ -332,9 +444,15 @@ function GithubPanel() {
                             <button className={insts.length === 0 ? "primary" : ""} onClick={() => install(c.name)}>
                               {insts.length === 0 ? "Install on GitHub" : "Add an organization"}</button>
                           )}
+                          {cloudApp && canConnect && iid != null && (repos.length === 0
+                            ? <a className="btn primary" href={repoLink({})}>Pick repositories</a>
+                            : <a className="btn" href={repoLink({})}>Change repositories</a>)}
                           <button onClick={() => test(c.name)} disabled={t?.busy}>{t?.busy ? "testing…" : "Test"}</button>
                           {!isApp(c) && <button onClick={() => { setRotating(rotating === c.name ? undefined : c.name); setNewToken(""); }}>Rotate</button>}
-                          <button className="danger" onClick={() => setConfirmDelete(c)}>Delete</button>
+                          {cloudApp
+                            ? canConnect && iid != null
+                              && <a className="btn danger" href={repoLink({ action: "disconnect" })}>Disconnect</a>
+                            : <button className="danger" onClick={() => setConfirmDelete(c)}>Delete</button>}
                         </div>
                       </td>
                     </tr>
