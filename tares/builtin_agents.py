@@ -1048,8 +1048,11 @@ class AgentRunner:
         # set to conclude: the run may not end without it (asked for it once more, below)
         must_conclude = bool(agent.get("concludes"))
         verdicts = verdict_words(agent)
+        from . import github_tools as _gh_tools
+        checks = _gh_tools.offered(self.store, agent)   # its GitHub App credential (TR-165)
         tools = (TOOL_DEFS + ([conclude_def(agent)] if offers_conclude(agent) else [])
-                 + ([_skills.TOOL_DEF] if skills else []) + toolbox.tool_defs)
+                 + ([_skills.TOOL_DEF] if skills else []) + toolbox.tool_defs
+                 + ([_gh_tools.CHECK_RUN_DEF] if checks else []))
         max_rounds = effective_max_rounds(agent)
         external_used: list[str] = []
         # The agent's own last conclusion for this entity, so a run builds on the previous one
@@ -1158,6 +1161,13 @@ class AgentRunner:
                                                    or [agent.get("owned_by")], wanted, skill_names)
                             if wanted not in skills_loaded:
                                 skills_loaded.append(wanted)
+                        elif name == _gh_tools.CHECK_RUN and checks:
+                            external_used.append(name)
+                            out = await _gh_tools.create_check_run(self.store, agent, tc.arguments)
+                            if produced is not None:
+                                made = _results.from_tool_call(name, tc.arguments, out)
+                                if made:
+                                    produced.append(made)
                         elif toolbox.owns(name):
                             external_used.append(name)
                             out = await toolbox.call(name, tc.arguments)

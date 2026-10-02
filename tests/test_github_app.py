@@ -121,6 +121,10 @@ def fake_github(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"default_branch": "main", "private": True})
     if path == "/repos/acme/app/commits":
         return httpx.Response(200, json=[])
+    if path == "/repos/acme/app/check-runs" and request.method == "POST":
+        body = json.loads(request.content)
+        STATE.setdefault("checks", []).append(body)
+        return httpx.Response(201, json={"id": 9, "html_url": "https://github.com/acme/app/runs/9"})
     if path == "/repos/acme/app/pulls":
         return httpx.Response(200, json=STATE["pulls"])
     return httpx.Response(404, json={"message": "Not Found"})
@@ -556,6 +560,59 @@ async def daemon():
                   and trigs["pr_merged"]["filters"][0]["value"] == "pull_request" and n == 1,
                   f"{n} {trigs['old_pr']['filters']}")
             check("the upgrade runs once", Engine(store).fill_github_commit_filters() == 0)
+
+            print("== agents on GitHub (TR-165) ==")
+            r = await cx.post("/api/integrations/github/acme-app/mcp", json={"write": True})
+            r2 = await cx.post("/api/integrations/github/acme-app/mcp", json={"write": True})
+            r3 = await cx.post("/api/integrations/github/acme-app/mcp", json={"write": False})
+            srv = store.get_mcp_server("github-acme-app")
+            check("the credential's GitHub MCP server: made once, reused; a read-only one apart",
+                  r.json()["server"] == r2.json()["server"] == "github-acme-app"
+                  and r3.json()["server"] == "github-acme-app-read"
+                  and srv["auth_value"] == "credential:github/acme-app"
+                  and "X-MCP-Readonly" not in (srv.get("headers") or {})
+                  and (store.get_mcp_server("github-acme-app-read").get("headers") or {}).get(
+                      "X-MCP-Readonly") == "true", str(srv))
+            r = await cx.post("/api/agents/builtin", json={
+                "name": "pr_checker", "trigger": "pr_merged", "prompt": "Review the PR.",
+                "mcp_servers": ["github-acme-app"], "github": "acme-app"})
+            check("agent created with a GitHub credential", r.status_code == 201, r.text)
+            r = await cx.post("/api/agents/builtin", json={
+                "name": "bad_gh", "trigger": "pr_merged", "prompt": "x", "github": "nope"})
+            check("an unknown credential is refused", r.status_code == 404, r.text)
+            ag = store.get_catalog_agent("pr_checker")
+            rows = (await cx.get("/api/agents/builtin")).json()["agents"]
+            check("the agent's github is stored and listed",
+                  ag["github"] == "acme-app" and next(a for a in rows if a["name"] == "pr_checker")["github"]
+                  == "acme-app", str(ag.get("github")))
+            r = await cx.put("/api/agents/builtin/pr_checker", json={
+                "trigger": "pr_merged", "prompt": "Review the PR again.", "mcp_servers": ["github-acme-app"]})
+            check("an update that does not mention github keeps it",
+                  store.get_catalog_agent("pr_checker")["github"] == "acme-app", r.text)
+            from tares import github_tools
+            from tares.results import from_tool_call
+            check("check runs offered for an App credential, not for a token",
+                  github_tools.offered(store, ag) and not github_tools.offered(store, {"github": "pat"})
+                  and not github_tools.offered(store, {"github": ""}))
+            out = await github_tools.create_check_run(store, ag, {
+                "repo": "acme/app", "sha": "abc", "conclusion": "failure", "summary": "two problems",
+                "annotations": [{"path": "a.py", "start_line": 3, "message": "off by one", "level": "failure"},
+                                {"path": "", "start_line": 1, "message": "dropped: no path"}]})
+            posted = STATE["checks"][-1]
+            check("a check run is posted with the App's token: conclusion, summary, valid notes only",
+                  "runs/9" in out and posted["conclusion"] == "failure" and posted["head_sha"] == "abc"
+                  and len(posted["output"]["annotations"]) == 1
+                  and posted["output"]["annotations"][0]["annotation_level"] == "failure", out)
+            res = from_tool_call("github_create_check_run", {"conclusion": "failure"}, out)
+            check("the run records it as a check result with its link",
+                  res == {"kind": "check", "label": "check run failure",
+                          "url": "https://github.com/acme/app/runs/9"}, str(res))
+            try:
+                await github_tools.create_check_run(store, ag, {"repo": "acme/app", "sha": "abc",
+                                                                "conclusion": "maybe", "summary": "x"})
+                check("a bad conclusion is a tool error the model can fix", False)
+            except ValueError as e:
+                check("a bad conclusion is a tool error the model can fix", "conclusion" in str(e))
 
 
 async def main():

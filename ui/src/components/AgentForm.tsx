@@ -6,7 +6,7 @@ import { api } from "../api";
 import type { SlackChannels } from "../api";
 import type { ModelProvider } from "../types";
 import { Combo, Picker } from "./bits";
-import type { AgentPreset, BuiltinAgent, Handoff, Verdict } from "../types";
+import type { AgentPreset, BuiltinAgent, GithubCredential, Handoff, Verdict } from "../types";
 
 const VERDICT_RE = /^[a-z0-9][a-z0-9_-]*$/;
 const DURATION_RE = /^\d+(\.\d+)?[smhd]$/;
@@ -179,12 +179,46 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   const toggleMcp = (name: string, on: boolean) =>
     setMcpSel((cur) => (on ? [...cur, name] : cur.filter((n) => n !== name)));
 
+  // GitHub (TR-165): a stored credential, and what the agent may do with it. Reads and writes go
+  // through the credential's GitHub MCP server (made once, `github-<cred>` / `github-<cred>-read`);
+  // an App credential also gives the agent the check-run tool.
+  const [ghCreds, setGhCreds] = useState<GithubCredential[]>();
+  useEffect(() => {
+    let live = true;
+    api.githubCredentials().then((r) => { if (live) setGhCreds(r.credentials); })
+      .catch(() => { if (live) setGhCreds([]); });
+    return () => { live = false; };
+  }, []);
+  const [ghCred, setGhCred] = useState(initial?.github ?? "");
+  const ghServer = (cred: string, write: boolean) => `github-${cred}${write ? "" : "-read"}`;
+  const [ghAccess, setGhAccess] = useState<"none" | "read" | "write">(() => {
+    const c = initial?.github ?? "";
+    if (!c) return "none";
+    const sel = initial?.mcp_servers ?? [];
+    return sel.includes(ghServer(c, true)) ? "write" : sel.includes(ghServer(c, false)) ? "read" : "none";
+  });
+  const ghChosen = ghCreds?.find((c) => c.name === ghCred);
+  const ghIsApp = !!ghChosen && (ghChosen.kind === "app" || ghChosen.kind === "app_broker");
+  const ghLabels: Record<string, string> = { "": "none" };
+  for (const c of ghCreds ?? []) {
+    ghLabels[c.name] = `${c.name} · ${c.kind === "token" ? "personal token" : "GitHub App"}`;
+  }
+
   const chanList = channels?.reason === null ? channels.channels : [];
   const chanLabels: Record<string, string> = { "": "pick a channel…" };
   for (const c of chanList) chanLabels[c.id] = (c.is_private ? "🔒 " : "#") + c.name;
 
   const save = async () => {
     setBusy(true); setErr(undefined);
+    // the GitHub MCP server for the chosen access, swapped in for any other variant of it
+    let servers = mcpSel.filter((n) => !/^github-.+?(-read)?$/.test(n) || !(ghCreds ?? []).some(
+      (c) => n === ghServer(c.name, true) || n === ghServer(c.name, false)));
+    if (ghCred && ghAccess !== "none") {
+      try {
+        const r = await api.githubCredentialMcp(ghCred, ghAccess === "write");
+        servers = [...servers, r.server];
+      } catch (e) { setErr(String((e as Error).message ?? e)); setBusy(false); return; }
+    }
     const body = {
       name: name.trim(), trigger, prompt: prompt.trim(), model, provider,
       ...(projectId ? { project: projectId } : {}),
@@ -194,7 +228,8 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
       webhook_url: writebackOn ? webhookUrl.trim() : "",
       webhook_token: writebackOn ? webhookToken.trim() : "",
       webhook_key_label: writebackOn ? webhookKeyLabel.trim() : "",
-      mcp_servers: mcpSel,
+      mcp_servers: servers,
+      github: ghCred,
       max_rounds: maxRounds.trim() ? Number(maxRounds) : null,
       budget_usd: budget.trim() ? Number(budget) : null,
       handoffs: handoffs.map((h) => ({ verdict: h.verdict.trim().toLowerCase(), agent: h.agent,
@@ -290,6 +325,49 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
             : <Picker value={model} onChange={setModel} options={modelOptions} labels={modelLabels}
                       ariaLabel="model" />}
         </div>
+      </div>
+
+      <div className="field">
+        <h3 style={{ margin: "10px 0 2px", fontSize: 16 }}>GitHub</h3>
+        <span className="help" style={{ display: "block", margin: "0 0 10px" }}>
+          Let this agent read and change repositories with a GitHub credential from{" "}
+          <Link to="/settings?tab=github">Settings, GitHub</Link>.
+        </span>
+        {ghCreds === undefined ? <span className="dim">loading…</span>
+          : ghCreds.length === 0 ? (
+            <span className="help">No GitHub connected yet. <Link to="/settings?tab=github">Connect GitHub</Link> first.</span>
+          ) : (
+            <div className="row2">
+              <label className="field">
+                <span className="lbl">credential</span>
+                <Picker value={ghCred} ariaLabel="GitHub credential"
+                        options={["", ...ghCreds.map((c) => c.name)]} labels={ghLabels}
+                        onChange={(v) => { setGhCred(v); if (!v) setGhAccess("none"); else if (ghAccess === "none") setGhAccess("read"); }} />
+              </label>
+              {ghCred && (
+                <label className="field">
+                  <span className="lbl">it may</span>
+                  <Picker value={ghAccess} ariaLabel="GitHub access"
+                          options={["read", "write", "none"]}
+                          labels={{ read: "read repositories", write: "read and write (branches, files, PRs, comments, reviews)",
+                                    none: "nothing through MCP" }}
+                          onChange={(v) => setGhAccess(v as "none" | "read" | "write")} />
+                </label>
+              )}
+            </div>
+          )}
+        {ghCred && ghIsApp && (
+          <span className="help" style={{ display: "block", marginTop: 6 }}>
+            As a GitHub App it can also post its verdict on a pull request as a check run, with
+            notes on the lines.
+          </span>
+        )}
+        {ghCred && ghAccess === "write" && (
+          <span className="help" style={{ display: "block", marginTop: 6 }}>
+            Writing lets this agent change repositories. Ask it to open pull requests rather than
+            push to the default branch.
+          </span>
+        )}
       </div>
 
       <div className="field">

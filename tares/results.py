@@ -14,7 +14,7 @@ import json
 import re
 from urllib.parse import urlparse
 
-KINDS = ("pr", "commit", "slack", "email", "webhook", "custom")
+KINDS = ("pr", "commit", "check", "slack", "email", "webhook", "custom")
 MAX_RESULTS = 20
 
 _PR_URL = re.compile(r"https://github\.com/[^\s\"'<>]+?/pull/(\d+)")
@@ -39,6 +39,11 @@ def from_tool_call(name: str, args: dict | None, out: str) -> dict | None:
         return None
     args = args or {}
     tool, full = _tool(name), name.lower()
+    if tool == "github_create_check_run":
+        m = re.search(r"https://github\.com/\S+/runs/\d+", out)
+        verdict = str(args.get("conclusion") or "").strip()
+        return {"kind": "check", "label": f"check run {verdict}".strip(),
+                **({"url": m.group(0)} if m else {})}
     if "pull_request" in tool and tool.startswith("create"):
         m = _PR_URL.search(out)
         if m:

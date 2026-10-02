@@ -140,6 +140,10 @@ SLACK_EVENTS_PATH = "/api/slack/events"
 # carries no Tares token, so these two GETs are public to the auth middleware. The creation callback
 # needs our signed `state`; the install callback needs the state, or an installation on the App
 # owner's account (see github_app_installed).
+# GitHub's hosted MCP server: agents read and write repos through it with a stored credential
+# (TR-348: it accepts a GitHub App's installation tokens, writes then show as the App)
+GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/"
+
 GITHUB_APP_CALLBACKS = ("/api/integrations/github/apps/callback",
                         "/api/integrations/github/apps/installed")
 
@@ -370,6 +374,13 @@ class AgentIn(BaseModel):
     # ([{verdict, when}]); None = off / none on create, unchanged on update
     concludes: bool | None = None
     verdicts: list[dict] | None = None
+    # the GitHub credential the agent acts with (the check-run tool); None = none on create,
+    # unchanged on update; "" clears. Reads and writes go through its GitHub MCP server.
+    github: str | None = None
+
+
+class GithubMcpIn(BaseModel):
+    write: bool = False          # write toolsets (branches, files, PRs, comments, reviews)
 
 
 class ImportReq(BaseModel):
@@ -1994,6 +2005,25 @@ def make_app() -> FastAPI:
                                           "GitHub", "installations": []}
         return {"ok": True, "login": rows[0]["account"], "installations": rows}
 
+    @app.post("/api/integrations/github/{name}/mcp")
+    async def github_credential_mcp(name: str, body: GithubMcpIn):
+        """The GitHub MCP server for this credential (GitHub's hosted server, authenticated with
+        the credential, so an App credential's agents act as the App): `github-<name>` with write
+        toolsets, `github-<name>-read` read-only. Created once, a shared part any project uses;
+        the agent form adds the returned name to the agent's MCP servers."""
+        if store.get_github_credential(name) is None:
+            _err(KeyError(f"unknown GitHub credential {name!r}"), 404)
+        from .github_credentials import CREDENTIAL_PREFIX
+        server = f"github-{name}" + ("" if body.write else "-read")
+        if store.get_mcp_server(server) is None:
+            headers = {"X-MCP-Toolsets": "repos,pull_requests,issues"}
+            if not body.write:
+                headers["X-MCP-Readonly"] = "true"
+            store.upsert_mcp_server(server, GITHUB_MCP_URL, "Authorization",
+                                    CREDENTIAL_PREFIX + name, headers)
+            store.put_in_project("mcp_server", server, store.default_project_id(), creator=True)
+        return {"ok": True, "server": server}
+
     @app.get("/api/integrations/github/{name}/repos")
     async def github_credential_repos(name: str, query: str = ""):
         cred = store.get_github_credential(name)
@@ -2332,6 +2362,7 @@ def make_app() -> FastAPI:
                          "handoffs": a.get("handoffs") or [],
                          "concludes": bool(a.get("concludes")),
                          "verdicts": a.get("verdicts") or [],
+                         "github": a.get("github") or "",
                          # it gets the conclude tool (set to, or its prompt names it): its runs
                          # end with an outcome and a verdict worth a column of their own
                          "offers_conclude": offers_conclude(a),
@@ -2353,6 +2384,12 @@ def make_app() -> FastAPI:
                 "slack_workspace": bool(resolve_slack_token(store)[0]),
                 "presets": [{"id": k, **v} for k, v in AGENT_PRESETS.items()]}
 
+    def _check_agent_github(value: str | None) -> str | None:
+        """An agent's `github` must name a stored GitHub credential (None and "" pass through)."""
+        if value and store.get_github_credential(value.strip()) is None:
+            _err(ValueError(f"GitHub credential {value!r} not found (Settings > GitHub)"), 404)
+        return value.strip() if value else value
+
     @app.post("/api/agents/builtin", status_code=201)
     async def create_builtin_agent(body: AgentIn):
         if not body.name:
@@ -2369,7 +2406,8 @@ def make_app() -> FastAPI:
                                    provider=body.provider.strip(),
                                    handoffs=raw.get("handoffs") or [],
                                    concludes=bool(body.concludes),
-                                   verdicts=raw.get("verdicts") or [])
+                                   verdicts=raw.get("verdicts") or [],
+                                   github=_check_agent_github(body.github) or "")
         store.put_in_project("agent", body.name, uid, creator=True)
         runtime.reload_catalog()
         return {"ok": True, "enabled": False, "project": uid,
@@ -2410,7 +2448,8 @@ def make_app() -> FastAPI:
                                    handoffs=raw.get("handoffs") if here else None,
                                    concludes=body.concludes,
                                    verdicts=(raw.get("verdicts") if body.verdicts is not None
-                                             else None))
+                                             else None),
+                                   github=_check_agent_github(body.github))
         store.mark_customized("agent", name)
         store.put_in_project("agent", name, uid)
         if not here:

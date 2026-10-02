@@ -140,6 +140,7 @@ class AgentCfg:
     daily_cap: int | None = None     # runs per rolling 24h; None = the instance-wide cap
     concludes: bool = False   # every run ends with the conclude tool, whatever the prompt says
     verdicts: list = dc_field(default_factory=list)   # [{verdict, when}]: the only ones it may give
+    github: str = ""          # a GitHub credential the agent acts with (check runs); "" = none
     enabled: bool = False
 
 
@@ -277,6 +278,7 @@ def _agent_from_dict(a: dict, enabled: bool = False) -> AgentCfg:
         daily_cap=(int(a["daily_cap"]) if a.get("daily_cap") not in (None, "") else None),
         concludes=bool(a.get("concludes")),
         verdicts=normalize_verdicts(a["name"], a.get("verdicts")),
+        github=str(a.get("github") or ""),
         enabled=bool(a.get("enabled", enabled)),
     )
 
@@ -468,7 +470,8 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
                                              if "handoffs" in a else None),
                                    concludes=(bool(a["concludes"]) if "concludes" in a else None),
                                    verdicts=(normalize_verdicts(a["name"], a["verdicts"])
-                                             if "verdicts" in a else None))
+                                             if "verdicts" in a else None),
+                                   github=(str(a.get("github") or "") if "github" in a else None))
         # on/off belongs to the wiring of the project the agent is in; applied once it is placed
         # (below, or by the engine that applies a template)
         _turn_on_where_placed(store, a)
@@ -741,6 +744,7 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
          **({"handoffs": a["handoffs"]} if a.get("handoffs") else {}),
          **({"concludes": True} if a.get("concludes") else {}),
          **({"verdicts": a["verdicts"]} if a.get("verdicts") else {}),
+         **({"github": a["github"]} if a.get("github") else {}),
          **({"slack_webhook": a["slack_webhook"]}
             if include_secrets and a.get("slack_webhook") else {}),
          **({"webhook_token": a["webhook_token"]}

@@ -62,6 +62,7 @@ export function ResultChips({ r, limit }: { r: AgentRun; limit?: number }) {
   const shown = limit ? all.slice(0, limit) : all;
   const title: Record<string, string> = {
     pr: "a pull request this run opened", commit: "a commit this run pushed",
+    check: "a check run this run posted on a pull request",
     slack: "a Slack message this run posted", email: "an email this run sent",
     webhook: "the write-back this run delivered", custom: "reported by the agent",
   };

@@ -313,6 +313,10 @@ export const api = {
   createGithubApp: (body: { name: string; org?: string; app_name?: string; public_url?: string }) =>
     request<{ action: string; manifest: string; hook_url: string; warning: string | null }>(
       "/api/integrations/github/apps", { method: "POST", body: JSON.stringify(body) }),
+  // the credential's GitHub MCP server (made once, reused): what an agent reads/writes repos with
+  githubCredentialMcp: (name: string, write: boolean) =>
+    request<{ ok: boolean; server: string }>(`/api/integrations/github/${encodeURIComponent(name)}/mcp`,
+      { method: "POST", body: JSON.stringify({ write }) }),
   githubAppInstallLink: (name: string) =>
     request<{ url: string }>(`/api/integrations/github/${encodeURIComponent(name)}/install`),
   githubCredentialTree: (name: string, repo: string, ref = "", path = "") =>

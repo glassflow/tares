@@ -262,6 +262,7 @@ export interface BuiltinAgent {
   handoffs?: Handoff[];        // who takes over when a run concludes with a verdict (TR-334)
   concludes?: boolean;         // every run ends with the conclude tool, whatever the prompt says
   verdicts?: Verdict[];        // the only verdicts it may give; empty: any word, or none
+  github?: string;             // the GitHub credential it acts with (check runs); "" = none
   offers_conclude?: boolean;   // it gets the conclude tool (set to, or its prompt names it)
   effective_max_rounds: number;   // the cap its next run will be held to
   updated_at?: string;
@@ -345,7 +346,7 @@ export interface Skill {
 }
 
 export interface RunResult {
-  kind: "pr" | "commit" | "slack" | "email" | "webhook" | "custom";
+  kind: "pr" | "commit" | "check" | "slack" | "email" | "webhook" | "custom";
   label: string;
   url?: string;
 }
