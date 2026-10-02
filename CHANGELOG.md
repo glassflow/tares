@@ -5,6 +5,42 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.41.0] - 2026-10-02
+
+Switch workspaces from the console, and connect GitHub and Slack from the workspace's own
+Settings. Pairs with the Tares Cloud control-plane release 1.21.0 and ships after it; a
+self-hosted instance looks and behaves as before.
+
+### Added
+- Workspace switcher: with `TARES_WORKSPACES_URL` set, the top left of the console shows the
+  workspace's name and opens a menu of your workspaces (the default one marked, ones still being
+  set up or suspended greyed out), Workspace settings, All workspaces, New workspace and Account.
+  When the Tares Cloud session has expired it offers "Sign in to switch workspaces"; the console
+  never waits for the list. The bottom "Workspace" link moves into this menu.
+- Connect Slack: with `TARES_SLACK_CONNECT_URL` set, Settings > Slack offers Connect Slack, then
+  shows which Slack workspace it is connected to and Disconnect, in place of the two paste boxes.
+  `PUT` and `DELETE /api/settings/slack-team` store the Slack team, and
+  `GET /api/settings/slack-bot-token` returns it as `team`.
+- GitHub App on Tares Cloud: an `app_broker` credential carries the repositories this workspace
+  follows (`repositories`, `owner/repo`; replaced when a create or update sends it, kept when it
+  does not). Settings > GitHub lists them, with Pick repositories or Change repositories.
+- Settings shows what happened when Tares Cloud sends you back from connecting or disconnecting
+  (`cloud`, `cloud_detail`), once.
+- `/health` reports `slack_connect_url` and `workspaces_url` when set, next to `workspace_url`
+  and `github_connect_url`.
+
+### Changed
+- Members who are not the workspace owner see who can connect GitHub and Slack instead of
+  buttons that would be refused. Personal tokens are unaffected.
+- Connect GitHub, Change repositories and Disconnect bring you back to Settings > GitHub.
+- The note that users, the Slack app, plan and storage are managed in the workspace is gone from
+  Settings.
+
+### Fixed
+- Disconnecting the Tares Cloud GitHub App from a workspace now goes through Tares Cloud, which
+  stops its deliveries to the workspace. Delete used to remove only the workspace's copy, so
+  events kept arriving.
+
 ## [1.40.0] - 2026-10-02
 
 ### Changed
