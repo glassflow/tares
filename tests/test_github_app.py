@@ -561,6 +561,17 @@ async def daemon():
                   f"{n} {trigs['old_pr']['filters']}")
             check("the upgrade runs once", Engine(store).fill_github_commit_filters() == 0)
 
+            print("== the setup builder and GitHub ==")
+            from tares import setup_flow
+            _plan, errs = setup_flow.normalize({
+                "goal": "review merged PRs", "name": "PR review", "who": "tares",
+                "watches": [{"key": "w1", "name": "gh", "connector": "github_app",
+                             "config": {"credential": "acme-app"}}]}, store, runtime.catalog)
+            check("a plan cannot make a new GitHub App source (it comes with the App)",
+                  any("GitHub App's source" in e for e in errs), str(errs))
+            check("the planner is told how GitHub events are named",
+                  "action merged" in setup_flow.SYSTEM and "github_app source" in setup_flow.SYSTEM)
+
             print("== agents on GitHub (TR-165) ==")
             r = await cx.post("/api/integrations/github/acme-app/mcp", json={"write": True})
             r2 = await cx.post("/api/integrations/github/acme-app/mcp", json={"write": True})

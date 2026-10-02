@@ -218,6 +218,7 @@ it can change things.
   an existing skill when it fits (existing true, its exact name),
   an existing agent when one already does the job (existing true, its exact name; its
   instructions stay as they are). Parts are shared between projects.
+- GitHub (repositories, pull requests, pushes, issues, reviews, releases, CI runs): when list_sources shows a github_app source (the GitHub App), use it as an existing source: it carries every repository the App is installed on, so never add a source per repository next to it. Otherwise one github source per repository (connector github, config repo owner/name, needs credential); it reports commits and pull requests opened, merged or closed only. Narrow the wake-up with filters on the event, not on text: event_type is pull_request, push, issues, issue_comment, pull_request_review, release or workflow_run (a github source also has commit); action is opened, synchronize, merged, closed, reopened, ready_for_review, submitted, created, published or completed; repo is owner/name. A merged pull request is event_type pull_request and action merged; a failed CI run is event_type workflow_run and conclusion failure. Pull request and issue events are keyed owner/repo#number, so the default grouping already gives one firing per pull request. key_field for GitHub is repo.
 - Slack: when the goal asks to be told or messaged in Slack, set slack true on the agent whose finding should be posted. Tares posts it to a channel itself; never suggest a Slack MCP server for that, and never ask for a channel: the person picks it.
 - Skills: at most 2, only when the goal implies house rules or vocabulary.
 - Every sentence is plain words for someone who is not an engineer: no jargon, no em dashes."""
@@ -642,6 +643,11 @@ def _normalize(raw, store, catalog, prev: dict | None,
             elif SPECS.get(conn, {}).get("internal"):
                 probs.add(where, f"{conn} is filled by Tares itself; pick another connector.",
                           label)
+            elif SPECS.get(conn, {}).get("credential_managed"):
+                # the GitHub App's source comes with the App (Settings > GitHub), never a plan
+                probs.add(where, "The GitHub App's source is made when the App is connected "
+                                 "(Settings, GitHub); use it as an existing source, or a GitHub "
+                                 "source for one repository.", label)
             else:
                 try:
                     # a label the model gave as a bare word, or with neither a field nor a fixed
