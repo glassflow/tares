@@ -123,6 +123,13 @@ def part1():
        all(s.attributes.get("gen_ai.agent.name") == "first-look"
            and s.attributes.get("gen_ai.agent.version") for s in spans),
        str([s.attributes.get("gen_ai.agent.name") for s in spans]))
+    ck("rius.main_agent.name on every span",
+       all(s.attributes.get("rius.main_agent.name") == "first-look" for s in spans),
+       str([s.attributes.get("rius.main_agent.name") for s in spans]))
+    ck("user.id is the instance on every span", all(s.attributes.get("user.id") == "cell-a" for s in spans),
+       str([s.attributes.get("user.id") for s in spans]))
+    ck("service.version on the resource", root.resource.attributes.get("service.version") == T.tares_version(),
+       str(root.resource.attributes))
     ck("children nest under the root", all(s.parent and s.parent.span_id == root.context.span_id
                                            for s in spans if s is not root))
     llm = by["chat claude-sonnet-4-6"]
