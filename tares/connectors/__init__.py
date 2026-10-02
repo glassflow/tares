@@ -18,6 +18,7 @@ from .base import UNIVERSAL_CONFIG
 from .claude_code import ClaudeCodeConnector
 from .docker_logs import DockerLogsConnector
 from .github import GithubConnector
+from .github_app import GithubAppConnector
 from .loki import LokiConnector
 from .memory import MemoryConnector
 from .otlp import OtlpConnector
@@ -40,6 +41,7 @@ REGISTRY = {
     "memory": MemoryConnector,
     "otlp": OtlpConnector,
     "github": GithubConnector,
+    "github_app": GithubAppConnector,
     "vercel": VercelConnector,
     "postgres": PostgresConnector,
     "claude_code": ClaudeCodeConnector,
@@ -84,9 +86,17 @@ SPECS = {
              "description": "Receives OTLP/HTTP logs, traces and metrics at POST /v1/{logs,traces,"
                             "metrics}. One source ingests every service; resource attributes "
                             "(service.name) become labels."},
-    "github": {"label": "GitHub commits", "mode": "poll", "discover": True, "poll": "2m",
-               "description": "Polls a repo's commits (cursor by SHA); one event per commit, "
-                              "keyed by repo, with author as a label."},
+    "github": {"label": "GitHub", "mode": "poll", "discover": True, "poll": "2m",
+               "description": "Polls one repository with a personal token: its commits, and pull "
+                              "requests opened, merged or closed. Install the GitHub App instead "
+                              "(Settings > GitHub) for every event of every repo as it happens."},
+    # `credential_managed`: created with its credential (the GitHub App flow), never offered as a
+    # new kind in Add source or the planner; an existing one is picked like any other source.
+    "github_app": {"label": "GitHub (App)", "mode": "push", "credential_managed": True,
+                   "description": "Every event of a GitHub App installation as it happens: pull "
+                                  "requests, pushes, reviews, comments, issues, releases, workflow "
+                                  "runs, across all its repositories. Created with the App "
+                                  "(Settings > GitHub)."},
     "vercel": {"label": "Vercel logs", "mode": "push",
                "description": "Push source for Vercel logs; point a Vercel log drain (JSON) at this "
                               "source's ingest endpoint; one event per log entry, keyed by project, "

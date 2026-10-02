@@ -200,14 +200,15 @@ async def main():
                   r.json()["credentials"][0]["mcp_servers"] == ["github"], r.text)
 
             from tares.mcp_client import _headers, resolve_servers
-            resolved = resolve_servers(store, store.list_mcp_servers())
+            resolved = await resolve_servers(store, store.list_mcp_servers())
             hdrs = _headers(resolved[0])
             check("resolved headers: bearer from credential + extra headers",
                   hdrs.get("Authorization") == "Bearer tok-2"
                   and hdrs.get("X-MCP-Toolsets") == "repos,pull_requests"
                   and hdrs.get("X-MCP-Readonly") == "true", str(hdrs))
             store.upsert_mcp_server("orphan", "https://x/mcp", "", "credential:github/gone", {})
-            bad = [s for s in resolve_servers(store, store.list_mcp_servers()) if s["name"] == "orphan"][0]
+            bad = [s for s in await resolve_servers(store, store.list_mcp_servers())
+                   if s["name"] == "orphan"][0]
             check("missing credential -> named auth error, no header",
                   bad.get("_auth_error") and "gone" in bad["_auth_error"] and not _headers(bad),
                   str(bad))

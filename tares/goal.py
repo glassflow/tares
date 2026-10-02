@@ -129,7 +129,7 @@ def _iso(dt):
 
 # ── trigger phrasing ─────────────────────────────────────────────────────────
 _FILTER_WORDS = {"eq": "=", "neq": "is not", "gt": "above", "lt": "below", "gte": "at least",
-                 "lte": "at most", "contains": "containing"}
+                 "lte": "at most", "contains": "containing", "in": "one of"}
 _COUNT_WORDS = {">": "more than", ">=": "at least", "<": "fewer than", "<=": "at most",
                 "==": "exactly"}
 _AGG_WORDS = {"avg": "average", "sum": "total", "max": "highest", "min": "lowest",
@@ -157,8 +157,13 @@ def filters_words(filters) -> str:
     for f in filters or []:
         if not isinstance(f, dict):
             continue
-        parts.append(f"{f.get('field')} {_FILTER_WORDS.get(f.get('op'), f.get('op'))} "
-                     f"{f.get('value')}")
+        value = f.get("value")
+        if f.get("op") == "in" and isinstance(value, list):
+            shown = ", ".join(str(v) for v in value[:3]) + (f" and {len(value) - 3} more"
+                                                            if len(value) > 3 else "")
+            parts.append(f"{f.get('field')} one of {shown}")
+            continue
+        parts.append(f"{f.get('field')} {_FILTER_WORDS.get(f.get('op'), f.get('op'))} {value}")
     return (" matching " + " and ".join(parts)) if parts else ""
 
 
@@ -186,10 +191,38 @@ def _cap(s: str) -> str:
     return "The" + s[3:] if s.startswith("the ") else s
 
 
+_GH_EVENTS = {"pull_request": "a pull request", "push": "a push", "commit": "a commit",
+              "issues": "an issue", "issue_comment": "a comment",
+              "pull_request_review": "a pull request review",
+              "pull_request_review_comment": "a review comment", "release": "a release",
+              "workflow_run": "a CI run"}
+_GH_ACTIONS = {"opened": "is opened", "merged": "is merged", "closed": "is closed",
+               "reopened": "is reopened", "synchronize": "gets new commits",
+               "published": "is published", "completed": "finishes", "created": "is written",
+               "submitted": "is submitted", "pushed": "lands"}
+
+
+def _github_event_words(filters) -> tuple[str, list] | None:
+    """A GitHub trigger said by its event: ("a pull request is merged", remaining filters), from an
+    `event_type` eq filter and an optional `action` eq filter (the GitHub event contract). None
+    when the trigger does not name an event type."""
+    fs = [f for f in filters or [] if isinstance(f, dict)]
+    ev = next((f for f in fs if f.get("field") == "event_type" and f.get("op") == "eq"), None)
+    if ev is None or str(ev.get("value")) not in _GH_EVENTS:
+        return None
+    act = next((f for f in fs if f.get("field") == "action" and f.get("op") == "eq"), None)
+    what = _GH_EVENTS[str(ev["value"])]
+    verb = _GH_ACTIONS.get(str(act.get("value")), f"is {act.get('value')}") if act else "happens"
+    rest = [f for f in fs if f is not ev and f is not act]
+    return f"{what} {verb}", rest
+
+
 def source_title(cfg) -> str:
     """What a person calls a source: the repo it watches, the host it reads, the table; its
     name when nothing better is known (internal names like ctx_org_repo stay on the setup page)."""
     c = getattr(cfg, "config", None) or {}
+    if getattr(cfg, "connector", "") == "github_app":
+        return "GitHub (every repository of the App)"
     for key in ("repo", "repository", "table", "container", "project"):
         v = c.get(key)
         if isinstance(v, str) and v.strip():
@@ -270,8 +303,13 @@ def condition_clause(trig, sources: dict) -> str:
         if op == ">" and n == 0:
             if kinds == {"finding"}:
                 return _finding_clause(trig, label)
-            if kinds == {"github"}:
-                return f"a commit{filt} lands in {srcs}{per}"
+            if kinds and kinds <= {"github", "github_app"}:
+                said = _github_event_words(trig.filters)
+                if said:
+                    what, rest = said
+                    return f"{what} in {srcs}{filters_words(rest)}{per}"
+                if kinds == {"github"}:
+                    return f"a commit{filt} lands in {srcs}{per}"
             return f"an event{filt} arrives on {srcs}{per}"
         if op == "==" and n == 0:
             what = f"no events{filt}"

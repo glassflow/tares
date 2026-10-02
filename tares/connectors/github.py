@@ -1,12 +1,21 @@
-"""GitHub commits connector — polls the commits API for a repo, one Envelope per new commit.
+"""GitHub connector, the personal token path: polls one repository for its commits and for pull
+requests opened, merged or closed. (With the GitHub App installed, every event of every repo
+arrives by webhook instead: see github_app.py. The person picks a credential, never a mode.)
 
-Cursor is the newest seen commit SHA: each poll fetches the latest commits (newest first) and
-ingests everything above the cursor, so there are no duplicates. Keyed by `repo` (one source =
-one repo); `author` is a secondary label. Point it at a service's repo and commits land in that
-service's timeline next to its metrics and logs.
+Commits: the cursor is the newest seen commit SHA; each poll fetches the latest commits (newest
+first) and ingests everything above it, so there are no duplicates. Pull requests: a second cursor
+(`<source>#prs`) holds the newest `updated_at` seen; each poll lists pull requests by last update
+and reports what happened since, without remembering per-PR state (github_events.pr_poll_events).
+The first poll sets that cursor and imports no old pull requests.
 
-Auth: a token (the source's `token` config) is optional for public repos, required for private
-ones. `discover()` validates the repo, finds its default branch, and proposes labels.
+Events follow the GitHub event contract (github_events.py) shared with the App connector: commits
+are `commit` events keyed `owner/repo`, pull requests `pull_request` events keyed
+`owner/repo#<number>` with an `action` label. The contract's labels are always set, whatever labels
+the source declares, so a trigger on `action=merged` works on any GitHub source.
+
+Auth: a stored credential (`credential`, resolved at every poll) or this source's own `token`;
+required for private repos, recommended otherwise (60 requests/hour per IP without one).
+`discover()` validates the repo, finds its default branch, and proposes labels.
 """
 from __future__ import annotations
 
@@ -17,6 +26,7 @@ import time
 import httpx
 
 from ..envelope import Envelope, now_utc
+from . import github_events as gh
 from .base import Connector
 
 _API_DEFAULT = "https://api.github.com"
@@ -74,14 +84,23 @@ class GithubConnector(Connector):
         "files": {"type": "boolean", "default": True, "advanced": True,
                   "help": "with a token, fetch each new commit's changed files (paths and patches, "
                           "capped) into the payload; one extra API call per commit"},
+        "prs": {"type": "boolean", "default": True, "advanced": True,
+                "help": "also report pull requests opened, merged or closed (one extra API call "
+                        "per poll). Reviews, comments and CI runs need the GitHub App"},
         "api_url": {"type": "string", "advanced": True,
                     "help": "GitHub API base for GitHub Enterprise (default https://api.github.com)"},
     }
 
     PROVIDES = [
         {"name": "repo", "primary": True, "help": "owner/name"},
-        {"name": "author", "help": "commit author (GitHub login)"},
-        {"name": "branch", "help": "branch followed"},
+        {"name": "author", "help": "commit or pull request author (GitHub login)"},
+        {"name": "branch", "help": "branch followed, or a pull request's head branch"},
+        {"name": "action", "help": "pull requests: opened | merged | closed"},
+        {"name": "number", "help": "pull request number"},
+        {"name": "base", "help": "the branch a pull request merges into"},
+        {"name": "sha", "help": "commit sha, or a pull request's head commit"},
+        {"name": "title", "help": "pull request title"},
+        {"name": "url", "help": "link to the pull request"},
     ]
 
     async def _get(self, cx, url: str, token: str | None, params: dict, etag_key: str, repo: str):
@@ -115,17 +134,14 @@ class GithubConnector(Connector):
             etags[etag_key] = r.headers["etag"]
         return r.json()
 
-    def _token(self) -> str | None:
+    async def _token(self, repo: str | None = None) -> str | None:
         """The token to use: the stored credential named in `credential` (resolved now, so a
-        rotation is picked up on the next poll), else this source's own `token`."""
+        rotation is picked up on the next poll; an App credential mints an installation token for
+        the installation covering `repo`), else this source's own `token`."""
         c = self.cfg.config
         if c.get("credential"):
-            from ..github_credentials import resolve_github_token
-            token = resolve_github_token(self.store, c["credential"])
-            if not token:
-                raise ValueError(f"GitHub credential {c['credential']!r} not found or empty "
-                                 "(Settings > GitHub)")
-            return token
+            from ..github_credentials import get_token
+            return await get_token(self.store, c["credential"], repo)
         return c.get("token") or None
 
     def _api(self) -> str:
@@ -141,7 +157,7 @@ class GithubConnector(Connector):
         c = self.cfg.config
         repo = _normalize_repo(c["repo"])
         api = self._api()
-        token = self._token()
+        token = await self._token(repo)
         limit = int(c.get("limit", 20))
         async with httpx.AsyncClient(timeout=15) as cx:
             branch = str(c.get("branch") or "")
@@ -154,26 +170,76 @@ class GithubConnector(Connector):
                 branch = self._default_branch
             commits = await self._get(cx, f"{api}/repos/{repo}/commits", token,
                                       {"per_page": limit, "sha": branch}, f"c:{branch}", repo)
-            if not isinstance(commits, list) or not commits:
-                return []
-            cursor = self.store.get_cursor(self.cfg.name)
             new = []
-            for commit in commits:           # newest first; stop at the last-seen SHA
-                if commit.get("sha") == cursor:
-                    break
-                new.append(commit)
-            if token and c.get("files", True):
-                # the list endpoint has no file list; one more call per new commit gives the agent
-                # what changed without a tool call. Only with a token (60/h unauthenticated would
-                # not survive it), and backed off when the quota runs low.
-                for commit in new:
-                    files = await self._files(cx, api, repo, commit.get("sha", ""), token)
-                    if files is not None:
-                        commit["files"] = files["files"]
-                        commit["files_truncated"] = files["truncated"]
-        self.store.set_cursor(self.cfg.name, commits[0].get("sha"))
-        return [self._commit_envelope({**commit, "_branch": branch}, repo)
+            if isinstance(commits, list) and commits:
+                cursor = self.store.get_cursor(self.cfg.name)
+                for commit in commits:           # newest first; stop at the last-seen SHA
+                    if commit.get("sha") == cursor:
+                        break
+                    new.append(commit)
+                if token and c.get("files", True):
+                    # the list endpoint has no file list; one more call per new commit gives the
+                    # agent what changed without a tool call. Only with a token (60/h
+                    # unauthenticated would not survive it), and backed off when quota runs low.
+                    for commit in new:
+                        files = await self._files(cx, api, repo, commit.get("sha", ""), token)
+                        if files is not None:
+                            commit["files"] = files["files"]
+                            commit["files_truncated"] = files["truncated"]
+                self.store.set_cursor(self.cfg.name, commits[0].get("sha"))
+            prs = []
+            if c.get("prs", True):
+                try:
+                    prs = await self._poll_prs(cx, api, repo, token)
+                except ValueError as e:
+                    # commits still land: a fine-grained token without pull request access answers
+                    # 404 here while its commits read fine. Said once per source, not every poll.
+                    if not getattr(self, "_prs_warned", False):
+                        print(f"[github {self.cfg.name}] pull requests not readable ({e}); "
+                              "commits only. Give the token Pull requests: read, or set prs off")
+                        self._prs_warned = True
+        envs = [self._commit_envelope({**commit, "_branch": branch}, repo)
                 for commit in reversed(new)]  # chronological
+        return sorted(envs + prs, key=lambda e: e.event_time)
+
+    async def _poll_prs(self, cx, api: str, repo: str, token: str | None) -> list[Envelope]:
+        """Pull requests opened, merged or closed since the last poll. Lists them by last update
+        (newest first, one page of 50) and stops at the first one not updated since the cursor;
+        the first poll only sets the cursor, so connecting a busy repo imports no history."""
+        key = f"{self.cfg.name}#prs"
+        since = gh.parse_time(self.store.get_cursor(key))
+        pulls = await self._get(cx, f"{api}/repos/{repo}/pulls", token,
+                                {"state": "all", "sort": "updated", "direction": "desc",
+                                 "per_page": 50}, "prs", repo)
+        if not isinstance(pulls, list):
+            if since is None:          # 304 or empty: still start the clock
+                self.store.set_cursor(key, now_utc().isoformat())
+            return []
+        newest = max((gh.parse_time(p.get("updated_at")) for p in pulls
+                      if gh.parse_time(p.get("updated_at"))), default=None)
+        if since is None:
+            # first poll: from now on, no backfill (GitHub's clock ahead of ours: from its newest)
+            start = max(newest, now_utc()) if newest else now_utc()
+            self.store.set_cursor(key, start.isoformat())
+            return []
+        out = []
+        for pr in pulls:
+            updated = gh.parse_time(pr.get("updated_at"))
+            if updated is None or updated <= since:
+                break
+            for action, when in gh.pr_poll_events(pr, repo, since):
+                out.append(self._pr_envelope(pr, repo, action, when))
+        if newest and newest > since:
+            self.store.set_cursor(key, newest.isoformat())
+        return out
+
+    def _pr_envelope(self, pr: dict, repo: str, action: str, when) -> Envelope:
+        stored = {**pr, "_github_event": "pull_request", "_action": action, "_repo": repo}
+        labels = self.labels_for(self.label_context(stored))
+        return Envelope(source=self.cfg.name, source_type=self.cfg.type,
+                        key_value=f"{repo}#{pr.get('number')}", event_type="pull_request",
+                        text=gh.pr_text(labels)[:300], event_time=when or now_utc(),
+                        payload=stored, labels=labels)
 
     async def _files(self, cx, api: str, repo: str, sha: str, token: str) -> dict | None:
         """The changed files of one commit (GET /repos/{repo}/commits/{sha}), trimmed so a payload
@@ -210,12 +276,22 @@ class GithubConnector(Connector):
                           "patch": patch})
         return {"files": files, "truncated": truncated}
 
+    def labels_for(self, context: dict | None = None) -> dict:
+        # the event contract's labels always, whatever the source declares; declared labels win
+        contract = {k: v for k, v in (context or {}).items()
+                    if v not in (None, "") and k != "author_name"}
+        return {**contract, **super().labels_for(context)}
+
     def label_context(self, commit: dict | None) -> dict:
         # repo comes from config; branch from config or the `_branch` the poller stamped into the
         # payload (multi-branch mode); author/sha from the commit. Shared by ingest and backfill
-        # so the synthesized labels survive a relabel.
+        # so the synthesized labels survive a relabel. A stored pull request (stamped
+        # `_github_event`) gets the contract's pull request labels.
         commit = commit or {}
         c = self.cfg.config
+        if commit.get("_github_event") == "pull_request":
+            repo = commit.get("_repo") or c.get("repo")
+            return gh.pr_fields(commit, repo, commit.get("_action") or "")
         cm = commit.get("commit") or {}
         cm_author = cm.get("author") or {}
         login = (commit.get("author") or {}).get("login") or cm_author.get("name") or "unknown"

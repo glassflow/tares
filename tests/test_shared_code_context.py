@@ -122,8 +122,8 @@ async def main():
     check("defaults", d["params"]["context_path"]["default"] == "" and
           d["params"]["layout"]["default"] == "existing" and
           d["params"]["max_rounds"]["default"] == 12 and d["params"]["write_mode"]["default"] == "pull_request")
-    check("trigger offers every_commit only",
-          [o["value"] for o in d["params"]["trigger"]["options"]] == ["every_commit"])
+    check("trigger offers every commit and every merged PR",
+          [o["value"] for o in d["params"]["trigger"]["options"]] == ["every_commit", "every_merged_pr"])
 
     print("== validate ==")
     base = {"credential": "gh", "source_repos": [{"repo": "acme/app"}, "https://github.com/acme/lib.git"],
@@ -192,6 +192,38 @@ async def main():
     check("per_repo layout keeps the page template",
           "context/<repo-name>.md" in per_repo and "Page template" in per_repo)
     check("existing layout has no per-repo template", "Page template" not in prompt)
+    check("token, every commit: the trigger counts commits only (sources also report PRs)",
+          trig["filters"] == [{"field": "event_type", "op": "eq", "value": "commit"}], json.dumps(trig))
+    prs = template.plan(template.validate({**base, "trigger": "every_merged_pr"}))
+    ptrig = next(o for o in prs if o.kind == "trigger").spec
+    check("token, every merged PR: per-repo sources, trigger on pull_request + merged",
+          [o.kind for o in prs].count("source") == 2
+          and ptrig["filters"] == [{"field": "event_type", "op": "eq", "value": "pull_request"},
+                                   {"field": "action", "op": "eq", "value": "merged"}], json.dumps(ptrig))
+    pprompt = next(o for o in prs if o.kind == "agent").spec["prompt"]
+    check("merged PR prompt reads the PR and its files",
+          "github__get_pull_request_files" in pprompt and "merged pull requests" in pprompt)
+
+    print("== plan with a GitHub App ==")
+    app_params = {**template.validate(base), "app_source": "github"}
+    app_plan = template.plan(app_params)
+    akinds = [o.kind for o in app_plan]
+    atrig = next(o for o in app_plan if o.kind == "trigger").spec
+    check("App: no source per repo; trigger on the App's one source",
+          "source" not in akinds and atrig["sources"] == ["github"], str(akinds))
+    check("App, every commit: pushes to the default branch of the watched repos",
+          atrig["filters"] == [{"field": "repo", "op": "in", "value": ["acme/app", "acme/lib"]},
+                               {"field": "event_type", "op": "eq", "value": "push"},
+                               {"field": "on_default_branch", "op": "eq", "value": "true"}],
+          json.dumps(atrig["filters"]))
+    app_prs = template.plan({**app_params, "trigger": "every_merged_pr"})
+    atrig2 = next(o for o in app_prs if o.kind == "trigger").spec
+    check("App, every merged PR: repo in + pull_request + merged",
+          atrig2["filters"][0]["op"] == "in" and atrig2["filters"][1:] == [
+              {"field": "event_type", "op": "eq", "value": "pull_request"},
+              {"field": "action", "op": "eq", "value": "merged"}], json.dumps(atrig2["filters"]))
+    aprompt = next(o for o in app_plan if o.kind == "agent").spec["prompt"]
+    check("App push prompt reads each push's commits", "push to a repository" in aprompt)
     check("no em dashes in prompt", "—" not in prompt)
     direct = template.render_prompt(template.validate({**base, "write_mode": "commit_to_branch"}))
     check("commit_to_branch prompt has no PR step",

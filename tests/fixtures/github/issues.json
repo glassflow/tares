@@ -1,0 +1,32 @@
+{
+ "action": "closed",
+ "issue": {
+  "number": 9,
+  "title": "Payments time out",
+  "state": "closed",
+  "user": {
+   "login": "carol"
+  },
+  "html_url": "https://github.com/acme/app/issues/9",
+  "updated_at": "2026-10-01T11:00:00Z"
+ },
+ "repository": {
+  "id": 1,
+  "full_name": "acme/app",
+  "name": "app",
+  "owner": {
+   "login": "acme"
+  },
+  "private": true,
+  "html_url": "https://github.com/acme/app",
+  "default_branch": "main"
+ },
+ "installation": {
+  "id": 101,
+  "node_id": "x"
+ },
+ "sender": {
+  "login": "alice",
+  "type": "User"
+ }
+}

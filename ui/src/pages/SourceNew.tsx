@@ -116,7 +116,7 @@ export default function SourceNew() {
           <div className="connector-cards">
             {/* `internal` connectors are provisioned by Tares itself (the agent findings
                 source); nothing to configure, so they're not offered here. */}
-            {Object.entries(specs).filter(([, s]) => !s.internal).map(([key, s]) => (
+            {Object.entries(specs).filter(([, s]) => !s.internal && !s.credential_managed).map(([key, s]) => (
               <button key={key} type="button"
                       className={"connector-card" + (unavailable(key) ? " unavailable" : "")}
                       disabled={unavailable(key)}

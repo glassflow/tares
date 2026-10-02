@@ -28,7 +28,8 @@ from urllib.parse import parse_qs
 import httpx
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse, RedirectResponse,
+                               Response, StreamingResponse)
 from pydantic import BaseModel, model_validator
 
 from .config import (SLACK_URL_PREFIX, CatalogError, agent_url, catalog_from_db, export_db_to_yaml,
@@ -86,6 +87,9 @@ LOGIN_URL = os.getenv("TARES_LOGIN_URL", "").strip()
 # out to it so a user never has to know the control plane exists to find them. Unset for
 # self-host: no link. Public, non-secret, surfaced on /health next to login_url.
 WORKSPACE_URL = os.getenv("TARES_WORKSPACE_URL", "").strip()
+# Cloud only: where "Connect GitHub" sends the browser (the control plane's install flow for the
+# GlassFlow-owned App, TR-166). Set, Settings > GitHub offers it instead of "Create GitHub App".
+GITHUB_CONNECT_URL = os.getenv("TARES_GITHUB_CONNECT_URL", "").strip()
 # The Anthropic key for the in-app Ask agent (and Tares agents) is resolved at request time via
 # resolve_anthropic_headers(store): Resolve headers from the console-stored key,
 # then ANTHROPIC_AUTH_TOKEN, then ANTHROPIC_API_KEY.
@@ -132,6 +136,17 @@ def _bypass_cooldown(request: Request) -> bool:
 
 SLACK_EVENTS_PATH = "/api/slack/events"
 
+# Where GitHub sends the browser back during "Create GitHub App" and after an install. A redirect
+# carries no Tares token, so these two GETs are public to the auth middleware. The creation callback
+# needs our signed `state`; the install callback needs the state, or an installation on the App
+# owner's account (see github_app_installed).
+# GitHub's hosted MCP server: agents read and write repos through it with a stored credential
+# (TR-348: it accepts a GitHub App's installation tokens, writes then show as the App)
+GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/"
+
+GITHUB_APP_CALLBACKS = ("/api/integrations/github/apps/callback",
+                        "/api/integrations/github/apps/installed")
+
 
 def _public(method: str, path: str) -> bool:
     """Reachable without the auth token: CORS preflight, the health probe, ingest (own token), the
@@ -150,6 +165,8 @@ def _public(method: str, path: str) -> bool:
         # and returns 503 rather than serving anything when no signing secret is configured.
         # Exactly one method on exactly one path: no prefix match, so nothing else rides in on it.
         return True
+    if method == "GET" and path in GITHUB_APP_CALLBACKS:
+        return True      # gated by the signed state, see GITHUB_APP_CALLBACKS
     return method in ("GET", "HEAD") and not (
         path.startswith("/api/") or path.startswith("/catalog") or path == "/query")
 
@@ -357,6 +374,13 @@ class AgentIn(BaseModel):
     # ([{verdict, when}]); None = off / none on create, unchanged on update
     concludes: bool | None = None
     verdicts: list[dict] | None = None
+    # the GitHub credential the agent acts with (the check-run tool); None = none on create,
+    # unchanged on update; "" clears. Reads and writes go through its GitHub MCP server.
+    github: str | None = None
+
+
+class GithubMcpIn(BaseModel):
+    write: bool = False          # write toolsets (branches, files, PRs, comments, reviews)
 
 
 class ImportReq(BaseModel):
@@ -408,6 +432,24 @@ class GithubCredentialIn(BaseModel):
     token: str = ""              # secret; blank-to-keep on update
     api_url: str | None = None   # GitHub Enterprise API base; empty = github.com; omitted on
                                  # update = keep
+    # token (default) | app (an App entered by hand) | app_broker (Tares Cloud's control plane
+    # holds the App's key and hands this cell tokens; see github_app.py)
+    kind: str = "token"
+    app_id: str = ""
+    private_key: str = ""        # secret; blank-to-keep on update
+    webhook_secret: str = ""     # secret; blank-to-keep on update
+    installation_ids: list[int] = []
+    token_url: str = ""          # app_broker: where the cell asks for a token
+    broker_secret: str = ""      # app_broker: the cell's own bearer to the broker; blank-to-keep
+    installation_id: int | None = None   # app_broker: the one installation
+    account: str = ""            # app_broker: the installation's account login
+
+
+class GithubAppCreateIn(BaseModel):
+    name: str = "github-app"     # the credential's name in Tares
+    org: str = ""                # GitHub organization to create the App in; empty = your account
+    app_name: str = ""           # the App's name on GitHub (globally unique); empty = suggested
+    public_url: str = ""         # this cell's address as GitHub reaches it; empty = this request's
 
 
 class AskSessionIn(BaseModel):
@@ -517,7 +559,10 @@ def make_app() -> FastAPI:
     # projects made from a template before goals existed get the template's goal (once)
     projects.fill_template_goals()
     # and the triggers a template planned get its plain-words description (once)
-    if projects.fill_template_trigger_descriptions():
+    filled = projects.fill_template_trigger_descriptions()
+    # triggers on GitHub token sources keep meaning "a commit" now that those report PRs (once)
+    filled += projects.fill_github_commit_filters()
+    if filled:
         # re-read the catalog only: nothing runs yet (the sources start in lifespan), and a
         # reload that restarts sources needs a running event loop (it crashed 1.38.0-rc.2's first
         # start on a cell with template projects)
@@ -613,6 +658,11 @@ def make_app() -> FastAPI:
         """None = public. 'any' = any valid credential. Reads of credentials and every write are
         admin, except the few in _READ_WRITES: a read with a body, and subscribe, which exposes
         nothing a reader couldn't pull and forward; it only persists that reader's own delivery."""
+        if (method == "POST" and path.startswith("/ingest/")
+                and runtime.signature_for(path[len("/ingest/"):])):
+            # a source that checks signatures (a GitHub App, a signed webhook) is authenticated by
+            # the signature the route verifies on the raw body; GitHub cannot send a Tares key
+            return None
         if method == "POST" and (_is_ingest(path) or path == "/remember"):
             return "ingest"   # before _public(): ingest paths are "public" only in the sense of
                               # not needing the auth token — they have their own scope
@@ -622,6 +672,8 @@ def make_app() -> FastAPI:
             return "any"
         # /api/settings holds instance credentials (the Anthropic key): admin even to READ, since
         # a read tells you whether and where a credential is configured.
+        if path == "/api/setup/github-suggestion":
+            return "admin"   # spends model money and distills private READMEs: not for read keys
         if (path in _ADMIN_PATHS or path.startswith("/api/keys")
                 or path.startswith("/api/discover") or path.startswith("/api/settings")):
             return "admin"
@@ -782,6 +834,8 @@ def make_app() -> FastAPI:
             body["login_url"] = LOGIN_URL
         if WORKSPACE_URL:
             body["workspace_url"] = WORKSPACE_URL
+        if GITHUB_CONNECT_URL:
+            body["github_connect_url"] = GITHUB_CONNECT_URL
         return body
 
     def _resolve_project(ref: str, default: bool = True) -> str | None:
@@ -1112,9 +1166,20 @@ def make_app() -> FastAPI:
         needs a credential with the `ingest` scope.
         """
         _refuse_if_full()
+        sig = runtime.signature_for(token)
+        if sig:
+            # verified on the exact bytes, before parsing (re-serialized JSON would not match)
+            from .webhook_verify import verify
+            reason = verify(sig["scheme"], sig["secret"], await request.body(),
+                            dict(request.headers), sig.get("header"))
+            if reason:
+                runtime.count_rejected(sig["source"], reason)
+                return JSONResponse({"detail": f"signature check failed ({sig['scheme']}): "
+                                               f"{reason}"}, status_code=401)
         body = await _parse_ingest_body(request)
         try:
-            n = await runtime.ingest(token, body, bypass_cooldown=_bypass_cooldown(request))
+            n = await runtime.ingest(token, body, bypass_cooldown=_bypass_cooldown(request),
+                                     headers=dict(request.headers))
         except KeyError as e:
             _err(e, 404)
         except ValueError as e:
@@ -1335,12 +1400,11 @@ def make_app() -> FastAPI:
         if config.get("credential") and not config.get("token"):
             # discover() is a classmethod with no store: resolve the stored GitHub credential
             # here so it can authenticate; the proposal keeps the reference, never the token
-            from .github_credentials import resolve_api_url, resolve_github_token
-            token = resolve_github_token(store, config["credential"])
-            if not token:
-                _err(ValueError(f"GitHub credential {config['credential']!r} not found "
-                                "(Settings > GitHub)"), 404)
-            config["token"] = token
+            from .github_credentials import get_token, resolve_api_url
+            try:
+                config["token"] = await get_token(store, config["credential"], config.get("repo"))
+            except ValueError as e:
+                _err(e, 404)
             config.setdefault("api_url", resolve_api_url(store, config["credential"]) or "")
         try:
             # bounded + catch-all: driver errors (asyncpg timeouts/auth/network) are not ValueError
@@ -1730,7 +1794,7 @@ def make_app() -> FastAPI:
         from .mcp_client import list_remote_tools, resolve_servers
         try:
             tools = await asyncio.wait_for(
-                list_remote_tools(resolve_servers(store, [server])[0]), timeout=20)
+                list_remote_tools((await resolve_servers(store, [server]))[0]), timeout=20)
         except Exception as e:
             detail = f"{type(e).__name__}: {str(e)[:200]}" if str(e).strip() else type(e).__name__
             _record_tool_test(name, False, 0, detail)
@@ -1741,8 +1805,9 @@ def make_app() -> FastAPI:
     # ── GitHub credentials: a token stored once, referenced by sources and MCP servers ──
     # Same write-only contract as the other credentials: the token is never returned, blank-to-keep
     # on update, and the console can list, test and delete.
-    from .github_credentials import (forget_repos, list_repos, list_tree, redact as _gh_redact,
-                                     test_credential)
+    from .github_credentials import (APP_KINDS, forget_repos, get_token, list_repos_for, list_tree,
+                                     redact as _gh_redact, test_credential)
+    from . import github_app as _gh_app
 
     def _gh_users(name: str) -> dict:
         """Where a credential is used, so deleting one is an informed act."""
@@ -1752,21 +1817,105 @@ def make_app() -> FastAPI:
         servers = [m["name"] for m in store.list_mcp_servers() if m.get("auth_value") == ref]
         return {"sources": sources, "mcp_servers": servers}
 
-    @app.get("/api/integrations/github")
-    async def list_github_credentials():
-        return {"credentials": [{**_gh_redact(c), **_gh_users(c["name"])}
-                                for c in store.list_github_credentials()]}
+    def _gh_app_source(name: str) -> str | None:
+        """The webhook source an App credential feeds, if it exists."""
+        return next((s["name"] for s in store.list_catalog_sources()
+                     if s["connector"] == "github_app"
+                     and (s.get("config") or {}).get("credential") == name), None)
 
-    @app.post("/api/integrations/github", status_code=201)
-    async def create_github_credential(body: GithubCredentialIn):
-        name = body.name.strip()
+    def _gh_deliveries(cred: dict) -> dict:
+        """What the settings row shows about an App's webhook: last delivery, refusals, drops."""
+        src = _gh_app_source(cred["name"])
+        if not src:
+            return {}
+        from .connectors.github_app import STATS
+        st = STATS.get(src) or {}
+        cfg = runtime.catalog.sources.get(src)
+        return {"source": src, "ingest_key": cfg.ingest_key if cfg else None,
+                "deliveries": {"received": st.get("deliveries", 0), "stored": st.get("stored", 0),
+                               "last_at": st.get("last_at"), "last_event": st.get("last_event"),
+                               "unknown_installation": st.get("unknown_installation", 0),
+                               "rejected_signature": runtime.rejected_deliveries.get(src, 0)}}
+
+    def _gh_row(c: dict) -> dict:
+        return {**_gh_redact(c), **_gh_users(c["name"]),
+                **(_gh_deliveries(c) if c.get("kind") in APP_KINDS else {})}
+
+    def _ensure_gh_app_source(name: str, ingest_key: str | None = None) -> str:
+        """The GitHub App source a credential feeds, created when missing: `github` when that name
+        is free, else `github_<credential>`. One per credential; it is a part of the cell like any
+        source (Default project until a project uses it)."""
+        existing = _gh_app_source(name)
+        if existing:
+            if ingest_key and runtime.catalog.sources[existing].ingest_key != ingest_key:
+                # an App recreated under the same name: its hook URL carries the new key
+                store.set_source_ingest_key(existing, ingest_key)
+                runtime.reload_catalog()
+            return existing
+        src = "github" if "github" not in runtime.catalog.sources else \
+            "github_" + re.sub(r"[^A-Za-z0-9_]", "_", name)
+        store.upsert_catalog_source(src, source_type_for("github_app"), "github_app", "1m",
+                                    normalize_config("github_app", {"credential": name}),
+                                    ingest_key=ingest_key)
+        store.put_in_project("source", src, store.default_project_id(), creator=True)
+        runtime.reload_catalog()
+        return src
+
+    def _check_gh_name(name: str) -> str:
+        name = (name or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
             _err(ValueError("name must be alphanumeric/_/-"))
         if store.get_github_credential(name) is not None:
             _err(ValueError(f"GitHub credential {name!r} already exists"), 409)
+        return name
+
+    @app.get("/api/integrations/github")
+    async def list_github_credentials():
+        return {"credentials": [_gh_row(c) for c in store.list_github_credentials()]}
+
+    @app.post("/api/integrations/github", status_code=201)
+    async def create_github_credential(body: GithubCredentialIn):
+        name = _check_gh_name(body.name)
+        api_url = (body.api_url or "").strip()
+        if body.kind == "app":
+            # an App the person created by hand: the same credential the manifest flow stores
+            if not (body.app_id.strip() and body.private_key.strip() and body.webhook_secret.strip()):
+                _err(ValueError("app id, private key and webhook secret are required"))
+            try:
+                _gh_app.app_jwt(body.app_id.strip(), body.private_key.strip())
+            except ValueError as e:
+                _err(e)
+            cfg = {"app_id": body.app_id.strip(), "private_key": body.private_key.strip(),
+                   "webhook_secret": body.webhook_secret.strip(), "installations": []}
+            cred = {"name": name, "kind": "app", "api_url": api_url, "config": cfg}
+            for iid in body.installation_ids:
+                try:
+                    cfg = _gh_app.with_installation({**cred, "config": cfg},
+                                                    await _gh_app.get_installation(cred, iid))
+                except ValueError as e:
+                    _err(e)
+            store.upsert_github_credential(name, "", "app", api_url, "", config=cfg)
+            src = _ensure_gh_app_source(name)
+            return {"ok": True, "account": "", "source": src,
+                    "ingest_key": runtime.catalog.sources[src].ingest_key}
+        if body.kind == "app_broker":
+            # Tares Cloud: the control plane keeps the App's key and brokers tokens (TR-166)
+            if not (body.token_url.strip() and body.broker_secret.strip()
+                    and body.installation_id and body.webhook_secret.strip()):
+                _err(ValueError("token_url, broker_secret, installation_id and webhook_secret "
+                                "are required"))
+            cfg = {"token_url": body.token_url.strip(), "broker_secret": body.broker_secret.strip(),
+                   "installation_id": int(body.installation_id),
+                   "webhook_secret": body.webhook_secret.strip()}
+            store.upsert_github_credential(name, "", "app_broker", api_url, body.account.strip(),
+                                           config=cfg)
+            src = _ensure_gh_app_source(name)
+            return {"ok": True, "account": body.account.strip(), "source": src,
+                    "ingest_key": runtime.catalog.sources[src].ingest_key}
+        if body.kind != "token":
+            _err(ValueError("kind must be token, app or app_broker"))
         if not body.token.strip():
             _err(ValueError("token is required"))
-        api_url = (body.api_url or "").strip()
         account = ""
         try:   # best effort: a bad token is still stored, the Test button explains it
             account = (await test_credential(body.token.strip(), api_url or None))["login"]
@@ -1780,16 +1929,34 @@ def make_app() -> FastAPI:
         existing = store.get_github_credential(name)
         if existing is None:
             _err(KeyError(f"unknown GitHub credential {name!r}"), 404)
-        token = body.token.strip() or existing["token"]     # blank-to-keep
         api_url = (existing.get("api_url") or "") if body.api_url is None else body.api_url.strip()
         account = existing.get("account") or ""
+        kind = existing.get("kind") or "token"
+        if kind in APP_KINDS:
+            # rotate a secret (blank-to-keep); installations follow GitHub, never this form
+            cfg = dict(existing.get("config") or {})
+            for field in ("private_key", "webhook_secret", "broker_secret", "token_url"):
+                val = getattr(body, field, "").strip()
+                if val:
+                    cfg[field] = val
+            if body.app_id.strip():
+                cfg["app_id"] = body.app_id.strip()
+            if kind == "app" and body.private_key.strip():
+                try:
+                    _gh_app.app_jwt(cfg.get("app_id"), cfg["private_key"])
+                except ValueError as e:
+                    _err(e)
+            store.upsert_github_credential(name, "", kind, api_url,
+                                           body.account.strip() or account, config=cfg)
+            forget_repos(name)
+            return {"ok": True, "account": body.account.strip() or account}
+        token = body.token.strip() or existing["token"]     # blank-to-keep
         if body.token.strip():
             try:
                 account = (await test_credential(token, api_url or None))["login"]
             except ValueError:
                 pass
-        store.upsert_github_credential(name, token, existing.get("kind") or "token",
-                                       api_url, account)
+        store.upsert_github_credential(name, token, kind, api_url, account)
         forget_repos(name)
         return {"ok": True, "account": account}
 
@@ -1806,6 +1973,8 @@ def make_app() -> FastAPI:
         cred = store.get_github_credential(name)
         if cred is None:
             _err(KeyError(f"unknown GitHub credential {name!r}"), 404)
+        if cred.get("kind") in APP_KINDS:
+            return await _test_gh_app(cred)
         try:
             info = await test_credential(cred["token"], cred.get("api_url") or None)
         except ValueError as e:
@@ -1815,14 +1984,61 @@ def make_app() -> FastAPI:
                                            cred.get("api_url") or "", info["login"])
         return {"ok": True, **info}
 
+    async def _test_gh_app(cred: dict) -> dict:
+        """An App: resync its installations from GitHub (a self-held App can list them), then mint
+        a token per installation and count its repos. The proof the whole chain works."""
+        try:
+            if cred["kind"] == "app":
+                # keep what is known or on the owner's account; a stranger's install of a public
+                # App is not ours (see github_app_installed)
+                insts = [i for i in await _gh_app.list_installations(cred)
+                         if _gh_app.may_add_installation(cred, i["id"], i["account"])]
+                cfg = {**(cred.get("config") or {}), "installations": insts}
+                store.update_github_credential_config(cred["name"], cfg)
+                cred = {**cred, "config": cfg}
+            rows = []
+            for inst in _gh_app.installations(cred):
+                repos = await _gh_app.installation_repos(cred, inst["id"], use_cache=False)
+                rows.append({**inst, "repos": len(repos)})
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        if not rows:
+            return {"ok": False, "error": "the App is not installed anywhere yet; install it on "
+                                          "GitHub", "installations": []}
+        return {"ok": True, "login": rows[0]["account"], "installations": rows}
+
+    @app.post("/api/integrations/github/{name}/mcp")
+    async def github_credential_mcp(name: str, body: GithubMcpIn):
+        """The GitHub MCP server for this credential (GitHub's hosted server, authenticated with
+        the credential, so an App credential's agents act as the App): `github-<name>` with write
+        toolsets, `githubro-<name>` read-only. Created once, a shared part any project uses;
+        the agent form adds the returned name to the agent's MCP servers."""
+        cred = store.get_github_credential(name)
+        if cred is None:
+            _err(KeyError(f"unknown GitHub credential {name!r}"), 404)
+        if cred.get("api_url"):
+            # GitHub's hosted MCP server is github.com's: a GitHub Enterprise token must not go there
+            _err(ValueError("GitHub's MCP server serves github.com only; this credential is for "
+                            "GitHub Enterprise"), 400)
+        from .github_credentials import CREDENTIAL_PREFIX
+        # two prefixes, not a suffix: credential names allow "-", so "x-read" would collide
+        server = ("github-" if body.write else "githubro-") + name
+        if store.get_mcp_server(server) is None:
+            headers = {"X-MCP-Toolsets": "repos,pull_requests,issues"}
+            if not body.write:
+                headers["X-MCP-Readonly"] = "true"
+            store.upsert_mcp_server(server, GITHUB_MCP_URL, "Authorization",
+                                    CREDENTIAL_PREFIX + name, headers)
+            store.put_in_project("mcp_server", server, store.default_project_id(), creator=True)
+        return {"ok": True, "server": server}
+
     @app.get("/api/integrations/github/{name}/repos")
     async def github_credential_repos(name: str, query: str = ""):
         cred = store.get_github_credential(name)
         if cred is None:
             _err(KeyError(f"unknown GitHub credential {name!r}"), 404)
         try:
-            repos = await asyncio.wait_for(
-                list_repos(name, cred["token"], cred.get("api_url") or None, query), timeout=60)
+            repos = await asyncio.wait_for(list_repos_for(cred, query), timeout=60)
         except ValueError as e:
             _err(e, 502)
         except (TimeoutError, asyncio.TimeoutError):
@@ -1837,12 +2053,115 @@ def make_app() -> FastAPI:
         if not repo or "/" not in repo:
             _err(ValueError("repo must be owner/name"))
         try:
+            token = await get_token(store, name, repo)
             return await asyncio.wait_for(
-                list_tree(cred["token"], repo, ref, path, cred.get("api_url") or None), timeout=30)
+                list_tree(token, repo, ref, path, cred.get("api_url") or None), timeout=30)
         except ValueError as e:
             _err(e, 502)
         except (TimeoutError, asyncio.TimeoutError):
             _err(ValueError("GitHub took too long to list the repository"), 504)
+
+    # ── Create GitHub App: GitHub's manifest flow, then the install ──
+    # 1. POST .../apps (admin) returns the manifest and where to POST it; the console submits it as
+    #    a form, so the person lands on GitHub's "create App" page with everything filled in.
+    # 2. GitHub sends the browser to .../apps/callback?code=...&state=...; the code is exchanged for
+    #    the App's id, key and webhook secret, the credential and its webhook source are stored.
+    # 3. The person installs it; GitHub sends the browser to .../apps/installed?installation_id=...
+    # The two callbacks are public to the auth middleware (a redirect has no Tares key) and gated
+    # by the signed state, or for the install by proving the installation belongs to our App.
+
+    def _gh_settings(params: dict) -> RedirectResponse:
+        from urllib.parse import urlencode
+        return RedirectResponse(f"/settings?{urlencode({'tab': 'github', **params})}",
+                                status_code=303)
+
+    @app.post("/api/integrations/github/apps")
+    async def create_github_app(body: GithubAppCreateIn, request: Request):
+        from .setup_flow import public_base
+        name = _check_gh_name(body.name)
+        base = (body.public_url.strip() or public_base(str(request.base_url))).rstrip("/")
+        ingest_key = f"github_app-{secrets.token_hex(8)}"
+        hook_url = f"{base}/ingest/{ingest_key}"
+        host = urlsplit(base).hostname or ""
+        app_name = body.app_name.strip() or f"Tares {host.split('.')[0] or name}"
+        state = _gh_app.sign_state(store, {"op": "create", "cred": name, "key": ingest_key})
+        warning = None
+        if host in ("localhost", "127.0.0.1", "0.0.0.0") or host.endswith(".local"):
+            warning = (f"GitHub cannot reach {base}. The App can still be created, but its "
+                       "webhooks will fail until Tares is reachable (a public address or a tunnel); "
+                       "enter that address as the public URL.")
+        return {"action": f"{_gh_app.manifest_action(body.org)}?state={state}",
+                "manifest": json.dumps(_gh_app.manifest(app_name, base, hook_url)),
+                "hook_url": hook_url, "warning": warning}
+
+    @app.get("/api/integrations/github/apps/callback")
+    async def github_app_created(code: str = "", state: str = ""):
+        try:
+            data = _gh_app.verify_state(store, state)
+            if data.get("op") != "create" or not code:
+                raise ValueError("this link is not a GitHub App creation callback")
+            name = data["cred"]
+            if store.get_github_credential(name) is not None:
+                raise ValueError(f"GitHub credential {name!r} already exists")
+            conv = await _gh_app.convert_manifest(code)
+        except ValueError as e:
+            return _gh_settings({"error": str(e)})
+        cfg = {k: conv[k] for k in ("app_id", "slug", "client_id", "client_secret", "private_key",
+                                    "webhook_secret", "html_url", "owner", "app_name")}
+        cfg["installations"] = []
+        store.upsert_github_credential(name, "", "app", "", conv["owner"], config=cfg)
+        _ensure_gh_app_source(name, data["key"])
+        return _gh_settings({"github": name, "event": "created"})
+
+    @app.get("/api/integrations/github/{name}/install")
+    async def github_app_install_link(name: str):
+        """The GitHub page that installs this App (with a signed state naming the credential)."""
+        cred = store.get_github_credential(name)
+        if cred is None or cred.get("kind") != "app" or not (cred.get("config") or {}).get("slug"):
+            _err(KeyError(f"{name!r} is not a GitHub App created here"), 404)
+        state = _gh_app.sign_state(store, {"op": "install", "cred": name})
+        return {"url": _gh_app.install_url(cred["config"]["slug"], state)}
+
+    @app.get("/api/integrations/github/apps/installed")
+    async def github_app_installed(installation_id: int = 0, setup_action: str = "",
+                                   state: str = ""):
+        if setup_action == "request" or not installation_id:
+            return _gh_settings({"event": "requested", "detail": "an organization owner has to "
+                                 "approve the install on GitHub"})
+        named = None
+        if state:
+            try:
+                data = _gh_app.verify_state(store, state)
+                named = data.get("cred") if data.get("op") == "install" else None
+            except ValueError:
+                named = None
+        # Two gates. The installation must belong to one of our Apps (GET /app/installations/{id}
+        # signed as each App succeeds only for its own). And someone allowed here must have asked
+        # for it: our signed state (the install link is admin-only), or, for an install started on
+        # GitHub's own page, the App owner's account or one already known. Without the second, a
+        # stranger installing a public App would join this cell.
+        apps = [c for c in store.list_github_credentials() if c.get("kind") == "app"
+                and (named is None or c["name"] == named)]
+        for cred in apps:
+            try:
+                inst = await _gh_app.get_installation(cred, installation_id)
+            except ValueError:
+                continue
+            if named is None and not _gh_app.may_add_installation(cred, installation_id,
+                                                                  inst.get("account", "")):
+                return _gh_settings({"error": f"installation on {inst.get('account')!r} was not "
+                                              f"added: start it from Settings > GitHub "
+                                              f"(Install / Add an organization)"})
+            store.update_github_credential_config(cred["name"],
+                                                  _gh_app.with_installation(cred, inst))
+            if inst.get("account") and not cred.get("account"):
+                store.upsert_github_credential(cred["name"], "", "app", cred.get("api_url") or "",
+                                               inst["account"])
+            _gh_app.forget_repos(cred["name"], installation_id)
+            return _gh_settings({"github": cred["name"], "event": "installed",
+                                 "account": inst.get("account", "")})
+        return _gh_settings({"error": f"installation {installation_id} does not belong to a "
+                                      "GitHub App created on this Tares"})
 
     # ── Ask sessions — server-side chat history, so a conversation survives navigation and a
     # console reopened tomorrow can pick up where it left off. The console PUTs the whole session
@@ -2051,6 +2370,7 @@ def make_app() -> FastAPI:
                          "handoffs": a.get("handoffs") or [],
                          "concludes": bool(a.get("concludes")),
                          "verdicts": a.get("verdicts") or [],
+                         "github": a.get("github") or "",
                          # it gets the conclude tool (set to, or its prompt names it): its runs
                          # end with an outcome and a verdict worth a column of their own
                          "offers_conclude": offers_conclude(a),
@@ -2072,6 +2392,13 @@ def make_app() -> FastAPI:
                 "slack_workspace": bool(resolve_slack_token(store)[0]),
                 "presets": [{"id": k, **v} for k, v in AGENT_PRESETS.items()]}
 
+    def _check_agent_github(value: str | None, current: str = "") -> str | None:
+        """An agent's `github` must name a stored GitHub credential (None and "" pass through;
+        the value it already has passes too, so a deleted credential never blocks a save)."""
+        if value and value.strip() != current and store.get_github_credential(value.strip()) is None:
+            _err(ValueError(f"GitHub credential {value!r} not found (Settings > GitHub)"), 404)
+        return value.strip() if value else value
+
     @app.post("/api/agents/builtin", status_code=201)
     async def create_builtin_agent(body: AgentIn):
         if not body.name:
@@ -2088,7 +2415,8 @@ def make_app() -> FastAPI:
                                    provider=body.provider.strip(),
                                    handoffs=raw.get("handoffs") or [],
                                    concludes=bool(body.concludes),
-                                   verdicts=raw.get("verdicts") or [])
+                                   verdicts=raw.get("verdicts") or [],
+                                   github=_check_agent_github(body.github) or "")
         store.put_in_project("agent", body.name, uid, creator=True)
         runtime.reload_catalog()
         return {"ok": True, "enabled": False, "project": uid,
@@ -2129,7 +2457,9 @@ def make_app() -> FastAPI:
                                    handoffs=raw.get("handoffs") if here else None,
                                    concludes=body.concludes,
                                    verdicts=(raw.get("verdicts") if body.verdicts is not None
-                                             else None))
+                                             else None),
+                                   github=_check_agent_github(body.github,
+                                                              existing.get("github") or ""))
         store.mark_customized("agent", name)
         store.put_in_project("agent", name, uid)
         if not here:
@@ -3045,6 +3375,8 @@ def make_app() -> FastAPI:
         """The planner's read tools, answered by this daemon's own routes in process."""
         paths = {"list_connectors": "/api/connectors", "list_sources": "/api/sources",
                  "list_templates": "/api/projects/templates"}
+        if name == "github_repo":
+            return await setup_flow.read_github_repo(store, str(args.get("repo") or ""))
         if name == "source_fields":
             path = f"/api/sources/{str(args.get('name') or '')}/fields"
         elif name in paths:
@@ -3071,6 +3403,29 @@ def make_app() -> FastAPI:
         except setup_flow.SetupError as e:
             _setup_err(e)
 
+    @app.get("/api/setup/github-suggestion")
+    async def setup_github_suggestion():
+        """The guided setup's opening line when GitHub is connected (TR-262): one goal grounded
+        in the person's newest repositories, cached a day. {available: false} without GitHub;
+        {suggestion: null} when no model provider is set up (the page just leaves it out)."""
+        if not store.list_github_credentials():
+            return {"available": False, "suggestion": None, "repos": []}
+        provider, _origin = resolve_provider(store)
+        if provider is None:
+            return {"available": True, "suggestion": None,
+                    "repos": await setup_flow.github_repo_lines(store, limit=8)}
+        pid = providers_mod.default_id(store)
+        model = providers_mod.default_model_for(store, pid)
+        try:
+            out = await setup_flow.github_suggestion(
+                store, provider, model,
+                on_usage=lambda u: _record_ask_usage(model, u, key_source=_origin,
+                                                     kind=provider.kind, provider_id=pid))
+        except Exception as e:  # noqa: BLE001 — the page works without it
+            print(f"setup: github suggestion failed: {type(e).__name__}: {e}")
+            return {"available": True, "suggestion": None, "repos": []}
+        return {"available": True, **out}
+
     @app.post("/api/setup/plan")
     async def setup_plan(body: dict = Body(...)):
         """{goal, who?, existing_sources?} -> {plan}: the whole project in plain words, written
@@ -3084,9 +3439,10 @@ def make_app() -> FastAPI:
         who = body.get("who") or None
         if who not in (None, "tares", "own"):
             _err(ValueError("who is tares or own"))
+        gh_repos = await setup_flow.github_repo_lines(store)
         plan = await _setup_generate(setup_flow.plan_message(
-            goal, who, body.get("existing_sources", True) is not False, store, runtime.catalog),
-            who=who)
+            goal, who, body.get("existing_sources", True) is not False, store, runtime.catalog,
+            github=gh_repos), who=who)
         return {"plan": plan}
 
     @app.post("/api/setup/adjust")
@@ -3221,7 +3577,8 @@ def make_app() -> FastAPI:
         store.log_project(uid, "draft", "planning from the goal")
         store.set_project_setup(uid, {"step": "plan", "goal": goal, "who": who, "plan": None,
                                       "practice_run": None})
-        _start_planning(uid, setup_flow.plan_message(goal, who, True, store, runtime.catalog),
+        _start_planning(uid, setup_flow.plan_message(goal, who, True, store, runtime.catalog,
+                                                     github=await setup_flow.github_repo_lines(store)),
                         None, who)
         return {"project": projects.get(uid)}
 
@@ -3259,7 +3616,8 @@ def make_app() -> FastAPI:
         setup.update(goal=goal, who=who, plan=None)
         store.set_project_setup(uid, setup)
         store.update_project(uid, goal=goal)
-        _start_planning(uid, setup_flow.plan_message(goal, who, True, store, runtime.catalog),
+        _start_planning(uid, setup_flow.plan_message(goal, who, True, store, runtime.catalog,
+                                                     github=await setup_flow.github_repo_lines(store)),
                         None, who)
         return {"ok": True}
 

@@ -46,6 +46,8 @@ class Runtime:
         self.sources: dict[str, SourceRuntime] = {}
         # {trigger_name: last_eval_datetime} — debounces trigger re-evaluation across ingest ticks.
         self._trigger_eval_at: dict = {}
+        # {source: deliveries refused for a bad or missing signature since start}
+        self.rejected_deliveries: dict[str, int] = {}
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
     def start_all(self) -> None:
@@ -237,12 +239,37 @@ class Runtime:
                                          paused=cfg.paused, ingest_key=cfg.ingest_key)
         self.reload_catalog()
 
-    async def ingest(self, token: str, payload, bypass_cooldown: bool = False) -> int:
+    def signature_for(self, token: str) -> dict | None:
+        """The signature a push source requires on every delivery, or None when it checks none:
+        `{source, scheme, secret, header}`. Resolved by ingest key first, then name, like /ingest.
+        Read before the body is parsed, so the check runs on the raw bytes (webhook_verify.py)."""
+        cfg = next((c for c in self.catalog.sources.values()
+                    if c.ingest_key and c.ingest_key == token), None) \
+            or self.catalog.sources.get(token)
+        if cfg is None:
+            return None
+        conn = build_connector(cfg, self.store)
+        sig = conn.signature() if hasattr(conn, "signature") else None
+        if not sig:
+            return None
+        header = conn.signature_header() if hasattr(conn, "signature_header") else None
+        return {"source": cfg.name, "scheme": sig[0], "secret": sig[1], "header": header}
+
+    def count_rejected(self, source: str, reason: str) -> None:
+        """A delivery refused for its signature: counted on the source, one log line, never the
+        body or the secret."""
+        self.rejected_deliveries[source] = self.rejected_deliveries.get(source, 0) + 1
+        print(f"taresd: refused a delivery to {source!r}: {reason}")
+
+    async def ingest(self, token: str, payload, bypass_cooldown: bool = False,
+                     headers: dict | None = None) -> int:
         cfg = self._push_cfg(token)   # token may be the ingest_key or the source name
         self._ensure_push_wins(cfg)   # first push flips a tail source to push mode (no double-ingest)
         conn = build_connector(cfg, self.store)
-        return await self._store_envelopes(cfg.name, conn.map_payload(payload),
-                                           bypass_cooldown=bypass_cooldown)
+        # a connector that reads its event name from a header (GitHub) asks for them
+        envs = (conn.map_payload(payload, headers=headers or {})
+                if getattr(conn, "WANTS_HEADERS", False) else conn.map_payload(payload))
+        return await self._store_envelopes(cfg.name, envs, bypass_cooldown=bypass_cooldown)
 
     async def ingest_otlp(self, source_name: str, signal: str, body) -> int:
         cfg = self._push_cfg(source_name)

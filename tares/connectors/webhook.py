@@ -41,7 +41,28 @@ class WebhookConnector(Connector):
                           "help": "render template over payload fields, e.g. '{action} by {sender}'"},
         "event_time_field": {"type": "string",
                              "help": "payload field holding an ISO-8601 event timestamp"},
+        # opt-in delivery verification (webhook_verify.py); a source that sets a scheme refuses
+        # unsigned posts and, in exchange, needs no Tares key on its ingest URL
+        "signature_scheme": {"type": "string", "advanced": True,
+                             "choices": ["", "github", "linear", "hmac_sha256"],
+                             "help": "verify each delivery's signature: github (X-Hub-Signature-256),"
+                                     " linear (Linear-Signature) or hmac_sha256 (a header you name);"
+                                     " empty = no check"},
+        "signing_secret": {"type": "string", "secret": True, "advanced": True,
+                           "help": "the secret the sender signs with (the same one pasted in the "
+                                   "sender's webhook settings)"},
+        "signature_header": {"type": "string", "advanced": True,
+                             "help": "hmac_sha256 only: the header holding the hex digest, "
+                                     "e.g. X-Signature"},
     }
+
+    def signature(self) -> tuple[str, str] | None:
+        """(scheme, secret) when this source verifies deliveries, else None (today's behaviour)."""
+        scheme = str(self.cfg.config.get("signature_scheme") or "").strip()
+        return (scheme, str(self.cfg.config.get("signing_secret") or "")) if scheme else None
+
+    def signature_header(self) -> str | None:
+        return str(self.cfg.config.get("signature_header") or "").strip() or None
 
     async def poll(self) -> list[Envelope]:
         return []  # push-only: envelopes arrive via map_payload from POST /ingest/{source}

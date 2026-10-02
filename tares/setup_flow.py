@@ -180,9 +180,84 @@ PLAN_TOOL = {"name": "propose_plan",
              "input_schema": PLAN_SCHEMA}
 
 
-def read_tools() -> list:
+# TR-262: a plan grounded in the person's repositories when GitHub is connected
+GITHUB_REPO_TOOL = {
+    "name": "github_repo",
+    "description": ("Read one of the person's GitHub repositories (owner/name, from the list in "
+                    "the first message): its README and the files at its root (a compose file "
+                    "names the services, a README names the stack). Only what the files say."),
+    "input_schema": {"type": "object", "properties": {"repo": {"type": "string"}},
+                     "required": ["repo"]},
+}
+GITHUB_REPOS_SHOWN = 20
+
+
+def read_tools(github: bool = False) -> list:
+    """The planner's reads; `github` (a GitHub credential is stored) adds github_repo."""
     from .agent import TOOLS
-    return [t for t in TOOLS if t["name"] in READ_TOOL_NAMES]
+    return [t for t in TOOLS if t["name"] in READ_TOOL_NAMES] + ([GITHUB_REPO_TOOL] if github else [])
+
+
+_REPO_LINES: dict = {}            # {"at": monotonic, "creds": key, "repos": [...]}
+REPO_LINES_TTL = 300
+
+
+async def github_repo_lines(store, limit: int = GITHUB_REPOS_SHOWN) -> list[str]:
+    """The person's repositories, most recently pushed first, from every stored GitHub
+    credential: what the plan and the opening suggestion are grounded in. Best effort and quick:
+    credentials are listed concurrently (10s each), a failing one is skipped, and the merged list
+    is reused for five minutes so planning does not wait on GitHub every time."""
+    import asyncio
+    import time as _t
+    from .github_credentials import list_repos_for
+    creds = store.list_github_credentials()
+    key = "|".join(sorted(f"{c['name']}:{c.get('updated_at')}" for c in creds))
+    hit = _REPO_LINES
+    if hit and hit.get("creds") == key and _t.monotonic() - hit["at"] < REPO_LINES_TTL:
+        return hit["repos"][:limit]
+
+    async def one(cred):
+        try:
+            return await asyncio.wait_for(list_repos_for(cred), timeout=10)
+        except Exception:  # noqa: BLE001
+            return []
+    seen: dict[str, dict] = {}
+    for repos in await asyncio.gather(*(one(c) for c in creds)):
+        for r in repos:
+            seen.setdefault(r["full_name"], r)
+    ordered = sorted(seen.values(), key=lambda r: r.get("pushed_at") or "", reverse=True)
+    lines = [r["full_name"] + (" (private)" if r.get("private") else "")
+             for r in ordered[:GITHUB_REPOS_SHOWN]]
+    _REPO_LINES.update({"at": _t.monotonic(), "creds": key, "repos": lines})
+    return lines[:limit]
+
+
+async def read_github_repo(store, repo: str) -> tuple[bool, str]:
+    """The github_repo read: README (capped) and the root's file names, with whichever stored
+    credential can read the repository."""
+    import httpx
+    from .github_credentials import get_token, resolve_api_url
+    repo = str(repo or "").strip().strip("/")
+    if repo.count("/") != 1:
+        return False, "repo must be owner/name"
+    for cred in store.list_github_credentials():
+        try:
+            token = await get_token(store, cred["name"], repo)
+        except ValueError:
+            continue
+        api = (resolve_api_url(store, cred["name"]) or "https://api.github.com").rstrip("/")
+        h = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
+             "Authorization": f"Bearer {token}"}
+        async with httpx.AsyncClient(timeout=15) as cx:
+            root = await cx.get(f"{api}/repos/{repo}/contents", headers=h)
+            if root.status_code != 200:
+                continue
+            names = [e.get("name") for e in root.json() if isinstance(e, dict)]
+            readme = await cx.get(f"{api}/repos/{repo}/readme",
+                                  headers={**h, "Accept": "application/vnd.github.raw+json"})
+        text = readme.text[:4000] if readme.status_code == 200 else "(no README)"
+        return True, f"Files at the root: {', '.join(names[:60])}\n\nREADME:\n{text}"
+    return False, f"no GitHub credential on this Tares can read {repo}"
 
 
 SYSTEM = """You plan a Tares project from a person's goal. Tares collects events from sources, \
@@ -218,6 +293,7 @@ it can change things.
   an existing skill when it fits (existing true, its exact name),
   an existing agent when one already does the job (existing true, its exact name; its
   instructions stay as they are). Parts are shared between projects.
+- GitHub (repositories, pull requests, pushes, issues, reviews, releases, CI runs): when list_sources shows a github_app source (the GitHub App), use it as an existing source: it carries every repository the App is installed on, so never add a source per repository next to it. Otherwise one github source per repository (connector github, config repo owner/name, needs credential); it reports commits and pull requests opened, merged or closed only. Narrow the wake-up with filters on the event, not on text: event_type is pull_request, push, issues, issue_comment, pull_request_review, release or workflow_run (a github source also has commit); action is opened, synchronize, merged, closed, reopened, ready_for_review, submitted, created, published or completed; repo is owner/name. A merged pull request is event_type pull_request and action merged; a failed CI run is event_type workflow_run and conclusion failure. Pull request and issue events are keyed owner/repo#number, so the default grouping already gives one firing per pull request. key_field for GitHub is repo.
 - Slack: when the goal asks to be told or messaged in Slack, set slack true on the agent whose finding should be posted. Tares posts it to a channel itself; never suggest a Slack MCP server for that, and never ask for a channel: the person picks it.
 - Skills: at most 2, only when the goal implies house rules or vocabulary.
 - Every sentence is plain words for someone who is not an engineer: no jargon, no em dashes."""
@@ -484,7 +560,9 @@ def needs_for(connector: str, config: dict | None) -> str:
     if spec.get("mode") == "push":
         return "send"
     secrets = [f["name"] for f in spec.get("fields") or [] if f.get("secret")]
-    if secrets and not any((config or {}).get(n) for n in secrets):
+    # a stored credential named on the source (GitHub's `credential`) stands in for its secret
+    if secrets and not (config or {}).get("credential") \
+            and not any((config or {}).get(n) for n in secrets):
         return "credential"
     return "none"
 
@@ -640,6 +718,11 @@ def _normalize(raw, store, catalog, prev: dict | None,
             elif SPECS.get(conn, {}).get("internal"):
                 probs.add(where, f"{conn} is filled by Tares itself; pick another connector.",
                           label)
+            elif SPECS.get(conn, {}).get("credential_managed"):
+                # the GitHub App's source comes with the App (Settings > GitHub), never a plan
+                probs.add(where, "The GitHub App's source is made when the App is connected "
+                                 "(Settings, GitHub); use it as an existing source, or a GitHub "
+                                 "source for one repository.", label)
             else:
                 try:
                     # a label the model gave as a bare word, or with neither a field nor a fixed
@@ -1018,6 +1101,8 @@ def read_words(name: str, args: dict | None, sources: dict | None = None) -> str
         src = str((args or {}).get("name") or "")
         cfg = (sources or {}).get(src)
         return f"Looked at what {G.source_title(cfg) if cfg else (src or 'a source')} sends"
+    if name == "github_repo":
+        return f"Read {str((args or {}).get('repo') or 'a repository')} on GitHub"
     return {"list_sources": "Looked at the sources on Tares",
             "list_connectors": "Looked at the kinds of source",
             "list_templates": "Looked at the templates"}.get(name, "Looked something up")
@@ -1035,10 +1120,10 @@ def _say(progress, text: str, running: bool = False) -> None:
 async def _run_model(provider, model: str, convo: list, read_tool, tracer, usage: dict,
                      forced_only: bool = False, progress=None,
                      writing: str = "Writing the plan",
-                     sources: dict | None = None) -> tuple[dict, object]:
+                     sources: dict | None = None, github: bool = False) -> tuple[dict, object]:
     """Model calls until propose_plan comes back: reads first when the model wants them, the
     last call forced to propose_plan. Returns (the plan it proposed, that reply)."""
-    tools = read_tools() + [PLAN_TOOL]
+    tools = read_tools(github) + [PLAN_TOOL]
     rounds = 1 if forced_only else MAX_ROUNDS
     for i in range(rounds):
         last = i == rounds - 1
@@ -1091,10 +1176,11 @@ async def _model_plan(provider, model, first_message, store, catalog, read_tool,
     usage = empty_usage()
     convo = [{"role": "user", "content": first_message}]
     writing = "Changing the plan" if prev else "Writing the plan"
+    github = bool(store.list_github_credentials())   # github_repo only when it can answer
     try:
         raw, (reply, call) = await _run_model(provider, model, convo, read_tool, tracer, usage,
                                               progress=progress, writing=writing,
-                                              sources=catalog.sources)
+                                              sources=catalog.sources, github=github)
         _say(progress, "Checking the plan", running=True)
         plan, errors = _check(raw, store, catalog, prev, who)
         if errors:
@@ -1104,7 +1190,7 @@ async def _model_plan(provider, model, first_message, store, catalog, read_tool,
                                           "fixed.")]))
             raw, _ = await _run_model(provider, model, convo, read_tool, tracer, usage,
                                       forced_only=True, progress=progress,
-                                      sources=catalog.sources,
+                                      sources=catalog.sources, github=github,
                                       writing=f"Fixing {len(errors)} thing"
                                               f"{'s' if len(errors) != 1 else ''} the check found")
             _say(progress, "Checking the plan again", running=True)
@@ -1138,11 +1224,61 @@ def context_words(catalog) -> str:
             f"{n_kind} kinds of source")
 
 
-def plan_message(goal: str, who: str | None, existing_sources: bool, store, catalog) -> str:
+SUGGEST_SYSTEM = """You suggest ONE goal for a Tares project from the names (and READMEs) of a \
+person's GitHub repositories. Tares watches events (pull requests, pushes, CI runs, deploys, \
+alerts) and wakes AI agents that look into them. Write one sentence the person could type as their \
+goal, naming one real repository, in plain words, under 140 characters, no em dashes. Ground it in \
+what the names and files say; never claim more. Answer with the sentence only."""
+SUGGEST_TTL = 24 * 3600
+SUGGEST_RETRY = 600          # a failed suggestion is tried again after ten minutes
+SUGGEST_SETTING = "setup_github_suggestion"
+
+
+async def github_suggestion(store, provider, model: str, on_usage=None) -> dict:
+    """{suggestion, repos}: the opening line of the guided setup when GitHub is connected. One
+    short model call over the newest repositories (and the first one's README), cached a day so
+    opening the page does not spend on every visit."""
+    import time as _t
+    repos = await github_repo_lines(store, limit=8)
+    if not repos:
+        return {"suggestion": None, "repos": []}
+    # the set of repositories, not their order: a push reorders them, it does not change them
+    key = "|".join(sorted(repos))
+    try:
+        cached = json.loads(store.get_setting(SUGGEST_SETTING) or "{}")
+    except ValueError:
+        cached = {}
+    ttl = SUGGEST_TTL if cached.get("suggestion") else SUGGEST_RETRY
+    if cached.get("key") == key and _t.time() - float(cached.get("at") or 0) < ttl:
+        return {"suggestion": cached.get("suggestion"), "repos": repos}
+    ok, readme = await read_github_repo(store, repos[0].split(" ")[0])
+    msg = ("Repositories:\n" + "\n".join(f"- {r}" for r in repos)
+           + (f"\n\nThe newest one, {repos[0].split(' ')[0]}:\n{readme[:2500]}" if ok else ""))
+    try:
+        reply = await provider.complete(model=model, system=SUGGEST_SYSTEM, tools=[],
+                                        messages=[{"role": "user", "content": msg}],
+                                        max_tokens=200, tools_allowed=False)
+    except Exception:
+        # remembered briefly, so a page opened again does not retry the model each time
+        store.set_setting(SUGGEST_SETTING, json.dumps({"key": key, "at": _t.time(),
+                                                       "suggestion": None}))
+        raise
+    if on_usage is not None:
+        on_usage(reply.usage)
+    text = " ".join((reply.text or "").split()).strip().strip('"')
+    text = scrub(text)[:200] or None
+    store.set_setting(SUGGEST_SETTING, json.dumps({"key": key, "at": _t.time(), "suggestion": text}))
+    return {"suggestion": text, "repos": repos}
+
+
+def plan_message(goal: str, who: str | None, existing_sources: bool, store, catalog,
+                 github: list[str] | None = None) -> str:
     who_line = {"tares": "Tares agents do the work (who tares).",
                 "own": "The person's own agent does the work (who own)."}.get(
         who or "", "Pick who does the work: Tares agents unless the goal says otherwise.")
-    return (f"Goal: {goal}\n{who_line}\n\n{_context(store, catalog, existing_sources)}")
+    gh = ("\n\nTheir GitHub repositories (most recently pushed first; github_repo reads one):\n"
+          + "\n".join(f"- {r}" for r in github)) if github else ""
+    return (f"Goal: {goal}\n{who_line}\n\n{_context(store, catalog, existing_sources)}{gh}")
 
 
 def adjust_message(plan: dict, instruction: str) -> str:

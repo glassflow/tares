@@ -190,7 +190,10 @@ async def main():
         # reachable without any credential: their own authentication or nothing to protect
         public = {("GET", "/health"), ("GET", "/metrics"), ("GET", "/ingest/{token}"),
                   ("POST", "/api/slack/events"), ("GET", "/{path:path}"),
-                  ("GET", "/derive")}   # a GET outside /api is the console's; this one says views are gone
+                  ("GET", "/derive"),   # a GET outside /api is the console's; this one says views are gone
+                  # GitHub sends the browser back here: gated by a signed state / proof of ownership
+                  ("GET", "/api/integrations/github/apps/callback"),
+                  ("GET", "/api/integrations/github/apps/installed")}
         # allowed, and narrowed to the key's project by the handler
         scoped = {("GET", "/api/whoami"), ("POST", "/read"), ("GET", "/catalog"),
                   ("GET", "/catalog/{handle}"), ("GET", "/api/projects")}

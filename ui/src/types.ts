@@ -43,6 +43,9 @@ export interface ConnectorSpec {
   discover?: boolean;
   poll?: string;   // connector-specific default poll interval (e.g. github: "2m")
   internal?: boolean;   // provisioned by Tares itself (agent findings) — not offered in the UI
+  // created with its credential (the GitHub App source): never offered as a new kind, but an
+  // existing one is picked like any other source (under the GitHub kind)
+  credential_managed?: boolean;
   description: string;
   fields: ConnectorField[];
   provides?: { name: string; primary?: boolean; help?: string }[];   // synthesized label fields
@@ -189,8 +192,8 @@ export interface ColumnsProposal {
 // One filter row on a trigger: which events it counts. Same ops the daemon accepts.
 export interface TriggerFilter {
   field: string;
-  op: "eq" | "neq" | "contains" | "gt" | "lt" | "gte" | "lte";
-  value: string | number;
+  op: "eq" | "neq" | "contains" | "gt" | "lt" | "gte" | "lte" | "in";
+  value: string | number | string[];   // a list for `in`
 }
 
 export interface Entity {
@@ -259,6 +262,7 @@ export interface BuiltinAgent {
   handoffs?: Handoff[];        // who takes over when a run concludes with a verdict (TR-334)
   concludes?: boolean;         // every run ends with the conclude tool, whatever the prompt says
   verdicts?: Verdict[];        // the only verdicts it may give; empty: any word, or none
+  github?: string;             // the GitHub credential it acts with (check runs); "" = none
   offers_conclude?: boolean;   // it gets the conclude tool (set to, or its prompt names it)
   effective_max_rounds: number;   // the cap its next run will be held to
   updated_at?: string;
@@ -342,7 +346,7 @@ export interface Skill {
 }
 
 export interface RunResult {
-  kind: "pr" | "commit" | "slack" | "email" | "webhook" | "custom";
+  kind: "pr" | "commit" | "check" | "slack" | "email" | "webhook" | "custom";
   label: string;
   url?: string;
 }
@@ -475,6 +479,23 @@ export interface GithubCredential {
   updated_at: string;
   sources: string[];
   mcp_servers: string[];
+  // a GitHub App (kind app, or app_broker on Tares Cloud)
+  app_id?: string;
+  slug?: string;
+  html_url?: string;
+  installations?: { id: number; account: string; account_type?: string; suspended?: boolean }[];
+  broker?: boolean;
+  source?: string;             // the webhook source this App feeds
+  deliveries?: { received: number; stored: number; last_at: number | null; last_event: string | null;
+                 unknown_installation: number; rejected_signature: number };
+}
+
+export interface GithubAppTest {
+  ok: boolean;
+  error?: string;
+  login?: string;
+  scopes?: string[];
+  installations?: { id: number; account: string; repos: number }[];
 }
 
 // ── Projects: a template (code) instantiated with params; the instance owns ordinary objects ──

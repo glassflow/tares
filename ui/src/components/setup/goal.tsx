@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
+import { api } from "../../api";
 import { errStatus, errText } from "./common";
 
 // Step 1: the goal in the person's own words and who does the work. "Plan it" hands both to the
@@ -27,6 +28,14 @@ export function GoalStep({ goal, setGoal, who, setWho, onSubmit, onCancel }: {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<{ text: string; noProvider: boolean }>();
   useEffect(() => { box.current?.focus(); }, []);
+  // GitHub connected: open with one goal grounded in their repositories (reacting is easier than
+  // writing). Quiet when there is none: the examples below still stand.
+  const [suggestion, setSuggestion] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    api.setupGithubSuggestion().then((r) => { if (live) setSuggestion(r.suggestion); }).catch(() => {});
+    return () => { live = false; };
+  }, []);
 
   const plan = async () => {
     const g = goal.replace(/\s+/g, " ").trim();
@@ -53,6 +62,17 @@ export function GoalStep({ goal, setGoal, who, setWho, onSubmit, onCancel }: {
                   placeholder="Catch checkout outages early and find the root cause"
                   onChange={(e) => setGoal(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); plan(); } }} />
+
+        {suggestion && (
+          <div className="su-examples">
+            <span className="help">From your GitHub repositories</span>
+            <div className="su-chips">
+              <button type="button" className={`su-chip${goal.trim() === suggestion ? " on" : ""}`}
+                      aria-pressed={goal.trim() === suggestion} disabled={busy}
+                      onClick={() => { setGoal(suggestion); box.current?.focus(); }}>{suggestion}</button>
+            </div>
+          </div>
+        )}
 
         <div className="su-examples">
           <span className="help">Or start from one of these</span>

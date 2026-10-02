@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 
 import { api, type AgentLimits, type TracingStatus } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { Close } from "../components/icons";
 import { InternalName, Picker, TimeAgo, keyTitle } from "../components/bits";
-import type { ApiKey, GithubCredential, ModelProvider, ModelProviders } from "../types";
+import type { ApiKey, GithubAppTest, GithubCredential, ModelProvider, ModelProviders } from "../types";
 
 // Four distinct credential concepts, one box each:
 //   · Access     — is this instance open, or does it require a login? (tares up --auth)
@@ -66,36 +66,79 @@ export default function Security() {
   );
 }
 
-// GitHub: a token stored once, referenced by name from `github` sources (`credential: <name>`)
-// and from MCP servers (`credential:github/<name>`), so a rotation happens here and nowhere else.
-// Same write-only contract as the other credentials: the token never comes back.
+// GitHub: how Tares reads and acts on GitHub, stored once and picked by name. Two kinds:
+//   * the GitHub App (recommended): created here with GitHub's manifest flow, installed on an
+//     organization; every event of every repository arrives by webhook as it happens, and agents
+//     act as the App. On Tares Cloud the App is GlassFlow's and "Connect GitHub" replaces "Create".
+//   * a personal token: polls the repositories you add for commits and pull requests.
+// Same write-only contract as the other credentials: no token, key or secret ever comes back.
 function GithubPanel() {
   const [creds, setCreds] = useState<GithubCredential[]>();
   const [err, setErr] = useState<string>();
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState<"" | "token" | "app">("");
   const [name, setName] = useState("");
   const [token, setToken] = useState("");
   const [apiUrl, setApiUrl] = useState("");
+  const [org, setOrg] = useState("");
+  const [appName, setAppName] = useState("");
+  const [publicUrl, setPublicUrl] = useState(window.location.origin);
+  const [connectUrl, setConnectUrl] = useState<string>();
   const [busy, setBusy] = useState(false);
-  const [tests, setTests] = useState<Record<string, { busy?: boolean; ok?: boolean; error?: string;
-                                                     login?: string; scopes?: string[] }>>({});
+  const [tests, setTests] = useState<Record<string, { busy?: boolean } & Partial<GithubAppTest>>>({});
   const [confirmDelete, setConfirmDelete] = useState<GithubCredential>();
   const [rotating, setRotating] = useState<string>();
   const [newToken, setNewToken] = useState("");
+  // what GitHub sent the browser back with (?event=created|installed|requested, ?error=)
+  const [back] = useState(() => {
+    const q = new URLSearchParams(window.location.search);
+    return { event: q.get("event") ?? "", error: q.get("error") ?? "", github: q.get("github") ?? "",
+             account: q.get("account") ?? "", detail: q.get("detail") ?? "" };
+  });
 
   const load = () =>
     api.githubCredentials().then((r) => setCreds(r.credentials))
       .catch((e) => setErr(String((e as Error).message ?? e)));
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    api.health().then((h) => setConnectUrl(h.github_connect_url || undefined)).catch(() => {});
+    if (back.event || back.error) {      // the message is shown once; a reload starts clean
+      const url = new URL(window.location.href);
+      for (const k of ["event", "error", "github", "account", "detail"]) url.searchParams.delete(k);
+      window.history.replaceState(null, "", url.toString());
+    }
+  }, []);
 
-  const add = async () => {
+  const addToken = async () => {
     setBusy(true); setErr(undefined);
     try {
       await api.createGithubCredential({ name: name.trim(), token: token.trim(), api_url: apiUrl.trim() });
-      setName(""); setToken(""); setApiUrl(""); setAdding(false);
+      setName(""); setToken(""); setApiUrl(""); setAdding("");
       await load();
     } catch (e) { setErr(String((e as Error).message ?? e)); }
     setBusy(false);
+  };
+
+  // GitHub's manifest flow: POST the manifest as a form, so the browser lands on GitHub's
+  // "create App" page with everything filled in; GitHub sends it back to the callback.
+  const createApp = async () => {
+    setBusy(true); setErr(undefined);
+    try {
+      const r = await api.createGithubApp({ name: name.trim(), org: org.trim(),
+                                            app_name: appName.trim(), public_url: publicUrl.trim() });
+      if (r.warning && !window.confirm(`${r.warning}\n\nCreate the App anyway?`)) {
+        setBusy(false); return;
+      }
+      const form = document.createElement("form");
+      form.method = "post"; form.action = r.action;
+      const input = document.createElement("input");
+      input.type = "hidden"; input.name = "manifest"; input.value = r.manifest;
+      form.appendChild(input); document.body.appendChild(form); form.submit();
+    } catch (e) { setErr(String((e as Error).message ?? e)); setBusy(false); }
+  };
+
+  const install = async (n: string) => {
+    try { window.location.href = (await api.githubAppInstallLink(n)).url; }
+    catch (e) { setErr(String((e as Error).message ?? e)); }
   };
 
   const rotate = async (n: string) => {
@@ -112,7 +155,7 @@ function GithubPanel() {
     setTests((t) => ({ ...t, [n]: { busy: true } }));
     try {
       const r = await api.testGithubCredential(n);
-      setTests((t) => ({ ...t, [n]: { ok: r.ok, error: r.error, login: r.login, scopes: r.scopes } }));
+      setTests((t) => ({ ...t, [n]: r }));
       if (r.ok) load();
     } catch (e) {
       setTests((t) => ({ ...t, [n]: { ok: false, error: String((e as Error).message ?? e) } }));
@@ -126,25 +169,96 @@ function GithubPanel() {
     setBusy(false); setConfirmDelete(undefined);
   };
 
+  const isApp = (c: GithubCredential) => c.kind === "app" || c.kind === "app_broker";
+  const backName = back.github && creds?.find((c) => c.name === back.github);
+
   return (
     <div className="panel">
       <div className="btnrow" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
         <h2 style={{ margin: 0 }}>GitHub</h2>
-        {!adding && <button className="primary" onClick={() => setAdding(true)}>Add credential</button>}
+        {!adding && (
+          <div className="btnrow">
+            {connectUrl
+              ? <a className="btn primary" href={connectUrl}>Connect GitHub</a>
+              : <button className="primary" onClick={() => { setAdding("app"); setName("github-app"); }}>Create GitHub App</button>}
+            <button onClick={() => { setAdding("token"); setName(""); }}>Add a personal token</button>
+          </div>
+        )}
       </div>
       <p className="help">
-        A GitHub token stored once. Pick it by name on a <em>GitHub</em> source instead of pasting a
-        token per repository, and on an MCP server as its authentication; rotate it here and every
-        source and server follows. Use a fine-grained token: the repositories you want, with{" "}
-        <strong>Contents</strong> read (read/write on a repository an agent should update),{" "}
-        <strong>Pull requests</strong> read/write, <strong>Metadata</strong> read. It is never
-        returned by the API and never included in a catalog export.
+        With the <strong>GitHub App</strong>, every event of the repositories it is installed on
+        reaches Tares as it happens: pull requests, pushes, reviews, comments, issues, releases and
+        CI runs. Agents act as the App. A <strong>personal token</strong> polls the repositories
+        you add for commits and pull requests opened, merged or closed. Either one is picked by
+        name on sources and MCP servers, and no token or key is ever shown again.
       </p>
 
+      {back.error && <div className="alert error">GitHub: {back.error}</div>}
+      {back.event === "created" && (
+        <div className="alert">
+          GitHub App <strong className="mono">{back.github}</strong> created. Install it on the
+          organization whose repositories Tares should watch.{" "}
+          {backName && <button className="primary" onClick={() => install(back.github)}>Install on GitHub</button>}
+        </div>
+      )}
+      {back.event === "installed" && (
+        <div className="alert">
+          <strong className="mono">{back.github}</strong> is installed
+          {back.account && <> on <strong className="mono">{back.account}</strong></>}. Its events
+          arrive in the <em>GitHub</em> source.
+        </div>
+      )}
+      {back.event === "requested" && <div className="alert">Install requested: {back.detail}.</div>}
       {err && <div className="alert error">{err}</div>}
 
-      {adding && (
+      {adding === "app" && (
         <div className="panel" style={{ marginBottom: 12 }}>
+          <p className="help" style={{ marginTop: 0 }}>
+            Opens GitHub with the App filled in: its permissions, the events it sends and where it
+            sends them. You confirm there, then install it on your organization.
+          </p>
+          <div className="row2">
+            <label className="field">
+              <span className="lbl">GitHub organization <span className="help">(empty: your own account)</span></span>
+              <input type="text" className="mono" placeholder="e.g. acme" value={org}
+                     onChange={(e) => setOrg(e.target.value)} />
+            </label>
+            <label className="field">
+              <span className="lbl">name in Tares</span>
+              <input type="text" className="mono" value={name} onChange={(e) => setName(e.target.value)} />
+            </label>
+          </div>
+          <details>
+            <summary className="help">Address and App name</summary>
+            <div className="row2">
+              <label className="field">
+                <span className="lbl">this Tares, as GitHub reaches it</span>
+                <input type="text" className="mono" value={publicUrl}
+                       onChange={(e) => setPublicUrl(e.target.value)} />
+              </label>
+              <label className="field">
+                <span className="lbl">App name on GitHub <span className="help">(unique on GitHub)</span></span>
+                <input type="text" className="mono" placeholder="suggested from this address" value={appName}
+                       onChange={(e) => setAppName(e.target.value)} />
+              </label>
+            </div>
+          </details>
+          <div className="btnrow">
+            <button className="primary" disabled={busy || !name.trim()} onClick={createApp}>
+              {busy ? "Opening GitHub…" : "Continue on GitHub"}</button>
+            <button onClick={() => { setAdding(""); setErr(undefined); }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {adding === "token" && (
+        <div className="panel" style={{ marginBottom: 12 }}>
+          <p className="help" style={{ marginTop: 0 }}>
+            A fine-grained token with the repositories you want and <strong>Metadata</strong>,{" "}
+            <strong>Contents</strong> and <strong>Pull requests</strong> read (write on a
+            repository an agent should change). A classic token needs the <span className="mono">repo</span> scope
+            for private repositories.
+          </p>
           <div className="row2">
             <label className="field">
               <span className="lbl">name</span>
@@ -164,28 +278,47 @@ function GithubPanel() {
                    value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} />
           </label>
           <div className="btnrow">
-            <button className="primary" disabled={busy || !name.trim() || !token.trim()} onClick={add}>Save</button>
-            <button onClick={() => { setAdding(false); setErr(undefined); }}>Cancel</button>
+            <button className="primary" disabled={busy || !name.trim() || !token.trim()} onClick={addToken}>Save</button>
+            <button onClick={() => { setAdding(""); setErr(undefined); }}>Cancel</button>
           </div>
         </div>
       )}
 
       {!creds ? <div className="muted">loading…</div>
         : creds.length === 0 ? (
-          !adding && <div className="empty">no GitHub credential yet. Add one to pick it on sources and MCP servers.</div>
+          !adding && <div className="empty">Nothing connected yet. Create the GitHub App, or add a personal token.</div>
         ) : (
           <table>
-            <thead><tr><th>name</th><th>account</th><th>used by</th><th>updated</th><th aria-label="actions" /></tr></thead>
+            <thead><tr><th>name</th><th>connects as</th><th>events</th><th>used by</th><th aria-label="actions" /></tr></thead>
             <tbody>
               {creds.map((c) => {
                 const t = tests[c.name];
                 const uses = c.sources.length + c.mcp_servers.length;
+                const insts = c.installations ?? [];
+                const d = c.deliveries;
                 return (
-                  <>
-                    <tr key={c.name}>
+                  <Fragment key={c.name}>
+                    <tr>
                       <td className="mono"><strong>{c.name}</strong>
                         {c.api_url && <span className="help" style={{ marginLeft: 6 }}>{c.api_url}</span>}</td>
-                      <td>{c.account ? <span className="mono">{c.account}</span> : <span className="dim">unknown</span>}</td>
+                      <td>
+                        {isApp(c) ? (
+                          <>GitHub App{c.broker && " (Tares Cloud)"}{insts.length > 0
+                            ? <> on <span className="mono">{insts.map((i) => i.account || i.id).join(", ")}</span></>
+                            : <span className="dim">, not installed yet</span>}</>
+                        ) : (
+                          <>token{c.account && <> of <span className="mono">{c.account}</span></>}</>
+                        )}
+                      </td>
+                      <td className="help">
+                        {!isApp(c) ? "polls the repositories you add"
+                          : !d ? <span className="dim">no source</span>
+                          : d.last_at ? <>last delivery <TimeAgo ts={new Date(d.last_at * 1000).toISOString()} />
+                              {d.rejected_signature > 0 && <span className="badge error" style={{ marginLeft: 6 }}
+                                title="deliveries refused because their signature did not match the App's webhook secret">
+                                {d.rejected_signature} refused</span>}</>
+                          : <span className="dim">no deliveries yet</span>}
+                      </td>
                       <td>{uses === 0 ? <span className="dim">nothing yet</span> : (
                         <span className="help" title={[...c.sources, ...c.mcp_servers].join("\n")}>
                           {c.sources.length > 0 && <>{c.sources.length} source{c.sources.length === 1 ? "" : "s"}</>}
@@ -193,35 +326,41 @@ function GithubPanel() {
                           {c.mcp_servers.length > 0 && <>{c.mcp_servers.length} MCP server{c.mcp_servers.length === 1 ? "" : "s"}</>}
                         </span>
                       )}</td>
-                      <td style={{ whiteSpace: "nowrap" }}><TimeAgo ts={c.updated_at} /></td>
                       <td style={{ whiteSpace: "nowrap" }}>
                         <div className="btnrow" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
+                          {c.kind === "app" && c.slug && (
+                            <button className={insts.length === 0 ? "primary" : ""} onClick={() => install(c.name)}>
+                              {insts.length === 0 ? "Install on GitHub" : "Add an organization"}</button>
+                          )}
                           <button onClick={() => test(c.name)} disabled={t?.busy}>{t?.busy ? "testing…" : "Test"}</button>
-                          <button onClick={() => { setRotating(rotating === c.name ? undefined : c.name); setNewToken(""); }}>Rotate</button>
+                          {!isApp(c) && <button onClick={() => { setRotating(rotating === c.name ? undefined : c.name); setNewToken(""); }}>Rotate</button>}
                           <button className="danger" onClick={() => setConfirmDelete(c)}>Delete</button>
                         </div>
                       </td>
                     </tr>
                     {t && !t.busy && (
-                      <tr key={c.name + "-test"}>
+                      <tr>
                         <td colSpan={5} style={{ background: "var(--wash)" }}>
-                          {t.ok ? (
-                            <div style={{ padding: "6px 4px" }}>
-                              <span className="badge ok">token works</span>{" "}
-                              <span className="help">signed in as <span className="mono">{t.login}</span>
-                                {t.scopes && t.scopes.length > 0 && <> with scopes <span className="mono">{t.scopes.join(", ")}</span></>}</span>
-                            </div>
-                          ) : (
-                            <div style={{ padding: "6px 4px" }}>
-                              <span className="badge error">failed</span>{" "}
-                              <span className="help mono">{t.error}</span>
-                            </div>
-                          )}
+                          <div style={{ padding: "6px 4px" }}>
+                            {t.ok ? (
+                              t.installations ? (
+                                <><span className="badge ok">works</span>{" "}
+                                  <span className="help">{t.installations.map((i) =>
+                                    `${i.account}: ${i.repos} repositor${i.repos === 1 ? "y" : "ies"}`).join(" · ")}</span></>
+                              ) : (
+                                <><span className="badge ok">token works</span>{" "}
+                                  <span className="help">signed in as <span className="mono">{t.login}</span>
+                                    {t.scopes && t.scopes.length > 0 && <> with scopes <span className="mono">{t.scopes.join(", ")}</span></>}</span></>
+                              )
+                            ) : (
+                              <><span className="badge error">failed</span>{" "}<span className="help mono">{t.error}</span></>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     )}
                     {rotating === c.name && (
-                      <tr key={c.name + "-rotate"}>
+                      <tr>
                         <td colSpan={5} style={{ background: "var(--wash)" }}>
                           <div className="btnrow" style={{ alignItems: "center", maxWidth: 720, padding: "6px 4px" }}>
                             <input type="password" className="mono" style={{ flex: 1 }} autoComplete="new-password"
@@ -232,7 +371,7 @@ function GithubPanel() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -242,9 +381,11 @@ function GithubPanel() {
       {confirmDelete && (
         <ConfirmDialog
           title={`Delete GitHub credential ${confirmDelete.name}?`}
-          message={confirmDelete.sources.length + confirmDelete.mcp_servers.length > 0
+          message={(confirmDelete.sources.length + confirmDelete.mcp_servers.length > 0
             ? `${confirmDelete.sources.length} source(s) and ${confirmDelete.mcp_servers.length} MCP server(s) reference it and will stop authenticating until you point them at another credential.`
-            : "Nothing references it."}
+            : "Nothing references it.")
+            + (isApp(confirmDelete) && confirmDelete.kind === "app"
+              ? " The App itself stays on GitHub; uninstall or delete it there too." : "")}
           confirmLabel="Delete" danger
           onConfirm={() => remove(confirmDelete.name)}
           onCancel={() => setConfirmDelete(undefined)} />

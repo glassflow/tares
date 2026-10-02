@@ -5,7 +5,7 @@ import { InternalName, sourceTitle } from "../bits";
 import type { PlanWatch } from "../../types";
 import { Choice, EditorFrame, ItemActions, Problems } from "./planBits";
 import {
-  agoWords, newKey, needsFor, offeredConnector, putWatch, removeWatch, type CellData,
+  agoWords, newKey, needsFor, offeredConnector, ofSameKind, putWatch, removeWatch, type CellData,
 } from "./planEdit";
 import type { CardCtx } from "./plan";
 
@@ -77,6 +77,7 @@ const NEW = "__new__";
 /** What a source reads, when its settings say it plainly (a GitHub source: its repository);
  *  a name like ctx_glassflow_rius_argus_core tells a person less than glassflow/argus-core. */
 function whatItReads(s: NonNullable<CellData["sources"]>[number]): string | null {
+  if (s.connector === "github_app") return "every repository the GitHub App is installed on";
   return sourceTitle(s.config);
 }
 
@@ -92,7 +93,9 @@ function SourceEditor({ watch, cell, taken, onSave, onCancel }: {
     !(specs?.[s.connector]?.internal) && s.connector !== "finding" && !taken.includes(s.name));
   const [kind, setKind] = useState(watch?.connector ?? "");
   const [choosingKind, setChoosingKind] = useState(!watch?.connector);
-  const ofKind = usable.filter((s) => s.connector === kind);
+  // the GitHub App source counts as a GitHub source, listed first: it already has every repo
+  const ofKind = usable.filter((s) => ofSameKind(s.connector, kind))
+    .sort((a, b) => Number(b.connector === "github_app") - Number(a.connector === "github_app"));
   const [pick, setPick] = useState(watch ? (watch.existing ? watch.name : NEW) : "");
   const [filter, setFilter] = useState("");
   const [key] = useState(() => watch?.key ?? newKey("w", []));

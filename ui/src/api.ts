@@ -3,7 +3,7 @@ import type {
   ApiKey, ExternalAgent,
   CatalogDescribe, ConnectorSpec, DiscoverProposal, DispatchDetail, DispatchLogEntry, Entity, EnvScan,
   AgentPreset, AgentRun, BuiltinAgent, Handoff,
-  GithubCredential,
+  GithubAppTest, GithubCredential,
   LabelFacet, ModelUsage, QueryLogEntry,
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults,
@@ -92,6 +92,7 @@ export const api = {
   health: () => request<{
     status: string; auth_required: boolean; login_url?: string;
     workspace_url?: string;   // cloud only: the control-plane workspace this cell belongs to
+    github_connect_url?: string;   // cloud only: "Connect GitHub" (the GlassFlow-owned App)
     detail?: string; pct_used?: number | null;
   }>("/health"),
   // Swap a one-time ?code= (handed to us in the redirect back from the control plane) for the real
@@ -306,8 +307,18 @@ export const api = {
   deleteGithubCredential: (name: string) =>
     request<{ ok: boolean }>(`/api/integrations/github/${encodeURIComponent(name)}`, { method: "DELETE" }),
   testGithubCredential: (name: string) =>
-    request<{ ok: boolean; error?: string; login?: string; name?: string; scopes?: string[] }>(
-      `/api/integrations/github/${encodeURIComponent(name)}/test`, { method: "POST" }),
+    request<GithubAppTest>(`/api/integrations/github/${encodeURIComponent(name)}/test`,
+      { method: "POST" }),
+  // Create GitHub App: the manifest and where to post it (GitHub's manifest flow)
+  createGithubApp: (body: { name: string; org?: string; app_name?: string; public_url?: string }) =>
+    request<{ action: string; manifest: string; hook_url: string; warning: string | null }>(
+      "/api/integrations/github/apps", { method: "POST", body: JSON.stringify(body) }),
+  // the credential's GitHub MCP server (made once, reused): what an agent reads/writes repos with
+  githubCredentialMcp: (name: string, write: boolean) =>
+    request<{ ok: boolean; server: string }>(`/api/integrations/github/${encodeURIComponent(name)}/mcp`,
+      { method: "POST", body: JSON.stringify({ write }) }),
+  githubAppInstallLink: (name: string) =>
+    request<{ url: string }>(`/api/integrations/github/${encodeURIComponent(name)}/install`),
   githubCredentialTree: (name: string, repo: string, ref = "", path = "") =>
     request<{ ref: string; path: string; dirs: string[]; files: string[]; markdown: string[]; exists: boolean }>(
       `/api/integrations/github/${encodeURIComponent(name)}/tree?repo=${encodeURIComponent(repo)}&ref=${encodeURIComponent(ref)}&path=${encodeURIComponent(path)}`),
@@ -412,6 +423,9 @@ export const api = {
   // ── Goal-first setup: plan from a goal, adjust in plain words, apply, then connect and try ──
   planSetup: (body: { goal: string; who?: "tares" | "own"; existing_sources?: boolean }) =>
     request<{ plan: Plan }>("/api/setup/plan", { method: "POST", body: JSON.stringify(body) }),
+  // the guided setup's opening line from the person's GitHub repositories (TR-262)
+  setupGithubSuggestion: () =>
+    request<{ available: boolean; suggestion: string | null; repos: string[] }>("/api/setup/github-suggestion"),
   adjustSetup: (plan: Plan, instruction: string) =>
     request<{ plan: Plan }>("/api/setup/adjust", { method: "POST", body: JSON.stringify({ plan, instruction }) }),
   checkSetup: (plan: Plan, project?: string) =>

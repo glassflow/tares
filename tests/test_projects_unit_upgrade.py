@@ -340,8 +340,12 @@ def legacy_import_checks(label: str, text: str):
           and counts["projects"] == len(raw["projects"]) and "views" not in counts, str(counts))
     by_name = {v["name"]: v for v in raw["views"]}
     trig = {t["name"]: t for t in store.list_catalog_triggers()}
+    # a shared code context trigger now also says it counts commits (its GitHub sources report
+    # pull requests too); that one filter is the template's, not the view's
+    commit = {"field": "event_type", "op": "eq", "value": "commit"}
     wrong = [n for n, t in raw_triggers(raw) if trig[n]["sources"] != by_name[t["view"]]["sources"]
-             or trig[n]["filters"] != (by_name[t["view"]].get("filters") or [])]
+             or [f for f in trig[n]["filters"] if f != commit]
+             != (by_name[t["view"]].get("filters") or [])]
     check(f"{label}: every trigger has its view's sources and filters", not wrong, str(wrong))
     projects = {p["id"] for p in store.list_projects()}
     check(f"{label}: every trigger has sources and a project",

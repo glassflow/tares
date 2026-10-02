@@ -297,6 +297,8 @@ CREATE TABLE IF NOT EXISTS skills (
 _MIGRATIONS = [
     "ALTER TABLE events ADD COLUMN IF NOT EXISTS labels JSON",
     "ALTER TABLE catalog_sources ADD COLUMN IF NOT EXISTS ingest_key TEXT",
+    # a GitHub App or broker credential's fields (app id, key, installations); token kind: empty
+    "ALTER TABLE github_credentials ADD COLUMN IF NOT EXISTS config JSON",
     "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS created_by TEXT",
     # No DEFAULT here on purpose: DuckDB re-applies an ADD COLUMN … DEFAULT on every boot even when
     # the column already exists, which would reset paused=TRUE back to FALSE each restart. Existing
@@ -364,6 +366,8 @@ _MIGRATIONS = [
     # how a run ends: always with the conclude tool (`concludes`), and the verdicts it may give,
     # [{verdict, when}], the only ones the tool accepts when there are any
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS concludes BOOLEAN",
+    # the GitHub credential the agent acts with (check runs; its GitHub MCP server is in mcp_servers)
+    "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS github TEXT",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS verdicts JSON",
     # Which key paid for a ledger row ("env:ANTHROPIC_API_KEY" | "console") — the boundary a
     # hosted trial's enforcement counts against. Rows from before attribution stay NULL (unknown).
@@ -486,6 +490,13 @@ def _filter_sql(filters) -> tuple[str, list]:
         if op == "contains":
             clauses.append(f"{expr} ILIKE ?")
             params.append(f"%{value}%")
+        elif op == "in":
+            values = [str(v) for v in (value if isinstance(value, list) else [value])]
+            if not values:
+                raise ValueError("filter op 'in' needs at least one value")
+            # case-insensitive: GitHub names (owner/repo) are, and a typed list rarely matches case
+            clauses.append(f"lower({expr}) IN ({', '.join('?' * len(values))})")
+            params.extend(v.lower() for v in values)
         elif op in _FILTER_OPS:
             clauses.append(f"{expr} {_FILTER_OPS[op]} ?")
             params.append(float(value) if numeric else str(value))
@@ -1287,8 +1298,10 @@ class Store:
         return r[0] if r else None
 
     def delete_cursor(self, source: str) -> None:
+        # a source may keep secondary cursors as `<source>#<what>` (GitHub: `#prs`); they go too
         with self._lock:
-            self.con.execute("DELETE FROM cursors WHERE source = ?", [source])
+            self.con.execute("DELETE FROM cursors WHERE source = ? OR starts_with(source, ?)",
+                             [source, source + "#"])
 
     def set_cursor(self, source: str, cursor: str) -> None:
         with self._lock:
@@ -1356,6 +1369,12 @@ class Store:
                 [name, type_, connector, poll, json.dumps(config), paused, ts, ts, ik],
             )
 
+    def set_source_ingest_key(self, name: str, ingest_key: str) -> None:
+        """Replace a push source's ingest key (a GitHub App recreated for an existing source)."""
+        with self._lock:
+            self.con.execute("UPDATE catalog_sources SET ingest_key = ? WHERE name = ?",
+                             [ingest_key, name])
+
     def list_catalog_sources(self) -> list[dict]:
         with self._lock:
             rows = self.con.execute(
@@ -1405,6 +1424,11 @@ class Store:
                  key_field or "", json.dumps(condition), json.dumps(emit), cooldown, ts, ts,
                  description or None],
             )
+
+    def set_trigger_filters(self, name: str, filters: list) -> None:
+        with self._lock:
+            self.con.execute("UPDATE catalog_triggers SET filters = ? WHERE name = ?",
+                             [json.dumps(filters or []), name])
 
     def set_trigger_description(self, name: str, description: str | None) -> None:
         with self._lock:
@@ -1469,18 +1493,20 @@ class Store:
                              daily_cap: int | None = None,
                              handoffs: list[dict] | None = None,
                              concludes: bool | None = None,
-                             verdicts: list[dict] | None = None) -> None:
-        # handoffs, concludes, verdicts: None keeps what is stored (a caller that does not know
-        # about them, such as a template re-plan, must not wipe them); [] / False clears
+                             verdicts: list[dict] | None = None,
+                             github: str | None = None) -> None:
+        # handoffs, concludes, verdicts, github: None keeps what is stored (a caller that does
+        # not know about them, such as a template re-plan, must not wipe them); [] / False / ""
+        # clears
         ts = now_utc()
         with self._lock:
             self.con.execute(
                 "INSERT INTO catalog_agents "
                 "(name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, max_rounds, budget_usd, "
-                "webhook_key_label, provider, daily_cap, handoffs, concludes, verdicts, "
+                "webhook_key_label, provider, daily_cap, handoffs, concludes, verdicts, github, "
                 "created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (name) DO UPDATE SET trigger = excluded.trigger, "
                 "prompt = excluded.prompt, slack_webhook = excluded.slack_webhook, "
                 "model = excluded.model, slack_channel = excluded.slack_channel, "
@@ -1492,6 +1518,7 @@ class Store:
                 "handoffs = COALESCE(excluded.handoffs, catalog_agents.handoffs), "
                 "concludes = COALESCE(excluded.concludes, catalog_agents.concludes), "
                 "verdicts = COALESCE(excluded.verdicts, catalog_agents.verdicts), "
+                "github = COALESCE(excluded.github, catalog_agents.github), "
                 "updated_at = excluded.updated_at",
                 [name, trigger, prompt, slack_webhook or "", model or "",
                  slack_channel or "", webhook_url or "", webhook_token or "",
@@ -1499,7 +1526,8 @@ class Store:
                  webhook_key_label or "", provider or "", daily_cap,
                  None if handoffs is None else json.dumps(handoffs),
                  None if concludes is None else bool(concludes),
-                 None if verdicts is None else json.dumps(verdicts), ts, ts],
+                 None if verdicts is None else json.dumps(verdicts),
+                 None if github is None else github, ts, ts],
             )
             # the agent's trigger and handoffs are the wiring of the project that made it
             # (P-TR-216); one not placed yet is wired when it is (_wire_owner)
@@ -1563,7 +1591,7 @@ class Store:
             rows = self.con.execute(
                 "SELECT name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, updated_at, max_rounds, budget_usd, owned_by, customized, "
-                "webhook_key_label, provider, daily_cap, handoffs, concludes, verdicts "
+                "webhook_key_label, provider, daily_cap, handoffs, concludes, verdicts, github "
                 "FROM catalog_agents ORDER BY name"
             ).fetchall()
             wiring = self.con.execute(
@@ -1593,7 +1621,7 @@ class Store:
                 "handoffs": hands.get((where, r[0]), [] if w or (where, r[0]) in hands
                                       else (json.loads(r[17]) if r[17] else [])),
                 "concludes": bool(r[18]), "verdicts": json.loads(r[19]) if r[19] else [],
-                "enabled": bool(on)})
+                "github": r[20] or "", "enabled": bool(on)})
         return out
 
     def get_catalog_agent(self, name: str, project: str | None = None) -> dict | None:
@@ -2615,30 +2643,56 @@ class Store:
                 "ORDER BY logged_at DESC LIMIT ?", [uid, limit]).fetchall()
         return [{"at": r[0], "action": r[1], "detail": r[2]} for r in rows]
     # ── GitHub credentials: a token stored once, referenced by sources and MCP servers ──
-    # The token is held verbatim like every other connector secret; redaction is the API's job.
+    # The token (and an App's private key) is held verbatim like every other connector secret;
+    # redaction is the API's job. `config` holds the kind-specific fields: for `app` the app id,
+    # private key, webhook secret and installations; for `app_broker` the broker URL and secret.
     def list_github_credentials(self) -> list[dict]:
         with self._lock:
             rows = self.con.execute(
-                "SELECT name, kind, token, api_url, account, created_at, updated_at "
+                "SELECT name, kind, token, api_url, account, created_at, updated_at, config "
                 "FROM github_credentials ORDER BY name").fetchall()
-        return [{"name": r[0], "kind": r[1] or "token", "token": r[2] or "",
-                 "api_url": r[3] or "", "account": r[4] or "",
-                 "created_at": r[5], "updated_at": r[6]} for r in rows]
+        out = []
+        for r in rows:
+            try:
+                cfg = json.loads(r[7]) if r[7] else {}
+            except (TypeError, ValueError):
+                cfg = {}
+            out.append({"name": r[0], "kind": r[1] or "token", "token": r[2] or "",
+                        "api_url": r[3] or "", "account": r[4] or "",
+                        "created_at": r[5], "updated_at": r[6],
+                        "config": cfg if isinstance(cfg, dict) else {}})
+        return out
 
     def get_github_credential(self, name: str) -> dict | None:
         return next((c for c in self.list_github_credentials() if c["name"] == name), None)
 
     def upsert_github_credential(self, name: str, token: str, kind: str = "token",
-                                 api_url: str = "", account: str = "") -> None:
+                                 api_url: str = "", account: str = "",
+                                 config: dict | None = None) -> None:
+        """Create or replace a credential. `config` None keeps the stored one (a token rotation
+        does not wipe an App's installations); pass {} to clear it."""
         ts = now_utc()
         with self._lock:
+            if config is None:
+                row = self.con.execute("SELECT config FROM github_credentials WHERE name = ?",
+                                       [name]).fetchone()
+                cfg_json = row[0] if row and row[0] else None
+            else:
+                cfg_json = json.dumps(config) if config else None
             self.con.execute(
                 "INSERT INTO github_credentials (name, kind, token, api_url, account, "
-                "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "created_at, updated_at, config) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (name) DO UPDATE SET kind = excluded.kind, token = excluded.token, "
                 "api_url = excluded.api_url, account = excluded.account, "
-                "updated_at = excluded.updated_at",
-                [name, kind, token or "", api_url or "", account or "", ts, ts])
+                "updated_at = excluded.updated_at, config = excluded.config",
+                [name, kind, token or "", api_url or "", account or "", ts, ts, cfg_json])
+
+    def update_github_credential_config(self, name: str, config: dict) -> None:
+        """Replace only the kind-specific fields (an installation added or removed by a webhook)."""
+        with self._lock:
+            self.con.execute(
+                "UPDATE github_credentials SET config = ?, updated_at = ? WHERE name = ?",
+                [json.dumps(config) if config else None, now_utc(), name])
 
     def delete_github_credential(self, name: str) -> None:
         with self._lock:
