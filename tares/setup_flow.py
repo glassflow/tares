@@ -198,22 +198,38 @@ def read_tools(github: bool = False) -> list:
     return [t for t in TOOLS if t["name"] in READ_TOOL_NAMES] + ([GITHUB_REPO_TOOL] if github else [])
 
 
+_REPO_LINES: dict = {}            # {"at": monotonic, "creds": key, "repos": [...]}
+REPO_LINES_TTL = 300
+
+
 async def github_repo_lines(store, limit: int = GITHUB_REPOS_SHOWN) -> list[str]:
     """The person's repositories, most recently pushed first, from every stored GitHub
     credential: what the plan and the opening suggestion are grounded in. Best effort and quick:
-    a credential that cannot list its repos is skipped, never an error."""
+    credentials are listed concurrently (10s each), a failing one is skipped, and the merged list
+    is reused for five minutes so planning does not wait on GitHub every time."""
     import asyncio
+    import time as _t
     from .github_credentials import list_repos_for
-    seen: dict[str, dict] = {}
-    for cred in store.list_github_credentials():
+    creds = store.list_github_credentials()
+    key = "|".join(sorted(f"{c['name']}:{c.get('updated_at')}" for c in creds))
+    hit = _REPO_LINES
+    if hit and hit.get("creds") == key and _t.monotonic() - hit["at"] < REPO_LINES_TTL:
+        return hit["repos"][:limit]
+
+    async def one(cred):
         try:
-            repos = await asyncio.wait_for(list_repos_for(cred), timeout=10)
+            return await asyncio.wait_for(list_repos_for(cred), timeout=10)
         except Exception:  # noqa: BLE001
-            continue
+            return []
+    seen: dict[str, dict] = {}
+    for repos in await asyncio.gather(*(one(c) for c in creds)):
         for r in repos:
             seen.setdefault(r["full_name"], r)
     ordered = sorted(seen.values(), key=lambda r: r.get("pushed_at") or "", reverse=True)
-    return [r["full_name"] + (" (private)" if r.get("private") else "") for r in ordered[:limit]]
+    lines = [r["full_name"] + (" (private)" if r.get("private") else "")
+             for r in ordered[:GITHUB_REPOS_SHOWN]]
+    _REPO_LINES.update({"at": _t.monotonic(), "creds": key, "repos": lines})
+    return lines[:limit]
 
 
 async def read_github_repo(store, repo: str) -> tuple[bool, str]:
@@ -1214,6 +1230,7 @@ alerts) and wakes AI agents that look into them. Write one sentence the person c
 goal, naming one real repository, in plain words, under 140 characters, no em dashes. Ground it in \
 what the names and files say; never claim more. Answer with the sentence only."""
 SUGGEST_TTL = 24 * 3600
+SUGGEST_RETRY = 600          # a failed suggestion is tried again after ten minutes
 SUGGEST_SETTING = "setup_github_suggestion"
 
 
@@ -1225,19 +1242,27 @@ async def github_suggestion(store, provider, model: str, on_usage=None) -> dict:
     repos = await github_repo_lines(store, limit=8)
     if not repos:
         return {"suggestion": None, "repos": []}
-    key = "|".join(repos)
+    # the set of repositories, not their order: a push reorders them, it does not change them
+    key = "|".join(sorted(repos))
     try:
         cached = json.loads(store.get_setting(SUGGEST_SETTING) or "{}")
     except ValueError:
         cached = {}
-    if cached.get("key") == key and _t.time() - float(cached.get("at") or 0) < SUGGEST_TTL:
+    ttl = SUGGEST_TTL if cached.get("suggestion") else SUGGEST_RETRY
+    if cached.get("key") == key and _t.time() - float(cached.get("at") or 0) < ttl:
         return {"suggestion": cached.get("suggestion"), "repos": repos}
     ok, readme = await read_github_repo(store, repos[0].split(" ")[0])
     msg = ("Repositories:\n" + "\n".join(f"- {r}" for r in repos)
            + (f"\n\nThe newest one, {repos[0].split(' ')[0]}:\n{readme[:2500]}" if ok else ""))
-    reply = await provider.complete(model=model, system=SUGGEST_SYSTEM, tools=[],
-                                    messages=[{"role": "user", "content": msg}], max_tokens=200,
-                                    tools_allowed=False)
+    try:
+        reply = await provider.complete(model=model, system=SUGGEST_SYSTEM, tools=[],
+                                        messages=[{"role": "user", "content": msg}],
+                                        max_tokens=200, tools_allowed=False)
+    except Exception:
+        # remembered briefly, so a page opened again does not retry the model each time
+        store.set_setting(SUGGEST_SETTING, json.dumps({"key": key, "at": _t.time(),
+                                                       "suggestion": None}))
+        raise
     if on_usage is not None:
         on_usage(reply.usage)
     text = " ".join((reply.text or "").split()).strip().strip('"')

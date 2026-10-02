@@ -672,6 +672,8 @@ def make_app() -> FastAPI:
             return "any"
         # /api/settings holds instance credentials (the Anthropic key): admin even to READ, since
         # a read tells you whether and where a credential is configured.
+        if path == "/api/setup/github-suggestion":
+            return "admin"   # spends model money and distills private READMEs: not for read keys
         if (path in _ADMIN_PATHS or path.startswith("/api/keys")
                 or path.startswith("/api/discover") or path.startswith("/api/settings")):
             return "admin"
@@ -2009,12 +2011,18 @@ def make_app() -> FastAPI:
     async def github_credential_mcp(name: str, body: GithubMcpIn):
         """The GitHub MCP server for this credential (GitHub's hosted server, authenticated with
         the credential, so an App credential's agents act as the App): `github-<name>` with write
-        toolsets, `github-<name>-read` read-only. Created once, a shared part any project uses;
+        toolsets, `githubro-<name>` read-only. Created once, a shared part any project uses;
         the agent form adds the returned name to the agent's MCP servers."""
-        if store.get_github_credential(name) is None:
+        cred = store.get_github_credential(name)
+        if cred is None:
             _err(KeyError(f"unknown GitHub credential {name!r}"), 404)
+        if cred.get("api_url"):
+            # GitHub's hosted MCP server is github.com's: a GitHub Enterprise token must not go there
+            _err(ValueError("GitHub's MCP server serves github.com only; this credential is for "
+                            "GitHub Enterprise"), 400)
         from .github_credentials import CREDENTIAL_PREFIX
-        server = f"github-{name}" + ("" if body.write else "-read")
+        # two prefixes, not a suffix: credential names allow "-", so "x-read" would collide
+        server = ("github-" if body.write else "githubro-") + name
         if store.get_mcp_server(server) is None:
             headers = {"X-MCP-Toolsets": "repos,pull_requests,issues"}
             if not body.write:
@@ -2384,9 +2392,10 @@ def make_app() -> FastAPI:
                 "slack_workspace": bool(resolve_slack_token(store)[0]),
                 "presets": [{"id": k, **v} for k, v in AGENT_PRESETS.items()]}
 
-    def _check_agent_github(value: str | None) -> str | None:
-        """An agent's `github` must name a stored GitHub credential (None and "" pass through)."""
-        if value and store.get_github_credential(value.strip()) is None:
+    def _check_agent_github(value: str | None, current: str = "") -> str | None:
+        """An agent's `github` must name a stored GitHub credential (None and "" pass through;
+        the value it already has passes too, so a deleted credential never blocks a save)."""
+        if value and value.strip() != current and store.get_github_credential(value.strip()) is None:
             _err(ValueError(f"GitHub credential {value!r} not found (Settings > GitHub)"), 404)
         return value.strip() if value else value
 
@@ -2449,7 +2458,8 @@ def make_app() -> FastAPI:
                                    concludes=body.concludes,
                                    verdicts=(raw.get("verdicts") if body.verdicts is not None
                                              else None),
-                                   github=_check_agent_github(body.github))
+                                   github=_check_agent_github(body.github,
+                                                              existing.get("github") or ""))
         store.mark_customized("agent", name)
         store.put_in_project("agent", name, uid)
         if not here:

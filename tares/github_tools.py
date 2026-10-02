@@ -23,13 +23,13 @@ CHECK_RUN_DEF = {
         "Post your verdict on a pull request as a GitHub check run, shown in the PR's checks with "
         "notes on the lines it is about. Use the PR's head commit sha. `conclusion`: success "
         "(nothing to fix), failure (must be fixed), neutral (worth a look), action_required. "
-        "Each annotation names a file path and line from the diff. Returns the check run's URL."),
+        "Each annotation names a file path and line from the diff. The check is named after "
+        "you; only repositories your GitHub credential covers. Returns the check run's URL."),
     "input_schema": {
         "type": "object",
         "properties": {
             "repo": {"type": "string", "description": "owner/name"},
             "sha": {"type": "string", "description": "the commit the check is about (PR head sha)"},
-            "name": {"type": "string", "description": "the check's name, e.g. 'Tares review'"},
             "conclusion": {"type": "string", "enum": list(CONCLUSIONS)},
             "title": {"type": "string", "description": "one line shown next to the check"},
             "summary": {"type": "string", "description": "markdown body: the verdict and why"},
@@ -66,17 +66,32 @@ async def create_check_run(store, agent: dict, args: dict) -> str:
         raise ValueError("repo (owner/name) and sha are required")
     if conclusion not in CONCLUSIONS:
         raise ValueError(f"conclusion must be one of {', '.join(CONCLUSIONS)}")
+    # Only a repository this credential covers (what the person connected), never one a prompt
+    # in a pull request names: an injected "post success on acme/other" stays an error.
+    from .github_credentials import list_repos_for
+    cred_row = store.get_github_credential(agent.get("github") or "")
+    if cred_row is None:
+        raise ValueError("the agent's GitHub credential is gone (Settings > GitHub)")
+    covered = {r["full_name"].lower() for r in await list_repos_for(cred_row)}
+    if repo.lower() not in covered:
+        raise ValueError(f"{repo} is not a repository this agent's GitHub credential covers")
     annotations = []
     for n in (a.get("annotations") or [])[:MAX_ANNOTATIONS]:
         if not isinstance(n, dict) or not n.get("path") or not n.get("message"):
             continue
-        start = int(n.get("start_line") or 1)
-        annotations.append({"path": str(n["path"]), "start_line": start,
-                            "end_line": int(n.get("end_line") or start),
+        try:
+            start = max(1, int(n.get("start_line") or 1))
+            end = max(start, int(n.get("end_line") or start))
+        except (TypeError, ValueError):
+            raise ValueError("annotation start_line and end_line must be line numbers")
+        annotations.append({"path": str(n["path"]), "start_line": start, "end_line": end,
                             "annotation_level": n.get("level") if n.get("level") in
                             ("notice", "warning", "failure") else "notice",
                             "message": str(n["message"])[:2000]})
-    body = {"name": str(a.get("name") or "Tares")[:100], "head_sha": sha, "status": "completed",
+    # named after the agent, never by the model: a check run cannot pose as a required status
+    # check of another name (branch protection would read it as green)
+    body = {"name": f"Tares: {agent.get('name') or 'agent'}"[:100], "head_sha": sha,
+            "status": "completed",
             "conclusion": conclusion,
             "output": {"title": str(a.get("title") or f"Tares: {conclusion}")[:200],
                        "summary": str(a.get("summary") or "")[:60000],

@@ -179,8 +179,14 @@ async def list_repos_for(cred: dict, query: str = "") -> list[dict]:
         return await list_repos(cred["name"], cred["token"], cred.get("api_url") or None, query)
     from .github_app import installation_repos, installations
     repos: list[dict] = []
+    errors = []
     for inst in installations(cred):
-        repos += await installation_repos(cred, inst["id"])
+        try:
+            repos += await installation_repos(cred, inst["id"])
+        except ValueError as e:     # one suspended or removed installation must not hide the rest
+            errors.append(e)
+    if errors and not repos:
+        raise errors[0]
     q = (query or "").strip().lower()
     return [r for r in repos if q in r["full_name"].lower()] if q else repos
 

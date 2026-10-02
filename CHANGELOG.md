@@ -5,6 +5,35 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+The GitHub connector: a personal token or the GitHub App, and agents that act on your
+repositories. Ships with the Tares Cloud release that adds Connect GitHub.
+
+### Added
+- GitHub App: **Settings > GitHub > Create GitHub App** (GitHub's manifest flow), then install it
+  on an organization. Every event of every repository it is installed on arrives as it happens in
+  one `github` source: pull requests, pushes, reviews, comments, issues, releases, CI runs. The App
+  credential mints and refreshes installation tokens; on Tares Cloud an `app_broker` credential
+  gets them from the control plane and the cell holds no key (`TARES_GITHUB_CONNECT_URL` shows
+  "Connect GitHub").
+- Personal token sources report pull requests opened, merged or closed next to commits (`prs`).
+  Both ways produce the same event types, keys (`owner/repo#number` for pull requests) and labels
+  (`repo`, `action`, `number`, `author`, `branch`, ...).
+- Webhook signatures: GitHub, Linear and HMAC-SHA256, checked on the raw body. A source that
+  checks signatures needs no Tares key on its ingest URL; the generic webhook connector opts in
+  with `signature_scheme`.
+- Agents on GitHub: a credential per agent and read or read-and-write access through GitHub's MCP
+  server, set up by Tares; with the App, a `github_create_check_run` tool posts the verdict as a
+  check run with line notes.
+- The guided setup opens with a goal from your GitHub repositories, and the planner knows GitHub's
+  event names (a merged pull request is `event_type pull_request`, `action merged`).
+- Trigger filters take `in` (a list, case-insensitive).
+
+### Changed
+- The `github` connector is labelled "GitHub". Upgrading adds `event_type = commit` to every
+  trigger on a token source that had no event filter, so it keeps meaning what it meant.
+- Shared code context: with the App it uses the App's source instead of a source per repository,
+  and offers "every merged pull request".
+
 ## [1.38.0] - 2026-10-02
 
 Projects are the unit, parts are shared between them, a guided setup starts a project from a goal,

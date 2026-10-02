@@ -618,10 +618,10 @@ async def daemon():
             srv = store.get_mcp_server("github-acme-app")
             check("the credential's GitHub MCP server: made once, reused; a read-only one apart",
                   r.json()["server"] == r2.json()["server"] == "github-acme-app"
-                  and r3.json()["server"] == "github-acme-app-read"
+                  and r3.json()["server"] == "githubro-acme-app"
                   and srv["auth_value"] == "credential:github/acme-app"
                   and "X-MCP-Readonly" not in (srv.get("headers") or {})
-                  and (store.get_mcp_server("github-acme-app-read").get("headers") or {}).get(
+                  and (store.get_mcp_server("githubro-acme-app").get("headers") or {}).get(
                       "X-MCP-Readonly") == "true", str(srv))
             r = await cx.post("/api/agents/builtin", json={
                 "name": "pr_checker", "trigger": "pr_merged", "prompt": "Review the PR.",
@@ -653,6 +653,25 @@ async def daemon():
                   "runs/9" in out and posted["conclusion"] == "failure" and posted["head_sha"] == "abc"
                   and len(posted["output"]["annotations"]) == 1
                   and posted["output"]["annotations"][0]["annotation_level"] == "failure", out)
+            check("the check is named after the agent, not by the model",
+                  posted["name"] == "Tares: pr_checker", posted["name"])
+            try:
+                await github_tools.create_check_run(store, ag, {
+                    "repo": "victim/elsewhere", "sha": "abc", "conclusion": "success", "summary": "ok"})
+                check("a check run on a repo the credential does not cover is refused", False)
+            except ValueError as e:
+                check("a check run on a repo the credential does not cover is refused",
+                      "not a repository" in str(e), str(e))
+            await cx.post("/api/integrations/github", json={"name": "ghes", "token": "tok-pat",
+                                                            "api_url": "https://ghe.example.com/api/v3"})
+            r = await cx.post("/api/integrations/github/ghes/mcp", json={"write": False})
+            check("no hosted MCP server for a GitHub Enterprise credential", r.status_code == 400, r.text)
+            rk = await cx.post("/api/keys", json={"name": "reader", "scopes": ["read"]})
+            reader = rk.json().get("secret") or rk.json().get("key") or ""
+            r = await anon.get("/api/setup/github-suggestion",
+                               headers={"Authorization": f"Bearer {reader}"})
+            check("a read key cannot ask for the GitHub suggestion", r.status_code == 403,
+                  f"{rk.status_code} {r.status_code}")
             res = from_tool_call("github_create_check_run", {"conclusion": "failure"}, out)
             check("the run records it as a check result with its link",
                   res == {"kind": "check", "label": "check run failure",

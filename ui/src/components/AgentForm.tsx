@@ -190,13 +190,18 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
     return () => { live = false; };
   }, []);
   const [ghCred, setGhCred] = useState(initial?.github ?? "");
-  const ghServer = (cred: string, write: boolean) => `github-${cred}${write ? "" : "-read"}`;
+  // two prefixes (credential names allow "-", so a "-read" suffix could collide)
+  const ghServer = (cred: string, write: boolean) => `${write ? "github" : "githubro"}-${cred}`;
   const [ghAccess, setGhAccess] = useState<"none" | "read" | "write">(() => {
     const c = initial?.github ?? "";
     if (!c) return "none";
     const sel = initial?.mcp_servers ?? [];
     return sel.includes(ghServer(c, true)) ? "write" : sel.includes(ghServer(c, false)) ? "read" : "none";
   });
+  // a credential deleted since: shown as none, so saving the agent clears it instead of failing
+  useEffect(() => {
+    if (ghCreds && ghCred && !ghCreds.some((c) => c.name === ghCred)) { setGhCred(""); setGhAccess("none"); }
+  }, [ghCreds]);  // eslint-disable-line react-hooks/exhaustive-deps
   const ghChosen = ghCreds?.find((c) => c.name === ghCred);
   const ghIsApp = !!ghChosen && (ghChosen.kind === "app" || ghChosen.kind === "app_broker");
   const ghLabels: Record<string, string> = { "": "none" };
@@ -211,14 +216,15 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   const save = async () => {
     setBusy(true); setErr(undefined);
     // the GitHub MCP server for the chosen access, swapped in for any other variant of it
-    let servers = mcpSel.filter((n) => !/^github-.+?(-read)?$/.test(n) || !(ghCreds ?? []).some(
-      (c) => n === ghServer(c.name, true) || n === ghServer(c.name, false)));
+    // the chosen credential's servers are swapped for the chosen access; other servers stay
+    let servers = mcpSel.filter((n) => !ghCred || (n !== ghServer(ghCred, true) && n !== ghServer(ghCred, false)));
     if (ghCred && ghAccess !== "none") {
       try {
         const r = await api.githubCredentialMcp(ghCred, ghAccess === "write");
         servers = [...servers, r.server];
       } catch (e) { setErr(String((e as Error).message ?? e)); setBusy(false); return; }
     }
+    servers = [...new Set(servers)];
     const body = {
       name: name.trim(), trigger, prompt: prompt.trim(), model, provider,
       ...(projectId ? { project: projectId } : {}),
@@ -584,7 +590,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
 
       <div className="btnrow">
         <button className="primary" onClick={save}
-                disabled={busy || !name.trim() || !prompt.trim() || (concludes && verdicts.some(verdictBad))
+                disabled={busy || ghCreds === undefined || !name.trim() || !prompt.trim() || (concludes && verdicts.some(verdictBad))
                           || (writebackOn && !webhookUrl.trim())
                           || (channelOn && !channel)
                           || handoffs.some(handoffBad) || handoffDup
