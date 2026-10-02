@@ -1891,13 +1891,18 @@ def make_app() -> FastAPI:
         return name
 
     def _gh_repositories(names: list[str]) -> list[str]:
-        """An app_broker's picked repositories: trimmed, each owner/repo, in order, no repeats."""
+        """An app_broker's picked repositories: trimmed, each owner/repo, in order, no repeats. At
+        most 500, GitHub's limit for one token."""
+        if len(names) > 500:
+            _err(ValueError("repositories: at most 500"))
         out: list[str] = []
+        seen: set[str] = set()
         for n in names:
             n = (n or "").strip()
-            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+", n):
-                _err(ValueError(f"repositories: {n!r} is not owner/repo"))
-            if n.lower() not in {o.lower() for o in out}:
+            if len(n) > 200 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+", n):
+                _err(ValueError(f"repositories: {n[:200]!r} is not owner/repo"))
+            if n.lower() not in seen:
+                seen.add(n.lower())
                 out.append(n)
         return out
 

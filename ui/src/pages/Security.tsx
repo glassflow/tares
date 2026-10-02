@@ -76,7 +76,8 @@ export default function Security() {
         ))}
       </div>
       {cloudBack && tab === backTab && (
-        <div className={"alert" + (cloudBack.kind ? ` ${cloudBack.kind}` : "")} role="status">
+        <div className={"alert" + (cloudBack.kind ? ` ${cloudBack.kind}` : "")}
+             role={cloudBack.kind === "error" ? "alert" : "status"}>
           {cloudBack.kind === "error" && cloudBack.detail ? cloudBack.detail
             : <>{cloudBack.text}{cloudBack.detail && <> {cloudBack.detail}</>}</>}
         </div>
@@ -85,8 +86,9 @@ export default function Security() {
       {tab === "anthropic" && <ProvidersPanel />}
       {tab === "agents" && <AgentLimitsPanel />}
       {tab === "github" && <GithubPanel cloud={cloud} />}
-      {tab === "slack" && (!cloud.ready ? <div className="muted">loading…</div>
-        : slackConnectUrl ? <SlackCloudPanel cloud={cloud} connectUrl={slackConnectUrl} />
+      {/* Until /health answers (it can be slow on a busy instance) the self-host panels show, so
+          a self-hosted Slack tab never waits on it; a cloud cell swaps to its panel once it does. */}
+      {tab === "slack" && (slackConnectUrl ? <SlackCloudPanel cloud={cloud} connectUrl={slackConnectUrl} />
         : <><SlackTokenPanel /><SlackSigningSecretPanel /></>)}
       {tab === "observability" && <TracingPanel />}
     </>
@@ -389,7 +391,8 @@ function GithubPanel({ cloud }: { cloud: Cloud }) {
 
       {!creds ? <div className="muted">loading…</div>
         : creds.length === 0 ? (
-          !adding && <div className="empty">Nothing connected yet. {connectUrl ? "Connect GitHub" : "Create the GitHub App"}, or add a personal token.</div>
+          !adding && <div className="empty">Nothing connected yet. {!connectUrl ? "Create the GitHub App, or add a personal token."
+            : canConnect ? "Connect GitHub, or add a personal token." : "You can add a personal token."}</div>
         ) : (
           <table>
             <thead><tr><th>name</th><th>connects as</th><th>events</th><th>used by</th><th aria-label="actions" /></tr></thead>

@@ -90,11 +90,12 @@ export default function WorkspaceSwitcher({ cloud }: { cloud: Cloud }) {
 
   return (
     <div className="brand ws-wrap" ref={wrap}
-         onBlur={(e) => {   // Tab out of the menu closes it
-           if (open && !wrap.current?.contains(e.relatedTarget as Node | null)) setOpen(false);
+         onBlur={(e) => {   // Tab out of the menu closes it (a click outside is the mousedown listener's)
+           const to = e.relatedTarget as Node | null;
+           if (open && to && !wrap.current?.contains(to)) setOpen(false);
          }}>
       <button ref={btn} type="button" className="ws-switch" aria-haspopup="true" aria-expanded={open}
-              aria-controls="ws-pop" title="Switch workspace" onClick={toggle}>
+              aria-controls={open ? "ws-pop" : undefined} title="Switch workspace" onClick={toggle}>
         <img className="brand-mark" src="/tares-mark.svg" alt="Tares" />
         <span className="brand-word ws-name">{slug}</span>
         <ChevronRight className="ico ws-chev" />
