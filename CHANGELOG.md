@@ -5,6 +5,12 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.40.0] - 2026-10-02
+
+### Changed
+- Agent traces carry `user.id` (the instance, so one user per cell in Rius's Users view) on every
+  span, `rius.main_agent.name` beside `gen_ai.agent.name`, and `service.version` on the resource.
+
 ## [1.39.0] - 2026-10-02
 
 The GitHub connector: a personal token or the GitHub App, and agents that act on your

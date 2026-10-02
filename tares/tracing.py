@@ -26,6 +26,10 @@ What every span of an agent run carries (TR-317):
     gen_ai.agent.version  the Tares version that ran it
     session.id            one run, one session: the firing's delivery id when the agent reports
                           one (webhook_key_label), else the trigger dispatch id, else the run id
+    rius.main_agent.name  the same as gen_ai.agent.name; the name Rius's Agents view reads first
+    user.id               the instance, on every span of every run, so a backend's user view
+                          shows one user per cell
+The resource carries service.version, the Tares version, for comparing releases.
 LLM spans also carry gen_ai.tool.definitions, the tools the call offered. A run that stopped
 before calling the model says why on its root span, in tares.run.skipped_reason.
 
@@ -65,6 +69,8 @@ GEN_AI_TOOL_CALL_ARGUMENTS = "gen_ai.tool.call.arguments"
 GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions"
 GEN_AI_AGENT_NAME = "gen_ai.agent.name"
 GEN_AI_AGENT_VERSION = "gen_ai.agent.version"
+RIUS_MAIN_AGENT_NAME = "rius.main_agent.name"
+USER_ID = "user.id"
 ERROR_TYPE = "error.type"
 SKIPPED_REASON = "tares.run.skipped_reason"
 GEN_AI_FIRST_TOKEN = "gen_ai.first_token"
@@ -242,9 +248,10 @@ class Tracing:
             "tares.instance": cfg.instance,
             "tares.agent": name,
             "tares.version": tares_version(),
+            "service.version": tares_version(),
         })
         provider = TracerProvider(resource=resource)
-        provider.add_span_processor(_RunAttributesProcessor())
+        provider.add_span_processor(_RunAttributesProcessor(cfg.instance))
         if self._exporter_factory is not None:
             exporter = self._exporter_factory(cfg)
         else:
@@ -281,14 +288,20 @@ class Tracing:
 # Backends derive a per-span session id with the trace id as the fallback, and group per agent by
 # gen_ai.agent.name, so stamping the root alone would scatter the children. The values ride the
 # OTel context and a processor copies them onto each span at start, the same way the Rius SDK
-# does it.
+# does it. The processor also stamps user.id (the instance) on every span: Rius reads the user
+# from the spans, not the resource, and a cell is the user.
 try:
     from opentelemetry import context as _otel_context
     from opentelemetry.sdk.trace import SpanProcessor as _SpanProcessor
     _RUN_ATTRS_KEY = _otel_context.create_key("tares-run-attributes")
 
     class _RunAttributesProcessor(_SpanProcessor):
+        def __init__(self, instance: str = ""):
+            self._instance = instance
+
         def on_start(self, span, parent_context=None):
+            if self._instance:
+                span.set_attribute(USER_ID, self._instance)
             value = _otel_context.get_value(_RUN_ATTRS_KEY, context=parent_context)
             if isinstance(value, dict):
                 for k, v in value.items():
@@ -501,6 +514,7 @@ def run_span(tracer, name: str, *, kind: str = "AGENT", session: str | None = No
         run_wide[SESSION_ID] = session
     if agent:
         run_wide[GEN_AI_AGENT_NAME] = agent
+        run_wide[RIUS_MAIN_AGENT_NAME] = agent
         run_wide[GEN_AI_AGENT_VERSION] = tares_version()
     attrs.update(run_wide)
     for k, v in (attributes or {}).items():
