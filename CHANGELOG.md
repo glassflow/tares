@@ -5,6 +5,8 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.39.0] - 2026-10-02
+
 The GitHub connector: a personal token or the GitHub App, and agents that act on your
 repositories. Ships with the Tares Cloud release that adds Connect GitHub.
 
