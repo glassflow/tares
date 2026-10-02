@@ -5,6 +5,43 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.38.0] - 2026-10-02
+
+Projects are the unit, parts are shared between them, a guided setup starts a project from a goal,
+and an agent's run ends the way you set. Released as 1.38.0-rc.1 to rc.8 (entries below) and run
+on glassflow-web before this release.
+
+### Added
+- Projects: a Default project on every cell, a goal and a one-sentence outline per project, a
+  health line, today's totals, What the agents found (one result per chain, with a headline and a
+  next step, markable as handled) and Activity, one thread per firing with what it led to.
+- Parts are shared: sources, triggers, agents, MCP servers and skills belong to the cell and any
+  number of projects use the same one. A project holds its wiring (which trigger wakes which agent,
+  on or off, and the handoffs); a run belongs to the project whose wiring started it. All
+  resources lists every part with the projects that use it (`GET /api/resources`); the catalog
+  export carries each project's `wiring:`.
+- Guided setup (Projects, Create new): goal, plan, connect, try it. The plan is written in the
+  background as a draft on the cell, reuses parts already there, and runs once as practice with
+  "Run it once now". Drafts can be finished later or deleted.
+- Skills: instructions agents load when a task matches, shared across projects.
+- Handoffs: an agent names, per verdict, the agent that takes over on the same entity. An agent
+  can have no trigger of its own, so only a handoff starts it.
+- How a run ends: "Ends every run with a conclusion" (`concludes`) and the verdicts an agent may
+  give (`verdicts`), enforced in the run; the handoff verdict is a dropdown of them, and the runs
+  table has an outcome column.
+- Project keys and outside agents that join a project, read it and record findings in it.
+
+### Changed
+- Views are gone: a trigger names its own `sources`, `filters` and `key_field`. Upgrading moves
+  each view into the triggers that used it and places every object in a project.
+- Deleting a part removes it from every project; the agents a deleted trigger woke stay, without
+  a trigger. Pausing or deleting a project keeps the parts another project uses.
+- The console names sources and tools by what they watch or call, with the internal name
+  underneath.
+
+### Fixed
+- Repairing a template's deleted trigger gives it back to the template's agents.
+
 ## [1.38.0-rc.8] - 2026-10-01
 
 Eighth release candidate: fixes from a run through every template.
