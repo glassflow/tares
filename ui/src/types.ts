@@ -485,6 +485,7 @@ export interface GithubCredential {
   html_url?: string;
   installations?: { id: number; account: string; account_type?: string; suspended?: boolean }[];
   broker?: boolean;
+  repositories?: string[];     // app_broker: the repositories this workspace follows, [] = none yet
   source?: string;             // the webhook source this App feeds
   deliveries?: { received: number; stored: number; last_at: number | null; last_event: string | null;
                  unknown_installation: number; rejected_signature: number };

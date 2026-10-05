@@ -64,6 +64,8 @@ from .store import Store, StoreUnavailable
 from .projects import Engine as ProjectEngine, ProjectError
 from .reads import resolve_read
 
+SLACK_TEAM_SETTING = "slack_team"   # JSON {id, name}: the Slack team the bot token belongs to
+
 CATALOG_PATH = os.getenv("TARES_CATALOG", "catalog.yaml")
 # Renamed in 1.0 along with everything else. An install that upgrades without moving its file is
 # caught by config.reject_legacy_db(), which refuses to start rather than silently creating an empty
@@ -90,6 +92,13 @@ WORKSPACE_URL = os.getenv("TARES_WORKSPACE_URL", "").strip()
 # Cloud only: where "Connect GitHub" sends the browser (the control plane's install flow for the
 # GlassFlow-owned App, TR-166). Set, Settings > GitHub offers it instead of "Create GitHub App".
 GITHUB_CONNECT_URL = os.getenv("TARES_GITHUB_CONNECT_URL", "").strip()
+# Cloud only: where "Connect Slack" sends the browser (the control plane's Slack install for this
+# workspace, TR-364). Set, Settings > Slack offers Connect and Disconnect instead of the paste forms.
+SLACK_CONNECT_URL = os.getenv("TARES_SLACK_CONNECT_URL", "").strip()
+# Cloud only: the control plane's list of the signed-in person's workspaces (TR-370). Set, the
+# console's top left becomes a workspace switcher; the console fetches it with the person's
+# control-plane session cookie, the cell never calls it.
+WORKSPACES_URL = os.getenv("TARES_WORKSPACES_URL", "").strip()
 # The Anthropic key for the in-app Ask agent (and Tares agents) is resolved at request time via
 # resolve_anthropic_headers(store): Resolve headers from the console-stored key,
 # then ANTHROPIC_AUTH_TOKEN, then ANTHROPIC_API_KEY.
@@ -443,6 +452,9 @@ class GithubCredentialIn(BaseModel):
     broker_secret: str = ""      # app_broker: the cell's own bearer to the broker; blank-to-keep
     installation_id: int | None = None   # app_broker: the one installation
     account: str = ""            # app_broker: the installation's account login
+    # app_broker: the repositories (owner/repo) this workspace follows in the installation
+    # (TR-372); replaced wholesale when present, kept when omitted on update
+    repositories: list[str] | None = None
 
 
 class GithubAppCreateIn(BaseModel):
@@ -495,6 +507,11 @@ class SlackTokenIn(BaseModel):
 
 class SlackSigningSecretIn(BaseModel):
     secret: str  # the signing secret behind POST /api/slack/events; same write-only contract
+
+
+class SlackTeamIn(BaseModel):
+    team_id: str     # the Slack workspace the bot token belongs to, e.g. T0123ABC
+    team_name: str = ""
 
 
 def _seed_project(store, projects) -> None:
@@ -836,6 +853,10 @@ def make_app() -> FastAPI:
             body["workspace_url"] = WORKSPACE_URL
         if GITHUB_CONNECT_URL:
             body["github_connect_url"] = GITHUB_CONNECT_URL
+        if SLACK_CONNECT_URL:
+            body["slack_connect_url"] = SLACK_CONNECT_URL
+        if WORKSPACES_URL:
+            body["workspaces_url"] = WORKSPACES_URL
         return body
 
     def _resolve_project(ref: str, default: bool = True) -> str | None:
@@ -1869,6 +1890,22 @@ def make_app() -> FastAPI:
             _err(ValueError(f"GitHub credential {name!r} already exists"), 409)
         return name
 
+    def _gh_repositories(names: list[str]) -> list[str]:
+        """An app_broker's picked repositories: trimmed, each owner/repo, in order, no repeats. At
+        most 500, GitHub's limit for one token."""
+        if len(names) > 500:
+            _err(ValueError("repositories: at most 500"))
+        out: list[str] = []
+        seen: set[str] = set()
+        for n in names:
+            n = (n or "").strip()
+            if len(n) > 200 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+", n):
+                _err(ValueError(f"repositories: {n[:200]!r} is not owner/repo"))
+            if n.lower() not in seen:
+                seen.add(n.lower())
+                out.append(n)
+        return out
+
     @app.get("/api/integrations/github")
     async def list_github_credentials():
         return {"credentials": [_gh_row(c) for c in store.list_github_credentials()]}
@@ -1906,7 +1943,8 @@ def make_app() -> FastAPI:
                                 "are required"))
             cfg = {"token_url": body.token_url.strip(), "broker_secret": body.broker_secret.strip(),
                    "installation_id": int(body.installation_id),
-                   "webhook_secret": body.webhook_secret.strip()}
+                   "webhook_secret": body.webhook_secret.strip(),
+                   "repositories": _gh_repositories(body.repositories or [])}
             store.upsert_github_credential(name, "", "app_broker", api_url, body.account.strip(),
                                            config=cfg)
             src = _ensure_gh_app_source(name)
@@ -1941,6 +1979,8 @@ def make_app() -> FastAPI:
                     cfg[field] = val
             if body.app_id.strip():
                 cfg["app_id"] = body.app_id.strip()
+            if kind == "app_broker" and body.repositories is not None:
+                cfg["repositories"] = _gh_repositories(body.repositories)
             if kind == "app" and body.private_key.strip():
                 try:
                     _gh_app.app_jwt(cfg.get("app_id"), cfg["private_key"])
@@ -2754,7 +2794,36 @@ def make_app() -> FastAPI:
         token, origin = resolve_slack_token(store)
         return {"configured": bool(token), "source": origin,
                 "stored": bool(store.get_setting(SLACK_TOKEN_SETTING)),
-                "env_overrides": origin.startswith("env:")}
+                "env_overrides": origin.startswith("env:"), "team": _slack_team()}
+
+    # ── the Slack team the bot token belongs to (TR-365) ─────────────────────
+    # Not a secret: the control plane stores it next to the token it pushes, so Settings can say
+    # which Slack workspace this one posts to. DELETE clears it, on disconnect.
+    def _slack_team() -> dict | None:
+        raw = store.get_setting(SLACK_TEAM_SETTING)
+        if not raw:
+            return None
+        try:
+            t = json.loads(raw)
+        except ValueError:
+            return None
+        if not isinstance(t, dict):
+            return None
+        return {"id": t.get("id") or "", "name": t.get("name") or ""}
+
+    @app.put("/api/settings/slack-team")
+    async def set_slack_team(body: SlackTeamIn):
+        team_id = body.team_id.strip()
+        if not team_id:
+            _err(ValueError("team_id is required (use DELETE to clear the team)"))
+        store.set_setting(SLACK_TEAM_SETTING,
+                          json.dumps({"id": team_id, "name": body.team_name.strip()}))
+        return {"ok": True, "team": _slack_team()}
+
+    @app.delete("/api/settings/slack-team")
+    async def clear_slack_team():
+        store.set_setting(SLACK_TEAM_SETTING, None)
+        return {"ok": True, "team": None}
 
     @app.put("/api/settings/slack-bot-token")
     async def set_slack_token(body: SlackTokenIn):

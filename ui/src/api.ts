@@ -45,6 +45,18 @@ export type SlackChannels = {
   detail?: string;
 };
 
+/** One workspace in the control plane's list (Tares Cloud). Only `active` ones can be opened. */
+export type CloudWorkspace = {
+  slug: string; host: string; url: string; role: string; owner_email: string;
+  state: "provisioning" | "active" | "error" | "suspended" | string;
+  is_default: boolean; open_url: string;
+};
+export type CloudWorkspacesResult =
+  | { status: "ok"; workspaces: CloudWorkspace[];
+      links: { all?: string; new?: string; account?: string } }
+  | { status: "signed_out" }   // 401: the control-plane session expired, the cell key still works
+  | { status: "unknown" };     // any other answer, or the network failed
+
 /** A failed call: the daemon's plain message, plus the HTTP status for the few places that act on
  *  it (setup planning says "add a model provider" on a 409). */
 export class ApiError extends Error {
@@ -93,8 +105,26 @@ export const api = {
     status: string; auth_required: boolean; login_url?: string;
     workspace_url?: string;   // cloud only: the control-plane workspace this cell belongs to
     github_connect_url?: string;   // cloud only: "Connect GitHub" (the GlassFlow-owned App)
+    slack_connect_url?: string;    // cloud only: "Connect Slack" (the control plane's Slack install)
+    workspaces_url?: string;       // cloud only: the signed-in person's workspaces, for the switcher
     detail?: string; pct_used?: number | null;
   }>("/health"),
+  // The control plane's list of the person's workspaces (Tares Cloud). A plain cross-origin GET
+  // with the control-plane session cookie and NO custom headers, so it stays a simple request with
+  // no preflight. Never the `request` helper: a 401 here means "signed out of the control plane",
+  // not "this console's key expired". Never throws.
+  cloudWorkspaces: async (url: string): Promise<CloudWorkspacesResult> => {
+    try {
+      const res = await fetch(url, { credentials: "include" });
+      if (res.status === 401) return { status: "signed_out" };
+      if (!res.ok) return { status: "unknown" };
+      const body = await res.json();
+      if (!body || !Array.isArray(body.workspaces)) return { status: "unknown" };
+      return { status: "ok", workspaces: body.workspaces, links: body.links ?? {} };
+    } catch {
+      return { status: "unknown" };
+    }
+  },
   // Swap a one-time ?code= (handed to us in the redirect back from the control plane) for the real
   // cell key. Raw cross-origin fetch: no auth header yet, and the control plane's CORS allows POST
   // from *.<cell domain>. Deliberately NOT the `request` helper, which would attach the (absent)
@@ -245,7 +275,8 @@ export const api = {
   // The Slack bot token behind slack:// subscriptions. Same contract as the Anthropic key: the
   // value never leaves the server, only whether one resolves and where from.
   slackTokenStatus: () =>
-    request<{ configured: boolean; source: string; stored: boolean; env_overrides: boolean }>(
+    request<{ configured: boolean; source: string; stored: boolean; env_overrides: boolean;
+              team?: { id: string; name: string } | null }>(   // the Slack team, set by Tares Cloud
       "/api/settings/slack-bot-token"),
   setSlackToken: (token: string) =>
     request<{ ok: boolean; source: string; note?: string }>("/api/settings/slack-bot-token",

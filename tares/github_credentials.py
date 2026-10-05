@@ -103,6 +103,9 @@ def redact(cred: dict) -> dict:
             "webhook_secret_configured": bool(cfg.get("webhook_secret")),
             "broker": kind == "app_broker",
         })
+        if kind == "app_broker":
+            # the repositories this workspace follows in the installation, [] until picked
+            out["repositories"] = list(cfg.get("repositories") or [])
     return out
 
 
