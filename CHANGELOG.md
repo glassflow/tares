@@ -28,6 +28,16 @@ self-hosted instance looks and behaves as before.
   (`cloud`, `cloud_detail`), once.
 - `/health` reports `slack_connect_url` and `workspaces_url` when set, next to `workspace_url`
   and `github_connect_url`.
+- Settings > Workspace: with `TARES_WORKSPACE_API_URL` set, a first tab manages the workspace
+  without leaving it. It shows the plan, Tares version and state; the team, where the owner
+  invites by email and removes members; storage used with the warning at 80%, which the owner
+  grows within the plan; the included credit while a trial applies; "Open this workspace when I
+  sign in"; and, for the owner, Delete workspace, which asks you to type the workspace name and
+  then lands you in your next workspace. Members see the same, read-only. Signed out of Tares
+  Cloud, the tab offers "Sign in to manage this workspace". Needs the matching Tares Cloud
+  control-plane release first.
+- `/health` reports `workspace_api_url` and `logout_url` when `TARES_WORKSPACE_API_URL` and
+  `TARES_LOGOUT_URL` are set.
 
 ### Changed
 - Members who are not the workspace owner see who can connect GitHub and Slack instead of
@@ -35,6 +45,11 @@ self-hosted instance looks and behaves as before.
 - Connect GitHub, Change repositories and Disconnect bring you back to Settings > GitHub.
 - The note that users, the Slack app, plan and storage are managed in the workspace is gone from
   Settings.
+- Sign out on Tares Cloud: with `TARES_LOGOUT_URL` set, Sign out also signs you out of Tares
+  Cloud and lands on its sign-in page, so the next visit asks you to sign in again. The sidebar
+  shows the email you are signed in with. Self-hosted, Sign out works as before.
+- With `TARES_WORKSPACE_API_URL` set, the switcher's Workspace settings opens Settings >
+  Workspace, and All workspaces and Account leave the menu. New workspace stays.
 
 ### Fixed
 - Disconnecting the Tares Cloud GitHub App from a workspace now goes through Tares Cloud, which
