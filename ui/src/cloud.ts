@@ -30,9 +30,24 @@ function loadHealth(): Promise<Health> {
   return healthP;
 }
 
-function loadList(url: string): Promise<CloudWorkspacesResult> {
-  if (!listP) listP = api.cloudWorkspaces(url);
+// every mounted useCloud, so a list fetched again (reloadList) reaches the switcher
+const listSubs = new Set<(l: CloudWorkspacesResult) => void>();
+
+function loadList(url: string, fresh = false): Promise<CloudWorkspacesResult> {
+  if (!listP || fresh) {
+    const p: Promise<CloudWorkspacesResult> = api.cloudWorkspaces(url).then((l) => {
+      if (listP === p) listSubs.forEach((f) => f(l));   // a newer fetch wins
+      return l;
+    });
+    listP = p;
+  }
   return listP;
+}
+
+/** Ask the control plane for the workspace list again, after a change it shows (the sign-in pin). */
+export function reloadList(): void {
+  const url = healthNow?.workspaces_url;
+  if (url) loadList(url, true);
 }
 
 export type Cloud = {
@@ -57,12 +72,13 @@ export function useCloud(): Cloud {
   const [ready, setReady] = useState(!!healthNow);
   useEffect(() => {
     let live = true;
+    listSubs.add(setList);
     loadHealth().then((h) => {
       if (!live) return;
       setHealth(h); setReady(true);
       if (h.workspaces_url) loadList(h.workspaces_url).then((l) => { if (live) setList(l); });
     }).catch(() => { if (live) setReady(true); });
-    return () => { live = false; };
+    return () => { live = false; listSubs.delete(setList); };
   }, []);
   const current = list?.status === "ok"
     ? list.workspaces.find((w) => w.host === window.location.host) : undefined;

@@ -82,9 +82,11 @@ export default function Security() {
   const slackConnectUrl = cloud.health?.slack_connect_url;
   const workspaceApiUrl = cloud.health?.workspace_api_url || undefined;
   // Workspace exists only on Tares Cloud; asked for elsewhere (an old link), Access shows instead.
-  // With no tab asked for, a self-hosted instance shows Access without waiting for /health.
-  const tab: SettingsTab = workspaceApiUrl ? (picked ?? "workspace")
-    : picked === "workspace" ? (cloud.ready ? "access" : "workspace") : (picked ?? "access");
+  // With no tab asked for, the default waits for /health (Workspace on Tares Cloud, else Access),
+  // so a hard load does not show Access and then jump.
+  const tab: SettingsTab | undefined = workspaceApiUrl ? (picked ?? "workspace")
+    : picked === "workspace" ? (cloud.ready ? "access" : "workspace")
+    : picked ?? (cloud.ready ? "access" : undefined);
   const tabs = TABS.filter((t) => t.key !== "workspace" || workspaceApiUrl);
   return (
     <>
@@ -94,7 +96,7 @@ export default function Security() {
           : "Who can get in, API keys, model providers, agent limits, GitHub and Slack credentials, and agent tracing."}
       </p>
       <div className="tabs">
-        {tabs.map((t) => (
+        {tab !== undefined && tabs.map((t) => (
           <button key={t.key} className={tab === t.key ? "active" : ""} onClick={() => pick(t.key)}>{t.label}</button>
         ))}
       </div>
@@ -105,6 +107,7 @@ export default function Security() {
             : <>{cloudBack.text}{cloudBack.detail && <> {cloudBack.detail}</>}</>}
         </div>
       )}
+      {tab === undefined && <div className="panel"><div className="muted">loading…</div></div>}
       {tab === "workspace" && (workspaceApiUrl
         ? <WorkspaceSettings cloud={cloud} apiUrl={workspaceApiUrl} onOpenTab={pick} />
         : <div className="panel"><div className="muted">loading…</div></div>)}
