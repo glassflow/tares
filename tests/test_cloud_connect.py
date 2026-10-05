@@ -3,8 +3,9 @@
 Run: .venv/bin/python tests/test_cloud_connect.py   (no network)
 
 Covers:
-* /health: `slack_connect_url` and `workspaces_url` only when TARES_SLACK_CONNECT_URL and
-  TARES_WORKSPACES_URL are set, next to `github_connect_url`.
+* /health: `slack_connect_url`, `workspaces_url`, `workspace_api_url` and `logout_url` only when
+  TARES_SLACK_CONNECT_URL, TARES_WORKSPACES_URL, TARES_WORKSPACE_API_URL and TARES_LOGOUT_URL are
+  set, next to `github_connect_url`.
 * app_broker `repositories`: [] by default, stored on create, replaced wholesale by a PUT that
   carries it, kept by a PUT that does not, trimmed and deduplicated, a bad name refused, and
   returned by the credential row. A token credential never shows the field.
@@ -17,7 +18,8 @@ import os
 os.environ["TARES_DB"] = "/tmp/tares-cloud-connect-test.duckdb"
 os.environ["TARES_CATALOG"] = "/tmp/does-not-exist.yaml"
 os.environ["TARES_AUTH_TOKEN"] = "root-secret"
-for _k in ("TARES_SLACK_CONNECT_URL", "TARES_WORKSPACES_URL", "TARES_GITHUB_CONNECT_URL"):
+for _k in ("TARES_SLACK_CONNECT_URL", "TARES_WORKSPACES_URL", "TARES_GITHUB_CONNECT_URL",
+           "TARES_WORKSPACE_API_URL", "TARES_LOGOUT_URL"):
     os.environ.pop(_k, None)
 
 import httpx
@@ -54,8 +56,10 @@ async def main():
 
             print("== /health ==")
             h = (await anon.get("/health")).json()
-            check("self-host: no slack_connect_url, workspaces_url or github_connect_url",
-                  not ({"slack_connect_url", "workspaces_url", "github_connect_url"} & set(h)),
+            check("self-host: no slack_connect_url, workspaces_url, github_connect_url, "
+                  "workspace_api_url or logout_url",
+                  not ({"slack_connect_url", "workspaces_url", "github_connect_url",
+                        "workspace_api_url", "logout_url"} & set(h)),
                   str(h))
             daemon.SLACK_CONNECT_URL = f"{CP}/slack/install?workspace=acme"
             daemon.WORKSPACES_URL = f"{CP}/api/me/workspaces"
@@ -72,6 +76,21 @@ async def main():
             check("each field follows its own variable",
                   "slack_connect_url" not in h and "workspaces_url" in h, str(h))
             daemon.WORKSPACES_URL = daemon.GITHUB_CONNECT_URL = ""
+            daemon.WORKSPACE_API_URL = f"{CP}/api/workspaces/acme"
+            h = (await anon.get("/health")).json()
+            check("cloud: workspace_api_url on the public /health",
+                  h.get("workspace_api_url") == f"{CP}/api/workspaces/acme", str(h))
+            check("logout_url stays off until its own variable is set",
+                  "logout_url" not in h, str(h))
+            daemon.LOGOUT_URL = f"{CP}/logout"
+            h = (await anon.get("/health")).json()
+            check("cloud: logout_url on the public /health",
+                  h.get("logout_url") == f"{CP}/logout", str(h))
+            daemon.WORKSPACE_API_URL = ""
+            h = (await anon.get("/health")).json()
+            check("workspace_api_url goes with its variable, logout_url stays",
+                  "workspace_api_url" not in h and "logout_url" in h, str(h))
+            daemon.LOGOUT_URL = ""
 
             async def row(name):
                 r = await cx.get("/api/integrations/github")
