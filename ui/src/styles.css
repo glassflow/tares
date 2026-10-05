@@ -1477,7 +1477,7 @@ pre.payload {
 
 /* Start (pages/Start.tsx): the list a new cell opens on, then the first project's goal */
 .start { max-width: 760px; display: flex; flex-direction: column; gap: 24px; min-width: 0; }
-.ready-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); background: var(--panel); }
+.main ul.ready-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); background: var(--panel); }
 .ready-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 14px 16px; }
 .ready-row + .ready-row { border-top: 1px solid var(--line); }
 .ready-mark { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; font-size: 11px; font-weight: 700; margin-top: 1px; }
@@ -1493,11 +1493,9 @@ pre.payload {
   .ready-action .help { text-align: left; }
 }
 /* what is left of the Start list, one quiet line on Projects (and the demo's "your own" line) */
-.ready-reminder { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; margin-bottom: 16px; border: 1px solid var(--line); background: var(--panel); font-size: 13px; }
-.ready-reminder-text { color: var(--ink-soft); margin-right: 4px; }
-.ready-reminder .btn, .ready-reminder button { padding: 4px 10px; font-size: 13px; }
-.ready-reminder .help { white-space: normal; }
-.ready-dismiss { margin-left: auto; }
+.ready-box { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; margin-bottom: 20px; }
+.ready-box .ready-list { align-self: stretch; }
+.ready-reminder { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; margin-bottom: 16px; border: 1px solid var(--line); background: var(--panel); }
 /* the demo's "make your own" line: a sentence and its one button */
 .ready-reminder-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; flex: 1 1 auto; min-width: 0; }
 .ready-reminder-row .ready-reminder-text { flex: 1 1 200px; color: var(--ink); }

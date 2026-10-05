@@ -18,7 +18,8 @@ project's goal right under it.
   `POST /api/projects/{id}/setup/plan` take `name` (kept as the project's name, over the
   planner's) and `description` (given to the planner with the goal);
   `GET /api/projects/{id}/setup` returns both for a draft.
-- Projects shows what is left of the Start list as one line until it is done or dismissed.
+- Projects shows the same list (model provider, GitHub, Slack, done ones ticked) until every row
+  is done or it is hidden.
 - Settings > Usage (self-hosted) holds model spend and storage; on Tares Cloud model spend
   joins Settings > Workspace.
 

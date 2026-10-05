@@ -10,7 +10,7 @@ import type { Project } from "../types";
 // This page lists them; Create new (/projects/new) is the goal-first setup. The default project
 // (whatever was made outside another project) is not listed as a project: when it holds
 // something, one line under the list points to All resources. What is left of the Start list
-// (model provider, GitHub, Slack) sits on top as one line until done or dismissed.
+// (model provider, GitHub, Slack) sits on top until done or hidden.
 
 function statusClass(s: Project["status"]) {
   return s === "active" ? "ok" : s === "paused" || s === "draft" ? "paused" : "error";

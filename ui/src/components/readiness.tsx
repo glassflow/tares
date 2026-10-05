@@ -27,9 +27,8 @@ export type ReadyRow = {
   done: boolean;
   title: string;
   text: string;
-  /** what to do about it: a button, a link, or the reason the person cannot. `quiet`: the
-   *  reminder line on Projects, where no button may outshout the page's own Create new */
-  action: (quiet?: boolean) => React.ReactNode;
+  /** what to do about it: a button, a link, or the reason the person cannot */
+  action: () => React.ReactNode;
 };
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
@@ -57,7 +56,7 @@ function modelRow(providers: { id: string; name: string; configured: boolean }[]
   if (trial?.state === "exhausted") {
     return { key: "model", done: false, title: "Add a model provider",
              text: `The included ${usd(trial.credit_usd)} of Anthropic credit is used up. Add your own key so agents keep running.`,
-             action: (q) => <Link className={q ? "btn" : "btn primary"} to={settings}>Add a model key</Link> };
+             action: () => <Link className="btn primary" to={settings}>Add a model key</Link> };
   }
   if (trial?.state === "active") {
     return { key: "model", done: true, title: "Model provider ready",
@@ -73,7 +72,7 @@ function modelRow(providers: { id: string; name: string; configured: boolean }[]
   }
   return { key: "model", done: false, title: "Add a model provider",
            text: "Agents and the planner need one: Anthropic, OpenAI, or any OpenAI-compatible endpoint.",
-           action: (q) => <Link className={q ? "btn" : "btn primary"} to={settings}>Add a model provider</Link> };
+           action: () => <Link className="btn primary" to={settings}>Add a model provider</Link> };
 }
 
 /** Connect on Tares Cloud (a control-plane link that comes back to `back`), or the Settings tab. */
@@ -132,21 +131,22 @@ export function ReadyItem({ done, title, text, action }: {
 const DISMISS_KEY = "tares_ready_dismissed";
 const dismissed = () => { try { return localStorage.getItem(DISMISS_KEY) === "1"; } catch { return false; } };
 
-/** What is left of the list, as one quiet line on Projects: a label and one equal-weight button
- *  per row left. Dismissing it is remembered in this browser only (a per-viewer convenience). */
+/** The list on Projects: the same rows as Start (model provider, GitHub, Slack), done ones
+ *  ticked, until every one is done or the person dismisses it. Dismissing is remembered in this
+ *  browser only (a per-viewer convenience). */
 export function ReadyReminder() {
   const { rows } = useReadiness("/projects");
   const [hidden, setHidden] = useState(dismissed);
-  const left = rows.filter((r) => !r.done);
-  if (hidden || !left.length) return null;
+  if (hidden || !rows.length || rows.every((r) => r.done)) return null;
   return (
-    <div className="ready-reminder" role="status">
-      <span className="ready-reminder-text">Still to set up</span>
-      {left.map((r) => <span key={r.key} className="ready-reminder-act">{r.action(true)}</span>)}
+    <section className="ready-box" aria-label="Still to set up">
+      <ul className="ready-list">
+        {rows.map((r) => <ReadyItem key={r.key} done={r.done} title={r.title} text={r.text} action={r.action()} />)}
+      </ul>
       <button type="button" className="dim ready-dismiss"
               onClick={() => { try { localStorage.setItem(DISMISS_KEY, "1"); } catch { /* private mode */ } setHidden(true); }}>
-        Dismiss
+        Hide this list
       </button>
-    </div>
+    </section>
   );
 }
