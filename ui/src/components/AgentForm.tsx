@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api";
-import type { ModelProvider } from "../types";
+import type { DecisionEndpoint, ModelProvider } from "../types";
 import { Combo, Picker } from "./bits";
 import type { AgentPreset, BuiltinAgent, GithubCredential, Handoff, Verdict } from "../types";
 import { SlackPick } from "./SlackPick";
@@ -87,6 +87,23 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   const [prompt, setPrompt] = useState(initial?.prompt ?? "");
   const [model, setModel] = useState(initial?.model ?? "");
   const [provider, setProvider] = useState(initial?.provider ?? "");
+  // What judges a run (TR-324): a chat model with tools, or a decision model that gives the
+  // window a probability and the threshold decides. The prompt then says what counts as a problem.
+  const [judge, setJudge] = useState<"chat" | "decision">(initial?.decision?.endpoint ? "decision" : "chat");
+  const [decEndpoint, setDecEndpoint] = useState(initial?.decision?.endpoint ?? "");
+  const [decModel, setDecModel] = useState(initial?.decision?.model ?? "");
+  const [threshold, setThreshold] = useState(String(initial?.decision?.threshold ?? 0.5));
+  const [shadow, setShadow] = useState(initial?.decision ? !!initial.decision.shadow : true);
+  const [endpoints, setEndpoints] = useState<DecisionEndpoint[]>();
+  useEffect(() => {
+    let live = true;
+    api.decisionEndpoints().then((r) => { if (live) setEndpoints(r.endpoints); })
+      .catch(() => { if (live) setEndpoints([]); });
+    return () => { live = false; };
+  }, []);
+  const decision = judge === "decision";
+  const chosenEndpoint = endpoints?.find((e) => e.id === decEndpoint);
+  const thresholdBad = decision && !(Number(threshold) > 0 && Number(threshold) < 1);
 
   // Delivery options: each is a toggle plus its fields. Off at save time means off, even if the
   // fields still hold text.
@@ -228,6 +245,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
                                       cooldown: h.cooldown.trim() || "30m" })),
       concludes,
       verdicts: concludes ? verdicts.map((v) => ({ verdict: word(v), when: (v.when ?? "").trim() })) : [],
+      decision: decision ? { endpoint: decEndpoint, model: decModel, threshold: Number(threshold), shadow } : {},
     };
     try {
       if (isNew) await api.createBuiltinAgent(body);
@@ -278,11 +296,13 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
         </table>
       )}
       <label className="field">
-        <span className="lbl">prompt</span>
-        <textarea rows={12} className="mono" value={prompt}
+        <span className="lbl">{decision ? "what counts as a problem" : "prompt"}</span>
+        <textarea rows={decision ? 6 : 12} className="mono" value={prompt}
                   onChange={(e) => setPrompt(e.target.value)} />
         <span className="help">
-          the correlated timeline is supplied at firing time; the final message becomes the finding
+          {decision
+            ? "the decision model gives each window a probability that this is true, and picks the entity it is about"
+            : "the correlated timeline is supplied at firing time; the final message becomes the finding"}
         </span>
       </label>
       {isNew && presets.length > 0 && (
@@ -292,113 +312,176 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
             <button key={p.id} onClick={() => {
               setPrompt(p.prompt);
               if (p.concludes !== undefined) { setConcludes(!!p.concludes); setVerdicts(p.verdicts ?? []); }
+              if (p.decision) {
+                setJudge("decision");
+                setThreshold(String(p.decision.threshold ?? 0.5));
+                setShadow(!!p.decision.shadow);
+                if (!decEndpoint) setDecEndpoint(endpoints?.find((e) => e.configured)?.id ?? "");
+              } else setJudge("chat");
             }}>{p.label}</button>
           ))}
         </div>
       )}
-      <div className="row2">
-        <div className="field">
-          <span className="lbl">provider</span>
-          <Picker value={provider} onChange={pickProvider}
-                  options={missingProvider ? [...providerOptions, provider] : providerOptions}
-                  labels={missingProvider ? { ...providerLabels, [provider]: `${provider} · not configured` } : providerLabels}
-                  ariaLabel="provider" />
-          {missingProvider && <span className="help">this provider is not on this cell; runs use the default until you pick one. Add it under Settings, Model providers.</span>}
-          {configured.length === 0 && <span className="help">no provider configured yet; add one under Settings, Model providers.</span>}
-        </div>
-        <div className="field">
-          <span className="lbl">model</span>
-          {providerModels.length === 0 && effective
-            ? <>
-                <input type="text" className="mono" value={model} placeholder="the model id, as the endpoint names it"
-                       onChange={(e) => setModel(e.target.value)} />
-                <span className="help">{effective.name} listed no models; type the id, or refresh its list under Settings, Model providers.</span>
-              </>
-            : <Picker value={model} onChange={setModel} options={modelOptions} labels={modelLabels}
-                      ariaLabel="model" />}
-        </div>
-      </div>
-
       <div className="field">
-        <h3 style={{ margin: "10px 0 2px", fontSize: 16 }}>GitHub</h3>
-        <span className="help" style={{ display: "block", margin: "0 0 10px" }}>
-          Let this agent read and change repositories with a GitHub credential from{" "}
-          <Link to="/settings?tab=github">Settings, GitHub</Link>.
-        </span>
-        {ghCreds === undefined ? <span className="dim">loading…</span>
-          : ghCreds.length === 0 ? (
-            <span className="help">No GitHub connected yet. <Link to="/settings?tab=github">Connect GitHub</Link> first.</span>
-          ) : (
-            <div className="row2">
-              <label className="field">
-                <span className="lbl">credential</span>
-                <Picker value={ghCred} ariaLabel="GitHub credential"
-                        options={["", ...ghCreds.map((c) => c.name)]} labels={ghLabels}
-                        onChange={(v) => { setGhCred(v); if (!v) setGhAccess("none"); else if (ghAccess === "none") setGhAccess("read"); }} />
-              </label>
-              {ghCred && (
-                <label className="field">
-                  <span className="lbl">it may</span>
-                  <Picker value={ghAccess} ariaLabel="GitHub access"
-                          options={["read", "write", "none"]}
-                          labels={{ read: "read repositories", write: "read and write (branches, files, PRs, comments, reviews)",
-                                    none: "nothing through MCP" }}
-                          onChange={(v) => setGhAccess(v as "none" | "read" | "write")} />
-                </label>
-              )}
-            </div>
-          )}
-        {ghCred && ghIsApp && (
-          <span className="help" style={{ display: "block", marginTop: 6 }}>
-            As a GitHub App it can also post its verdict on a pull request as a check run, with
-            notes on the lines.
-          </span>
-        )}
-        {ghCred && ghAccess === "write" && (
-          <span className="help" style={{ display: "block", marginTop: 6 }}>
-            Writing lets this agent change repositories. Ask it to open pull requests rather than
-            push to the default branch.
-          </span>
-        )}
+        <span className="lbl">judged by</span>
+        <Picker value={judge} ariaLabel="judged by" options={["chat", "decision"]}
+                labels={{ chat: "a chat model, with tools", decision: "a decision model, with a threshold" }}
+                onChange={(v) => setJudge(v as "chat" | "decision")} />
       </div>
-
-      <div className="field">
-        <h3 style={{ margin: "10px 0 2px", fontSize: 16 }}>External tools</h3>
-        <span className="help" style={{ display: "block", margin: "0 0 10px" }}>
-          MCP servers this agent may call, alongside its built-in reads. Tools from these servers
-          can act on your systems; enable only what this agent should touch.
-        </span>
-        {mcpAvail === undefined ? <span className="dim">loading…</span>
-          : mcpAvail.length === 0 ? (
-            <span className="help">
-              none in this project yet. Add one under <Link to={projectId ? `/projects/${encodeURIComponent(projectId)}?view=settings:mcp` : "/projects"}>MCP servers</Link>, then
-              pick it here.
-            </span>
-          ) : (
-            <>
-              {mcpSel.length > 0 && (
-                <div className="btnrow" style={{ marginBottom: 8, flexWrap: "wrap" }}>
-                  {mcpSel.map((name) => (
-                    <span key={name} className="chip mono" title={mcpAvail.find((m) => m.name === name)?.url}>
-                      {name}
-                      <button type="button" className="chip-x" aria-label={`remove ${name}`}
-                              onClick={() => toggleMcp(name, false)}>×</button>
-                    </span>
-                  ))}
+      {decision ? (
+        <div className="field">
+          {endpoints === undefined ? <span className="dim">loading…</span>
+            : endpoints.length === 0 ? (
+              <span className="help">No decision model yet. Add one under <Link to="/settings?tab=decision">Settings, Decision models</Link> first.</span>
+            ) : (
+              <>
+                <div className="row2">
+                  <div className="field">
+                    <span className="lbl">decision model</span>
+                    <Picker value={decEndpoint} ariaLabel="decision model endpoint"
+                            options={["", ...endpoints.map((e) => e.id)]}
+                            labels={{ "": "pick one…", ...Object.fromEntries(endpoints.map((e) => [e.id, e.configured ? e.name : `${e.name} · no token`])) }}
+                            onChange={(v) => { setDecEndpoint(v); setDecModel(""); }} />
+                  </div>
+                  <div className="field">
+                    <span className="lbl">model</span>
+                    {chosenEndpoint && chosenEndpoint.models.length > 0
+                      ? <Picker value={decModel} ariaLabel="decision model"
+                                options={["", ...chosenEndpoint.models.slice(1)]}
+                                labels={{ "": `${chosenEndpoint.models[0]} · default` }}
+                                onChange={setDecModel} />
+                      : <input type="text" className="mono" value={decModel} placeholder="as the endpoint names it, if it wants one"
+                               onChange={(e) => setDecModel(e.target.value)} />}
+                  </div>
                 </div>
-              )}
-              {mcpAvail.some((m) => !mcpSel.includes(m.name)) && (
-                <Picker value="" ariaLabel="add an MCP server"
-                        options={mcpAvail.filter((m) => !mcpSel.includes(m.name)).map((m) => m.name)}
-                        labels={{ "": "add a server…" }}
-                        onChange={(name) => { if (name) toggleMcp(name, true); }} />
-              )}
-              <span className="help">
-                manage connections under <Link to={projectId ? `/projects/${encodeURIComponent(projectId)}?view=settings:mcp` : "/projects"}>MCP servers</Link>
-              </span>
-            </>
+                <div className="row2">
+                  <label className="field">
+                    <span className="lbl">threshold</span>
+                    <input type="number" min={0.01} max={0.99} step={0.05} value={threshold} style={{ width: 90 }}
+                           onChange={(e) => setThreshold(e.target.value)} aria-label="threshold" />
+                    <span className="help">at or above this probability it concludes investigate on the entity; below, nothing to report</span>
+                    {thresholdBad && <span className="help">a number between 0 and 1</span>}
+                  </label>
+                  <div className="field">
+                    <span className="lbl">shadow</span>
+                    <label className="su-check">
+                      <input type="checkbox" checked={shadow} onChange={(e) => setShadow(e.target.checked)} />
+                      <span>Score every window, but never hand anything on</span>
+                    </label>
+                    <span className="help">each run keeps its probability and what it would have done; turn this off to let it wake the next agent</span>
+                  </div>
+                </div>
+              </>
+            )}
+        </div>
+      ) : (
+      <>
+      <div className="row2">
+          <div className="field">
+            <span className="lbl">provider</span>
+            <Picker value={provider} onChange={pickProvider}
+                    options={missingProvider ? [...providerOptions, provider] : providerOptions}
+                    labels={missingProvider ? { ...providerLabels, [provider]: `${provider} · not configured` } : providerLabels}
+                    ariaLabel="provider" />
+            {missingProvider && <span className="help">this provider is not on this cell; runs use the default until you pick one. Add it under Settings, Model providers.</span>}
+            {configured.length === 0 && <span className="help">no provider configured yet; add one under Settings, Model providers.</span>}
+          </div>
+          <div className="field">
+            <span className="lbl">model</span>
+            {providerModels.length === 0 && effective
+              ? <>
+                  <input type="text" className="mono" value={model} placeholder="the model id, as the endpoint names it"
+                         onChange={(e) => setModel(e.target.value)} />
+                  <span className="help">{effective.name} listed no models; type the id, or refresh its list under Settings, Model providers.</span>
+                </>
+              : <Picker value={model} onChange={setModel} options={modelOptions} labels={modelLabels}
+                        ariaLabel="model" />}
+          </div>
+        </div>
+  
+        <div className="field">
+          <h3 style={{ margin: "10px 0 2px", fontSize: 16 }}>GitHub</h3>
+          <span className="help" style={{ display: "block", margin: "0 0 10px" }}>
+            Let this agent read and change repositories with a GitHub credential from{" "}
+            <Link to="/settings?tab=github">Settings, GitHub</Link>.
+          </span>
+          {ghCreds === undefined ? <span className="dim">loading…</span>
+            : ghCreds.length === 0 ? (
+              <span className="help">No GitHub connected yet. <Link to="/settings?tab=github">Connect GitHub</Link> first.</span>
+            ) : (
+              <div className="row2">
+                <label className="field">
+                  <span className="lbl">credential</span>
+                  <Picker value={ghCred} ariaLabel="GitHub credential"
+                          options={["", ...ghCreds.map((c) => c.name)]} labels={ghLabels}
+                          onChange={(v) => { setGhCred(v); if (!v) setGhAccess("none"); else if (ghAccess === "none") setGhAccess("read"); }} />
+                </label>
+                {ghCred && (
+                  <label className="field">
+                    <span className="lbl">it may</span>
+                    <Picker value={ghAccess} ariaLabel="GitHub access"
+                            options={["read", "write", "none"]}
+                            labels={{ read: "read repositories", write: "read and write (branches, files, PRs, comments, reviews)",
+                                      none: "nothing through MCP" }}
+                            onChange={(v) => setGhAccess(v as "none" | "read" | "write")} />
+                  </label>
+                )}
+              </div>
+            )}
+          {ghCred && ghIsApp && (
+            <span className="help" style={{ display: "block", marginTop: 6 }}>
+              As a GitHub App it can also post its verdict on a pull request as a check run, with
+              notes on the lines.
+            </span>
           )}
-      </div>
+          {ghCred && ghAccess === "write" && (
+            <span className="help" style={{ display: "block", marginTop: 6 }}>
+              Writing lets this agent change repositories. Ask it to open pull requests rather than
+              push to the default branch.
+            </span>
+          )}
+        </div>
+  
+        <div className="field">
+          <h3 style={{ margin: "10px 0 2px", fontSize: 16 }}>External tools</h3>
+          <span className="help" style={{ display: "block", margin: "0 0 10px" }}>
+            MCP servers this agent may call, alongside its built-in reads. Tools from these servers
+            can act on your systems; enable only what this agent should touch.
+          </span>
+          {mcpAvail === undefined ? <span className="dim">loading…</span>
+            : mcpAvail.length === 0 ? (
+              <span className="help">
+                none in this project yet. Add one under <Link to={projectId ? `/projects/${encodeURIComponent(projectId)}?view=settings:mcp` : "/projects"}>MCP servers</Link>, then
+                pick it here.
+              </span>
+            ) : (
+              <>
+                {mcpSel.length > 0 && (
+                  <div className="btnrow" style={{ marginBottom: 8, flexWrap: "wrap" }}>
+                    {mcpSel.map((name) => (
+                      <span key={name} className="chip mono" title={mcpAvail.find((m) => m.name === name)?.url}>
+                        {name}
+                        <button type="button" className="chip-x" aria-label={`remove ${name}`}
+                                onClick={() => toggleMcp(name, false)}>×</button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {mcpAvail.some((m) => !mcpSel.includes(m.name)) && (
+                  <Picker value="" ariaLabel="add an MCP server"
+                          options={mcpAvail.filter((m) => !mcpSel.includes(m.name)).map((m) => m.name)}
+                          labels={{ "": "add a server…" }}
+                          onChange={(name) => { if (name) toggleMcp(name, true); }} />
+                )}
+                <span className="help">
+                  manage connections under <Link to={projectId ? `/projects/${encodeURIComponent(projectId)}?view=settings:mcp` : "/projects"}>MCP servers</Link>
+                </span>
+              </>
+            )}
+        </div>
+  
+      </>
+      )}
 
       <div className="field">
         <h3 style={{ margin: "10px 0 2px", fontSize: 16 }}>Deliver findings</h3>
@@ -545,13 +628,13 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
         )}
       </div>
 
-      <div className="field">
+      {!decision && <div className="field">
         <button type="button" onClick={() => setAdvancedOpen((o) => !o)}
                 style={{ padding: 0, border: 0, background: "none", cursor: "pointer" }}
                 className="help">
           {advancedOpen ? "Hide advanced" : "Advanced"}
         </button>
-        {advancedOpen && (
+        {advancedOpen && !decision && (
           <div style={{ marginTop: 8 }}>
             <span className="lbl">max rounds</span>
             <input type="number" min={1} max={maxRoundsLimit} value={maxRounds}
@@ -566,7 +649,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
             </span>
           </div>
         )}
-      </div>
+      </div>}
 
       <div className="btnrow">
         <button className="primary" onClick={save}
@@ -574,6 +657,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
                           || (writebackOn && !webhookUrl.trim())
                           || (channelOn && !channel)
                           || handoffs.some(handoffBad) || handoffDup
+                          || (decision && (!decEndpoint || thresholdBad))
                           || (!!maxRounds.trim() && (Number(maxRounds) < 1
                               || Number(maxRounds) > maxRoundsLimit
                               || !Number.isInteger(Number(maxRounds))))}>

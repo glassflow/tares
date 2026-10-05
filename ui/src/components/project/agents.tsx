@@ -6,7 +6,7 @@ import AgentForm from "../AgentForm";
 import ConfirmDialog from "../ConfirmDialog";
 import { ExternalAgentsPanel } from "../ProjectKeys";
 import { TimeAgo, fmtCost } from "../bits";
-import { RunsPanel, WakesOn, handedBy, statusBadge } from "../../pages/AgentDetail";
+import { DecisionSummary, RunsPanel, WakesOn, handedBy, statusBadge } from "../../pages/AgentDetail";
 import type { BuiltinAgent } from "../../types";
 import { Facts, NotHere, VLink, ViewHead, type AgentsData, type Ctx } from "./common";
 
@@ -135,7 +135,7 @@ export function AgentView({ ctx, name }: { ctx: Ctx; name: string }) {
           <button className="danger" onClick={() => setConfirmDel(true)}>Delete</button>
         </>}
       </ViewHead>
-      {!d.key_configured && (
+      {!d.key_configured && !agent.decision?.endpoint && (
         <div className="alert warn">No model provider is configured, so this agent cannot run. Add one under <Link to="/settings?tab=anthropic">Settings, Model providers</Link>.</div>
       )}
       {editing ? (
@@ -169,7 +169,10 @@ export function AgentView({ ctx, name }: { ctx: Ctx; name: string }) {
             : agent.offers_conclude
               ? <span className="help">a conclusion when it calls one (its prompt mentions conclude); else its last message</span>
               : <span className="help">its last message is the finding</span>],
-          ["model", <><span className="mono">{agent.model || d.default_models?.[agent.effective_provider ?? ""] || d.default_model}</span>
+          agent.decision?.endpoint
+            ? ["judged by", <><DecisionSummary agent={agent} />
+                {agent.budget_usd ? <span className="help"> · budget ${agent.budget_usd}</span> : null}</>]
+            : ["model", <><span className="mono">{agent.model || d.default_models?.[agent.effective_provider ?? ""] || d.default_model}</span>
             {!agent.model && <span className="help"> · provider default</span>}
             <span className="help"> · up to {agent.effective_max_rounds} rounds</span>
             {agent.budget_usd ? <span className="help"> · budget ${agent.budget_usd}</span> : null}</>],
