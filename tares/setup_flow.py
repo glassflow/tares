@@ -1272,13 +1272,18 @@ async def github_suggestion(store, provider, model: str, on_usage=None) -> dict:
 
 
 def plan_message(goal: str, who: str | None, existing_sources: bool, store, catalog,
-                 github: list[str] | None = None) -> str:
+                 github: list[str] | None = None, name: str = "", description: str = "") -> str:
     who_line = {"tares": "Tares agents do the work (who tares).",
                 "own": "The person's own agent does the work (who own)."}.get(
         who or "", "Pick who does the work: Tares agents unless the goal says otherwise.")
     gh = ("\n\nTheir GitHub repositories (most recently pushed first; github_repo reads one):\n"
           + "\n".join(f"- {r}" for r in github)) if github else ""
-    return (f"Goal: {goal}\n{who_line}\n\n{_context(store, catalog, existing_sources)}{gh}")
+    named = f"Project name (the person chose it; use it as the plan's name): {name}\n" if name else ""
+    about = (f"What the person said about it (where the data comes from, what a good result is, "
+             f"who should hear; it may be a pasted alert or incident thread):\n{description}\n"
+             if description else "")
+    return (f"Goal: {goal}\n{named}{about}{who_line}\n\n"
+            f"{_context(store, catalog, existing_sources)}{gh}")
 
 
 def adjust_message(plan: dict, instruction: str) -> str:

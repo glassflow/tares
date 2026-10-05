@@ -44,6 +44,7 @@ async def main():
     async with app.router.lifespan_context(app):
         store = app.state.store
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t")
+        store.default_project_id()   # made lazily; this test leans on it existing
         default = next(p for p in (await cx.get("/api/projects")).json()["projects"] if p["default"])
 
         r = await cx.post("/api/projects", json={"template": "custom", "name": "Checkout", "objects": []})

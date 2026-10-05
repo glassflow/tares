@@ -5,7 +5,7 @@ import { api } from "../api";
 import { ErrorState, usePolling } from "../components/bits";
 import { Stepper, errText, type FlowStep } from "../components/setup/common";
 import { ConnectStep } from "../components/setup/connect";
-import { GoalStep, type Who } from "../components/setup/goal";
+import { GoalStep, type GoalWords, type Who } from "../components/setup/goal";
 import { PlanStep, baselineOf, type Baseline } from "../components/setup/plan";
 import { DeleteDraft } from "../components/setup/deleteDraft";
 import { PlanningView } from "../components/setup/planning";
@@ -22,6 +22,13 @@ import type { Plan, ProjectSetup as SetupData, SetupConnect } from "../types";
 // Nothing of a draft runs until "Looks right, set it up"; it waits on the Projects list.
 // The template gallery and the by-hand path stay one link away on the Goal step.
 
+/** "Plan it": a draft project from the goal step's words, planned in the background. */
+export async function startDraft(g: GoalWords, who: Who): Promise<string> {
+  const r = await api.createDraft({ goal: g.goal, who, name: g.name || undefined,
+                                    description: g.about || undefined });
+  return r.project.id;
+}
+
 export default function ProjectSetup() {
   const { id } = useParams();
   return id ? <ResumeSetup key={id} id={id} /> : <NewSetup />;
@@ -30,15 +37,15 @@ export default function ProjectSetup() {
 function NewSetup() {
   const navigate = useNavigate();
   const handed = useLocation().state as { goal?: string } | null;
-  const [goal, setGoal] = useState(handed?.goal ?? "");
+  const [words, setWords] = useState<GoalWords>({ goal: handed?.goal ?? "", name: "", about: "" });
   const [who, setWho] = useState<Who>("tares");
   return (
     <div className="su">
       <Stepper at="goal" />
-      <GoalStep goal={goal} setGoal={setGoal} who={who} setWho={setWho}
+      <GoalStep words={words} setWords={setWords} who={who} setWho={setWho}
                 onSubmit={async (g, w) => {
-                  const r = await api.createDraft({ goal: g, who: w });
-                  navigate(`/projects/${encodeURIComponent(r.project.id)}/setup`);
+                  const id = await startDraft(g, w);
+                  navigate(`/projects/${encodeURIComponent(id)}/setup`);
                 }} />
     </div>
   );
@@ -82,7 +89,8 @@ function DraftSetup({ id, data, reload, onApplied }: {
   onApplied: (r: Awaited<ReturnType<typeof api.applySetup>>) => void;
 }) {
   const [editingGoal, setEditingGoal] = useState(!data.plan && data.planning?.state !== "running" && !data.planning);
-  const [goal, setGoal] = useState(data.goal ?? "");
+  const [words, setWords] = useState<GoalWords>({ goal: data.goal ?? "", name: data.name ?? "",
+                                                  about: data.description ?? "" });
   const [who, setWho] = useState<Who>((data.who as Who) ?? "tares");
   const [dismissed, setDismissed] = useState<string>();   // a failed change set aside
   // each finished planning run hands the editor a fresh plan
@@ -104,8 +112,8 @@ function DraftSetup({ id, data, reload, onApplied }: {
     return (
       <>
         <Stepper at="goal" />
-        <GoalStep goal={goal} setGoal={setGoal} who={who} setWho={setWho}
-                  onSubmit={(g, w) => replan({ goal: g, who: w })}
+        <GoalStep words={words} setWords={setWords} who={who} setWho={setWho}
+                  onSubmit={(g, w) => replan({ goal: g.goal, who: w, name: g.name, description: g.about })}
                   onCancel={data.plan ? () => setEditingGoal(false) : undefined} />
       </>
     );
@@ -118,7 +126,7 @@ function DraftSetup({ id, data, reload, onApplied }: {
         <Stepper at="plan" />
         <PlanningView goal={data.plan?.goal || data.goal || ""} planning={data.planning}
                       changing={!!data.plan}
-                      onRetry={() => replan({ goal: data.goal ?? goal, who })}
+                      onRetry={() => replan({ goal: data.goal ?? words.goal, who })}
                       onEditGoal={() => setEditingGoal(true)}
                       onKeepPlan={data.plan ? () => setDismissed(failedAt) : undefined} />
       </>
@@ -129,7 +137,7 @@ function DraftSetup({ id, data, reload, onApplied }: {
     <>
       <Stepper at="plan" />
       <DraftPlan key={gen} id={id} initial={data.plan}
-                 onBack={() => { setGoal(data.plan?.goal || goal); setEditingGoal(true); }}
+                 onBack={() => { setWords({ ...words, goal: data.plan?.goal || words.goal }); setEditingGoal(true); }}
                  onAdjust={(instruction, plan) => replan({ instruction, plan })}
                  onApplied={onApplied} />
     </>

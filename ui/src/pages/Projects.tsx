@@ -2,11 +2,15 @@ import { Link } from "react-router-dom";
 
 import { api } from "../api";
 import { ErrorState, TimeAgo, projectGoal, usePolling } from "../components/bits";
+import { ReadyReminder } from "../components/readiness";
 import { DeleteDraft } from "../components/setup/deleteDraft";
 import type { Project } from "../types";
 
 // Projects are the unit: a named set of sources, triggers, agents and MCP servers with one page.
-// The Default project holds whatever was made outside another project. This page lists them; Create new (/projects/new) holds the template gallery.
+// This page lists them; Create new (/projects/new) is the goal-first setup. The default project
+// (whatever was made outside another project) is not listed as a project: when it holds
+// something, one line under the list points to All resources. What is left of the Start list
+// (the demo, model provider, GitHub, Slack) sits on top until done or hidden.
 
 function statusClass(s: Project["status"]) {
   return s === "active" ? "ok" : s === "paused" || s === "draft" ? "paused" : "error";
@@ -20,7 +24,8 @@ export function projectKindCounts(u: Project) {
 
 export default function Projects() {
   const { data: inst, error: instError, reload: reloadInst } = usePolling(() => api.projects(), 10000);
-  const projects = inst?.projects ?? [];
+  const projects = (inst?.projects ?? []).filter((p) => !p.default);
+  const loose = inst?.projects.find((p) => p.default)?.objects.length ?? 0;
 
   return (
     <>
@@ -28,8 +33,7 @@ export default function Projects() {
         <div>
           <h1>Projects</h1>
           <p className="subtitle">
-            Each project is a goal and the sources, wake-ups and agents that work toward it. The
-            Default project holds whatever was made outside another one.
+            Each project is a goal and the sources, wake-ups and agents that work toward it.
           </p>
         </div>
         <span className="btnrow">
@@ -37,13 +41,15 @@ export default function Projects() {
         </span>
       </div>
 
+      <ReadyReminder />
+
       {instError && <ErrorState error={instError} what="your projects" onRetry={reloadInst} />}
       {!inst && !instError && <div className="dim">loading…</div>}
 
       {inst && projects.length === 0 && (
         <div className="empty">
-          no projects yet · <Link to="/projects/new">create one</Link> from a template or from
-          objects you already have
+          No projects yet. <Link to="/start">Start here</Link>: say what your first one should
+          achieve and Tares plans it with you.
         </div>
       )}
 
@@ -64,8 +70,7 @@ export default function Projects() {
                 : `/projects/${encodeURIComponent(u.id)}`;
               return (
                 <tr key={u.id}>
-                  <td><Link to={to}><strong>{u.name}</strong></Link>
-                    {u.default && <span className="chip" style={{ marginLeft: 8 }}>default</span>}</td>
+                  <td><Link to={to}><strong>{u.name}</strong></Link></td>
                   <td className="help"><span className="proj-goal">{projectGoal(u)}</span></td>
                   <td>
                     <span className={`badge ${statusClass(u.status)}`}>{u.status}</span>
@@ -90,6 +95,13 @@ export default function Projects() {
             })}
           </tbody>
         </table>
+      )}
+
+      {loose > 0 && (
+        <p className="help">
+          {loose} part{loose === 1 ? " is" : "s are"} not in any project.{" "}
+          <Link to="/resources">See {loose === 1 ? "it" : "them"} in All resources</Link>.
+        </p>
       )}
     </>
   );

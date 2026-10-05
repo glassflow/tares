@@ -993,6 +993,44 @@ async def main():
         r = await cx.delete(f"/api/projects/{bad_}")
         ck("a draft deletes like any project", r.status_code in (200, 204), r.text)
 
+        print("== drafts: the person's own name and description ==")
+        DN = copy.deepcopy(D)
+        DN.update(name="Planner's name", goal="Tell me about every new customer")
+        DN["watches"][0]["name"] = "Signup Events"
+        DN["wakes"][0].update(name="signup-new", sources=["Signup Events"])
+        DN["agents"][0].update(name="signup-look", trigger="signup-new", slack=False)
+        STUB.script = [[("propose_plan", DN)]]
+        STUB.calls.clear()
+        r = await cx.post("/api/setup/drafts", json={
+            "goal": DN["goal"], "who": "tares", "name": "New signups",
+            "description": "Stripe customer.created events; a good result names the company."})
+        ck("a draft with a name and a description (202)", r.status_code == 202, r.text)
+        named_ = r.json()["project"]["id"]
+        eq("the draft is called what the person said", store.get_project(named_)["name"],
+           "New signups")
+        st = await settled_(named_)
+        eq("the plan keeps the person's name over the planner's",
+           (st["plan"]["name"], store.get_project(named_)["name"]), ("New signups",) * 2)
+        sent = json.dumps(STUB.calls[0]["messages"]) if STUB.calls else ""
+        ck("the planner is told the name and the description",
+           "New signups" in sent and "a good result names the company" in sent, sent[:400])
+        eq("a second draft of the same name is refused",
+           (await cx.post("/api/setup/drafts", json={"goal": "x", "name": "New signups"})).status_code,
+           409)
+        eq("a name too long is refused",
+           (await cx.post("/api/setup/drafts", json={"goal": "x", "name": "n" * 81})).status_code,
+           400)
+        renamed = copy.deepcopy(st["plan"]); renamed["name"] = "Signups by company"
+        STUB.script = [[("propose_plan", renamed)]]
+        r = await cx.post(f"/api/projects/{named_}/setup/plan",
+                          json={"instruction": "call it Signups by company", "plan": st["plan"]})
+        ck("a change in plain words plans it again (202)", r.status_code == 202, r.text)
+        st = await settled_(named_)
+        eq("a rename asked for afterwards wins over the first name",
+           (st["plan"]["name"], store.get_project(named_)["name"],
+            store.get_project_setup(named_).get("name")), ("Signups by company",) * 3)
+        await cx.delete(f"/api/projects/{named_}")
+
         print("== reuse: an agent already on Tares, wired by a second project ==")
         msg = S.plan_message("Watch checkout", "tares", True, store, runtime.catalog)
         ck("the planner is told the tools and agents already on Tares",

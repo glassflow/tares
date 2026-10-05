@@ -6,8 +6,9 @@ the engine adds is membership (see store.put_in_project: a trigger, agent or MCP
 exactly one project, a source in any number), a diff on update, all-or-nothing create,
 pause/resume, delete and repair.
 
-Every cell has a default project (store.default_project_id) that holds whatever no other project
-does: objects created without naming a project, and objects a project lets go of.
+The default project (store.default_project_id) holds whatever no other project does: objects
+created without naming a project, and objects a project lets go of. It is made the first time
+there is such an object, so a cell where everything starts in a project has none.
 """
 from __future__ import annotations
 
@@ -53,8 +54,10 @@ class Engine:
                 "skill": ({x["name"]: {**x, "owned_by": uid} for x in s.list_skills(uid)}
                           if uid else {})}
 
-    def default_id(self) -> str:
-        return self.store.default_project_id()
+    def default_id(self) -> str | None:
+        """The default project's id, or None on a cell that has none yet: reading never makes
+        it (it is made the first time something has no other project, store.default_project_id)."""
+        return self.store.default_project_id_if_any()
 
     def get(self, uid: str) -> dict | None:
         inst = self.store.get_project(uid)

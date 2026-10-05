@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useProjectName } from "./components/ProjectBadge";
+import { useOwnProjects } from "./components/readiness";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { api, auth } from "./api";
@@ -24,13 +25,14 @@ type NavItem = {
   kbd?: string;     // keyboard-shortcut hint, e.g. "⌘K"
 };
 
-// Two named groups. Projects are the product, so they sit at the top with Overview and Ask;
+// Two named groups. Projects are the product, so they sit at the top with Ask (and Start, until
+// the person has a project of their own);
 // everything a project is made of is one flat Catalog group ordered along the pipeline
 // (sources feed triggers, triggers run agents, agents leave firings).
 // The old Data / Automate split was mechanism vocabulary and is gone.
 const NAV_GROUPS: { section: string; items: NavItem[] }[] = [
   { section: "", items: [
-    { to: "/", end: true, label: "Overview", icon: Grid },
+    { to: "/start", label: "Start", icon: Grid },
     { to: "/projects", label: "Projects", icon: Zap },
     { to: "/ask", label: "Ask", icon: Chat, kbd: "⌘K" },
   ] },
@@ -59,11 +61,12 @@ const SECTION_LABEL: Record<string, string> = {
   settings: "Settings",
   projects: "Projects",
   resources: "All resources",
+  start: "Start",
 };
 
 type Crumb = { label: string; to?: string; mono?: boolean };
 
-/** Derive breadcrumbs from the current path. `/` is Overview; every section is a sibling of it,
+/** Derive breadcrumbs from the current path. Every section is a sibling of the others,
  *  so second-level pages link back to their own list (/sources/:name → Sources) rather than to
  *  the root the way they did when Sources *was* the root. */
 function useCrumbs(): Crumb[] {
@@ -72,7 +75,7 @@ function useCrumbs(): Crumb[] {
   const projectId = parts[0] === "projects" && parts.length > 1 && parts[1] !== "new" ? decodeURIComponent(parts[1]) : undefined;
   const projectName = useProjectName(projectId);
 
-  if (parts.length === 0) return [{ label: "Overview" }];
+  if (parts.length === 0) return [];
 
   if (parts[0] === "sources") {
     if (parts.length === 1) return [{ label: "Sources" }];
@@ -174,6 +177,10 @@ export default function App() {
   const logoutUrl = cloud.health?.logout_url || undefined;
   const overview = useWorkspaceOverview(logoutUrl ? cloud.health?.workspace_api_url || undefined : undefined);
   const email = overview.result?.status === "ok" ? overview.result.data.you?.email : undefined;
+  // Start is in the sidebar until the person has a project of their own (and while it is open)
+  const { own } = useOwnProjects();
+  const onStart = useLocation().pathname === "/start";
+  const showStart = onStart || (own !== undefined && own.length === 0);
   useEffect(() => {
     api.capabilities().then((c) => setVersion(c.version ?? null)).catch(() => {});
   }, []);
@@ -188,9 +195,9 @@ export default function App() {
 
         {NAV_GROUPS.map(({ section, items }) => (
           <div className="nav-group" key={section}>
-            {/* Overview and Ask have no section heading: they sit above the groups. */}
+            {/* Start, Projects and Ask have no section heading: they sit above the groups. */}
             {section && <div className="nav-section">{section}</div>}
-            {items.map(({ to, end, label, icon: Icon, badge, locked, kbd }) => (
+            {items.filter((x) => x.to !== "/start" || showStart).map(({ to, end, label, icon: Icon, badge, locked, kbd }) => (
               <NavLink key={to} to={to} end={end} className={link}>
                 <Icon className="ico" />
                 <span className="nav-label">{label}</span>

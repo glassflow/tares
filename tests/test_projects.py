@@ -85,12 +85,17 @@ async def main():
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as cx:
 
             print("== the default project ==")
+            st = app.state.store
             ps = (await cx.get("/api/projects")).json()["projects"]
-            check("a fresh cell has exactly one project, the default one",
+            check("a fresh cell has no project, not even the default one (it is made lazily)",
+                  ps == [] and st.get_setting("default_project") is None, json.dumps(ps)[:300])
+            # the first thing made outside a project makes it (every create path asks for it so)
+            st.default_project_id()
+            ps = (await cx.get("/api/projects")).json()["projects"]
+            check("asked for, the default project exists, once",
                   len(ps) == 1 and ps[0]["default"] is True and ps[0]["template"] == "default"
                   and ps[0]["name"] == "Default", json.dumps(ps)[:300])
             did = ps[0]["id"]
-            st = app.state.store
             check("its id is in settings", st.get_setting("default_project") == did)
             r = await cx.delete(f"/api/projects/{did}")
             check("the default project cannot be deleted",

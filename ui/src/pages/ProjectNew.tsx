@@ -5,8 +5,8 @@ import { ErrorState, usePolling } from "../components/bits";
 import type { Template } from "../types";
 
 // The template gallery, at /projects/new/templates: one card per template, the deterministic
-// path. Create new itself (/projects/new) is the landing screen (Landing.tsx), which links here
-// and, per template sentence, straight to the wizard. Templates the console sets up with a
+// path. Create new itself (/projects/new) is the goal-first setup, whose goal step links here.
+// Templates the console sets up with a
 // dedicated wizard; anything else the API lists still gets a card, routed to the generic form.
 export const WIZARDS: Record<string, string> = {
   shared_code_context: "/projects/new/shared_code_context",

@@ -3565,6 +3565,19 @@ def make_app() -> FastAPI:
             _err(ValueError("this project is already set up"), 409)
         return store.get_project_setup(uid) or {}
 
+    def _draft_words(body: dict, setup: dict | None = None) -> tuple[str, str]:
+        """The name the person gave the project and what they said about it, both optional; an
+        absent field keeps what the draft has."""
+        setup = setup or {}
+        name = " ".join(str(body["name"] if "name" in body else setup.get("name") or "").split())
+        about = str(body["description"] if "description" in body
+                    else setup.get("description") or "").strip()
+        if len(name) > 80:
+            _err(ValueError("a project name is at most 80 characters"))
+        if len(about) > 4000:
+            _err(ValueError("a description is at most 4000 characters"))
+        return name, about
+
     def _draft_name(goal: str) -> str:
         base = (goal[:60].rsplit(" ", 1)[0] if len(goal) > 60 else goal) or "New project"
         base = base[:1].upper() + base[1:]
@@ -3609,6 +3622,12 @@ def make_app() -> FastAPI:
                 setup = store.get_project_setup(uid)
                 if setup is None:
                     return
+                # the name the person gave stays the name of a plan written from the goal; a
+                # change they asked for afterwards ("call it Bar") wins, and becomes their name
+                if setup.get("name") and prev is None:
+                    plan["name"] = setup["name"]
+                elif setup.get("name") and plan.get("name"):
+                    setup["name"] = plan["name"]
                 # a secret typed into a new source stays out of the draft (as on every save)
                 setup.update(plan=setup_flow.stored_plan(plan), planning=None, who=plan.get("who"))
                 store.set_project_setup(uid, setup)
@@ -3639,8 +3658,9 @@ def make_app() -> FastAPI:
 
     @app.post("/api/setup/drafts", status_code=202)
     async def setup_draft(body: dict = Body(...)):
-        """{goal, who?} -> {project}: a draft project, and its plan being written in the
-        background. GET /api/projects/{id}/setup shows the planning step by step, then the plan."""
+        """{goal, who?, name?, description?} -> {project}: a draft project, and its plan being
+        written in the background. GET /api/projects/{id}/setup shows the planning step by step,
+        then the plan. `name` is kept as the project's name; `description` goes to the planner."""
         try:
             goal = goal_mod.normalize_goal(body.get("goal"))
         except ValueError as e:
@@ -3650,22 +3670,26 @@ def make_app() -> FastAPI:
         who = body.get("who") or None
         if who not in (None, "tares", "own"):
             _err(ValueError("who is tares or own"))
+        name, about = _draft_words(body)
+        if name and store.get_project_by_name(name):
+            _err(ValueError(f"a project named {name!r} already exists"), 409)
         _setup_model()   # no provider: 409 now, on the goal page, not later on the draft
         uid = "uc_" + uuid.uuid4().hex[:10]
-        store.create_project(uid, "custom", _draft_name(goal), {"objects": []},
+        store.create_project(uid, "custom", name or _draft_name(goal), {"objects": []},
                              status=setup_flow.DRAFT, goal=goal)
         store.log_project(uid, "draft", "planning from the goal")
         store.set_project_setup(uid, {"step": "plan", "goal": goal, "who": who, "plan": None,
-                                      "practice_run": None})
+                                      "practice_run": None, "name": name, "description": about})
         _start_planning(uid, setup_flow.plan_message(goal, who, True, store, runtime.catalog,
-                                                     github=await setup_flow.github_repo_lines(store)),
+                                                     github=await setup_flow.github_repo_lines(store),
+                                                     name=name, description=about),
                         None, who)
         return {"project": projects.get(uid)}
 
     @app.post("/api/projects/{uid}/setup/plan", status_code=202)
     async def setup_replan(uid: str, body: dict = Body(default={})):
-        """A draft planned again in the background: {goal, who?} plans from a changed goal;
-        {instruction} changes the current plan as asked."""
+        """A draft planned again in the background: {goal, who?, name?, description?} plans from a
+        changed goal; {instruction} changes the current plan as asked."""
         setup = _draft_or_404(uid)
         if uid in _planning_tasks:
             _err(ValueError("Tares is planning this project already"), 409)
@@ -3692,12 +3716,17 @@ def make_app() -> FastAPI:
         who = body.get("who") or setup.get("who") or None
         if who not in (None, "tares", "own"):
             _err(ValueError("who is tares or own"))
+        name, about = _draft_words(body, setup)
+        other = store.get_project_by_name(name) if name else None
+        if other and other["id"] != uid:
+            _err(ValueError(f"a project named {name!r} already exists"), 409)
         _setup_model()
-        setup.update(goal=goal, who=who, plan=None)
+        setup.update(goal=goal, who=who, plan=None, name=name, description=about)
         store.set_project_setup(uid, setup)
-        store.update_project(uid, goal=goal)
+        store.update_project(uid, goal=goal, **({"name": name} if name else {}))
         _start_planning(uid, setup_flow.plan_message(goal, who, True, store, runtime.catalog,
-                                                     github=await setup_flow.github_repo_lines(store)),
+                                                     github=await setup_flow.github_repo_lines(store),
+                                                     name=name, description=about),
                         None, who)
         return {"ok": True}
 
@@ -3745,6 +3774,7 @@ def make_app() -> FastAPI:
         setup = _setup_or_404(uid)
         if _project_or_404(uid).get("status") == setup_flow.DRAFT:
             return {"step": "plan", "draft": True, "goal": setup.get("goal"),
+                    "name": setup.get("name") or "", "description": setup.get("description") or "",
                     "who": setup.get("who"), "plan": setup.get("plan"),
                     "planning": setup.get("planning"), "practice_run": None, "checks": None,
                     "connect": None}
@@ -3767,6 +3797,8 @@ def make_app() -> FastAPI:
             if uid in _planning_tasks:
                 _err(ValueError("Tares is planning this project; wait for the plan"), 409)
             setup["plan"] = setup_flow.stored_plan(body["plan"])
+            if setup.get("name") and body["plan"].get("name"):   # renamed on the plan: that is their name now
+                setup["name"] = str(body["plan"]["name"])
             store.set_project_setup(uid, setup)
             return {"ok": True}
         step = body.get("step")

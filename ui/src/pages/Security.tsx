@@ -7,6 +7,7 @@ import { Close } from "../components/icons";
 import { InternalName, Picker, TimeAgo, keyTitle } from "../components/bits";
 import { type Cloud, cloudLink, useCloud } from "../cloud";
 import type { ApiKey, GithubAppTest, GithubCredential, ModelProvider, ModelProviders } from "../types";
+import { UsagePanels } from "../components/UsagePanels";
 import WorkspaceSettings from "./WorkspaceSettings";
 
 // Four distinct credential concepts, one box each:
@@ -18,9 +19,10 @@ import WorkspaceSettings from "./WorkspaceSettings";
 // The per-source ingest URL is an address, not a secret — it lives on the source page, not here.
 //   · Workspace  (Tares Cloud only) team, plan, storage, credit and delete, held by the control
 //                  plane (TR-375); shown first, and the default tab, when /health has workspace_api_url
-type SettingsTab = "workspace" | "access" | "anthropic" | "agents" | "github" | "slack" | "observability";
+type SettingsTab = "workspace" | "usage" | "access" | "anthropic" | "agents" | "github" | "slack" | "observability";
 const TABS: { key: SettingsTab; label: string }[] = [
   { key: "workspace", label: "Workspace" },
+  { key: "usage", label: "Usage" },
   { key: "access", label: "Access and API keys" },
   { key: "anthropic", label: "Model providers" },
   { key: "agents", label: "Agents" },
@@ -31,7 +33,7 @@ const TABS: { key: SettingsTab; label: string }[] = [
 
 // Coming back from a Tares Cloud connect page (contract §3): `cloud` says what happened and
 // `cloud_detail` may add a sentence to show as is. Shown once, on the tab it belongs to.
-const CLOUD_BACK: Record<string, { tab?: SettingsTab; text: string; kind: "ok" | "error" | "" }> = {
+export const CLOUD_BACK: Record<string, { tab?: SettingsTab; text: string; kind: "ok" | "error" | "" }> = {
   "github-connected": { tab: "github", kind: "ok",
     text: "GitHub is connected. Events from the repositories you picked arrive here as they happen." },
   "github-repos": { tab: "github", kind: "ok",
@@ -87,13 +89,16 @@ export default function Security() {
   const tab: SettingsTab | undefined = workspaceApiUrl ? (picked ?? "workspace")
     : picked === "workspace" ? (cloud.ready ? "access" : "workspace")
     : picked ?? (cloud.ready ? "access" : undefined);
-  const tabs = TABS.filter((t) => t.key !== "workspace" || workspaceApiUrl);
+  // Tares Cloud: Workspace (team, plan, storage, credit, model spend). Self-hosted: Usage (model
+  // spend and storage) in its place.
+  const tabs = TABS.filter((t) => t.key === "workspace" ? !!workspaceApiUrl
+    : t.key === "usage" ? !workspaceApiUrl : true);
   return (
     <>
       <h1>Settings</h1>
       <p className="subtitle">
-        {workspaceApiUrl ? "Your team, plan and storage, API keys, model providers, agent limits, GitHub and Slack, and agent tracing."
-          : "Who can get in, API keys, model providers, agent limits, GitHub and Slack credentials, and agent tracing."}
+        {workspaceApiUrl ? "Your team, plan, storage and model spend, API keys, model providers, agent limits, GitHub and Slack, and agent tracing."
+          : "Model spend and storage, who can get in, API keys, model providers, agent limits, GitHub and Slack credentials, and agent tracing."}
       </p>
       <div className="tabs">
         {tab !== undefined && tabs.map((t) => (
@@ -111,6 +116,7 @@ export default function Security() {
       {tab === "workspace" && (workspaceApiUrl
         ? <WorkspaceSettings cloud={cloud} apiUrl={workspaceApiUrl} onOpenTab={pick} />
         : <div className="panel"><div className="muted">loading…</div></div>)}
+      {tab === "usage" && <UsagePanels />}
       {tab === "access" && <><AccessPanel /><ApiKeysPanel /></>}
       {tab === "anthropic" && <ProvidersPanel />}
       {tab === "agents" && <AgentLimitsPanel />}
