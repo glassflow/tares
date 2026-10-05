@@ -1730,6 +1730,7 @@ pre.payload {
 .su-break { overflow-wrap: anywhere; }
 .su-cta { min-height: 44px; padding: 0 18px; }
 .su-alt { margin-top: 4px; }
+.su-fixit { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
 
 .su-crumbs { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--ink-soft); }
 .su-crumbs a { color: var(--ink-soft); }

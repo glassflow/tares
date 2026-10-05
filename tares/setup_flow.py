@@ -583,22 +583,26 @@ def _plain(e) -> str:
 class _Problems:
     """Problems per plan item: where ("watches.w1", "wakes.k1", "agents.a1", "tools.t1",
     "skills.s1", "own_agent", a section name for the section as a whole, or "plan"), a plain
-    message, and the label the model's retry reads it under ("Trigger checkout-spike")."""
+    message, the label the model's retry reads it under ("Trigger checkout-spike"), and who can
+    fix it: "tares" (the plan's own mistake: the planner fixes it, the person can ask it to) or
+    "you" (only the person knows the answer, like which Slack channel; the planner is never
+    asked)."""
 
     def __init__(self):
         self.items: list[dict] = []
 
-    def add(self, where: str, message: str, label: str = "") -> None:
-        p = {"where": where, "message": message, "label": label}
+    def add(self, where: str, message: str, label: str = "", who: str = "tares") -> None:
+        p = {"where": where, "message": message, "label": label, "who": who}
         if p not in self.items:
             self.items.append(p)
 
-    def texts(self) -> list[str]:
+    def texts(self, who: str | None = None) -> list[str]:
         return [f"{p['label']}: {p['message']}" if p["label"] else p["message"]
-                for p in self.items]
+                for p in self.items if who is None or p["who"] == who]
 
     def public(self) -> list[dict]:
-        return [{"where": p["where"], "message": p["message"]} for p in self.items]
+        return [{"where": p["where"], "message": p["message"], "who": p["who"]}
+                for p in self.items]
 
 
 _NUMERIC_OPS = {"gt", "gte", "lt", "lte"}
@@ -725,6 +729,15 @@ def _normalize(raw, store, catalog, prev: dict | None,
                                  "source for one repository.", label)
             else:
                 try:
+                    # labels the model gave as an object ({"location": "berlin"}): one label
+                    # per key, the value a fixed value ({} or "" reads the field of its name,
+                    # an object is the label's own settings)
+                    if isinstance(spec["config"], dict) and isinstance(spec["config"].get("labels"), dict):
+                        spec["config"]["labels"] = [
+                            {"name": str(k), **v} if isinstance(v, dict)
+                            else {"name": str(k), "const": str(v)} if v not in (None, "")
+                            else {"name": str(k), "field": str(k)}
+                            for k, v in spec["config"]["labels"].items()]
                     # a label the model gave as a bare word, or with neither a field nor a fixed
                     # value, reads the event field of its own name (label service -> field
                     # service)
@@ -1010,17 +1023,21 @@ def _normalize(raw, store, catalog, prev: dict | None,
             for x in a["mcp_servers"]:
                 if x not in known_servers:
                     plain.append(f"It uses the tool {x}, which is not in this plan.")
+            # the channel is the person's to pick: the planner cannot see their Slack
+            yours: list[str] = []
             if a["slack"]:
                 if not a["slack_channel"]:
-                    plain.append("Pick the Slack channel it posts to.")
+                    yours.append("Pick the Slack channel it posts to.")
                 else:
                     try:
                         validate_slack_channel(a["slack_channel"])
                     except ValueError as e:
-                        plain.append(f"{str(e)[:1].upper()}{str(e)[1:]}.")
+                        yours.append(f"{str(e)[:1].upper()}{str(e)[1:]}.")
             for msg in plain:
                 probs.add(where, msg, label)
-            if plain or a["trigger"] not in trig_dicts:
+            for msg in yours:
+                probs.add(where, msg, label, who="you")
+            if plain or yours or a["trigger"] not in trig_dicts:
                 continue
             try:
                 a["handoffs"] = normalize_handoffs(a["name"], a["handoffs"])
@@ -1152,8 +1169,9 @@ async def _run_model(provider, model: str, convo: list, read_tool, tracer, usage
 async def model_plan(provider, model: str, first_message: str, store, catalog, read_tool,
                      tracer=None, on_usage=None, prev: dict | None = None,
                      who: str | None = None, progress=None) -> dict:
-    """The plan from the model: generate, normalize, and on errors one retry with them. Raises
-    SetupError(422) when the second plan is still invalid. `who`: the choice the person made,
+    """The plan from the model: generate, normalize, and while the check finds the plan's own
+    mistakes, up to FIX_ROUNDS retries with them. Raises SetupError(422) when what is left has
+    nothing to show. `who`: the choice the person made,
     which the plan must keep. `progress(text, running)` hears each step as it happens."""
     from . import tracing as _tracing
     with _tracing.run_span(tracer, "project-setup", kind="CHAIN", agent="project-setup") as obs:
@@ -1164,8 +1182,16 @@ async def model_plan(provider, model: str, first_message: str, store, catalog, r
         return plan
 
 
+# How many times the planner is handed the check's findings to fix before the plan is shown with
+# whatever is left. Each round is one more model call.
+FIX_ROUNDS = 3
+
+
 def _check(raw, store, catalog, prev, who) -> tuple[dict, list]:
-    plan, errors = normalize(raw, store, catalog, prev)
+    """(plan, the problems the planner must fix). Problems only the person can solve (which Slack
+    channel) are left for the plan screen: asking the model about them wastes a round."""
+    plan, probs = _normalize(raw, store, catalog, prev)
+    errors = probs.texts(who="tares")
     if who and plan.get("who") != who:
         errors.append(f"The person chose who {who}; keep it.")
     return plan, errors
@@ -1183,18 +1209,21 @@ async def _model_plan(provider, model, first_message, store, catalog, read_tool,
                                               sources=catalog.sources, github=github)
         _say(progress, "Checking the plan", running=True)
         plan, errors = _check(raw, store, catalog, prev, who)
-        if errors:
+        for _ in range(FIX_ROUNDS):
+            if not errors:
+                break
             convo.append(tool_message([(call.id, "The plan cannot be applied:\n- "
                                         + "\n- ".join(errors)
                                         + "\nCall propose_plan again with the whole plan, "
                                           "fixed.")]))
-            raw, _ = await _run_model(provider, model, convo, read_tool, tracer, usage,
-                                      forced_only=True, progress=progress,
-                                      sources=catalog.sources, github=github,
-                                      writing=f"Fixing {len(errors)} thing"
-                                              f"{'s' if len(errors) != 1 else ''} the check found")
+            raw, (reply, call) = await _run_model(
+                provider, model, convo, read_tool, tracer, usage, forced_only=True,
+                progress=progress, sources=catalog.sources, github=github,
+                writing=f"Fixing {len(errors)} thing{'s' if len(errors) != 1 else ''} the "
+                        "check found")
             _say(progress, "Checking the plan again", running=True)
             plan, errors = _check(raw, store, catalog, prev, who)
+        if errors:
             # still not right: the plan opens anyway when there is something to show, and the
             # plan screen names each problem on its card for the person to fix in place
             # (who the person chose is not something to fix by hand: a plan that ignores it is refused)

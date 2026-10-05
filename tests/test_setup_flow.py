@@ -278,9 +278,12 @@ async def main():
            "checkout-errors")
         no_em_dash("the plan response", r.json())
 
-        STUB.script = [[("propose_plan", wrong)], [("propose_plan", wrong)]]
+        STUB.script = [[("propose_plan", wrong)]] * (1 + S.FIX_ROUNDS)
+        STUB.calls.clear()
         r = await cx.post("/api/setup/plan", json={"goal": GOOD["goal"]})
-        # still wrong after the retry: the plan opens anyway, and check names the problem on
+        eq("the planner gets every fix round before the plan is shown", len(STUB.calls),
+           1 + S.FIX_ROUNDS)
+        # still wrong after the retries: the plan opens anyway, and check names the problem on
         # its card, for the person to fix in place
         ck("still wrong after the retry: the plan opens", r.status_code == 200
            and r.json()["plan"]["agents"][0]["name"] == "checkout-triage", r.text[:300])
@@ -289,7 +292,7 @@ async def main():
                                                            for p in probs), probs)
         r = await cx.post("/api/setup/plan", json={"goal": ""})
         eq("no goal: 400", r.status_code, 400)
-        STUB.script = [[("propose_plan", GOOD)], [("propose_plan", GOOD)]]
+        STUB.script = [[("propose_plan", GOOD)]] * (1 + S.FIX_ROUNDS)
         r = await cx.post("/api/setup/plan", json={"goal": GOOD["goal"], "who": "own"})
         ck("the plan keeps who the person chose", r.status_code == 422
            and "who own" in r.text, r.text)
@@ -975,7 +978,7 @@ async def main():
            409)
 
         print("== drafts: a plan that does not come out, step by step ==")
-        STUB.script = [[("list_connectors", {})], [("propose_plan", {})], [("propose_plan", {})]]
+        STUB.script = [[("list_connectors", {})]] + [[("propose_plan", {})]] * (1 + S.FIX_ROUNDS)
         r = await cx.post("/api/setup/drafts", json={"goal": "Something vague", "who": "tares"})
         bad_ = r.json()["project"]["id"]
         st = await settled_(bad_)
@@ -1030,6 +1033,33 @@ async def main():
            (st["plan"]["name"], store.get_project(named_)["name"],
             store.get_project_setup(named_).get("name")), ("Signups by company",) * 3)
         await cx.delete(f"/api/projects/{named_}")
+
+        print("== labels given as an object; who fixes what ==")
+        LB = copy.deepcopy(D)
+        LB.update(name="Weather check", goal="Tell me about storms in Berlin")
+        LB["watches"][0].update(name="Berlin Weather", config={
+            "event_type": "log", "text_template": "{service}: {msg}",
+            "labels": {"location": "berlin", "service": ""}})
+        LB["wakes"][0].update(name="berlin-storm", sources=["Berlin Weather"])
+        LB["agents"][0].update(name="storm-look", trigger="berlin-storm", slack=True,
+                               slack_channel="")
+        STUB.script = [[("propose_plan", LB)]]
+        STUB.calls.clear()
+        r = await cx.post("/api/setup/plan", json={"goal": LB["goal"]})
+        ck("labels as an object pass the check, no fix round", r.status_code == 200
+           and len(STUB.calls) == 1, (r.status_code, len(STUB.calls), r.text[:300]))
+        eq("one label per key: a value is fixed, an empty one reads the field",
+           sorted((l["name"], l.get("const"), l.get("field"))
+                  for l in r.json()["plan"]["watches"][0]["config"]["labels"]),
+           [("location", "berlin", None), ("service", None, "service")])
+        probs = (await cx.post("/api/setup/check", json={"plan": r.json()["plan"]})).json()["problems"]
+        eq("the Slack channel is the person's to pick, never the planner's",
+           [(p_["message"], p_["who"]) for p_ in probs], [("Pick the Slack channel it posts to.", "you")])
+        bad = copy.deepcopy(r.json()["plan"])
+        bad["watches"][0]["config"]["labels"] = ["", {"field": "x"}]
+        probs = (await cx.post("/api/setup/check", json={"plan": bad})).json()["problems"]
+        ck("a label without a name is Tares's to fix, and says the shape",
+           any(p_["who"] == "tares" and '"const"' in p_["message"] for p_ in probs), probs)
 
         print("== reuse: an agent already on Tares, wired by a second project ==")
         msg = S.plan_message("Watch checkout", "tares", True, store, runtime.catalog)

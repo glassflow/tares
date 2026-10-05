@@ -932,7 +932,10 @@ def _validate_labels(s: dict) -> None:
     specs = s.get("config", {}).get("labels") if isinstance(s.get("config"), dict) else None
     for spec in specs or []:
         if not isinstance(spec, dict) or not spec.get("name"):
-            raise CatalogError(f"source {s['name']!r}: each label needs a name (got {spec!r})")
+            raise CatalogError(f"source {s['name']!r}: each label is an object with a name and a "
+                               f"field or a fixed value, like {{\"name\": \"service\", "
+                               f"\"field\": \"service\"}} or {{\"name\": \"region\", "
+                               f"\"const\": \"eu\"}} (got {spec!r})")
         if not re.match(r"^[A-Za-z0-9_]+$", str(spec["name"])):
             raise CatalogError(
                 f"source {s['name']!r}: label name {spec['name']!r} must be alphanumeric/_")

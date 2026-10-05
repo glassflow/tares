@@ -758,7 +758,9 @@ export interface Plan {
 // POST /api/setup/check -> problems: what stops the plan from applying, per item. where:
 // "watches.<key>", "wakes.<key>", "agents.<key>", "tools.<key>", "skills.<key>", "own_agent",
 // a section ("watches", "wakes", "agents") or "plan"
-export interface SetupProblem { where: string; message: string }
+/** `who`: "tares" when the plan itself is wrong (the planner fixes it), "you" when only the
+ *  person knows the answer (which Slack channel). */
+export interface SetupProblem { where: string; message: string; who?: "tares" | "you" }
 export type SetupStep = "connect" | "try" | "done";
 
 // POST /api/setup/apply -> connect: what only the user can do next
