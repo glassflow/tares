@@ -169,12 +169,11 @@ export default function App() {
   return (
     <>
       <nav className="sidebar">
-        {cloud.switcher ? <WorkspaceSwitcher cloud={cloud} /> : (
-          <div className="brand">
-            <img className="brand-mark" src="/tares-mark.svg" alt="Tares" />
-            <span className="brand-word">tares</span>
-          </div>
-        )}
+        <div className={"brand" + (cloud.switcher ? " with-switcher" : "")}>
+          <img className="brand-mark" src="/tares-mark.svg" alt="Tares" />
+          <span className="brand-word">tares</span>
+        </div>
+        {cloud.switcher && <WorkspaceSwitcher cloud={cloud} />}
 
         {NAV_GROUPS.map(({ section, items }) => (
           <div className="nav-group" key={section}>

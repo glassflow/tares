@@ -4,7 +4,7 @@ import type { CloudWorkspace } from "../api";
 import { type Cloud, signInLink, slugFromHost } from "../cloud";
 import { ChevronRight } from "./icons";
 
-// Tares Cloud (TR-370): the top-left brand becomes a menu of the person's workspaces, so switching
+// Tares Cloud (TR-370): a menu of the person's workspaces just under the logo, so switching
 // is one click from the console instead of a trip to the control plane. Opening another workspace
 // goes through its `open_url`, the control plane's handoff, which checks membership and hands that
 // workspace a key. The list loads in the background: the slug from the address shows at once and
@@ -89,15 +89,14 @@ export default function WorkspaceSwitcher({ cloud }: { cloud: Cloud }) {
   };
 
   return (
-    <div className="brand ws-wrap" ref={wrap}
+    <div className="ws-wrap" ref={wrap}
          onBlur={(e) => {   // Tab out of the menu closes it (a click outside is the mousedown listener's)
            const to = e.relatedTarget as Node | null;
            if (open && to && !wrap.current?.contains(to)) setOpen(false);
          }}>
       <button ref={btn} type="button" className="ws-switch" aria-haspopup="true" aria-expanded={open}
               aria-controls={open ? "ws-pop" : undefined} title="Switch workspace" onClick={toggle}>
-        <img className="brand-mark" src="/tares-mark.svg" alt="Tares" />
-        <span className="brand-word ws-name">{slug}</span>
+        <span className="ws-name">{slug}</span>
         <ChevronRight className="ico ws-chev" />
       </button>
       {open && (
