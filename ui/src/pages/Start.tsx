@@ -47,7 +47,7 @@ export default function Start() {
 
       <ul className="ready-list">
         <DemoRow projects={projects} onChange={reloadProjects} />
-        {rows.map((r) => <ReadyItem key={r.key} done={r.done} title={r.title} text={r.text} action={r.action()} />)}
+        {rows.map((r) => <ReadyItem key={r.key} done={r.done} pending={r.pending} title={r.title} text={r.text} action={r.action()} />)}
       </ul>
 
       {drafts.length > 0 && (

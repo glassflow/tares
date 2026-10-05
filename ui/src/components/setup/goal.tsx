@@ -70,12 +70,15 @@ export function GoalStep({ words, setWords, who, setWho, onSubmit, onCancel, sta
       <form className="su-section" onSubmit={(e) => { e.preventDefault(); plan(); }}>
         <div className="su-field">
           <label htmlFor="su-name">Name <span className="help">(optional, Tares suggests one)</span></label>
+          {/* not a person's name: browsers and password managers must not offer to fill it */}
           <input id="su-name" value={words.name} disabled={busy} maxLength={80}
+                 autoComplete="off" data-1p-ignore="" data-lpignore="true" data-bwignore="" data-form-type="other"
                  placeholder="New signups"
                  onChange={(e) => setWords({ ...words, name: e.target.value })} />
         </div>
         <label htmlFor="su-goal" className="su-label">Goal</label>
         <textarea id="su-goal" ref={box} rows={2} className="su-goal-box" value={goal} disabled={busy}
+                  autoComplete="off" data-1p-ignore="" data-lpignore="true" data-bwignore="" data-form-type="other"
                   placeholder="Catch checkout outages early and find the root cause"
                   onChange={(e) => setGoal(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); plan(); } }} />
@@ -105,6 +108,7 @@ export function GoalStep({ words, setWords, who, setWho, onSubmit, onCancel, sta
         <div className="su-field">
           <label htmlFor="su-about">Describe it <span className="help">(optional)</span></label>
           <textarea id="su-about" rows={3} value={words.about} disabled={busy} maxLength={4000}
+                    autoComplete="off" data-1p-ignore="" data-lpignore="true" data-bwignore="" data-form-type="other"
                     placeholder="Where the data comes from, what a good result looks like, who should hear about it. You can paste an alert or an incident thread here."
                     onChange={(e) => setWords({ ...words, about: e.target.value })} />
         </div>

@@ -13,7 +13,9 @@ project's goal right under it.
   left of it), GitHub and Slack, each ticking itself from the cell's state and every one
   optional; then the goal step for the first project. Connect GitHub and Connect Slack on Tares
   Cloud come back to Start. The demo starts from here, and shows Open and Remove once running;
-  the demo's page points back to creating your own project.
+  the demo's page points back to creating your own project. A row whose state is not known yet
+  says "Checking…" in its place. The goal step's fields tell browsers and password managers not
+  to fill them.
 - The goal step asks for an optional name and description. `POST /api/setup/drafts` and
   `POST /api/projects/{id}/setup/plan` take `name` (kept as the project's name, over the
   planner's) and `description` (given to the planner with the goal);
