@@ -36,7 +36,7 @@ from .config import (SLACK_URL_PREFIX, CatalogError, agent_url, catalog_from_db,
                      validate_mcp_server_dict,
                      import_yaml_to_db, slack_channel_from_url, slack_url,
                      validate_agent_dict, validate_slack_channel, validate_source_dict,
-                     check_handoff_targets, normalize_handoffs, normalize_verdicts,
+                     check_handoff_targets, normalize_decision, normalize_handoffs, normalize_verdicts,
                      validate_trigger_dict, normalize_trigger_description, VIEWS_REMOVED,
                      _source_from_dict)
 from .connectors import (SPECS, normalize_config, redact_config, restore_secrets,
@@ -52,6 +52,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_
                              DEFAULT_API_BASE)
 from . import metrics as _metrics
 from . import skills as skills_mod
+from . import decision as decision_mod
 from . import providers as providers_mod
 from .runtime import Runtime
 from . import slack as slack_mod
@@ -395,6 +396,9 @@ class AgentIn(BaseModel):
     # the GitHub credential the agent acts with (the check-run tool); None = none on create,
     # unchanged on update; "" clears. Reads and writes go through its GitHub MCP server.
     github: str | None = None
+    # a decision model instead of a chat model (TR-324): {endpoint, model, threshold, shadow};
+    # None = none on create, unchanged on update; {} turns it back into a chat-model agent
+    decision: dict | None = None
 
 
 class GithubMcpIn(BaseModel):
@@ -508,6 +512,19 @@ class ProviderIn(BaseModel):
 
 class ProviderDefaultIn(BaseModel):
     id: str
+
+
+class DecisionEndpointIn(BaseModel):
+    kind: str                # cloudflare | typesafe | custom
+    name: str = ""           # display name; names a new endpoint (its id is the slug)
+    key: str = ""            # API token or key; blank keeps the stored one
+    account_id: str = ""     # cloudflare: the account the token belongs to
+    url: str = ""            # custom: the endpoint's URL
+    model: str = ""          # custom: the model name it expects, if any
+
+
+class DecisionTestIn(BaseModel):
+    model: str = ""          # "" = the endpoint's first model
 
 
 class SlackTokenIn(BaseModel):
@@ -2376,8 +2393,12 @@ def make_app() -> FastAPI:
         try:
             validate_agent_dict(raw, set(triggers), triggers, set(servers))
             raw["verdicts"] = normalize_verdicts(raw["name"], body.verdicts)
+            raw["decision"] = normalize_decision(raw["name"], body.decision)
         except CatalogError as e:
             _err(e)
+        if raw["decision"] and decision_mod.entry(store, raw["decision"]["endpoint"]) is None:
+            _err(ValueError(f"decision endpoint {raw['decision']['endpoint']!r} not found "
+                            "(Settings, Decision models)"), 404)
         if body.handoffs is not None:
             # the targets: agents that exist (TR-334)
             try:
@@ -2429,6 +2450,7 @@ def make_app() -> FastAPI:
                          "concludes": bool(a.get("concludes")),
                          "verdicts": a.get("verdicts") or [],
                          "github": a.get("github") or "",
+                         "decision": a.get("decision") or {},
                          # it gets the conclude tool (set to, or its prompt names it): its runs
                          # end with an outcome and a verdict worth a column of their own
                          "offers_conclude": offers_conclude(a),
@@ -2448,6 +2470,7 @@ def make_app() -> FastAPI:
                 "default_max_rounds_with_mcp": AGENT_MAX_ROUNDS_WITH_MCP,
                 "max_rounds_limit": AGENT_MAX_ROUNDS_LIMIT,
                 "slack_workspace": bool(resolve_slack_token(store)[0]),
+                "decision_endpoints": decision_mod.list_endpoints(store)["endpoints"],
                 "presets": [{"id": k, **v} for k, v in AGENT_PRESETS.items()]}
 
     def _check_agent_github(value: str | None, current: str = "") -> str | None:
@@ -2474,7 +2497,8 @@ def make_app() -> FastAPI:
                                    handoffs=raw.get("handoffs") or [],
                                    concludes=bool(body.concludes),
                                    verdicts=raw.get("verdicts") or [],
-                                   github=_check_agent_github(body.github) or "")
+                                   github=_check_agent_github(body.github) or "",
+                                   decision=raw.get("decision") or {})
         store.put_in_project("agent", body.name, uid, creator=True)
         runtime.reload_catalog()
         return {"ok": True, "enabled": False, "project": uid,
@@ -2517,7 +2541,9 @@ def make_app() -> FastAPI:
                                    verdicts=(raw.get("verdicts") if body.verdicts is not None
                                              else None),
                                    github=_check_agent_github(body.github,
-                                                              existing.get("github") or ""))
+                                                              existing.get("github") or ""),
+                                   decision=(raw.get("decision") if body.decision is not None
+                                             else None))
         store.mark_customized("agent", name)
         store.put_in_project("agent", name, uid)
         if not here:
@@ -2558,7 +2584,14 @@ def make_app() -> FastAPI:
         agent = store.get_catalog_agent(name)
         if agent is None:
             _err(KeyError(f"unknown agent {name!r}"), 404)
-        if providers_mod.resolve_for_agent(store, agent)[0] is None:
+        decision = agent.get("decision") or {}
+        if decision:
+            # a decision agent needs its endpoint, not a chat model provider (TR-324)
+            e = decision_mod.entry(store, decision["endpoint"])
+            if e is None or not decision_mod.configured(e):
+                _err(ValueError(f"decision model {decision['endpoint']!r} is missing or has no "
+                                "token; set it under Settings, Decision models, before enabling"))
+        elif providers_mod.resolve_for_agent(store, agent)[0] is None:
             _err(ValueError("no model provider configured; add one under Settings, or set "
                             "ANTHROPIC_API_KEY, before enabling an agent"))
         uid = _wired_project(name, project)
@@ -2621,6 +2654,33 @@ def make_app() -> FastAPI:
                                      where_sql="id IN (SELECT run_id FROM run_projects WHERE "
                                                "project = ?)" if uid else "",
                                      where_params=[uid] if uid else None)
+
+    @app.get("/api/agents/builtin/{name}/runs.csv")
+    async def builtin_agent_runs_csv(name: str, limit: int = 5000):
+        """An agent's runs as CSV, newest first, for a comparison outside the console (the
+        decision watcher's shadow week, TR-383): when, how it ended, and a decision run's
+        probability, entity and whether it would have escalated."""
+        import csv
+        import io
+        if store.get_catalog_agent(name) is None:
+            _err(KeyError(f"unknown agent {name!r}"), 404)
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["started_at", "status", "outcome", "verdict", "key", "probability",
+                    "threshold", "entity", "entity_probability", "would_escalate", "shadow",
+                    "model", "input_tokens", "cost_usd", "duration_ms", "summary"])
+        for r in store.list_agent_runs(name, limit=min(max(1, limit), 20000)):
+            sc = r.get("scores") or {}
+            w.writerow([r["started_at"], r["status"], r.get("outcome") or "", r.get("verdict") or "",
+                        r.get("key") or "", sc.get("problem", ""), sc.get("threshold", ""),
+                        sc.get("entity") or "", sc.get("entity_p", ""),
+                        "" if not sc else ("yes" if sc.get("escalate") else "no"),
+                        "" if not sc else ("yes" if sc.get("shadow") else "no"),
+                        r.get("model") or "", r.get("input_tokens") or "",
+                        r.get("cost_usd") if r.get("cost_usd") is not None else "",
+                        r.get("duration_ms") or "", (r.get("finding") or r.get("error") or "")[:500]])
+        return Response(buf.getvalue(), media_type="text/csv", headers={
+            "Content-Disposition": f'attachment; filename="{name}-runs.csv"'})
 
     # ── the Anthropic key: a stored key wins, env is the fallback ────────────
     @app.get("/api/settings/anthropic-key")
@@ -2742,6 +2802,48 @@ def make_app() -> FastAPI:
         except ValueError as e:
             _err(e)
         return {"ok": True, **providers_mod.list_providers(store)}
+
+    # ── decision models (TR-381): endpoints a watcher agent can use instead of a chat model ──
+    # Tokens are write-only, like provider keys: the listing says whether one is stored.
+    @app.get("/api/settings/decision-endpoints")
+    async def get_decision_endpoints():
+        return decision_mod.list_endpoints(store)
+
+    @app.put("/api/settings/decision-endpoints/{endpoint_id}")
+    async def save_decision_endpoint(endpoint_id: str, body: DecisionEndpointIn):
+        """`new` as the id creates an endpoint (its id is the slug of the name)."""
+        try:
+            eid = decision_mod.save_endpoint(store, "" if endpoint_id == "new" else endpoint_id,
+                                             body.kind.strip(), body.name, body.key,
+                                             body.account_id, body.url, body.model)
+        except ValueError as e:
+            _err(e)
+        return {"ok": True, "id": eid, **decision_mod.list_endpoints(store)}
+
+    @app.post("/api/settings/decision-endpoints/{endpoint_id}/test")
+    async def test_decision_endpoint(endpoint_id: str, body: DecisionTestIn):
+        """One small request: works, or why not in plain words (200 either way, so the console
+        shows the reason next to the button)."""
+        e = decision_mod.entry(store, endpoint_id)
+        if e is None:
+            _err(KeyError(f"unknown decision endpoint {endpoint_id!r}"), 404)
+        model = body.model.strip() or decision_mod.model_for(e, {})
+        try:
+            return {**await decision_mod.test(e, model), "model": model}
+        except decision_mod.DecisionError as ex:
+            return {"ok": False, "error": str(ex), "model": model}
+
+    @app.delete("/api/settings/decision-endpoints/{endpoint_id}")
+    async def delete_decision_endpoint(endpoint_id: str):
+        if decision_mod.entry(store, endpoint_id) is None:
+            _err(KeyError(f"unknown decision endpoint {endpoint_id!r}"), 404)
+        users = [a["name"] for a in store.list_catalog_agents()
+                 if (a.get("decision") or {}).get("endpoint") == endpoint_id]
+        if users:
+            _err(ValueError(f"in use by {', '.join(users)}; point those agents elsewhere first"),
+                 409)
+        decision_mod.delete_endpoint(store, endpoint_id)
+        return {"ok": True, **decision_mod.list_endpoints(store)}
 
     # ── agent tracing: where runs are exported, and whether ──────────────────
     # A console-stored value wins over the environment, like the Anthropic key. Secrets (the

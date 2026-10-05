@@ -141,6 +141,8 @@ class AgentCfg:
     concludes: bool = False   # every run ends with the conclude tool, whatever the prompt says
     verdicts: list = dc_field(default_factory=list)   # [{verdict, when}]: the only ones it may give
     github: str = ""          # a GitHub credential the agent acts with (check runs); "" = none
+    # a decision model instead of a chat model (TR-324): {endpoint, model, threshold, shadow}
+    decision: dict = dc_field(default_factory=dict)
     enabled: bool = False
 
 
@@ -279,6 +281,7 @@ def _agent_from_dict(a: dict, enabled: bool = False) -> AgentCfg:
         concludes=bool(a.get("concludes")),
         verdicts=normalize_verdicts(a["name"], a.get("verdicts")),
         github=str(a.get("github") or ""),
+        decision=normalize_decision(a["name"], a.get("decision")),
         enabled=bool(a.get("enabled", enabled)),
     )
 
@@ -471,7 +474,9 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
                                    concludes=(bool(a["concludes"]) if "concludes" in a else None),
                                    verdicts=(normalize_verdicts(a["name"], a["verdicts"])
                                              if "verdicts" in a else None),
-                                   github=(str(a.get("github") or "") if "github" in a else None))
+                                   github=(str(a.get("github") or "") if "github" in a else None),
+                                   decision=(normalize_decision(a["name"], a["decision"])
+                                             if "decision" in a else None))
         # on/off belongs to the wiring of the project the agent is in; applied once it is placed
         # (below, or by the engine that applies a template)
         _turn_on_where_placed(store, a)
@@ -745,6 +750,7 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
          **({"concludes": True} if a.get("concludes") else {}),
          **({"verdicts": a["verdicts"]} if a.get("verdicts") else {}),
          **({"github": a["github"]} if a.get("github") else {}),
+         **({"decision": a["decision"]} if a.get("decision") else {}),
          **({"slack_webhook": a["slack_webhook"]}
             if include_secrets and a.get("slack_webhook") else {}),
          **({"webhook_token": a["webhook_token"]}
@@ -1102,6 +1108,15 @@ MAX_VERDICTS = 10
 VERDICT_WHEN_MAX = 300
 
 
+def normalize_decision(name: str, d) -> dict:
+    """An agent's decision-model settings (TR-324), or {} for a chat-model agent."""
+    from .decision import normalize
+    try:
+        return normalize(name, d)
+    except ValueError as e:
+        raise CatalogError(str(e))
+
+
 def normalize_verdicts(name: str, verdicts) -> list[dict]:
     """The verdicts an agent may give, as [{verdict, when}]: each one word (lowercased), unique,
     not no_op (the built-in "nothing to report"), with an optional sentence saying when to give
@@ -1266,6 +1281,7 @@ def validate_agent_dict(a: dict, trigger_names: set, triggers: dict | None = Non
                                "(or empty for the instance-wide cap)")
     normalize_handoffs(str(a["name"]), a.get("handoffs"))
     normalize_verdicts(str(a["name"]), a.get("verdicts"))
+    normalize_decision(str(a["name"]), a.get("decision"))
 
     # Loop guard: a Tares agent writes a finding into the `findings` source. If its trigger
     # watches that source, its own finding re-fires the trigger, which runs the agent again,

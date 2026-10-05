@@ -14,6 +14,22 @@ Tares Cloud control plane 1.24.0). Released as 1.42.0-rc.1 to rc.4 first; this i
 copy fix in Settings > Slack.
 
 ### Added
+- Decision models (TR-324, TR-381): a watcher agent can be judged by a System One decision model
+  instead of a chat model. Each run asks the model two typed questions about the window it was
+  handed: how likely it is that something needs a closer look (the agent's prompt says what
+  counts), and which entity. At or above the agent's threshold it concludes `investigate` on that
+  entity, so its handoffs wake the next agent; below it, nothing to report. Shadow mode scores
+  every window and records what it would have done, but never hands anything on. Decision runs do
+  not count toward the daily run cap.
+- Settings, Decision models: add Cloudflare Workers AI (Clef, Clef-flash; an Account ID and a
+  Workers AI API token), TypeSafe Jev (an API key), or any URL that takes the same request. The
+  token is write-only; Save and Test check it with one small request and say what is wrong in
+  plain words. API: `GET/PUT/DELETE /api/settings/decision-endpoints[/{id}]`,
+  `POST /api/settings/decision-endpoints/{id}/test`.
+- Agents take `decision: {endpoint, model, threshold, shadow}`; the preset "Triage with a decision
+  model" starts one in shadow mode. Each run stores its probabilities (`scores` on the run), shown
+  in the runs list with a "would escalate" mark for shadow runs, and
+  `GET /api/agents/builtin/{name}/runs.csv` exports every run with them (Export CSV on the runs tab).
 - Start (`/start`): the demo, a model provider (on Tares Cloud the included credit and what is
   left of it), GitHub and Slack, each ticking itself from the cell's state and every one
   optional; then the goal step for the first project. Connect GitHub and Connect Slack on Tares

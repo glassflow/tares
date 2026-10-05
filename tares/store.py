@@ -369,6 +369,10 @@ _MIGRATIONS = [
     # the GitHub credential the agent acts with (check runs; its GitHub MCP server is in mcp_servers)
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS github TEXT",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS verdicts JSON",
+    # a decision model instead of a chat model (TR-324): {endpoint, model, threshold, shadow}
+    "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS decision JSON",
+    # a decision run's probabilities (TR-324): problem, threshold, entity, options, escalate
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS scores JSON",
     # Which key paid for a ledger row ("env:ANTHROPIC_API_KEY" | "console") — the boundary a
     # hosted trial's enforcement counts against. Rows from before attribution stay NULL (unknown).
     "ALTER TABLE model_usage ADD COLUMN IF NOT EXISTS key_source TEXT",
@@ -1494,8 +1498,9 @@ class Store:
                              handoffs: list[dict] | None = None,
                              concludes: bool | None = None,
                              verdicts: list[dict] | None = None,
-                             github: str | None = None) -> None:
-        # handoffs, concludes, verdicts, github: None keeps what is stored (a caller that does
+                             github: str | None = None,
+                             decision: dict | None = None) -> None:
+        # handoffs, concludes, verdicts, github, decision: None keeps what is stored (a caller that does
         # not know about them, such as a template re-plan, must not wipe them); [] / False / ""
         # clears
         ts = now_utc()
@@ -1505,8 +1510,8 @@ class Store:
                 "(name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, max_rounds, budget_usd, "
                 "webhook_key_label, provider, daily_cap, handoffs, concludes, verdicts, github, "
-                "created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "decision, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (name) DO UPDATE SET trigger = excluded.trigger, "
                 "prompt = excluded.prompt, slack_webhook = excluded.slack_webhook, "
                 "model = excluded.model, slack_channel = excluded.slack_channel, "
@@ -1519,6 +1524,7 @@ class Store:
                 "concludes = COALESCE(excluded.concludes, catalog_agents.concludes), "
                 "verdicts = COALESCE(excluded.verdicts, catalog_agents.verdicts), "
                 "github = COALESCE(excluded.github, catalog_agents.github), "
+                "decision = COALESCE(excluded.decision, catalog_agents.decision), "
                 "updated_at = excluded.updated_at",
                 [name, trigger, prompt, slack_webhook or "", model or "",
                  slack_channel or "", webhook_url or "", webhook_token or "",
@@ -1527,7 +1533,8 @@ class Store:
                  None if handoffs is None else json.dumps(handoffs),
                  None if concludes is None else bool(concludes),
                  None if verdicts is None else json.dumps(verdicts),
-                 None if github is None else github, ts, ts],
+                 None if github is None else github,
+                 None if decision is None else json.dumps(decision), ts, ts],
             )
             # the agent's trigger and handoffs are the wiring of the project that made it
             # (P-TR-216); one not placed yet is wired when it is (_wire_owner)
@@ -1591,8 +1598,8 @@ class Store:
             rows = self.con.execute(
                 "SELECT name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, updated_at, max_rounds, budget_usd, owned_by, customized, "
-                "webhook_key_label, provider, daily_cap, handoffs, concludes, verdicts, github "
-                "FROM catalog_agents ORDER BY name"
+                "webhook_key_label, provider, daily_cap, handoffs, concludes, verdicts, github, "
+                "decision FROM catalog_agents ORDER BY name"
             ).fetchall()
             wiring = self.con.execute(
                 "SELECT project, kind, trigger, agent, from_agent, verdict, cooldown, enabled "
@@ -1621,7 +1628,8 @@ class Store:
                 "handoffs": hands.get((where, r[0]), [] if w or (where, r[0]) in hands
                                       else (json.loads(r[17]) if r[17] else [])),
                 "concludes": bool(r[18]), "verdicts": json.loads(r[19]) if r[19] else [],
-                "github": r[20] or "", "enabled": bool(on)})
+                "github": r[20] or "", "decision": json.loads(r[21]) if r[21] else {},
+                "enabled": bool(on)})
         return out
 
     def get_catalog_agent(self, name: str, project: str | None = None) -> dict | None:
@@ -1718,7 +1726,7 @@ class Store:
                "model, input_tokens, output_tokens, cache_creation_input_tokens, "
                "cache_read_input_tokens, cost_usd, delivery, delivery_error, provider, "
                "outcome, verdict, results, woken_by, parent_run_id, project, skills, "
-               "headline, next_step, handled_at, handled_by, practice "
+               "headline, next_step, handled_at, handled_by, practice, scores "
                "FROM agent_runs ")
         where, params = [], []
         if where_sql:
@@ -1749,7 +1757,8 @@ class Store:
              "woken_by": r[26], "parent_run_id": r[27], "project": r[28],
              "skills": json.loads(r[29]) if r[29] else [],
              "headline": r[30], "next_step": r[31], "handled_at": r[32], "handled_by": r[33],
-             "practice": bool(r[34])}
+             "practice": bool(r[34]),
+             "scores": json.loads(r[35]) if r[35] else None}
             for r in rows
         ]
 
@@ -1785,6 +1794,12 @@ class Store:
         with self._lock:
             self.con.execute("UPDATE agent_runs SET results = ? WHERE id = ?",
                              [json.dumps(results), run_id])
+
+    def set_run_scores(self, run_id: str, scores: dict) -> None:
+        """A decision run's probabilities (TR-324), stamped when the model answers."""
+        with self._lock:
+            self.con.execute("UPDATE agent_runs SET scores = ? WHERE id = ?",
+                             [json.dumps(scores), run_id])
 
     def set_run_skills(self, run_id: str, names: list[str]) -> None:
         """The skills the run loaded (TR-332), stamped when it ends."""
