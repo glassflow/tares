@@ -26,6 +26,8 @@ export function useOwnProjects(intervalMs = 30000) {
 export type ReadyRow = {
   key: "model" | "github" | "slack";
   done: boolean;
+  /** its state is not known yet: the row stands in its place, saying so, until it is */
+  pending?: boolean;
   title: string;
   text: string;
   /** what to do about it: a button, a link, or the reason the person cannot */
@@ -34,8 +36,9 @@ export type ReadyRow = {
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
 
-/** The rows, once each has answered (a row whose state is not known yet is left out). `back` is
- *  the page a Tares Cloud connect returns to. */
+/** The rows, each in its place from the first render: one whose state is not known yet says
+ *  "Checking…" until its answer arrives, so the list never shows as an empty box on a slow cell.
+ *  `back` is the page a Tares Cloud connect returns to. */
 export function useReadiness(back: string): { rows: ReadyRow[]; loading: boolean } {
   const cloud = useCloud();
   const { data: prov } = usePolling(() => api.providers(), 30000);
@@ -45,11 +48,15 @@ export function useReadiness(back: string): { rows: ReadyRow[]; loading: boolean
   const trial = ov.result?.status === "ok" ? ov.result.data.trial : undefined;
 
   const rows: ReadyRow[] = [];
-  if (prov) rows.push(modelRow(prov.providers, prov.default, trial));
-  if (gh) rows.push(githubRow(gh.credentials.map((c) => c.account).filter(Boolean), cloud, back));
-  if (slack) rows.push(slackRow(slack.configured, slack.team?.name, cloud, back));
+  rows.push(prov ? modelRow(prov.providers, prov.default, trial) : checking("model", "Model provider"));
+  rows.push(gh ? githubRow(gh.credentials.map((c) => c.account).filter(Boolean), cloud, back)
+    : checking("github", "GitHub"));
+  rows.push(slack ? slackRow(slack.configured, slack.team?.name, cloud, back) : checking("slack", "Slack"));
   return { rows, loading: !prov || !gh || !slack };
 }
+
+const checking = (key: ReadyRow["key"], title: string): ReadyRow =>
+  ({ key, done: false, pending: true, title, text: "Checking…", action: () => null });
 
 function modelRow(providers: { id: string; name: string; configured: boolean }[], dflt: string | null,
                   trial: { state: string; spend_usd: number | null; credit_usd: number } | undefined): ReadyRow {
@@ -113,18 +120,18 @@ function slackRow(configured: boolean, team: string | undefined, cloud: Cloud, b
 }
 
 /** One row of the list: a mark, what it is, and what to do. */
-export function ReadyItem({ done, title, text, action }: {
-  done: boolean; title: string; text: React.ReactNode; action?: React.ReactNode;
+export function ReadyItem({ done, pending, title, text, action }: {
+  done: boolean; pending?: boolean; title: string; text: React.ReactNode; action?: React.ReactNode;
 }) {
   return (
-    <li className={"ready-row" + (done ? " done" : "")}>
+    <li className={"ready-row" + (done ? " done" : "") + (pending ? " pending" : "")} aria-busy={pending || undefined}>
       <span className="ready-mark" aria-hidden="true">{done ? "✓" : ""}</span>
       <span className="ready-text">
         <strong>{title}</strong>
         <span className="help">{text}</span>
       </span>
       {action && <span className="ready-action">{action}</span>}
-      <span className="sr-only">{done ? "done" : "not done yet"}</span>
+      {!pending && <span className="sr-only">{done ? "done" : "not done yet"}</span>}
     </li>
   );
 }
@@ -137,15 +144,16 @@ const dismissed = () => { try { return localStorage.getItem(DISMISS_KEY) === "1"
  *  person hides it. Dismissing is remembered in this
  *  browser only (a per-viewer convenience). */
 export function ReadyReminder() {
-  const { rows } = useReadiness("/projects");
+  const { rows, loading } = useReadiness("/projects");
   const { projects, reload } = useOwnProjects();
   const [hidden, setHidden] = useState(dismissed);
-  if (hidden || !rows.length || rows.every((r) => r.done)) return null;
+  // shown once every row has answered: a list that may turn out finished must not flash up
+  if (hidden || loading || rows.every((r) => r.done)) return null;
   return (
     <section className="ready-box" aria-label="Still to set up">
       <ul className="ready-list">
         <DemoRow projects={projects} onChange={reload} />
-        {rows.map((r) => <ReadyItem key={r.key} done={r.done} title={r.title} text={r.text} action={r.action()} />)}
+        {rows.map((r) => <ReadyItem key={r.key} done={r.done} pending={r.pending} title={r.title} text={r.text} action={r.action()} />)}
       </ul>
       <button type="button" className="dim ready-dismiss"
               onClick={() => { try { localStorage.setItem(DISMISS_KEY, "1"); } catch { /* private mode */ } setHidden(true); }}>
@@ -166,7 +174,9 @@ export function DemoRow({ projects, onChange }: { projects: Project[] | undefine
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
   const [confirm, setConfirm] = useState(false);
-  if (!template || !projects) return null;
+  // the templates or the projects not in yet: its place, saying so; no demo on this cell: no row
+  if (!rec || !projects) return <ReadyItem done={false} pending title="Watch an agent handle an incident" text="Checking…" />;
+  if (!template) return null;
 
   const start = async () => {
     setBusy(true); setErr(undefined);
