@@ -25,7 +25,15 @@ project's goal right under it.
 - Settings > Usage (self-hosted) holds model spend and storage; on Tares Cloud model spend
   joins Settings > Workspace.
 
+- The plan screen offers "Ask Tares to fix it" when the plan still has a mistake of its own after
+  Tares's own fix rounds; it hands what the check found back to the planner. Problems carry
+  `who` (`tares` or `you`) on `POST /api/setup/check`.
+
 ### Changed
+- The planner gets up to three rounds to fix what the check finds (was one), and is never asked
+  about what only the person can answer, like which Slack channel.
+- Labels the planner writes as an object (`{"location": "berlin"}`) become one label per key; the
+  label error now shows the shape it expects.
 - `/` opens Start while the cell has no project of your own (the demo, the default project and
   drafts do not count), and Projects after that. Start leaves the sidebar with the first project.
 - The default project is made the first time something is created outside a project, not when

@@ -156,6 +156,18 @@ export function PlanStep({ projectId, plan, setPlan, base, setBase, onBack, onAd
     catch (e) { setAdjustErr(errText(e)); setAdjusting(false); }
   };
 
+  // what the planner got wrong and could not fix in its own rounds: one click hands the same
+  // findings back to it, as if the person had typed them as a change
+  const theirs = problems.filter((p) => p.who === "tares");
+  const fixIt = async () => {
+    if (busy || !theirs.length) return;
+    setAdjusting(true); setAdjustErr(undefined);
+    try {
+      await onAdjust("Fix what the check found, and keep everything else as it is: "
+        + theirs.map((p) => p.message).join(" "), plan);
+    } catch (e) { setAdjustErr(errText(e)); setAdjusting(false); }
+  };
+
   const apply = async () => {
     if (busy || problems.length || stale) return;
     setApplying(true); setApplyErr(undefined);
@@ -193,6 +205,17 @@ export function PlanStep({ projectId, plan, setPlan, base, setBase, onBack, onAd
                onChange={(e) => edit({ ...plan, name: e.target.value })} />
       </label>
       <Problems list={planWide} />
+      {theirs.length > 0 && !stale && (
+        <div className="alert warn su-fixit" role="status">
+          <span>
+            Tares could not sort out {theirs.length === 1 ? "one thing" : `${theirs.length} things`} in
+            this plan by itself. {theirs.length === 1 ? "It is" : "They are"} marked below.
+          </span>
+          <button type="button" onClick={fixIt} disabled={busy || !!open}>
+            {adjusting ? "Fixing…" : "Ask Tares to fix it"}
+          </button>
+        </div>
+      )}
 
       <ol className="su-cards">
         <WatchesCard ctx={ctx} />
