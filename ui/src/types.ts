@@ -529,7 +529,7 @@ export interface Template {
   // The card's you/Tares bullets, in the mode the daemon is running in (a hosted demo stack
   // says different things than a local docker one). Absent on older daemons.
   facts?: { you: string[]; tares: string[] };
-  // what a person would type to get this template, first person; the landing screen's starters
+  // what a person would type to get this template, first person
   sentence?: string;
 }
 export interface McpServer {
@@ -788,6 +788,8 @@ export interface ProjectSetup {
   step: SetupStep | "plan";     // plan: a draft, still being planned or edited
   draft?: boolean;
   goal?: string | null;
+  name?: string;                // a draft: the name the person gave it ("" when Tares names it)
+  description?: string;         // a draft: what the person said about it, for the planner
   who?: "tares" | "own" | null;
   plan: Plan | null;            // null on a draft until its first plan is written
   planning?: SetupPlanning | null;

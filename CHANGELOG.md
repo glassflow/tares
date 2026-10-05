@@ -5,6 +5,34 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+A new cell opens on Start instead of Overview: a short list of what is ready, and the first
+project's goal right under it.
+
+### Added
+- Start (`/start`): the demo, a model provider (on Tares Cloud the included credit and what is
+  left of it), GitHub and Slack, each ticking itself from the cell's state and every one
+  optional; then the goal step for the first project. Connect GitHub and Connect Slack on Tares
+  Cloud come back to Start. The demo starts from here, and shows Open and Remove once running;
+  the demo's page points back to creating your own project.
+- The goal step asks for an optional name and description. `POST /api/setup/drafts` and
+  `POST /api/projects/{id}/setup/plan` take `name` (kept as the project's name, over the
+  planner's) and `description` (given to the planner with the goal);
+  `GET /api/projects/{id}/setup` returns both for a draft.
+- Projects shows what is left of the Start list as one line until it is done or dismissed.
+- Settings > Usage (self-hosted) holds model spend and storage; on Tares Cloud model spend
+  joins Settings > Workspace.
+
+### Changed
+- `/` opens Start while the cell has no project of your own (the demo, the default project and
+  drafts do not count), and Projects after that. Start leaves the sidebar with the first project.
+- The default project is made the first time something is created outside a project, not when
+  the cell starts, so a cell where everything starts in a project never has one. Projects no
+  longer lists it; when it holds something, a line under the list points to All resources.
+
+### Removed
+- Overview and the landing screen. Its "What do you want to build?" box handed the text to the
+  goal step, which asked the same question again; the goal step is now the one place.
+
 ## [1.41.0] - 2026-10-02
 
 Switch workspaces from the console, and connect GitHub and Slack from the workspace's own

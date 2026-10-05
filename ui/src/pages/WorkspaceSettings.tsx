@@ -3,6 +3,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { type CloudMember, type CloudResult, type CloudWorkspaceOverview, cloudApi } from "../api";
 import { type Cloud, reloadList, signInLink, slugFromHost, useWorkspaceOverview, type WorkspaceOverview } from "../cloud";
 import { Switch } from "../components/setup/common";
+import { UsagePanels } from "../components/UsagePanels";
 
 // Settings > Workspace on Tares Cloud (TR-375, TR-376): team, plan, storage, included credit, the
 // sign-in pin and delete, read from and written to the control plane with the person's Tares
@@ -103,6 +104,8 @@ export default function WorkspaceSettings({ cloud, apiUrl, onOpenTab }: {
       <TeamPanel {...p} isOwner={isOwner} you={w.you?.email} />
       <StoragePanel {...p} w={w} isOwner={isOwner} />
       {showCredit && <CreditPanel w={w} onOpenTab={onOpenTab} />}
+      {/* what this cell spent on model providers; storage is the panel above, from the control plane */}
+      <UsagePanels storage={false} />
       <PinPanel {...p} w={w} />
       {isOwner && <DeletePanel {...p} />}
     </>

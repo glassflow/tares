@@ -14,6 +14,7 @@ import SourceDiscover from "./pages/SourceDiscover";
 import SourceNew from "./pages/SourceNew";
 import Security from "./pages/Security";
 import Home from "./pages/Home";
+import Start from "./pages/Start";
 import Sources from "./pages/Sources";
 import Projects from "./pages/Projects";
 import ProjectTemplates from "./pages/ProjectNew";
@@ -46,9 +47,10 @@ const router = createBrowserRouter([
     path: "/",
     element: <App />,
     children: [
-      // `/` is Overview, not the source list. The cloud login handoff (TARES_LOGIN_URL) lands
-      // here, so a customer arrives at the instance at a glance rather than at a table.
+      // `/` opens Start on a cell with no project of the person's own, else Projects. The cloud
+      // login handoff (TARES_LOGIN_URL) lands here.
       { index: true, element: <Home /> },
+      { path: "start", element: <Start /> },
       { path: "projects", element: <Projects /> },
       // Create new is the goal-first setup: goal, plan, connect, try it. The template gallery and
       // the by-hand path are links from its first step.

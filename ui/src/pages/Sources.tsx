@@ -30,8 +30,8 @@ function CatalogMenu() {
 }
 
 // Just the source list. Instance-wide numbers (storage, totals, agent runs) used to sit at the
-// bottom of this page; they now live on Overview (pages/Home.tsx), because on a real cell this
-// list is long enough to push them below the fold — and they were never about the sources anyway.
+// bottom of this page; they now live in Settings (components/UsagePanels.tsx), because on a real
+// cell this list is long enough to push them below the fold, and they were never about the sources.
 export default function Sources() {
   const nav = useNavigate();
   const { data: sources, error } = usePolling(() => api.sources());

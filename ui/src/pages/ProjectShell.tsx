@@ -6,6 +6,7 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import { Combo, Picker, TimeAgo, usePolling } from "../components/bits";
 import { SessionsPanel } from "../components/ChallengerSessions";
 import ProjectActivity from "../components/ProjectActivity";
+import { ownProjects } from "../components/readiness";
 import ProjectNav from "../components/project/ProjectNav";
 import { isSetup, parseView, viewParam, viewSearch, type Ctx, type View } from "../components/project/common";
 import { HowView, Overview, ResultView } from "../components/project/overview";
@@ -272,6 +273,15 @@ export default function ProjectShell({ s, id, reload, template }: {
   const page = !isSetup(view) ? (
     <>
       {alerts}
+      {/* the demo is a rehearsal: point at the person's own project once they have seen it run */}
+      {view.kind === "overview" && s.template === "ai_sre_demo" && (
+        <div className="ready-reminder" role="note">
+          <div className="ready-reminder-row">
+            <span className="ready-reminder-text">Ready for your own? Say what it should watch and Tares plans it with you.</span>
+            <Link className="btn" to={ownProjects(projects?.projects)?.length ? "/projects/new" : "/start"}>Create your project</Link>
+          </div>
+        </div>
+      )}
       {view.kind === "overview" && (
         <Overview ctx={ctx} actions={<>{pauseButton}{templateActions}</>}
                   onResume={act(() => api.resumeProject(id))} />

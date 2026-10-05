@@ -812,14 +812,14 @@ class Store:
             raise
 
     def _wiring_move(self) -> None:
-        default = self._ensure_default_project()
+        default = self._lazy_default_project()
         projects = {r[0] for r in self.con.execute("SELECT id FROM usecases").fetchall()}
         on = {r[0][len(AGENT_PREFIX):] for r in self.con.execute(
             "SELECT url FROM subscriptions WHERE url LIKE ?", [AGENT_PREFIX + "%"]).fetchall()}
         ts = now_utc()
         for name, trig, owner, raw in self.con.execute(
                 "SELECT name, trigger, owned_by, handoffs FROM catalog_agents").fetchall():
-            project = owner if owner in projects else default
+            project = owner if owner in projects else default()
             # the store's placement pass may have wired it already (off): keep that row, carry
             # on/off over
             if trig:
@@ -2363,6 +2363,32 @@ class Store:
         with self._lock:
             return self._ensure_default_project()
 
+    def default_project_id_if_any(self) -> str | None:
+        with self._lock:
+            return self._default_project_if_any()
+
+    def _default_project_if_any(self) -> str | None:
+        """The default project's id when the cell has one, never creating it. Called with the
+        lock held."""
+        row = self.con.execute("SELECT value FROM settings WHERE key = 'default_project'").fetchone()
+        if row and self.con.execute("SELECT 1 FROM usecases WHERE id = ?", [row[0]]).fetchone():
+            return row[0]
+        found = self.con.execute("SELECT id FROM usecases WHERE recipe = 'default' "
+                                 "ORDER BY created_at LIMIT 1").fetchone()
+        return found[0] if found else None
+
+    def _lazy_default_project(self):
+        """A function giving the default project's id, made on its first call and only then. The
+        default project exists from the first time something has no other project to sit in, so
+        a cell where everything starts in a project never has one. Called with the lock held."""
+        made: list[str | None] = [None]
+
+        def get() -> str:
+            if made[0] is None:
+                made[0] = self._ensure_default_project()
+            return made[0]
+        return get
+
     def _ensure_default_project(self) -> str:
         """The default project's id, creating the project if the cell has none yet. Called with
         the lock held."""
@@ -2462,7 +2488,8 @@ class Store:
         that made it; a part with no maker takes `uid`."""
         table = self._OWNED_TABLES[kind]
         with self._lock:
-            default = self._ensure_default_project()
+            # None on a cell that has none: nothing can be leaving it
+            default = self._default_project_if_any()
             row = self.con.execute(f"SELECT owned_by FROM {table} WHERE name = ?",
                                    [name]).fetchone()
             owner = row[0] if row else None
@@ -2510,7 +2537,6 @@ class Store:
             elif kind == "trigger":
                 self.con.execute("DELETE FROM project_wiring WHERE project = ? AND kind = 'wake' "
                                  "AND trigger = ?", [uid, name])
-            default = self._ensure_default_project()
             table = self._OWNED_TABLES[kind]
             exists = self.con.execute(f"SELECT owned_by FROM {table} WHERE name = ?",
                                       [name]).fetchone()
@@ -2518,6 +2544,7 @@ class Store:
                 return
             left = self._rows_for(kind, name)
             if not left:
+                default = self._ensure_default_project()
                 self._add_row(default, kind, name)
                 left = [default]
             if kind != "source" and exists[0] == uid:
@@ -2555,7 +2582,8 @@ class Store:
             self._normalize_projects()
 
     def _normalize_projects(self) -> None:
-        default = self._ensure_default_project()
+        # made only when something here has no other project to sit in
+        default = self._lazy_default_project()
         recipes = self._recipes()
         # views are gone: so are their rows, and their entries in custom projects
         self.con.execute("DELETE FROM usecase_objects WHERE kind = 'view'")
@@ -2584,11 +2612,11 @@ class Store:
             "SELECT name, owned_by, sources FROM catalog_triggers").fetchall()}
         owners: dict[tuple[str, str], str] = {}
         for name, (owner, _srcs) in triggers.items():
-            owners[("trigger", name)] = owner or default
+            owners[("trigger", name)] = owner or default()
         agents = {r[0]: (valid(r[1]), r[2], json.loads(r[3] or "[]")) for r in self.con.execute(
             "SELECT name, owned_by, trigger, mcp_servers FROM catalog_agents").fetchall()}
         for name, (owner, trig, _servers) in agents.items():
-            owners[("agent", name)] = owner or owners.get(("trigger", trig)) or default
+            owners[("agent", name)] = owner or owners.get(("trigger", trig)) or default()
         users: dict[str, set] = {}
         for name, (_o, _t, servers) in agents.items():
             for srv in servers:
@@ -2596,7 +2624,7 @@ class Store:
         for name, owner in self.con.execute("SELECT name, owned_by FROM mcp_servers").fetchall():
             by = users.get(name) or set()
             owners[("mcp_server", name)] = valid(owner) or (next(iter(by)) if len(by) == 1
-                                                            else default)
+                                                            else default())
         table = self._OWNED_TABLES
         for (kind, name), owner in owners.items():
             current = self.con.execute(f"SELECT owned_by FROM {table[kind]} WHERE name = ?",
@@ -2621,15 +2649,18 @@ class Store:
                     self._add_row(owners[("trigger", name)], "source", src)
         for src in existing:
             if not self._rows_for("source", src):
-                self._add_row(default, "source", src)
+                self._add_row(default(), "source", src)
         # the default project holds only what no other project does: a source another project
         # has and no default trigger reads leaves it
+        held = self._default_project_if_any()
+        if held is None:
+            return
         default_reads = {src for (name, (_o, srcs)) in triggers.items()
-                         if default in self._rows_for("trigger", name) for src in srcs}
+                         if held in self._rows_for("trigger", name) for src in srcs}
         for src in existing:
             rows = self._rows_for("source", src)
-            if default in rows and len(rows) > 1 and src not in default_reads:
-                self._drop_rows("source", src, [default])
+            if held in rows and len(rows) > 1 and src not in default_reads:
+                self._drop_rows("source", src, [held])
 
     def log_project(self, uid: str, action: str, detail: str = "") -> None:
         with self._lock:

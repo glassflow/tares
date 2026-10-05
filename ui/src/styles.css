@@ -1474,23 +1474,37 @@ pre.payload {
 .uc-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .uc-setup-done .uc-setup-title { color: var(--ink-soft); }
 
-/* The landing screen (Landing.tsx): one question, centred, nothing else asking for attention. */
-.landing { max-width: 760px; margin: 24px auto 0; }
-.landing-title { font-size: 28px; margin: 0 0 4px; }
-.landing-sub { color: var(--ink-soft); margin: 0 0 28px; font-size: 15px; }
-.landing-ask { background: var(--panel); border: 1px solid var(--line); padding: 18px 20px; margin-bottom: 18px; }
-.landing-q { display: block; font-weight: 600; margin-bottom: 10px; }
-.landing-ask textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 15px; padding: 10px 12px; }
-.landing-ask textarea.mono { font-family: var(--mono); font-size: 13px; }
-.landing-ask .cta { padding: 10px 22px; font-size: 14px; font-weight: 600; }
-.landing-heard { min-height: 26px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0 10px; }
-.landing-starters { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; }
-.starter.on { border-color: var(--accent); color: var(--ink); }
-.starter.off { color: var(--ink-soft); }
-.landing-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-.landing-head .btn { flex: 0 0 auto; margin-top: 6px; }
-.landing-demo { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 14px; }
-.landing-foot { text-align: center; }
+
+/* Start (pages/Start.tsx): the list a new cell opens on, then the first project's goal */
+.start { max-width: 760px; display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+.ready-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); background: var(--panel); }
+.ready-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 14px 16px; }
+.ready-row + .ready-row { border-top: 1px solid var(--line); }
+.ready-mark { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; font-size: 11px; font-weight: 700; margin-top: 1px; }
+.ready-row.done .ready-mark { background: var(--ok); border-color: var(--ok); color: var(--bg); }
+.ready-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.ready-text .help { white-space: normal; }
+.ready-action { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+.ready-action .help { max-width: 240px; white-space: normal; text-align: right; }
+.link-btn { border-color: transparent; background: none; text-decoration: underline; color: var(--ink-soft); padding-inline: 4px; }
+@media (max-width: 640px) {
+  .ready-row { grid-template-columns: 22px minmax(0, 1fr); }
+  .ready-action { grid-column: 2; justify-content: flex-start; }
+  .ready-action .help { text-align: left; }
+}
+/* what is left of the Start list, one quiet line on Projects (and the demo's "your own" line) */
+.ready-reminder { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 14px; margin-bottom: 16px; border: 1px solid var(--line); background: var(--panel); }
+.ready-reminder-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; flex: 1 1 320px; min-width: 0; }
+.ready-reminder-text { flex: 1 1 200px; min-width: 0; }
+.ready-dismiss { margin-left: auto; }
+/* the goal step's name and description (components/setup/goal.tsx) */
+.su-field { display: flex; flex-direction: column; gap: 6px; }
+.su-field label, .su-label { font-weight: 600; }
+.su-field label .help { font-weight: 400; }
+.su-field input, .su-field textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 10px 12px; }
+.su-field textarea { resize: vertical; }
+.su-label { margin-bottom: -14px; }
+.su-title.su-title-sm { font-size: 20px; }
 
 /* the builder once it is running: the goal as a brief, the active step visibly busy */
 .builder-brief blockquote { margin: 2px 0 0; padding: 0 0 0 12px; border-left: 3px solid var(--line); white-space: pre-wrap; }

@@ -73,9 +73,10 @@ def stop(proc):
 
 
 async def projects(cx):
-    """The projects besides the default one every cell has (it is never seeded, never deleted)."""
+    """The projects besides the default one (never seeded, never deleted, made only when something
+    has no other project)."""
     everything = (await cx.get(f"{B}/api/projects")).json()["projects"]
-    assert sum(1 for p in everything if p.get("default")) == 1, everything
+    assert sum(1 for p in everything if p.get("default")) <= 1, everything
     return [p for p in everything if not p.get("default")]
 
 

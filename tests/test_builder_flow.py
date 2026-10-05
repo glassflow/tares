@@ -48,6 +48,7 @@ async def main():
     app = make_app()
     async with app.router.lifespan_context(app):
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t")
+        app.state.store.default_project_id()   # made lazily; this test leans on it existing
         default = next(p["id"] for p in (await cx.get("/api/projects")).json()["projects"] if p["default"])
 
         print("== the project first, empty ==")

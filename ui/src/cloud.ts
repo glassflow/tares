@@ -96,10 +96,12 @@ export function slugFromHost(): string {
 /** A link to one of the control plane's connect pages: its URL plus `params`, plus `return`, the
  *  Settings tab to come back to. Built with the URL API, never by concatenation (contract §2). */
 export function cloudLink(base: string, params: Record<string, string>,
-                          tab: "github" | "slack"): string {
+                          tab: "github" | "slack", back?: string): string {
   const u = new URL(base, window.location.href);
   for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
-  u.searchParams.set("return", `${window.location.origin}/settings?tab=${tab}`);
+  // where the person comes back to: the Settings tab by default, or `back` (a path on this
+  // workspace, e.g. /start); the control plane accepts any URL on the workspace's own origin
+  u.searchParams.set("return", `${window.location.origin}${back ?? `/settings?tab=${tab}`}`);
   return u.toString();
 }
 

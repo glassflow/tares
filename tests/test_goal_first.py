@@ -365,10 +365,10 @@ async def main():
         ck("a goal over 200 characters is refused", r.status_code == 400 and "200" in r.text,
            r.text)
         ck("and nothing was created", store.get_project_by_name("Long") is None)
+        default = store.default_project_id()   # made lazily, here on purpose
         listed = {p["id"]: p for p in (await cx.get("/api/projects")).json()["projects"]}
         eq("the list carries it", listed[a].get("goal"),
            "Catch checkout outages early and find the root cause.")
-        default = store.default_project_id()
         ck("the default project has no goal yet", listed[default].get("goal", "x") is None)
         summ = (await cx.get(f"/api/projects/{a}/summary")).json()
         eq("the summary carries it", summ.get("goal"),
