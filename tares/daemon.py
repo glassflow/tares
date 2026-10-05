@@ -3622,8 +3622,12 @@ def make_app() -> FastAPI:
                 setup = store.get_project_setup(uid)
                 if setup is None:
                     return
-                if setup.get("name"):   # the name the person gave stays the name
+                # the name the person gave stays the name of a plan written from the goal; a
+                # change they asked for afterwards ("call it Bar") wins, and becomes their name
+                if setup.get("name") and prev is None:
                     plan["name"] = setup["name"]
+                elif setup.get("name") and plan.get("name"):
+                    setup["name"] = plan["name"]
                 # a secret typed into a new source stays out of the draft (as on every save)
                 setup.update(plan=setup_flow.stored_plan(plan), planning=None, who=plan.get("who"))
                 store.set_project_setup(uid, setup)
@@ -3793,6 +3797,8 @@ def make_app() -> FastAPI:
             if uid in _planning_tasks:
                 _err(ValueError("Tares is planning this project; wait for the plan"), 409)
             setup["plan"] = setup_flow.stored_plan(body["plan"])
+            if setup.get("name") and body["plan"].get("name"):   # renamed on the plan: that is their name now
+                setup["name"] = str(body["plan"]["name"])
             store.set_project_setup(uid, setup)
             return {"ok": True}
         step = body.get("step")

@@ -1020,6 +1020,15 @@ async def main():
         eq("a name too long is refused",
            (await cx.post("/api/setup/drafts", json={"goal": "x", "name": "n" * 81})).status_code,
            400)
+        renamed = copy.deepcopy(st["plan"]); renamed["name"] = "Signups by company"
+        STUB.script = [[("propose_plan", renamed)]]
+        r = await cx.post(f"/api/projects/{named_}/setup/plan",
+                          json={"instruction": "call it Signups by company", "plan": st["plan"]})
+        ck("a change in plain words plans it again (202)", r.status_code == 202, r.text)
+        st = await settled_(named_)
+        eq("a rename asked for afterwards wins over the first name",
+           (st["plan"]["name"], store.get_project(named_)["name"],
+            store.get_project_setup(named_).get("name")), ("Signups by company",) * 3)
         await cx.delete(f"/api/projects/{named_}")
 
         print("== reuse: an agent already on Tares, wired by a second project ==")
