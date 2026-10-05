@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 
 import { api, type AgentLimits, type TracingStatus } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -6,6 +7,7 @@ import { Close } from "../components/icons";
 import { InternalName, Picker, TimeAgo, keyTitle } from "../components/bits";
 import { type Cloud, cloudLink, useCloud } from "../cloud";
 import type { ApiKey, GithubAppTest, GithubCredential, ModelProvider, ModelProviders } from "../types";
+import WorkspaceSettings from "./WorkspaceSettings";
 
 // Four distinct credential concepts, one box each:
 //   · Access     — is this instance open, or does it require a login? (tares up --auth)
@@ -14,8 +16,11 @@ import type { ApiKey, GithubAppTest, GithubCredential, ModelProvider, ModelProvi
 //   · Slack      — the bot token behind slack:// trigger subscriptions (outbound), and the
 //                  signing secret that authenticates the /tares slash command (inbound)
 // The per-source ingest URL is an address, not a secret — it lives on the source page, not here.
-type SettingsTab = "access" | "anthropic" | "agents" | "github" | "slack" | "observability";
+//   · Workspace  (Tares Cloud only) team, plan, storage, credit and delete, held by the control
+//                  plane (TR-375); shown first, and the default tab, when /health has workspace_api_url
+type SettingsTab = "workspace" | "access" | "anthropic" | "agents" | "github" | "slack" | "observability";
 const TABS: { key: SettingsTab; label: string }[] = [
+  { key: "workspace", label: "Workspace" },
   { key: "access", label: "Access and API keys" },
   { key: "anthropic", label: "Model providers" },
   { key: "agents", label: "Agents" },
@@ -47,41 +52,65 @@ export default function Security() {
     const m = CLOUD_BACK[q.get("cloud") ?? ""];
     return m ? { ...m, detail: q.get("cloud_detail") ?? "" } : undefined;
   });
-  const [tab, setTab] = useState<SettingsTab>(() => {
+  // the tab the address or a click asked for; none: Workspace on Tares Cloud, else Access
+  const [picked, setPicked] = useState<SettingsTab | undefined>(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
-    return cloudBack?.tab ?? (TABS.find((x) => x.key === t)?.key ?? "access");
+    return cloudBack?.tab ?? TABS.find((x) => x.key === t)?.key;
   });
-  const [backTab] = useState(tab);   // the tab the cloud message belongs to
+  const [backTab] = useState(picked);   // the tab the cloud message belongs to
   useEffect(() => {   // the message is shown once; a reload starts clean
     const url = new URL(window.location.href);
     if (!url.searchParams.has("cloud") && !url.searchParams.has("cloud_detail")) return;
     url.searchParams.delete("cloud"); url.searchParams.delete("cloud_detail");
-    url.searchParams.set("tab", backTab);
+    if (backTab) url.searchParams.set("tab", backTab);
     window.history.replaceState(null, "", url.toString());
   }, []);
+  // an in-app link to another tab while Settings is open (the switcher's "Workspace settings")
+  const loc = useLocation();
+  const [firstKey] = useState(loc.key);   // the first render already read the address
+  useEffect(() => {
+    if (loc.key === firstKey) return;
+    const t = TABS.find((x) => x.key === new URLSearchParams(loc.search).get("tab"))?.key;
+    if (t) setPicked(t);
+  }, [loc.key, loc.search]);
   const pick = (t: SettingsTab) => {
-    setTab(t);
+    setPicked(t);
     const url = new URL(window.location.href); url.searchParams.set("tab", t);
     window.history.replaceState(null, "", url.toString());
   };
   const cloud = useCloud();
   const slackConnectUrl = cloud.health?.slack_connect_url;
+  const workspaceApiUrl = cloud.health?.workspace_api_url || undefined;
+  // Workspace exists only on Tares Cloud; asked for elsewhere (an old link), Access shows instead.
+  // With no tab asked for, the default waits for /health (Workspace on Tares Cloud, else Access),
+  // so a hard load does not show Access and then jump.
+  const tab: SettingsTab | undefined = workspaceApiUrl ? (picked ?? "workspace")
+    : picked === "workspace" ? (cloud.ready ? "access" : "workspace")
+    : picked ?? (cloud.ready ? "access" : undefined);
+  const tabs = TABS.filter((t) => t.key !== "workspace" || workspaceApiUrl);
   return (
     <>
       <h1>Settings</h1>
-      <p className="subtitle">Who can get in, API keys, model providers, agent limits, GitHub and Slack credentials, and agent tracing.</p>
+      <p className="subtitle">
+        {workspaceApiUrl ? "Your team, plan and storage, API keys, model providers, agent limits, GitHub and Slack, and agent tracing."
+          : "Who can get in, API keys, model providers, agent limits, GitHub and Slack credentials, and agent tracing."}
+      </p>
       <div className="tabs">
-        {TABS.map((t) => (
+        {tab !== undefined && tabs.map((t) => (
           <button key={t.key} className={tab === t.key ? "active" : ""} onClick={() => pick(t.key)}>{t.label}</button>
         ))}
       </div>
-      {cloudBack && tab === backTab && (
+      {cloudBack && (backTab ? tab === backTab : picked === undefined) && (
         <div className={"alert" + (cloudBack.kind ? ` ${cloudBack.kind}` : "")}
              role={cloudBack.kind === "error" ? "alert" : "status"}>
           {cloudBack.kind === "error" && cloudBack.detail ? cloudBack.detail
             : <>{cloudBack.text}{cloudBack.detail && <> {cloudBack.detail}</>}</>}
         </div>
       )}
+      {tab === undefined && <div className="panel"><div className="muted">loading…</div></div>}
+      {tab === "workspace" && (workspaceApiUrl
+        ? <WorkspaceSettings cloud={cloud} apiUrl={workspaceApiUrl} onOpenTab={pick} />
+        : <div className="panel"><div className="muted">loading…</div></div>)}
       {tab === "access" && <><AccessPanel /><ApiKeysPanel /></>}
       {tab === "anthropic" && <ProvidersPanel />}
       {tab === "agents" && <AgentLimitsPanel />}

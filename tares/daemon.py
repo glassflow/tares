@@ -99,6 +99,13 @@ SLACK_CONNECT_URL = os.getenv("TARES_SLACK_CONNECT_URL", "").strip()
 # console's top left becomes a workspace switcher; the console fetches it with the person's
 # control-plane session cookie, the cell never calls it.
 WORKSPACES_URL = os.getenv("TARES_WORKSPACES_URL", "").strip()
+# Cloud only: this workspace's own record in the control plane (TR-375), e.g.
+# {cp}/api/workspaces/acme. Set, Settings gets a Workspace tab (team, plan, storage, credit,
+# delete); the console calls it with the person's control-plane session cookie, the cell never does.
+WORKSPACE_API_URL = os.getenv("TARES_WORKSPACE_API_URL", "").strip()
+# Cloud only: the control plane's sign-out (TR-377). Set, Sign out forgets the workspace key and
+# then goes there, so it ends the Tares Cloud session too. Unset: Sign out as before.
+LOGOUT_URL = os.getenv("TARES_LOGOUT_URL", "").strip()
 # The Anthropic key for the in-app Ask agent (and Tares agents) is resolved at request time via
 # resolve_anthropic_headers(store): Resolve headers from the console-stored key,
 # then ANTHROPIC_AUTH_TOKEN, then ANTHROPIC_API_KEY.
@@ -857,6 +864,10 @@ def make_app() -> FastAPI:
             body["slack_connect_url"] = SLACK_CONNECT_URL
         if WORKSPACES_URL:
             body["workspaces_url"] = WORKSPACES_URL
+        if WORKSPACE_API_URL:
+            body["workspace_api_url"] = WORKSPACE_API_URL
+        if LOGOUT_URL:
+            body["logout_url"] = LOGOUT_URL
         return body
 
     def _resolve_project(ref: str, default: bool = True) -> str | None:

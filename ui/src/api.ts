@@ -57,6 +57,82 @@ export type CloudWorkspacesResult =
   | { status: "signed_out" }   // 401: the control-plane session expired, the cell key still works
   | { status: "unknown" };     // any other answer, or the network failed
 
+/** This workspace as the control plane sees it (Tares Cloud, TR-375): GET workspace_api_url. */
+export type CloudWorkspaceOverview = {
+  slug: string; state: string; plan: string; image_tag: string;
+  storage_gb: number; storage_max_gb: number;
+  storage_used_bytes: number | null; storage_pct_used: number | null; usage_checked_at?: string | null;
+  host: string; role: "owner" | "member" | string;
+  trial?: { state: "active" | "exhausted" | "superseded" | string; spend_usd: number | null; credit_usd: number };
+  you: { email: string; name: string | null };
+  is_default: boolean; default_url: string;
+};
+export type CloudMember = {
+  user_id: string; email: string; name: string | null;
+  role: "owner" | "member" | string; status: "active" | "invited" | string;
+};
+/** A call to the control plane from this workspace: the answer, signed out of Tares Cloud (401),
+ *  or any other failure with the control plane's own `detail` (contract §2). Never throws. */
+export type CloudResult<T> =
+  | { status: "ok"; data: T }
+  | { status: "signed_out" }
+  | { status: "error"; code: number; detail: string };
+
+/** Calls the control plane with the person's Tares Cloud session cookie. Reads send no custom
+ *  header, so they stay simple requests; writes say which workspace asks (X-Tares-Workspace) and,
+ *  with a body, that it is JSON. Never the `request` helper: a 401 here is the control plane's
+ *  session, not this console's key. */
+async function cloudCall<T>(url: string, init?: { method?: string; slug?: string; body?: unknown }): Promise<CloudResult<T>> {
+  const method = init?.method ?? "GET";
+  const headers: Record<string, string> = {};
+  if (method !== "GET") headers["X-Tares-Workspace"] = init?.slug ?? "";
+  if (init?.body !== undefined) headers["Content-Type"] = "application/json";
+  let res: Response;
+  try {
+    res = await fetch(url, { method, credentials: "include", headers,
+                             body: init?.body !== undefined ? JSON.stringify(init.body) : undefined });
+  } catch {
+    return { status: "error", code: 0, detail: "Tares Cloud could not be reached. Try again in a moment." };
+  }
+  if (res.status === 401) return { status: "signed_out" };
+  let body: unknown = null;
+  try { body = await res.json(); } catch { /* an empty or non-JSON body */ }
+  if (!res.ok) {
+    const d = (body as { detail?: unknown } | null)?.detail;
+    const detail = typeof d === "string" ? d
+      : res.status === 404 ? "Only the workspace owner can do that."
+      : `Tares Cloud answered ${res.status}${res.statusText ? ` ${res.statusText}` : ""}.`;
+    return { status: "error", code: res.status, detail };
+  }
+  return { status: "ok", data: body as T };
+}
+
+/** A URL plus one path segment, kept clear of the query string. */
+function cloudPath(base: string, ...segments: string[]): string {
+  const u = new URL(base, window.location.href);
+  u.pathname = [u.pathname.replace(/\/+$/, ""), ...segments.map(encodeURIComponent)].join("/");
+  return u.toString();
+}
+
+export const cloudApi = {
+  overview: (url: string) => cloudCall<CloudWorkspaceOverview>(url),
+  growStorage: (url: string, slug: string, storage_gb: number) =>
+    cloudCall<Partial<CloudWorkspaceOverview>>(url, { method: "PATCH", slug, body: { storage_gb } }),
+  deleteWorkspace: (url: string, slug: string) => {
+    const u = new URL(url, window.location.href);
+    u.searchParams.set("confirm", slug);
+    return cloudCall<{ slug: string; deleted: boolean; next?: string }>(u.toString(), { method: "DELETE", slug });
+  },
+  members: (url: string) => cloudCall<{ members: CloudMember[] }>(cloudPath(url, "members")),
+  invite: (url: string, slug: string, email: string) =>
+    cloudCall<CloudMember>(cloudPath(url, "members"), { method: "POST", slug, body: { email } }),
+  removeMember: (url: string, slug: string, userId: string) =>
+    cloudCall<unknown>(cloudPath(url, "members", userId), { method: "DELETE", slug }),
+  /** Pin this workspace as the one to open after sign-in, or unpin it (null). */
+  setDefault: (defaultUrl: string, slug: string, pin: string | null) =>
+    cloudCall<unknown>(defaultUrl, { method: "PUT", slug, body: { slug: pin } }),
+};
+
 /** A failed call: the daemon's plain message, plus the HTTP status for the few places that act on
  *  it (setup planning says "add a model provider" on a 409). */
 export class ApiError extends Error {
@@ -107,6 +183,8 @@ export const api = {
     github_connect_url?: string;   // cloud only: "Connect GitHub" (the GlassFlow-owned App)
     slack_connect_url?: string;    // cloud only: "Connect Slack" (the control plane's Slack install)
     workspaces_url?: string;       // cloud only: the signed-in person's workspaces, for the switcher
+    workspace_api_url?: string;    // cloud only: this workspace in the control plane (Settings > Workspace)
+    logout_url?: string;           // cloud only: Sign out ends the Tares Cloud session there
     detail?: string; pct_used?: number | null;
   }>("/health"),
   // The control plane's list of the person's workspaces (Tares Cloud). A plain cross-origin GET

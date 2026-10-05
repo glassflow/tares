@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 
 import type { CloudWorkspace } from "../api";
 import { type Cloud, signInLink, slugFromHost } from "../cloud";
@@ -60,6 +61,12 @@ export default function WorkspaceSwitcher({ cloud }: { cloud: Cloud }) {
   }, [open]);
 
   const links = list?.status === "ok" ? list.links : {};
+  // Workspace settings: this workspace's own Settings tab when it has one (TR-379), and then the
+  // control plane's list and account pages are gone; otherwise the control plane's workspace page.
+  const inApp = !!health?.workspace_api_url;
+  const settings = inApp
+    ? <Link className="menu-item" to="/settings?tab=workspace" onClick={() => close(false)}>Workspace settings</Link>
+    : health?.workspace_url ? <a className="menu-item" href={health.workspace_url}>Workspace settings</a> : null;
   const item = (w: CloudWorkspace) => {
     const here = w === current;
     const note = w.is_default ? <span className="ws-note">default</span> : null;
@@ -113,19 +120,17 @@ export default function WorkspaceSwitcher({ cloud }: { cloud: Cloud }) {
             <>
               {list.workspaces.map(item)}
               <div className="menu-sep" role="separator" />
-              {health?.workspace_url && (
-                <a className="menu-item" href={health.workspace_url}>Workspace settings</a>
-              )}
-              {links.all && <a className="menu-item" href={links.all}>All workspaces</a>}
+              {settings}
+              {!inApp && links.all && <a className="menu-item" href={links.all}>All workspaces</a>}
               {links.new && <a className="menu-item" href={links.new}>New workspace</a>}
-              {links.account && <a className="menu-item" href={links.account}>Account</a>}
+              {!inApp && links.account && <a className="menu-item" href={links.account}>Account</a>}
             </>
           )}
           {list?.status !== "ok" && !(list?.status === "signed_out" && health?.login_url)
-            && health?.workspace_url && (
+            && settings && (
             <>
               <div className="menu-sep" role="separator" />
-              <a className="menu-item" href={health.workspace_url}>Workspace settings</a>
+              {settings}
             </>
           )}
         </div>

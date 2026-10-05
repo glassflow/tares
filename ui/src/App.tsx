@@ -3,7 +3,7 @@ import { useProjectName } from "./components/ProjectBadge";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { api, auth } from "./api";
-import { useCloud } from "./cloud";
+import { useCloud, useWorkspaceOverview } from "./cloud";
 import CommandPalette from "./components/CommandPalette";
 import WorkspaceSwitcher from "./components/WorkspaceSwitcher";
 import {
@@ -134,9 +134,12 @@ function Breadcrumbs() {
   );
 }
 
-function signOut() {
+/** Forget this console's key. On Tares Cloud (logout_url set, TR-377) then end the Tares Cloud
+ *  session too, which lands on its sign-in page; self-hosted, back to the login form. */
+function signOut(logoutUrl?: string) {
   auth.clear();
-  window.location.reload();
+  if (logoutUrl) window.location.assign(logoutUrl);
+  else window.location.reload();
 }
 
 function ThemeToggle() {
@@ -161,8 +164,16 @@ export default function App() {
   // sets no TARES_WORKSPACE_URL and never sees it.
   // With TARES_WORKSPACES_URL as well (TR-370), the top left is a workspace switcher and this
   // link moves into it; an older control plane that only sets the workspace URL keeps it here.
+  // With TARES_WORKSPACE_API_URL (TR-375) the workspace is managed in Settings > Workspace, so the
+  // link out goes away whatever else is set.
   const cloud = useCloud();
-  const workspaceUrl = cloud.switcher ? undefined : cloud.health?.workspace_url || undefined;
+  const workspaceUrl = cloud.switcher || cloud.health?.workspace_api_url
+    ? undefined : cloud.health?.workspace_url || undefined;
+  // Tares Cloud: who is signed in, from the control plane's view of this workspace (shared with
+  // Settings, loaded once). Nothing shows while it is unknown.
+  const logoutUrl = cloud.health?.logout_url || undefined;
+  const overview = useWorkspaceOverview(logoutUrl ? cloud.health?.workspace_api_url || undefined : undefined);
+  const email = overview.result?.status === "ok" ? overview.result.data.you?.email : undefined;
   useEffect(() => {
     api.capabilities().then((c) => setVersion(c.version ?? null)).catch(() => {});
   }, []);
@@ -206,8 +217,9 @@ export default function App() {
           </a>
         )}
         <ThemeToggle />
+        {logoutUrl && email && <div className="who" title={`Signed in as ${email}`}>{email}</div>}
         {auth.get() && (
-          <button className="navbtn" onClick={signOut}>
+          <button className="navbtn" onClick={() => signOut(logoutUrl)}>
             <SignOut className="ico" />
             <span className="nav-label">Sign out</span>
           </button>
