@@ -292,18 +292,24 @@ b, strong { font-weight: 600; }
 .brand-word { display: block; line-height: 1.05; }
 .brand small { display: block; font-family: var(--mono); font-size: 10px; color: var(--ink-faint); font-style: normal; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 2px; }
 
-/* Tares Cloud: the brand as a workspace switcher (TR-370). The button sits inside .brand so the
-   brand's spacing (and the h1 alignment it carries) is unchanged; it bleeds 6px each side so the
-   hover wash frames the logo without moving it. */
-.ws-wrap { min-width: 0; }
+/* Tares Cloud: the workspace switcher (TR-370), its own row under the logo, the width of the nav
+   rows. The logo keeps its place; with the switcher the logo's gap moves below the switcher, so
+   Overview and the rest sit a little lower. */
+.sidebar .brand.with-switcher { margin-bottom: 14px; }
+.ws-wrap { min-width: 0; margin: 0 0 26px; }
 button.ws-switch {
   display: flex; align-items: center; gap: 8px;
-  width: calc(100% + 12px); min-width: 0; margin: -4px -6px; padding: 4px 6px;
-  border: none; background: none; color: inherit;
-  font: inherit; font-size: inherit; font-weight: inherit; letter-spacing: inherit;
+  width: 100%; min-width: 0; padding: 7px 10px;
+  border: 1px solid var(--line); border-radius: 0; background: var(--panel); color: var(--ink);
+  font: inherit; font-size: 14px; font-weight: 500;
   text-align: left; cursor: pointer;
 }
-button.ws-switch:hover { background: var(--hover); color: inherit; border: none; }
+button.ws-switch:hover { background: var(--hover); color: var(--ink); border-color: var(--line); }
+button.ws-switch[aria-expanded="true"] { border-color: var(--accent); }
+@media (max-height: 820px) {
+  .sidebar .brand.with-switcher { margin-bottom: 10px; }
+  .ws-wrap { margin-bottom: 18px; }
+}
 .ws-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-chev { width: 14px; height: 14px; color: var(--ink-faint); transform: rotate(90deg);
   transition: transform 0.12s ease; }
