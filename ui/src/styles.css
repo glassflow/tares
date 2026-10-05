@@ -1493,10 +1493,14 @@ pre.payload {
   .ready-action .help { text-align: left; }
 }
 /* what is left of the Start list, one quiet line on Projects (and the demo's "your own" line) */
-.ready-reminder { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 14px; margin-bottom: 16px; border: 1px solid var(--line); background: var(--panel); }
-.ready-reminder-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; flex: 1 1 320px; min-width: 0; }
-.ready-reminder-text { flex: 1 1 200px; min-width: 0; }
+.ready-reminder { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; margin-bottom: 16px; border: 1px solid var(--line); background: var(--panel); font-size: 13px; }
+.ready-reminder-text { color: var(--ink-soft); margin-right: 4px; }
+.ready-reminder .btn, .ready-reminder button { padding: 4px 10px; font-size: 13px; }
+.ready-reminder .help { white-space: normal; }
 .ready-dismiss { margin-left: auto; }
+/* the demo's "make your own" line: a sentence and its one button */
+.ready-reminder-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; flex: 1 1 auto; min-width: 0; }
+.ready-reminder-row .ready-reminder-text { flex: 1 1 200px; color: var(--ink); }
 /* the goal step's name and description (components/setup/goal.tsx) */
 .su-field { display: flex; flex-direction: column; gap: 6px; }
 .su-field label, .su-label { font-weight: 600; }

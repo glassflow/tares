@@ -27,10 +27,9 @@ export type ReadyRow = {
   done: boolean;
   title: string;
   text: string;
-  /** what to do about it: a button, a link, or the reason the person cannot */
-  action?: React.ReactNode;
-  /** the shorter sentence the reminder line on Projects uses */
-  nudge: string;
+  /** what to do about it: a button, a link, or the reason the person cannot. `quiet`: the
+   *  reminder line on Projects, where no button may outshout the page's own Create new */
+  action: (quiet?: boolean) => React.ReactNode;
 };
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
@@ -58,25 +57,23 @@ function modelRow(providers: { id: string; name: string; configured: boolean }[]
   if (trial?.state === "exhausted") {
     return { key: "model", done: false, title: "Add a model provider",
              text: `The included ${usd(trial.credit_usd)} of Anthropic credit is used up. Add your own key so agents keep running.`,
-             action: <Link className="btn primary" to={settings}>Add a key</Link>,
-             nudge: "The included credit is used up; add your own model key so agents keep running." };
+             action: (q) => <Link className={q ? "btn" : "btn primary"} to={settings}>Add a model key</Link> };
   }
   if (trial?.state === "active") {
     return { key: "model", done: true, title: "Model provider ready",
              text: `${usd(trial.credit_usd)} of included Anthropic credit, ${usd(trial.spend_usd ?? 0)} used. Agents and Ask run on it.`,
-             action: <Link className="btn link-btn" to={settings}>Use your own key</Link>, nudge: "" };
+             action: () => <Link className="btn link-btn" to={settings}>Use your own key</Link> };
   }
   const on = providers.filter((p) => p.configured);
   if (on.length) {
     const name = (on.find((p) => p.id === dflt) ?? on[0]).name;
     return { key: "model", done: true, title: "Model provider ready",
              text: `${name}. Agents and Ask run on it.`,
-             action: <Link className="btn link-btn" to={settings}>Change</Link>, nudge: "" };
+             action: () => <Link className="btn link-btn" to={settings}>Change</Link> };
   }
   return { key: "model", done: false, title: "Add a model provider",
            text: "Agents and the planner need one: Anthropic, OpenAI, or any OpenAI-compatible endpoint.",
-           action: <Link className="btn primary" to={settings}>Add a model provider</Link>,
-           nudge: "Add a model provider so agents can run." };
+           action: (q) => <Link className={q ? "btn" : "btn primary"} to={settings}>Add a model provider</Link> };
 }
 
 /** Connect on Tares Cloud (a control-plane link that comes back to `back`), or the Settings tab. */
@@ -97,24 +94,22 @@ function githubRow(accounts: string[], cloud: Cloud, back: string): ReadyRow {
   if (accounts.length) {
     return { key: "github", done: true, title: "GitHub connected",
              text: `${[...new Set(accounts)].join(", ")}. Tares reads your repositories and suggests projects from them.`,
-             action: <Link className="btn link-btn" to="/settings?tab=github">Manage</Link>, nudge: "" };
+             action: () => <Link className="btn link-btn" to="/settings?tab=github">Manage</Link> };
   }
   return { key: "github", done: false, title: "Connect GitHub",
            text: "Tares reads your repositories and suggests a first project from them.",
-           action: connectAction("GitHub", cloud.health?.github_connect_url, cloud, back),
-           nudge: "Connect GitHub so Tares can read your repositories." };
+           action: () => connectAction("GitHub", cloud.health?.github_connect_url, cloud, back) };
 }
 
 function slackRow(configured: boolean, team: string | undefined, cloud: Cloud, back: string): ReadyRow {
   if (configured) {
     return { key: "slack", done: true, title: "Slack connected",
              text: `${team ? `${team}. ` : ""}Agents post what they find to the channels you pick.`,
-             action: <Link className="btn link-btn" to="/settings?tab=slack">Manage</Link>, nudge: "" };
+             action: () => <Link className="btn link-btn" to="/settings?tab=slack">Manage</Link> };
   }
   return { key: "slack", done: false, title: "Connect Slack",
            text: "Agents post what they find to a channel you pick.",
-           action: connectAction("Slack", cloud.health?.slack_connect_url, cloud, back),
-           nudge: "Connect Slack so agents can post what they find." };
+           action: () => connectAction("Slack", cloud.health?.slack_connect_url, cloud, back) };
 }
 
 /** One row of the list: a mark, what it is, and what to do. */
@@ -137,8 +132,8 @@ export function ReadyItem({ done, title, text, action }: {
 const DISMISS_KEY = "tares_ready_dismissed";
 const dismissed = () => { try { return localStorage.getItem(DISMISS_KEY) === "1"; } catch { return false; } };
 
-/** What is left of the list, as one quiet line on Projects. Dismissing it is remembered in this
- *  browser only (a per-viewer convenience). */
+/** What is left of the list, as one quiet line on Projects: a label and one equal-weight button
+ *  per row left. Dismissing it is remembered in this browser only (a per-viewer convenience). */
 export function ReadyReminder() {
   const { rows } = useReadiness("/projects");
   const [hidden, setHidden] = useState(dismissed);
@@ -146,12 +141,8 @@ export function ReadyReminder() {
   if (hidden || !left.length) return null;
   return (
     <div className="ready-reminder" role="status">
-      {left.map((r) => (
-        <div key={r.key} className="ready-reminder-row">
-          <span className="ready-reminder-text">{r.nudge}</span>
-          {r.action}
-        </div>
-      ))}
+      <span className="ready-reminder-text">Still to set up</span>
+      {left.map((r) => <span key={r.key} className="ready-reminder-act">{r.action(true)}</span>)}
       <button type="button" className="dim ready-dismiss"
               onClick={() => { try { localStorage.setItem(DISMISS_KEY, "1"); } catch { /* private mode */ } setHidden(true); }}>
         Dismiss
