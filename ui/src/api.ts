@@ -43,6 +43,7 @@ export type SlackChannels = {
   channels: SlackChannel[];
   reason: null | "no_token" | "missing_scope" | "error";
   detail?: string;
+  stale?: boolean;   // a re-read failed; this is the last good list (detail says why)
 };
 
 /** One workspace in the control plane's list (Tares Cloud). Only `active` ones can be opened. */

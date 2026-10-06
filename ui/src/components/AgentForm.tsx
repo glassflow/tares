@@ -15,7 +15,7 @@ const DURATION_RE = /^\d+(\.\d+)?[smhd]$/;
  *  Opening the row shows an explicit on/off toggle; the fields appear only when it is on. */
 function OptionRow({ title, desc, on, disabled, disabledHint, onToggle, children }: {
   title: string; desc: string; on: boolean;
-  disabled?: boolean; disabledHint?: string;
+  disabled?: boolean; disabledHint?: React.ReactNode;   // what the open row shows while disabled
   onToggle: (on: boolean) => void;
   children?: React.ReactNode;
 }) {
@@ -33,7 +33,7 @@ function OptionRow({ title, desc, on, disabled, disabledHint, onToggle, children
       {open && (
         <div className="opt-body">
           {disabled
-            ? <span className="help">{disabledHint}</span>
+            ? disabledHint
             : (
               <label className="opt-toggle">
                 <input type="checkbox" checked={on} onChange={(e) => onToggle(e.target.checked)} />
@@ -408,7 +408,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
         <OptionRow title="Slack channel"
                    desc="the workspace bot posts the full finding to a channel"
                    on={channelOn} disabled={!slackWorkspace}
-                   disabledHint="connect a workspace bot under Settings to enable this"
+                   disabledHint={<SlackPick value={channel} onChange={setChannel} />}
                    onToggle={setChannelOn}>
           <SlackPick value={channel} onChange={setChannel} />
         </OptionRow>

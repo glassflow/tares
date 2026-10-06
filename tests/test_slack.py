@@ -21,7 +21,7 @@ which) plus the private channels the bot is in (`users.conversations`, private o
 bot no other). The cell caches it, and `POST /api/slack/channels/changed` (admin, like every
 write) drops the cache so a channel Tares was just added to shows up on the next read.
 """
-import asyncio, json, os, signal, subprocess, sys, threading
+import asyncio, json, os, signal, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qsl
 
@@ -62,6 +62,7 @@ MODE = "ok"
 # CH_MODE switches every call to a failure the way MODE does for chat.postMessage.
 GETS: list = []
 CH_MODE = "ok"
+CH_DELAY = 0.0
 PUBLIC_PAGES = {
     "": {"channels": [{"id": "C300", "name": "zeta", "is_channel": True, "is_private": False,
                        "is_member": False, "num_members": 4, "purpose": {"value": "x" * 400}},
@@ -79,9 +80,11 @@ PRIVATE_PAGES = {
 
 
 class Stub(BaseHTTPRequestHandler):
-    def _json(self, out):
+    def _json(self, out, status=200, headers=None):
         raw = json.dumps(out).encode()
-        self.send_response(200)
+        self.send_response(status)
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(raw)))
         self.end_headers()
@@ -98,7 +101,11 @@ class Stub(BaseHTTPRequestHandler):
         path, _, query = self.path.partition("?")
         q = dict(parse_qsl(query))
         GETS.append({"path": path, "query": q, "auth": self.headers.get("authorization", "")})
-        if CH_MODE.startswith("missing_scope"):
+        if CH_DELAY and path.endswith("/users.conversations"):
+            time.sleep(CH_DELAY)          # a slow Slack, so a drop can land mid-read
+        if CH_MODE == "429":
+            self._json({"ok": False, "error": "ratelimited"}, 429, {"Retry-After": "30"})
+        elif CH_MODE.startswith("missing_scope"):
             # "missing_scope:<scope>" lets each phase pick which scope Slack says it wants —
             # with two read scopes in play the detail must echo Slack, not a hardcoded name.
             needed = CH_MODE.partition(":")[2] or "channels:read"
@@ -162,7 +169,7 @@ async def _fire(cx, n=3, tag=""):
 
 
 async def main():
-    global MODE, CH_MODE
+    global MODE, CH_MODE, CH_DELAY
     for p in (DB, DB + ".wal"):
         if os.path.exists(p):
             os.remove(p)
@@ -274,11 +281,40 @@ async def main():
             r = await cx.post(f"{B}/api/slack/channels/changed")
             ck("a bare POST (no body) is accepted too", r.status_code == 200, r.text)
 
+            # ── a drop that lands while a read is in flight ──────────────────
+            # The read started before the change, so its answer may predate it: it goes back to
+            # its caller but is not kept, and the next read asks Slack again.
+            await cx.post(f"{B}/api/slack/channels/changed", json={})
+            CH_DELAY = 1.0
+            slow = asyncio.create_task(cx.get(f"{B}/api/slack/channels"))
+            await asyncio.sleep(0.4)
+            await cx.post(f"{B}/api/slack/channels/changed", json={})
+            r = await slow
+            CH_DELAY = 0.0
+            ck("a read overtaken by a drop still answers its caller",
+               r.status_code == 200 and len(r.json().get("channels") or []) == 4, r.text[:200])
+            GETS.clear()
+            await cx.get(f"{B}/api/slack/channels")
+            ck("...but is not kept: the next read asks Slack again", len(GETS) == 3, str(GETS))
+
+            # ── a failed re-read keeps the last good list ────────────────────
+            CH_MODE = "invalid_auth"
+            await cx.post(f"{B}/api/slack/channels/changed", json={})
+            ch = (await cx.get(f"{B}/api/slack/channels")).json()
+            ck("a failed re-read serves the last good list, marked stale",
+               ch.get("reason") is None and ch.get("stale") is True
+               and len(ch.get("channels") or []) == 4, str(ch))
+            ck("...and says what went wrong", "invalid_auth" in str(ch.get("detail") or ""), str(ch))
+
+            async def _fresh():
+                # a token write forgets the last good list (it may belong to another Slack)
+                await cx.put(f"{B}/api/settings/slack-bot-token", json={"token": TOKEN})
+
             # ── the important failure: a token predating the read scopes ──
             # Every existing install has one. The console says "Reconnect Slack" on this reason,
             # so it must be told apart from a generic error.
             CH_MODE = "missing_scope:channels:read"
-            await cx.post(f"{B}/api/slack/channels/changed", json={})
+            await _fresh()
             r = await cx.get(f"{B}/api/slack/channels")
             ch = r.json()
             ck("a token without channels:read is still a 200", r.status_code == 200, r.text)
@@ -297,7 +333,7 @@ async def main():
             # Two scopes are in play now, so the detail must echo whichever one Slack names; a
             # hardcoded "channels:read" would send the operator to grant the scope they already have.
             CH_MODE = "missing_scope:groups:read"
-            await cx.post(f"{B}/api/slack/channels/changed", json={})
+            await _fresh()
             ch = (await cx.get(f"{B}/api/slack/channels")).json()
             detail = str(ch.get("detail") or "")
             ck("missing groups:read is reported as groups:read, not channels:read",
@@ -305,13 +341,28 @@ async def main():
                and "channels:read" not in detail, detail)
 
             CH_MODE = "invalid_auth"
-            await cx.post(f"{B}/api/slack/channels/changed", json={})
+            await _fresh()
             ch = (await cx.get(f"{B}/api/slack/channels")).json()
             ck("any other Slack failure is reason=error with a readable detail",
                ch.get("reason") == "error" and "invalid_auth" in str(ch.get("detail") or "")
                and ch.get("channels") == [], str(ch))
+
+            # ── rate limited: Slack's Retry-After is honoured ────────────────
+            CH_MODE = "429"
+            await _fresh()
+            ch = (await cx.get(f"{B}/api/slack/channels")).json()
+            ck("a 429 is reason=error and says to wait",
+               ch.get("reason") == "error" and "rate limited" in str(ch.get("detail") or "")
+               and "30s" in str(ch.get("detail") or ""), str(ch))
             CH_MODE = "ok"
-            await cx.post(f"{B}/api/slack/channels/changed", json={})
+            await asyncio.sleep(5.5)
+            GETS.clear()
+            ch = (await cx.get(f"{B}/api/slack/channels")).json()
+            ck("...and Slack is not asked again before Retry-After (30s) is up",
+               not GETS and ch.get("reason") == "error", f"{GETS} {ch}")
+            await _fresh()
+            ch = (await cx.get(f"{B}/api/slack/channels")).json()
+            ck("a token write starts over", ch.get("reason") is None, str(ch))
 
             # ── subscribing a channel ────────────────────────────────────────
             r = await cx.post(f"{B}/subscribe", json={"trigger": "incident", "url": "slack://channel/not a channel!"})

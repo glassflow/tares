@@ -34,16 +34,17 @@ project's goal right under it.
 - `POST /api/slack/channels/changed` (admin; body `{"event", "channel"}`, both optional): drops
   the cell's cached channel list, so the next read asks Slack again. Tares Cloud calls it when
   Slack reports a channel joined, created, renamed or archived.
-- `/tares ask <workspace> <question>`: when the first word after `ask` is this workspace's name
-  (the first part of the address Slack's request came to), it is dropped from the question. This
-  is how Tares Cloud asks which workspace when one Slack is linked to several; a self-hosted or
-  single-workspace `/tares ask` is unchanged.
+- `/tares ask <workspace> <question>`: on Tares Cloud, when the first word after `ask` is this
+  workspace's name (the `workspace` parameter of `TARES_SLACK_CONNECT_URL`), it is dropped from
+  the question. This is how Tares Cloud asks which workspace when one Slack is linked to several.
+  Without `TARES_SLACK_CONNECT_URL` (self-hosted) nothing is dropped.
 
 ### Changed
 - `GET /api/slack/channels` lists every public channel of the connected Slack, not only the ones
   Tares was added to, plus the private channels Tares is in. Each channel carries `is_member`
-  next to `is_private`. The cell keeps the list for a minute (a failed read for a few seconds),
-  and the picker reads it again every few seconds while it is on screen, when the window regains
+  next to `is_private`. The cell keeps the list for a minute, a failed read for a few seconds or
+  as long as Slack's Retry-After asks. When a re-read fails, the last good list is served with
+  `stale: true` instead of an error, and the picker keeps showing it. The picker reads the list again every few seconds while it is on screen, when the window regains
   focus and when the dropdown opens, so a channel Tares was just added to appears without a
   reload.
 - No screen asks for a Slack channel ID any more. When there is nothing to pick from, the picker

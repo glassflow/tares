@@ -172,15 +172,13 @@ def _stop(proc):
 def pure_checks():
     """parse_command and workspace_slug on their own, no daemon."""
     from tares.slack import parse_command, workspace_slug
-    ck("slug: the first label of a workspace host",
-       workspace_slug("glassflow-web.tares-glassflow.com") == "glassflow-web")
-    ck("slug: a port does not get in the way",
-       workspace_slug("acme.tares-glassflow.com:443") == "acme")
-    ck("slug: none for localhost, an IP or an empty Host",
-       workspace_slug("localhost:8000") is None and workspace_slug("10.0.0.7:8000") is None
-       and workspace_slug("[::1]:8000") is None and workspace_slug("") is None)
-    ck("parse: no workspace, unchanged",
-       parse_command("ask acme what broke") == ("acme what broke", None))
+    ck("slug: the workspace parameter of the connect URL",
+       workspace_slug("https://console.test/slack/install?workspace=glassflow-web") == "glassflow-web")
+    ck("slug: none self-hosted (no connect URL) or without the parameter",
+       workspace_slug("") is None and workspace_slug(None) is None
+       and workspace_slug("https://console.test/slack/install") is None)
+    ck("parse: no workspace (self-hosted), unchanged",
+       parse_command("ask acme what broke", workspace_slug("")) == ("acme what broke", None))
     ck("parse: the slug after ask is dropped",
        parse_command("ask acme what broke", "acme") == ("what broke", None))
     ck("parse: a bare /tares <question> is not touched",
@@ -199,7 +197,8 @@ async def main():
     base_env = {**os.environ, "TARES_DB": DB, "TARES_CATALOG": SEED, "TARES_PORT": PORT,
                 "TARES_OTLP_GRPC_PORT": "off",
                 "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{STUB_PORT}"}
-    for k in ("TARES_SLACK_SIGNING_SECRET", "TARES_AUTH_TOKEN", "ANTHROPIC_API_KEY"):
+    for k in ("TARES_SLACK_SIGNING_SECRET", "TARES_AUTH_TOKEN", "ANTHROPIC_API_KEY",
+              "TARES_SLACK_CONNECT_URL"):
         base_env.pop(k, None)
 
     # ── phase 1: no signing secret configured — 503, never 200 ──────────────
@@ -247,7 +246,8 @@ async def main():
 
     # ── phase 2: signed, keyed, capped ──────────────────────────────────────
     env2 = {**base_env, "TARES_SLACK_SIGNING_SECRET": SECRET, "ANTHROPIC_API_KEY": "sk-test",
-            "TARES_SLACK_DAILY_CAP": "2"}
+            "TARES_SLACK_DAILY_CAP": "2",
+            "TARES_SLACK_CONNECT_URL": "https://console.test/slack/install?workspace=glassflow-web"}
     proc = _spawn(env2)
     try:
         if not await _wait(f"{B}/health"):
@@ -363,21 +363,21 @@ async def main():
                str(rep)[:200])
 
             # ── /tares ask <workspace> <question> (TR-394) ────────────────────
-            # Tares Cloud forwards the text as typed when one Slack has several workspaces; the
-            # Host it calls is <slug>.<cell domain>, so the cell drops the word that is its slug.
-            host = "glassflow-web.tares-glassflow.com"
-            q = await asked(cx, "ask glassflow-web what failed today", host, "U3")
+            # Tares Cloud forwards the text as typed when one Slack has several workspaces. This
+            # daemon runs with TARES_SLACK_CONNECT_URL=...?workspace=glassflow-web, the slug the
+            # cell drops; the request's Host plays no part.
+            q = await asked(cx, "ask glassflow-web what failed today", None, "U3")
             ck("the workspace word is dropped when it is this workspace's slug",
                q == "what failed today", repr(q))
-            q = await asked(cx, "ask Glassflow-Web what failed today", host, "U4")
+            q = await asked(cx, "ask Glassflow-Web what failed today", None, "U4")
             ck("...whatever its case", q == "what failed today", repr(q))
-            q = await asked(cx, "ask glassflow what failed today", host, "U5")
+            q = await asked(cx, "ask glassflow what failed today", None, "U5")
             ck("a first word that only resembles the slug stays in the question",
                q == "glassflow what failed today", repr(q))
-            q = await asked(cx, "ask glassflow-web what failed today", None, "U6")
-            ck("without a workspace host (127.0.0.1) the question is untouched",
-               q == "glassflow-web what failed today", repr(q))
-            r = await slash(cx, "ask glassflow-web", host=host, user="U7")
+            q = await asked(cx, "ask acme what failed today", "acme.tares-glassflow.com", "U6")
+            ck("the Host does not name the workspace: another slug in it strips nothing",
+               q == "acme what failed today", repr(q))
+            r = await slash(cx, "ask glassflow-web", user="U7")
             ck("the slug alone is no question: usage", "ask what?" in r.text, r.text[:200])
             REPLIES.clear()
 

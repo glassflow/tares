@@ -152,7 +152,7 @@ def _bypass_cooldown(request: Request) -> bool:
 
 SLACK_EVENTS_PATH = "/api/slack/events"
 SLACK_CHANNELS_TTL = 60.0         # seconds a good channel list is served from the cell
-SLACK_CHANNELS_FAIL_TTL = 5.0     # ... and a failed one, so Try again soon asks Slack again
+SLACK_CHANNELS_FAIL_TTL = 5.0     # ... and a failed one at least (longer on a 429's Retry-After)
 
 # Where GitHub sends the browser back during "Create GitHub App" and after an install. A redirect
 # carries no Tares token, so these two GETs are public to the auth middleware. The creation callback
@@ -2854,7 +2854,7 @@ def make_app() -> FastAPI:
             _err(ValueError("that does not look like a Slack bot token; it should start with "
                             "'xoxb-' (OAuth & Permissions → Bot User OAuth Token)"))
         store.set_setting(SLACK_TOKEN_SETTING, token)
-        _drop_channels_cache()
+        _drop_channels_cache(forget=True)
         _, origin = resolve_slack_token(store)
         return {"ok": True, "source": origin,
                 **({"note": "an environment token takes precedence and is still in use"}
@@ -2863,7 +2863,7 @@ def make_app() -> FastAPI:
     @app.delete("/api/settings/slack-bot-token")
     async def clear_slack_token():
         store.set_setting(SLACK_TOKEN_SETTING, None)
-        _drop_channels_cache()
+        _drop_channels_cache(forget=True)
         token, origin = resolve_slack_token(store)
         return {"ok": True, "configured": bool(token), "source": origin}
 
@@ -2878,13 +2878,25 @@ def make_app() -> FastAPI:
     #
     # Cached in the cell: an open picker re-reads every few seconds, and conversations.list is
     # rate limited per workspace. A good list is kept a minute, a failure a few seconds (so Try
-    # again soon asks Slack again). POST /api/slack/channels/changed drops it when Slack says a
-    # channel changed, so a channel Tares was just added to shows up within one poll.
-    _channels_cache: dict = {}            # token -> (expires_at, response)
+    # again soon asks Slack again), or as long as Slack's Retry-After says on a 429. When a re-read
+    # fails while a good list is known, that list is served with `stale: true` rather than an
+    # error: a picker that worked a minute ago must not turn into "Slack did not answer".
+    # POST /api/slack/channels/changed drops it when Slack says a channel changed, so a channel
+    # Tares was just added to shows up within one poll.
+    #
+    # `gen` counts the drops. A read captures it before asking Slack and stores its answer only if
+    # no drop came in meanwhile; otherwise that answer predates the change and would hide it for
+    # a minute. It still goes back to the caller that asked, just not into the cache.
+    _channels = {"token": "", "expires": 0.0, "resp": None, "good": None, "gen": 0}
     _channels_lock = asyncio.Lock()       # one Slack read at a time; pickers poll together
 
-    def _drop_channels_cache() -> None:
-        _channels_cache.clear()
+    def _drop_channels_cache(forget: bool = False) -> None:
+        """Make the next read ask Slack. `forget` also drops the last good list (the token
+        changed, so that list may belong to another Slack)."""
+        _channels["gen"] += 1
+        _channels["expires"] = 0.0
+        if forget:
+            _channels.update(token="", resp=None, good=None)
 
     @app.get("/api/slack/channels")
     async def list_slack_channels():
@@ -2892,20 +2904,27 @@ def make_app() -> FastAPI:
         if not token:
             return {"channels": [], "reason": "no_token"}
         async with _channels_lock:
-            hit = _channels_cache.get(token)
-            if hit and hit[0] > time.monotonic():
-                return hit[1]
+            if _channels["token"] != token:      # not the token the kept list was read with
+                _channels.update(token=token, expires=0.0, resp=None, good=None)
+            if _channels["resp"] is not None and _channels["expires"] > time.monotonic():
+                return _channels["resp"]
+            gen = _channels["gen"]
             try:
-                channels, reason, detail = await slack_mod.list_channels(token)
+                channels, reason, detail, retry = await slack_mod.list_channels(token)
             except Exception as e:                  # belt and braces: list_channels swallows too
-                channels, reason, detail = [], "error", f"{type(e).__name__}: {e}"[:200]
-            out = {"channels": channels, "reason": reason}
-            if detail:
-                out["detail"] = detail
-            _channels_cache.clear()                 # one token at a time; an old one's list goes
-            _channels_cache[token] = (time.monotonic()
-                                      + (SLACK_CHANNELS_TTL if reason is None
-                                         else SLACK_CHANNELS_FAIL_TTL), out)
+                channels, reason, detail, retry = [], "error", f"{type(e).__name__}: {e}"[:200], None
+            if reason is None:
+                out = {"channels": channels, "reason": None}
+                ttl = SLACK_CHANNELS_TTL
+            else:
+                good = _channels["good"]
+                out = ({**good, "stale": True, **({"detail": detail} if detail else {})} if good
+                       else {"channels": [], "reason": reason, **({"detail": detail} if detail else {})})
+                ttl = max(SLACK_CHANNELS_FAIL_TTL, retry or 0.0)
+            if _channels["gen"] == gen and _channels["token"] == token:
+                _channels.update(expires=time.monotonic() + ttl, resp=out)
+                if reason is None:
+                    _channels["good"] = out
             return out
 
     @app.post("/api/slack/channels/changed")
@@ -2950,6 +2969,7 @@ def make_app() -> FastAPI:
     # The only route in this daemon that is public to the auth middleware AND accepts a body from
     # the internet, so it carries its own authentication: an HMAC over the raw bytes.
     _ask_cap = slack_mod.AskCap()
+    _slack_workspace = slack_mod.workspace_slug(SLACK_CONNECT_URL)   # None self-hosted
     _ask_tasks: set = set()      # keeps background tasks referenced; asyncio only holds weak refs
 
     async def _slack_respond(response_url: str, body: dict) -> None:
@@ -3057,10 +3077,9 @@ def make_app() -> FastAPI:
             return Response(status_code=200)
         response_url = (form.get("response_url") or "").strip()
         thread_ts = (form.get("thread_ts") or "").strip() or None
-        # The Host names this workspace on Tares Cloud (<slug>.<cell domain>): with several
-        # workspaces on one Slack, `/tares ask <slug> …` arrives here as typed.
-        question, problem = slack_mod.parse_command(
-            form.get("text", ""), slack_mod.workspace_slug(request.headers.get("host")))
+        # With several workspaces on one Slack, Tares Cloud forwards `/tares ask <slug> …` as typed;
+        # the slug comes from the connect URL it gave this cell, never from the request.
+        question, problem = slack_mod.parse_command(form.get("text", ""), _slack_workspace)
         if problem:
             return slack_mod.build_error(problem, thread_ts)
         if not response_url:

@@ -254,11 +254,20 @@ _CHANNEL_MAX_PAGES = 10          # per listing: 2000 channels; past that a picke
 
 
 class _ListFailed(Exception):
-    """One listing failed; carries the `(reason, detail)` list_channels returns."""
+    """One listing failed; carries the `(reason, detail, retry_after)` list_channels returns."""
 
-    def __init__(self, reason: str, detail: str):
+    def __init__(self, reason: str, detail: str, retry_after: float | None = None):
         super().__init__(detail)
-        self.reason, self.detail = reason, detail
+        self.reason, self.detail, self.retry_after = reason, detail, retry_after
+
+
+def _retry_after(r: httpx.Response) -> float | None:
+    """Slack's Retry-After on a 429, in seconds; None when absent or unreadable."""
+    try:
+        v = float(r.headers.get("retry-after", ""))
+    except ValueError:
+        return None
+    return v if v >= 0 else None
 
 
 async def _list_pages(cx: httpx.AsyncClient, method: str, params: dict, headers: dict) -> list[dict]:
@@ -272,7 +281,13 @@ async def _list_pages(cx: httpx.AsyncClient, method: str, params: dict, headers:
             data = r.json()
         except Exception:
             data = None
-        if r.status_code == 429 or r.status_code >= 500:
+        if r.status_code == 429:
+            # conversations.list is Tier 2 (about 20 a minute per workspace); Slack says how long
+            # to wait, and asking again sooner only extends the wait
+            wait = _retry_after(r)
+            raise _ListFailed("error", "slack: rate limited (HTTP 429)"
+                              + (f", try again in {wait:.0f}s" if wait is not None else ""), wait)
+        if r.status_code >= 500:
             raise _ListFailed("error", f"slack: HTTP {r.status_code}")
         if not isinstance(data, dict):
             raise _ListFailed("error", f"slack: HTTP {r.status_code} (non-JSON response)")
@@ -297,8 +312,9 @@ async def _list_pages(cx: httpx.AsyncClient, method: str, params: dict, headers:
 
 
 async def list_channels(token: str, timeout: float = 10.0
-                        ) -> tuple[list[dict], str | None, str | None]:
-    """`(channels, reason, detail)`: every public channel, plus the private ones the bot is in.
+                        ) -> tuple[list[dict], str | None, str | None, float | None]:
+    """`(channels, reason, detail, retry_after)`: every public channel, plus the private ones the
+    bot is in. `retry_after` is the seconds Slack asked to wait on a 429, else None.
 
     Two listings. `conversations.list` with `public_channel` gives every unarchived public channel
     of the workspace, the bot a member or not: a person picking where something should go expects
@@ -319,7 +335,7 @@ async def list_channels(token: str, timeout: float = 10.0
     before `channels:read`/`groups:read` were requested has it, and the only fix is reconnecting.
     """
     if not (token or "").strip():
-        return [], "no_token", None
+        return [], "no_token", None, None
     headers = {"authorization": f"Bearer {token.strip()}"}
     base = {"exclude_archived": "true", "limit": str(_CHANNEL_PAGE)}
     try:
@@ -329,10 +345,10 @@ async def list_channels(token: str, timeout: float = 10.0
             private = await _list_pages(cx, "users.conversations",
                                         {**base, "types": "private_channel"}, headers)
     except _ListFailed as f:
-        return [], f.reason, f.detail
+        return [], f.reason, f.detail, f.retry_after
     except Exception as e:
         return [], "error", ("slack: " + type(e).__name__
-                             + (f": {e}" if str(e).strip() else ""))[:200]
+                             + (f": {e}" if str(e).strip() else ""))[:200], None
     seen: dict[str, dict] = {}
     for c, member in [(c, None) for c in public] + [(c, True) for c in private]:
         if not (c.get("id") and c.get("name")):
@@ -344,7 +360,7 @@ async def list_channels(token: str, timeout: float = 10.0
                               "is_private": bool(c.get("is_private")) or member is True,
                               "is_member": True if member else bool(c.get("is_member"))}
     out = sorted(seen.values(), key=lambda c: (c["name"], c["id"]))
-    return out, None, None
+    return out, None, None, None
 
 
 # ── inbound: the /tares slash command ─────────────────────────────────────
@@ -390,7 +406,7 @@ def parse_command(text: str, workspace: str | None = None) -> tuple[str, str | N
     the same thing — forgetting the subcommand is the overwhelmingly likely mistake, and answering
     it beats a lecture. Empty, or `help`, gets the usage line; nothing gets a stack trace.
 
-    `workspace` is this instance's slug, when it has one (see `workspace_slug`). When one Slack
+    `workspace` is this instance's slug on Tares Cloud (see `workspace_slug`). When one Slack
     workspace is linked to several Tares workspaces, Tares Cloud asks for
     `/tares ask <workspace> <question>` and forwards the text unchanged (the signature covers it),
     so the first word after `ask` is dropped when it is exactly this slug. Anything else is part
@@ -410,18 +426,18 @@ def parse_command(text: str, workspace: str | None = None) -> tuple[str, str | N
     return text, None
 
 
-def workspace_slug(host: str | None) -> str | None:
-    """The first label of the request's Host, `glassflow-web` for
-    `glassflow-web.tares-glassflow.com`; None for a bare name or an IP address, which name no
-    workspace (`localhost:8000`, `10.0.0.7`)."""
-    host = (host or "").strip().lower()
-    if host.startswith("["):
-        return None                                # an IPv6 literal
-    host = host.split(":", 1)[0]
-    first, dot, _ = host.partition(".")
-    if not dot or not first or first.isdigit():
+def workspace_slug(connect_url: str | None) -> str | None:
+    """This workspace's slug on Tares Cloud: the `workspace` query parameter of
+    TARES_SLACK_CONNECT_URL, which the control plane sets to
+    `<console>/slack/install?workspace=<slug>`. None when it is unset (self-hosted) or carries no
+    such parameter, and then `/tares ask` strips nothing."""
+    from urllib.parse import parse_qs, urlsplit
+    try:
+        vals = parse_qs(urlsplit((connect_url or "").strip()).query).get("workspace") or []
+    except ValueError:
         return None
-    return first
+    slug = (vals[0] if vals else "").strip()
+    return slug or None
 
 
 _MD_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")

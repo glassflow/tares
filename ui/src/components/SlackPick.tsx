@@ -10,6 +10,9 @@ import { api, type SlackChannel, type SlackChannels } from "../api";
 // channel changed, so a channel Tares was just added to shows up within one poll.
 const POLL_MS = 5000;
 let shared: SlackChannels | undefined;
+// A failed poll never replaces a good list already on screen: the open dropdown, its search text
+// and the choice stay put, and the next poll tries again. The failure is said only when there has
+// never been a good list. Not connected and a missing scope are answers, not failures: they show.
 let inflight: Promise<void> | null = null;
 let timer: ReturnType<typeof setInterval> | undefined;
 const listeners = new Set<(s: SlackChannels) => void>();
@@ -18,7 +21,10 @@ function readChannels(): Promise<void> {
   if (inflight) return inflight;
   inflight = api.slackChannels()
     .then((s) => s, (e) => ({ channels: [], reason: "error", detail: String((e as Error).message ?? e) }) as SlackChannels)
-    .then((s) => { shared = s; listeners.forEach((fn) => fn(s)); })
+    .then((s) => {
+      if (s.reason === "error" && shared?.reason === null) s = { ...shared, stale: true, detail: s.detail };
+      shared = s; listeners.forEach((fn) => fn(s));
+    })
     .finally(() => { inflight = null; });
   return inflight;
 }
