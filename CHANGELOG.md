@@ -6,6 +6,14 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Richer schedule summary (TR-400): a schedule trigger can hand its agent more than the counts
+  per label. `condition.summary` (or "Richer summary" on the trigger form) turns on, each on its
+  own: every other label counted per entity (`by_entity`, so a 401 spike arrives tied to the
+  service), the usual value and how much it varies over the last N windows with a z score
+  (`baseline`), a volume floor (`min_count`), avg and max of numeric fields per entity
+  (`numbers`), sample lines for what moved most instead of the newest lines (`examples`), and the
+  newest earlier finding on the entities in the window (`findings`). `"rich"` is the defaults.
+  Bounded whatever the volume. Without it the summary is the same as before.
 - Decision models (TR-324, TR-381): a watcher agent can be judged by a System One decision model
   instead of a chat model. Each run asks the model two typed questions about the window it was
   handed: how likely it is that something needs a closer look (the agent's prompt says what

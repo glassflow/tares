@@ -219,6 +219,17 @@ export interface TriggerCondition {
   // a schedule instead of a condition (TR-320): fire every interval, summarized by these labels
   every?: string;
   summary_by?: string[];
+  summary?: SummaryOptions | "rich";   // what else the summary carries (TR-400)
+}
+
+// A schedule summary's extras (TR-400); each off unless set.
+export interface SummaryOptions {
+  by_entity?: boolean;   // each other label counted per entity too
+  baseline?: number;     // windows of history: usual value and spread, z
+  min_count?: number;    // values under this in both windows (and usually) are left out
+  numbers?: string[];    // numeric fields: avg and max per entity
+  examples?: number;     // sample lines per value that moved most
+  findings?: string;     // how far back to look for earlier findings, e.g. 6h
 }
 
 // A trigger reads its own sources (members of its project), narrowed by filters, grouped by the

@@ -11,7 +11,7 @@ import re
 import secrets
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import duckdb
 
@@ -1293,6 +1293,64 @@ class Store:
             gvals, val = r[:len(gexprs)], r[-1]
             key = gvals[0] if isinstance(group_by, str) else tuple(gvals)
             out[key] = val if val is not None else 0.0
+        return out
+
+    def bucket_counts(self, sources: list[str], group_by, start: datetime, bucket_seconds: float,
+                      buckets: int, filters: list | None = None,
+                      scope: dict | None = None) -> dict:
+        """{group: [count per bucket]} over `buckets` consecutive windows of `bucket_seconds` from
+        `start`, oldest first, in one query: the history a summary's baseline is read from
+        (TR-400). `group_by` as in `aggregate`; a group missing from a bucket counts 0 there."""
+        names = [group_by] if isinstance(group_by, str) else list(group_by)
+        gexprs = [_label_expr(n) for n in names]
+        ph = ", ".join(["?"] * len(sources))
+        fsql, fparams = _filter_sql(filters)
+        ssql, sparams = _scope_sql(scope)
+        sel_g = ", ".join(f"{e} AS g{i}" for i, e in enumerate(gexprs))
+        grp_g = ", ".join(f"g{i}" for i in range(len(gexprs)))
+        having = " AND ".join(f"g{i} IS NOT NULL" for i in range(len(gexprs)))
+        end = start + timedelta(seconds=bucket_seconds * buckets)
+        t0 = start.timestamp()
+        with self._lock:
+            rows = self.con.execute(
+                f"SELECT {sel_g}, CAST(FLOOR((epoch(event_time) - ?) / ?) AS INTEGER) AS b, "
+                f"COUNT(*) FROM events WHERE source IN ({ph}) AND event_time >= ? "
+                f"AND event_time < ?{fsql}{ssql} GROUP BY {grp_g}, b HAVING {having}",
+                [t0, float(bucket_seconds), *sources, start, end, *fparams, *sparams],
+            ).fetchall()
+        out: dict = {}
+        for r in rows:
+            gvals, b, n = r[:len(gexprs)], r[-2], r[-1]
+            if b is None or not 0 <= b < buckets:
+                continue
+            key = gvals[0] if isinstance(group_by, str) else tuple(gvals)
+            out.setdefault(key, [0] * buckets)[b] = int(n)
+        return out
+
+    def recent_findings(self, source: str, keys: list[str], since: datetime,
+                        project: str | None = None) -> dict:
+        """{key: the newest finding payload} recorded for any of `keys` since `since`, any agent;
+        with `project`, only those recorded in that project (TR-400)."""
+        keys = [str(k) for k in keys if k not in (None, "")]
+        if not keys:
+            return {}
+        ph = ", ".join(["?"] * len(keys))
+        with self._lock:
+            rows = self.con.execute(
+                f"SELECT key_value, event_time, payload FROM events WHERE source = ? "
+                f"AND key_value IN ({ph}) AND event_time >= ? ORDER BY event_time DESC",
+                [source, *keys, since]).fetchall()
+        out: dict = {}
+        for k, t, pj in rows:
+            if k in out:
+                continue
+            try:
+                p = json.loads(pj) if pj else {}
+            except (TypeError, ValueError):
+                continue
+            if project and p.get("project") and p.get("project") != project:
+                continue
+            out[k] = {**p, "at": t}
         return out
 
     # ── cursors (incremental connectors) ──────────────────────────────────────
