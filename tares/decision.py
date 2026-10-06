@@ -230,7 +230,8 @@ def probability(answer) -> float | None:
     if isinstance(answer, (int, float)):
         return float(answer)
     if isinstance(answer, dict):
-        for k in ("probability", "p", "true", "value", "score"):
+        # Workers AI (Clef) answers {"type": "noul", "noul": 0.90}
+        for k in ("noul", "probability", "p", "true", "value", "score"):
             if isinstance(answer.get(k), (int, float)) and not isinstance(answer.get(k), bool):
                 return float(answer[k])
         probs = answer.get("probabilities")

@@ -125,6 +125,7 @@ def unit_checks():
     check("above the threshold but no entity: no_op", c["outcome"] == "no_op" and not s["escalate"])
     c, s = dm.outcome({"problem": {"probabilities": {"true": 0.7, "false": 0.3}}}, settings,
                       "service", {}, "checkout")
+    check("the Workers AI noul shape reads", dm.probability({"type": "noul", "noul": 0.9003}) == 0.9003)
     check("a trigger that fired on one entity: that entity",
           c["outcome"] == "finding" and c["key"] == "checkout")
     try:
