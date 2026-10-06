@@ -118,9 +118,24 @@ async def post_raw(cx, body: bytes, headers: dict, url: str = f"{B}/api/slack/ev
     return await cx.post(url, content=body, headers=headers)
 
 
-async def slash(cx, text, **kw):
+async def slash(cx, text, host: str | None = None, **kw):
     body = command_body(text, **{k: v for k, v in kw.items() if k in ("user", "thread_ts", "response_url")})
-    return await post_raw(cx, body, signed_headers(body, "application/x-www-form-urlencoded"))
+    hdr = signed_headers(body, "application/x-www-form-urlencoded")
+    return await post_raw(cx, body, {**hdr, **({"host": host} if host else {})})
+
+
+async def asked(cx, text, host: str | None, user: str) -> str:
+    """Send one command and return what reached the model as the question ("" if nothing did)."""
+    before = len(MODEL_CALLS)
+    r = await slash(cx, text, host=host, user=user)
+    if r.json().get("response_type") == "ephemeral" and "asking Tares" not in r.text:
+        return ""
+    await _until(lambda: len(MODEL_CALLS) > before)
+    if len(MODEL_CALLS) <= before:
+        return ""
+    msgs = MODEL_CALLS[before].get("messages") or []
+    first = msgs[0].get("content") if msgs else ""
+    return first if isinstance(first, str) else json.dumps(first)
 
 
 async def _wait(url, tries=80):
@@ -154,7 +169,26 @@ def _stop(proc):
     except Exception: proc.kill()
 
 
+def pure_checks():
+    """parse_command and workspace_slug on their own, no daemon."""
+    from tares.slack import parse_command, workspace_slug
+    ck("slug: the first label of a workspace host",
+       workspace_slug("glassflow-web.tares-glassflow.com") == "glassflow-web")
+    ck("slug: a port does not get in the way",
+       workspace_slug("acme.tares-glassflow.com:443") == "acme")
+    ck("slug: none for localhost, an IP or an empty Host",
+       workspace_slug("localhost:8000") is None and workspace_slug("10.0.0.7:8000") is None
+       and workspace_slug("[::1]:8000") is None and workspace_slug("") is None)
+    ck("parse: no workspace, unchanged",
+       parse_command("ask acme what broke") == ("acme what broke", None))
+    ck("parse: the slug after ask is dropped",
+       parse_command("ask acme what broke", "acme") == ("what broke", None))
+    ck("parse: a bare /tares <question> is not touched",
+       parse_command("acme what broke", "acme") == ("acme what broke", None))
+
+
 async def main():
+    pure_checks()
     for p in (DB, DB + ".wal"):
         if os.path.exists(p):
             os.remove(p)
@@ -328,6 +362,25 @@ async def main():
             ck("...in the thread it was asked in", rep.get("thread_ts") == "1700000000.000100",
                str(rep)[:200])
 
+            # ── /tares ask <workspace> <question> (TR-394) ────────────────────
+            # Tares Cloud forwards the text as typed when one Slack has several workspaces; the
+            # Host it calls is <slug>.<cell domain>, so the cell drops the word that is its slug.
+            host = "glassflow-web.tares-glassflow.com"
+            q = await asked(cx, "ask glassflow-web what failed today", host, "U3")
+            ck("the workspace word is dropped when it is this workspace's slug",
+               q == "what failed today", repr(q))
+            q = await asked(cx, "ask Glassflow-Web what failed today", host, "U4")
+            ck("...whatever its case", q == "what failed today", repr(q))
+            q = await asked(cx, "ask glassflow what failed today", host, "U5")
+            ck("a first word that only resembles the slug stays in the question",
+               q == "glassflow what failed today", repr(q))
+            q = await asked(cx, "ask glassflow-web what failed today", None, "U6")
+            ck("without a workspace host (127.0.0.1) the question is untouched",
+               q == "glassflow-web what failed today", repr(q))
+            r = await slash(cx, "ask glassflow-web", host=host, user="U7")
+            ck("the slug alone is no question: usage", "ask what?" in r.text, r.text[:200])
+            REPLIES.clear()
+
             # ── the cost cap (TARES_SLACK_DAILY_CAP=2 for this daemon) ─────
             REPLIES.clear()
             before = len(MODEL_CALLS)
@@ -364,6 +417,16 @@ async def main():
             ck("no model provider -> a readable message, not silence",
                "no model provider" in r.text and "warning" in r.text, r.text[:300])
             ck("...and the model was never called", not MODEL_CALLS, str(MODEL_CALLS)[:200])
+
+            # the channel list's invalidation (TR-398) is a write: admin, like every other
+            r = await cx.post(f"{B}/api/slack/channels/changed",
+                              json={"event": "member_joined_channel", "channel": "G1"})
+            ck("POST /api/slack/channels/changed without a token -> 401", r.status_code == 401,
+               f"{r.status_code} {r.text[:200]}")
+            r = await cx.post(f"{B}/api/slack/channels/changed",
+                              json={"event": "member_joined_channel", "channel": "G1"},
+                              headers={"authorization": f"Bearer {AUTH}"})
+            ck("...with the admin token -> 200", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
 
             body = command_body("ask anything")
             r = await post_raw(cx, body, {"content-type": "application/x-www-form-urlencoded",

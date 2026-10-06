@@ -151,6 +151,8 @@ def _bypass_cooldown(request: Request) -> bool:
 
 
 SLACK_EVENTS_PATH = "/api/slack/events"
+SLACK_CHANNELS_TTL = 60.0         # seconds a good channel list is served from the cell
+SLACK_CHANNELS_FAIL_TTL = 5.0     # ... and a failed one, so Try again soon asks Slack again
 
 # Where GitHub sends the browser back during "Create GitHub App" and after an install. A redirect
 # carries no Tares token, so these two GETs are public to the auth middleware. The creation callback
@@ -514,6 +516,11 @@ class SlackTokenIn(BaseModel):
 
 class SlackSigningSecretIn(BaseModel):
     secret: str  # the signing secret behind POST /api/slack/events; same write-only contract
+
+
+class SlackChannelsChangedIn(BaseModel):
+    event: str = ""      # the Slack event behind it (member_joined_channel, channel_rename, ...)
+    channel: str = ""    # the channel it concerns; informational, the whole list is re-read
 
 
 class SlackTeamIn(BaseModel):
@@ -2847,6 +2854,7 @@ def make_app() -> FastAPI:
             _err(ValueError("that does not look like a Slack bot token; it should start with "
                             "'xoxb-' (OAuth & Permissions → Bot User OAuth Token)"))
         store.set_setting(SLACK_TOKEN_SETTING, token)
+        _drop_channels_cache()
         _, origin = resolve_slack_token(store)
         return {"ok": True, "source": origin,
                 **({"note": "an environment token takes precedence and is still in use"}
@@ -2855,28 +2863,57 @@ def make_app() -> FastAPI:
     @app.delete("/api/settings/slack-bot-token")
     async def clear_slack_token():
         store.set_setting(SLACK_TOKEN_SETTING, None)
+        _drop_channels_cache()
         token, origin = resolve_slack_token(store)
         return {"ok": True, "configured": bool(token), "source": origin}
 
-    # ── the channels the bot can post to ─────────────────────────────────────
-    # Feeds the console's channel picker, so that subscribing a trigger to Slack does not require
-    # the operator to go and dig a channel ID out of Slack's own UI.
+    # ── the channels the console's picker offers ─────────────────────────────
+    # Every public channel plus the private ones the bot is in, so that picking where something
+    # goes never means digging a channel ID out of Slack's own UI.
     #
-    # ALWAYS 200, never an exception: the console branches on `reason` and falls back to the
-    # free-text channel box when the list can't be trusted. A Slack outage, or the very common
-    # token issued before `channels:read`/`groups:read` were requested, must not blank the page.
+    # ALWAYS 200, never an exception: the console branches on `reason` and says why there is
+    # nothing to pick (not connected, reconnect for the scope, Slack did not answer). A Slack
+    # outage, or the very common token issued before `channels:read`/`groups:read` were
+    # requested, must not blank the page.
+    #
+    # Cached in the cell: an open picker re-reads every few seconds, and conversations.list is
+    # rate limited per workspace. A good list is kept a minute, a failure a few seconds (so Try
+    # again soon asks Slack again). POST /api/slack/channels/changed drops it when Slack says a
+    # channel changed, so a channel Tares was just added to shows up within one poll.
+    _channels_cache: dict = {}            # token -> (expires_at, response)
+    _channels_lock = asyncio.Lock()       # one Slack read at a time; pickers poll together
+
+    def _drop_channels_cache() -> None:
+        _channels_cache.clear()
+
     @app.get("/api/slack/channels")
     async def list_slack_channels():
-        try:
-            token, _origin = resolve_slack_token(store)
-            channels, reason, detail = await slack_mod.list_channels(token)
-        except Exception as e:                      # belt and braces — list_channels swallows too
-            return {"channels": [], "reason": "error",
-                    "detail": f"{type(e).__name__}: {e}"[:200]}
-        out = {"channels": channels, "reason": reason}
-        if detail:
-            out["detail"] = detail
-        return out
+        token, _origin = resolve_slack_token(store)
+        if not token:
+            return {"channels": [], "reason": "no_token"}
+        async with _channels_lock:
+            hit = _channels_cache.get(token)
+            if hit and hit[0] > time.monotonic():
+                return hit[1]
+            try:
+                channels, reason, detail = await slack_mod.list_channels(token)
+            except Exception as e:                  # belt and braces: list_channels swallows too
+                channels, reason, detail = [], "error", f"{type(e).__name__}: {e}"[:200]
+            out = {"channels": channels, "reason": reason}
+            if detail:
+                out["detail"] = detail
+            _channels_cache.clear()                 # one token at a time; an old one's list goes
+            _channels_cache[token] = (time.monotonic()
+                                      + (SLACK_CHANNELS_TTL if reason is None
+                                         else SLACK_CHANNELS_FAIL_TTL), out)
+            return out
+
+    @app.post("/api/slack/channels/changed")
+    async def slack_channels_changed(body: SlackChannelsChangedIn | None = None):
+        """Tares Cloud forwards Slack's channel events here (member_joined_channel, channel_created,
+        channel_rename, channel_archive); the next read of the list asks Slack again."""
+        _drop_channels_cache()
+        return {"ok": True}
 
     # ── the Slack signing secret: the credential that makes inbound Slack safe ──
     # Same write-only contract as the bot token. Without it POST /api/slack/events answers 503:
@@ -3020,7 +3057,10 @@ def make_app() -> FastAPI:
             return Response(status_code=200)
         response_url = (form.get("response_url") or "").strip()
         thread_ts = (form.get("thread_ts") or "").strip() or None
-        question, problem = slack_mod.parse_command(form.get("text", ""))
+        # The Host names this workspace on Tares Cloud (<slug>.<cell domain>): with several
+        # workspaces on one Slack, `/tares ask <slug> …` arrives here as typed.
+        question, problem = slack_mod.parse_command(
+            form.get("text", ""), slack_mod.workspace_slug(request.headers.get("host")))
         if problem:
             return slack_mod.build_error(problem, thread_ts)
         if not response_url:

@@ -13,13 +13,13 @@ The token is a credential: it is write-only over the API, and the environment be
 
 `GET /api/slack/channels` feeds the console's channel picker and is asserted here too. It always
 answers 200 and puts the verdict in `reason`, because the console branches on the data rather than
-catching exceptions — most importantly on `missing_scope`, which a token issued before the read
-scopes were requested returns and which sends the console back to the free-text box.
+catching exceptions; most importantly on `missing_scope`, which a token issued before the read
+scopes were requested returns and which the console answers with "Reconnect Slack".
 
-The endpoint it calls is itself under test: it must be `users.conversations` (channels the bot is
-a *member* of, public and private) and not `conversations.list`, which happily lists public
-channels the bot was never invited to — subscribing to one of those can only ever fail with
-`not_in_channel`, which is the failure the picker exists to prevent.
+The list is every public channel (`conversations.list`, the bot a member or not, `is_member` says
+which) plus the private channels the bot is in (`users.conversations`, private only: Slack shows a
+bot no other). The cell caches it, and `POST /api/slack/channels/changed` (admin, like every
+write) drops the cache so a channel Tares was just added to shows up on the next read.
 """
 import asyncio, json, os, signal, subprocess, sys, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -54,21 +54,27 @@ PUBLIC_URL = "https://tares.example.com"
 CALLS: list = []
 MODE = "ok"
 
-# users.conversations behind the console's channel picker. Two pages, deliberately out of
-# alphabetical order and fat with the fields Slack really sends, so the endpoint has to sort and
-# strip. One private channel and two public ones — and `alerts` omits `is_private` entirely, the
-# way some Slack payloads do, so the default has to hold. CH_MODE switches the whole call to a
-# failure the way MODE does for chat.postMessage.
+# The two listings behind the console's channel picker. conversations.list (public) is two pages,
+# deliberately out of alphabetical order and fat with the fields Slack really sends, so the
+# endpoint has to sort and strip; `alerts` omits `is_private` entirely, the way some Slack payloads
+# do, and `zeta` is a channel the bot is not in. users.conversations (private) holds `ops`, which
+# says nothing about membership: a private channel is only listed because the bot is in it.
+# CH_MODE switches every call to a failure the way MODE does for chat.postMessage.
 GETS: list = []
 CH_MODE = "ok"
-CH_PAGES = {
+PUBLIC_PAGES = {
     "": {"channels": [{"id": "C300", "name": "zeta", "is_channel": True, "is_private": False,
-                       "num_members": 4, "purpose": {"value": "x" * 400}},
-                      {"id": "C100", "name": "alerts", "is_channel": True, "num_members": 12,
-                       "topic": {"value": "incidents"}}],       # no is_private key at all
+                       "is_member": False, "num_members": 4, "purpose": {"value": "x" * 400}},
+                      {"id": "C100", "name": "alerts", "is_channel": True, "is_member": True,
+                       "num_members": 12, "topic": {"value": "incidents"}}],   # no is_private key
          "response_metadata": {"next_cursor": "page2"}},
-    "page2": {"channels": [{"id": "C200", "name": "ops", "is_group": True, "is_private": True}],
+    "page2": {"channels": [{"id": "C400", "name": "general", "is_channel": True,
+                            "is_private": False}],                            # no is_member key
               "response_metadata": {"next_cursor": ""}},
+}
+PRIVATE_PAGES = {
+    "": {"channels": [{"id": "G200", "name": "ops", "is_group": True, "is_private": True}],
+         "response_metadata": {"next_cursor": ""}},
 }
 
 
@@ -101,7 +107,8 @@ class Stub(BaseHTTPRequestHandler):
         elif CH_MODE != "ok":
             self._json({"ok": False, "error": CH_MODE})
         else:
-            self._json({"ok": True, **CH_PAGES.get(q.get("cursor", ""), CH_PAGES[""])})
+            pages = PRIVATE_PAGES if path.endswith("/users.conversations") else PUBLIC_PAGES
+            self._json({"ok": True, **pages.get(q.get("cursor", ""), pages[""])})
 
     def log_message(self, *a):
         pass
@@ -210,46 +217,68 @@ async def main():
             ck("channels -> 200", r.status_code == 200, r.text)
             ck("a good list carries reason=null", ch.get("reason") is None, r.text)
             names = [c["name"] for c in ch.get("channels", [])]
-            ck("every page is included — pagination follows next_cursor",
-               names == ["alerts", "ops", "zeta"], str(names))
-            ck("...which took two calls, the second carrying the cursor",
-               len(GETS) == 2 and GETS[0]["query"].get("cursor") is None
-               and GETS[1]["query"].get("cursor") == "page2", str(GETS))
-            ck("channels are sorted by name, not by Slack's order",
-               names == sorted(names), str(names))
+            ck("every public channel and the private one, sorted by name",
+               names == ["alerts", "general", "ops", "zeta"], str(names))
             ck("ids come through with the names",
-               [c["id"] for c in ch["channels"]] == ["C100", "C200", "C300"], str(ch["channels"]))
-            ck("only id, name and is_private are returned — Slack's payload is not passed through",
-               all(set(c) == {"id", "name", "is_private"} for c in ch["channels"]),
+               [c["id"] for c in ch["channels"]] == ["C100", "C400", "G200", "C300"],
+               str(ch["channels"]))
+            ck("only id, name, is_private and is_member: Slack's payload is not passed through",
+               all(set(c) == {"id", "name", "is_private", "is_member"} for c in ch["channels"]),
                str(ch["channels"]))
 
-            # ── public vs private: the console renders a lock instead of a # ──
-            priv = {c["name"]: c["is_private"] for c in ch["channels"]}
-            ck("a private channel comes back is_private=true", priv.get("ops") is True, str(priv))
-            ck("a public channel comes back is_private=false", priv.get("zeta") is False, str(priv))
-            ck("a channel with no is_private field defaults to public",
-               priv.get("alerts") is False, str(priv))
+            pub = [g for g in GETS if g["path"].endswith("/conversations.list")]
+            prv = [g for g in GETS if g["path"].endswith("/users.conversations")]
+            ck("public channels come from conversations.list, every page (cursor followed)",
+               len(pub) == 2 and pub[0]["query"].get("cursor") is None
+               and pub[1]["query"].get("cursor") == "page2", str(pub))
+            ck("...asking for unarchived public channels only",
+               all(g["query"].get("types") == "public_channel"
+                   and g["query"].get("exclude_archived") == "true" for g in pub), str(pub))
+            ck("private channels come from users.conversations, private only (the bot's own)",
+               len(prv) == 1 and prv[0]["query"].get("types") == "private_channel"
+               and prv[0]["query"].get("exclude_archived") == "true", str(prv))
+            ck("both listings are authenticated with the bot token",
+               all(g["auth"] == f"Bearer {TOKEN}" for g in GETS), str(GETS))
 
-            ck("the listing is authenticated with the bot token",
-               GETS[0]["auth"] == f"Bearer {TOKEN}", GETS[0]["auth"])
-            # The endpoint is the whole point of the picker: conversations.list would also answer
-            # here, and would offer channels the bot isn't in — every one of which fails its first
-            # firing with not_in_channel. users.conversations returns membership only.
-            ck("it asks users.conversations, not conversations.list",
-               GETS[0]["path"].endswith("/users.conversations")
-               and not GETS[0]["path"].endswith("/conversations.list"), str(GETS[0]))
-            ck("...for unarchived public AND private channels",
-               GETS[0]["query"].get("types") == "public_channel,private_channel"
-               and GETS[0]["query"].get("exclude_archived") == "true", str(GETS[0]))
-            ck("...on every page, cursor included",
-               all(g["path"].endswith("/users.conversations")
-                   and g["query"].get("types") == "public_channel,private_channel"
-                   for g in GETS), str(GETS))
+            # ── public vs private, member or not: a lock, and whether Tares is in it ──
+            by = {c["name"]: c for c in ch["channels"]}
+            ck("a private channel comes back is_private=true", by["ops"]["is_private"] is True, str(by))
+            ck("...and is_member=true, although Slack's payload did not say so",
+               by["ops"]["is_member"] is True, str(by))
+            ck("a public channel comes back is_private=false", by["zeta"]["is_private"] is False, str(by))
+            ck("a channel with no is_private field defaults to public",
+               by["alerts"]["is_private"] is False, str(by))
+            ck("a public channel the bot is not in is listed, is_member=false",
+               by["zeta"]["is_member"] is False, str(by))
+            ck("...one it is in, is_member=true", by["alerts"]["is_member"] is True, str(by))
+            ck("...and one that does not say, is_member=false", by["general"]["is_member"] is False, str(by))
+
+            # ── the cell's cache: an open picker polls, Slack is asked once a minute ──
+            GETS.clear()
+            again = (await cx.get(f"{B}/api/slack/channels")).json()
+            ck("a second read is served from the cell, Slack is not asked", not GETS, str(GETS))
+            ck("...with the same list", again == ch, str(again))
+
+            # ── the changed endpoint: what Tares Cloud calls on a Slack channel event ──
+            PRIVATE_PAGES[""]["channels"].append({"id": "G500", "name": "incident-war-room",
+                                                  "is_private": True})
+            r = await cx.post(f"{B}/api/slack/channels/changed",
+                              json={"event": "member_joined_channel", "channel": "G500"})
+            ck("POST /api/slack/channels/changed -> 200", r.status_code == 200, r.text)
+            GETS.clear()
+            ch = (await cx.get(f"{B}/api/slack/channels")).json()
+            ck("after it, the next read asks Slack again", len(GETS) == 3, str(GETS))
+            ck("...and the channel Tares was just added to is in the list",
+               any(c["id"] == "G500" and c["is_private"] for c in ch["channels"]), str(ch))
+            PRIVATE_PAGES[""]["channels"].pop()
+            r = await cx.post(f"{B}/api/slack/channels/changed")
+            ck("a bare POST (no body) is accepted too", r.status_code == 200, r.text)
 
             # ── the important failure: a token predating the read scopes ──
-            # Every existing install has one. The console falls back to the free-text box on this
-            # reason and prompts a reconnect, so it must be told apart from a generic error.
+            # Every existing install has one. The console says "Reconnect Slack" on this reason,
+            # so it must be told apart from a generic error.
             CH_MODE = "missing_scope:channels:read"
+            await cx.post(f"{B}/api/slack/channels/changed", json={})
             r = await cx.get(f"{B}/api/slack/channels")
             ch = r.json()
             ck("a token without channels:read is still a 200", r.status_code == 200, r.text)
@@ -258,9 +287,17 @@ async def main():
             ck("...and names the scope it needs", "channels:read" in str(ch.get("detail") or ""),
                str(ch.get("detail")))
 
-            # Two scopes are in play now, so the detail must echo whichever one Slack names — a
+            # A failure is cached only briefly; recovering must not wait out the minute.
+            CH_MODE = "ok"
+            await asyncio.sleep(5.5)
+            ch = (await cx.get(f"{B}/api/slack/channels")).json()
+            ck("a failed read is retried after a few seconds, not a minute",
+               ch.get("reason") is None and len(ch.get("channels") or []) == 4, str(ch))
+
+            # Two scopes are in play now, so the detail must echo whichever one Slack names; a
             # hardcoded "channels:read" would send the operator to grant the scope they already have.
             CH_MODE = "missing_scope:groups:read"
+            await cx.post(f"{B}/api/slack/channels/changed", json={})
             ch = (await cx.get(f"{B}/api/slack/channels")).json()
             detail = str(ch.get("detail") or "")
             ck("missing groups:read is reported as groups:read, not channels:read",
@@ -268,11 +305,13 @@ async def main():
                and "channels:read" not in detail, detail)
 
             CH_MODE = "invalid_auth"
+            await cx.post(f"{B}/api/slack/channels/changed", json={})
             ch = (await cx.get(f"{B}/api/slack/channels")).json()
             ck("any other Slack failure is reason=error with a readable detail",
                ch.get("reason") == "error" and "invalid_auth" in str(ch.get("detail") or "")
                and ch.get("channels") == [], str(ch))
             CH_MODE = "ok"
+            await cx.post(f"{B}/api/slack/channels/changed", json={})
 
             # ── subscribing a channel ────────────────────────────────────────
             r = await cx.post(f"{B}/subscribe", json={"trigger": "incident", "url": "slack://channel/not a channel!"})
