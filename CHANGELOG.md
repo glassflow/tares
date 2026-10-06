@@ -28,8 +28,31 @@ project's goal right under it.
 - The plan screen offers "Ask Tares to fix it" when the plan still has a mistake of its own after
   Tares's own fix rounds; it hands what the check found back to the planner. Problems carry
   `who` (`tares` or `you`) on `POST /api/setup/check`.
+- One Slack channel picker wherever Tares asks for a channel: the guided setup, the agent form,
+  a project's subscribers and template forms. It is a searchable list; a private channel shows a
+  lock. Under it, one line says how to add Tares to a private channel (`/invite @Tares`).
+- `POST /api/slack/channels/changed` (admin; body `{"event", "channel"}`, both optional): drops
+  the cell's cached channel list, so the next read asks Slack again. Tares Cloud calls it when
+  Slack reports a channel joined, created, renamed or archived.
+- `/tares ask <workspace> <question>`: on Tares Cloud, when the first word after `ask` is this
+  workspace's name (the `workspace` parameter of `TARES_SLACK_CONNECT_URL`), it is dropped from
+  the question. This is how Tares Cloud asks which workspace when one Slack is linked to several.
+  Without `TARES_SLACK_CONNECT_URL` (self-hosted) nothing is dropped.
 
 ### Changed
+- `GET /api/slack/channels` lists every public channel of the connected Slack, not only the ones
+  Tares was added to, plus the private channels Tares is in. Each channel carries `is_member`
+  next to `is_private`. The cell keeps the list for a minute, a failed read for a few seconds or
+  as long as Slack's Retry-After asks. When a re-read fails, the last good list is served with
+  `stale: true` instead of an error, and the picker keeps showing it. The picker reads the list again every few seconds while it is on screen, when the window regains
+  focus and when the dropdown opens, so a channel Tares was just added to appears without a
+  reload.
+- No screen asks for a Slack channel ID any more. When there is nothing to pick from, the picker
+  says why: Slack not connected (with a link to Settings, Slack), a missing permission (Reconnect
+  Slack), Slack did not answer (the reason, and Try again), or no channel Tares can see. A channel
+  already saved as an ID or a name keeps working and shows by name.
+- Settings > Slack lists the bot scopes a pasted token needs: `chat:write`,
+  `chat:write.public`, `channels:read`, `groups:read` and `commands`.
 - The planner gets up to three rounds to fix what the check finds (was one), and is never asked
   about what only the person can answer, like which Slack channel.
 - Labels the planner writes as an object (`{"location": "berlin"}`) become one label per key; the

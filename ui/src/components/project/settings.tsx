@@ -5,6 +5,7 @@ import { api } from "../../api";
 import ConfirmDialog from "../ConfirmDialog";
 import { ProjectKeysPanel } from "../ProjectKeys";
 import { Picker, TimeAgo } from "../bits";
+import { SlackPick } from "../SlackPick";
 import { ServerForm } from "../../pages/McpServers";
 import { VLink, ViewHead, type Ctx } from "./common";
 
@@ -45,7 +46,6 @@ export function SubscribersView({ ctx }: { ctx: Ctx }) {
   const [msg, setMsg] = useState<string>();
   const [unsub, setUnsub] = useState<{ id: string; label: string } | null>(null);
   const triggerNames = new Set(ctx.triggers.map((t) => t.name));
-  const channels = ctx.slack;
   const rows = (ctx.roster?.agents ?? []).flatMap((a) =>
     a.subscriptions.filter((sub) => triggerNames.has(sub.trigger)).map((sub) => ({ a, sub })));
   const subscribe = async (url: string) => {
@@ -82,25 +82,17 @@ export function SubscribersView({ ctx }: { ctx: Ctx }) {
               <span className="help">your agent's endpoint; it gets POSTed the timeline on every firing · <Link to="/connect?tab=push">what it receives</Link></span>
             </label>
           ) : (
-            <label className="field">
+            <div className="field">
               <span className="lbl">channel</span>
-              {channels.length > 0 ? (
-                <Picker value={subChannel} onChange={setSubChannel} ariaLabel="Slack channel"
-                        options={["", ...channels.map((c) => c.id)]}
-                        labels={{ "": "choose a channel…",
-                                  ...Object.fromEntries(channels.map((c) => [c.id, c.is_private ? `🔒 ${c.name}` : `#${c.name}`])) }} />
-              ) : (
-                <input type="text" className="mono" autoFocus placeholder="C0123456789, or the channel's lowercase name"
-                       value={subChannel} onChange={(e) => setSubChannel(e.target.value)} />
-              )}
-              <span className="help">the workspace bot posts every firing there; add the bot to the channel in Slack first</span>
-            </label>
+              <SlackPick value={subChannel} onChange={setSubChannel} emptyLabel="Choose a channel" />
+              <span className="help">Tares posts every firing there.</span>
+            </div>
           )}
           <div className="btnrow">
             <button className="primary" disabled={busy || (adding === "webhook" ? !subUrl.trim() : !subChannel.trim())}
                     onClick={() => subscribe(adding === "webhook"
                       ? subUrl.trim()
-                      : `slack://channel/${(channels.length ? subChannel : subChannel.trim().replace(/^#/, ""))}`)}>
+                      : `slack://channel/${subChannel}`)}>
               {busy ? "…" : "Subscribe"}
             </button>
             <button type="button" onClick={() => setAdding(null)}>Cancel</button>

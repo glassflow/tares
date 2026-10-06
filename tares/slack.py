@@ -247,85 +247,120 @@ def _error_detail(err: str, data: dict) -> str:
 # ── the channel picker ────────────────────────────────────────────────────
 # The console offers a list instead of a free-text box for the channel ID, which nobody can find
 # without leaving the app. One page is 200 channels and a real workspace has more, so this
-# paginates — but bounded, because a cursor that never terminates would spin here forever.
+# paginates, but bounded: a cursor that never terminates would spin here forever.
 
 _CHANNEL_PAGE = 200
-_CHANNEL_MAX_PAGES = 10          # 2000 channels; past that the picker is the wrong UI anyway
+_CHANNEL_MAX_PAGES = 10          # per listing: 2000 channels; past that a picker is the wrong UI
+
+
+class _ListFailed(Exception):
+    """One listing failed; carries the `(reason, detail, retry_after)` list_channels returns."""
+
+    def __init__(self, reason: str, detail: str, retry_after: float | None = None):
+        super().__init__(detail)
+        self.reason, self.detail, self.retry_after = reason, detail, retry_after
+
+
+def _retry_after(r: httpx.Response) -> float | None:
+    """Slack's Retry-After on a 429, in seconds; None when absent or unreadable."""
+    try:
+        v = float(r.headers.get("retry-after", ""))
+    except ValueError:
+        return None
+    return v if v >= 0 else None
+
+
+async def _list_pages(cx: httpx.AsyncClient, method: str, params: dict, headers: dict) -> list[dict]:
+    """Every page of one conversations listing, raising _ListFailed on the first bad answer."""
+    out: list[dict] = []
+    cursor = ""
+    for _ in range(_CHANNEL_MAX_PAGES):
+        q = {**params, **({"cursor": cursor} if cursor else {})}
+        r = await cx.get(f"{API_BASE}/{method}", params=q, headers=headers)
+        try:
+            data = r.json()
+        except Exception:
+            data = None
+        if r.status_code == 429:
+            # conversations.list is Tier 2 (about 20 a minute per workspace); Slack says how long
+            # to wait, and asking again sooner only extends the wait
+            wait = _retry_after(r)
+            raise _ListFailed("error", "slack: rate limited (HTTP 429)"
+                              + (f", try again in {wait:.0f}s" if wait is not None else ""), wait)
+        if r.status_code >= 500:
+            raise _ListFailed("error", f"slack: HTTP {r.status_code}")
+        if not isinstance(data, dict):
+            raise _ListFailed("error", f"slack: HTTP {r.status_code} (non-JSON response)")
+        if not data.get("ok"):
+            err = str(data.get("error") or "unknown_error")
+            if err == "missing_scope":
+                # Not _error_detail's hint: that one names chat:write, which is the scope this
+                # token almost certainly *does* have. Two read scopes are in play, so the missing
+                # one can be either: take Slack's `needed` when it says, name both when it doesn't.
+                needed = str(data.get("needed") or "").strip() or "channels:read and groups:read"
+                raise _ListFailed("missing_scope", (
+                    f"slack: missing_scope (the bot token is missing {needed}; "
+                    "reconnect Slack to grant it)"))
+            raise _ListFailed("error", f"slack: {err}{_error_detail(err, data)}")
+        out.extend(c for c in data.get("channels") or [] if isinstance(c, dict))
+        cursor = str(((data.get("response_metadata") or {}).get("next_cursor") or "")).strip()
+        if not cursor:
+            break
+        # Falling out of the loop with a cursor still set means the bound was hit. A partial
+        # list is a usable picker; an error here would take the whole feature away.
+    return out
 
 
 async def list_channels(token: str, timeout: float = 10.0
-                        ) -> tuple[list[dict], str | None, str | None]:
-    """`(channels, reason, detail)` — the channels this bot is a **member of**.
+                        ) -> tuple[list[dict], str | None, str | None, float | None]:
+    """`(channels, reason, detail, retry_after)`: every public channel, plus the private ones the
+    bot is in. `retry_after` is the seconds Slack asked to wait on a 429, else None.
 
-    `users.conversations`, not `conversations.list`. The latter lists every public channel in the
-    workspace, including the ones the bot was never invited to: picking one of those produces a
-    subscription that fails at its first firing with `not_in_channel`, which is exactly the failure
-    the picker exists to prevent. `users.conversations` returns only conversations reachable "via
-    membership of the channel" for the presented token, so everything it offers can actually be
-    posted to. It also covers private channels, which `conversations.list` cannot return at all.
+    Two listings. `conversations.list` with `public_channel` gives every unarchived public channel
+    of the workspace, the bot a member or not: a person picking where something should go expects
+    to find any channel there, and `is_member` lets the console say when Tares still has to be
+    added (posting to a public channel the bot is not in fails with `not_in_channel` unless the
+    app holds `chat:write.public`). `users.conversations` with `private_channel` gives the private
+    channels the bot was added to; Slack shows a bot no other private channel at all.
 
-    Both `public_channel` and `private_channel` are asked for; the app holds `channels:read` and
-    `groups:read`. Each channel carries `is_private` so the console can render a lock rather than
-    a `#`.
+    Each channel is `{id, name, is_private, is_member}`, sorted by name. A private channel is
+    always a member: it is only listed because the bot is in it.
 
-    `reason` is None when the list is trustworthy (an empty list then means the bot has not been
-    invited anywhere), otherwise it names why the caller should not believe it: "no_token",
-    "missing_scope", "error". Nothing raises: the console renders whatever this returns, and a
-    Slack outage must degrade to the free-text box rather than to a stack trace.
+    `reason` is None when the list is trustworthy (an empty list then means the workspace has no
+    channel the bot can see), otherwise it names why the caller should not believe it:
+    "no_token", "missing_scope", "error". Nothing raises: the console renders whatever this returns,
+    and a Slack outage must degrade to a sentence rather than to a stack trace.
 
-    `missing_scope` is called out separately because it is the *expected* failure — a token issued
-    before these scopes were requested has it, and the only fix is reconnecting Slack.
+    `missing_scope` is called out separately because it is the *expected* failure: a token issued
+    before `channels:read`/`groups:read` were requested has it, and the only fix is reconnecting.
     """
     if not (token or "").strip():
-        return [], "no_token", None
+        return [], "no_token", None, None
     headers = {"authorization": f"Bearer {token.strip()}"}
-    params = {"types": "public_channel,private_channel", "exclude_archived": "true",
-              "limit": str(_CHANNEL_PAGE)}
-    out: list[dict] = []
-    cursor = ""
+    base = {"exclude_archived": "true", "limit": str(_CHANNEL_PAGE)}
     try:
         async with httpx.AsyncClient(timeout=timeout) as cx:
-            for _ in range(_CHANNEL_MAX_PAGES):
-                q = {**params, **({"cursor": cursor} if cursor else {})}
-                r = await cx.get(f"{API_BASE}/users.conversations", params=q, headers=headers)
-                try:
-                    data = r.json()
-                except Exception:
-                    data = None
-                if r.status_code == 429 or r.status_code >= 500:
-                    return [], "error", f"slack: HTTP {r.status_code}"
-                if not isinstance(data, dict):
-                    return [], "error", f"slack: HTTP {r.status_code} (non-JSON response)"
-                if not data.get("ok"):
-                    err = str(data.get("error") or "unknown_error")
-                    if err == "missing_scope":
-                        # Not _error_detail's hint: that one names chat:write, which is the scope
-                        # this token almost certainly *does* have. Two scopes are in play here, so
-                        # the missing one can be either — take Slack's `needed` when it says, and
-                        # only name both when it doesn't.
-                        needed = str(data.get("needed") or "").strip() or "channels:read and groups:read"
-                        return [], "missing_scope", (
-                            f"slack: missing_scope (the bot token is missing {needed}; "
-                            "reconnect Slack to grant it)")
-                    return [], "error", f"slack: {err}{_error_detail(err, data)}"
-                for c in data.get("channels") or []:
-                    if isinstance(c, dict) and c.get("id") and c.get("name"):
-                        # id, name and is_private only: the console needs nothing else and a
-                        # conversation object carries a few hundred bytes of purpose, topic and
-                        # membership. `is_private` is absent on some payloads — a channel that
-                        # doesn't say it is private isn't.
-                        out.append({"id": str(c["id"]), "name": str(c["name"]),
-                                    "is_private": bool(c.get("is_private"))})
-                cursor = str(((data.get("response_metadata") or {}).get("next_cursor") or "")).strip()
-                if not cursor:
-                    break
-            # Falling out of the loop with a cursor still set means the bound was hit. A partial
-            # list is a usable picker; an error here would take the whole feature away.
+            public = await _list_pages(cx, "conversations.list",
+                                       {**base, "types": "public_channel"}, headers)
+            private = await _list_pages(cx, "users.conversations",
+                                        {**base, "types": "private_channel"}, headers)
+    except _ListFailed as f:
+        return [], f.reason, f.detail, f.retry_after
     except Exception as e:
         return [], "error", ("slack: " + type(e).__name__
-                             + (f": {e}" if str(e).strip() else ""))[:200]
-    out.sort(key=lambda c: c["name"])
-    return out, None, None
+                             + (f": {e}" if str(e).strip() else ""))[:200], None
+    seen: dict[str, dict] = {}
+    for c, member in [(c, None) for c in public] + [(c, True) for c in private]:
+        if not (c.get("id") and c.get("name")):
+            continue
+        # id, name, is_private and is_member only: a conversation object carries a few hundred
+        # bytes of purpose, topic and membership the console never reads. `is_private` is absent
+        # on some payloads; a channel that doesn't say it is private isn't.
+        seen[str(c["id"])] = {"id": str(c["id"]), "name": str(c["name"]),
+                              "is_private": bool(c.get("is_private")) or member is True,
+                              "is_member": True if member else bool(c.get("is_member"))}
+    out = sorted(seen.values(), key=lambda c: (c["name"], c["id"]))
+    return out, None, None, None
 
 
 # ── inbound: the /tares slash command ─────────────────────────────────────
@@ -364,12 +399,18 @@ class AskCap:
         return True
 
 
-def parse_command(text: str) -> tuple[str, str | None]:
+def parse_command(text: str, workspace: str | None = None) -> tuple[str, str | None]:
     """`(question, error)` for the `text` of a `/tares` slash command.
 
     `/tares ask <question>` is the documented form. A bare `/tares <question>` is accepted as
     the same thing — forgetting the subcommand is the overwhelmingly likely mistake, and answering
     it beats a lecture. Empty, or `help`, gets the usage line; nothing gets a stack trace.
+
+    `workspace` is this instance's slug on Tares Cloud (see `workspace_slug`). When one Slack
+    workspace is linked to several Tares workspaces, Tares Cloud asks for
+    `/tares ask <workspace> <question>` and forwards the text unchanged (the signature covers it),
+    so the first word after `ask` is dropped when it is exactly this slug. Anything else is part
+    of the question, which keeps self-hosted and single-workspace asks as they were.
     """
     text = (text or "").strip()
     if not text or text.lower() in ("help", "-h", "--help", "?"):
@@ -377,8 +418,26 @@ def parse_command(text: str) -> tuple[str, str | None]:
     head, _, rest = text.partition(" ")
     if head.lower() == "ask":
         rest = rest.strip()
+        if workspace:
+            first, _, tail = rest.partition(" ")
+            if first.lower() == workspace.lower():
+                rest = tail.strip()
         return (rest, None) if rest else ("", f"ask what? {USAGE}")
     return text, None
+
+
+def workspace_slug(connect_url: str | None) -> str | None:
+    """This workspace's slug on Tares Cloud: the `workspace` query parameter of
+    TARES_SLACK_CONNECT_URL, which the control plane sets to
+    `<console>/slack/install?workspace=<slug>`. None when it is unset (self-hosted) or carries no
+    such parameter, and then `/tares ask` strips nothing."""
+    from urllib.parse import parse_qs, urlsplit
+    try:
+        vals = parse_qs(urlsplit((connect_url or "").strip()).query).get("workspace") or []
+    except ValueError:
+        return None
+    slug = (vals[0] if vals else "").strip()
+    return slug or None
 
 
 _MD_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
