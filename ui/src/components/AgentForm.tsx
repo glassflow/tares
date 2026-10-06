@@ -3,10 +3,10 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api";
-import type { SlackChannels } from "../api";
 import type { ModelProvider } from "../types";
 import { Combo, Picker } from "./bits";
 import type { AgentPreset, BuiltinAgent, GithubCredential, Handoff, Verdict } from "../types";
+import { SlackPick } from "./SlackPick";
 
 const VERDICT_RE = /^[a-z0-9][a-z0-9_-]*$/;
 const DURATION_RE = /^\d+(\.\d+)?[smhd]$/;
@@ -155,16 +155,6 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   const modelLabels: Record<string, string> = { "": effectiveDefaultModel ? `${effectiveDefaultModel} · ${effective ? effective.name : "instance"} default` : "pick a model (this provider lists none)" };
   const pickProvider = (id: string) => { setProvider(id); setModel(""); };
 
-  // The channel list comes from the workspace bot, exactly like the trigger page's picker: only
-  // channels the bot is in are offered, because anything else fails at the first post.
-  const [channels, setChannels] = useState<SlackChannels>();
-  useEffect(() => {
-    if (!slackWorkspace) return;
-    let live = true;
-    api.slackChannels().then((c) => { if (live) setChannels(c); })
-      .catch(() => { if (live) setChannels({ channels: [], reason: "error" }); });
-    return () => { live = false; };
-  }, [slackWorkspace]);
   // The MCP registry: which servers exist is managed on its own page; here the agent only picks
   // from them.
   const [mcpAvail, setMcpAvail] = useState<{ name: string; url: string }[]>();
@@ -208,10 +198,6 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   for (const c of ghCreds ?? []) {
     ghLabels[c.name] = `${c.name} · ${c.kind === "token" ? "personal token" : "GitHub App"}`;
   }
-
-  const chanList = channels?.reason === null ? channels.channels : [];
-  const chanLabels: Record<string, string> = { "": "pick a channel…" };
-  for (const c of chanList) chanLabels[c.id] = (c.is_private ? "🔒 " : "#") + c.name;
 
   const save = async () => {
     setBusy(true); setErr(undefined);
@@ -424,13 +410,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
                    on={channelOn} disabled={!slackWorkspace}
                    disabledHint="connect a workspace bot under Settings to enable this"
                    onToggle={setChannelOn}>
-          <Picker value={channel} onChange={setChannel}
-                  options={["", ...chanList.map((c) => c.id)]} labels={chanLabels}
-                  ariaLabel="Slack channel" />
-          <span className="help">
-            {channels?.reason === "missing_scope" && "reconnect Slack to list channels"}
-            {channels?.reason === null && chanList.length === 0 && "add the bot to a channel in Slack first"}
-          </span>
+          <SlackPick value={channel} onChange={setChannel} />
         </OptionRow>
         <OptionRow title="Slack incoming webhook"
                    desc="legacy per-agent webhook; used only when no channel is set"

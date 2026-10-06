@@ -35,10 +35,10 @@ export function authHeader(): Record<string, string> {
 // carrying one (say, a release or two after 1.0.2).
 try { localStorage.removeItem("tares_anthropic_key"); } catch { /* private mode */ }
 
-// Only channels the bot is a member of are listed, so a private one appearing here is expected.
-// `is_private` exists because Slack never shows a private channel as "#name" — labelling it that
-// way would name something the user can't find by that name.
-export type SlackChannel = { id: string; name: string; is_private: boolean };
+// Every public channel, plus the private ones the bot is in (Slack shows a bot no other).
+// `is_private` exists because Slack never shows a private channel as "#name": labelling it that
+// way would name something the user can't find by that name. `is_member`: Tares is in it.
+export type SlackChannel = { id: string; name: string; is_private: boolean; is_member: boolean };
 export type SlackChannels = {
   channels: SlackChannel[];
   reason: null | "no_token" | "missing_scope" | "error";

@@ -1007,12 +1007,14 @@ function SlackTokenPanel() {
     <div className="panel">
       <h2 style={{ marginTop: 0 }}>Slack bot token</h2>
       <p className="help" style={{ marginTop: 0 }}>
-        Lets a trigger post to a channel: subscribe{" "}
-        <code>slack://channel/C0123456789</code> on any trigger and every firing is delivered,
-        retried and logged like a webhook. Create a Slack app with the <code>chat:write</code>{" "}
-        scope, invite it to the channel, and paste its <strong>Bot User OAuth Token</strong> here —
-        or set <code>TARES_SLACK_BOT_TOKEN</code> in the daemon's environment. It is never
-        returned by the API and never included in a catalog export.
+        Lets triggers and agents post to Slack: pick a channel on a trigger or an agent and every
+        firing or finding is delivered, retried and logged like a webhook. Create a Slack app with
+        the bot scopes <code>chat:write</code>, <code>chat:write.public</code> (post to a public
+        channel without inviting the app), <code>channels:read</code> and{" "}
+        <code>groups:read</code> (list the channels to pick from), and <code>commands</code>{" "}
+        (<code>/tares ask</code>). Paste its <strong>Bot User OAuth Token</strong> here, or set{" "}
+        <code>TARES_SLACK_BOT_TOKEN</code> in the daemon's environment. It is never returned by
+        the API and never included in a catalog export.
       </p>
 
       {err && <div className="alert error">{err}</div>}

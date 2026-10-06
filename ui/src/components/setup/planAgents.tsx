@@ -81,7 +81,7 @@ export function AgentsCard({ ctx }: { ctx: CardCtx }) {
             {a.slack && a.enabled && (
               <div className="field su-slack">
                 <span className="lbl">Posts to the Slack channel</span>
-                <SlackPick slack={ctx.cell.slack} value={a.slack_channel ?? ""} disabled={busy || !!open}
+                <SlackPick value={a.slack_channel ?? ""} disabled={busy || !!open}
                            onChange={(ch) => edit({ ...plan, agents: plan.agents.map((x) => (x.key === a.key ? { ...x, slack_channel: ch } : x)) })} />
               </div>
             )}
@@ -316,7 +316,7 @@ function AgentEditor({ agent, ctx, onSave, onCancel }: {
           <input type="checkbox" checked={slack} onChange={(e) => setSlack(e.target.checked)} />
           <span>Post what it finds to a Slack channel</span>
         </label>
-        {slack && <SlackPick slack={cell.slack} value={channel} onChange={setChannel} />}
+        {slack && <SlackPick value={channel} onChange={setChannel} />}
       </div>
 
       <fieldset className="su-filters">
