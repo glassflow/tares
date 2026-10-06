@@ -5,8 +5,13 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.42.0] - 2026-10-06
+
 A new cell opens on Start instead of Overview: a short list of what is ready, and the first
-project's goal right under it.
+project's goal right under it. Slack picks a channel from every public channel, posts to any of
+them without an invite, and one Slack workspace can serve several Tares workspaces (with the
+Tares Cloud control plane 1.24.0). Released as 1.42.0-rc.1 to rc.4 first; this is rc.4 plus a
+copy fix in Settings > Slack.
 
 ### Added
 - Start (`/start`): the demo, a model provider (on Tares Cloud the included credit and what is
