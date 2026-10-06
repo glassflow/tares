@@ -179,8 +179,8 @@ function SlackCloudPanel({ cloud, connectUrl }: { cloud: Cloud; connectUrl: stri
           </p>
           <p className="help" style={{ marginTop: 0 }}>
             Triggers and agents post what they find to the channels you pick, and your team can
-            ask Tares from any channel with <code>/tares ask</code>. Invite the app to a channel in
-            Slack before posting to it.
+            ask Tares from any channel with <code>/tares ask</code>. Tares posts to any public
+            channel; for a private one, add it there first with <code>/invite @Tares</code>.
           </p>
           {canConnect
             ? <a className="btn danger" href={cloudLink(connectUrl, { action: "disconnect" }, "slack")}>Disconnect</a>
