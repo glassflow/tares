@@ -312,6 +312,113 @@ def _earlier_findings(store, trig, entity: str, values: list, lookback: str) -> 
     return out + [""]
 
 
+# ── the state a decision model reads (TR-401) ────────────────────────────────
+# A decision model cannot drill down, so the window comes to it already split by entity: one row
+# per entity, each carrying its own signals (the other labels' values under it), with now,
+# before, the usual value, its spread and z computed up front. JSON, fixed caps, so the price per
+# tick stays steady. The trigger's summary options set the baseline, floor, numbers and findings
+# lookback; what they leave unset comes from the "rich" defaults.
+STATE_ENTITIES = 12        # rows
+STATE_SIGNALS = 5          # signals per row
+STATE_DEFAULTS = {"baseline": 6, "min_count": 5, "findings": "6h"}
+
+
+def _stat(r: dict, n: int) -> dict:
+    out = {"now": r["now"], "before": r["before"]}
+    if n:
+        out.update({"usual": round(r["usual"], 1), "spread": round(r["spread"], 1),
+                    "z": round(r["z"], 1)})
+    if r["change"] in ("new", "gone"):
+        out[r["change"]] = True
+    return out
+
+
+def entity_state(store, catalog, trig) -> tuple[dict, list]:
+    """(the JSON state, its rows as [{id, value, now, before, change}]) for one window. The row
+    ids are the options of the decision call's `entity` question."""
+    every = trig.condition.every
+    window = f"{int(every)}s" if every % 60 else f"{int(every // 60)}m"
+    entity = trigger_entity_label(trig, catalog.sources) or "key_value"
+    labels = [x for x in (trig.condition.summary_by or []) if x != entity]
+    opts = {**STATE_DEFAULTS, **(getattr(trig.condition, "summary", None) or {})}
+    n, floor = int(opts.get("baseline") or 0), int(opts.get("min_count") or 0)
+
+    cur, prev = _counts(store, trig, entity, every)
+    ent_rows, small = _rows(cur, prev, _history(store, trig, entity, every, n), n, floor)
+    by_ent = {r["g"]: r for r in ent_rows}
+    signals: dict = {}
+    for label in labels:
+        group = [label, entity]
+        c, p = _counts(store, trig, group, every)
+        rows, _small = _rows(c, p, _history(store, trig, group, every, n), n, floor)
+        for r in rows:
+            value, ent = r["g"]
+            signals.setdefault(ent, []).append({"label": label, "value": value, **_stat(r, n),
+                                                "_score": _score(r)})
+    # the entities worth a row: the most unusual by their own counts, and any carrying a signal
+    # that moved more than they did
+    def strength(e):
+        own = _score(by_ent[e]) if e in by_ent else 0.0
+        return max([own] + [x["_score"] for x in signals.get(e, [])])
+    candidates = [e for e in set(by_ent) | set(signals) if e in by_ent or signals.get(e)]
+    candidates.sort(key=lambda e: (-strength(e), str(e)))
+    chosen = candidates[:STATE_ENTITIES]
+
+    found = {}
+    if opts.get("findings"):
+        since = now_utc() - timedelta(seconds=parse_duration(opts["findings"]))
+        found = store.recent_findings(FINDINGS_SOURCE, [str(e) for e in chosen], since,
+                                      project=getattr(trig, "project", None))
+    numbers = {}
+    start = now_utc() - timedelta(seconds=every)
+    for field in opts.get("numbers") or []:
+        for agg in ("avg", "max"):
+            now_v = store.aggregate(trig.sources, field, agg, start, filters=trig.filters,
+                                    group_by=entity)
+            before_v = store.aggregate(trig.sources, field, agg, start - timedelta(seconds=every),
+                                       filters=trig.filters, group_by=entity, until=start)
+            for e in chosen:
+                if now_v.get(e) or before_v.get(e):
+                    numbers.setdefault(e, []).append({"field": field, "agg": agg,
+                                                      "now": now_v.get(e), "before": before_v.get(e)})
+    entities, rows_out = [], []
+    now = now_utc()
+    for i, e in enumerate(chosen, 1):
+        oid = f"o{i}"
+        own = by_ent.get(e) or {"now": 0, "before": 0, "usual": 0.0, "spread": 0.0,
+                                "z": _z(0, 0.0, 0.0) if n else None, "change": "none"}
+        sig = sorted(signals.get(e, []), key=lambda x: -x["_score"])[:STATE_SIGNALS]
+        row = {"id": oid, "value": str(e), "events": _stat(own, n),
+               "signals": [{k: v for k, v in x.items() if k != "_score"} for x in sig]}
+        if numbers.get(e):
+            row["numbers"] = numbers[e]
+        if str(e) in found:
+            f = found[str(e)]
+            row["last_finding"] = {
+                "verdict": f.get("verdict"), "agent": f.get("agent"),
+                "ago_minutes": int(max((now - _aware(f["at"])).total_seconds(), 0) // 60),
+                "headline": f.get("headline") or " ".join(str(f.get("finding") or "").split())[:200]}
+        where = {entity: str(e)}
+        if sig:
+            where[sig[0]["label"]] = str(sig[0]["value"])
+        ex = store.read_window(trig.sources, None, start, cap=1, filters=trig.filters, where=where)
+        if ex:
+            lines, _ = _render(sorted(ex, key=lambda r: r[0], reverse=True)[:1])
+            if lines:
+                row["example"] = _strip_age(lines[0])[:300]
+        entities.append(row)
+        rows_out.append({"id": oid, "value": str(e), "now": own["now"], "before": own["before"],
+                         "change": own["change"]})
+    tc, tp = sum(int(x) for x in cur.values()), sum(int(x) for x in prev.values())
+    state = {"window": {"every": window, "sources": list(trig.sources),
+                        "total": {"now": tc, "before": tp}},
+             "entity_label": entity,
+             "baseline_windows": n, "min_count": floor,
+             "left_out": {"small": small, "more": max(len(candidates) - len(chosen), 0)},
+             "entities": entities}
+    return state, rows_out
+
+
 def due(store, trig, now=None) -> bool:
     if getattr(trig, "paused", False):
         return False

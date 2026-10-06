@@ -6,6 +6,14 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Entity rows for a decision model (TR-401): with `decision.state: "entities"` ("it reads: one
+  row per entity" on the agent form), a decision watcher reads JSON instead of the text summary:
+  one row per entity, the most unusual first, each with its own counts and its signals (the
+  other labels' values under it) against the usual value, its spread and z, plus numbers, the
+  newest earlier finding and one example line. The `entity` options are the row ids, and a `kind`
+  question says what sort of problem it sees (stored on the run and in the CSV). Fixed caps keep
+  the price per tick steady. The trigger's summary options set the baseline, floor and lookback;
+  unset, they default to 6 windows, 5 events and 6h. What the model read is on the run's trace.
 - Richer schedule summary (TR-400): a schedule trigger can hand its agent more than the counts
   per label. `condition.summary` (or "Richer summary" on the trigger form) turns on, each on its
   own: every other label counted per entity (`by_entity`, so a 401 spike arrives tied to the

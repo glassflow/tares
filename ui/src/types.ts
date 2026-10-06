@@ -720,11 +720,15 @@ export interface DecisionEndpoints {
   kinds: { id: DecisionEndpoint["kind"]; label: string; models: string[] }[];
 }
 // An agent's decision settings (TR-324); {} for a chat-model agent.
-export interface AgentDecision { endpoint?: string; model?: string; threshold?: number; shadow?: boolean }
+export interface AgentDecision {
+  endpoint?: string; model?: string; threshold?: number; shadow?: boolean;
+  state?: "summary" | "entities";   // what the model reads (TR-401); absent = the summary text
+}
 // A decision run's probabilities, stored on the run.
 export interface RunScores {
   problem: number; threshold: number; shadow: boolean; escalate: boolean;
   label: string | null; entity: string | null; entity_p?: number;
+  state?: "entities"; kind?: string;   // an entity-row run (TR-401) and the kind of problem it named
   options?: { value: string; p: number }[];
 }
 

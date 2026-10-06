@@ -94,6 +94,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   const [decModel, setDecModel] = useState(initial?.decision?.model ?? "");
   const [threshold, setThreshold] = useState(String(initial?.decision?.threshold ?? 0.5));
   const [shadow, setShadow] = useState(initial?.decision ? !!initial.decision.shadow : true);
+  const [decState, setDecState] = useState<"summary" | "entities">(initial?.decision?.state ?? "summary");
   const [endpoints, setEndpoints] = useState<DecisionEndpoint[]>();
   useEffect(() => {
     let live = true;
@@ -245,7 +246,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
                                       cooldown: h.cooldown.trim() || "30m" })),
       concludes,
       verdicts: concludes ? verdicts.map((v) => ({ verdict: word(v), when: (v.when ?? "").trim() })) : [],
-      decision: decision ? { endpoint: decEndpoint, model: decModel, threshold: Number(threshold), shadow } : {},
+      decision: decision ? { endpoint: decEndpoint, model: decModel, threshold: Number(threshold), shadow, state: decState } : {},
     };
     try {
       if (isNew) await api.createBuiltinAgent(body);
@@ -353,6 +354,19 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
                       : <input type="text" className="mono" value={decModel} placeholder="as the endpoint names it, if it wants one"
                                onChange={(e) => setDecModel(e.target.value)} />}
                   </div>
+                </div>
+                <div className="field">
+                  <span className="lbl">it reads</span>
+                  <Picker value={decState} ariaLabel="what the decision model reads"
+                          options={["summary", "entities"]}
+                          labels={{ summary: "the schedule's summary, as a chat model would",
+                                    entities: "one row per entity, worked out for it (JSON)" }}
+                          onChange={(v) => setDecState(v as "summary" | "entities")} />
+                  <span className="help">
+                    {decState === "entities"
+                      ? "each entity with its own signals, how far each is from usual, an example line and any earlier finding; it also says what kind of problem it sees"
+                      : "the same text the schedule hands a chat model"}
+                  </span>
                 </div>
                 <div className="row2">
                   <label className="field">

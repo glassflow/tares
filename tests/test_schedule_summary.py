@@ -5,6 +5,7 @@ before.
 
 Runs against a real store with events placed in 10-minute windows.
 """
+import json
 import os
 import sys
 import tempfile
@@ -121,6 +122,34 @@ def main():
     check("sample lines for what moved, not the newest lines", "sample lines for what moved most" in rich
           and "POST /v1/traces 401" in rich and "most recent lines:" not in rich, rich[-800:])
     check("bounded", len(rich) <= schedule.RICH_MAX_CHARS + 60)
+
+    print("== the entity state for a decision model (TR-401) ==")
+    state, rows = schedule.entity_state(store, catalog, trig({"numbers": ["ms"]}))
+    print(json.dumps(state, indent=1)[:1500])
+    ents = state["entities"]
+    check("JSON with one row per entity, the most unusual first",
+          state["entity_label"] == "service" and ents and ents[0]["value"] == "api"
+          and ents[0]["id"] == "o1", json.dumps(ents[:1]))
+    api = ents[0]
+    check("the entity's own counts against its usual",
+          api["events"]["now"] == 190 and api["events"]["usual"] == 100.0 and api["events"]["z"] > 5)
+    sig = api["signals"][0] if api["signals"] else {}
+    check("its signals under it: 401 with now, before, usual and z",
+          sig.get("label") == "code" and sig.get("value") == "401" and sig.get("now") == 120
+          and sig.get("before") == 30 and sig.get("z", 0) > 5, json.dumps(api["signals"]))
+    check("defaults fill what the trigger leaves unset (baseline 6, floor 5)",
+          state["baseline_windows"] == 6 and state["min_count"] == 5
+          and state["left_out"]["small"] >= 1 and all(e["value"] != "docs" for e in ents))
+    check("numbers per entity", any(x["field"] == "ms" and x["agg"] == "avg" and x["now"] == 300
+                                    for x in api.get("numbers", [])), json.dumps(api.get("numbers")))
+    check("the earlier finding on api", (api.get("last_finding") or {}).get("verdict") == "resolved")
+    check("one example line from its strongest signal",
+          "POST /v1/traces 401" in api.get("example", ""), api.get("example"))
+    check("rows for the entity question match the state",
+          [r["id"] for r in rows] == [e["id"] for e in ents] and rows[0]["value"] == "api"
+          and rows[0]["now"] == 190)
+    check("bounded", len(ents) <= schedule.STATE_ENTITIES
+          and all(len(e["signals"]) <= schedule.STATE_SIGNALS for e in ents))
 
     print("== each part alone ==")
     only = schedule.summary(store, catalog, trig({"min_count": 5}))

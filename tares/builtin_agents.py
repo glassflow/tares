@@ -31,6 +31,7 @@ import uuid
 import httpx
 
 from . import decision as _decision
+from . import schedule as _schedule
 from . import metrics
 from . import results as _results
 from . import skills as _skills
@@ -974,10 +975,24 @@ class AgentRunner:
             trig = next((t for t in catalog.triggers if t.name == trigger_name), None) \
                 if catalog else None
             label = trigger_entity_label(trig, catalog.sources) if trig else None
-        qs, ids = _decision.questions(agent.get("prompt") or "", label if scheduled else None,
-                                      rows)
+        state = payload
+        if scheduled and settings.get("state") == "entities":
+            # one JSON row per entity instead of the text summary (TR-401)
+            try:
+                state, erows = _schedule.entity_state(self.store, self.runtime.catalog,
+                                                      self._trigger(trigger_name))
+                qs, ids = _decision.entity_questions(agent.get("prompt") or "", label, erows)
+            except Exception as e:
+                msg = f"decision model: building the entity state failed: {type(e).__name__}: {e}"
+                self.store.finish_agent_run(run_id, "failed", error=msg[:500])
+                return "failed", msg[:500]
+        else:
+            qs, ids = _decision.questions(agent.get("prompt") or "", label if scheduled else None,
+                                          rows)
+        # what the model read and was asked, on the run's trace
+        obs.set_input(json.dumps({"state": state, "questions": qs})[:60000])
         try:
-            out = await _decision.decide(endpoint, model, payload, qs)
+            out = await _decision.decide(endpoint, model, state, qs)
             concluded, scores = _decision.outcome(out["answers"], settings, label, ids,
                                                   None if scheduled else key)
         except _decision.DecisionError as e:
@@ -1344,6 +1359,9 @@ class AgentRunner:
                     seen.add(sk["name"])
                     out.append(sk)
         return out
+
+    def _trigger(self, trigger_name: str):
+        return next((t for t in self.runtime.catalog.triggers if t.name == trigger_name), None)
 
     def _is_scheduled(self, trigger_name: str) -> bool:
         """Whether the run was woken by a schedule trigger (TR-320), which ticks for all its

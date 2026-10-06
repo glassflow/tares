@@ -2668,7 +2668,7 @@ def make_app() -> FastAPI:
         w = csv.writer(buf)
         w.writerow(["started_at", "status", "outcome", "verdict", "key", "probability",
                     "threshold", "entity", "entity_probability", "would_escalate", "shadow",
-                    "model", "input_tokens", "cost_usd", "duration_ms", "summary"])
+                    "state", "kind", "model", "input_tokens", "cost_usd", "duration_ms", "summary"])
         for r in store.list_agent_runs(name, limit=min(max(1, limit), 20000)):
             sc = r.get("scores") or {}
             w.writerow([r["started_at"], r["status"], r.get("outcome") or "", r.get("verdict") or "",
@@ -2676,6 +2676,7 @@ def make_app() -> FastAPI:
                         sc.get("entity") or "", sc.get("entity_p", ""),
                         "" if not sc else ("yes" if sc.get("escalate") else "no"),
                         "" if not sc else ("yes" if sc.get("shadow") else "no"),
+                        sc.get("state") or ("summary" if sc else ""), sc.get("kind") or "",
                         r.get("model") or "", r.get("input_tokens") or "",
                         r.get("cost_usd") if r.get("cost_usd") is not None else "",
                         r.get("duration_ms") or "", (r.get("finding") or r.get("error") or "")[:500]])

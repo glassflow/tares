@@ -338,17 +338,44 @@ async def e2e():
             await asyncio.sleep(2)
             check("nothing more handed off", len(await runs("rca")) == 1)
 
+            print("== the entity state (TR-401) ==")
+            n_before = len(DECISIONS)
+            PROBLEM[0] = 0.9
+            r = await cx.put(f"{B}/api/agents/builtin/watcher", json={
+                **watcher, "decision": {**watcher["decision"], "shadow": True, "state": "entities"}})
+            check("the watcher reads one row per entity now", r.status_code == 200, r.text[:200])
+            await cx.post(f"{B}/api/agents/builtin/watcher/runs/{w['id']}/rerun")
+            check("that run finished", await until(lambda: done("watcher", 4)))
+            body = DECISIONS[-1]["body"] if len(DECISIONS) > n_before else {}
+            st = body.get("state")
+            check("the state is JSON with entity rows",
+                  isinstance(st, dict) and st.get("entity_label") == "service"
+                  and any(e.get("value") == "ui" for e in st.get("entities", [])), str(st)[:400])
+            ent_q = body.get("questions", {}).get("entity", {}).get("criteria", {})
+            check("entity options are the rows' ids, plus none",
+                  set(ent_q) == {e["id"] for e in st.get("entities", [])} | {"none"}, str(ent_q))
+            check("it is asked what kind of problem", body.get("questions", {}).get("kind", {})
+                  .get("type") == "choice")
+            w4 = (await runs("watcher"))[0]
+            sc4 = w4.get("scores") or {}
+            check("the run names its state and the entity it picked",
+                  sc4.get("state") == "entities" and sc4.get("entity") == "ui"
+                  and sc4.get("escalate"), json.dumps(sc4))
+            r = await cx.put(f"{B}/api/agents/builtin/watcher", json={
+                **watcher, "decision": {**watcher["decision"], "state": "nope"}})
+            check("an unknown state is refused", r.status_code == 400, r.text[:200])
+
             print("== the daily cap does not apply ==")
             await cx.put(f"{B}/api/settings/agents", json={"daily_cap": 1})
             await cx.post(f"{B}/api/agents/builtin/watcher/runs/{w['id']}/rerun")
-            check("another run finished", await until(lambda: done("watcher", 4)))
+            check("another run finished", await until(lambda: done("watcher", 5)))
             check("it was not capped", (await runs("watcher"))[0]["status"] == "ok",
                   json.dumps((await runs("watcher"))[0])[:300])
 
             print("== the export ==")
             r = await cx.get(f"{B}/api/agents/builtin/watcher/runs.csv")
             lines = r.text.strip().splitlines()
-            check("one row per run under a header", r.status_code == 200 and len(lines) == 5
+            check("one row per run under a header", r.status_code == 200 and len(lines) == 6
                   and lines[0].startswith("started_at,status,outcome"), r.text[:300])
             check("the shadow run reads as would-escalate, in shadow",
                   ",0.9,0.5,ui,0.8,yes,yes," in lines[-1], lines[-1])

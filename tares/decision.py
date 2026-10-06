@@ -40,6 +40,16 @@ TIMEOUT = 30.0
 PRICING = {"clef-flash": 0.09}
 
 VERDICT = "investigate"
+# What the model reads (TR-401): the schedule's text summary, or one JSON row per entity
+STATES = ("summary", "entities")
+KINDS_OF_PROBLEM = {
+    "error_spike": "errors or failures went up",
+    "traffic_spike": "much more traffic than usual",
+    "traffic_drop": "much less traffic than usual, or it stopped",
+    "new_source": "a source of traffic that was not there before",
+    "slowdown": "responses got slower",
+    "none": "nothing stands out",
+}
 DEFAULT_THRESHOLD = 0.5
 MAX_OPTIONS = 40     # entity options offered, largest change first (the API takes up to 255)
 DEFAULT_PROBLEM = (
@@ -290,8 +300,12 @@ def normalize(name: str, d) -> dict:
         raise ValueError(f"agent {name!r}: the threshold is a number between 0 and 1")
     if not 0 < t < 1:
         raise ValueError(f"agent {name!r}: the threshold is a number between 0 and 1")
+    state = str(d.get("state") or "summary").strip().lower()
+    if state not in STATES:
+        raise ValueError(f"agent {name!r}: decision state is one of {', '.join(STATES)}")
     return {"endpoint": endpoint, "model": str(d.get("model") or "").strip(),
-            "threshold": t, "shadow": bool(d.get("shadow"))}
+            "threshold": t, "shadow": bool(d.get("shadow")),
+            **({"state": state} if state != "summary" else {})}
 
 
 def model_for(e: dict, settings: dict) -> str:
@@ -316,6 +330,22 @@ def questions(problem: str, label: str | None, rows: list[dict]) -> tuple[dict, 
     return qs, ids
 
 
+def entity_questions(problem: str, label: str, rows: list[dict]) -> tuple[dict, dict]:
+    """The questions for an entity-row state (TR-401): `problem`, `entity` over the rows' ids,
+    and `kind`, what sort of problem it is."""
+    qs = {"problem": {"type": "noul", "instructions": problem.strip() or DEFAULT_PROBLEM},
+          "kind": {"type": "choice", "criteria": dict(KINDS_OF_PROBLEM),
+                   "instructions": "What kind of problem does this window show, if any?"}}
+    ids = {r["id"]: r for r in rows}
+    if rows:
+        criteria = {r["id"]: f"{label}={r['value']} (the entities row with id {r['id']})"
+                    for r in rows}
+        criteria["none"] = f"no {label} stands out"
+        qs["entity"] = {"type": "choice", "criteria": criteria,
+                        "instructions": f"Which {label} row does the problem concern?"}
+    return qs, ids
+
+
 def outcome(answers: dict, settings: dict, label: str | None, ids: dict,
             key: str) -> tuple[dict, dict]:
     """(the conclude outcome, the scores stored on the run) for one decision call."""
@@ -335,7 +365,10 @@ def outcome(answers: dict, settings: dict, label: str | None, ids: dict,
     else:
         value = key    # a trigger that fired on one entity: that entity
     escalate = p >= t and value is not None
+    kind, _kind_p = choice(answers.get("kind")) if "kind" in answers else (None, {})
     scores = {"problem": round(p, 4), "threshold": t, "shadow": settings["shadow"],
+              **({"state": settings["state"]} if settings.get("state") else {}),
+              **({"kind": kind} if kind else {}),
               "escalate": escalate, "label": label, "entity": value,
               **({"entity_p": round(entity_p, 4)} if entity_p is not None else {}),
               **({"options": options} if options else {})}

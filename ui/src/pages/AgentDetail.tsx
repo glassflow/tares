@@ -22,7 +22,7 @@ export function DecisionSummary({ agent }: { agent: BuiltinAgent }) {
   const d = agent.decision ?? {};
   return <>
     <span className="mono">{d.endpoint}{d.model ? ` / ${d.model}` : ""}</span>
-    <span className="help"> · a decision model, threshold {d.threshold ?? 0.5}</span>
+    <span className="help"> · a decision model, threshold {d.threshold ?? 0.5}{d.state === "entities" ? ", reads one row per entity" : ""}</span>
     {d.shadow && <> <span className="badge warn" title="it scores every window but never hands anything on">shadow</span></>}
   </>;
 }
@@ -628,7 +628,8 @@ function RunRow({ r, open, focused, onToggle, outcomes = false }: {
               {r.scores && (
                 <p className="help" style={{ margin: "0 0 8px", whiteSpace: "normal" }}>
                   decision model: <strong>{Math.round(r.scores.problem * 100)}%</strong> that this window shows a problem
-                  (threshold {r.scores.threshold}){r.scores.shadow ? ", in shadow mode" : ""}.
+                  (threshold {r.scores.threshold}){r.scores.shadow ? ", in shadow mode" : ""}
+                  {r.scores.kind && r.scores.kind !== "none" ? `; kind: ${r.scores.kind.replace(/_/g, " ")}` : ""}.
                   {(r.scores.options ?? []).length > 0 && <> Entity: {(r.scores.options ?? []).map((o, i) => (
                     <span key={o.value}>{i ? ", " : " "}<span className="mono">{o.value}</span> {Math.round(o.p * 100)}%</span>))}.</>}
                 </p>
