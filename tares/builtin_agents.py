@@ -976,7 +976,11 @@ class AgentRunner:
                 if catalog else None
             label = trigger_entity_label(trig, catalog.sources) if trig else None
         state = payload
-        if scheduled and settings.get("state") == "entities":
+        used = settings.get("state") or _decision.DEFAULT_STATE
+        if not scheduled:
+            used = "timeline"
+        settings = {**settings, "state": used}
+        if used == "entities":
             # one JSON row per entity instead of the text summary (TR-401)
             try:
                 state, erows = _schedule.entity_state(self.store, self.runtime.catalog,

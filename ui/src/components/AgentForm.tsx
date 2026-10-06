@@ -94,7 +94,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   const [decModel, setDecModel] = useState(initial?.decision?.model ?? "");
   const [threshold, setThreshold] = useState(String(initial?.decision?.threshold ?? 0.5));
   const [shadow, setShadow] = useState(initial?.decision ? !!initial.decision.shadow : true);
-  const [decState, setDecState] = useState<"summary" | "entities">(initial?.decision?.state ?? "summary");
+  const [decState, setDecState] = useState<"summary" | "entities">(initial?.decision?.state ?? "entities");
   const [endpoints, setEndpoints] = useState<DecisionEndpoint[]>();
   useEffect(() => {
     let live = true;
@@ -358,14 +358,14 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
                 <div className="field">
                   <span className="lbl">it reads</span>
                   <Picker value={decState} ariaLabel="what the decision model reads"
-                          options={["summary", "entities"]}
-                          labels={{ summary: "the schedule's summary, as a chat model would",
-                                    entities: "one row per entity, worked out for it (JSON)" }}
+                          options={["entities", "summary"]}
+                          labels={{ entities: "one row per entity, worked out for it (JSON)",
+                                    summary: "the schedule's summary, as a chat model would (a control to compare with)" }}
                           onChange={(v) => setDecState(v as "summary" | "entities")} />
                   <span className="help">
                     {decState === "entities"
                       ? "each entity with its own signals, how far each is from usual, an example line and any earlier finding; it also says what kind of problem it sees"
-                      : "the same text the schedule hands a chat model"}
+                      : "the same text the schedule hands a chat model; useful to compare models on the same input"}
                   </span>
                 </div>
                 <div className="row2">

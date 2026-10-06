@@ -6,8 +6,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- Entity rows for a decision model (TR-401): with `decision.state: "entities"` ("it reads: one
-  row per entity" on the agent form), a decision watcher reads JSON instead of the text summary:
+- Entity rows for a decision model (TR-401): on a schedule trigger a decision watcher reads JSON
+  by default (`decision.state: "entities"`; `"summary"` gives it the text summary instead, as a
+  control when comparing models):
   one row per entity, the most unusual first, each with its own counts and its signals (the
   other labels' values under it) against the usual value, its spread and z, plus numbers, the
   newest earlier finding and one example line. The `entity` options are the row ids, and a `kind`

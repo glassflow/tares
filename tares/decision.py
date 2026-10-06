@@ -40,8 +40,11 @@ TIMEOUT = 30.0
 PRICING = {"clef-flash": 0.09}
 
 VERDICT = "investigate"
-# What the model reads (TR-401): the schedule's text summary, or one JSON row per entity
-STATES = ("summary", "entities")
+# What the model reads (TR-401): one JSON row per entity (the default, what a decision model is
+# built for), or the schedule's text summary, the same text a chat model gets (a control in a
+# comparison). A trigger that fires on one entity always hands over its timeline text.
+STATES = ("entities", "summary")
+DEFAULT_STATE = "entities"
 KINDS_OF_PROBLEM = {
     "error_spike": "errors or failures went up",
     "traffic_spike": "much more traffic than usual",
@@ -300,12 +303,12 @@ def normalize(name: str, d) -> dict:
         raise ValueError(f"agent {name!r}: the threshold is a number between 0 and 1")
     if not 0 < t < 1:
         raise ValueError(f"agent {name!r}: the threshold is a number between 0 and 1")
-    state = str(d.get("state") or "summary").strip().lower()
+    state = str(d.get("state") or DEFAULT_STATE).strip().lower()
     if state not in STATES:
         raise ValueError(f"agent {name!r}: decision state is one of {', '.join(STATES)}")
     return {"endpoint": endpoint, "model": str(d.get("model") or "").strip(),
             "threshold": t, "shadow": bool(d.get("shadow")),
-            **({"state": state} if state != "summary" else {})}
+            **({"state": state} if state != DEFAULT_STATE else {})}
 
 
 def model_for(e: dict, settings: dict) -> str:
@@ -367,7 +370,7 @@ def outcome(answers: dict, settings: dict, label: str | None, ids: dict,
     escalate = p >= t and value is not None
     kind, _kind_p = choice(answers.get("kind")) if "kind" in answers else (None, {})
     scores = {"problem": round(p, 4), "threshold": t, "shadow": settings["shadow"],
-              **({"state": settings["state"]} if settings.get("state") else {}),
+              "state": settings.get("state") or DEFAULT_STATE,
               **({"kind": kind} if kind else {}),
               "escalate": escalate, "label": label, "entity": value,
               **({"entity_p": round(entity_p, 4)} if entity_p is not None else {}),

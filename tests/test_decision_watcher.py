@@ -91,7 +91,11 @@ def unit_checks():
     check("the threshold is between 0 and 1",
           "between 0 and 1" in raises(dm.normalize, "a", {"endpoint": "x", "threshold": 1.5}))
     n = dm.normalize("a", {"endpoint": "x"})
-    check("defaults: threshold 0.5, not shadow", n["threshold"] == 0.5 and n["shadow"] is False)
+    check("defaults: threshold 0.5, not shadow, entity rows",
+          n["threshold"] == 0.5 and n["shadow"] is False and "state" not in n
+          and dm.DEFAULT_STATE == "entities")
+    check("the summary text is kept when asked for",
+          dm.normalize("a", {"endpoint": "x", "state": "summary"})["state"] == "summary")
 
     print("== questions and outcome ==")
     rows = [{"value": "ui", "now": 60, "before": 0, "change": "new"},
@@ -254,14 +258,15 @@ async def e2e():
                        "prompt": ba.PRESETS["triage-decision"]["prompt"],
                        "verdicts": ba.PRESETS["triage-decision"]["verdicts"],
                        "handoffs": [{"verdict": "investigate", "agent": "rca"}],
-                       "decision": {"endpoint": "stub", "threshold": 0.5, "shadow": True}}
+                       "decision": {"endpoint": "stub", "threshold": 0.5, "shadow": True,
+                                    "state": "summary"}}
             r = await cx.post(f"{B}/api/agents/builtin", json=watcher)
             check("the decision watcher created, in shadow mode", r.status_code == 201, r.text[:200])
             agents = (await cx.get(f"{B}/api/agents/builtin")).json()
             row = next(a for a in agents["agents"] if a["name"] == "watcher")
             check("the agent lists its decision settings",
                   row["decision"] == {"endpoint": "stub", "model": "", "threshold": 0.5,
-                                      "shadow": True}, json.dumps(row["decision"]))
+                                      "shadow": True, "state": "summary"}, json.dumps(row["decision"]))
             check("the agents listing offers the endpoints and the preset",
                   [e["id"] for e in agents["decision_endpoints"]] == ["stub"]
                   and any(p["id"] == "triage-decision" for p in agents["presets"]))
@@ -342,8 +347,9 @@ async def e2e():
             n_before = len(DECISIONS)
             PROBLEM[0] = 0.9
             r = await cx.put(f"{B}/api/agents/builtin/watcher", json={
-                **watcher, "decision": {**watcher["decision"], "shadow": True, "state": "entities"}})
-            check("the watcher reads one row per entity now", r.status_code == 200, r.text[:200])
+                **watcher, "decision": {k: v for k, v in watcher["decision"].items() if k != "state"}})
+            check("without a state it reads one row per entity (the default)",
+                  r.status_code == 200, r.text[:200])
             await cx.post(f"{B}/api/agents/builtin/watcher/runs/{w['id']}/rerun")
             check("that run finished", await until(lambda: done("watcher", 4)))
             body = DECISIONS[-1]["body"] if len(DECISIONS) > n_before else {}

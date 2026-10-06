@@ -22,7 +22,7 @@ export function DecisionSummary({ agent }: { agent: BuiltinAgent }) {
   const d = agent.decision ?? {};
   return <>
     <span className="mono">{d.endpoint}{d.model ? ` / ${d.model}` : ""}</span>
-    <span className="help"> · a decision model, threshold {d.threshold ?? 0.5}{d.state === "entities" ? ", reads one row per entity" : ""}</span>
+    <span className="help"> · a decision model, threshold {d.threshold ?? 0.5}{d.state === "summary" ? ", reads the summary text" : ", reads one row per entity"}</span>
     {d.shadow && <> <span className="badge warn" title="it scores every window but never hands anything on">shadow</span></>}
   </>;
 }

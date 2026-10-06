@@ -2676,7 +2676,7 @@ def make_app() -> FastAPI:
                         sc.get("entity") or "", sc.get("entity_p", ""),
                         "" if not sc else ("yes" if sc.get("escalate") else "no"),
                         "" if not sc else ("yes" if sc.get("shadow") else "no"),
-                        sc.get("state") or ("summary" if sc else ""), sc.get("kind") or "",
+                        sc.get("state") or "", sc.get("kind") or "",
                         r.get("model") or "", r.get("input_tokens") or "",
                         r.get("cost_usd") if r.get("cost_usd") is not None else "",
                         r.get("duration_ms") or "", (r.get("finding") or r.get("error") or "")[:500]])
