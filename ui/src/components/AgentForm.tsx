@@ -553,6 +553,15 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
         </button>
         {advancedOpen && (
           <div style={{ marginTop: 8 }}>
+            <span className="lbl">budget (USD)</span>
+            <input type="number" min={0} step={1} value={budget} placeholder="no budget"
+                   onChange={(e) => setBudget(e.target.value)}
+                   style={{ width: 110 }} aria-label="budget in US dollars" />
+            <span className="help" style={{ display: "block", marginTop: 4, marginBottom: 10 }}>
+              what this agent may spend in all, from its runs so far; once reached, its runs stop
+              before calling the model. Blank means no budget.
+              {initial?.stats?.cost_usd != null && <> Spent so far: ${initial.stats.cost_usd.toFixed(2)}.</>}
+            </span>
             <span className="lbl">max rounds</span>
             <input type="number" min={1} max={maxRoundsLimit} value={maxRounds}
                    placeholder={String(mcpSel.length ? defaultMaxRoundsWithMcp : defaultMaxRounds)}
@@ -574,6 +583,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
                           || (writebackOn && !webhookUrl.trim())
                           || (channelOn && !channel)
                           || handoffs.some(handoffBad) || handoffDup
+                          || (!!budget.trim() && !(Number(budget) > 0))
                           || (!!maxRounds.trim() && (Number(maxRounds) < 1
                               || Number(maxRounds) > maxRoundsLimit
                               || !Number.isInteger(Number(maxRounds))))}>

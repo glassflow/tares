@@ -668,6 +668,21 @@ async def main():
         r = await cx.get(f"/api/projects/{a}/results?before=yesterday")
         ck("a bad cursor is a 400", r.status_code == 400, r.text)
 
+        # the Show filter: a busy watcher's "nothing to report" out of the way
+        fo = (await cx.get(f"/api/projects/{a}/results", params={"show": "findings"})).json()
+        eq("only findings leaves out what had nothing to report",
+           [x["entity"] for x in fo["results"]],
+           [x["entity"] for x in res["results"] if not x["no_op"]])
+        ck("orders-api's no_op is the one left out", "orders-api" not in
+           {x["entity"] for x in fo["results"]} and by_entity["orders-api"]["no_op"])
+        ag = (await cx.get(f"/api/projects/{a}/results", params={"show": "agent:checkout-rca"})).json()
+        eq("one agent's conclusions", [x["id"] for x in ag["results"]],
+           [x["id"] for x in res["results"] if x["chain"][-1] == "checkout-rca"])
+        ck("the root-cause result is among them", rca[0]["id"] in {x["id"] for x in ag["results"]})
+        eq("today counts the whole project whatever the filter", ag["today"], res["today"])
+        r = await cx.get(f"/api/projects/{a}/results", params={"show": "nope"})
+        ck("an unknown filter is a 400", r.status_code == 400, r.text)
+
         print("== a result's steps ==")
         det = (await cx.get(f"/api/projects/{a}/results/{rca[0]['id']}")).json()
         eq("the note in full", det.get("note"), SCRIPT["checkout-rca"]["summary"])
