@@ -297,11 +297,33 @@ async def list_projects(store, q: str = "") -> list[dict]:
 _ISSUES = """query($id: String!, $after: String) {
   project(id: $id) {
     issues(first: 100, after: $after, includeArchived: false) {
-      nodes { id identifier title url sortOrder updatedAt state { name type } }
+      nodes { id identifier title url sortOrder updatedAt state { name type }
+              projectMilestone { id }
+              inverseRelations(first: 50) { nodes { type issue { id } } } }
       pageInfo { hasNextPage endCursor }
     }
   }
 }"""
+
+# a Linear project's milestones, in Linear's order (TR-411)
+_MILESTONES = """query($id: String!) {
+  project(id: $id) {
+    projectMilestones(first: 100) { nodes { id name description sortOrder } }
+  }
+}"""
+
+
+def blockers_of(issue: dict) -> list[str]:
+    """The Linear ids of the issues that block this one (a "blocks" relation pointing at it)."""
+    rel = ((issue.get("inverseRelations") or {}).get("nodes")) or []
+    return [r["issue"]["id"] for r in rel
+            if str(r.get("type") or "").lower() == "blocks" and (r.get("issue") or {}).get("id")]
+
+
+async def fetch_milestones(store, linear_project_id: str) -> list[dict]:
+    data = await query(store, _MILESTONES, {"id": linear_project_id})
+    proj = data.get("project") or {}
+    return list(((proj.get("projectMilestones") or {}).get("nodes")) or [])
 
 # Linear's workflow state types -> a ticket's status
 _STATUS = {"backlog": "todo", "unstarted": "todo", "triage": "todo", "started": "in_progress",
@@ -349,9 +371,11 @@ async def sync_project(store, uid: str) -> list[Envelope]:
         return []
     try:
         issues = await fetch_issues(store, link["id"])
+        milestones = await fetch_milestones(store, link["id"])
     except LinearError as e:
         store.set_project_linear(uid, {**link, "error": str(e)})
         raise
+    ms_ids = _sync_milestones(store, uid, milestones)
     have = {t["external_id"]: t for t in store.list_tickets(uid) if t["owner"] == "linear"}
     seen, out = set(), []
     for iss in issues:
@@ -359,10 +383,12 @@ async def sync_project(store, uid: str) -> list[Envelope]:
         status = status_of(iss.get("state"))
         pos = float(iss.get("sortOrder") or 0)
         ident = iss.get("identifier") or iss["id"]
+        ms = ms_ids.get((iss.get("projectMilestone") or {}).get("id") or "")
         cur = have.get(iss["id"])
         if cur is None:
             store.create_ticket(uid, "linear", iss.get("title") or ident, status, pos,
-                                external_id=iss["id"], identifier=ident, url=iss.get("url"))
+                                external_id=iss["id"], identifier=ident, url=iss.get("url"),
+                                milestone=ms)
             out.append(_env(project, link, iss, "created",
                             f"{ident} added in Linear: {iss.get('title')}", {"status": status}))
             continue
@@ -383,8 +409,19 @@ async def sync_project(store, uid: str) -> list[Envelope]:
                             {"from": cur["position"], "to": pos}))
         if cur["identifier"] != ident or cur["url"] != iss.get("url"):
             changes.update(identifier=ident, url=iss.get("url"))
+        if cur["milestone"] != ms:
+            changes["milestone"] = ms
         if changes:
             store.update_ticket(cur["id"], **changes)
+    # blocking relations become dependencies, once every issue has its ticket
+    by_ext = {t["external_id"]: t for t in store.list_tickets(uid) if t["owner"] == "linear"}
+    for iss in issues:
+        t = by_ext.get(iss["id"])
+        if t is None:
+            continue
+        deps = [by_ext[b]["id"] for b in blockers_of(iss) if b in by_ext and b != iss["id"]]
+        if sorted(deps) != sorted(t["depends_on"]):
+            store.update_ticket(t["id"], depends_on=deps)
     for ext, cur in have.items():
         if ext in seen or cur["status"] == "canceled":
             continue
@@ -398,6 +435,38 @@ async def sync_project(store, uid: str) -> list[Envelope]:
     store.set_project_linear(uid, {**link, "synced_at": now_utc().isoformat(), "error": None,
                                    "issues": len(issues)})
     return out
+
+
+def _sync_milestones(store, uid: str, milestones: list[dict]) -> dict[str, str]:
+    """Linear's project milestones mirrored on the project (name and order from Linear; goal
+    from its description until someone writes one on Tares; checks always Tares's). A milestone
+    gone from Linear goes here too, its tickets keep going without one. Returns {Linear id:
+    milestone id}."""
+    have = {m["external_id"]: m for m in store.list_milestones(uid) if m["owner"] == "linear"}
+    ids: dict[str, str] = {}
+    for lm in milestones:
+        name = (lm.get("name") or "").strip() or "Milestone"
+        pos = float(lm.get("sortOrder") or 0)
+        cur = have.get(lm["id"])
+        if cur is None:
+            # a Tares milestone of the same name (written before the link) becomes this one
+            same = store.get_milestone(uid, name)
+            if same and same["owner"] != "linear":
+                store.update_milestone(same["id"], owner="linear", external_id=lm["id"],
+                                       position=pos)
+                ids[lm["id"]] = same["id"]
+                continue
+            ids[lm["id"]] = store.create_milestone(
+                uid, name, " ".join(str(lm.get("description") or "").split())[:500], [], pos,
+                owner="linear", external_id=lm["id"])
+            continue
+        ids[lm["id"]] = cur["id"]
+        if cur["name"] != name or cur["position"] != pos:
+            store.update_milestone(cur["id"], name=name, position=pos)
+    for ext, cur in have.items():
+        if ext not in ids:
+            store.delete_milestone(cur["id"])
+    return ids
 
 
 def ensure_source(store) -> bool:

@@ -4,7 +4,7 @@ import { api } from "../../api";
 import { TimeAgo, usePolling } from "../bits";
 import { VLink, type Ctx } from "./common";
 import { Goal } from "./overview";
-import type { DocSummary, ProjectSession, Ticket } from "../../types";
+import type { DocSummary, Milestone, ProjectSession, Ticket } from "../../types";
 
 // The page of a software factory project (kind "software_factory"): a project a spec session
 // made in Claude Code and sessions build from docs and tickets. Where the build stands (spec,
@@ -52,8 +52,13 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const { data: docs } = usePolling(() => api.docs(ctx.id), 15000);
   const { data: tk } = usePolling(() => api.tickets(ctx.id), 15000);
   const { data: ss } = usePolling(() => api.projectSessions(ctx.id), 15000);
+  const { data: msd } = usePolling(() => api.milestones(ctx.id), 15000);
   const tickets = tk?.tickets ?? [];
-  const next = tickets.find((t) => t.status === "in_progress") ?? tickets.find((t) => t.status === "todo");
+  const milestones = msd?.milestones ?? [];
+  // the ticket a build takes next: the one in progress, else the first ready one (TR-414)
+  const next = tickets.find((t) => t.status === "in_progress")
+    ?? tickets.find((t) => t.status === "todo" && t.ready);
+  const blocked = tickets.filter((t) => t.status === "todo" && !t.ready && t.blocked_by.length);
 
   const own = (docs ?? []).filter((d) => !d.global && d.kind !== "working" && d.kind !== "note");
   const shared = (docs ?? []).filter((d) => d.global);
@@ -146,9 +151,11 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
                 prompt={prompt} waiting={attention !== null && next.status === "in_progress"} />
       ) : tk && (
         <section className="fo-next fo-next-empty">
-          {tickets.length
-            ? <h2>Every ticket is done.</h2>
-            : <><h2>No tickets yet</h2><p className="help">Run <span className="mono">/tares:spec</span> in Claude Code to spec this project, or add tickets under Setup.</p></>}
+          {!tickets.length
+            ? <><h2>No tickets yet</h2><p className="help">Run <span className="mono">/tares:spec</span> in Claude Code to spec this project, or add tickets under Setup.</p></>
+            : blocked.length
+              ? <><h2>No ticket is ready</h2><p className="help">Every open ticket waits for another one that is not done: {blocked.map((t) => `${t.label} waits for ${t.blocked_by.join(", ")}`).join("; ")}.</p></>
+              : <h2>Every ticket is done.</h2>}
         </section>
       )}
 
@@ -176,16 +183,22 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
         </Fold>
 
         <Fold id="tickets" title="Tickets"
-              meta={`${tickets.length} · ${done} done · ${tk?.linear ? "in Linear" : "in Tares"}`}>
-          <ol className="fo-tickets">
-            {tickets.map((t, i) => (
-              <li key={t.id} className={t.id === next?.id ? "is-next" : ""}>
-                <span className="fo-n">{t.identifier ?? i + 1}</span>
-                <VLink v={{ kind: "ticket", name: t.id }}>{t.title}</VLink>
-                <span className={`fo-st fo-st-${t.status}`}>{t.id === next?.id && t.status === "todo" ? "next" : STATUS_TEXT[t.status]}</span>
-              </li>
-            ))}
-          </ol>
+              meta={[`${tickets.length} · ${done} done`,
+                     milestones.length ? `${milestones.length} ${milestones.length === 1 ? "milestone" : "milestones"}` : "",
+                     tk?.linear ? "in Linear" : "in Tares"].filter(Boolean).join(" · ")}>
+          {milestones.length ? (
+            <>
+              {milestones.map((m) => (
+                <MilestoneGroup key={m.id} m={m} tickets={tickets.filter((t) => t.milestone === m.id)} nextId={next?.id} />
+              ))}
+              {tickets.some((t) => !t.milestone) && (
+                <>
+                  <div className="fo-sub">No milestone</div>
+                  <TicketList tickets={tickets.filter((t) => !t.milestone)} nextId={next?.id} />
+                </>
+              )}
+            </>
+          ) : <TicketList tickets={tickets} nextId={next?.id} />}
           <div className="fo-foot"><VLink v={{ kind: "tickets" }} className="fo-link">All tickets</VLink></div>
         </Fold>
       </div>
@@ -327,8 +340,8 @@ function NextUp({ ctx, next, of, total, prompt, waiting }: {
   return (
     <section className="fo-next" aria-labelledby="fo-next-h">
       <span className="fo-label">
-        {next.status === "in_progress" ? (waiting ? "In progress · stopped" : "In progress") : "Next up"} · ticket {of} of {total}
-        {next.identifier && <> · {next.identifier}</>}
+        {next.status === "in_progress" ? (waiting ? "In progress · stopped" : "In progress") : "Next up"} · {next.label} · ticket {of} of {total}
+        {next.milestone_name && <> · {next.milestone_name}</>}
       </span>
       <h2 id="fo-next-h">{next.title}</h2>
       {text && <p className="fo-gist">{text}</p>}
@@ -340,6 +353,55 @@ function NextUp({ ctx, next, of, total, prompt, waiting }: {
       </div>
       <span className="help">Paste it into a new Claude Code session with the Tares plugin, in the project's repository.</span>
     </section>
+  );
+}
+
+/** A milestone's tickets under its name, progress and goal, its acceptance checks folded. */
+function MilestoneGroup({ m, tickets, nextId }: { m: Milestone; tickets: Ticket[]; nextId?: string }) {
+  return (
+    <div className="fo-ms">
+      <div className="fo-ms-head">
+        <b>{m.name}</b>
+        <span className={`fo-st${m.finished ? " fo-st-done" : ""}`}>
+          {m.finished ? "done" : `${m.done} of ${m.tickets}`}
+        </span>
+      </div>
+      {m.goal && <p className="fo-ms-goal">{m.goal}</p>}
+      {m.checks.length > 0 && (
+        <details className="fo-checks">
+          <summary>{m.checks.length} acceptance {m.checks.length === 1 ? "check" : "checks"}</summary>
+          <ul>
+            {m.checks.map((c, i) => (
+              <li key={i}><code>{c.check}</code>{c.expect && <> <span aria-hidden="true">→</span> {c.expect}</>}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {tickets.length ? <TicketList tickets={tickets} nextId={nextId} />
+        : <p className="fo-empty">No tickets in this milestone yet.</p>}
+    </div>
+  );
+}
+
+function TicketList({ tickets, nextId }: { tickets: Ticket[]; nextId?: string }) {
+  return (
+    <ol className="fo-tickets">
+      {tickets.map((t) => {
+        const waits = t.status === "todo" && t.blocked_by.length > 0;
+        return (
+          <li key={t.id} className={t.id === nextId ? "is-next" : ""}>
+            <span className="fo-n">{t.label}</span>
+            <span className="fo-tk">
+              <VLink v={{ kind: "ticket", name: t.id }}>{t.title}</VLink>
+              {waits && <small className="fo-wait">waits for {t.blocked_by.join(", ")}</small>}
+            </span>
+            <span className={`fo-st fo-st-${t.status}`}>
+              {t.id === nextId && t.status === "todo" ? "next" : waits ? "blocked" : STATUS_TEXT[t.status]}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 

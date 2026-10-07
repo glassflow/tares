@@ -1,120 +1,188 @@
 ---
 name: spec-project
-description: Use when the user wants to spec, plan or brainstorm a new project, feature or piece of work so that another session can build it later (any wording, or /tares:spec). Guides the brainstorm, then writes everything the build needs into a Tares project (spec, plan, AGENTS.md, starting prompt, a ticket list with a working doc per ticket), with the tickets in Linear when the user wants Linear.
+description: Use when the user wants to spec, plan or brainstorm a new project, feature or piece of work so that another session or a tares-factory crew can build it later (any wording, or /tares:spec). Interviews one question at a time with a recommended answer, removes unknowns with research and throwaway prototypes, has a second model attack the plan, then writes everything the build needs into a Tares project (spec, plan, milestones with acceptance checks, AGENTS.md, starting prompt, tickets with dependencies and a working doc each), with the tickets in Linear when the user wants Linear.
 ---
 
 # Spec a project into Tares
 
-You are the spec session. Your job ends when a fresh Claude Code session, told only the project's
-name, can read everything it needs from Tares and start building without asking the user anything
-you could have written down. You do not build anything here.
+You are the spec session. Your job ends when a fresh Claude Code session, or a tares-factory
+crew, told only the project's name, can read everything it needs from Tares and build it without
+asking the user anything you could have written down. Cheaper models may build the tickets, so
+nothing may be left for them to guess. You do not build anything here.
 
-## 0. Read the shared docs
+## 0. Read what is already decided
 
-Call `read_global_docs` first. It returns the AGENTS.md and the memory every project shares: the
-user's standing rules (for example how they use git) and facts that hold everywhere. Follow them
-and do not ask again for what they already answer.
+- Call `read_global_docs` first: the AGENTS.md and memory every project shares hold the user's
+  standing rules and facts. Follow them and do not ask again for what they answer.
+- Call `read_grants` if it exists: the user's standing permissions for the factory. Only ask
+  about what is different for this project.
+- If the project builds on a repo that exists, **read the repo before asking about it**: layout,
+  stack, how it builds and tests today, its own AGENTS.md or README.
 
 **Throughout the session:** when the user states something that holds beyond this project (a
 standing rule such as "always build on a branch", or a fact such as "prices are in euros"), ask
-once: "Should I add that to the shared AGENTS.md (or memory) so every project gets it?" On yes,
-call `add_to_global` with `agents` for a rule or `memory` for a fact, one short line. Rules that
-only fit this project go in its own AGENTS.md instead.
+once whether to add it to the shared AGENTS.md (or memory). On yes, `add_to_global` with `agents`
+for a rule or `memory` for a fact, one short line.
 
-## 1. Brainstorm first
+## 1. Understand the idea, one question at a time
 
-Talk it through before writing anything. Ask, a few questions at a time, until these are clear:
+Interview the user the way a good tech lead would: **one question per message, each with your
+recommended answer and why**, so the user can just say yes. Never send a list of questions. Stop
+when you could explain the project to a new engineer. Cover:
 
-- the goal, in one line, and who it is for
+- the goal in one line, who it is for, and what a user can do when it is done
 - what is in and what is explicitly out of scope
-- constraints: stack, repos, data, deadlines, what must not change
-- how we will know it works (the checks a builder can run, and where: a performance target
-  needs the machine it is measured on)
+- constraints: stack, hosting, data, deadlines, budget, what must not change
 - where the code lives (repo path or URL, branch) and the git rules (push or not, PRs or not)
-- the rough shape of the work: the pieces and their order
+- how we will know it works, and where it is checked (a performance target needs the machine it
+  is measured on)
+- how it ships: where it runs, how a release is done and checked, how it is rolled back
+- whether it will run on a tares-factory crew, or be built by one session (see step 8)
 
-Push back on vague answers. Offer options with a recommendation when the user is unsure. Do not
-call any Tares write tool until the user agrees the idea is clear enough to write down.
+Push back on vague answers. Do not call any Tares write tool until the user agrees the idea is
+clear enough to write down.
 
-## 2. Where the tickets live
+## 2. Remove the unknowns before planning
 
-Ask: "Should the tickets live in Linear, or only in Tares?"
+For anything uncertain (a library you have not used, an API whose behaviour you are guessing, a
+performance question, a UI the user cannot picture):
 
-- **Linear:** you need Linear's own MCP tools in this session (a `linear` server, or the user's
-  Linear connector). If they are missing, say so and offer to keep the tickets in Tares instead.
-  Tares also needs Linear connected (Tares console, Settings, Linear) to keep its ticket list in
-  sync; `link_linear_project` says so if it is not.
+- research it (docs, the repo, the web) and say what you found;
+- prove a risky assumption with a quick throwaway prototype in a scratch git worktree, delete it
+  afterwards, and say what it showed;
+- show a UI idea as a mockup (an HTML page or a sketch) and get a yes before planning around it;
+- check how the work fits the existing code: what it touches, what could break.
+
+Every open question is answered here, by the user or by evidence, or becomes an explicit
+assumption written in the spec.
+
+## 3. Plan in milestones that ship something checkable
+
+- **Milestones** each ship something a person can see and check. Small first milestone. No
+  milestone depends on a later one. Each has **acceptance checks**: a command and what it should
+  show, or a URL and what it returns, that a releaser can run after the milestone ships.
+- **Tickets** are an hour or two of agent work each, one PR each, in order. Each belongs to a
+  milestone and names the tickets it depends on. A ticket a cheaper model cannot finish without
+  guessing is too big or too vague: split it or say more.
+
+## 4. Have a second model attack the plan
+
+Before writing anything to Tares, give a subagent on a **different model from yours** (`model:
+"sonnet"` if you run on Opus, `"opus"` if you run on Sonnet) the spec, the plan with its checks,
+and every ticket with its working doc, and ask it to find:
+
+- steps a builder would have to guess, and words that mean two things;
+- tickets that are too big, in the wrong order, or with hidden dependencies;
+- acceptance checks that cannot fail or cannot be run;
+- anything missing from AGENTS.md that a builder needs to build, test or release;
+- risks the plan ignores.
+
+Fix what holds up. **Show the user a short list of what changed and why**, then continue.
+
+## 5. Where the tickets live
+
+Ask (one question, with your recommendation): "Should the tickets live in Linear, or only in
+Tares?"
+
+- **Linear:** you need Linear's own MCP tools in this session (a `linear` server or the user's
+  Linear connector). If they are missing, say so and offer Tares instead. Tares also needs Linear
+  connected (Tares console, Settings, Linear) to keep its list in sync.
 - **Tares only:** nothing else to set up.
 
-## 3. Create the project
+## 6. Write the project into Tares
 
-Call `create_project` with a short unique name and the one-line goal. Use that name as `project`
-in every call after this. This also ties this session's recording to the project.
+Write for a reader who was not here: no "as discussed", no references to this conversation.
 
-## 4. Write the docs that live only in Tares
+1. `create_project` with a short unique name and the one-line goal. Use that name as `project` in
+   every call after this.
+2. `write_doc` kind `spec`: what is built and why, who it is for, scope in and out, constraints,
+   decisions made here (with the user's words where they decided), assumptions still open.
+3. `write_doc` kind `plan`: the milestones in order with their goal and the tickets in each.
+4. `write_doc` kind `agents`, the AGENTS.md of the build: where the code lives (absolute path or
+   clone URL, branch), layout, exact commands to install, build, run, test, lint; conventions; the
+   git rules; what not to touch; and the **release section**: how to release, where it runs, how
+   to check it went out, how to roll back, as exact commands. Propose the release section and get
+   the user's yes. Ask for anything you do not know; a builder cannot guess it.
+5. Milestones: `write_milestone` once per milestone, in order, with its goal and its acceptance
+   checks (`[{"check": ..., "expect": ...}]`).
+6. Tickets, in order:
+   - **Linear:** create the Linear project named like the Tares project, its milestones, and one
+     issue per ticket in its milestone, with a two or three line description; add a "blocks"
+     relation for each dependency. Then `link_linear_project` with the Linear project's URL, and
+     `write_milestone` again for each milestone to add its checks (Linear has no place for them).
+     Check the ticket list Tares returns matches what you created.
+   - **Tares only:** `write_ticket` once per ticket with `milestone` and `depends_on` (the
+     tickets' labels, `T1`, `T2`, ...). Titles say what the ticket does, without a number.
+7. A working doc per ticket: `write_doc` kind `working`, titled `Working: <ticket title>`, then
+   `attach_working_doc`. Working docs never go to Linear. Use exactly these sections:
 
-Use `write_doc`. Write for a reader who was not here: no "as discussed", no references to this
-conversation.
+   ```markdown
+   ## Goal
+   What this ticket delivers, in one or two lines.
 
-- `spec`: what is built and why, who it is for, scope in and out, constraints, how it is checked.
-- `plan`: milestones in order, what each delivers, and how the tickets map onto them.
-- `agents`: the AGENTS.md of the build: where the code lives (the repo's absolute path or clone
-  URL, and the branch to work on), repo layout, commands to build and test, conventions, what not
-  to touch, and the git rules (commit per ticket or not, push or keep local, open PRs or not).
-  Ask the user for anything here you do not know; a builder cannot guess it.
+   ## Context and files
+   Why it exists, what it builds on (its dependencies), and the files or modules likely touched.
 
-## 5. Create the tickets
+   ## Steps
+   1. Concrete steps in order, naming files and functions.
 
-One ticket per piece of work a session can finish and verify on its own, in the order they should
-be done. Titles say what the ticket does, without a number in front: the list keeps the order.
+   ## Definition of done
+   - Observable results that must hold.
 
-- **Linear:** create a Linear project named like the Tares project, and one issue per ticket in
-  order, with the title and a two or three line description only. Then call
-  `link_linear_project` with the Linear project's URL. Tares reads the tickets from Linear; check
-  the list it returns matches what you created.
-- **Tares only:** call `write_ticket` once per ticket, in order.
+   ## Out of scope
+   - What this ticket must not do.
 
-## 6. A working doc per ticket
+   ## How to check
+   - `<command>` -> <expected output>
 
-For every ticket, `write_doc` with kind `working`, titled `Working: <ticket title>`, then
-`attach_working_doc` with the ticket's id (or Linear identifier, e.g. ENG-12). Working docs never
-go to Linear. Each one holds:
-
-- **Context:** why this ticket exists and what it depends on
-- **Steps:** concrete steps, in order
-- **Files:** the files or modules likely touched
-- **Verify:** the exact checks that prove it is done (commands, expected output, what to look at)
-- **Out of scope:** what this ticket must not do
+   ## Progress
+   (The builder keeps this current: what is done, what is next, how to run what it needs.)
+   ```
 
 ## 7. The starting prompt
 
-`write_doc` with kind `start`, titled `Start here`. It is the first thing a building session
-reads. Say:
+`write_doc` kind `start`, titled `Start here`: the first thing a building session reads. Which one
+depends on how the project is built (step 1's last question).
 
-- what the project is, in two lines, and that the spec, plan and AGENTS.md are in this Tares
-  project (`list_docs`, `get_doc`)
-- to read the shared AGENTS.md and memory too (the docs marked `global`, or
-  `read_global_docs`): they hold the user's standing rules, and the project's AGENTS.md adds to
-  them
-- where the code lives: the repo's absolute path or clone URL and the branch, and what to do if
-  it is not there yet
-- how to work: take tickets in order with `list_tickets`, read each with `get_ticket` (it carries
-  the working doc), and mark progress (in Linear for Linear tickets, `write_ticket` otherwise)
+**Built by one session:**
+
+- what the project is, in two lines, and that the spec, plan, milestones and AGENTS.md are in this
+  Tares project (`list_docs`, `get_doc`, `list_milestones`)
+- to read the shared AGENTS.md and memory too (`read_global_docs`): the project's AGENTS.md adds
+  to them
+- where the code lives: the repo's absolute path or clone URL, the branch, and what to do if it
+  is not there yet
+- how to work: one milestone at a time; within it, the ready tickets from `list_tickets` in
+  order; each read with `get_ticket` (it carries the working doc); progress marked (in Linear for
+  Linear tickets, `write_ticket` otherwise); when a milestone's tickets are done, run its checks
 - if a ticket is already in progress when the session starts, an earlier session stopped on it:
-  call `pick_up` first and finish that ticket instead of starting it over
-- to keep a `## Progress` section at the end of the ticket's working doc (`write_doc` with the
-  doc's id), updated after each step that works: what is done, what is next, and how to run what
-  it needs (servers, databases, test logins). A session that picks the build up reads it first
-- which ticket to start with
-- where questions go: leave a `note` doc in the project when something is unclear (the wiring to
-  an orchestrator session comes later)
+  `pick_up` first and finish that ticket instead of starting it over
+- to keep the working doc's `## Progress` current after each step that works
+- where questions go: a `note` doc in the project when something is unclear
+
+**Built by a tares-factory crew:** the starting prompt is what every station and builder joins
+from.
+
+- Get the join snippet: run `factory snippet` in a terminal if the `factory` CLI is installed;
+  otherwise use the kit's `plugin/templates/join-snippet.md`. Put it in the starting prompt as
+  is, then the two lines on what the project is, where the code lives, and that the plan,
+  milestones, tickets and AGENTS.md are on this Tares project.
+- Builders ask the crew's orchestrator, not the user, and record what they assume with `assume`;
+  they do not leave `note` docs.
+- Do not include the single-session instructions above.
 
 ## 8. Check, then hand over
 
-Call `list_docs` and `list_tickets` and confirm: a spec, a plan, an AGENTS.md, a starting prompt,
-and every ticket has a working doc. Fix anything missing. Then tell the user, briefly:
+Call `list_docs`, `list_milestones` and `list_tickets` and confirm: a spec, a plan, an AGENTS.md
+with a release section, a starting prompt, every milestone has checks, every ticket has a
+milestone and a working doc with all sections, and only the first tickets are ready. Fix anything
+missing. Then tell the user, briefly:
 
-- the project name and what it holds (counts, not a dump)
+- the project name and what it holds (counts, not a dump), and the assumptions worth a glance
 - where the tickets live, with the Linear link if any
-- the exact sentence to start the build in a new session:
-  `Work on Tares project "<name>": read its starting prompt and begin.`
+- the next step:
+  - one session: the exact sentence to start the build in a new session:
+    `Work on Tares project "<name>": read its starting prompt and begin.`
+  - a crew: hand the project to the crew (see the hand-over step if this skill has one), or, if
+    no crew is running, run `factory crew up` in a terminal first. Starting stations hands them
+    the user's permissions, so the user starts them, not you.

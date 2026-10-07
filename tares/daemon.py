@@ -52,6 +52,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_
                              DEFAULT_API_BASE)
 from . import metrics as _metrics
 from . import docs as docs_mod
+from . import factory as factory_mod
 from . import linear as _linear
 from . import skills as skills_mod
 from . import providers as providers_mod
@@ -754,6 +755,7 @@ def make_app() -> FastAPI:
         ("GET", re.compile(r"^/docs/[^/]+$"), "read"),
         ("GET", re.compile(r"^/tickets$"), "read"),
         ("GET", re.compile(r"^/tickets/[^/]+$"), "read"),
+        ("GET", re.compile(r"^/milestones$"), "read"),
         ("GET", re.compile(r"^/sessions$"), "read"),
         ("GET", re.compile(r"^/sessions/[^/]+$"), "read"),
         ("GET", re.compile(r"^/pickup$"), "read"),
@@ -4315,14 +4317,72 @@ def make_app() -> FastAPI:
                  "projects": [{"id": p, "name": names.get(p, p)} for p in d["projects"]]}
                 for d in docs_mod.sort_docs(store.list_cell_docs())]
 
-    def _ticket_out(uid: str, t: dict, with_doc: bool = False) -> dict:
+    def _plan_ctx(uid: str) -> dict:
+        """What every ticket's view needs from the rest of the plan: the tickets by id, the
+        milestones' names, and which tickets are ready (TR-411, TR-412)."""
+        tickets = store.list_tickets(uid)
+        return {"by_id": {t["id"]: t for t in tickets},
+                "ms": {m["id"]: m["name"] for m in store.list_milestones(uid)},
+                "ready": factory_mod.readiness(tickets)}
+
+    def _ticket_out(uid: str, t: dict, with_doc: bool = False, ctx: dict | None = None) -> dict:
+        ctx = ctx or _plan_ctx(uid)
         out = {k: t[k] for k in ("id", "owner", "identifier", "url", "title", "status",
-                                 "position", "working_doc", "updated_at")}
+                                 "position", "working_doc", "updated_at", "number", "milestone")}
+        out["label"] = factory_mod.label(t)
+        out["milestone_name"] = ctx["ms"].get(t["milestone"]) if t["milestone"] else None
+        out["depends_on"] = [factory_mod.label(ctx["by_id"][d]) for d in t["depends_on"]
+                             if d in ctx["by_id"]]
+        r = ctx["ready"].get(t["id"]) or {"ready": False, "blocked_by": []}
+        out["ready"], out["blocked_by"] = r["ready"], r["blocked_by"]
         doc = store.get_doc(uid, t["working_doc"]) if t["working_doc"] else None
         out["working_doc_title"] = doc["title"] if doc else None
         if with_doc:
             out["working_doc_body"] = doc["body"] if doc else None
         return out
+
+    def _tickets_out(uid: str) -> list[dict]:
+        ctx = _plan_ctx(uid)
+        return [_ticket_out(uid, t, ctx=ctx) for t in store.list_tickets(uid)]
+
+    def _milestone_ref(uid: str, ref) -> str | None:
+        """The id of the milestone `ref` names (id or name), None for "" or None; 404 otherwise."""
+        ref = str(ref or "").strip()
+        if not ref:
+            return None
+        m = store.get_milestone(uid, ref)
+        if m is None:
+            names = [x["name"] for x in store.list_milestones(uid)]
+            _err(KeyError(f"project has no milestone {ref!r}"
+                          + ("; one of: " + ", ".join(names) if names
+                             else "; write it first with write_milestone")), 404)
+        return m["id"]
+
+    def _depends_ref(uid: str, tid: str | None, refs) -> list[str]:
+        """The ids of the tickets `refs` name, refusing an unknown ticket, the ticket itself and
+        a dependency loop."""
+        try:
+            refs = factory_mod.depends_ok(refs)
+        except docs_mod.DocError as e:
+            _err(e)
+        ids: list[str] = []
+        for ref in refs:
+            d = store.get_ticket(uid, ref)
+            if d is None:
+                _err(KeyError(f"project has no ticket {ref!r} to depend on"), 404)
+            if d["id"] == tid:
+                _err(ValueError("a ticket cannot depend on itself"))
+            if d["id"] not in ids:
+                ids.append(d["id"])
+        if tid and ids:
+            deps = {t["id"]: t["depends_on"] for t in store.list_tickets(uid)}
+            deps[tid] = ids
+            loop = factory_mod.find_loop(deps, tid)
+            if loop:
+                by_id = {t["id"]: t for t in store.list_tickets(uid)}
+                _err(ValueError("that makes a dependency loop: " + " -> ".join(
+                    factory_mod.label(by_id[x]) for x in loop if x in by_id)), 409)
+        return ids
 
     def _ticket_or_404(uid: str, ref: str) -> dict:
         t = store.get_ticket(uid, ref)
@@ -4343,13 +4403,12 @@ def make_app() -> FastAPI:
         Linear project they live in when the project uses Linear (`linear`, with the last
         sync's time and error)."""
         _project_or_404(uid)
-        return {"tickets": [_ticket_out(uid, t) for t in store.list_tickets(uid)],
-                "linear": store.get_project_linear(uid)}
+        return {"tickets": _tickets_out(uid), "linear": store.get_project_linear(uid)}
 
     @app.post("/api/projects/{uid}/tickets", status_code=201)
     async def create_project_ticket(uid: str, body: dict = Body(...)):
-        """{title, status?, position?, working_doc?}: a ticket Tares owns. Refused when the
-        project's tickets live in Linear."""
+        """{title, status?, position?, working_doc?, milestone?, depends_on?}: a ticket Tares
+        owns. Refused when the project's tickets live in Linear."""
         _project_or_404(uid)
         if store.get_project_linear(uid):
             _err(ValueError("this project's tickets live in Linear; add the ticket there and "
@@ -4360,9 +4419,12 @@ def make_app() -> FastAPI:
         except docs_mod.DocError as e:
             _err(e)
         pos = body.get("position")
+        milestone = _milestone_ref(uid, body.get("milestone"))
+        depends = _depends_ref(uid, None, body.get("depends_on"))
         tid = store.create_ticket(uid, "tares", title, status,
                                   float(pos) if pos is not None else None,
-                                  working_doc=_working_doc_ok(uid, body.get("working_doc")))
+                                  working_doc=_working_doc_ok(uid, body.get("working_doc")),
+                                  milestone=milestone, depends_on=depends)
         return _ticket_out(uid, _ticket_or_404(uid, tid))
 
     @app.get("/api/projects/{uid}/tickets/{ref}")
@@ -4373,14 +4435,15 @@ def make_app() -> FastAPI:
 
     @app.put("/api/projects/{uid}/tickets/{ref}")
     async def update_project_ticket(uid: str, ref: str, body: dict = Body(...)):
-        """Change a ticket. A Linear ticket only takes `working_doc` (its title, status and order
-        change in Linear); a Tares ticket also takes title, status and position."""
+        """Change a ticket. A Linear ticket only takes `working_doc` (its title, status, order,
+        milestone and blocking relations change in Linear); a Tares ticket also takes title,
+        status, position, milestone and depends_on."""
         _project_or_404(uid)
         t = _ticket_or_404(uid, ref)
         fields: dict = {}
         if "working_doc" in body:
             fields["working_doc"] = _working_doc_ok(uid, body.get("working_doc"))
-        own = {"title", "status", "position"} & set(body)
+        own = {"title", "status", "position", "milestone", "depends_on"} & set(body)
         if own and t["owner"] == "linear":
             _err(ValueError(f"{t['identifier'] or t['id']} lives in Linear: change its "
                             + ", ".join(sorted(own)) + " there"), 409)
@@ -4393,6 +4456,10 @@ def make_app() -> FastAPI:
             _err(e)
         if "position" in body and body["position"] is not None:
             fields["position"] = float(body["position"])
+        if "milestone" in body:
+            fields["milestone"] = _milestone_ref(uid, body.get("milestone"))
+        if "depends_on" in body:
+            fields["depends_on"] = _depends_ref(uid, t["id"], body.get("depends_on"))
         if fields:
             store.update_ticket(t["id"], **fields)
         return _ticket_out(uid, _ticket_or_404(uid, t["id"]), with_doc=True)
@@ -4407,6 +4474,94 @@ def make_app() -> FastAPI:
                  409)
         store.delete_ticket(t["id"])
         return {"ok": True, "deleted": t["id"]}
+
+    # ── milestones (TR-411): each ships something a person can check, its acceptance checks.
+    # A Linear-linked project's milestones come from Linear; their checks stay Tares's ──────
+    def _milestones_out(uid: str) -> list[dict]:
+        tickets = _tickets_out(uid)
+        out = []
+        for m in store.list_milestones(uid):
+            mine = [t for t in tickets if t["milestone"] == m["id"]]
+            done = sum(1 for t in mine if t["status"] in factory_mod.DONE_STATUSES)
+            out.append({**{k: m[k] for k in ("id", "owner", "name", "goal", "checks", "position",
+                                              "updated_at")},
+                        "tickets": len(mine), "done": done,
+                        "ready": [t["label"] for t in mine if t["ready"]],
+                        "finished": bool(mine) and done == len(mine)})
+        return out
+
+    def _milestone_or_404(uid: str, ref: str) -> dict:
+        m = store.get_milestone(uid, ref)
+        if m is None:
+            _err(KeyError(f"project has no milestone {ref!r}"), 404)
+        return m
+
+    @app.get("/api/projects/{uid}/milestones")
+    async def list_project_milestones(uid: str):
+        """The project's milestones in order, each with its goal, acceptance checks, and how far
+        its tickets are (count, done, the ready ones, finished)."""
+        _project_or_404(uid)
+        return {"milestones": _milestones_out(uid)}
+
+    @app.post("/api/projects/{uid}/milestones", status_code=201)
+    async def create_project_milestone(uid: str, body: dict = Body(...)):
+        """{name, goal?, checks?: [{check, expect}], position?}. A milestone with the same name
+        is changed instead of added twice."""
+        _project_or_404(uid)
+        try:
+            name, goal, checks = factory_mod.milestone_ok(body.get("name"), body.get("goal"),
+                                                          body.get("checks"))
+        except docs_mod.DocError as e:
+            _err(e)
+        cur = store.get_milestone(uid, name)
+        pos = body.get("position")
+        if cur:
+            fields = {"goal": goal, "checks": checks}
+            if pos is not None and cur["owner"] != "linear":
+                fields["position"] = float(pos)
+            store.update_milestone(cur["id"], **fields)
+            mid = cur["id"]
+        else:
+            if store.get_project_linear(uid):
+                _err(ValueError("this project's milestones live in Linear: add it there, then "
+                                "write its checks here"), 409)
+            mid = store.create_milestone(uid, name, goal, checks,
+                                         float(pos) if pos is not None else None)
+        return next(m for m in _milestones_out(uid) if m["id"] == mid)
+
+    @app.put("/api/projects/{uid}/milestones/{ref}")
+    async def update_project_milestone(uid: str, ref: str, body: dict = Body(...)):
+        """Change a milestone's name, goal, checks or position. A Linear milestone only takes
+        goal and checks (its name and order change in Linear)."""
+        _project_or_404(uid)
+        m = _milestone_or_404(uid, ref)
+        if m["owner"] == "linear" and ({"name", "position"} & set(body)):
+            _err(ValueError(f"{m['name']} lives in Linear: rename or reorder it there"), 409)
+        fields: dict = {}
+        try:
+            if "name" in body:
+                fields["name"] = docs_mod.title_ok(body["name"])
+            if "goal" in body:
+                fields["goal"] = factory_mod.goal_ok(body["goal"])
+            if "checks" in body:
+                fields["checks"] = factory_mod.checks_ok(body["checks"])
+        except docs_mod.DocError as e:
+            _err(e)
+        if body.get("position") is not None:
+            fields["position"] = float(body["position"])
+        if fields:
+            store.update_milestone(m["id"], **fields)
+        return next(x for x in _milestones_out(uid) if x["id"] == m["id"])
+
+    @app.delete("/api/projects/{uid}/milestones/{ref}")
+    async def delete_project_milestone(uid: str, ref: str):
+        """Delete a Tares milestone; its tickets stay, without a milestone."""
+        _project_or_404(uid)
+        m = _milestone_or_404(uid, ref)
+        if m["owner"] == "linear":
+            _err(ValueError(f"{m['name']} lives in Linear: remove it there"), 409)
+        store.delete_milestone(m["id"])
+        return {"ok": True, "deleted": m["id"]}
 
     # ── the Claude Code sessions that worked in a project (TR-405) ────────────
     @app.get("/api/projects/{uid}/sessions")
@@ -4464,8 +4619,10 @@ def make_app() -> FastAPI:
 
     def _pickup(uid: str) -> dict:
         tickets = store.list_tickets(uid)
+        ready = factory_mod.readiness(tickets)
         ticket = next((t for t in tickets if t["status"] == "in_progress"), None)
-        nxt = ticket or next((t for t in tickets if t["status"] == "todo"), None)
+        nxt = ticket or next((t for t in tickets if t["status"] == "todo"
+                              and ready[t["id"]]["ready"]), None)
         sessions = store.project_sessions(uid)
         prev = _previous_session(sessions, ticket) if ticket else None
         out: dict = {"ticket": _ticket_out(uid, nxt, with_doc=True) if nxt else None,
@@ -4632,7 +4789,7 @@ def make_app() -> FastAPI:
             await _linear_sync_now(uid)
         except _linear.LinearError:
             pass   # recorded on the link; the answer shows it
-        return {"tickets": [_ticket_out(uid, t) for t in store.list_tickets(uid)],
+        return {"tickets": _tickets_out(uid),
                 "linear": store.get_project_linear(uid)}
 
     @app.post("/api/projects/{uid}/linear/sync")
@@ -4645,7 +4802,7 @@ def make_app() -> FastAPI:
             await _linear_sync_now(uid)
         except _linear.LinearError as e:
             _linear_err(e)
-        return {"tickets": [_ticket_out(uid, t) for t in store.list_tickets(uid)],
+        return {"tickets": _tickets_out(uid),
                 "linear": store.get_project_linear(uid)}
 
     @app.delete("/api/projects/{uid}/linear")
@@ -4657,7 +4814,10 @@ def make_app() -> FastAPI:
         for t in store.list_tickets(uid):
             if t["owner"] == "linear":
                 store.update_ticket_owner(t["id"], "tares")
-        return {"tickets": [_ticket_out(uid, t) for t in store.list_tickets(uid)],
+        for m in store.list_milestones(uid):
+            if m["owner"] == "linear":
+                store.update_milestone(m["id"], owner="tares", external_id=None)
+        return {"tickets": _tickets_out(uid),
                 "linear": None}
 
     # ── joining a project (TR-335, TR-336): its keys, an external agent's subscription to it,

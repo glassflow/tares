@@ -16,6 +16,7 @@ from datetime import datetime
 import duckdb
 
 from .envelope import Envelope, now_utc
+from .factory_store import FACTORY_SCHEMA, FactoryStore
 
 # the URL a Tares agent's subscription had before the wiring moved onto projects (config.agent_url)
 AGENT_PREFIX = "tares://agent/"
@@ -465,6 +466,11 @@ _MIGRATIONS = [
     # What kind of project it is, shown as a tag and choosing its page (NULL = an ordinary
     # project). 'software_factory': specced in Claude Code, built from docs and tickets.
     "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS kind TEXT",
+    # The factory's plan (TR-411, TR-412): the milestone a ticket belongs to (a milestone id),
+    # the tickets it depends on ([ticket id]), and its number in the project (T1, T2, ...)
+    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS milestone TEXT",
+    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS depends_on JSON",
+    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS number INTEGER",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -635,7 +641,7 @@ class StoreUnavailable(RuntimeError):
         self.path = path
 
 
-class Store:
+class Store(FactoryStore):
     def __init__(self, path: str = "tares.duckdb"):
         # All access is from taresd's event loop thread; the lock is belt-and-suspenders since
         # FastAPI may run sync work in a threadpool.
@@ -656,6 +662,8 @@ class Store:
                     self.con.execute(stmt)
             for stmt in _MIGRATIONS:
                 self.con.execute(stmt)
+            for stmt in FACTORY_SCHEMA:
+                self.con.execute(stmt)
             self._rename_query_log_scope()
             self._fold_views()
             self._migrate_claude_code_repo_label()
@@ -664,6 +672,7 @@ class Store:
             self._wiring_upgrade()
             self._skills_upgrade()
             self._factory_kind_upgrade()
+            self._factory_upgrade()
             self._init_source_stats()
             self._init_entity_counts()
             # Write the upgrade into the database file now. Left in the WAL, the new columns on
@@ -2277,6 +2286,7 @@ class Store:
             self._forget_unused_skills()   # a skill another project uses stays
             self._forget_unused_docs()     # so does a doc
             self.con.execute("DELETE FROM tickets WHERE project = ?", [uid])
+            self._factory_forget_project(uid)
             self.con.execute("DELETE FROM project_sessions WHERE project = ?", [uid])
             self.con.execute("DELETE FROM session_states WHERE session NOT IN (SELECT session "
                              "FROM project_sessions)")
@@ -2524,19 +2534,23 @@ class Store:
                          "FROM usecase_objects WHERE kind = 'doc')")
 
     _TICKET_COLS = ("id, project, owner, external_id, identifier, url, title, status, position, "
-                    "working_doc, created_at, updated_at")
+                    "working_doc, created_at, updated_at, milestone, depends_on, number")
 
     @staticmethod
     def _ticket_row(r) -> dict:
         return {"id": r[0], "project": r[1], "owner": r[2], "external_id": r[3],
                 "identifier": r[4], "url": r[5], "title": r[6], "status": r[7],
-                "position": r[8], "working_doc": r[9], "created_at": r[10], "updated_at": r[11]}
+                "position": r[8], "working_doc": r[9], "created_at": r[10], "updated_at": r[11],
+                "milestone": r[12], "depends_on": json.loads(r[13]) if r[13] else [],
+                "number": r[14]}
 
     def create_ticket(self, project: str, owner: str, title: str, status: str = "todo",
                       position: float | None = None, external_id: str | None = None,
                       identifier: str | None = None, url: str | None = None,
-                      working_doc: str | None = None) -> str:
-        """A ticket at the end of the project's list unless `position` says where."""
+                      working_doc: str | None = None, milestone: str | None = None,
+                      depends_on: list[str] | None = None) -> str:
+        """A ticket at the end of the project's list unless `position` says where. It gets the
+        project's next number (T1, T2, ...)."""
         tid = "tk_" + uuid.uuid4().hex[:10]
         ts = now_utc()
         with self._lock:
@@ -2544,20 +2558,26 @@ class Store:
                 last = self.con.execute("SELECT max(position) FROM tickets WHERE project = ?",
                                         [project]).fetchone()[0]
                 position = (last or 0) + 1
+            num = (self.con.execute("SELECT max(number) FROM tickets WHERE project = ?",
+                                    [project]).fetchone()[0] or 0) + 1
             self.con.execute(
                 f"INSERT INTO tickets ({self._TICKET_COLS}) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [tid, project, owner, external_id, identifier, url, title, status,
-                 float(position), working_doc, ts, ts])
+                 float(position), working_doc, ts, ts, milestone,
+                 json.dumps(depends_on) if depends_on else None, num])
         return tid
 
     def update_ticket(self, tid: str, **fields) -> None:
         """Set the given columns (title, status, position, working_doc, identifier, url,
-        external_id); None clears working_doc only when passed explicitly."""
+        external_id, milestone, depends_on); None clears working_doc or milestone only when passed
+        explicitly."""
         allowed = {"title", "status", "position", "working_doc", "identifier", "url",
-                   "external_id"}
+                   "external_id", "milestone", "depends_on"}
         sets, vals = ["updated_at = ?"], [now_utc()]
         for col, v in fields.items():
+            if col == "depends_on":
+                v = json.dumps(v) if v else None
             if col in allowed:
                 sets.append(f"{col} = ?"); vals.append(v)
         vals.append(tid)
@@ -2577,12 +2597,17 @@ class Store:
         return [self._ticket_row(r) for r in rows]
 
     def get_ticket(self, project: str, ref: str) -> dict | None:
-        """A ticket of the project by its id, Linear identifier (ENG-12, any case) or Linear
-        issue id."""
+        """A ticket of the project by its id, Linear identifier (ENG-12, any case), Linear
+        issue id, or number (T3, or 3)."""
+        m = re.match(r"^[Tt]?(\d{1,6})$", (ref or "").strip())
+        num = int(m.group(1)) if m else -1
         with self._lock:
             r = self.con.execute(
                 f"SELECT {self._TICKET_COLS} FROM tickets WHERE project = ? AND (id = ? OR "
-                "upper(identifier) = upper(?) OR external_id = ?)", [project, ref, ref, ref]
+                "upper(identifier) = upper(?) OR external_id = ?) "
+                "UNION ALL "
+                f"SELECT {self._TICKET_COLS} FROM tickets WHERE project = ? AND number = ? "
+                "LIMIT 1", [project, ref, ref, ref, project, num]
             ).fetchone()
         return self._ticket_row(r) if r else None
 

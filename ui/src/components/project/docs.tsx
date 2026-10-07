@@ -345,12 +345,17 @@ export function TicketsView({ ctx }: { ctx: Ctx }) {
       )}
       {data === undefined ? <div className="dim">loading…</div> : tickets.length ? (
         <table>
-          <thead><tr><th>#</th><th>ticket</th><th>status</th><th>working doc</th></tr></thead>
+          <thead><tr><th>#</th><th>ticket</th><th>milestone</th><th>status</th><th>working doc</th></tr></thead>
           <tbody>
-            {tickets.map((t, i) => (
+            {tickets.map((t) => (
               <tr key={t.id} className="clickable" onClick={() => ctx.go({ kind: "ticket", name: t.id })}>
-                <td className="dim">{t.identifier ?? i + 1}</td>
-                <td><VLink v={{ kind: "ticket", name: t.id }}>{t.title}</VLink></td>
+                <td className="dim">{t.label}</td>
+                <td>
+                  <VLink v={{ kind: "ticket", name: t.id }}>{t.title}</VLink>
+                  {t.status === "todo" && t.blocked_by.length > 0 &&
+                    <div className="dim" style={{ fontSize: 12 }}>waits for {t.blocked_by.join(", ")}</div>}
+                </td>
+                <td>{t.milestone_name ?? <span className="dim">none</span>}</td>
                 <td onClick={(e) => e.stopPropagation()}>
                   {t.owner === "tares"
                     ? <Picker value={t.status} options={STATUSES} labels={STATUS_LABEL}
@@ -399,7 +404,13 @@ export function TicketView({ ctx, name }: { ctx: Ctx; name: string }) {
         </>}
       </ViewHead>
       <Facts rows={[
+        ["ticket", data.label],
         ["status", <StatusBadge s={data.status} />],
+        ["milestone", data.milestone_name ?? <span className="dim">none</span>],
+        ["depends on", data.depends_on.length ? data.depends_on.join(", ") : <span className="dim">nothing</span>],
+        ["ready", data.status === "todo"
+          ? (data.ready ? "yes" : `no, waits for ${data.blocked_by.join(", ")}`)
+          : <span className="dim">{data.status === "in_progress" ? "being worked on" : "finished"}</span>],
         ["changed", <TimeAgo ts={data.updated_at} />],
       ]} />
       {editingDoc ? (

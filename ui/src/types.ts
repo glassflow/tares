@@ -372,6 +372,28 @@ export interface Ticket {
   working_doc_title: string | null;
   working_doc_body?: string | null;
   updated_at: string;
+  // the factory's plan (TR-411, TR-412)
+  number: number | null;
+  label: string;                  // the Linear identifier, else T<n>
+  milestone: string | null;       // milestone id
+  milestone_name: string | null;
+  depends_on: string[];           // labels of the tickets it waits for
+  ready: boolean;                 // not finished, and everything it depends on is
+  blocked_by: string[];           // labels of the unfinished tickets it depends on
+}
+export interface MilestoneCheck { check: string; expect: string }
+export interface Milestone {
+  id: string;
+  owner: "tares" | "linear";
+  name: string;
+  goal: string;
+  checks: MilestoneCheck[];
+  position: number;
+  updated_at: string;
+  tickets: number;
+  done: number;
+  ready: string[];
+  finished: boolean;
 }
 export interface LinearLink {
   id: string; name: string; url: string;

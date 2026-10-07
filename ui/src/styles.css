@@ -1974,3 +1974,15 @@ pre.payload {
 .fo-pin:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 1px; }
 .fo-fold.is-pinned > summary { cursor: default; }
 .fo-fold.is-pinned .fo-fold-h::before { visibility: hidden; }
+
+/* the factory page's plan grouped by milestone (TR-414) */
+.fo-ms { border-top: 1px solid var(--line); }
+.fo-ms:first-child { border-top: 0; }
+.fo-ms-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 16px 2px; font-size: 14px; }
+.fo-ms-goal { margin: 0; padding: 0 16px 6px; color: var(--ink-soft); font-size: 13px; }
+.fo-checks { padding: 0 16px 8px; font-size: 13px; }
+.fo-checks summary { cursor: pointer; color: var(--ink-soft); font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; }
+.main .fo-checks ul { margin: 6px 0 0; padding: 0 0 0 16px; }
+.fo-checks li { margin: 2px 0; overflow-wrap: anywhere; }
+.fo-tk { display: flex; flex-direction: column; min-width: 0; }
+.fo-wait { color: var(--ink-soft); font-size: 12px; }

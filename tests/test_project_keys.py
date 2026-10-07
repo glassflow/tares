@@ -237,7 +237,9 @@ async def main():
                   ("GET", "/api/projects/{uid}/tickets/{ref}"),
                   ("GET", "/api/projects/{uid}/sessions"),
                   ("GET", "/api/projects/{uid}/sessions/{sid}"),
-                  ("GET", "/api/projects/{uid}/pickup")}
+                  ("GET", "/api/projects/{uid}/pickup"),
+                  # the factory's plan (TR-411)
+                  ("GET", "/api/projects/{uid}/milestones")}
         bad, n = [], 0
         for route in app.routes:
             if not isinstance(route, APIRoute) or "{uid}" not in route.path:

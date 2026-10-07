@@ -594,10 +594,12 @@ async def pick_up(project: str = "", take_over: bool = False) -> str:
 
 @mcp.tool()
 async def list_tickets(project: str = "") -> str:
-    """The project's tickets in plan order: id, title, status (todo, in_progress, done,
-    canceled), the Linear identifier and link when they live in Linear, and the id and title of
-    each one's working doc. Also says which Linear project they live in, if any, and when it was
-    last synced. Read one with get_ticket to get its working doc."""
+    """The project's tickets in plan order: id, label (the Linear identifier, else T<n>), title,
+    status (todo, in_progress, done, canceled), milestone, depends_on, whether it is ready (all
+    it depends on is done) or which tickets block it, the link when it lives in Linear, and the
+    id and title of each one's working doc. Work the ready tickets in this order. Also says
+    which Linear project they live in, if any, and when it was last synced. Read one with
+    get_ticket to get its working doc."""
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -609,8 +611,10 @@ async def list_tickets(project: str = "") -> str:
     lin = data.get("linear")
     out = {
         "linear": ({k: lin.get(k) for k in ("name", "url", "synced_at", "error")} if lin else None),
-        "tickets": [{k: t.get(k) for k in ("id", "identifier", "title", "status", "url",
-                                            "working_doc", "working_doc_title")}
+        "tickets": [{k: t.get(k) for k in ("id", "label", "title", "status", "milestone_name",
+                                            "depends_on", "ready", "blocked_by", "url",
+                                            "working_doc", "working_doc_title")
+                     if t.get(k) not in (None, [], "")} | {"ready": t.get("ready")}
                     for t in data.get("tickets") or []]}
     if any(t.get("status") == "in_progress" for t in data.get("tickets") or []):
         out["note"] = ("A ticket is already in progress: unless you are the session working on "
@@ -632,16 +636,24 @@ async def get_ticket(ticket: str, project: str = "") -> str:
 
 @writable()
 async def write_ticket(title: str, status: str = "", position: float | None = None,
+                       milestone: str = "", depends_on: list[str] | None = None,
                        id: str = "", project: str = "") -> str:
-    """Add a ticket to the project's list, or change one when `id` is given. Only for a project
-    whose tickets live in Tares: when they live in Linear, create and change them in Linear and
-    Tares picks them up on its next sync. `status` is todo, in_progress, done or canceled;
-    `position` orders the list (a new ticket goes to the end). Returns the ticket."""
+    """Add a ticket to the project's list, or change one when `id` is given (its id or T<n>).
+    Only for a project whose tickets live in Tares: when they live in Linear, create and change
+    them in Linear (milestones and "blocks" relations included) and Tares picks them up on its
+    next sync. `status` is todo, in_progress, done or canceled; `position` orders the list (a
+    new ticket goes to the end); `milestone` is the name of a milestone written with
+    write_milestone; `depends_on` lists the tickets (T<n> or id) that must be done first. Returns
+    the ticket with its label (T<n>)."""
     body: dict = {"title": title}
     if status:
         body["status"] = status
     if position is not None:
         body["position"] = position
+    if milestone:
+        body["milestone"] = milestone
+    if depends_on is not None:
+        body["depends_on"] = depends_on
     async with _cx(15) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -652,7 +664,8 @@ async def write_ticket(title: str, status: str = "", position: float | None = No
             r = await cx.put(f"{TARESD}/api/projects/{uid}/tickets/{id}", json=body)
         else:
             r = await cx.post(f"{TARESD}/api/projects/{uid}/tickets", json=body)
-    return _out(r, ("id", "title", "status", "position"))
+    return _out(r, ("id", "label", "title", "status", "position", "milestone_name",
+                    "depends_on"))
 
 
 @writable()
@@ -710,6 +723,9 @@ class _BearerGate:
                 return
             _CALLER_TOKEN.set(tok)
         await self.app(scope, receive, send)
+
+
+from . import mcp_factory  # noqa: E402,F401  (registers the factory's tools on `mcp`)
 
 
 def main():
