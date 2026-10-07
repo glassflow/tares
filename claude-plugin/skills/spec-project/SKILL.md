@@ -16,7 +16,9 @@ Talk it through before writing anything. Ask, a few questions at a time, until t
 - the goal, in one line, and who it is for
 - what is in and what is explicitly out of scope
 - constraints: stack, repos, data, deadlines, what must not change
-- how we will know it works (the checks a builder can run)
+- how we will know it works (the checks a builder can run, and where: a performance target
+  needs the machine it is measured on)
+- where the code lives (repo path or URL, branch) and the git rules (push or not, PRs or not)
 - the rough shape of the work: the pieces and their order
 
 Push back on vague answers. Offer options with a recommendation when the user is unsure. Do not
@@ -44,8 +46,10 @@ conversation.
 
 - `spec`: what is built and why, who it is for, scope in and out, constraints, how it is checked.
 - `plan`: milestones in order, what each delivers, and how the tickets map onto them.
-- `agents`: the AGENTS.md of the build: repo layout, commands to build and test, conventions,
-  what not to touch.
+- `agents`: the AGENTS.md of the build: where the code lives (the repo's absolute path or clone
+  URL, and the branch to work on), repo layout, commands to build and test, conventions, what not
+  to touch, and the git rules (commit per ticket or not, push or keep local, open PRs or not).
+  Ask the user for anything here you do not know; a builder cannot guess it.
 
 ## 5. Create the tickets
 
@@ -77,6 +81,8 @@ reads. Say:
 
 - what the project is, in two lines, and that the spec, plan and AGENTS.md are in this Tares
   project (`list_docs`, `get_doc`)
+- where the code lives: the repo's absolute path or clone URL and the branch, and what to do if
+  it is not there yet
 - how to work: take tickets in order with `list_tickets`, read each with `get_ticket` (it carries
   the working doc), and mark progress (in Linear for Linear tickets, `write_ticket` otherwise)
 - which ticket to start with
