@@ -73,6 +73,26 @@ The mechanism follows [andreidavid/codex-review](https://github.com/andreidavid/
 `.git/`. This plugin reimplements it in Python, gates it on the session mark, and records the
 exchange in Tares.
 
+## Spec a project
+
+Type `/tares:spec <what you want to build>` (or ask Claude to spec a new project). Claude
+brainstorms it with you first, then writes everything a later session needs to build it into a
+new Tares project:
+
+- the spec, the plan, the AGENTS.md of the build and a starting prompt (docs, kept in Tares)
+- the tickets, in order, each with a working doc (context, steps, files, how to verify)
+
+The tickets live in Tares, or in Linear when you want Linear: Claude creates them there with
+Linear's own MCP tools, links the Linear project, and Tares keeps its ticket list in sync (it
+polls about once a minute). Working docs stay in Tares either way. For Linear, connect it once in
+the Tares console (Settings, Linear) and give this session Linear's MCP server.
+
+The spec session's whole recording lands on the project. A later session told
+`Work on Tares project "<name>"` reads the starting prompt, the tickets and their working docs
+with `list_docs`, `get_doc`, `list_tickets` and `get_ticket`.
+
+Creating projects and writing docs needs an admin key in `access_token` on a secured instance.
+
 ## How capture works
 
 Every Claude Code hook receives `transcript_path` on stdin. `ship.py` reads the new bytes since a

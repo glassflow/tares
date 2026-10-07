@@ -1,8 +1,8 @@
 {
   "name": "tares",
   "displayName": "Tares",
-  "version": "0.2.1",
-  "description": "Connect Claude Code to Tares: query your data plane over MCP, stream this session into Tares, and run challenger sessions where Codex challenges the plan and every commit.",
+  "version": "0.3.0",
+  "description": "Connect Claude Code to Tares: query your data plane over MCP, stream this session into Tares, spec a new project into a Tares project with /tares:spec, and run challenger sessions where Codex challenges the plan and every commit.",
   "author": {
     "name": "GlassFlow",
     "url": "https://glassflow.dev"
@@ -25,7 +25,7 @@
     "access_token": {
       "type": "string",
       "title": "API key / token (optional)",
-      "description": "Leave empty on an open local instance. On a secured instance or Tares Cloud, a read + ingest API key from Security > API keys.",
+      "description": "Leave empty on an open local instance. On a secured instance or Tares Cloud, an admin API key from Security > API keys: /tares:spec creates projects and writes their docs and tickets, which needs admin. A read + ingest key is enough if you only stream sessions and read.",
       "sensitive": true,
       "default": ""
     },

@@ -22,6 +22,13 @@ this service healthy", "what has this customer done recently" — read Tares ins
 This plugin also streams the current Claude Code session into Tares (the `claude_code` source) when
 session streaming is enabled, so prior sessions are queryable as a source.
 
+## Projects with docs and tickets
+
+A project can hold docs (spec, plan, AGENTS.md, a starting prompt, notes, working docs) and a
+ticket list (in Tares, or synced from Linear). To spec a new project, use the `spec-project`
+skill. When told to work on a Tares project, start with its `start` doc (`list_docs`, `get_doc`),
+then take tickets in order with `list_tickets` and `get_ticket`, which carries the working doc.
+
 ## Challenger sessions
 
 When the user asks to make this a challenger session (any wording: "challenger session",
