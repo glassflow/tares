@@ -2520,6 +2520,12 @@ class Store:
         with self._lock:
             self.con.execute(f"UPDATE tickets SET {', '.join(sets)} WHERE id = ?", vals)
 
+    def update_ticket_owner(self, tid: str, owner: str) -> None:
+        """A project stopped using Linear: its tickets become Tares's (TR-408)."""
+        with self._lock:
+            self.con.execute("UPDATE tickets SET owner = ?, updated_at = ? WHERE id = ?",
+                             [owner, now_utc(), tid])
+
     def list_tickets(self, project: str) -> list[dict]:
         with self._lock:
             rows = self.con.execute(f"SELECT {self._TICKET_COLS} FROM tickets WHERE project = ? "

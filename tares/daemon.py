@@ -52,6 +52,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_
                              DEFAULT_API_BASE)
 from . import metrics as _metrics
 from . import docs as docs_mod
+from . import linear as _linear
 from . import skills as skills_mod
 from . import providers as providers_mod
 from .runtime import Runtime
@@ -163,6 +164,7 @@ SLACK_CHANNELS_FAIL_TTL = 5.0     # ... and a failed one at least (longer on a 4
 # (TR-348: it accepts a GitHub App's installation tokens, writes then show as the App)
 GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/"
 
+LINEAR_CALLBACK = "/api/linear/oauth/callback"   # Linear sends the browser back here (TR-408)
 GITHUB_APP_CALLBACKS = ("/api/integrations/github/apps/callback",
                         "/api/integrations/github/apps/installed")
 
@@ -186,6 +188,8 @@ def _public(method: str, path: str) -> bool:
         return True
     if method == "GET" and path in GITHUB_APP_CALLBACKS:
         return True      # gated by the signed state, see GITHUB_APP_CALLBACKS
+    if method == "GET" and path == LINEAR_CALLBACK:
+        return True      # gated by the signed state and the PKCE verifier only this process holds
     return method in ("GET", "HEAD") and not (
         path.startswith("/api/") or path.startswith("/catalog") or path == "/query")
 
@@ -707,7 +711,8 @@ def make_app() -> FastAPI:
         if path == "/api/setup/github-suggestion":
             return "admin"   # spends model money and distills private READMEs: not for read keys
         if (path in _ADMIN_PATHS or path.startswith("/api/keys")
-                or path.startswith("/api/discover") or path.startswith("/api/settings")):
+                or path.startswith("/api/discover") or path.startswith("/api/settings")
+                or path.startswith("/api/linear")):
             return "admin"
         if method != "GET" and (path.startswith("/api/sources")
                                 or path.startswith("/api/triggers")
@@ -4324,6 +4329,139 @@ def make_app() -> FastAPI:
                  409)
         store.delete_ticket(t["id"])
         return {"ok": True, "deleted": t["id"]}
+
+    # ── Linear (TR-408): the cell's connection, and the Linear project a project's tickets live
+    # in. Tares only reads from Linear; sessions write with Linear's own tools ───────────────
+    def _linear_err(e: Exception):
+        _err(e, 502 if "reach" in str(e) or "answered" in str(e) else 400)
+
+    @app.get("/api/linear")
+    async def linear_status():
+        """Whether Linear is connected (never the token), as whom, and whether sign-in with
+        Linear is set up (an OAuth application's client id)."""
+        return _linear.public_connection(store)
+
+    @app.post("/api/linear")
+    async def linear_connect_key(body: dict = Body(...)):
+        """{api_key}: connect with a personal API key, checked against Linear first."""
+        try:
+            await _linear.connect_api_key(store, str(body.get("api_key") or ""))
+        except _linear.LinearError as e:
+            _linear_err(e)
+        return _linear.public_connection(store)
+
+    @app.put("/api/linear/oauth-app")
+    async def linear_oauth_app(body: dict = Body(...)):
+        """{client_id, client_secret?}: the Linear OAuth application sign-in uses. A secret left
+        out keeps the saved one; with PKCE it is optional."""
+        secret = body.get("client_secret")
+        _linear.save_oauth_app(store, str(body.get("client_id") or ""),
+                               None if secret is None else str(secret))
+        return _linear.public_connection(store)
+
+    def _linear_redirect(request: Request) -> str:
+        from .setup_flow import public_base
+        return public_base(str(request.base_url)).rstrip("/") + LINEAR_CALLBACK
+
+    @app.get("/api/linear/oauth/start")
+    async def linear_oauth_start(request: Request):
+        """The Linear page to send the browser to, and the callback URL the OAuth application
+        must list."""
+        redirect = _linear_redirect(request)
+        try:
+            url = _linear.oauth_start(store, redirect, _gh_app.sign_state)
+        except _linear.LinearError as e:
+            _linear_err(e)
+        return {"url": url, "redirect_uri": redirect}
+
+    @app.get(LINEAR_CALLBACK)
+    async def linear_oauth_callback(code: str = "", state: str = "", error: str = ""):
+        from urllib.parse import urlencode
+        params = {"tab": "linear"}
+        try:
+            if error:
+                raise _linear.LinearError(f"Linear sign-in was not completed: {error}")
+            await _linear.oauth_finish(store, code, state, _gh_app.verify_state)
+            params["event"] = "connected"
+        except (ValueError, _linear.LinearError) as e:
+            params["error"] = str(e)
+        return RedirectResponse(f"/settings?{urlencode(params)}", status_code=303)
+
+    @app.delete("/api/linear")
+    async def linear_disconnect():
+        """Forget the connection (an OAuth token is revoked at Linear). Linked projects keep
+        their tickets and stop syncing until Linear is connected again."""
+        conn = _linear.disconnect(store)
+        if conn:
+            await _linear.revoke(conn)
+        return _linear.public_connection(store)
+
+    @app.get("/api/linear/projects")
+    async def linear_projects(q: str = ""):
+        """Linear projects this connection can see, most recently updated first, for a picker."""
+        try:
+            return {"projects": await _linear.list_projects(store, q)}
+        except _linear.LinearError as e:
+            _linear_err(e)
+
+    async def _linear_sync_now(uid: str) -> None:
+        envelopes = await _linear.sync_project(store, uid)
+        if envelopes:
+            store.append(envelopes)
+
+    @app.post("/api/projects/{uid}/linear")
+    async def link_linear_project(uid: str, body: dict = Body(...)):
+        """{project}: the Linear project (id, URL or name) this project's tickets live in. Runs a
+        first sync; from then on the `linear` source keeps them in sync. A project that already
+        has Tares tickets cannot be linked (they would be two lists)."""
+        _project_or_404(uid)
+        if any(t["owner"] == "tares" for t in store.list_tickets(uid)):
+            _err(ValueError("this project already has its own tickets in Tares; a project's "
+                            "tickets live in one place"), 409)
+        try:
+            found = await _linear.find_project(store, str(body.get("project") or ""))
+        except _linear.LinearError as e:
+            _linear_err(e)
+        cur = store.get_project_linear(uid)
+        if cur and cur.get("id") != found["id"]:
+            _err(ValueError(f"this project is linked to Linear project {cur.get('name')!r}; "
+                            "unlink it first"), 409)
+        store.set_project_linear(uid, {**(cur or {}), **found})
+        if _linear.ensure_source(store):
+            runtime.reload_catalog()
+        store.upsert_project_object(uid, "source", f"+source:{_linear.SOURCE_NAME}",
+                                    _linear.SOURCE_NAME)
+        try:
+            await _linear_sync_now(uid)
+        except _linear.LinearError:
+            pass   # recorded on the link; the answer shows it
+        return {"tickets": [_ticket_out(uid, t) for t in store.list_tickets(uid)],
+                "linear": store.get_project_linear(uid)}
+
+    @app.post("/api/projects/{uid}/linear/sync")
+    async def sync_linear_project(uid: str):
+        """Sync the project's tickets with Linear now."""
+        _project_or_404(uid)
+        if not store.get_project_linear(uid):
+            _err(ValueError("this project does not use Linear"), 409)
+        try:
+            await _linear_sync_now(uid)
+        except _linear.LinearError as e:
+            _linear_err(e)
+        return {"tickets": [_ticket_out(uid, t) for t in store.list_tickets(uid)],
+                "linear": store.get_project_linear(uid)}
+
+    @app.delete("/api/projects/{uid}/linear")
+    async def unlink_linear_project(uid: str):
+        """The project stops using Linear. Its tickets stay, now owned by Tares, with their
+        working docs."""
+        _project_or_404(uid)
+        store.set_project_linear(uid, None)
+        for t in store.list_tickets(uid):
+            if t["owner"] == "linear":
+                store.update_ticket_owner(t["id"], "tares")
+        return {"tickets": [_ticket_out(uid, t) for t in store.list_tickets(uid)],
+                "linear": None}
 
     # ── joining a project (TR-335, TR-336): its keys, an external agent's subscription to it,
     # the findings recorded in it, and stats over its sources ────────────────────────────────

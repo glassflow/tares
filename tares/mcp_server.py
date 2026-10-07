@@ -414,6 +414,178 @@ async def project_timeline(limit: int = 20, project: str = "") -> str:
     return r.text
 
 
+# ── a project's docs and tickets (TR-403, TR-404): a spec session writes the spec, the plan, the
+# AGENTS.md, the starting prompt and a working doc per ticket; the session that builds the project
+# reads them back. Tickets live in Linear when the project uses it (Tares keeps a synced list),
+# otherwise in Tares. ─────────────────────────────────────────────────────────────────────────
+
+def _out(r: httpx.Response, keys: tuple[str, ...] | None = None) -> str:
+    if r.status_code >= 400:
+        try:
+            return f"error {r.status_code}: {r.json().get('detail', r.text)}"
+        except ValueError:
+            return f"error {r.status_code}: {r.text}"
+    data = r.json()
+    if keys:
+        data = {k: data.get(k) for k in keys}
+    return json.dumps(data, default=str)
+
+
+@writable()
+async def create_project(name: str, goal: str = "") -> str:
+    """Create an empty Tares project for a piece of work you are about to spec, and tie this
+    session to it. `name` is the project's handle (unique on Tares); `goal` is one line saying
+    what it is for. Then write its docs with write_doc and its tickets (write_ticket, or
+    link_linear_project when the tickets live in Linear). Returns the project's id and name."""
+    body = {"template": "custom", "name": name.strip(), "objects": [],
+            **({"goal": goal.strip()} if goal.strip() else {})}
+    async with _cx(15) as cx:
+        r = await cx.post(f"{TARESD}/api/projects", json=body)
+    return _out(r, ("id", "name", "goal"))
+
+
+@writable()
+async def write_doc(kind: str, title: str, body: str, id: str = "", project: str = "") -> str:
+    """Write a markdown doc into the project, or replace one when `id` is given. `kind` is one
+    of: `start` (the prompt a session that builds the project starts with: what to read first,
+    which ticket to take, how to work), `spec` (what is built and why), `plan` (milestones and
+    the order of work), `agents` (the AGENTS.md of the build: conventions, commands, how to
+    test), `working` (the working doc of one ticket: context, steps, files likely touched, how to
+    verify; link it with attach_working_doc), `note` (anything else). Working docs and every
+    other doc stay in Tares; they never go to Linear. Returns the doc's id."""
+    payload = {"kind": kind, "title": title, "body": body, "by": "claude code session"}
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        if id:
+            r = await cx.put(f"{TARESD}/api/projects/{uid}/docs/{id}", json=payload)
+        else:
+            r = await cx.post(f"{TARESD}/api/projects/{uid}/docs", json=payload)
+    return _out(r, ("id", "kind", "title", "updated_at"))
+
+
+@mcp.tool()
+async def list_docs(kind: str = "", project: str = "") -> str:
+    """The project's docs in reading order (starting prompt, spec, plan, AGENTS.md, notes,
+    working docs): id, kind, title, size, when changed. No bodies: read one with get_doc.
+    `kind` narrows the list."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/docs", params={"kind": kind})
+    if r.status_code >= 400:
+        return _out(r)
+    return json.dumps([{k: d.get(k) for k in ("id", "kind", "title", "size", "updated_at")}
+                       for d in r.json()], default=str)
+
+
+@mcp.tool()
+async def get_doc(id: str, project: str = "") -> str:
+    """One of the project's docs, with its markdown body."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/docs/{id}")
+    return _out(r, ("id", "kind", "title", "body", "updated_at", "updated_by"))
+
+
+@mcp.tool()
+async def list_tickets(project: str = "") -> str:
+    """The project's tickets in plan order: id, title, status (todo, in_progress, done,
+    canceled), the Linear identifier and link when they live in Linear, and the id and title of
+    each one's working doc. Also says which Linear project they live in, if any, and when it was
+    last synced. Read one with get_ticket to get its working doc."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/tickets")
+    if r.status_code >= 400:
+        return _out(r)
+    data = r.json()
+    lin = data.get("linear")
+    return json.dumps({
+        "linear": ({k: lin.get(k) for k in ("name", "url", "synced_at", "error")} if lin else None),
+        "tickets": [{k: t.get(k) for k in ("id", "identifier", "title", "status", "url",
+                                            "working_doc", "working_doc_title")}
+                    for t in data.get("tickets") or []]}, default=str)
+
+
+@mcp.tool()
+async def get_ticket(ticket: str, project: str = "") -> str:
+    """One ticket, by its Tares id or its Linear identifier (for example ENG-12), with the body
+    of its working doc: everything you need to work on it."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/tickets/{ticket}")
+    return _out(r)
+
+
+@writable()
+async def write_ticket(title: str, status: str = "", position: float | None = None,
+                       id: str = "", project: str = "") -> str:
+    """Add a ticket to the project's list, or change one when `id` is given. Only for a project
+    whose tickets live in Tares: when they live in Linear, create and change them in Linear and
+    Tares picks them up on its next sync. `status` is todo, in_progress, done or canceled;
+    `position` orders the list (a new ticket goes to the end). Returns the ticket."""
+    body: dict = {"title": title}
+    if status:
+        body["status"] = status
+    if position is not None:
+        body["position"] = position
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        if id:
+            if not title:
+                body.pop("title")
+            r = await cx.put(f"{TARESD}/api/projects/{uid}/tickets/{id}", json=body)
+        else:
+            r = await cx.post(f"{TARESD}/api/projects/{uid}/tickets", json=body)
+    return _out(r, ("id", "title", "status", "position"))
+
+
+@writable()
+async def attach_working_doc(ticket: str, doc: str, project: str = "") -> str:
+    """Link a working doc (write it first with write_doc, kind `working`) to a ticket, by the
+    ticket's Tares id or Linear identifier. Works for tickets in Linear too: the working doc
+    stays in Tares."""
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.put(f"{TARESD}/api/projects/{uid}/tickets/{ticket}",
+                         json={"working_doc": doc})
+    return _out(r, ("id", "identifier", "title", "working_doc"))
+
+
+@writable()
+async def link_linear_project(linear_project: str, project: str = "") -> str:
+    """Tie the project to the Linear project its tickets live in, by the Linear project's id,
+    URL or name. Tares then keeps its ticket list in sync with Linear (about once a minute) and
+    runs a first sync now. Needs Linear connected on Tares (Settings). Returns the tickets
+    found."""
+    async with _cx(60) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/linear",
+                          json={"project": linear_project})
+    if r.status_code >= 400:
+        return _out(r)
+    data = r.json()
+    return json.dumps({"linear": {k: (data.get("linear") or {}).get(k)
+                                  for k in ("name", "url", "synced_at", "error")},
+                       "tickets": [{k: t.get(k) for k in ("identifier", "title", "status")}
+                                   for t in data.get("tickets") or []]}, default=str)
+
+
 class _BearerGate:
     """Pure-ASGI middleware: every HTTP request to the MCP server must carry *a* bearer token —
     the root auth token or a scoped API key. The token is forwarded to taresd per-request, which
