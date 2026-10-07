@@ -908,6 +908,7 @@ def result_for(thread: dict, run: dict, parent: dict) -> dict:
             "kind": kind_of(run, next_step),
             "headline": headline, "summary": summary_of(run.get("finding"), headline),
             "next_step": next_step, "verdict": run.get("verdict"), "chain": chain,
+            "no_op": run.get("outcome") == "no_op",
             "cost_usd": round(sum(float(r.get("cost_usd") or 0) for r in path), 6),
             "duration_ms": sum(int(r.get("duration_ms") or 0) for r in path),
             "handled": handled, "external": run.get("woken_by") == "external",
@@ -946,11 +947,25 @@ def utc_midnight(now=None):
     return now.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
 
+def _shown(r: dict, show: str) -> bool:
+    """Whether a result passes the overview's Show filter: "" everything, "findings" only runs
+    that recorded a finding (not "nothing to report"), "agent:<name>" only those the agent
+    concluded."""
+    if not show:
+        return True
+    if show == "findings":
+        return not r.get("no_op")
+    if show.startswith("agent:"):
+        return bool(r["chain"]) and r["chain"][-1] == show[len("agent:"):]
+    return True
+
+
 def project_results(store, uid: str, limit: int = 20, before=None, scheduled: set | None = None,
-                    now=None) -> dict:
+                    now=None, show: str = "") -> dict:
     """One page of results. The first page (no `before`) also counts today's in the same walk:
     it reads on past the page while threads are from today, so the overview's poll walks the
-    project once. Older pages leave `found` at 0; the console reads today from the first page."""
+    project once. Older pages leave `found` at 0; the console reads today from the first page.
+    `show` narrows the page (see _shown); today's counts are the whole project's either way."""
     limit = max(1, min(int(limit), 100))
     scheduled = scheduled or set()
     # "today" is since midnight UTC: the cell does not know the viewer's time zone
@@ -966,7 +981,7 @@ def project_results(store, uid: str, limit: int = 20, before=None, scheduled: se
         if r is not None:
             if today_thread and r["kind"] == "action" and not r["practice"]:
                 found += 1
-            if not full:
+            if not full and _shown(r, show):
                 results.append(r)
                 if len(results) >= limit:
                     next_before, full = _iso(t["at"]), True

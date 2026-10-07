@@ -469,7 +469,8 @@ export const api = {
   projectOutline: (id: string) =>
     request<ProjectOutline>(`/api/projects/${encodeURIComponent(id)}/outline`),
   // newest first; page with `before` = the previous page's next_before
-  projectResults: (id: string, q: { limit?: number; before?: string | null } = {}) =>
+  // `show`: "findings" leaves out "nothing to report"; "agent:<name>" keeps one agent's conclusions
+  projectResults: (id: string, q: { limit?: number; before?: string | null; show?: string } = {}) =>
     request<ProjectResults>(
       `/api/projects/${encodeURIComponent(id)}/results?` + new URLSearchParams(
         Object.entries(q).filter(([, v]) => v != null && v !== "").map(([k, v]) => [k, String(v)])).toString()),

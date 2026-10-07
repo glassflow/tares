@@ -1,10 +1,10 @@
 import { Link } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { api } from "../../api";
-import { ErrorState, TimeAgo, usePolling } from "../bits";
+import { ErrorState, Picker, TimeAgo, usePolling } from "../bits";
 import type {
   OutlineWatch, ProjectHealth, ProjectOutline, ProjectResult, ProjectResults, ProjectSetup,
 } from "../../types";
@@ -245,12 +245,36 @@ export function ResultCard({ r, onOpen }: { r: ProjectResult; onOpen: () => void
   );
 }
 
-function Results({ ctx, head, headError, reload, outline }: {
+// What the results list shows: everything, only findings, or one agent's conclusions. Remembered
+// per project in this browser, so a busy watcher's "nothing to report" stays out of the way.
+function useShow(project: string): [string, (v: string) => void] {
+  const key = `tares_results_show:${project}`;
+  const [show, setShowState] = useState<string>(() => {
+    try { return localStorage.getItem(key) ?? ""; } catch { return ""; }
+  });
+  const setShow = (v: string) => {
+    setShowState(v);
+    try { if (v) localStorage.setItem(key, v); else localStorage.removeItem(key); } catch { /* private window */ }
+  };
+  return [show, setShow];
+}
+
+function Results({ ctx, head, headError, reload, outline, show, setShow }: {
   ctx: Ctx; head: ProjectResults | undefined; headError: string | undefined; reload: () => void;
-  outline: ProjectOutline | undefined;
+  outline: ProjectOutline | undefined; show: string; setShow: (v: string) => void;
 }) {
   const [older, setOlder] = useState<ProjectResult[]>([]);
   const [olderCursor, setOlderCursor] = useState<string | null | undefined>(undefined);
+  // a new filter starts over from the newest page
+  useEffect(() => { setOlder([]); setOlderCursor(undefined); }, [show]);
+  // the project's agents, and any other agent whose conclusions are on the page (one outside Tares)
+  const agents = [...new Set([...(outline?.agents ?? []).map((a) => a.name),
+                              ...(head?.results ?? []).map((r) => r.chain[r.chain.length - 1]).filter(Boolean)])];
+  const showOptions = ["", "findings", ...agents.map((a) => `agent:${a}`)];
+  if (show && !showOptions.includes(show)) showOptions.push(show);
+  const showLabels: Record<string, string> = { "": "Everything", findings: "Only findings" };
+  for (const a of agents) showLabels[`agent:${a}`] = `Only ${a}`;
+  if (show.startsWith("agent:") && !agents.includes(show.slice(6))) showLabels[show] = `Only ${show.slice(6)}`;
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState<string>();
   const seen = new Set<string>();
@@ -261,7 +285,7 @@ function Results({ ctx, head, headError, reload, outline }: {
     if (!cursor) return;
     setLoadingMore(true); setMoreError(undefined);
     try {
-      const page = await api.projectResults(ctx.id, { limit: 20, before: cursor });
+      const page = await api.projectResults(ctx.id, { limit: 20, before: cursor, show });
       setOlder((o) => [...o, ...page.results]);
       setOlderCursor(page.next_before);
     } catch (e) { setMoreError(String((e as Error).message ?? e)); }
@@ -271,7 +295,13 @@ function Results({ ctx, head, headError, reload, outline }: {
 
   return (
     <section aria-labelledby="gf-results-h" className="gf-results">
-      <h2 id="gf-results-h">What the agents found</h2>
+      <div className="gf-results-head">
+        <h2 id="gf-results-h">What the agents found</h2>
+        {(agents.length > 1 || show) && (
+          <Picker value={show} onChange={setShow} options={showOptions} labels={showLabels}
+                  ariaLabel="show which results" />
+        )}
+      </div>
       {headError && <ErrorState error={headError} what="the results" onRetry={reload} />}
       {results && results.length > 0 && (
         <ol className="gf-cards">
@@ -280,7 +310,9 @@ function Results({ ctx, head, headError, reload, outline }: {
       )}
       {results && results.length === 0 && !headError && (
         <div className="gf-empty">
-          <p>Nothing yet. Each time this project wakes, its agents look, and what they conclude shows up here, newest first.</p>
+          <p>{show
+            ? <>Nothing here with this filter yet. <button type="button" className="linklike" onClick={() => setShow("")}>Show everything</button></>
+            : "Nothing yet. Each time this project wakes, its agents look, and what they conclude shows up here, newest first."}</p>
           {!wake && outline && <p className="help">Nothing wakes it yet. <VLink v={{ kind: "triggers" }} extra={{ add: "1" }}>Add a trigger</VLink> to say when the agents should look.</p>}
         </div>
       )}
@@ -298,7 +330,12 @@ function Results({ ctx, head, headError, reload, outline }: {
 export function Overview({ ctx, actions, onResume }: { ctx: Ctx; actions: React.ReactNode; onResume: () => void }) {
   const { data: outline } = usePolling(() => api.projectOutline(ctx.id), 30000);
   const { data: health, error: healthError, reload: reloadHealth } = usePolling(() => api.projectHealth(ctx.id), 15000);
-  const { data: head, error: headError, reload } = usePolling(() => api.projectResults(ctx.id, { limit: 20 }), 15000);
+  const [show, setShow] = useShow(ctx.id);
+  const { data: head, error: headError, reload } = usePolling(() => api.projectResults(ctx.id, { limit: 20, show }), 15000);
+  const shownOnce = useRef(false);
+  useEffect(() => {   // the poll's first load already used it; reload only when it changes
+    if (shownOnce.current) reload(); else shownOnce.current = true;
+  }, [show]);   // eslint-disable-line react-hooks/exhaustive-deps
   // a pause or resume changes what the health says; ask again right away, not at the next poll
   const status = ctx.s.status;
   const [lastStatus, setLastStatus] = useState(status);
@@ -328,7 +365,8 @@ export function Overview({ ctx, actions, onResume }: { ctx: Ctx; actions: React.
 
       {head && <Today today={head.today} />}
 
-      <Results ctx={ctx} head={head} headError={headError} reload={reload} outline={outline} />
+      <Results ctx={ctx} head={head} headError={headError} reload={reload} outline={outline}
+               show={show} setShow={setShow} />
     </div>
   );
 }

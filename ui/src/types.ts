@@ -599,6 +599,7 @@ export interface ProjectResult {
   next_step: string | null;
   verdict: string | null;
   chain: string[];            // the agents in order, e.g. triage then root cause
+  no_op?: boolean;            // it concluded with nothing to report
   cost_usd: number | null;    // the whole chain
   duration_ms: number | null; // the whole chain
   handled: { at: string; by: string } | null;
