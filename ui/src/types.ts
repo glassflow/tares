@@ -390,7 +390,7 @@ export interface ProjectSession {
   session: string; repo: string | null; linked_at: string;
   started_at: string | null; last_at: string | null; lines: number;
   // what it is doing now, from the plugin; null before the plugin reported a state
-  state: "working" | "waiting" | "ended" | null;
+  state: "working" | "waiting" | "ended" | "replaced" | null;   // replaced: a fresh session picked up
   state_reason: string | null;
   state_at: string | null;
   last_said?: string;   // a waiting session: the last thing it wrote

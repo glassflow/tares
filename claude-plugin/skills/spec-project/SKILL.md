@@ -100,6 +100,11 @@ reads. Say:
   it is not there yet
 - how to work: take tickets in order with `list_tickets`, read each with `get_ticket` (it carries
   the working doc), and mark progress (in Linear for Linear tickets, `write_ticket` otherwise)
+- if a ticket is already in progress when the session starts, an earlier session stopped on it:
+  call `pick_up` first and finish that ticket instead of starting it over
+- to keep a `## Progress` section at the end of the ticket's working doc (`write_doc` with the
+  doc's id), updated after each step that works: what is done, what is next, and how to run what
+  it needs (servers, databases, test logins). A session that picks the build up reads it first
 - which ticket to start with
 - where questions go: leave a `note` doc in the project when something is unclear (the wiring to
   an orchestrator session comes later)

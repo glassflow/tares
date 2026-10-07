@@ -2616,15 +2616,60 @@ class Store:
                  "last_at": r[4], "lines": int(r[5] or 0), "state": r[6], "state_reason": r[7],
                  "state_at": r[8]} for r in rows]
 
-    def set_session_state(self, session: str, state: str, reason: str | None, at) -> None:
-        """The session's state now; an older line than the one stored does not win."""
+    def set_session_state(self, session: str, state: str, reason: str | None, at,
+                          force: bool = False) -> None:
+        """The session's state now; an older line than the one stored does not win, unless
+        `force` (a take-over is a decision, not a report)."""
+        when = "" if force else " WHERE excluded.state_at >= session_states.state_at"
         with self._lock:
             self.con.execute(
                 "INSERT INTO session_states (session, state, reason, state_at) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT (session) DO UPDATE SET state = excluded.state, "
-                "reason = excluded.reason, state_at = excluded.state_at "
-                "WHERE excluded.state_at >= session_states.state_at",
+                "reason = excluded.reason, state_at = excluded.state_at" + when,
                 [session, state, reason or None, at])
+
+    def said_lately(self, source: str, session: str, n: int = 3) -> list[dict]:
+        """The session's last `n` assistant messages (not tool calls), oldest first."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT text, event_time FROM events WHERE source = ? AND key_value = ? AND "
+                "event_type = 'assistant' ORDER BY event_time DESC LIMIT 60",
+                [source, session]).fetchall()
+        out = []
+        for t, at in rows:
+            t = (t or "").strip()
+            if t and not t.startswith("→"):
+                out.append({"text": t, "at": at})
+            if len(out) >= n:
+                break
+        return list(reversed(out))
+
+    def files_touched(self, source: str, session: str, limit: int = 20) -> list[str]:
+        """The files the session last edited or wrote (its Edit / Write / NotebookEdit calls),
+        most recent first, each once."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT payload FROM events WHERE source = ? AND key_value = ? AND event_type = "
+                "'tool_use' ORDER BY event_time DESC LIMIT 400", [source, session]).fetchall()
+        seen: list[str] = []
+        for (pj,) in rows:
+            try:
+                o = json.loads(pj) if pj else {}
+            except (TypeError, ValueError):
+                continue
+            msg = o.get("message") if isinstance(o.get("message"), dict) else {}
+            for b in msg.get("content") or []:
+                if not isinstance(b, dict) or b.get("type") != "tool_use":
+                    continue
+                if str(b.get("name") or "") not in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+                    continue
+                inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+                path = str(inp.get("file_path") or inp.get("notebook_path") or "")
+                if path and path not in seen:
+                    seen.append(path)
+            if len(seen) >= limit:
+                break
+        return seen
 
     def last_said(self, source: str, session: str) -> str | None:
         """The last thing the session's assistant wrote (not a tool call), for a waiting

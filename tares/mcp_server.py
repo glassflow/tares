@@ -527,6 +527,71 @@ async def add_to_global(doc: str, line: str) -> str:
     return json.dumps({"doc": d["title"], "id": d["id"], "added": d["added"]})
 
 
+def _handover(b: dict) -> str:
+    """The pick-up brief as markdown a session reads top to bottom."""
+    lines = []
+    t = b.get("ticket")
+    if t:
+        head = "Ticket in progress" if b.get("in_progress") else "Next ticket"
+        ident = f" ({t['identifier']})" if t.get("identifier") else ""
+        lines += [f"## {head}: {t['title']}{ident}", f"id: {t['id']}", ""]
+        if t.get("working_doc_body"):
+            lines += ["### Working doc", t["working_doc_body"].strip(), ""]
+    p = b.get("previous_session")
+    if p:
+        lines += ["## The session that was on it",
+                  f"state: {p.get('state') or 'unknown'}"
+                  + (f" ({p['reason']})" if p.get("reason") else "")
+                  + (f", last active {p['quiet_minutes']} min ago" if p.get("quiet_minutes") is not None else "")]
+        if p.get("said_lately"):
+            lines += ["", "### What it said last"]
+            lines += [f"> {m['text'].strip()}".replace("\n", "\n> ") for m in p["said_lately"]]
+        if p.get("files_touched"):
+            lines += ["", "### Files it touched (most recent first)"]
+            lines += [f"- {f}" for f in p["files_touched"]]
+        lines.append("")
+    if b.get("notes"):
+        lines += ["## Builders' notes"]
+        for n in b["notes"]:
+            lines += [f"### {n['title']}", n["body"].strip(), ""]
+    lines += ["## Checklist"] + [f"{i}. {c}" for i, c in enumerate(b.get("checklist") or [], 1)]
+    return "\n".join(lines)
+
+
+@writable()
+async def pick_up(project: str = "", take_over: bool = False) -> str:
+    """Pick the build up where an earlier session stopped. Call it first when you are told to
+    work on a project and a ticket is already in progress (list_tickets says so), or when told
+    to pick up. Returns the hand-over: the ticket with its working doc, what the previous
+    session said last and the files it touched, the builders' notes and a checklist. It takes
+    the build over (the previous session is marked replaced) unless that session may still be
+    open: then it says so and does nothing; ask the person, and call again with take_over=true
+    only if they say so."""
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/pickup")
+        if r.status_code >= 400:
+            return _out(r)
+        brief = r.json()
+        if not brief.get("in_progress"):
+            return ("Nothing to pick up: no ticket is in progress. Start the next ticket the way "
+                    "the starting prompt says.\n\n" + _handover(brief))
+        prev = brief.get("previous_session") or {}
+        if brief.get("may_be_open") and not take_over:
+            return ("STOP: the session that was building may still be open "
+                    f"(state {prev.get('state') or 'active'}, last active "
+                    f"{prev.get('quiet_minutes')} min ago). Two sessions on one branch collide. "
+                    "Ask the person whether to take over; only if they say yes, call pick_up "
+                    "again with take_over=true. Read-only hand-over for context:\n\n"
+                    + _handover(brief))
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/pickup", json={"take_over": True})
+    if r.status_code >= 400:
+        return _out(r)
+    return "You have taken the build over.\n\n" + _handover(r.json())
+
+
 @mcp.tool()
 async def list_tickets(project: str = "") -> str:
     """The project's tickets in plan order: id, title, status (todo, in_progress, done,
@@ -542,11 +607,15 @@ async def list_tickets(project: str = "") -> str:
         return _out(r)
     data = r.json()
     lin = data.get("linear")
-    return json.dumps({
+    out = {
         "linear": ({k: lin.get(k) for k in ("name", "url", "synced_at", "error")} if lin else None),
         "tickets": [{k: t.get(k) for k in ("id", "identifier", "title", "status", "url",
                                             "working_doc", "working_doc_title")}
-                    for t in data.get("tickets") or []]}, default=str)
+                    for t in data.get("tickets") or []]}
+    if any(t.get("status") == "in_progress" for t in data.get("tickets") or []):
+        out["note"] = ("A ticket is already in progress: unless you are the session working on "
+                       "it, call pick_up before anything else.")
+    return json.dumps(out, default=str)
 
 
 @mcp.tool()

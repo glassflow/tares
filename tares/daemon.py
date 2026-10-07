@@ -756,6 +756,7 @@ def make_app() -> FastAPI:
         ("GET", re.compile(r"^/tickets/[^/]+$"), "read"),
         ("GET", re.compile(r"^/sessions$"), "read"),
         ("GET", re.compile(r"^/sessions/[^/]+$"), "read"),
+        ("GET", re.compile(r"^/pickup$"), "read"),
         ("GET", re.compile(r"^/results$"), "read"),
         ("GET", re.compile(r"^/results/[^/]+$"), "read"),
         ("GET", re.compile(r"^/outline$"), "read"),
@@ -4435,6 +4436,96 @@ def make_app() -> FastAPI:
         return {"session": sid,
                 "lines": store.key_events(src, sid, limit=min(max(limit, 1), 1000),
                                           offset=max(offset, 0))}
+
+    # ── picking up a build where a session stopped: what a fresh session needs to carry on the
+    # ticket in progress, from what Tares recorded (works after a crash too) ────────────────
+    _QUIET_MIN = 10   # a working session that sent nothing for this long is taken as gone
+
+    def _cc_source() -> str:
+        return next((n for n, c in runtime.catalog.sources.items()
+                     if c.connector == "claude_code"), "claude_code")
+
+    def _previous_session(sessions: list[dict], ticket: dict | None) -> dict | None:
+        """The session that was working on the ticket: active when it went in progress (its
+        lines span that moment), else the latest one that started before it, else the latest."""
+        live = [s for s in sessions if s["state"] != "replaced"]
+        if not live:
+            return None
+        t = ticket["updated_at"] if ticket else None
+        if t is not None:
+            spans = [s for s in live if s["started_at"] and s["last_at"]
+                     and s["started_at"] <= t <= s["last_at"]]
+            if spans:
+                return max(spans, key=lambda s: s["last_at"])
+            before = [s for s in live if s["started_at"] and s["started_at"] <= t]
+            if before:
+                return max(before, key=lambda s: s["last_at"] or s["started_at"])
+        return live[0]
+
+    def _pickup(uid: str) -> dict:
+        tickets = store.list_tickets(uid)
+        ticket = next((t for t in tickets if t["status"] == "in_progress"), None)
+        nxt = ticket or next((t for t in tickets if t["status"] == "todo"), None)
+        sessions = store.project_sessions(uid)
+        prev = _previous_session(sessions, ticket) if ticket else None
+        out: dict = {"ticket": _ticket_out(uid, nxt, with_doc=True) if nxt else None,
+                     "in_progress": ticket is not None, "previous_session": None,
+                     "may_be_open": False}
+        if prev:
+            now = now_utc()
+            quiet = int((now - prev["last_at"]).total_seconds() // 60) if prev["last_at"] else None
+            open_ = prev["state"] == "waiting" or (
+                prev["state"] in (None, "working") and quiet is not None and quiet < _QUIET_MIN)
+            src = _cc_source()
+            out["previous_session"] = {
+                "session": prev["session"], "repo": prev["repo"], "state": prev["state"],
+                "reason": prev["state_reason"], "last_at": prev["last_at"], "quiet_minutes": quiet,
+                "said_lately": store.said_lately(src, prev["session"], 3),
+                "files_touched": store.files_touched(src, prev["session"])}
+            out["may_be_open"] = bool(open_)
+        notes = [d for d in store.list_docs(uid, "note")]
+        out["notes"] = [{"id": d["id"], "title": d["title"],
+                         "body": (store.get_doc(uid, d["id"]) or {}).get("body", "")[:4000]}
+                        for d in notes]
+        out["checklist"] = (
+            [f"Check the branch and uncommitted changes (git status, git log -3) before editing: "
+             f"the previous session may have left work on ticket \"{ticket['title']}\" "
+             "uncommitted.",
+             "Restart what the project runs on (local database, dev server) the way AGENTS.md "
+             "says; the previous session's processes are gone.",
+             "Read the ticket's working doc, its Progress section first, then the previous "
+             "session's last messages: they say what was done and what was left.",
+             "Finish what is left, run the ticket's Verify, commit, mark it done, then carry on "
+             "with the next ticket."]
+            if ticket else
+            ["No ticket is in progress: start with the next one, the way the starting prompt says."])
+        return out
+
+    @app.get("/api/projects/{uid}/pickup")
+    async def get_pickup(uid: str):
+        """What a fresh session needs to pick the build up where a session stopped: the ticket in
+        progress (else the next) with its working doc, the session that was on it (its state,
+        last messages, files it touched, whether it may still be open), the builders' notes and
+        a checklist. Reads only."""
+        _project_or_404(uid)
+        return _pickup(uid)
+
+    @app.post("/api/projects/{uid}/pickup")
+    async def take_over(uid: str, body: dict = Body(default={})):
+        """A fresh session takes the build over: the previous session is marked replaced, so two
+        sessions never work the same ticket. When it may still be open (waiting, or active in
+        the last minutes) this needs {"take_over": true}."""
+        _project_or_404(uid)
+        out = _pickup(uid)
+        prev = out["previous_session"]
+        if prev and out["may_be_open"] and not body.get("take_over"):
+            _err(ValueError("the session that was building may still be open "
+                            f"({prev['state'] or 'active'}); ask the person, then take over with "
+                            "take_over"), 409)
+        if prev:
+            store.set_session_state(prev["session"], "replaced",
+                                    "a fresh session picked the build up", now_utc(), force=True)
+        return {**out, "taken_over": prev["session"] if prev else None}
 
     # ── Linear (TR-408): the cell's connection, and the Linear project a project's tickets live
     # in. Tares only reads from Linear; sessions write with Linear's own tools ───────────────

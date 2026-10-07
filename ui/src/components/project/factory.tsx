@@ -66,7 +66,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const sessions = ss?.sessions ?? [];
   const firstLinked = [...sessions].sort((a, b) => a.linked_at.localeCompare(b.linked_at))[0]?.session;
   // the session the build depends on: the most recently active one (sessions come newest first)
-  const active = sessions[0];
+  const active = sessions.find((s) => s.state !== "replaced");
   const building = tickets.some((t) => t.status === "in_progress");
   const quietMin = active ? quiet(active, ss?.now) : 0;
   const attention: "waiting" | "silent" | null = !building || !active ? null
@@ -127,7 +127,8 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
       {attention && active && (
         <Attention kind={attention} session={active} quietMin={quietMin}
                    label={active.session === firstLinked ? "spec session" : "build session"}
-                   ticket={next?.status === "in_progress" ? next.title : undefined} />
+                   ticket={next?.status === "in_progress" ? next.title : undefined}
+                   pickUp={`Pick up Tares project "${ctx.s.name}" where the last session stopped.`} />
       )}
 
       {next ? (
@@ -214,6 +215,7 @@ function quiet(s: ProjectSession, now?: string): number {
 function StateBadge({ s, now }: { s: ProjectSession; now?: string }) {
   if (s.state === "waiting") return <span className="fo-st fo-st-wait" title={s.state_reason ?? undefined}>waiting</span>;
   if (s.state === "ended") return <span className="fo-st">ended</span>;
+  if (s.state === "replaced") return <span className="fo-st" title={s.state_reason ?? undefined}>replaced</span>;
   if (s.state === "working") {
     return quiet(s, now) >= SILENT_MIN
       ? <span className="fo-st fo-st-quiet" title="nothing sent for a while">quiet</span>
@@ -223,8 +225,9 @@ function StateBadge({ s, now }: { s: ProjectSession; now?: string }) {
 }
 
 /** A build that has stopped: the session waits for the person, or has gone silent. */
-function Attention({ kind, session, quietMin, label, ticket }: {
+function Attention({ kind, session, quietMin, label, ticket, pickUp }: {
   kind: "waiting" | "silent"; session: ProjectSession; quietMin: number; label: string; ticket?: string;
+  pickUp: string;
 }) {
   const said = (session.last_said ?? "").trim();
   return (
@@ -250,7 +253,14 @@ function Attention({ kind, session, quietMin, label, ticket }: {
           laptop went to sleep. Check its terminal.
         </p>
       )}
-      <VLink v={{ kind: "claude", name: session.session }} className="fo-link">Open the session</VLink>
+      <div className="fo-cmd">
+        <code>{pickUp}</code>
+        <CopyButton text={pickUp} label="Copy pick-up prompt" />
+      </div>
+      <span className="help">
+        Or carry on in a fresh Claude Code session with the Tares plugin: it reads where the build
+        stopped and takes it over. <VLink v={{ kind: "claude", name: session.session }} className="fo-link">Open the session</VLink>
+      </span>
     </section>
   );
 }
