@@ -401,10 +401,62 @@ def main() -> None:
                     with open(off_file, "w") as f:
                         f.write(str(new_offset))   # advance only on success; failures retry next hook
 
+    if session_id and shipped_ok:
+        report_state(cfg, hook, event, flow)
+
     if event == "SessionEnd" and session_id and flow:
         # the line the challenger_session_ended trigger watches; the marker goes with the session
         ship_lines(cfg, [synthetic_line(hook, "session_end", flow)])
         write_flow(data_dir, session_id, "")
+
+
+# ── the session's state (working / waiting / ended), from the hook that fired ─
+# Sent as a `session_state` line when it changes, so Tares can say a session stopped and is
+# waiting for the person, even when its last turn ran no tool. A crash sends nothing; Tares
+# notices that from the silence.
+
+def state_for(event: str, hook: dict) -> tuple:
+    """(state, reason) a hook event means, or (None, None) when it says nothing new."""
+    if event in ("UserPromptSubmit", "PostToolUse"):
+        return "working", ""
+    if event == "Stop":
+        return "waiting", "the turn ended; the session waits for input"
+    if event == "Notification":
+        return "waiting", str(hook.get("message") or "Claude Code needs your attention")[:300]
+    if event == "SessionEnd":
+        return "ended", str(hook.get("reason") or "")[:100]
+    return None, None
+
+
+def state_marker(data_dir: str, session_id: str) -> str:
+    return flow_marker(data_dir, session_id)[:-len(".flow")] + ".state"
+
+
+def report_state(cfg: dict, hook: dict, event: str, flow: str) -> None:
+    state, reason = state_for(event, hook)
+    if state is None:
+        return
+    sid = str(hook.get("session_id") or "")
+    path = state_marker(cfg["data_dir"], sid)
+    key = f"{state}|{reason}"
+    try:
+        if open(path).read() == key:
+            return   # unchanged: one line per change, not per tool call
+    except OSError:
+        pass
+    project = read_project(cfg["data_dir"], sid)
+    line = synthetic_line(hook, "session_state", flow, state=state, reason=reason)
+    if project:
+        line["tares_project"] = project
+    if ship_lines(cfg, [line]):
+        if state == "ended":
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        else:
+            with open(path, "w") as f:
+                f.write(key)
 
 
 if __name__ == "__main__":

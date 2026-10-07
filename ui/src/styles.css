@@ -1958,3 +1958,11 @@ pre.payload {
 @media (max-width: 640px) { .fo-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } .fo-steps li:nth-child(2) { border-right: 0; } .fo-steps li:nth-child(-n+2) { border-bottom: 1px solid var(--line); } }
 @media (prefers-reduced-motion: reduce) { .fo-fold-h::before { transition: none; } }
 .main .fo-steps, .main .fo-docs, .main .fo-tickets { margin: 0; padding: 0; list-style: none; }
+/* a build that stopped: the session waits for the person, or has gone quiet */
+.fo-attn { border: 1px solid var(--warn); background: var(--warn-soft); padding: 14px 18px; display: flex; flex-direction: column; gap: 8px; }
+.fo-attn-silent { border-color: var(--err); background: var(--err-soft); }
+.fo-attn h2 { margin: 0; font-size: 17px; }
+.fo-said { margin: 0; white-space: pre-wrap; font-size: 14px; border-left: 3px solid var(--warn); padding-left: 12px; max-width: 90ch; max-height: 220px; overflow: auto; }
+.fo-sess { display: inline-flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.fo-st-wait { color: var(--accent-deep); border-color: var(--accent-deep); background: var(--accent-soft); }
+.fo-st-quiet { color: var(--err); border-color: var(--err); }

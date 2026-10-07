@@ -322,6 +322,14 @@ CREATE TABLE IF NOT EXISTS project_sessions (
   linked_at  TIMESTAMPTZ,
   PRIMARY KEY (project, session)
 );
+-- What a Claude Code session is doing now (TR-405 follow-up), from the plugin's session_state
+-- lines: working, waiting (for the person, `reason` says why) or ended. One row per session.
+CREATE TABLE IF NOT EXISTS session_states (
+  session    TEXT PRIMARY KEY,
+  state      TEXT,
+  reason     TEXT,
+  state_at   TIMESTAMPTZ
+);
 CREATE TABLE IF NOT EXISTS skills (
   project     TEXT,
   name        TEXT,
@@ -2270,6 +2278,8 @@ class Store:
             self._forget_unused_docs()     # so does a doc
             self.con.execute("DELETE FROM tickets WHERE project = ?", [uid])
             self.con.execute("DELETE FROM project_sessions WHERE project = ?", [uid])
+            self.con.execute("DELETE FROM session_states WHERE session NOT IN (SELECT session "
+                             "FROM project_sessions)")
             self.con.execute("DELETE FROM usecase_log WHERE usecase_id = ?", [uid])
             self.con.execute("DELETE FROM usecases WHERE id = ?", [uid])
 
@@ -2592,16 +2602,42 @@ class Store:
 
     def project_sessions(self, project: str) -> list[dict]:
         """The sessions that worked in the project, newest activity first, with when they started
-        and last did something and how many lines they have."""
+        and last did something, how many lines they have, and their state (working, waiting,
+        ended; None before the plugin reported one) with its reason and time."""
         with self._lock:
             rows = self.con.execute(
                 "SELECT s.session, s.repo, s.linked_at, min(e.event_time), max(e.event_time), "
-                "count(e.key_value) FROM project_sessions s LEFT JOIN events e ON "
-                "e.source = 'claude_code' AND e.key_value = s.session WHERE s.project = ? "
-                "GROUP BY s.session, s.repo, s.linked_at ORDER BY max(e.event_time) DESC NULLS LAST",
-                [project]).fetchall()
+                "count(e.key_value), st.state, st.reason, st.state_at FROM project_sessions s "
+                "LEFT JOIN events e ON e.source = 'claude_code' AND e.key_value = s.session "
+                "LEFT JOIN session_states st ON st.session = s.session WHERE s.project = ? "
+                "GROUP BY s.session, s.repo, s.linked_at, st.state, st.reason, st.state_at "
+                "ORDER BY max(e.event_time) DESC NULLS LAST", [project]).fetchall()
         return [{"session": r[0], "repo": r[1], "linked_at": r[2], "started_at": r[3],
-                 "last_at": r[4], "lines": int(r[5] or 0)} for r in rows]
+                 "last_at": r[4], "lines": int(r[5] or 0), "state": r[6], "state_reason": r[7],
+                 "state_at": r[8]} for r in rows]
+
+    def set_session_state(self, session: str, state: str, reason: str | None, at) -> None:
+        """The session's state now; an older line than the one stored does not win."""
+        with self._lock:
+            self.con.execute(
+                "INSERT INTO session_states (session, state, reason, state_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT (session) DO UPDATE SET state = excluded.state, "
+                "reason = excluded.reason, state_at = excluded.state_at "
+                "WHERE excluded.state_at >= session_states.state_at",
+                [session, state, reason or None, at])
+
+    def last_said(self, source: str, session: str) -> str | None:
+        """The last thing the session's assistant wrote (not a tool call), for a waiting
+        session: what it stopped on."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT text FROM events WHERE source = ? AND key_value = ? AND event_type = "
+                "'assistant' ORDER BY event_time DESC LIMIT 20", [source, session]).fetchall()
+        for (t,) in rows:
+            t = (t or "").strip()
+            if t and not t.startswith("→"):
+                return t
+        return None
 
     def session_projects(self, session: str) -> list[str]:
         with self._lock:

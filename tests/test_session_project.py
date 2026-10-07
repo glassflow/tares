@@ -96,6 +96,30 @@ def plugin():
                                     hook)
     ck("Claude Code's bookkeeping lines are not shipped", [o["type"] for o in kept] == ["user"],
        kept)
+    print("== the plugin: session state ==")
+    ck("hooks map to states",
+       ship.state_for("PostToolUse", {}) == ("working", "")
+       and ship.state_for("Stop", {})[0] == "waiting"
+       and ship.state_for("Notification", {"message": "Claude needs your permission to use Bash"})
+       == ("waiting", "Claude needs your permission to use Bash")
+       and ship.state_for("SessionEnd", {"reason": "exit"}) == ("ended", "exit")
+       and ship.state_for("SessionStart", {}) == (None, None))
+    sent = []
+    real = ship.ship_lines
+    ship.ship_lines = lambda cfg, objs: sent.extend(objs) or True
+    try:
+        cfg = {"base": "http://x", "headers": {}, "data_dir": tempfile.mkdtemp()}
+        ship.write_project(cfg["data_dir"], SID, "Invoices")
+        h = {"session_id": SID, "cwd": "/w/invoices"}
+        for ev in ("PostToolUse", "PostToolUse", "PostToolUse", "Stop", "Stop", "UserPromptSubmit",
+                   "SessionEnd"):
+            ship.report_state(cfg, h, ev, "")
+        ck("one line per change, not per tool call",
+           [o["state"] for o in sent] == ["working", "waiting", "working", "ended"], sent)
+        ck("the line carries the project", all(o.get("tares_project") == "Invoices" for o in sent))
+    finally:
+        ship.ship_lines = real
+
     d = tempfile.mkdtemp()
     ship.write_project(d, SID, "Invoices")
     ck("the marker round-trips", ship.read_project(d, SID) == "Invoices"
@@ -131,6 +155,37 @@ async def tares(shipped):
         ck("read the session top to bottom", texts[0] == "let's build an invoice parser"
            and "session works in project Invoices" in texts, texts)
         ck("the claude_code source is in the project", "claude_code" in store.project_sources(uid))
+        print("== Tares: session state ==")
+        ck("no state before the plugin reports one", ss[0]["state"] is None, ss[0])
+        said = {"type": "assistant", "sessionId": SID, "timestamp": "2026-10-07T10:01:00.000Z",
+                "message": {"role": "assistant", "content": [
+                    {"type": "text", "text": "I've paused: the safety check stopped answering."}]}}
+        waiting = {"type": "session_state", "sessionId": SID, "state": "waiting",
+                   "reason": "Claude needs your permission to use Bash",
+                   "timestamp": "2026-10-07T10:01:05.000Z"}
+        stale = {**waiting, "state": "working", "reason": "", "timestamp": "2026-10-07T10:00:59.000Z"}
+        await cx.post("/ingest/claude_code", content="\n".join(json.dumps(o) for o in
+                      (said, waiting, stale)) + "\n", headers={"Content-Type": "application/x-ndjson"})
+        s = (await cx.get(f"/api/projects/{uid}/sessions")).json()
+        one = s["sessions"][0]
+        ck("a waiting session, with the reason, the time and what it said last",
+           one["state"] == "waiting" and one["state_reason"].startswith("Claude needs")
+           and one["last_said"] == "I've paused: the safety check stopped answering."
+           and s["now"], one)
+        ck("an older line does not win", one["state"] == "waiting")
+        ended = {"type": "session_state", "sessionId": SID, "state": "ended", "reason": "exit",
+                 "timestamp": "2026-10-07T10:05:00.000Z"}
+        await cx.post("/ingest/claude_code", content=json.dumps(ended) + "\n",
+                      headers={"Content-Type": "application/x-ndjson"})
+        one = (await cx.get(f"/api/projects/{uid}/sessions")).json()["sessions"][0]
+        ck("then ended, and no last_said for a session that is not waiting",
+           one["state"] == "ended" and "last_said" not in one, one)
+        bogus = {"type": "session_state", "sessionId": SID, "state": "asleep",
+                 "timestamp": "2026-10-07T10:06:00.000Z"}
+        await cx.post("/ingest/claude_code", content=json.dumps(bogus) + "\n",
+                      headers={"Content-Type": "application/x-ndjson"})
+        one = (await cx.get(f"/api/projects/{uid}/sessions")).json()["sessions"][0]
+        ck("an unknown state is ignored", one["state"] == "ended", one)
         r = await cx.get(f"/api/projects/{uid}/sessions/other")
         ck("a session that did not work here -> 404", r.status_code == 404, r.text)
         r = await cx.post("/ingest/claude_code", content=json.dumps(

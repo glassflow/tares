@@ -4411,9 +4411,17 @@ def make_app() -> FastAPI:
     @app.get("/api/projects/{uid}/sessions")
     async def list_project_sessions(uid: str):
         """The sessions that worked in the project (the spec session among them), newest activity
-        first."""
+        first, each with its state (working, waiting for the person, ended) and, for a waiting
+        one, the last thing it said (`last_said`)."""
         _project_or_404(uid)
-        return {"sessions": store.project_sessions(uid)}
+        src = next((n for n, c in runtime.catalog.sources.items()
+                    if c.connector == "claude_code"), "claude_code")
+        out = store.project_sessions(uid)
+        for s in out:
+            if s["state"] == "waiting":
+                said = store.last_said(src, s["session"]) or ""
+                s["last_said"] = said[:1200]
+        return {"sessions": out, "now": now_utc()}
 
     @app.get("/api/projects/{uid}/sessions/{sid}")
     async def get_project_session(uid: str, sid: str, limit: int = 200, offset: int = 0):

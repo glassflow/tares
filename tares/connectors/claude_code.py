@@ -109,6 +109,8 @@ class ClaudeCodeConnector(Connector):
         for o in items:
             if isinstance(o, dict) and o.get("type") == "session_project":
                 self._link_project(o)
+            if isinstance(o, dict) and o.get("type") == "session_state":
+                self._record_state(o)
             if isinstance(o, dict):
                 env = self._obj_to_envelope(o, redact, include_thinking)
                 if env is not None:
@@ -131,6 +133,17 @@ class ClaudeCodeConnector(Connector):
         self.store.link_session(p["id"], sid, Path(str(cwd)).name if cwd else None)
         self.store.upsert_project_object(p["id"], "source", f"+source:{self.cfg.name}",
                                          self.cfg.name)
+
+    STATES = ("working", "waiting", "ended")
+
+    def _record_state(self, o: dict) -> None:
+        """A `session_state` line: the plugin saw the session start working, stop and wait for
+        the person (a turn ended, a notification), or end. Kept as the session's state now."""
+        sid, state = str(o.get("sessionId") or ""), str(o.get("state") or "")
+        if not sid or state not in self.STATES or self.store is None:
+            return
+        self.store.set_session_state(sid, state, str(o.get("reason") or "")[:300] or None,
+                                     self._ts(o))
 
     def label_context(self, o: dict | None) -> dict:
         """Synthesized label axes from a raw transcript object — the SAME mapping ingest uses
@@ -255,6 +268,9 @@ class ClaudeCodeConnector(Connector):
             return f"session flow: {o.get('flow') or 'cleared'}"
         if o.get("type") == "session_project":
             return f"session works in project {o.get('tares_project')}"
+        if o.get("type") == "session_state":
+            why = f": {o.get('reason')}" if o.get("reason") else ""
+            return f"session {o.get('state')}{why}"
         if o.get("type") in ClaudeCodeConnector.CHALLENGE_TYPES:
             return ClaudeCodeConnector._render_challenge(o)
         content = msg.get("content")

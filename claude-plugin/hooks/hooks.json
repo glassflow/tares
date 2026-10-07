@@ -12,7 +12,11 @@
         "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/challenger.py"], "timeout": 900 }] }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/challenger.py"], "timeout": 10 }] }
+      { "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/challenger.py"], "timeout": 10 }] },
+      { "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"], "async": true }] }
+    ],
+    "Notification": [
+      { "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"], "async": true }] }
     ],
     "SessionEnd": [
       { "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"] }] }

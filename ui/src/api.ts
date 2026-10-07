@@ -559,7 +559,7 @@ export const api = {
     request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/tickets/${encodeURIComponent(ref)}`,
       { method: "DELETE" }),
   projectSessions: (id: string) =>
-    request<{ sessions: ProjectSession[] }>(`/api/projects/${encodeURIComponent(id)}/sessions`),
+    request<{ sessions: ProjectSession[]; now: string }>(`/api/projects/${encodeURIComponent(id)}/sessions`),
   projectSession: (id: string, sid: string, offset = 0) =>
     request<{ session: string; lines: { event_type: string; text: string; event_time: string; labels: Record<string, string> }[] }>(
       `/api/projects/${encodeURIComponent(id)}/sessions/${encodeURIComponent(sid)}?limit=500&offset=${offset}`),

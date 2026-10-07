@@ -4,7 +4,7 @@ import { api } from "../../api";
 import { TimeAgo, usePolling } from "../bits";
 import { VLink, type Ctx } from "./common";
 import { Goal } from "./overview";
-import type { DocSummary, Ticket } from "../../types";
+import type { DocSummary, ProjectSession, Ticket } from "../../types";
 
 // The page of a software factory project (kind "software_factory"): a project a spec session
 // made in Claude Code and sessions build from docs and tickets. Where the build stands (spec,
@@ -65,6 +65,13 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const doing = live.filter((t) => t.status === "in_progress").length;
   const sessions = ss?.sessions ?? [];
   const firstLinked = [...sessions].sort((a, b) => a.linked_at.localeCompare(b.linked_at))[0]?.session;
+  // the session the build depends on: the most recently active one (sessions come newest first)
+  const active = sessions[0];
+  const building = tickets.some((t) => t.status === "in_progress");
+  const quietMin = active ? quiet(active, ss?.now) : 0;
+  const attention: "waiting" | "silent" | null = !building || !active ? null
+    : active.state === "waiting" ? "waiting"
+    : active.state !== "ended" && quietMin >= SILENT_MIN ? "silent" : null;
   const prompt = `Work on Tares project "${ctx.s.name}": read its starting prompt and begin.`;
   const where = tk?.linear ? <>in Linear project <a href={tk.linear.url} target="_blank" rel="noreferrer">{tk.linear.name}</a></> : "in Tares";
 
@@ -117,9 +124,15 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
         </div>
       )}
 
+      {attention && active && (
+        <Attention kind={attention} session={active} quietMin={quietMin}
+                   label={active.session === firstLinked ? "spec session" : "build session"}
+                   ticket={next?.status === "in_progress" ? next.title : undefined} />
+      )}
+
       {next ? (
         <NextUp key={next.id} ctx={ctx} next={next} of={tickets.indexOf(next) + 1} total={tickets.length}
-                prompt={prompt} />
+                prompt={prompt} waiting={attention !== null && next.status === "in_progress"} />
       ) : tk && (
         <section className="fo-next fo-next-empty">
           {tickets.length
@@ -175,9 +188,12 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
           <ul className="fo-docs">
             {sessions.map((x) => (
               <li key={x.session}>
-                <VLink v={{ kind: "claude", name: x.session }}>
-                  {x.session === firstLinked ? "Spec session" : "Build session"}{x.repo && <> · {x.repo}</>}
-                </VLink>
+                <span className="fo-sess">
+                  <VLink v={{ kind: "claude", name: x.session }}>
+                    {x.session === firstLinked ? "Spec session" : "Build session"}{x.repo && <> · {x.repo}</>}
+                  </VLink>
+                  <StateBadge s={x} now={ss?.now} />
+                </span>
                 <small>{x.started_at ? <TimeAgo ts={x.started_at} /> : null} · {x.lines} lines</small>
               </li>
             ))}
@@ -188,16 +204,67 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   );
 }
 
+// a session that has sent nothing for this long while a ticket is in progress may be gone
+const SILENT_MIN = 10;
+
+function quiet(s: ProjectSession, now?: string): number {
+  return s.last_at && now ? Math.floor((Date.parse(now) - Date.parse(s.last_at)) / 60000) : 0;
+}
+
+function StateBadge({ s, now }: { s: ProjectSession; now?: string }) {
+  if (s.state === "waiting") return <span className="fo-st fo-st-wait" title={s.state_reason ?? undefined}>waiting</span>;
+  if (s.state === "ended") return <span className="fo-st">ended</span>;
+  if (s.state === "working") {
+    return quiet(s, now) >= SILENT_MIN
+      ? <span className="fo-st fo-st-quiet" title="nothing sent for a while">quiet</span>
+      : <span className="fo-st fo-st-in_progress">working</span>;
+  }
+  return null;
+}
+
+/** A build that has stopped: the session waits for the person, or has gone silent. */
+function Attention({ kind, session, quietMin, label, ticket }: {
+  kind: "waiting" | "silent"; session: ProjectSession; quietMin: number; label: string; ticket?: string;
+}) {
+  const said = (session.last_said ?? "").trim();
+  return (
+    <section className={`fo-attn fo-attn-${kind}`} role="status" aria-labelledby="fo-attn-h">
+      <h2 id="fo-attn-h">
+        {kind === "waiting"
+          ? <>The {label} is waiting for you{session.state_at && <> since <TimeAgo ts={session.state_at} /></>}</>
+          : <>No word from the {label} for {quietMin} min</>}
+      </h2>
+      {kind === "waiting" ? (
+        <>
+          {said && <p className="fo-said">{said.length > 600 ? `${said.slice(0, 597)}…` : said}</p>}
+          <p className="help" style={{ margin: 0 }}>
+            {ticket && <>Ticket "{ticket}" is in progress. </>}
+            Answer it in that Claude Code session, or say "continue" there.
+            {session.state_reason && session.state_reason !== "the turn ended; the session waits for input" && <> Claude Code said: {session.state_reason}.</>}
+          </p>
+        </>
+      ) : (
+        <p className="help" style={{ margin: 0 }}>
+          {ticket ? <>Ticket "{ticket}" is in progress, but </> : null}the session has sent nothing
+          since <TimeAgo ts={session.last_at} />. It may have crashed, its terminal was closed, or the
+          laptop went to sleep. Check its terminal.
+        </p>
+      )}
+      <VLink v={{ kind: "claude", name: session.session }} className="fo-link">Open the session</VLink>
+    </section>
+  );
+}
+
 /** The ticket a build session takes next, with what it is about and the sentence to start one. */
-function NextUp({ ctx, next, of, total, prompt }: {
-  ctx: Ctx; next: Ticket; of: number; total: number; prompt: string;
+function NextUp({ ctx, next, of, total, prompt, waiting }: {
+  ctx: Ctx; next: Ticket; of: number; total: number; prompt: string; waiting?: boolean;
 }) {
   const { data: full } = usePolling(() => api.ticket(ctx.id, next.id), 30000);
   const text = gist(full?.working_doc_body);
   return (
     <section className="fo-next" aria-labelledby="fo-next-h">
       <span className="fo-label">
-        {next.status === "in_progress" ? "In progress" : "Next up"} · ticket {of} of {total}
+        {next.status === "in_progress" ? (waiting ? "In progress · stopped" : "In progress") : "Next up"} · ticket {of} of {total}
         {next.identifier && <> · {next.identifier}</>}
       </span>
       <h2 id="fo-next-h">{next.title}</h2>
