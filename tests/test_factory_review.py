@@ -90,6 +90,25 @@ def unit():
     ck("a break check with no failing run differs", st == "differs" and "test_cart" in rec, rec)
     late = {"command": "pytest -q", "result": "14 passed", "broke_test": "", "at": t0 - timedelta(minutes=20)}
     ck("a run after the claim does not count", factory.match_check(late, cmds)[0] == "not_found")
+    short = [{"at": t0 - timedelta(minutes=3), "command": "pytest", "output": "1 passed", "is_error": False}]
+    ck("a shorter command that ran does not stand for the claimed one",
+       factory.match_check(check("pytest -q tests/", "1 passed"), short)[0] == "not_found")
+    twelve = [{"at": t0 - timedelta(minutes=3), "command": "pytest -q", "output": "12 passed in 1s", "is_error": False}]
+    ck("2 passed is not 12 passed", factory.match_check(check("pytest -q", "2 passed"), twelve)[0] == "differs")
+    ck("a zero count in the claim is not required in the output",
+       factory.match_check(check("pytest -q", "12 passed, 0 failed"), twelve)[0] == "matched")
+    hidden = [{"at": t0 - timedelta(minutes=3), "command": "pytest -q",
+               "output": "FAILED tests/test_x.py::test_a\n12 passed 0 failed", "is_error": False}]
+    ck("a FAILED line is a failure even next to 0 failed",
+       factory.match_check(check("pytest -q", "12 passed"), hidden)[0] == "differs")
+    unittest = [{"at": t0 - timedelta(minutes=3), "command": "python t.py", "output": "ran 4, errors=0", "is_error": False}]
+    ck("errors=0 is not a failure", factory.match_check(check("python t.py", "4 ran"), unittest)[0] == "matched")
+    early = [{"at": t0 - timedelta(hours=3), "command": "pytest -q", "output": "14 passed", "is_error": False}]
+    ck("a run from before the ticket went into the work does not count",
+       factory.match_check(check("pytest -q", "14 passed"), early, since=t0 - timedelta(hours=1))[0] == "not_found")
+    ck("finding kinds use whole words: blocking is not a lock",
+       factory.finding_kind("this is a blocking issue") != "concurrency"
+       and factory.finding_kind("the author field") != "security")
 
     print("== the Codex layer from its recorded reviews (TR-440) ==")
     ev = [{"type": "challenge_commit", "challenge": {"verdict": "FAIL", "sha": "1", "findings": [
@@ -147,17 +166,18 @@ async def main():
         await mf.assign_ticket("T1", "shop-build-m1", project="Shop")
         as_station("shop-build-m1", "builder", "crew-orchestrator")
         await mf.set_stage("T1", "doing", project="Shop")
+        await ingest([   # the builder runs its tests after it started the ticket
+            {"type": "session_station", "sessionId": "b1", "cwd": "/w/shop", "timestamp": ago(30),
+             "station": "shop-build-m1", "role": "builder", "parent": "crew-orchestrator", "tares_project": "Shop"},
+            {"type": "assistant", "sessionId": "b1", "cwd": "/w/shop", "timestamp": ago(0), "message": {
+                "role": "assistant", "content": [{"type": "tool_use", "id": "u1", "name": "Bash",
+                                                  "input": {"command": "pytest -q"}}]}},
+            {"type": "user", "sessionId": "b1", "cwd": "/w/shop", "timestamp": ago(0), "message": {
+                "role": "user", "content": [{"type": "tool_result", "tool_use_id": "u1", "content": "14 passed"}]}}])
         await mf.add_check("T1", "pytest -q", "14 passed", project="Shop")
         await mf.add_check("T1", "make e2e", "all green", project="Shop")
         await mf.set_stage("T1", "review", pr="https://github.com/acme/shop/pull/7", project="Shop")
         await ingest([
-            {"type": "session_station", "sessionId": "b1", "cwd": "/w/shop", "timestamp": ago(30),
-             "station": "shop-build-m1", "role": "builder", "parent": "crew-orchestrator", "tares_project": "Shop"},
-            {"type": "assistant", "sessionId": "b1", "cwd": "/w/shop", "timestamp": ago(20), "message": {
-                "role": "assistant", "content": [{"type": "tool_use", "id": "u1", "name": "Bash",
-                                                  "input": {"command": "pytest -q"}}]}},
-            {"type": "user", "sessionId": "b1", "cwd": "/w/shop", "timestamp": ago(19), "message": {
-                "role": "user", "content": [{"type": "tool_result", "tool_use_id": "u1", "content": "14 passed"}]}},
             {"type": "challenge_commit", "sessionId": "b1", "cwd": "/w/shop", "timestamp": ago(18),
              "gitBranch": "factory/T1", "tares_project": "Shop", "flow": "challenger",
              "challenge": {"verdict": "FAIL", "sha": "abc", "findings": [{"priority": "P2", "title": "no tests for empty cart"}]}},

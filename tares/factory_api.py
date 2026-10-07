@@ -125,8 +125,9 @@ def verdict_now(t: dict, last: dict | None) -> dict | None:
     given on a commit; once the pull request's head moves on, it is for an older commit."""
     if not last:
         return None
-    head = (t.get("pr") or {}).get("head")
-    current = not head or head.startswith(last["head"]) or last["head"].startswith(head)
+    head = ((t.get("pr") or {}).get("head") or "").lower()
+    mine = (last["head"] or "").lower()
+    current = not head or head.startswith(mine) or mine.startswith(head)
     return {"verdict": last["verdict"], "head": last["head"], "round": last["round"],
             "at": last["at"], "current": bool(current),
             "note": None if current else
@@ -136,18 +137,26 @@ def verdict_now(t: dict, last: dict | None) -> dict | None:
 def review_state(store, uid: str, t: dict, source: str) -> dict:
     """What a ticket's full view adds for review (TR-440..444): its checks matched against the
     recording, the challenger's layer, the review rounds, and whether the last verdict counts."""
-    p = store.get_project(uid) or {}
-    holder = t.get("holder")
-    sessions = (store.station_session_ids(holder) if holder
-                else [s["session"] for s in store.project_sessions(uid)])
-    commands = store.recorded_commands(source, sessions) if sessions else []
+    raw = store.ticket_checks(t["id"], 50)
     checks = []
-    for c in store.ticket_checks(t["id"], 50):
-        state, recorded = factory_mod.match_check(c, commands) if sessions else (None, None)
-        checks.append({**c, "match": state, "recorded": recorded})
+    if raw:
+        holder = t.get("holder")
+        sessions = (store.station_session_ids(holder) if holder
+                    else [s["session"] for s in store.project_sessions(uid)])
+        commands = store.recorded_commands(source, sessions) if sessions else []
+        # only what ran since the ticket went into the work counts for its checks
+        since = next((x["at"] for x in store.ticket_history(t["id"])
+                      if x["field"] == "stage" and x["value"] == "doing"), None)
+        if since is not None:
+            from datetime import timedelta
+            since = since - timedelta(minutes=5)
+        for c in raw:
+            state, recorded = (factory_mod.match_check(c, commands, since) if sessions
+                               else (None, None))
+            checks.append({**c, "match": state, "recorded": recorded})
     reviews = store.ticket_reviews(t["id"])
     layer = factory_mod.challenger_layer(
-        store.challenge_events(source, p.get("name") or "", factory_mod.label(t)))
+        store.challenge_events(source, uid, factory_mod.label(t)))
     return {"checks": checks, "reviews": reviews, "challenger": layer,
             "verdict": verdict_now(t, reviews[-1] if reviews else None)}
 
@@ -575,12 +584,21 @@ def register(app, store, h: SimpleNamespace) -> None:
                 body.get("findings"), body.get("head"))
         except docs_mod.DocError as e:
             h.err(e)
-        resolved = body.get("resolved") or {}
-        if not isinstance(resolved, dict) or any(v not in ("fixed", "open")
-                                                 for v in resolved.values()):
+        raw = body.get("resolved") or {}
+        if not isinstance(raw, dict) or any(v not in ("fixed", "open") for v in raw.values()):
             h.err(ValueError("resolved is {finding: fixed|open}, e.g. {\"F1\": \"fixed\"}"))
+        # one spelling for every finding ref (F1, f1, 1, its id); an unknown one is a mistake
+        known = {f["id"]: f["label"] for r in store.ticket_reviews(t["id"]) for f in r["findings"]}
+        resolved = {}
+        for k, v in raw.items():
+            m = re.match(r"^[Ff]?(\d{1,6})$", str(k).strip())
+            lab = f"F{int(m.group(1))}" if m else known.get(str(k))
+            if lab not in known.values():
+                h.err(KeyError(f"no finding {k!r} on {factory_mod.label(t)}; it has: "
+                               + (", ".join(sorted(known.values())) or "none")), 404)
+            resolved[lab] = v
         if verdict == "pass" and any(
-                f["blocking"] and resolved.get(f["label"], resolved.get(f["id"])) != "fixed"
+                f["blocking"] and resolved.get(f["label"]) != "fixed"
                 for f in store.open_findings(t["id"])):
             h.err(ValueError("a pass leaves no blocking finding open: mark the earlier ones "
                              "fixed in `resolved`, or ask for changes"))
@@ -601,26 +619,25 @@ def register(app, store, h: SimpleNamespace) -> None:
             tickets = store.list_tickets(uid)
             if not any(t["stage"] == "review" for t in tickets):
                 continue
-            ms_open = {}   # a ticket blocks its milestone when the milestone is not finished
-            for t in tickets:
-                if t["milestone"]:
-                    ms_open.setdefault(t["milestone"], False)
-                    if t["status"] not in factory_mod.DONE_STATUSES:
-                        ms_open[t["milestone"]] = True
             for t in tickets:
                 if t["stage"] != "review":
                     continue
+                # it blocks its milestone when it is the last of the milestone's tickets open
+                others = [x for x in tickets if x["milestone"] and x["milestone"] == t["milestone"]
+                          and x["id"] != t["id"]]
+                blocks = bool(t["milestone"]) and all(
+                    x["status"] in factory_mod.DONE_STATUSES for x in others)
                 since = next((x["at"] for x in reversed(store.ticket_history(t["id"]))
                               if x["field"] == "stage" and x["value"] == "review"), t["updated_at"])
                 layer = factory_mod.challenger_layer(
-                    store.challenge_events(h.cc_source(), pname, factory_mod.label(t)))
+                    store.challenge_events(h.cc_source(), uid, factory_mod.label(t)))
                 last = store.ticket_reviews(t["id"])[-1:]
                 v = verdict_now(t, last[0] if last else None)
                 out.append({"project": uid, "project_name": pname, "ticket": factory_mod.label(t),
                             "title": t["title"], "holder": t["holder"],
                             "pr": (t["pr"] or {}).get("url"), "head": (t["pr"] or {}).get("head"),
                             "waiting_since": since,
-                            "blocks_milestone": bool(t["milestone"] and ms_open.get(t["milestone"])),
+                            "blocks_milestone": blocks,
                             "layer1_clean": layer["clean"],
                             "verdict": v})
         now = now_utc()
@@ -661,7 +678,8 @@ def register(app, store, h: SimpleNamespace) -> None:
             if pr.get("merged"):
                 L += ["", "STOP: the pull request is already merged. There is nothing to review."]
                 return "\n".join(L)
-            if head and pr.get("head") and not (pr["head"].startswith(head) or head.startswith(pr["head"])):
+            hd, now_head = head.lower(), str(pr.get("head") or "").lower()
+            if len(hd) >= 7 and now_head and not (now_head.startswith(hd) or hd.startswith(now_head)):
                 L += ["", f"STOP: the head moved. You were asked about {head[:12]}, the PR is now "
                           f"at {pr['head'][:12]}. Review the new head and say so."]
                 return "\n".join(L)
@@ -712,12 +730,11 @@ def register(app, store, h: SimpleNamespace) -> None:
             L += ["## Assumptions made on this ticket"]
             L += [f"- {a['label']} ({a['state']}): {a['question']} -> {a['choice']}"
                   for a in full["assumptions"]] + [""]
-        if hasattr(store, "list_decisions"):
-            ds = [d for d in store.list_decisions(p["id"]) if lab in (d.get("tickets") or [])
-                  or not d.get("tickets")][:10]
-            if ds:
-                L += ["## Decisions the person made on this project"]
-                L += [f"- {d['question']}: \"{d['words']}\"" for d in ds] + [""]
+        ds = [d for d in store.list_decisions(p["id"], all_=True)
+              if lab in (d.get("tickets") or []) or not d.get("tickets")][:10]
+        if ds:
+            L += ["## Decisions the person made on this project"]
+            L += [f"- {d.get('question') or ''}: \"{d.get('words') or ''}\"" for d in ds] + [""]
         # 7. recurring findings in this repo: check these first
         if pr.get("repo"):
             rec = recurring(pr["repo"])
@@ -738,24 +755,22 @@ def register(app, store, h: SimpleNamespace) -> None:
         names = {p["id"]: p["name"] for p in store.list_projects()}
         by: dict[str, dict] = {}
         for f in rows:
-            k = by.setdefault(f["kind"], {"kind": f["kind"], "tickets": set(), "examples": []})
+            k = by.setdefault(f["kind"], {"kind": f["kind"], "refs": set(), "examples": []})
             t = store.get_ticket(f["project"], f["ticket"])
-            k["tickets"].add(f"{names.get(f['project'], '?')} {factory_mod.label(t) if t else '?'}")
+            k["refs"].add((f["project"], factory_mod.label(t) if t else "?"))
             if len(k["examples"]) < 3:
                 k["examples"].append(f["text"][:200])
-        out = [{"kind": k["kind"], "count": len(k["tickets"]), "tickets": sorted(k["tickets"]),
+        out = [{"kind": k["kind"], "count": len(k["refs"]),
+                "projects": sorted({p for p, _ in k["refs"]}),
+                "tickets": sorted(f"{names.get(p, '?')} {lab}" for p, lab in k["refs"]),
                 "examples": k["examples"]} for k in by.values()
-               if len(k["tickets"]) >= factory_mod.RECUR_MIN]
+               if len(k["refs"]) >= factory_mod.RECUR_MIN]
         return sorted(out, key=lambda r: -r["count"])
 
     def offer_rules(repo: str) -> None:
         for r in recurring(repo):
-            projects = {x.split(" ")[0] for x in r["tickets"]}
-            scope = "all" if len(projects) > 1 else "project"
-            pid = None
-            if scope == "project":
-                pid = next((p["id"] for p in store.list_projects()
-                            if p["name"] == next(iter(projects))), None)
+            scope = "all" if len(r["projects"]) > 1 else "project"
+            pid = r["projects"][0] if scope == "project" else None
             text = (f"In {repo}, check for {r['kind']} before asking for review: it came back in "
                     f"{r['count']} tickets.")
             store.upsert_rule_proposal(repo, r["kind"], pid, scope, text, r["tickets"], now_utc())
@@ -788,7 +803,9 @@ def register(app, store, h: SimpleNamespace) -> None:
         if decision != "accept":
             h.err(KeyError("accept or reject"), 404)
         text = " ".join(str(body.get("text") or rp["text"]).split())
-        if rp["scope"] == "project" and rp["project"]:
+        if rp["scope"] == "project" and not (rp["project"] and store.get_project(rp["project"])):
+            h.err(ValueError("the project this rule was for is gone; reject it"), 409)
+        if rp["scope"] == "project":
             doc = next((d for d in store.list_docs(rp["project"], "agents")
                         if d["id"] not in h.global_ids(False).values()), None)
             doc_id = doc["id"] if doc else store.create_doc(
@@ -883,28 +900,54 @@ def register(app, store, h: SimpleNamespace) -> None:
         scope = str(body.get("scope") or "project").strip().lower()
         if scope not in ("project", "all"):
             h.err(ValueError("scope is project or all"))
+        if scope == "all" and d["project"] and not factory_mod.says_every_project(words):
+            h.err(ValueError("a project's question is answered for that project; it holds for "
+                             "every project only when the person says so"))
         from datetime import timedelta
-        since = now_utc() - timedelta(hours=factory_mod.MATCH_HOURS)
+        # only what the person typed after the question was asked can answer it
+        since = max(d["created_at"], now_utc() - timedelta(hours=factory_mod.MATCH_HOURS))
         labeled = bool(caller(request)["station"])
         sessions = store.role_sessions("orchestrator") if labeled else None
-        hit = factory_mod.words_match(words, store.person_turns(h.cc_source(), sessions, since))
-        standing = bool(body.get("standing"))
-        granted = False
-        if standing and hit:
-            line = factory_mod.grant_line(words, now_utc().date().isoformat())
-            granted = append_grant(d["project"] if scope == "project" and d["project"] else None,
-                                   line, "the person, on the desk")
-        # an assumption batch: each kept or overturned with the person's words
+        turns = store.person_turns(h.cc_source(), sessions, since)
+        hit = factory_mod.words_match(words, turns)
+        # an assumption batch: every listed assumption kept or overturned, with the person's words
         kept = [str(a) for a in body.get("kept") or []]
         over = body.get("overturned") or {}
         if not isinstance(over, dict):
             h.err(ValueError("overturned is {A<n>: the person's words}"))
-        changed = []
+        plan = []
         for ref_a, st, w in [(a, "kept", None) for a in kept] + [
                 (a, "overturned", str(w)) for a, w in over.items()]:
             a = store.get_assumption(d["project"], ref_a) if d["project"] else None
-            if a is None:
-                h.err(KeyError(f"no assumption {ref_a!r} in {d['label']}'s project"), 404)
+            if a is None or a["label"] not in d["assumptions"]:
+                h.err(KeyError(f"{ref_a!r} is not one of {d['label']}'s assumptions: "
+                               + (", ".join(d["assumptions"]) or "it has none")), 404)
+            if a["state"] != "open":
+                h.err(ValueError(f"{a['label']} was already {a['state']}"), 409)
+            plan.append((a, st, w))
+        missing = set(d["assumptions"]) - {a["label"] for a, _, _ in plan}
+        if d["assumptions"] and missing:
+            h.err(ValueError("the answer must keep or overturn every assumption of "
+                             f"{d['label']}; left out: " + ", ".join(sorted(missing))))
+        unheard = [a["label"] for a, st, w in plan if st == "overturned"
+                   and not (factory_mod.words_match(w, turns)
+                            or factory_mod._plain(w) in factory_mod._plain(words))]
+        if hit is None or unheard:
+            # nothing is recorded as the person's unless they typed it: the question stays open
+            return {"desk_item": desk_out(d), "matched": False, "granted": False,
+                    "recorded": False, "assumptions": [], "follow_up": [],
+                    "unheard": unheard}
+        standing = bool(body.get("standing"))
+        granted = False
+        if standing:
+            try:
+                line = factory_mod.grant_line(words, now_utc().date().isoformat())
+            except docs_mod.DocError as e:
+                h.err(e)
+            granted = append_grant(d["project"] if scope == "project" and d["project"] else None,
+                                   line, "the person, on the desk")
+        changed = []
+        for a, st, w in plan:
             store.decide_assumption(a["id"], st, w, d["label"], now_utc())
             changed.append({"label": a["label"], "state": st, "tickets": a["tickets"]})
         dec = store.add_decision(d["project"], d["id"], d["question"], words,
@@ -917,8 +960,8 @@ def register(app, store, h: SimpleNamespace) -> None:
                    "tickets": [factory_mod.label(by_id[x]) for x in c["tickets"] if x in by_id]}
                   for c in changed if c["state"] == "overturned"]
         return {"desk_item": desk_out(desk_or_404(d["id"])), "decision": dec,
-                "matched": hit is not None, "granted": granted, "assumptions": changed,
-                "follow_up": follow}
+                "matched": True, "recorded": True, "granted": granted, "assumptions": changed,
+                "follow_up": follow, "unheard": []}
 
     @app.get("/api/projects/{uid}/decisions")
     async def project_decisions(uid: str):

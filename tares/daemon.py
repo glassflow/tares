@@ -4373,7 +4373,7 @@ def make_app() -> FastAPI:
                 for a in store.list_assumptions(uid, ticket=t["id"])]
             out.update(factory_api.review_state(store, uid, t, _cc_source()))
             lab = out["label"]
-            ds = store.list_decisions(uid)
+            ds = store.list_decisions(uid, all_=True)
             out["decisions"] = ([d for d in ds if lab in d["tickets"]]
                                 + [d for d in ds if lab not in d["tickets"]])[:10]
         else:
@@ -4699,7 +4699,7 @@ def make_app() -> FastAPI:
             body = "...\n" + body[-6000:].split("\n", 1)[-1]
         out["memory"] = body
         out["decisions"] = [{k: d[k] for k in ("label", "question", "words", "choice", "at")}
-                            for d in store.list_decisions(uid)[:10]]
+                            for d in store.list_decisions(uid, all_=True)[:10]]
         notes = [d for d in store.list_docs(uid, "note")]
         out["notes"] = [{"id": d["id"], "title": d["title"],
                          "body": (store.get_doc(uid, d["id"]) or {}).get("body", "")[:4000]}

@@ -48,11 +48,18 @@ def ago(minutes):
 
 def unit():
     print("== words as typed ==")
-    turns = [{"session": "o1", "text": "Hmm. Use Stripe test mode, and keep it simple!"}]
-    ck("the person's words are found, case and spacing aside",
-       factory.words_match("use  stripe test mode", turns) is not None)
+    turns = [{"session": "o1", "text": "Hmm. Use Stripe test mode, and keep it simple!"},
+             {"session": "o1", "text": "I don't want to ship it until Friday\nyes"}]
+    ck("a whole sentence of theirs matches, case and spacing aside",
+       factory.words_match("use  stripe test mode, and keep it simple", turns) is not None)
+    ck("a whole line matches", factory.words_match("Yes", turns) is not None)
+    ck("a fragment does not", factory.words_match("use stripe test mode", turns) is None
+       and factory.words_match("ship it", turns) is None)
+    ck("nor a word hidden in another", factory.words_match("ok", [{"text": "token"}]) is None)
     ck("a paraphrase is not", factory.words_match("Go with Stripe", turns) is None)
     ck("one character is not an answer", factory.words_match("y", turns) is None)
+    ck("every project only when they say so", factory.says_every_project("fine for every project")
+       and not factory.says_every_project("fine for staging"))
 
 
 async def main():
@@ -109,27 +116,38 @@ async def main():
         ck("nor answer it", "only the orchestrator" in bad, bad)
 
         print("== answers word for word (TR-450) ==")
+        def now_plus(seconds):
+            t = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+            return t.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         await ingest([
             {"type": "session_station", "sessionId": "o1", "cwd": "/w", "timestamp": ago(10),
              "station": "crew-orchestrator", "role": "orchestrator"},
-            {"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": ago(5),
+            {"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": ago(30),
+             "message": {"role": "user", "content": "Paddle, obviously"}},
+            {"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": now_plus(1),
              "message": {"role": "user", "content": "Use Stripe test mode for now"}},
-            {"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": ago(4),
+            {"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": now_plus(2),
              "message": {"role": "user", "content": "Always fine to deploy to staging"}},
-            {"type": "user", "sessionId": "x1", "cwd": "/w", "timestamp": ago(4),
+            {"type": "user", "sessionId": "x1", "cwd": "/w", "timestamp": now_plus(2),
              "message": {"role": "user", "content": "Comments off please"}},
         ])
         as_station("crew-orchestrator", "orchestrator")
+        out = json.loads(await mf.desk_answer("D1", "Paddle, obviously"))
+        ck("words typed before the question was asked do not answer it", out["recorded"] is False, out)
         out = json.loads(await mf.desk_answer("D1", "Use Stripe test mode for now", choice="Stripe"))
         ck("an answer copied from the session matches", out["matches_what_they_typed"], out)
         g = json.loads(await m.get_ticket("T2", project="Shop"))
         ck("the decision reaches its ticket, first", g["decisions"] and g["decisions"][0]["words"]
            == "Use Stripe test mode for now", g.get("decisions"))
         out = json.loads(await mf.desk_answer("D2", "Comments off please"))
-        ck("words typed in another session, not the orchestrator's: not found",
-           not out["matches_what_they_typed"] and "not a summary" in out.get("note", ""), out)
+        ck("words typed in another session, not the orchestrator's: nothing recorded, still open",
+           out["recorded"] is False and out["still_open"]
+           and "D2" in [d["label"] for d in json.loads(await mf.desk_list())], out)
         bad = await mf.desk_answer("D1", "again")
         ck("an answered item is closed", "already answered" in bad, bad)
+        bad = await mf.desk_answer("D3", "Always fine to deploy to staging", standing=True, scope="all")
+        ck("a project's question does not become a grant for every project unless they say so",
+           "only when the person says so" in bad, bad)
 
         print("== standing answers become grants (TR-451) ==")
         out = json.loads(await mf.desk_answer("D3", "Always fine to deploy to staging", standing=True))
@@ -140,7 +158,7 @@ async def main():
         d4 = json.loads(await mf.desk_add("Prod deploys?", "ask me", "risky", project="Shop"))
         out = json.loads(await mf.desk_answer(d4["label"], "You may always deploy to prod", standing=True))
         ck("a standing answer the person did not type never becomes a grant",
-           not out["matches_what_they_typed"] and not out["became_a_grant"], out)
+           out["recorded"] is False, out)
         ck("and is not in the grants", "deploy to prod" not in await mf.read_grants(project="Shop"))
 
         print("== assumption batches (TR-452) ==")
@@ -152,8 +170,11 @@ async def main():
         d5 = json.loads(await mf.desk_add("Keep these assumptions?", "keep all four", "they are defaults",
                                           assumptions=["A1", "A2", "A3", "A4"], project="Shop"))
         ck("a batch carries its assumptions", d5["assumptions"] == ["A1", "A2", "A3", "A4"], d5)
-        await ingest([{"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": ago(1),
+        await ingest([{"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": now_plus(3),
                        "message": {"role": "user", "content": "keep 1, 2, 4; overturn 3, use the other date format"}}])
+        bad = await mf.desk_answer(d5["label"], "keep 1, 2, 4; overturn 3, use the other date format",
+                                   kept=["A1", "A2"], overturned={"A3": "use the other date format"})
+        ck("a batch answer decides every listed assumption", "left out: A4" in bad, bad)
         out = json.loads(await mf.desk_answer(d5["label"], "keep 1, 2, 4; overturn 3, use the other date format",
                                               kept=["A1", "A2", "A4"],
                                               overturned={"A3": "use the other date format"}))
@@ -172,8 +193,8 @@ async def main():
         ck("the pick-up has them", any(d["words"] == "Use Stripe test mode for now" for d in pk["decisions"]), pk["decisions"])
         ck("so does the reviewer's brief", "Use Stripe test mode for now" in br, br[-600:])
         dl = json.loads(await mf.list_decisions(project="Shop"))
-        ck("list_decisions, newest first, with match marks",
-           dl[0]["label"] == "D5" and dl[-1]["label"] == "D1" and dl[-1]["matched"], dl)
+        ck("list_decisions, newest first, only what the person typed",
+           [d["label"] for d in dl] == ["D5", "D3", "D1"] and all(d["matched"] for d in dl), dl)
 
         print("== withdrawing ==")
         d6 = json.loads(await mf.desk_add("Logo colour?", "blue", "brand", project="Blog"))

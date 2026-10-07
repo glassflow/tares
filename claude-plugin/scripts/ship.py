@@ -418,6 +418,10 @@ def ship_subagents(cfg: dict, hook: dict, flow: str, project: str) -> None:
             continue
         if offset > size:          # the file was rewritten: start over
             offset, count = 0, 0
+            try:
+                os.remove(off_file[:-len(".off")] + ".cut")
+            except OSError:
+                pass
         if offset >= size:
             continue
         with open(path, "rb") as f:
@@ -425,6 +429,13 @@ def ship_subagents(cfg: dict, hook: dict, flow: str, project: str) -> None:
             chunk = f.read(MAX_SUBAGENT_READ)   # bounded: a huge file ships over several hooks
         last_nl = chunk.rfind(b"\n")
         if last_nl < 0:
+            if len(chunk) == MAX_SUBAGENT_READ:
+                # one line larger than a whole read: step over it so the file does not stall
+                with open(off_file, "w") as f:
+                    f.write(str(offset + len(chunk)))
+                ship_lines(cfg, [synthetic_line(hook, "subagent_truncated", flow, subagent=agent,
+                                                note=f"a line of subagent {agent} was too large "
+                                                     "to record")])
             continue
         meta = subagent_meta(path)
         objs = []

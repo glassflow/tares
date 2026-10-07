@@ -153,7 +153,7 @@ export function Desk({ project }: { project?: string }) {
             {d.project_name && <span className="dim"> · {d.project_name}</span>}
             <div>{d.question}</div>
             <div className="dim" style={{ fontSize: 13 }}>
-              Recommended: {d.recommendation}. {d.why}
+              Recommended: {d.recommendation.replace(/[.!]+$/, "")}. {d.why}
               {d.blocks && <> Blocks: {d.blocks}.</>}
               {d.assumptions.length > 0 && <> Confirms {d.assumptions.join(", ")}.</>}
             </div>
@@ -202,13 +202,17 @@ function RuleProposals() {
   const [busy, setBusy] = useState<string | null>(null);
   const ps = data?.proposals ?? [];
   if (!ps.length) return null;
+  const [err, setErr] = useState<string | null>(null);
   const decide = async (id: string, d: "accept" | "reject") => {
-    setBusy(id);
-    try { await api.decideRule(id, d); reload(); } finally { setBusy(null); }
+    setBusy(id); setErr(null);
+    try { await api.decideRule(id, d); reload(); }
+    catch (e) { setErr(String((e as Error)?.message ?? e)); }
+    finally { setBusy(null); }
   };
   return (
     <div className="fo-panel">
       <h2 style={{ fontSize: 14, margin: 0, padding: "12px 16px 4px" }}>Rules offered from repeated findings</h2>
+      {err && <p className="fo-warn" style={{ margin: "0 16px" }}>{err}</p>}
       <ul className="crew-list">
         {ps.map((p) => (
           <li key={p.id} className="crew-row">

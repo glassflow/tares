@@ -258,8 +258,8 @@ def review_ok(verdict, verified, not_verified, findings, head) -> tuple:
     v = str(verdict or "").strip().lower()
     if v not in VERDICTS:
         raise DocError("verdict is one of: " + ", ".join(VERDICTS))
-    head = str(head or "").strip()
-    if not re.match(r"^[0-9a-fA-F]{7,64}$", head):
+    head = str(head or "").strip().lower()
+    if not re.match(r"^[0-9a-f]{7,64}$", head):
         raise DocError("head is the commit the review was made on (its hash)")
     ver = str(verified or "").strip()[:4000]
     if not ver:
@@ -286,22 +286,25 @@ def review_ok(verdict, verified, not_verified, findings, head) -> tuple:
 # what a finding is about, to see the same mistake come back (TR-443). A plain word bucket:
 # cheap, stable, and readable by a person deciding whether it is a rule
 FINDING_KINDS = [
-    ("migration", ("migration", "migrate", "schema change", "alter table")),
-    ("missing test", ("no test", "untested", "missing test", "test does not", "not covered",
-                      "without a test", "test passes against")),
-    ("error handling", ("error handling", "unhandled", "exception", "swallow", "raises")),
-    ("config key", ("config", "setting", "env var", "environment variable")),
-    ("null or empty", ("null", "none", "empty", "missing value", "undefined")),
-    ("concurrency", ("race", "concurren", "lock", "deadlock")),
-    ("security", ("secret", "token", "injection", "xss", "csrf", "auth")),
-    ("docs out of date", ("readme", "docs", "documentation", "comment says")),
+    ("migration", (r"migrations?", r"migrate", r"schema change", r"alter table")),
+    ("missing test", (r"no tests?", r"untested", r"missing tests?", r"not covered by",
+                      r"without a test", r"test passes against")),
+    ("error handling", (r"error handling", r"unhandled", r"swallow(s|ed)?", r"uncaught")),
+    ("config key", (r"config keys?", r"env vars?", r"environment variables?")),
+    ("null or empty", (r"null", r"empty (list|string|value|input)", r"undefined",
+                       r"nonetype")),
+    ("concurrency", (r"race conditions?", r"concurren\w*", r"deadlocks?", r"data race")),
+    ("security", (r"secrets?", r"(sql|command) injection", r"xss", r"csrf",
+                  r"auth(entication|orization|z)?\b(?!or)")),
+    ("docs out of date", (r"readme", r"out of date doc\w*", r"comment says")),
 ]
 
 
 def finding_kind(text: str) -> str:
+    """What a finding is about, as a word bucket (word boundaries, no generic words)."""
     t = (text or "").lower()
-    for kind, words in FINDING_KINDS:
-        if any(w in t for w in words):
+    for kind, pats in FINDING_KINDS:
+        if any(re.search(rf"\b{p}\b", t) for p in pats):
             return kind
     words = [w for w in re.findall(r"[a-z]{4,}", t)][:4]
     return " ".join(words) or "other"
@@ -315,32 +318,49 @@ def _norm(s: str) -> str:
     return " ".join(str(s or "").split()).lower()
 
 
-_FAILED = re.compile(r"\b(fail(ed|ure|ures|s)?|error(s)?|traceback)\b", re.I)
+# a failure in a command's output: a non-zero failure count, a FAILED line, a traceback
+_FAIL_COUNT = re.compile(r"\b([1-9]\d*)\s+(failed|errors?|failures?)\b"
+                         r"|\b(failures|errors|failed)\s*[=:]\s*([1-9]\d*)\b", re.I)
+_FAIL_LINE = re.compile(r"^\s*(FAILED\b|FAIL\b|Traceback \(most recent call last\))", re.M)
+# the counts a claim and an output are compared on
+_COUNT = re.compile(r"\b(\d+)\s+(passed|failed|errors?|skipped|xfailed|xpassed)\b", re.I)
 
 
 def _says_failed(text: str) -> bool:
     t = str(text or "")
-    if re.search(r"\b0 (failed|errors?)\b", t, re.I) and not re.search(r"\b[1-9]\d* (failed|errors?)\b", t, re.I):
+    return bool(_FAIL_COUNT.search(t) or _FAIL_LINE.search(t))
+
+
+def _same_command(claimed: str, ran: str) -> bool:
+    """The claimed command is what ran: the same command, or the last step of a chain
+    (`cd app && pytest -q` ran `pytest -q`). A short recorded command never stands for a longer
+    claim."""
+    c, r = _norm(claimed), _norm(ran)
+    if len(r) < 3 or not c:
         return False
-    return bool(_FAILED.search(t))
+    if c == r:
+        return True
+    last = re.split(r"\s*(?:&&|;|\|\|)\s*", r)[-1].strip()
+    return last == c
 
 
-def match_check(check: dict, commands: list[dict]) -> tuple[str, str | None]:
+def match_check(check: dict, commands: list[dict], since=None) -> tuple[str, str | None]:
     """("matched" | "not_found" | "differs", what the recording shows) for a check a builder
-    claimed (TR-442): the command must be in the recording at or before the claim, and what it
-    printed must agree with the claimed result (every count in the claim, no failure where the
-    claim says it passed). A break check also needs the named test failing, then passing."""
-    cmd = _norm(check.get("command"))
+    claimed (TR-442): the command must be in the recording between `since` (when the ticket
+    went into the work) and the claim, and what it printed must agree with the claimed result
+    (each pass, fail, error and skip count the claim states, and no failure where the claim
+    says it passed). A break check also needs the named test failing, then passing."""
     when = check.get("at")
-    ran = [c for c in commands if cmd and (cmd in _norm(c["command"]) or _norm(c["command"]) in cmd)
-           and _norm(c["command"]) and (when is None or c["at"] <= when)]
+    ran = [c for c in commands if _same_command(check.get("command"), c["command"])
+           and (when is None or c["at"] <= when) and (since is None or c["at"] >= since)]
     if not ran:
         return "not_found", None
     run = ran[-1]
     out = run["output"] or ""
     claim = str(check.get("result") or "")
-    counts = re.findall(r"\b\d+\s+[a-z]+", claim.lower())
-    missing = [c for c in counts if c not in _norm(out)]
+    counts = [(n, w.lower().rstrip("s")) for n, w in _COUNT.findall(claim) if int(n) > 0]
+    missing = [f"{n} {w}" for n, w in counts
+               if not re.search(rf"\b{n}\s+{w}s?\b", out, re.I)]
     claims_pass = not _says_failed(claim)
     if missing or (claims_pass and (run["is_error"] or _says_failed(out))):
         tail = out.strip().splitlines()[-3:] if out.strip() else ["(no output recorded)"]
@@ -348,7 +368,7 @@ def match_check(check: dict, commands: list[dict]) -> tuple[str, str | None]:
     test = str(check.get("broke_test") or "").strip()
     if test:
         about = [c for c in commands if test.lower() in (c["command"] + " " + c["output"]).lower()
-                 and (when is None or c["at"] <= when)]
+                 and (when is None or c["at"] <= when) and (since is None or c["at"] >= since)]
         failed_at = next((i for i, c in enumerate(about) if c["is_error"] or _says_failed(c["output"])), None)
         passed_after = failed_at is not None and any(
             not (c["is_error"] or _says_failed(c["output"])) for c in about[failed_at + 1:])
@@ -369,19 +389,25 @@ def challenger_layer(events: list[dict]) -> dict:
                 "sha": None, "clean": True}
     last = commits[-1]["challenge"]
     verdict = str(last.get("verdict") or "").upper()
-    open_ = [f for f in (last.get("findings") or []) if not f.get("waived")] if verdict == "FAIL" else []
+    waived_titles = {w.get("title") for w in waivers}
+    # a waiver recorded after the review it answers takes the finding out of the open ones
+    open_ = ([f for f in (last.get("findings") or [])
+              if not f.get("waived") and f.get("title") not in waived_titles]
+             if verdict == "FAIL" else [])
     open_titles = {f.get("title") for f in open_}
     seen: dict[str, dict] = {}
     for e in commits[:-1]:
         for f in e["challenge"].get("findings") or []:
             if not f.get("waived"):
                 seen.setdefault(f.get("title"), f)
-    waived_titles = {w.get("title") for w in waivers}
     fixed = [f for t, f in seen.items() if t not in open_titles and t not in waived_titles]
     blocking = [f for f in open_ if f.get("priority") in ("P1", "P2")]
+    # a run that gave no verdict (error, timeout) is not a clean layer
+    ran = verdict in ("PASS", "FAIL")
     return {"rounds": len(commits), "open": open_, "fixed": fixed, "waived": waivers,
-            "verdict": "pass" if verdict == "PASS" else "findings" if verdict == "FAIL" else verdict.lower() or None,
-            "sha": last.get("sha"), "clean": not blocking}
+            "verdict": "pass" if verdict == "PASS" else "findings" if verdict == "FAIL"
+            else (verdict.lower() or "no verdict"),
+            "sha": last.get("sha"), "clean": ran and not blocking}
 
 
 # ── you in the loop (M7) ──────────────────────────────────────────────────────
@@ -408,13 +434,31 @@ def _plain(s: str) -> str:
     return t.strip(" .!\"'")
 
 
+def _pieces(text: str) -> list[str]:
+    """A turn, each of its lines, and each sentence of each line, in plain form."""
+    out = [_plain(text)]
+    for line in str(text or "").splitlines():
+        if line.strip():
+            out.append(_plain(line))
+            out += [_plain(s) for s in re.split(r"(?<=[.!?;])\s+", line) if s.strip()]
+    return [p for p in out if p]
+
+
 def words_match(words: str, turns: list[dict]) -> dict | None:
-    """The person turn that holds `words` as typed (case, spacing and quote marks aside), or
-    None: an answer recorded as the person's must be something they typed (TR-450)."""
+    """The person turn whose whole text, or one whole line or sentence of it, is `words` (case,
+    spacing and quote marks aside), or None. Not a fragment: "ok" is not found in "token", nor
+    "ship it" in "I don't want to ship it". An answer recorded as the person's must be what
+    they typed (TR-450)."""
     w = _plain(words)
     if len(w) < 2:
         return None
-    return next((t for t in turns if w in _plain(t["text"])), None)
+    return next((t for t in turns if w in _pieces(t["text"])), None)
+
+
+def says_every_project(words: str) -> bool:
+    """The person's words say a standing answer holds for every project."""
+    return bool(re.search(r"\b(all|every|each) projects?\b|\beverywhere\b", str(words or ""),
+                          re.I))
 
 
 # ── the crew (M3): one always-on crew serves every project ────────────────────

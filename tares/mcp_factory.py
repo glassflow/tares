@@ -318,12 +318,18 @@ async def desk_answer(item: str, words: str, choice: str = "", standing: bool = 
     if r.status_code >= 400:
         return _out(r)
     d = r.json()
-    out = {"item": d["desk_item"]["label"], "recorded": "your words as typed",
-           "matches_what_they_typed": d["matched"], "became_a_grant": d["granted"],
+    if not d.get("recorded"):
+        what = ("the overturned words for " + ", ".join(d["unheard"]) if d.get("unheard")
+                else "these words")
+        return json.dumps({
+            "item": d["desk_item"]["label"], "recorded": False, "still_open": True,
+            "note": f"Tares did not find {what} in what the person typed into your session "
+                    "after the question was asked. Nothing is recorded. Pass their reply exactly "
+                    "as they typed it (a whole message, line or sentence of theirs), or ask "
+                    "them again."})
+    out = {"item": d["desk_item"]["label"], "recorded": True,
+           "matches_what_they_typed": True, "became_a_grant": d["granted"],
            "assumptions": d["assumptions"], "follow_up_tickets_needed": d["follow_up"]}
-    if not d["matched"]:
-        out["note"] = ("Tares did not find these words in what the person typed into your "
-                       "session: record their exact reply, not a summary.")
     return json.dumps(out, default=str)
 
 

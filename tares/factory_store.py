@@ -570,18 +570,23 @@ class FactoryStore:
                  "at": r[5]} for r in rows]
 
     # ── what the recording says (TR-440, TR-442) ──────────────────────────────
-    def challenge_events(self, source: str, project_name: str, ref: str) -> list[dict]:
+    def challenge_events(self, source: str, project: str, ref: str) -> list[dict]:
         """The Codex challenger's reviews and waivers on a ticket's branch (factory/<ref>...) in
-        sessions working on the project, oldest first."""
+        the project `project` (its id), oldest first. A line stamped with the project's name (any
+        case) or id counts; an unstamped one only from a session tied to the project."""
         with self._lock:
+            name = (self.con.execute("SELECT name FROM usecases WHERE id = ?", [project]).fetchone()
+                    or [project])[0]
             rows = self.con.execute(
                 "SELECT event_time, event_type, payload, key_value FROM events WHERE source = ? "
                 "AND event_type IN ('challenge_commit', 'challenge_waived', 'challenge_plan') "
                 "AND (json_extract_string(labels, '$.branch') = ? OR "
                 "     json_extract_string(labels, '$.branch') LIKE ?) "
-                "AND coalesce(json_extract_string(labels, '$.tares_project'), ?) = ? "
+                "AND (lower(json_extract_string(labels, '$.tares_project')) IN (lower(?), lower(?)) "
+                "     OR (json_extract_string(labels, '$.tares_project') IS NULL AND key_value IN "
+                "         (SELECT session FROM project_sessions WHERE project = ?))) "
                 "ORDER BY event_time", [source, f"factory/{ref}", f"factory/{ref}-%",
-                                        project_name, project_name]).fetchall()
+                                        name, project, project]).fetchall()
         out = []
         for at, typ, pj, sid in rows:
             try:
@@ -600,13 +605,23 @@ class FactoryStore:
             return []
         marks = ", ".join("?" for _ in sessions)
         with self._lock:
-            rows = self.con.execute(
+            # the Bash calls first (their rendered text names the tool), then the results that
+            # came after the oldest of them: other tools' rows never push a Bash run out
+            uses = self.con.execute(
                 f"SELECT event_time, event_type, payload, key_value FROM events WHERE source = ? "
-                f"AND key_value IN ({marks}) AND event_type IN ('tool_use', 'tool_result') "
-                "ORDER BY event_time DESC LIMIT ?", [source, *sessions, limit]).fetchall()
+                f"AND key_value IN ({marks}) AND event_type = 'tool_use' "
+                "AND text LIKE '%Bash(%' ORDER BY event_time DESC LIMIT ?",
+                [source, *sessions, limit // 2]).fetchall()
+            oldest = min((u[0] for u in uses), default=None)
+            results = self.con.execute(
+                f"SELECT event_time, event_type, payload, key_value FROM events WHERE source = ? "
+                f"AND key_value IN ({marks}) AND event_type = 'tool_result' AND event_time >= ? "
+                "ORDER BY event_time DESC LIMIT ?",
+                [source, *sessions, oldest, limit * 2]).fetchall() if uses else []
+            rows = uses + results
         uses: dict[str, dict] = {}
         results: dict[str, dict] = {}
-        for at, typ, pj, sid in reversed(rows):
+        for at, typ, pj, sid in sorted(rows, key=lambda r: r[0]):
             try:
                 o = json.loads(pj) if isinstance(pj, str) else (pj or {})
             except ValueError:
@@ -623,7 +638,8 @@ class FactoryStore:
                     c = b.get("content")
                     if isinstance(c, list):
                         c = "\n".join(str(x.get("text") or "") for x in c if isinstance(x, dict))
-                    results[str(b.get("tool_use_id"))] = {"output": str(c or "")[:20000],
+                    # the tail: a test run's summary line is at the end
+                    results[str(b.get("tool_use_id"))] = {"output": str(c or "")[-20000:],
                                                           "is_error": bool(b.get("is_error"))}
         out = []
         for tid, u in uses.items():
@@ -642,8 +658,9 @@ class FactoryStore:
             if cur and cur[1] != "open":
                 return None
             if cur:
-                self.con.execute("UPDATE rule_proposals SET tickets = ?, scope = ?, project = ? "
-                                 "WHERE id = ?", [json.dumps(tickets), scope, project, cur[0]])
+                self.con.execute("UPDATE rule_proposals SET tickets = ?, scope = ?, project = ?, "
+                                 "text = ? WHERE id = ?",
+                                 [json.dumps(tickets), scope, project, text, cur[0]])
                 pid = cur[0]
             else:
                 pid = "rp_" + uuid.uuid4().hex[:10]
@@ -746,8 +763,8 @@ class FactoryStore:
         return next(d for d in self.list_decisions(project, all_=True) if d["id"] == did)
 
     def list_decisions(self, project: str | None, all_: bool = False) -> list[dict]:
-        """A project's decisions, newest first (with `all_`, the cell's decisions not tied to a
-        project too)."""
+        """A project's decisions, newest first; with `all_`, the cell-wide ones (asked with no
+        project) too. `project` None: every decision on the cell."""
         q = ("SELECT d.id, d.project, d.desk_item, d.question, d.words, d.choice, d.standing, "
              "d.scope, d.matched, d.session, d.granted, d.tickets, d.decided_at, k.number FROM "
              "decisions d LEFT JOIN desk_items k ON k.id = d.desk_item")
