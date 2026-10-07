@@ -2656,18 +2656,21 @@ class Store(FactoryStore):
         with self._lock:
             rows = self.con.execute(
                 "SELECT s.session, s.repo, s.linked_at, min(e.event_time), max(e.event_time), "
-                "count(e.key_value), st.state, st.reason, st.state_at FROM project_sessions s "
+                "count(e.key_value), st.state, st.reason, st.state_at, x.station "
+                "FROM project_sessions s "
+                "LEFT JOIN session_stations x ON x.session = s.session "
                 "LEFT JOIN events e ON e.source = 'claude_code' AND e.key_value = s.session "
                 "LEFT JOIN session_states st ON st.session = s.session WHERE s.project = ? "
                 # the crew's own stations serve every project: they show on the Crew page and
                 # never count as the project's build session (a pick-up must not replace them)
                 "AND s.session NOT IN (SELECT session FROM session_stations WHERE role IN "
                 "('orchestrator', 'reviewer', 'releaser', 'comms')) "
-                "GROUP BY s.session, s.repo, s.linked_at, st.state, st.reason, st.state_at "
+                "GROUP BY s.session, s.repo, s.linked_at, st.state, st.reason, st.state_at, "
+                "x.station "
                 "ORDER BY max(e.event_time) DESC NULLS LAST", [project]).fetchall()
         return [{"session": r[0], "repo": r[1], "linked_at": r[2], "started_at": r[3],
                  "last_at": r[4], "lines": int(r[5] or 0), "state": r[6], "state_reason": r[7],
-                 "state_at": r[8]} for r in rows]
+                 "state_at": r[8], "station": r[9]} for r in rows]
 
     def set_session_state(self, session: str, state: str, reason: str | None, at,
                           force: bool = False) -> None:

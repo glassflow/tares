@@ -109,7 +109,7 @@ export default function Crew() {
             : <>No word from {s.name} for {s.quiet_minutes} min</>}</h2>
           <p className="help" style={{ margin: 0 }}>
             {s.state === "waiting"
-              ? <>{s.state_reason ?? "It waits for input."} {s.role === "orchestrator" ? <>Answer it with <span className="mono">factory attach orchestrator</span>.</> : null}</>
+              ? <>{sentence(s.state_reason ?? "it waits for input")} {s.role === "orchestrator" ? <>Answer it with <span className="mono">factory attach orchestrator</span>.</> : null}</>
               : <>It may have been retired by Claude Code or crashed. <span className="mono">factory watch</span> brings it back; Tares only shows it.</>}
           </p>
         </section>
@@ -138,6 +138,14 @@ export default function Crew() {
   );
 }
 
+/** A capital first letter and a full stop, for a phrase a station wrote as a reason. */
+function sentence(s: string): string {
+  const t = (s || "").trim();
+  if (!t) return "";
+  const c = t[0].toUpperCase() + t.slice(1);
+  return /[.!?]$/.test(c) ? c : `${c}.`;
+}
+
 /** The questions waiting for you (TR-453). Read-only: you answer in the orchestrator's session. */
 export function Desk({ project }: { project?: string }) {
   const { data } = usePolling(() => api.desk(project ?? ""), 15000);
@@ -153,8 +161,8 @@ export function Desk({ project }: { project?: string }) {
             {d.project_name && <span className="dim"> · {d.project_name}</span>}
             <div>{d.question}</div>
             <div className="dim" style={{ fontSize: 13 }}>
-              Recommended: {d.recommendation.replace(/[.!]+$/, "")}. {d.why}
-              {d.blocks && <> Blocks: {d.blocks}.</>}
+              Recommended: {d.recommendation.replace(/[.!]+$/, "")}. {sentence(d.why)}
+              {d.blocks && <> Blocks: {d.blocks.replace(/[.!]+$/, "")}.</>}
               {d.assumptions.length > 0 && <> Confirms {d.assumptions.join(", ")}.</>}
             </div>
           </li>

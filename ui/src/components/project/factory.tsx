@@ -58,6 +58,8 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const { data: crew } = usePolling(() => api.projectCrew(ctx.id), 15000);
   const { data: asm } = usePolling(() => api.assumptions(ctx.id), 30000);
   const { data: decisions } = usePolling(() => api.projectDecisions(ctx.id), 30000);
+  // handed to the crew: the crew builds it, there is no build prompt to copy
+  const byCrew = !!crew?.handover;
   const tickets = tk?.tickets ?? [];
   const milestones = msd?.milestones ?? [];
   // the ticket a build takes next: the one in progress, else the first ready one (TR-414)
@@ -98,7 +100,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const steps: { key: Phase; title: string; text: React.ReactNode }[] = [
     { key: "spec", title: "Spec", text: start ? <>written <TimeAgo ts={start.updated_at} /></> : "no starting prompt yet" },
     { key: "build", title: "Build", text: phase === "spec" ? "after the spec" : doing ? `${doing} in progress` : done ? `${done} of ${live.length} done` : "not started" },
-    { key: "review", title: "Review", text: "the last ticket: verify and open the PR" },
+    { key: "review", title: "Review", text: byCrew ? "every pull request, by the crew's reviewer" : "the last ticket: verify and open the PR" },
     { key: "done", title: "Done", text: phase === "done" ? "every ticket done" : "when every ticket is done" },
   ];
   const order: Phase[] = ["spec", "build", "review", "done"];
@@ -112,7 +114,9 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
           <Goal ctx={ctx} />
         </div>
         <div className="gf-head-actions">
-          <CopyButton text={prompt} label="Copy build prompt" primary />
+          {byCrew
+            ? <Link to="/crew" className="btn primary" title="The crew builds this project">The crew</Link>
+            : <CopyButton text={prompt} label="Copy build prompt" primary />}
           <VLink v={{ kind: "activity" }} className="btn"
                  title="Every doc, ticket, session, source and setting of this project">Setup</VLink>
         </div>
@@ -146,14 +150,15 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
 
       {attention && active && (
         <Attention kind={attention} session={active} quietMin={quietMin}
-                   label={active.session === firstLinked ? "spec session" : "build session"}
+                   label={active.station ?? (active.session === firstLinked ? "spec session" : "build session")}
                    ticket={next?.status === "in_progress" ? next.title : undefined}
                    pickUp={`Pick up Tares project "${ctx.s.name}" where the last session stopped.`} />
       )}
 
       {next ? (
         <NextUp key={next.id} ctx={ctx} next={next} of={tickets.indexOf(next) + 1} total={tickets.length}
-                prompt={prompt} waiting={attention !== null && next.status === "in_progress"} />
+                prompt={prompt} waiting={attention !== null && next.status === "in_progress"}
+                byCrew={byCrew} />
       ) : tk && (
         <section className="fo-next fo-next-empty">
           {!tickets.length
@@ -280,7 +285,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
               <li key={x.session}>
                 <span className="fo-sess">
                   <VLink v={{ kind: "claude", name: x.session }}>
-                    {x.session === firstLinked ? "Spec session" : "Build session"}{x.repo && <> · {x.repo}</>}
+                    {x.station ?? (x.session === firstLinked ? "Spec session" : "Build session")}{x.repo && <> · {x.repo}</>}
                   </VLink>
                   <StateBadge s={x} now={ss?.now} shown={shownState(x, ss?.now)} />
                 </span>
@@ -401,8 +406,9 @@ function Attention({ kind, session, quietMin, label, ticket, pickUp }: {
 }
 
 /** The ticket a build session takes next, with what it is about and the sentence to start one. */
-function NextUp({ ctx, next, of, total, prompt, waiting }: {
+function NextUp({ ctx, next, of, total, prompt, waiting, byCrew }: {
   ctx: Ctx; next: Ticket; of: number; total: number; prompt: string; waiting?: boolean;
+  byCrew?: boolean;
 }) {
   const { data: full } = usePolling(() => api.ticket(ctx.id, next.id), 30000);
   const text = gist(full?.working_doc_body);
@@ -416,11 +422,20 @@ function NextUp({ ctx, next, of, total, prompt, waiting }: {
       {text && <p className="fo-gist">{text}</p>}
       <VLink v={{ kind: "ticket", name: next.id }} className="fo-link">
         {next.working_doc ? "Open the working doc" : "Write its working doc"}</VLink>
-      <div className="fo-cmd">
-        <code>{prompt}</code>
-        <CopyButton text={prompt} label="Copy" />
-      </div>
-      <span className="help">Paste it into a new Claude Code session with the Tares plugin, in the project's repository.</span>
+      {byCrew ? (
+        <span className="help">
+          The crew builds this project{next.holder ? <>: <span className="mono">{next.holder}</span> holds this ticket</> : ""}.
+          To steer it, talk to the orchestrator: <span className="mono">factory attach orchestrator</span>.
+        </span>
+      ) : (
+        <>
+          <div className="fo-cmd">
+            <code>{prompt}</code>
+            <CopyButton text={prompt} label="Copy" />
+          </div>
+          <span className="help">Paste it into a new Claude Code session with the Tares plugin, in the project's repository.</span>
+        </>
+      )}
     </section>
   );
 }

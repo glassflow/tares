@@ -493,6 +493,7 @@ export interface ProjectSession {
   state_reason: string | null;
   state_at: string | null;
   last_said?: string;   // a waiting session: the last thing it wrote
+  station?: string | null;   // the tares-factory station it played, for a crew session
 }
 
 export interface RunResult {
