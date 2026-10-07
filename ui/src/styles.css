@@ -2015,3 +2015,5 @@ pre.payload {
 .tk-history li, .tk-msgs li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
 .tk-msgs summary { cursor: pointer; }
 .tk-msgs pre { white-space: pre-wrap; font-size: 12px; margin: 6px 0 0; }
+.main .crew-desk { list-style: none; margin: 4px 0 8px; padding: 0; }
+.crew-desk li { padding: 6px 0; border-top: 1px solid var(--line); }

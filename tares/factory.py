@@ -384,6 +384,39 @@ def challenger_layer(events: list[dict]) -> dict:
             "sha": last.get("sha"), "clean": not blocking}
 
 
+# ── you in the loop (M7) ──────────────────────────────────────────────────────
+
+DESK_STATES = ("open", "answered", "withdrawn")
+MATCH_HOURS = 48       # an answer is looked for in what the person typed this recently
+
+
+def desk_ok(question, recommendation, why, options, context) -> tuple:
+    q = _line(question, "the question", 1000)
+    rec = _line(recommendation, "your recommendation", 500)
+    w = _line(why, "why you recommend it", 1000)
+    if options is None:
+        options = []
+    if not isinstance(options, list) or len(options) > 8:
+        raise DocError("options is a list of up to 8 choices")
+    opts = [_line(o, "an option", 300) for o in options]
+    return q, rec, w, opts, _line(context, "the context", 1500, False)
+
+
+def _plain(s: str) -> str:
+    t = " ".join(str(s or "").lower().split())
+    t = t.replace("’", "'").replace("“", '"').replace("”", '"')
+    return t.strip(" .!\"'")
+
+
+def words_match(words: str, turns: list[dict]) -> dict | None:
+    """The person turn that holds `words` as typed (case, spacing and quote marks aside), or
+    None: an answer recorded as the person's must be something they typed (TR-450)."""
+    w = _plain(words)
+    if len(w) < 2:
+        return None
+    return next((t for t in turns if w in _plain(t["text"])), None)
+
+
 # ── the crew (M3): one always-on crew serves every project ────────────────────
 
 ROLES = ("orchestrator", "reviewer", "releaser", "builder", "helper", "comms")

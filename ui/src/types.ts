@@ -399,6 +399,16 @@ export interface VerdictNow { verdict: "pass" | "changes" | "block"; head: strin
 export interface ChallengeFinding { priority?: string; title?: string; waived?: boolean; reason?: string }
 export interface ReviewFinding { id: string; label: string; severity: "P1" | "P2" | "P3"; file: string | null; line: number | null; blocking: boolean; text: string; kind: string; state: "open" | "fixed"; fixed_in: string | null }
 export interface Review { id: string; round: number; pr: string | null; head: string; verdict: "pass" | "changes" | "block"; verified: string; not_verified: string | null; by: string | null; at: string; findings: ReviewFinding[]; fixed: string[] }
+export interface DeskItem {
+  id: string; label: string; project: string | null; project_name: string | null; question: string;
+  context: string; options: string[]; recommendation: string; why: string; blocks: string;
+  tickets: string[]; blocking: boolean; asked_by: string | null; assumptions: string[];
+  state: "open" | "answered" | "withdrawn"; reason: string | null; created_at: string; closed_at: string | null;
+}
+export interface Decision {
+  id: string; label: string | null; question: string; words: string; choice: string | null;
+  standing: boolean; scope: "project" | "all"; matched: boolean; granted: boolean; tickets: string[]; at: string;
+}
 export interface QueueItem { project: string; project_name: string; ticket: string; title: string; holder: string | null; pr: string | null; head: string | null; waiting_minutes: number | null; blocks_milestone: boolean; layer1_clean: boolean; verdict: VerdictNow | null }
 export interface RuleProposal { id: string; repo: string; kind: string; project: string | null; scope: "project" | "all"; text: string; tickets: string[]; state: "open" | "accepted" | "rejected"; created_at: string }
 export type AssumptionState = "open" | "kept" | "overturned";

@@ -101,6 +101,8 @@ export default function Crew() {
         </div>
       </div>
 
+      <Desk />
+
       {attention.map((s) => (
         <section key={s.name} className={`fo-attn fo-attn-${s.state === "waiting" ? "waiting" : "silent"}`} role="status">
           <h2>{s.state === "waiting" ? <>{s.name} is waiting{s.state_at && <> since <TimeAgo ts={s.state_at} /></>}</>
@@ -133,6 +135,33 @@ export default function Crew() {
 
       {data && <Settings st={data.settings} grants={data.grants} />}
     </div>
+  );
+}
+
+/** The questions waiting for you (TR-453). Read-only: you answer in the orchestrator's session. */
+export function Desk({ project }: { project?: string }) {
+  const { data } = usePolling(() => api.desk(project ?? ""), 15000);
+  const items = data?.desk ?? [];
+  if (!items.length) return null;
+  return (
+    <section className="fo-attn fo-attn-waiting" role="status" aria-labelledby="desk-h">
+      <h2 id="desk-h">{items.length} {items.length === 1 ? "question" : "questions"} waiting for you</h2>
+      <ul className="crew-desk">
+        {items.map((d) => (
+          <li key={d.id}>
+            <b>{d.label}</b>{d.blocking && <span className="fo-st fo-st-quiet" style={{ marginLeft: 6 }}>blocks work</span>}
+            {d.project_name && <span className="dim"> · {d.project_name}</span>}
+            <div>{d.question}</div>
+            <div className="dim" style={{ fontSize: 13 }}>
+              Recommended: {d.recommendation}. {d.why}
+              {d.blocks && <> Blocks: {d.blocks}.</>}
+              {d.assumptions.length > 0 && <> Confirms {d.assumptions.join(", ")}.</>}
+            </div>
+          </li>
+        ))}
+      </ul>
+      <p className="help" style={{ margin: 0 }}>Answer in the orchestrator's session: <span className="mono">factory attach orchestrator</span>.</p>
+    </section>
   );
 }
 

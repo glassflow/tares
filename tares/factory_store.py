@@ -137,6 +137,44 @@ FACTORY_SCHEMA = [
       created_at  TIMESTAMPTZ,
       decided_at  TIMESTAMPTZ
     )""",
+    # The desk (TR-449): questions for the person, one numbering for the cell (D1, D2...), written
+    # only by the orchestrator. A batch of assumptions to confirm is a desk item too (TR-452).
+    """CREATE TABLE IF NOT EXISTS desk_items (
+      id             TEXT PRIMARY KEY,
+      number         INTEGER,
+      project        TEXT,
+      question       TEXT,
+      context        TEXT,
+      options        JSON,
+      recommendation TEXT,
+      why            TEXT,
+      blocks         TEXT,
+      tickets        JSON,
+      blocking       BOOLEAN,
+      asked_by       TEXT,
+      assumptions    JSON,
+      state          TEXT,
+      reason         TEXT,
+      created_at     TIMESTAMPTZ,
+      closed_at      TIMESTAMPTZ
+    )""",
+    # The person's answers (TR-450, TR-451): their words as typed, whether Tares found those words
+    # in what they typed into the orchestrator's session, and whether it stands from now on.
+    """CREATE TABLE IF NOT EXISTS decisions (
+      id          TEXT PRIMARY KEY,
+      project     TEXT,
+      desk_item   TEXT,
+      question    TEXT,
+      words       TEXT,
+      choice      TEXT,
+      standing    BOOLEAN,
+      scope       TEXT,
+      matched     BOOLEAN,
+      session     TEXT,
+      granted     BOOLEAN,
+      tickets     JSON,
+      decided_at  TIMESTAMPTZ
+    )""",
     # A factory project handed to the crew at the end of its spec (TR-425): when, from where.
     """CREATE TABLE IF NOT EXISTS handovers (
       project     TEXT PRIMARY KEY,
@@ -186,6 +224,8 @@ class FactoryStore:
         self.con.execute("DELETE FROM ticket_checks WHERE project = ?", [uid])
         self.con.execute("DELETE FROM reviews WHERE project = ?", [uid])
         self.con.execute("DELETE FROM review_findings WHERE project = ?", [uid])
+        self.con.execute("DELETE FROM desk_items WHERE project = ?", [uid])
+        self.con.execute("DELETE FROM decisions WHERE project = ?", [uid])
         self.con.execute("DELETE FROM handovers WHERE project = ?", [uid])
 
     # ── milestones (TR-411) ───────────────────────────────────────────────────
@@ -642,6 +682,108 @@ class FactoryStore:
             return [r[0] for r in self.con.execute(
                 "SELECT session FROM session_stations WHERE station = ? OR parent = ?",
                 [station, station]).fetchall()]
+
+    # ── the desk (TR-449..452) ────────────────────────────────────────────────
+    _DK_COLS = ("id, number, project, question, context, options, recommendation, why, blocks, "
+                "tickets, blocking, asked_by, assumptions, state, reason, created_at, closed_at")
+
+    @staticmethod
+    def _dk_row(r) -> dict:
+        return {"id": r[0], "number": r[1], "label": f"D{r[1]}", "project": r[2],
+                "question": r[3], "context": r[4] or "", "options": json.loads(r[5]) if r[5] else [],
+                "recommendation": r[6], "why": r[7], "blocks": r[8] or "",
+                "tickets": json.loads(r[9]) if r[9] else [], "blocking": bool(r[10]),
+                "asked_by": r[11], "assumptions": json.loads(r[12]) if r[12] else [],
+                "state": r[13], "reason": r[14], "created_at": r[15], "closed_at": r[16]}
+
+    def add_desk_item(self, project: str | None, question: str, context: str, options: list[str],
+                      recommendation: str, why: str, blocks: str, tickets: list[str],
+                      blocking: bool, asked_by: str, assumptions: list[str], at) -> dict:
+        did = "dk_" + uuid.uuid4().hex[:10]
+        with self._lock:
+            n = (self.con.execute("SELECT max(number) FROM desk_items").fetchone()[0] or 0) + 1
+            self.con.execute(
+                f"INSERT INTO desk_items ({self._DK_COLS}) VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, NULL)",
+                [did, n, project, question, context or None, json.dumps(options or []),
+                 recommendation, why, blocks or None, json.dumps(tickets or []), blocking,
+                 asked_by or None, json.dumps(assumptions or []), at])
+        return self.get_desk_item(did)
+
+    def get_desk_item(self, ref: str) -> dict | None:
+        m = re.match(r"^[Dd]?(\d{1,6})$", (ref or "").strip())
+        with self._lock:
+            r = self.con.execute(f"SELECT {self._DK_COLS} FROM desk_items WHERE id = ? OR "
+                                 "number = ?", [ref, int(m.group(1)) if m else -1]).fetchone()
+        return self._dk_row(r) if r else None
+
+    def list_desk(self, state: str | None = "open", project: str | None = None) -> list[dict]:
+        q, vals = f"SELECT {self._DK_COLS} FROM desk_items WHERE 1 = 1", []
+        if state:
+            q += " AND state = ?"; vals.append(state)
+        if project:
+            q += " AND project = ?"; vals.append(project)
+        with self._lock:
+            rows = self.con.execute(q + " ORDER BY blocking DESC, created_at", vals).fetchall()
+        return [self._dk_row(r) for r in rows]
+
+    def close_desk_item(self, did: str, state: str, reason: str | None, at) -> None:
+        with self._lock:
+            self.con.execute("UPDATE desk_items SET state = ?, reason = ?, closed_at = ? WHERE "
+                             "id = ?", [state, reason, at, did])
+
+    def add_decision(self, project: str | None, desk_item: str, question: str, words: str,
+                     choice: str, standing: bool, scope: str, matched: bool, session: str | None,
+                     granted: bool, tickets: list[str], at) -> dict:
+        did = "dc_" + uuid.uuid4().hex[:10]
+        with self._lock:
+            self.con.execute(
+                "INSERT INTO decisions (id, project, desk_item, question, words, choice, standing, "
+                "scope, matched, session, granted, tickets, decided_at) VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [did, project, desk_item, question, words, choice or None, standing, scope,
+                 matched, session, granted, json.dumps(tickets or []), at])
+        return next(d for d in self.list_decisions(project, all_=True) if d["id"] == did)
+
+    def list_decisions(self, project: str | None, all_: bool = False) -> list[dict]:
+        """A project's decisions, newest first (with `all_`, the cell's decisions not tied to a
+        project too)."""
+        q = ("SELECT d.id, d.project, d.desk_item, d.question, d.words, d.choice, d.standing, "
+             "d.scope, d.matched, d.session, d.granted, d.tickets, d.decided_at, k.number FROM "
+             "decisions d LEFT JOIN desk_items k ON k.id = d.desk_item")
+        vals: list = []
+        if project and not all_:
+            q += " WHERE d.project = ?"; vals.append(project)
+        elif project:
+            q += " WHERE d.project = ? OR d.project IS NULL"; vals.append(project)
+        with self._lock:
+            rows = self.con.execute(q + " ORDER BY d.decided_at DESC", vals).fetchall()
+        return [{"id": r[0], "project": r[1], "desk_item": r[2], "question": r[3], "words": r[4],
+                 "choice": r[5], "standing": bool(r[6]), "scope": r[7], "matched": bool(r[8]),
+                 "session": r[9], "granted": bool(r[10]),
+                 "tickets": json.loads(r[11]) if r[11] else [], "at": r[12],
+                 "label": f"D{r[13]}" if r[13] else None} for r in rows]
+
+    def person_turns(self, source: str, sessions: list[str] | None, since) -> list[dict]:
+        """What a person typed (user turns that are not tool results, not a subagent's) in
+        `sessions` (every session when None) since `since`, newest first (TR-450)."""
+        q = ("SELECT key_value, event_time, text FROM events WHERE source = ? AND "
+             "event_type = 'user' AND event_time >= ? AND "
+             "coalesce(json_extract_string(labels, '$.sidechain'), 'false') <> 'true'")
+        vals: list = [source, since]
+        if sessions is not None:
+            if not sessions:
+                return []
+            q += f" AND key_value IN ({', '.join('?' for _ in sessions)})"
+            vals += sessions
+        with self._lock:
+            rows = self.con.execute(q + " ORDER BY event_time DESC LIMIT 2000", vals).fetchall()
+        return [{"session": r[0], "at": r[1], "text": r[2] or ""} for r in rows]
+
+    def role_sessions(self, role: str) -> list[str]:
+        with self._lock:
+            return [r[0] for r in self.con.execute(
+                "SELECT session FROM session_stations WHERE role = ?", [role]).fetchall()]
 
     # ── hand-over to the crew (TR-425) ────────────────────────────────────────
     def set_handover(self, project: str, repo: str | None, by: str | None, at) -> None:

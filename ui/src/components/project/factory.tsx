@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../../api";
-import { CrewState } from "../../pages/Crew";
+import { CrewState, Desk } from "../../pages/Crew";
 import { TimeAgo, usePolling } from "../bits";
 import { VLink, type Ctx } from "./common";
 import { Goal } from "./overview";
@@ -57,6 +57,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const { data: msd } = usePolling(() => api.milestones(ctx.id), 15000);
   const { data: crew } = usePolling(() => api.projectCrew(ctx.id), 15000);
   const { data: asm } = usePolling(() => api.assumptions(ctx.id), 30000);
+  const { data: decisions } = usePolling(() => api.projectDecisions(ctx.id), 30000);
   const tickets = tk?.tickets ?? [];
   const milestones = msd?.milestones ?? [];
   // the ticket a build takes next: the one in progress, else the first ready one (TR-414)
@@ -206,6 +207,27 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
           <div className="fo-foot"><VLink v={{ kind: "tickets" }} className="fo-link">All tickets</VLink></div>
         </Fold>
       </div>
+
+      <Desk project={ctx.id} />
+
+      {(decisions?.decisions.length ?? 0) > 0 && (
+        <Fold id="decisions" title="Decisions"
+              meta={`${decisions!.decisions.length} · your words, newest first`}>
+          <ul className="fo-docs">
+            {decisions!.decisions.map((d) => (
+              <li key={d.id} style={{ display: "block" }}>
+                {d.label && <b>{d.label} </b>}{d.question}
+                <div>"{d.words}"{d.choice && <span className="dim"> · {d.choice}</span>}</div>
+                <small style={{ display: "block" }}>
+                  <TimeAgo ts={d.at} />
+                  {d.matched ? " · matches what you typed" : <span className="fo-warn"> · not found in the session</span>}
+                  {d.standing && (d.granted ? " · kept as a grant" : " · standing")}
+                </small>
+              </li>
+            ))}
+          </ul>
+        </Fold>
+      )}
 
       {(asm?.assumptions.length ?? 0) > 0 && (
         <Fold id="assumptions" title="Assumptions"

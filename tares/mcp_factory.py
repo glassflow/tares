@@ -5,6 +5,7 @@ as tares/mcp_server.py, which imports this module at its end.
 from __future__ import annotations
 
 import json
+import os
 
 from .mcp_server import TARESD, _cx, _out, _project_id, mcp, writable
 
@@ -254,6 +255,102 @@ async def recurring_findings(repo: str) -> str:
     async with _cx(10) as cx:
         r = await cx.get(f"{TARESD}/api/recurring-findings", params={"repo": repo})
     return _out(r)
+
+
+# ── you in the loop: the desk (TR-449..452) ───────────────────────────────────
+
+def _desk_line(d: dict) -> dict:
+    return {k: d.get(k) for k in ("label", "project_name", "question", "options", "recommendation",
+                                  "why", "context", "blocks", "tickets", "blocking", "asked_by",
+                                  "assumptions", "state", "created_at")}
+
+
+@writable()
+async def desk_add(question: str, recommendation: str, why: str, options: list[str] | None = None,
+                   context: str = "", blocks: str = "", tickets: list[str] | None = None,
+                   blocking: bool = False, asked_by: str = "", assumptions: list[str] | None = None,
+                   project: str = "") -> str:
+    """Put a question for the person on the desk (one desk for every project; numbered D1,
+    D2...): the question, your recommendation and why, the options, two lines of context, what
+    it blocks (tickets, stations), whether it blocks, and who asked. For the batch of
+    assumptions to confirm once per milestone, pass their numbers in `assumptions`. Then ask the
+    person in your session, one item at a time, blockers first. Only the orchestrator writes
+    the desk."""
+    body = {"question": question, "recommendation": recommendation, "why": why,
+            "options": options or [], "context": context, "blocks": blocks,
+            "tickets": tickets or [], "blocking": blocking, "asked_by": asked_by,
+            "assumptions": assumptions or []}
+    if project or os.getenv("TARES_PROJECT", "").strip():
+        body["project"] = project or os.getenv("TARES_PROJECT", "").strip()
+    async with _cx(10) as cx:
+        r = await cx.post(f"{TARESD}/api/desk", json=body)
+    if r.status_code >= 400:
+        return _out(r)
+    return json.dumps(_desk_line(r.json()), default=str)
+
+
+@mcp.tool()
+async def desk_list(state: str = "open", project: str = "") -> str:
+    """The desk: open questions (or `answered`, `withdrawn`) across every project, blockers
+    first, then oldest. Ask the first one."""
+    async with _cx(10) as cx:
+        r = await cx.get(f"{TARESD}/api/desk", params={"state": state, "project": project})
+    if r.status_code >= 400:
+        return _out(r)
+    return json.dumps([_desk_line(d) for d in r.json().get("desk") or []], default=str)
+
+
+@writable()
+async def desk_answer(item: str, words: str, choice: str = "", standing: bool = False,
+                      scope: str = "project", kept: list[str] | None = None,
+                      overturned: dict | None = None) -> str:
+    """Record the person's answer to a desk item (D3). `words` is their reply exactly as they
+    typed it in your session, never your summary: Tares checks it against what they typed and
+    says whether it matches. `choice` the option it picks. `standing` only when they said it
+    holds from now on ("always fine for staging"); with `scope` all it holds for every project.
+    A standing answer that matches becomes a grant. For an assumption batch: `kept` the
+    assumptions they keep, `overturned` {A3: their words}; open a follow-up ticket for each
+    overturned one."""
+    body = {"words": words, "choice": choice, "standing": standing, "scope": scope,
+            "kept": kept or [], "overturned": overturned or {}}
+    async with _cx(15) as cx:
+        r = await cx.post(f"{TARESD}/api/desk/{item}/answer", json=body)
+    if r.status_code >= 400:
+        return _out(r)
+    d = r.json()
+    out = {"item": d["desk_item"]["label"], "recorded": "your words as typed",
+           "matches_what_they_typed": d["matched"], "became_a_grant": d["granted"],
+           "assumptions": d["assumptions"], "follow_up_tickets_needed": d["follow_up"]}
+    if not d["matched"]:
+        out["note"] = ("Tares did not find these words in what the person typed into your "
+                       "session: record their exact reply, not a summary.")
+    return json.dumps(out, default=str)
+
+
+@writable()
+async def desk_withdraw(item: str, reason: str) -> str:
+    """Take a question off the desk when it no longer needs the person (answered by events,
+    or no longer relevant), saying why."""
+    async with _cx(10) as cx:
+        r = await cx.post(f"{TARESD}/api/desk/{item}/withdraw", json={"reason": reason})
+    return _out(r, ("label", "state", "reason"))
+
+
+@mcp.tool()
+async def list_decisions(project: str = "") -> str:
+    """What the person decided on the project, newest first: the question, their words, the
+    choice, whether it stands from now on and whether it matched what they typed. Follow them;
+    relay them to stations by quoting the words."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/decisions")
+    if r.status_code >= 400:
+        return _out(r)
+    return json.dumps([{k: d.get(k) for k in ("label", "question", "words", "choice", "standing",
+                                              "matched", "tickets", "at")}
+                       for d in r.json().get("decisions") or []], default=str)
 
 
 # ── the crew (TR-419, TR-420, TR-425) ─────────────────────────────────────────

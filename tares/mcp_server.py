@@ -566,6 +566,11 @@ def _handover(b: dict) -> str:
             lines.append("")
     if b.get("memory"):
         lines += ["## Project memory", b["memory"].strip(), ""]
+    if b.get("decisions"):
+        lines += ["## What the person decided (their words)"]
+        lines += [f"- {d.get('label') or ''} {d['question']}: \"{d['words']}\"".strip()
+                  for d in b["decisions"]]
+        lines.append("")
     p = b.get("previous_session")
     if p:
         lines += ["## The session that was on it",

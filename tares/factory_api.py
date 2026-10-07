@@ -259,31 +259,34 @@ def register(app, store, h: SimpleNamespace) -> None:
             line = factory_mod.grant_line(body.get("words"), now_utc().date().isoformat())
         except docs_mod.DocError as e:
             h.err(e)
-        if scope == "all":
-            doc_id = shared_grants_id(create=True)
-            cur = store.get_doc(None, doc_id)["body"]
-            uid = None
-        else:
+        uid = None
+        if scope == "project":
             ref = str(body.get("project") or "").strip()
             if not ref:
                 h.err(ValueError("name the project the grant is for"))
             uid = h.project_or_404(h.resolve_project(ref))["id"]
+        added = append_grant(uid, line, h.by(request, body))
+        return {**grants_out(uid), "added": added, "line": line}
+
+    def append_grant(uid: str | None, line: str, by: str) -> bool:
+        """One grant line into the shared grants (uid None) or the project's own."""
+        if uid is None:
+            doc_id = shared_grants_id(create=True)
+        else:
             d = project_grants_doc(uid)
             if d is None:
                 p = store.get_project(uid)
                 doc_id = store.create_doc(uid, "grants", f"Grants: {p['name']}",
                                           f"# Grants for {p['name']}\n\nWhat the person allows "
                                           "the crew in this project, on top of the grants for "
-                                          "every project. Their words, dated.\n\n",
-                                          by=h.by(request, body))
+                                          "every project. Their words, dated.\n\n", by=by)
             else:
                 doc_id = d["id"]
             include_shared_grants(uid)
-            cur = store.get_doc(None, doc_id)["body"]
-        text, added = docs_mod.append_line(cur, line)
+        text, added = docs_mod.append_line(store.get_doc(None, doc_id)["body"], line)
         if added:
-            store.update_doc(doc_id, body=text, by=h.by(request, body))
-        return {**grants_out(uid), "added": added, "line": line}
+            store.update_doc(doc_id, body=text, by=by)
+        return added
 
     # ── stations (TR-420): sessions grouped by the station they play ──────────
     def _ts(v) -> float:
@@ -797,6 +800,131 @@ def register(app, store, h: SimpleNamespace) -> None:
         store.update_doc(doc_id, body=new, by="console")
         store.decide_rule_proposal(pid, "accepted", text, now_utc())
         return {**store.get_rule_proposal(pid), "doc": doc_id}
+
+    # ── the desk: questions for the person, and their answers (TR-449..452) ────
+    def desk_out(d: dict) -> dict:
+        p = store.get_project(d["project"]) if d["project"] else None
+        return {**d, "project_name": p["name"] if p else None}
+
+    @app.post("/api/desk", status_code=201)
+    async def desk_add(request: Request, body: dict = Body(...)):
+        """{question, recommendation, why, options?, context?, blocks?, tickets?, blocking?,
+        assumptions?, project?}: a question for the person, numbered D1, D2... for the whole
+        cell. Only the orchestrator (or a person's own session) writes the desk."""
+        deny(request, "desk")
+        try:
+            q, rec, why, opts, ctx = factory_mod.desk_ok(
+                body.get("question"), body.get("recommendation"), body.get("why"),
+                body.get("options"), body.get("context"))
+        except docs_mod.DocError as e:
+            h.err(e)
+        uid = None
+        if str(body.get("project") or "").strip():
+            uid = h.project_or_404(h.resolve_project(str(body["project"]).strip()))["id"]
+        tickets = []
+        if uid:
+            tickets = [factory_mod.label(ticket_or_404(uid, r))
+                       for r in factory_mod.depends_ok(body.get("tickets"))]
+        asm = []
+        for a in body.get("assumptions") or []:
+            got = store.get_assumption(uid, str(a)) if uid else None
+            if got is None:
+                h.err(KeyError(f"no assumption {a!r} in that project"), 404)
+            asm.append(got["label"])
+        by, _ = who(request, body)
+        d = store.add_desk_item(uid, q, ctx, opts, rec, why,
+                                " ".join(str(body.get("blocks") or "").split())[:300], tickets,
+                                bool(body.get("blocking")), str(body.get("asked_by") or by)[:120],
+                                asm, now_utc())
+        return desk_out(d)
+
+    @app.get("/api/desk")
+    async def desk_list(state: str = "open", project: str = ""):
+        """The desk, blockers first, then oldest."""
+        st = state.strip().lower() or None
+        if st and st not in factory_mod.DESK_STATES:
+            h.err(ValueError("state is one of: " + ", ".join(factory_mod.DESK_STATES)))
+        uid = h.project_or_404(h.resolve_project(project.strip()))["id"] if project.strip() else None
+        return {"desk": [desk_out(d) for d in store.list_desk(st, uid)]}
+
+    def desk_or_404(ref: str) -> dict:
+        d = store.get_desk_item(ref)
+        if d is None:
+            h.err(KeyError(f"no desk item {ref!r}"), 404)
+        return d
+
+    @app.post("/api/desk/{ref}/withdraw")
+    async def desk_withdraw(ref: str, request: Request, body: dict = Body(default={})):
+        deny(request, "desk")
+        d = desk_or_404(ref)
+        if d["state"] != "open":
+            h.err(ValueError(f"{d['label']} is already {d['state']}"), 409)
+        store.close_desk_item(d["id"], "withdrawn",
+                              " ".join(str(body.get("reason") or "").split())[:500] or None,
+                              now_utc())
+        return desk_out(desk_or_404(d["id"]))
+
+    @app.post("/api/desk/{ref}/answer")
+    async def desk_answer(ref: str, request: Request, body: dict = Body(...)):
+        """{words, choice?, standing?, scope?: project|all, kept?: [A<n>], overturned?: {A<n>:
+        words}}: the person's answer, their words as typed. Tares looks for those words in what
+        the person typed into the orchestrator's session (or, from the person's own session, in
+        any session) and says whether they match. A standing answer that matches becomes a
+        grant. An assumption batch keeps or overturns each assumption."""
+        deny(request, "desk")
+        d = desk_or_404(ref)
+        if d["state"] != "open":
+            h.err(ValueError(f"{d['label']} is already {d['state']}"), 409)
+        words = str(body.get("words") or "").strip()
+        if not words:
+            h.err(ValueError("words: the person's reply exactly as they typed it"))
+        if len(words) > 4000:
+            h.err(ValueError("keep the words to 4000 characters"))
+        scope = str(body.get("scope") or "project").strip().lower()
+        if scope not in ("project", "all"):
+            h.err(ValueError("scope is project or all"))
+        from datetime import timedelta
+        since = now_utc() - timedelta(hours=factory_mod.MATCH_HOURS)
+        labeled = bool(caller(request)["station"])
+        sessions = store.role_sessions("orchestrator") if labeled else None
+        hit = factory_mod.words_match(words, store.person_turns(h.cc_source(), sessions, since))
+        standing = bool(body.get("standing"))
+        granted = False
+        if standing and hit:
+            line = factory_mod.grant_line(words, now_utc().date().isoformat())
+            granted = append_grant(d["project"] if scope == "project" and d["project"] else None,
+                                   line, "the person, on the desk")
+        # an assumption batch: each kept or overturned with the person's words
+        kept = [str(a) for a in body.get("kept") or []]
+        over = body.get("overturned") or {}
+        if not isinstance(over, dict):
+            h.err(ValueError("overturned is {A<n>: the person's words}"))
+        changed = []
+        for ref_a, st, w in [(a, "kept", None) for a in kept] + [
+                (a, "overturned", str(w)) for a, w in over.items()]:
+            a = store.get_assumption(d["project"], ref_a) if d["project"] else None
+            if a is None:
+                h.err(KeyError(f"no assumption {ref_a!r} in {d['label']}'s project"), 404)
+            store.decide_assumption(a["id"], st, w, d["label"], now_utc())
+            changed.append({"label": a["label"], "state": st, "tickets": a["tickets"]})
+        dec = store.add_decision(d["project"], d["id"], d["question"], words,
+                                 str(body.get("choice") or "")[:300], standing, scope,
+                                 hit is not None, hit["session"] if hit else None, granted,
+                                 d["tickets"], now_utc())
+        store.close_desk_item(d["id"], "answered", None, now_utc())
+        by_id = {t["id"]: t for t in store.list_tickets(d["project"])} if d["project"] else {}
+        follow = [{"assumption": c["label"],
+                   "tickets": [factory_mod.label(by_id[x]) for x in c["tickets"] if x in by_id]}
+                  for c in changed if c["state"] == "overturned"]
+        return {"desk_item": desk_out(desk_or_404(d["id"])), "decision": dec,
+                "matched": hit is not None, "granted": granted, "assumptions": changed,
+                "follow_up": follow}
+
+    @app.get("/api/projects/{uid}/decisions")
+    async def project_decisions(uid: str):
+        """The person's answers on this project, newest first."""
+        h.project_or_404(uid)
+        return {"decisions": store.list_decisions(uid)}
 
     @app.post("/api/projects/{uid}/handover")
     async def hand_over(uid: str, request: Request, body: dict = Body(default={})):

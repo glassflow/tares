@@ -761,6 +761,7 @@ def make_app() -> FastAPI:
         ("GET", re.compile(r"^/crew$"), "read"),
         ("GET", re.compile(r"^/tickets/[^/]+/messages$"), "read"),
         ("GET", re.compile(r"^/assumptions$"), "read"),
+        ("GET", re.compile(r"^/decisions$"), "read"),
         ("GET", re.compile(r"^/sessions$"), "read"),
         ("GET", re.compile(r"^/sessions/[^/]+$"), "read"),
         ("GET", re.compile(r"^/pickup$"), "read"),
@@ -4371,6 +4372,10 @@ def make_app() -> FastAPI:
                  "tickets": [factory_mod.label(by_id[x]) for x in a["tickets"] if x in by_id]}
                 for a in store.list_assumptions(uid, ticket=t["id"])]
             out.update(factory_api.review_state(store, uid, t, _cc_source()))
+            lab = out["label"]
+            ds = store.list_decisions(uid)
+            out["decisions"] = ([d for d in ds if lab in d["tickets"]]
+                                + [d for d in ds if lab not in d["tickets"]])[:10]
         else:
             last = store.ticket_reviews(t["id"])[-1:] if t["stage"] else []
             out["verdict"] = factory_api.verdict_now(t, last[0] if last else None)
@@ -4693,6 +4698,8 @@ def make_app() -> FastAPI:
         if len(body) > 6000:   # newest last: keep the newest lines
             body = "...\n" + body[-6000:].split("\n", 1)[-1]
         out["memory"] = body
+        out["decisions"] = [{k: d[k] for k in ("label", "question", "words", "choice", "at")}
+                            for d in store.list_decisions(uid)[:10]]
         notes = [d for d in store.list_docs(uid, "note")]
         out["notes"] = [{"id": d["id"], "title": d["title"],
                          "body": (store.get_doc(uid, d["id"]) or {}).get("body", "")[:4000]}
