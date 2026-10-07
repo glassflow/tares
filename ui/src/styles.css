@@ -1625,6 +1625,8 @@ pre.payload {
 .gf-today strong { color: var(--ink); font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
 .gf-results { display: flex; flex-direction: column; gap: 12px; }
+.gf-results-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.gf-results-head .picker { min-width: 200px; }
 .gf-results h2, .gf-h3 { margin: 0; font-size: 16px; font-weight: 600; }
 .gf-h3 { font-size: 14px; }
 .main ol.gf-cards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }

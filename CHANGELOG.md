@@ -39,6 +39,13 @@ the project follows [Semantic Versioning](https://semver.org/).
   model" starts one in shadow mode. Each run stores its probabilities (`scores` on the run), shown
   in the runs list with a "would escalate" mark for shadow runs, and
   `GET /api/agents/builtin/{name}/runs.csv` exports every run with them (Export CSV on the runs tab).
+- The project page's results have a Show filter: everything, only findings (leaves out what had
+  nothing to report), or one agent's conclusions, so a root-cause agent's notes are not buried
+  under a watcher's quiet checks. Remembered per project in the browser.
+  `GET /api/projects/{id}/results` takes `show` (`findings` or `agent:<name>`); today's counts
+  stay the whole project's.
+- An agent's budget can be set on the agent form (Advanced): what it may spend in all, with what
+  it spent so far. Blank means no budget. Before, the form kept the value but had no field for it.
 
 ## [1.42.0] - 2026-10-06
 

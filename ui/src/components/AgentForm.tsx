@@ -642,14 +642,24 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
         )}
       </div>
 
-      {!decision && <div className="field">
+      <div className="field">
         <button type="button" onClick={() => setAdvancedOpen((o) => !o)}
                 style={{ padding: 0, border: 0, background: "none", cursor: "pointer" }}
                 className="help">
           {advancedOpen ? "Hide advanced" : "Advanced"}
         </button>
-        {advancedOpen && !decision && (
+        {advancedOpen && (
           <div style={{ marginTop: 8 }}>
+            <span className="lbl">budget (USD)</span>
+            <input type="number" min={0} step={1} value={budget} placeholder="no budget"
+                   onChange={(e) => setBudget(e.target.value)}
+                   style={{ width: 110 }} aria-label="budget in US dollars" />
+            <span className="help" style={{ display: "block", marginTop: 4, marginBottom: 10 }}>
+              what this agent may spend in all, from its runs so far; once reached, its runs stop
+              before calling the model. Blank means no budget.
+              {initial?.stats?.cost_usd != null && <> Spent so far: ${initial.stats.cost_usd.toFixed(2)}.</>}
+            </span>
+            {!decision && <>
             <span className="lbl">max rounds</span>
             <input type="number" min={1} max={maxRoundsLimit} value={maxRounds}
                    placeholder={String(mcpSel.length ? defaultMaxRoundsWithMcp : defaultMaxRounds)}
@@ -661,9 +671,10 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
               external MCP servers are enabled. Limit {maxRoundsLimit}. One extra call is made
               when the budget runs out, to ask for a conclusion.
             </span>
+            </>}
           </div>
         )}
-      </div>}
+      </div>
 
       <div className="btnrow">
         <button className="primary" onClick={save}
@@ -672,6 +683,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
                           || (channelOn && !channel)
                           || handoffs.some(handoffBad) || handoffDup
                           || (decision && (!decEndpoint || thresholdBad))
+                          || (!!budget.trim() && !(Number(budget) > 0))
                           || (!!maxRounds.trim() && (Number(maxRounds) < 1
                               || Number(maxRounds) > maxRoundsLimit
                               || !Number.isInteger(Number(maxRounds))))}>

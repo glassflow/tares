@@ -3543,9 +3543,10 @@ def make_app() -> FastAPI:
                                        runtime.health_snapshot())
 
     @app.get("/api/projects/{uid}/results")
-    async def project_results(uid: str, limit: int = 20, before: str = ""):
+    async def project_results(uid: str, limit: int = 20, before: str = "", show: str = ""):
         """What the agents concluded, newest first: one result per chain of runs. Page with
-        `before` = the previous page's `next_before`."""
+        `before` = the previous page's `next_before`. `show`: "findings" leaves out the runs that
+        had nothing to report, "agent:<name>" keeps that agent's conclusions."""
         _project_or_404(uid)
         at = None
         if before:
@@ -3553,8 +3554,10 @@ def make_app() -> FastAPI:
                 at = datetime.fromisoformat(before.replace("Z", "+00:00"))
             except ValueError:
                 _err(ValueError("before must be an ISO timestamp, as next_before gives it"))
+        if show and show != "findings" and not show.startswith("agent:"):
+            _err(ValueError('show is "findings" or "agent:<name>"'))
         return await asyncio.to_thread(goal_mod.project_results, store, uid, limit=limit,
-                                       before=at, scheduled=_scheduled())
+                                       before=at, scheduled=_scheduled(), show=show)
 
     @app.get("/api/projects/{uid}/results/{run_id}")
     async def project_result(uid: str, run_id: str):
