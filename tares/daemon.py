@@ -51,6 +51,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_
                              resolve_anthropic_headers, resolve_api_base, resolve_provider,
                              DEFAULT_API_BASE)
 from . import metrics as _metrics
+from . import docs as docs_mod
 from . import skills as skills_mod
 from . import providers as providers_mod
 from .runtime import Runtime
@@ -743,6 +744,10 @@ def make_app() -> FastAPI:
         ("GET", re.compile(r"^/skills$"), "read"),
         ("GET", re.compile(r"^/skills/[^/]+$"), "read"),
         ("GET", re.compile(r"^/findings$"), "read"),
+        ("GET", re.compile(r"^/docs$"), "read"),
+        ("GET", re.compile(r"^/docs/[^/]+$"), "read"),
+        ("GET", re.compile(r"^/tickets$"), "read"),
+        ("GET", re.compile(r"^/tickets/[^/]+$"), "read"),
         ("GET", re.compile(r"^/results$"), "read"),
         ("GET", re.compile(r"^/results/[^/]+$"), "read"),
         ("GET", re.compile(r"^/outline$"), "read"),
@@ -4147,6 +4152,178 @@ def make_app() -> FastAPI:
         if not created:
             store.mark_skill_customized(uid, name)
         return {**_skill_or_404(uid, name), "created": created}
+
+    # ── a project's docs and tickets (TR-403): what a spec session leaves for the session that
+    # builds it. Docs belong to the cell and projects include them; tickets are owned by Linear
+    # when the project uses it (written by the sync only), by Tares otherwise ────────────────
+    def _by(request: Request, body: dict | None = None) -> str:
+        """Who made a change: what the caller says (`by`), else its credential's name."""
+        said = str((body or {}).get("by") or "").strip()[:100]
+        cred = getattr(request.state, "credential", None) or {}
+        return said or cred.get("name") or ""
+
+    def _doc_or_404(uid: str, doc_id: str) -> dict:
+        d = store.get_doc(uid, doc_id)
+        if d is None:
+            _err(KeyError(f"project has no doc {doc_id!r}"), 404)
+        return d
+
+    @app.get("/api/projects/{uid}/docs")
+    async def list_project_docs(uid: str, kind: str = ""):
+        """The docs the project includes, without bodies, in reading order (starting prompt,
+        spec, plan, AGENTS.md, notes, working docs)."""
+        _project_or_404(uid)
+        return docs_mod.sort_docs(store.list_docs(uid, kind.strip().lower() or None))
+
+    @app.post("/api/projects/{uid}/docs", status_code=201)
+    async def create_project_doc(uid: str, request: Request, body: dict = Body(...)):
+        """{kind, title, body}: a new doc in the project."""
+        _project_or_404(uid)
+        try:
+            kind, title, text = docs_mod.validate_doc(body.get("kind"), body.get("title"),
+                                                      body.get("body"))
+        except docs_mod.DocError as e:
+            _err(e)
+        doc_id = store.create_doc(uid, kind, title, text, by=_by(request, body))
+        return _doc_or_404(uid, doc_id)
+
+    @app.get("/api/projects/{uid}/docs/{doc_id}")
+    async def get_project_doc(uid: str, doc_id: str):
+        _project_or_404(uid)
+        return _doc_or_404(uid, doc_id)
+
+    @app.put("/api/projects/{uid}/docs/{doc_id}")
+    async def update_project_doc(uid: str, doc_id: str, request: Request,
+                                 body: dict = Body(...)):
+        """Change the kind, title or body; a field left out keeps its value. Docs are shared: the
+        change shows in every project that includes the doc."""
+        _project_or_404(uid)
+        cur = _doc_or_404(uid, doc_id)
+        try:
+            kind, title, text = docs_mod.validate_doc(body.get("kind", cur["kind"]),
+                                                      body.get("title", cur["title"]),
+                                                      body.get("body", cur["body"]))
+        except docs_mod.DocError as e:
+            _err(e)
+        store.update_doc(doc_id, kind=kind, title=title, body=text, by=_by(request, body))
+        return _doc_or_404(uid, doc_id)
+
+    @app.delete("/api/projects/{uid}/docs/{doc_id}")
+    async def delete_project_doc(uid: str, doc_id: str):
+        """The project stops including the doc; it is deleted when no other project includes
+        it."""
+        _project_or_404(uid)
+        others = [p for p in _doc_or_404(uid, doc_id)["projects"] if p != uid]
+        store.remove_doc(uid, doc_id)
+        return {"ok": True, "removed": doc_id, "kept_for": others}
+
+    @app.post("/api/projects/{uid}/docs/{doc_id}/use")
+    async def use_project_doc(uid: str, doc_id: str):
+        """The project includes a doc already on the cell (shared: an edit shows everywhere)."""
+        _project_or_404(uid)
+        if not store.use_doc(uid, doc_id):
+            _err(KeyError(f"there is no doc {doc_id!r} on Tares"), 404)
+        return _doc_or_404(uid, doc_id)
+
+    @app.get("/api/docs")
+    async def list_cell_docs():
+        """Every doc on Tares, with the projects that include it (no bodies)."""
+        names = {p["id"]: p["name"] for p in store.list_projects()}
+        return [{**d, "projects": [{"id": p, "name": names.get(p, p)} for p in d["projects"]]}
+                for d in docs_mod.sort_docs(store.list_cell_docs())]
+
+    def _ticket_out(uid: str, t: dict, with_doc: bool = False) -> dict:
+        out = {k: t[k] for k in ("id", "owner", "identifier", "url", "title", "status",
+                                 "position", "working_doc", "updated_at")}
+        doc = store.get_doc(uid, t["working_doc"]) if t["working_doc"] else None
+        out["working_doc_title"] = doc["title"] if doc else None
+        if with_doc:
+            out["working_doc_body"] = doc["body"] if doc else None
+        return out
+
+    def _ticket_or_404(uid: str, ref: str) -> dict:
+        t = store.get_ticket(uid, ref)
+        if t is None:
+            _err(KeyError(f"project has no ticket {ref!r}"), 404)
+        return t
+
+    def _working_doc_ok(uid: str, doc_id) -> str | None:
+        if not doc_id:
+            return None
+        if store.get_doc(uid, str(doc_id)) is None:
+            _err(KeyError(f"project has no doc {doc_id!r}; write the working doc first"), 404)
+        return str(doc_id)
+
+    @app.get("/api/projects/{uid}/tickets")
+    async def list_project_tickets(uid: str):
+        """The project's tickets in order, each with the title of its working doc, and the
+        Linear project they live in when the project uses Linear (`linear`, with the last
+        sync's time and error)."""
+        _project_or_404(uid)
+        return {"tickets": [_ticket_out(uid, t) for t in store.list_tickets(uid)],
+                "linear": store.get_project_linear(uid)}
+
+    @app.post("/api/projects/{uid}/tickets", status_code=201)
+    async def create_project_ticket(uid: str, body: dict = Body(...)):
+        """{title, status?, position?, working_doc?}: a ticket Tares owns. Refused when the
+        project's tickets live in Linear."""
+        _project_or_404(uid)
+        if store.get_project_linear(uid):
+            _err(ValueError("this project's tickets live in Linear; add the ticket there and "
+                            "it shows up here on the next sync"), 409)
+        try:
+            title = docs_mod.title_ok(body.get("title"))
+            status = docs_mod.status_ok(body.get("status"))
+        except docs_mod.DocError as e:
+            _err(e)
+        pos = body.get("position")
+        tid = store.create_ticket(uid, "tares", title, status,
+                                  float(pos) if pos is not None else None,
+                                  working_doc=_working_doc_ok(uid, body.get("working_doc")))
+        return _ticket_out(uid, _ticket_or_404(uid, tid))
+
+    @app.get("/api/projects/{uid}/tickets/{ref}")
+    async def get_project_ticket(uid: str, ref: str):
+        """One ticket by its id or Linear identifier, with its working doc's body."""
+        _project_or_404(uid)
+        return _ticket_out(uid, _ticket_or_404(uid, ref), with_doc=True)
+
+    @app.put("/api/projects/{uid}/tickets/{ref}")
+    async def update_project_ticket(uid: str, ref: str, body: dict = Body(...)):
+        """Change a ticket. A Linear ticket only takes `working_doc` (its title, status and order
+        change in Linear); a Tares ticket also takes title, status and position."""
+        _project_or_404(uid)
+        t = _ticket_or_404(uid, ref)
+        fields: dict = {}
+        if "working_doc" in body:
+            fields["working_doc"] = _working_doc_ok(uid, body.get("working_doc"))
+        own = {"title", "status", "position"} & set(body)
+        if own and t["owner"] == "linear":
+            _err(ValueError(f"{t['identifier'] or t['id']} lives in Linear: change its "
+                            + ", ".join(sorted(own)) + " there"), 409)
+        try:
+            if "title" in body:
+                fields["title"] = docs_mod.title_ok(body["title"])
+            if "status" in body:
+                fields["status"] = docs_mod.status_ok(body["status"])
+        except docs_mod.DocError as e:
+            _err(e)
+        if "position" in body and body["position"] is not None:
+            fields["position"] = float(body["position"])
+        if fields:
+            store.update_ticket(t["id"], **fields)
+        return _ticket_out(uid, _ticket_or_404(uid, t["id"]), with_doc=True)
+
+    @app.delete("/api/projects/{uid}/tickets/{ref}")
+    async def delete_project_ticket(uid: str, ref: str):
+        """Delete a Tares ticket (its working doc stays). A Linear ticket is removed in Linear."""
+        _project_or_404(uid)
+        t = _ticket_or_404(uid, ref)
+        if t["owner"] == "linear":
+            _err(ValueError(f"{t['identifier'] or t['id']} lives in Linear: remove it there"),
+                 409)
+        store.delete_ticket(t["id"])
+        return {"ok": True, "deleted": t["id"]}
 
     # ── joining a project (TR-335, TR-336): its keys, an external agent's subscription to it,
     # the findings recorded in it, and stats over its sources ────────────────────────────────

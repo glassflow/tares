@@ -282,6 +282,36 @@ CREATE TABLE IF NOT EXISTS shared_skills (
   created_at  TIMESTAMPTZ,
   updated_at  TIMESTAMPTZ
 );
+-- Docs (TR-403): markdown that belongs to the cell, included by projects through usecase_objects
+-- (kind 'doc', key 'doc:<id>'), like skills. `made_by` is the project that wrote it, `updated_by`
+-- who changed it last (a key's name, "console", a session). Kinds in tares/docs.py.
+CREATE TABLE IF NOT EXISTS docs (
+  id          TEXT PRIMARY KEY,
+  kind        TEXT,
+  title       TEXT,
+  body        TEXT,
+  made_by     TEXT,
+  updated_by  TEXT,
+  created_at  TIMESTAMPTZ,
+  updated_at  TIMESTAMPTZ
+);
+-- Tickets (TR-403): a project's list of work. owner 'linear' is a record of a Linear issue, written
+-- only by the Linear sync (external_id = the issue id, identifier = e.g. ENG-12). owner 'tares'
+-- means the project has no Linear and Tares is the source of truth. `working_doc` is a doc id.
+CREATE TABLE IF NOT EXISTS tickets (
+  id          TEXT PRIMARY KEY,
+  project     TEXT,
+  owner       TEXT,
+  external_id TEXT,
+  identifier  TEXT,
+  url         TEXT,
+  title       TEXT,
+  status      TEXT,
+  position    DOUBLE,
+  working_doc TEXT,
+  created_at  TIMESTAMPTZ,
+  updated_at  TIMESTAMPTZ
+);
 CREATE TABLE IF NOT EXISTS skills (
   project     TEXT,
   name        TEXT,
@@ -411,6 +441,9 @@ _MIGRATIONS = [
     # A trigger's own words for what wakes it ("an alert fires in the demo service"), used by
     # every generated sentence instead of the rule's wording. NULL = say it from the rule.
     "ALTER TABLE catalog_triggers ADD COLUMN IF NOT EXISTS description TEXT",
+    # TR-408: the Linear project a project's tickets live in, and how the last sync went
+    # ({id, name, url, synced_at, cursor, error}); NULL = the project does not use Linear
+    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS linear JSON",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -2201,6 +2234,8 @@ class Store:
             self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ?", [uid])
             self.con.execute("DELETE FROM project_wiring WHERE project = ?", [uid])
             self._forget_unused_skills()   # a skill another project uses stays
+            self._forget_unused_docs()     # so does a doc
+            self.con.execute("DELETE FROM tickets WHERE project = ?", [uid])
             self.con.execute("DELETE FROM usecase_log WHERE usecase_id = ?", [uid])
             self.con.execute("DELETE FROM usecases WHERE id = ?", [uid])
 
@@ -2332,6 +2367,197 @@ class Store:
         with self._lock:
             self.con.execute("UPDATE usecase_objects SET customized = TRUE WHERE usecase_id = ? "
                              "AND kind = 'skill' AND name = ?", [project, name])
+
+    # ── docs and tickets (TR-403): validated by tares/docs.py before they get here ──
+    _DOC_COLS = "d.id, d.kind, d.title, d.made_by, d.updated_by, d.created_at, d.updated_at"
+
+    @staticmethod
+    def _doc_row(r, body: str | None = None) -> dict:
+        out = {"id": r[0], "kind": r[1], "title": r[2], "made_by": r[3], "updated_by": r[4],
+               "created_at": r[5], "updated_at": r[6]}
+        if body is not None:
+            out["body"] = body
+        return out
+
+    def create_doc(self, project: str | None, kind: str, title: str, body: str,
+                   by: str = "") -> str:
+        """A new doc on the cell, included in `project` (None: on the cell only, for every
+        project to include). Returns its id."""
+        doc_id = "doc_" + uuid.uuid4().hex[:10]
+        ts = now_utc()
+        with self._lock:
+            self.con.execute(
+                "INSERT INTO docs (id, kind, title, body, made_by, updated_by, created_at, "
+                "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [doc_id, kind, title, body, project, by or None, ts, ts])
+            if project:
+                self._use_doc(project, doc_id)
+        return doc_id
+
+    def update_doc(self, doc_id: str, kind: str | None = None, title: str | None = None,
+                   body: str | None = None, by: str = "") -> None:
+        sets, vals = ["updated_at = ?", "updated_by = ?"], [now_utc(), by or None]
+        for col, v in (("kind", kind), ("title", title), ("body", body)):
+            if v is not None:
+                sets.append(f"{col} = ?"); vals.append(v)
+        vals.append(doc_id)
+        with self._lock:
+            self.con.execute(f"UPDATE docs SET {', '.join(sets)} WHERE id = ?", vals)
+
+    def get_doc(self, project: str | None, doc_id: str) -> dict | None:
+        """A doc the project includes (any doc, with None), with its body and the projects that
+        include it."""
+        with self._lock:
+            if project is not None and not self.con.execute(
+                    "SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND kind = 'doc' "
+                    "AND name = ?", [project, doc_id]).fetchone():
+                return None
+            r = self.con.execute(f"SELECT {self._DOC_COLS}, d.body FROM docs d WHERE d.id = ?",
+                                 [doc_id]).fetchone()
+            if not r:
+                return None
+            users = [u[0] for u in self.con.execute(
+                "SELECT usecase_id FROM usecase_objects WHERE kind = 'doc' AND name = ? "
+                "ORDER BY usecase_id", [doc_id]).fetchall()]
+        return {**self._doc_row(r, r[7]), "projects": users}
+
+    def list_docs(self, project: str, kind: str | None = None) -> list[dict]:
+        """The docs a project includes, without bodies: size in bytes instead."""
+        q = (f"SELECT DISTINCT {self._DOC_COLS}, octet_length(encode(d.body)) FROM docs d "
+             "JOIN usecase_objects o ON o.kind = 'doc' AND o.name = d.id WHERE o.usecase_id = ?")
+        vals: list = [project]
+        if kind:
+            q += " AND d.kind = ?"; vals.append(kind)
+        with self._lock:
+            rows = self.con.execute(q, vals).fetchall()
+        return [{**self._doc_row(r), "size": int(r[7] or 0)} for r in rows]
+
+    def list_cell_docs(self) -> list[dict]:
+        """Every doc on the cell (no bodies), with the projects that include it."""
+        with self._lock:
+            rows = self.con.execute(f"SELECT {self._DOC_COLS}, octet_length(encode(d.body)) "
+                                    "FROM docs d ORDER BY d.title").fetchall()
+            users = self.con.execute("SELECT name, usecase_id FROM usecase_objects WHERE "
+                                     "kind = 'doc' GROUP BY name, usecase_id").fetchall()
+        by: dict[str, list] = {}
+        for n, u in users:
+            by.setdefault(n, []).append(u)
+        return [{**self._doc_row(r), "size": int(r[7] or 0), "projects": sorted(by.get(r[0], []))}
+                for r in rows]
+
+    def _use_doc(self, project: str, doc_id: str) -> None:
+        """Lock held."""
+        self.con.execute("INSERT INTO usecase_objects (usecase_id, kind, key, name, customized, "
+                         "created_at) VALUES (?, 'doc', ?, ?, FALSE, ?) ON CONFLICT DO NOTHING",
+                         [project, f"doc:{doc_id}", doc_id, now_utc()])
+
+    def use_doc(self, project: str, doc_id: str) -> bool:
+        """A doc already on the cell, included in one more project. False when there is no such
+        doc."""
+        with self._lock:
+            if not self.con.execute("SELECT 1 FROM docs WHERE id = ?", [doc_id]).fetchone():
+                return False
+            self._use_doc(project, doc_id)
+        return True
+
+    def remove_doc(self, project: str, doc_id: str) -> bool:
+        """The project stops including the doc; the doc is deleted when no project includes it
+        any more and it was made by a project (a doc made on the cell stays). A ticket of this
+        project whose working doc it was loses the link. Returns whether the project had it."""
+        with self._lock:
+            had = self.con.execute("SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND "
+                                   "kind = 'doc' AND name = ?", [project, doc_id]).fetchone()
+            self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = 'doc' "
+                             "AND name = ?", [project, doc_id])
+            self.con.execute("UPDATE tickets SET working_doc = NULL WHERE project = ? AND "
+                             "working_doc = ?", [project, doc_id])
+            self._forget_unused_docs()
+        return had is not None
+
+    def _forget_unused_docs(self) -> None:
+        """Docs a project made that no project includes any more go. Lock held."""
+        self.con.execute("DELETE FROM docs WHERE made_by IS NOT NULL AND id NOT IN (SELECT name "
+                         "FROM usecase_objects WHERE kind = 'doc')")
+
+    _TICKET_COLS = ("id, project, owner, external_id, identifier, url, title, status, position, "
+                    "working_doc, created_at, updated_at")
+
+    @staticmethod
+    def _ticket_row(r) -> dict:
+        return {"id": r[0], "project": r[1], "owner": r[2], "external_id": r[3],
+                "identifier": r[4], "url": r[5], "title": r[6], "status": r[7],
+                "position": r[8], "working_doc": r[9], "created_at": r[10], "updated_at": r[11]}
+
+    def create_ticket(self, project: str, owner: str, title: str, status: str = "todo",
+                      position: float | None = None, external_id: str | None = None,
+                      identifier: str | None = None, url: str | None = None,
+                      working_doc: str | None = None) -> str:
+        """A ticket at the end of the project's list unless `position` says where."""
+        tid = "tk_" + uuid.uuid4().hex[:10]
+        ts = now_utc()
+        with self._lock:
+            if position is None:
+                last = self.con.execute("SELECT max(position) FROM tickets WHERE project = ?",
+                                        [project]).fetchone()[0]
+                position = (last or 0) + 1
+            self.con.execute(
+                f"INSERT INTO tickets ({self._TICKET_COLS}) VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [tid, project, owner, external_id, identifier, url, title, status,
+                 float(position), working_doc, ts, ts])
+        return tid
+
+    def update_ticket(self, tid: str, **fields) -> None:
+        """Set the given columns (title, status, position, working_doc, identifier, url,
+        external_id); None clears working_doc only when passed explicitly."""
+        allowed = {"title", "status", "position", "working_doc", "identifier", "url",
+                   "external_id"}
+        sets, vals = ["updated_at = ?"], [now_utc()]
+        for col, v in fields.items():
+            if col in allowed:
+                sets.append(f"{col} = ?"); vals.append(v)
+        vals.append(tid)
+        with self._lock:
+            self.con.execute(f"UPDATE tickets SET {', '.join(sets)} WHERE id = ?", vals)
+
+    def list_tickets(self, project: str) -> list[dict]:
+        with self._lock:
+            rows = self.con.execute(f"SELECT {self._TICKET_COLS} FROM tickets WHERE project = ? "
+                                    "ORDER BY position, created_at", [project]).fetchall()
+        return [self._ticket_row(r) for r in rows]
+
+    def get_ticket(self, project: str, ref: str) -> dict | None:
+        """A ticket of the project by its id, Linear identifier (ENG-12, any case) or Linear
+        issue id."""
+        with self._lock:
+            r = self.con.execute(
+                f"SELECT {self._TICKET_COLS} FROM tickets WHERE project = ? AND (id = ? OR "
+                "upper(identifier) = upper(?) OR external_id = ?)", [project, ref, ref, ref]
+            ).fetchone()
+        return self._ticket_row(r) if r else None
+
+    def delete_ticket(self, tid: str) -> None:
+        with self._lock:
+            self.con.execute("DELETE FROM tickets WHERE id = ?", [tid])
+
+    def get_project_linear(self, uid: str) -> dict | None:
+        """The Linear project a project's tickets live in, with the last sync's state, or None."""
+        with self._lock:
+            r = self.con.execute("SELECT linear FROM usecases WHERE id = ?", [uid]).fetchone()
+        return json.loads(r[0]) if r and r[0] else None
+
+    def set_project_linear(self, uid: str, linear: dict | None) -> None:
+        with self._lock:
+            self.con.execute("UPDATE usecases SET linear = ? WHERE id = ?",
+                             [json.dumps(linear, default=str) if linear is not None else None,
+                              uid])
+
+    def linear_projects(self) -> list[tuple[str, dict]]:
+        """(project id, its Linear link) for every project that uses Linear."""
+        with self._lock:
+            rows = self.con.execute("SELECT id, linear FROM usecases WHERE linear IS NOT NULL"
+                                    ).fetchall()
+        return [(r[0], json.loads(r[1])) for r in rows if r[1]]
 
     def skill_loads(self, agents: list[str], days: int = 7) -> dict[str, list[str]]:
         """{skill: [agents]} for the runs of `agents` in the last `days` that loaded a skill."""
