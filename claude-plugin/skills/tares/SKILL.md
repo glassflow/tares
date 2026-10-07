@@ -33,6 +33,9 @@ from `list_tickets`, in order, each read with `get_ticket`, which carries the wo
 If a ticket is already in progress when you start, an earlier session stopped on it: call
 `pick_up` first, and finish that ticket. While you build, keep a `## Progress` section at the end
 of the ticket's working doc (done, next, how to run things), so the next session can pick up.
+Record each check you run with `add_check` (it adds one line to the working doc), what you
+learn about the project with `remember_for_project`, and, in a tares-factory crew, an assumption
+you make so as not to block with `assume`.
 
 Two docs belong to every project: the shared AGENTS.md (standing rules) and memory (facts that
 hold everywhere). Read them with `read_global_docs`. When the user states a rule or fact that

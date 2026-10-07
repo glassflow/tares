@@ -139,7 +139,9 @@ def readiness(tickets: list[dict]) -> dict[str, dict]:
     out = {}
     for t in tickets:
         waits = [by_id[d] for d in t.get("depends_on") or [] if d in by_id and not delivered(by_id[d])]
-        out[t["id"]] = {"ready": not finished(t) and not waits,
+        # ready means "can be started": a ticket already in the work is not
+        out[t["id"]] = {"ready": t.get("status") == "todo" and t.get("stage") in (None, "todo")
+                                 and not waits,
                         "blocked_by": [label(w) + (" (canceled)" if w.get("status") == "canceled"
                                                    else "") for w in waits]}
     return out
@@ -180,6 +182,68 @@ def may_move(caller: dict, ticket: dict, stage: str) -> str | None:
         return (f"{name} has no holder yet: the orchestrator assigns it (assign_ticket) before "
                 "anyone moves it")
     return f"{name} is held by {holder}; ask the orchestrator to reassign it"
+
+
+# ── the build, recorded (M5) ──────────────────────────────────────────────────
+
+ASSUMPTION_STATES = ("open", "kept", "overturned")
+
+
+def _line(v, what: str, n: int = 1000, required: bool = True) -> str:
+    s = " ".join(str(v or "").split())
+    if required and not s:
+        raise DocError(f"say {what}")
+    if len(s) > n:
+        raise DocError(f"{what} is {len(s)} characters; keep it to {n}")
+    return s
+
+
+def assumption_ok(question, choice, why, affects) -> tuple[str, str, str, str]:
+    return (_line(question, "the question"), _line(choice, "what you chose"),
+            _line(why, "why you chose it"), _line(affects, "who it affects", 300, False))
+
+
+def check_ok(command, result, commit, broke_test) -> tuple[str, str, str, str]:
+    """A check a builder ran: the command, what it showed, the commit it ran on, and for a test
+    it added, the test proven to fail against broken code."""
+    cmd = str(command or "").strip()
+    if not cmd:
+        raise DocError("say the command you ran")
+    if len(cmd) > 1000:
+        raise DocError("keep the command to 1000 characters")
+    commit = str(commit or "").strip()[:64]
+    if commit and not re.match(r"^[0-9a-fA-F]{4,64}$", commit):
+        raise DocError("commit is the commit's hash")
+    return cmd, _line(result, "what it showed", 1000), commit, _line(broke_test, "the test", 300, False)
+
+
+def check_line(cmd: str, result: str, commit: str, broke_test: str) -> str:
+    """One check as it reads in the working doc."""
+    at = f"[{commit[:7]}] " if commit else ""
+    broke = f" (broke the code under `{broke_test}`: it failed, then passed again)" if broke_test else ""
+    return f"- {at}`{cmd}` -> {result}{broke}"
+
+
+def add_check_to_doc(body: str, line: str) -> str:
+    """The working doc with `line` appended to the Checks part of its Progress section; both are
+    made when missing. The rest of the doc is left as it is."""
+    lines = body.rstrip("\n").split("\n") if body.strip() else []
+    prog = next((i for i, l in enumerate(lines) if re.match(r"^##\s+Progress\b", l, re.I)), None)
+    if prog is None:
+        return "\n".join(lines + ["", "## Progress", "", "### Checks", "", line]) + "\n"
+    end = next((i for i in range(prog + 1, len(lines)) if re.match(r"^#{1,2}\s", lines[i])), len(lines))
+    chk = next((i for i in range(prog + 1, end) if re.match(r"^###\s+Checks\b", lines[i], re.I)), None)
+    if chk is None:
+        at = end
+        while at > prog + 1 and not lines[at - 1].strip():
+            at -= 1
+        block = ["", "### Checks", "", line] + ([""] if end < len(lines) else [])
+        return "\n".join(lines[:at] + block + lines[end:]) + "\n"
+    stop = next((i for i in range(chk + 1, end) if re.match(r"^#{1,3}\s", lines[i])), end)
+    at = stop
+    while at > chk + 1 and not lines[at - 1].strip():
+        at -= 1
+    return "\n".join(lines[:at] + [line] + lines[at:]) + "\n"
 
 
 # ── the crew (M3): one always-on crew serves every project ────────────────────

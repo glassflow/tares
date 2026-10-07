@@ -8,6 +8,7 @@ from the station's environment (tares/factory.py `may`).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from datetime import datetime
@@ -36,11 +37,41 @@ def caller(request: Request) -> dict:
             "parent": (h.get("x-tares-parent") or "").strip()[:factory_mod.MAX_NAME]}
 
 
+_REFRESHING: dict[str, asyncio.Task] = {}
+REFRESH_WAIT = 2.5     # seconds a ticket read waits for GitHub before serving what it has
+_READS_AT_ONCE = 4
+
+
 async def refresh_prs(store, uid: str) -> None:
-    """Bring a project's pull requests up to date before its tickets are read (TR-410):
-    a linked PR read again when its last read is stale; a ticket in the work with no PR linked
-    by a `factory/<ref>` branch seen on a GitHub source of the project's repos; a merge seen on
-    GitHub marks the ticket merged even when the builder did not."""
+    """Bring a project's pull requests up to date before its tickets are read (TR-410), without
+    making the read wait on GitHub: one refresh per project at a time, shared by every read that
+    asks meanwhile; a read waits at most REFRESH_WAIT seconds, then gets the cached state while
+    the refresh finishes in the background."""
+    task = _REFRESHING.get(uid)
+    if task is None or task.done():
+        task = asyncio.create_task(_refresh(store, uid))
+        _REFRESHING[uid] = task
+    try:
+        await asyncio.wait_for(asyncio.shield(task), REFRESH_WAIT)
+    except (asyncio.TimeoutError, Exception):
+        pass
+
+
+def merged_fields(t: dict, pr: dict) -> dict:
+    """What a merge seen on GitHub changes on the ticket (nothing when it already says so)."""
+    if not pr.get("merged") or t["stage"] in ("merged", "shipped"):
+        return {}
+    out = {"stage": "merged"}
+    if t["owner"] != "linear":
+        out["status"] = "done"
+    return out
+
+
+async def _refresh(store, uid: str) -> None:
+    """A linked PR read again when its last read is stale; a ticket in the work with no PR linked
+    by a `factory/<ref>` branch in the project's repos, only when no other project has a ticket
+    in the work with that ref in that repo; a merge seen on GitHub marks the ticket merged even
+    when the builder did not."""
     tickets = store.list_tickets(uid)
     repos = {t["pr"]["repo"] for t in tickets if t["pr"] and t["pr"].get("repo")}
     if repos:
@@ -48,24 +79,34 @@ async def refresh_prs(store, uid: str) -> None:
         for t in tickets:
             if t["pr"] or t["stage"] not in ("doing", "review", "changes", "blocked"):
                 continue
-            hit = seen.get(factory_mod.label(t).upper())
-            if hit:
-                t["pr"] = {"repo": hit[0], "number": hit[1], "checked_at": None}
+            lab = factory_mod.label(t).upper()
+            hit = next(((r, n) for (r, ref), (_, n) in seen.items() if ref == lab), None)
+            if hit and not store.factory_ref_elsewhere(uid, hit[0], factory_mod.label(t)):
+                t["pr"] = {"repo": hit[0], "number": hit[1], "checked_at": None,
+                           "linked_by": "branch"}
                 store.update_ticket(t["id"], pr=t["pr"])
-    for t in tickets:
+    sem = asyncio.Semaphore(_READS_AT_ONCE)
+
+    async def one(t: dict) -> None:
         pr = t["pr"]
-        if not factory_github.stale(pr):
-            continue
-        new = await factory_github.read_pr(store, pr["repo"], int(pr["number"]), pr)
-        fields: dict = {"pr": new}
-        if new.get("merged") and t["stage"] not in ("merged", "shipped"):
-            fields["stage"] = "merged"
-            if t["owner"] != "linear":
-                fields["status"] = "done"
-            store.add_ticket_history(t["id"], uid, "stage", "merged",
-                                     "GitHub shows the pull request merged", "github", None,
+        if factory_github.stale(pr):
+            async with sem:
+                pr = await factory_github.read_pr(store, pr["repo"], int(pr["number"]), pr)
+        cur = store.get_ticket(uid, t["id"])   # re-read: a set_stage may have run meanwhile
+        if cur is None or not cur["pr"] or (cur["pr"].get("repo"), cur["pr"].get("number")) != (
+                pr.get("repo"), pr.get("number")):
+            return
+        fields: dict = {"pr": pr} if pr is not t["pr"] else {}
+        fields.update(merged_fields(cur, pr))
+        if fields:
+            store.update_ticket(cur["id"], **fields)
+        if fields.get("stage") == "merged":
+            store.add_ticket_history(cur["id"], uid, "stage", "merged",
+                                     "GitHub shows the pull request merged", "github", "github",
                                      now_utc())
-        store.update_ticket(t["id"], **fields)
+
+    await asyncio.gather(*(one(t) for t in tickets if t["pr"] and t["pr"].get("repo")),
+                         return_exceptions=True)
 
 
 def pr_note(t: dict) -> str | None:
@@ -327,7 +368,15 @@ def register(app, store, h: SimpleNamespace) -> None:
             fields["pr"] = await factory_github.read_pr(store, parsed[0], parsed[1], prev)
         store.update_ticket(t["id"], **fields)
         by, role = who(request, body)
-        store.add_ticket_history(t["id"], uid, "stage", stage, reason, by, role, now_utc())
+        store.add_ticket_history(t["id"], uid, "stage", stage, reason, by, role or None, now_utc())
+        if fields.get("pr"):   # a PR GitHub already shows merged makes the ticket merged
+            after = ticket_or_404(uid, t["id"])
+            merged = merged_fields(after, fields["pr"])
+            if merged:
+                store.update_ticket(t["id"], **merged)
+                store.add_ticket_history(t["id"], uid, "stage", "merged",
+                                         "GitHub shows the pull request merged", "github",
+                                         "github", now_utc())
         return h.ticket_out(uid, ticket_or_404(uid, t["id"]), with_doc=False)
 
     @app.get("/api/projects/{uid}/tickets/{ref}/messages")
@@ -342,16 +391,128 @@ def register(app, store, h: SimpleNamespace) -> None:
         builders = {s["station"] for s in store.station_sessions(h.cc_source())
                     if s["project"] == project["id"]}
         lab = factory_mod.label(t)
+        name = re.compile(rf"(?<![\w-]){re.escape(project['name'])}(?![\w-])", re.I)
         out = []
         for m in store.protocol_messages(h.cc_source()):
             text = m["text"]
-            if not re.search(rf"(?<![\w-]){re.escape(lab)}(?![\w-])", text, re.I):
+            if not re.search(rf"(?<![\w-]){re.escape(lab)}(?![\w-])", text):
                 continue
-            if not (m["to"] in builders or m["from"] in builders
-                    or project["name"].lower() in text.lower()):
+            # a builder of this project took part, or the message names the project (the
+            # crew's own stations serve every project)
+            if not (m["to"] in builders or m["from"] in builders or name.search(text)):
                 continue
             out.append(m)
         return out
+
+    # ── the build, recorded (TR-433, TR-435, TR-436) ──────────────────────────
+    def ticket_ids(uid: str, refs) -> list[str]:
+        try:
+            refs = factory_mod.depends_ok(refs)
+        except docs_mod.DocError as e:
+            h.err(e)
+        return [ticket_or_404(uid, r)["id"] for r in refs]
+
+    def assumption_out(uid: str, a: dict) -> dict:
+        by_id = {t["id"]: t for t in store.list_tickets(uid)}
+        return {**a, "tickets": [factory_mod.label(by_id[t]) for t in a["tickets"] if t in by_id]}
+
+    @app.post("/api/projects/{uid}/assumptions", status_code=201)
+    async def add_assumption(uid: str, request: Request, body: dict = Body(...)):
+        """{question, choice, why, affects?, tickets?}: an assumption made so the work did not
+        block. Numbered A1, A2... per project; open until the person keeps or overturns it."""
+        h.project_or_404(uid)
+        try:
+            q, choice, why, affects = factory_mod.assumption_ok(
+                body.get("question"), body.get("choice"), body.get("why"), body.get("affects"))
+        except docs_mod.DocError as e:
+            h.err(e)
+        by, role = who(request, body)
+        a = store.add_assumption(uid, q, choice, why, affects, ticket_ids(uid, body.get("tickets")),
+                                 by, role, now_utc())
+        return assumption_out(uid, a)
+
+    @app.get("/api/projects/{uid}/assumptions")
+    async def list_assumptions(uid: str, state: str = ""):
+        h.project_or_404(uid)
+        st = state.strip().lower() or None
+        if st and st not in factory_mod.ASSUMPTION_STATES:
+            h.err(ValueError("state is one of: " + ", ".join(factory_mod.ASSUMPTION_STATES)))
+        return {"assumptions": [assumption_out(uid, a) for a in store.list_assumptions(uid, st)]}
+
+    @app.post("/api/projects/{uid}/assumptions/{ref}/state")
+    async def decide_assumption(uid: str, ref: str, request: Request, body: dict = Body(...)):
+        """{state: kept|overturned|open, words?, batch?}: what the person said about it. Only the
+        orchestrator (or a person's own session) records it; an overturned one keeps the
+        person's words."""
+        h.project_or_404(uid)
+        deny(request, "assumption_state")
+        a = store.get_assumption(uid, ref)
+        if a is None:
+            h.err(KeyError(f"project has no assumption {ref!r}"), 404)
+        st = str(body.get("state") or "").strip().lower()
+        if st not in factory_mod.ASSUMPTION_STATES:
+            h.err(ValueError("state is one of: " + ", ".join(factory_mod.ASSUMPTION_STATES)))
+        words = " ".join(str(body.get("words") or "").split())[:1000] or None
+        if st == "overturned" and not words:
+            h.err(ValueError("an overturned assumption keeps the person's words: say them"))
+        store.decide_assumption(a["id"], st, words, str(body.get("batch") or "") or None,
+                                now_utc() if st != "open" else None)
+        return assumption_out(uid, store.get_assumption(uid, a["id"]))
+
+    @app.post("/api/projects/{uid}/tickets/{ref}/checks", status_code=201)
+    async def add_check(uid: str, ref: str, request: Request, body: dict = Body(...)):
+        """{command, result, commit?, broke_test?}: a check run on the ticket. Kept, and added as
+        one line to the Checks part of the ticket's working doc (made when there is none)."""
+        p = h.project_or_404(uid)
+        t = ticket_or_404(uid, ref)
+        try:
+            cmd, result, commit, broke = factory_mod.check_ok(
+                body.get("command"), body.get("result"), body.get("commit"), body.get("broke_test"))
+        except docs_mod.DocError as e:
+            h.err(e)
+        by, _ = who(request, body)
+        store.add_check(uid, t["id"], cmd, result, commit, broke, caller(request)["station"],
+                        "", now_utc())
+        line = factory_mod.check_line(cmd, result, commit, broke)
+        doc_id = t["working_doc"]
+        if doc_id and store.get_doc(uid, doc_id):
+            body_now = store.get_doc(uid, doc_id)["body"]
+            store.update_doc(doc_id, body=factory_mod.add_check_to_doc(body_now, line), by=by)
+        else:
+            doc_id = store.create_doc(uid, "working", f"Working: {t['title']}",
+                                      factory_mod.add_check_to_doc(f"# {t['title']}\n", line), by=by)
+            store.update_ticket(t["id"], working_doc=doc_id)
+        return {"line": line, "working_doc": doc_id,
+                "checks": store.ticket_checks(t["id"], 10), "project": p["name"]}
+
+    # the project's own memory (TR-436): what builders learned about this project
+    def memory_doc(uid: str, create: bool = False) -> str | None:
+        gid = (h.global_ids(False) or {}).get("memory")
+        d = next((x for x in store.list_docs(uid, "memory") if x["id"] != gid), None)
+        if d or not create:
+            return d["id"] if d else None
+        p = store.get_project(uid)
+        return store.create_doc(uid, "memory", f"Memory: {p['name']}",
+                                f"# Memory for {p['name']}\n\nWhat the builders learned about "
+                                "this project, one line each, newest last.\n\n", by="tares")
+
+    @app.post("/api/projects/{uid}/memory/lines", status_code=201)
+    async def remember_for_project(uid: str, request: Request, body: dict = Body(...)):
+        """{text}: one dated line in the project's memory (made with the first line)."""
+        h.project_or_404(uid)
+        doc_id = memory_doc(uid, create=True)
+        by, _ = who(request, body)
+        cur = store.get_doc(uid, doc_id)["body"]
+        try:
+            text, added = docs_mod.append_line(
+                cur, f"{str(body.get('text') or '').strip()} ({now_utc().date().isoformat()}, {by})"
+                if str(body.get("text") or "").strip() else "")
+        except docs_mod.DocError as e:
+            h.err(e)
+        if added:
+            store.update_doc(doc_id, body=text, by=by)
+        h.ensure_globals(uid)
+        return {"id": doc_id, "added": added, "body": store.get_doc(uid, doc_id)["body"]}
 
     @app.post("/api/projects/{uid}/handover")
     async def hand_over(uid: str, request: Request, body: dict = Body(default={})):

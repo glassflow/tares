@@ -554,6 +554,18 @@ def _handover(b: dict) -> str:
         lines += [f"## {head}: {t['title']}{ident}", f"id: {t['id']}", ""]
         if t.get("working_doc_body"):
             lines += ["### Working doc", t["working_doc_body"].strip(), ""]
+        if t.get("assumptions"):
+            lines += ["### Assumptions made on it"]
+            lines += [f"- {a['label']} ({a['state']}): {a['question']} -> {a['choice']}"
+                      for a in t["assumptions"]]
+            lines.append("")
+        if t.get("checks"):
+            lines += ["### Checks run (newest last)"]
+            lines += [f"- [{(c.get('commit') or '')[:7]}] `{c['command']}` -> {c['result']}"
+                      for c in t["checks"][-8:]]
+            lines.append("")
+    if b.get("memory"):
+        lines += ["## Project memory", b["memory"].strip(), ""]
     p = b.get("previous_session")
     if p:
         lines += ["## The session that was on it",

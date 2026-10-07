@@ -387,6 +387,20 @@ export interface Ticket {
   pr: TicketPR | null;
   pr_note: string | null;         // the stage and GitHub disagree
   history?: { at: string; field: "holder" | "stage"; value: string | null; reason: string | null; by: string | null; role: string | null }[];
+  // the build, recorded (TR-433, TR-435)
+  assumptions?: { label: string; question: string; choice: string; why: string; state: AssumptionState; words: string | null; made_by: string | null; tickets: string[] }[];
+  checks?: TicketCheck[];
+}
+export type AssumptionState = "open" | "kept" | "overturned";
+export interface Assumption {
+  id: string; label: string; number: number; question: string; choice: string; why: string;
+  affects: string; tickets: string[]; state: AssumptionState; words: string | null;
+  made_by: string | null; made_at: string; decided_at: string | null;
+}
+export interface TicketCheck {
+  id: string; command: string; result: string; commit: string | null; broke_test: string | null;
+  by: string | null; at: string;
+  match?: "matched" | "not_found" | "differs" | null; recorded?: string | null;
 }
 export type TicketStage = "todo" | "doing" | "review" | "changes" | "merged" | "shipped" | "blocked";
 export interface TicketPR {

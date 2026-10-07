@@ -56,6 +56,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const { data: ss } = usePolling(() => api.projectSessions(ctx.id), 15000);
   const { data: msd } = usePolling(() => api.milestones(ctx.id), 15000);
   const { data: crew } = usePolling(() => api.projectCrew(ctx.id), 15000);
+  const { data: asm } = usePolling(() => api.assumptions(ctx.id), 30000);
   const tickets = tk?.tickets ?? [];
   const milestones = msd?.milestones ?? [];
   // the ticket a build takes next: the one in progress, else the first ready one (TR-414)
@@ -205,6 +206,24 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
           <div className="fo-foot"><VLink v={{ kind: "tickets" }} className="fo-link">All tickets</VLink></div>
         </Fold>
       </div>
+
+      {(asm?.assumptions.length ?? 0) > 0 && (
+        <Fold id="assumptions" title="Assumptions"
+              meta={`${asm!.assumptions.filter((a) => a.state === "open").length} open · ${asm!.assumptions.length} in all`}>
+          <ul className="fo-docs">
+            {[...asm!.assumptions].sort((a, b) => (a.state === "open" ? 0 : 1) - (b.state === "open" ? 0 : 1)).map((a) => (
+              <li key={a.id} style={{ display: "block" }}>
+                <b>{a.label}</b> <span className={`fo-st${a.state === "open" ? " fo-st-wait" : a.state === "kept" ? " fo-st-done" : ""}`}>{a.state}</span>{" "}
+                {a.question} → <b>{a.choice}</b>
+                <small style={{ display: "block" }}>
+                  {a.tickets.length > 0 && <>{a.tickets.map((t, i) => <span key={t}>{i ? ", " : ""}<VLink v={{ kind: "ticket", name: t }}>{t}</VLink></span>)} · </>}
+                  {a.made_by ?? "a session"}{a.words && <> · you said: "{a.words}"</>}
+                </small>
+              </li>
+            ))}
+          </ul>
+        </Fold>
+      )}
 
       {crew && (crew.handover || crew.stations.length > 0) && (
         <Fold id="crew" title="Crew"
@@ -452,7 +471,7 @@ function TicketList({ tickets, nextId }: { tickets: Ticket[]; nextId?: string })
               {t.stage === "blocked" && t.stage_reason && <small className="fo-wait">blocked: {t.stage_reason}</small>}
               {t.pr_note && <small className="fo-warn">{t.pr_note}</small>}
             </span>
-            {t.stage && t.stage !== "todo" ? (
+            {t.stage && t.stage !== "todo" && !(t.owner === "linear" && (t.status === "done" || t.status === "canceled")) ? (
               <span className={`fo-st ${STAGE_CLASS[t.stage]}`}>{STAGE_TEXT[t.stage]}</span>
             ) : (
               <span className={`fo-st fo-st-${t.status}`}>

@@ -364,6 +364,102 @@ def stamp_station(objs: list) -> list:
     return objs
 
 
+# ── subagent transcripts (TR-434) ─────────────────────────────────────────────
+# Claude Code keeps each subagent's transcript next to the session's own:
+# <transcript without .jsonl>/subagents/agent-<id>.jsonl, with agent-<id>.meta.json holding its
+# type and the task's description. A builder writes its code through subagents, so without them
+# Tares sees a session that only delegates. Their lines ship under the parent session, tagged with
+# the subagent, each file from its own offset, capped per subagent.
+
+MAX_SUBAGENT_LINES = 3000
+
+
+def subagent_files(transcript: str) -> list:
+    """[(path, agent id)] of the session's subagent transcripts, oldest name first."""
+    if not transcript or not transcript.endswith(".jsonl"):
+        return []
+    d = os.path.join(transcript[:-len(".jsonl")], "subagents")
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        return []
+    return [(os.path.join(d, n), n[len("agent-"):-len(".jsonl")]) for n in names
+            if n.startswith("agent-") and n.endswith(".jsonl")]
+
+
+def subagent_meta(path: str) -> dict:
+    try:
+        m = json.load(open(path[:-len(".jsonl")] + ".meta.json"))
+        return m if isinstance(m, dict) else {}
+    except Exception:
+        return {}
+
+
+def ship_subagents(cfg: dict, hook: dict, flow: str, project: str) -> None:
+    sid = str(hook.get("session_id") or "")
+    for path, agent in subagent_files(hook.get("transcript_path") or ""):
+        key = hashlib.sha1(path.encode()).hexdigest()[:16]
+        off_dir = os.path.join(cfg["data_dir"], "offsets")
+        os.makedirs(off_dir, exist_ok=True)
+        off_file = os.path.join(off_dir, key + ".off")
+        cnt_file = os.path.join(off_dir, key + ".count")
+        try:
+            offset = int(open(off_file).read().strip())
+        except Exception:
+            offset = 0
+        try:
+            count = int(open(cnt_file).read().strip())
+        except Exception:
+            count = 0
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        if offset >= size:
+            continue
+        with open(path, "rb") as f:
+            f.seek(offset)
+            chunk = f.read()
+        last_nl = chunk.rfind(b"\n")
+        if last_nl < 0:
+            continue
+        meta = subagent_meta(path)
+        objs = []
+        for raw in chunk[: last_nl + 1].decode("utf-8", "replace").splitlines():
+            try:
+                o = json.loads(raw)
+            except Exception:
+                continue
+            if not isinstance(o, dict) or o.get("type") in BOOKKEEPING:
+                continue
+            o.setdefault("sessionId", sid)
+            o["isSidechain"] = True
+            o["subagent"] = agent
+            if meta.get("agentType"):
+                o["subagent_type"] = str(meta["agentType"])
+            if meta.get("description"):
+                o["subagent_description"] = str(meta["description"])[:200]
+            if flow:
+                o["flow"] = flow
+            if project:
+                o["tares_project"] = project
+            objs.append(o)
+        room = MAX_SUBAGENT_LINES - count
+        dropped = 0
+        if len(objs) > room:
+            dropped = len(objs) - max(room, 0)
+            objs = objs[:max(room, 0)]
+            if count < MAX_SUBAGENT_LINES:
+                objs.append(synthetic_line(hook, "subagent_truncated", flow, subagent=agent,
+                                           note=f"subagent {agent} passed {MAX_SUBAGENT_LINES} "
+                                                "lines; the rest is not recorded"))
+        if not objs or ship_lines(cfg, stamp_station(objs)):
+            with open(off_file, "w") as f:
+                f.write(str(offset + last_nl + 1))
+            with open(cnt_file, "w") as f:
+                f.write(str(count + len(objs) + dropped))
+
+
 # ── SessionStart: hand accepted memory to Claude ─────────────────────────────
 
 def memory_context(cfg: dict, cwd: str) -> str:
@@ -466,6 +562,7 @@ def main() -> None:
                         f.write(str(new_offset))   # advance only on success; failures retry next hook
 
     if session_id and shipped_ok:
+        ship_subagents(cfg, hook, flow, read_project(data_dir, session_id))
         report_state(cfg, hook, event, flow)
 
     if event == "SessionEnd" and session_id and flow:

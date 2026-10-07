@@ -58,6 +58,40 @@ FACTORY_SCHEMA = [
       by_station  TEXT,
       by_role     TEXT
     )""",
+    # Assumptions a builder made so it did not block (TR-433): numbered per project, never
+    # reused; open until the orchestrator confirms them with the person (kept or overturned).
+    """CREATE TABLE IF NOT EXISTS assumptions (
+      id          TEXT PRIMARY KEY,
+      project     TEXT,
+      number      INTEGER,
+      question    TEXT,
+      choice      TEXT,
+      why         TEXT,
+      affects     TEXT,
+      tickets     JSON,
+      state       TEXT,
+      words       TEXT,
+      batch       TEXT,
+      made_by     TEXT,
+      made_role   TEXT,
+      made_at     TIMESTAMPTZ,
+      decided_at  TIMESTAMPTZ
+    )""",
+    # Checks a builder ran on a ticket (TR-435): the command, what it showed, the commit, the test
+    # proven to bite. Also a line in the ticket's working doc; kept here so they can be matched
+    # against the recording (TR-442).
+    """CREATE TABLE IF NOT EXISTS ticket_checks (
+      id          TEXT PRIMARY KEY,
+      project     TEXT,
+      ticket      TEXT,
+      command     TEXT,
+      result      TEXT,
+      commit_sha  TEXT,
+      broke_test  TEXT,
+      by_station  TEXT,
+      by_session  TEXT,
+      checked_at  TIMESTAMPTZ
+    )""",
     # A factory project handed to the crew at the end of its spec (TR-425): when, from where.
     """CREATE TABLE IF NOT EXISTS handovers (
       project     TEXT PRIMARY KEY,
@@ -103,6 +137,8 @@ class FactoryStore:
         self.con.execute("DELETE FROM milestones WHERE project = ?", [uid])
         self.con.execute("DELETE FROM ticket_numbers WHERE project = ?", [uid])
         self.con.execute("DELETE FROM ticket_history WHERE project = ?", [uid])
+        self.con.execute("DELETE FROM assumptions WHERE project = ?", [uid])
+        self.con.execute("DELETE FROM ticket_checks WHERE project = ?", [uid])
         self.con.execute("DELETE FROM handovers WHERE project = ?", [uid])
 
     # ── milestones (TR-411) ───────────────────────────────────────────────────
@@ -219,38 +255,65 @@ class FactoryStore:
         return [{"at": r[0], "field": r[1], "value": r[2], "reason": r[3], "by": r[4],
                  "role": r[5]} for r in rows]
 
-    def factory_branch_prs(self, repos: set[str]) -> dict[str, tuple[str, int]]:
-        """{ticket ref (upper case): (repo, number)} for the pull requests GitHub sources saw on
-        a `factory/<ref>` branch in one of `repos`, newest first wins (TR-410)."""
+    def factory_branch_prs(self, repos: set[str]) -> dict[tuple[str, str], tuple[str, int]]:
+        """{(repo, ticket ref upper case): (repo, number)} for the pull requests GitHub sources
+        saw on a `factory/<ref>` branch in one of `repos`, newest first wins (TR-410)."""
         from .factory_github import branch_ref
+        if not repos:
+            return {}
+        marks = ", ".join("?" for _ in repos)
         with self._lock:
             rows = self.con.execute(
-                "SELECT labels FROM events WHERE event_type = 'pull_request' "
-                "ORDER BY event_time DESC LIMIT 1000").fetchall()
-        out: dict[str, tuple[str, int]] = {}
+                "SELECT labels FROM events WHERE event_type = 'pull_request' AND "
+                f"json_extract_string(labels, '$.repo') IN ({marks}) AND "
+                "json_extract_string(labels, '$.branch') LIKE 'factory/%' "
+                "ORDER BY event_time DESC LIMIT 1000", list(repos)).fetchall()
+        out: dict[tuple[str, str], tuple[str, int]] = {}
         for (lj,) in rows:
             try:
                 lab = json.loads(lj) if isinstance(lj, str) else (lj or {})
             except ValueError:
                 continue
             ref = branch_ref(lab.get("branch") or "")
-            if not ref or lab.get("repo") not in repos:
+            if not ref:
                 continue
             try:
-                out.setdefault(ref.upper(), (lab["repo"], int(lab.get("number"))))
+                out.setdefault((lab["repo"], ref.upper()), (lab["repo"], int(lab.get("number"))))
             except (TypeError, ValueError):
                 continue
         return out
+
+    def factory_ref_elsewhere(self, uid: str, repo: str, ref: str) -> bool:
+        """Another project has a ticket called `ref` in the work whose PRs live in `repo`: a
+        branch named after the ref could be either's, so it is not linked by name."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT t.project, t.number, t.identifier, t.stage FROM tickets t WHERE "
+                "t.project <> ? AND t.project IN (SELECT project FROM tickets WHERE "
+                "json_extract_string(pr, '$.repo') = ?)", [uid, repo]).fetchall()
+        for project, number, ident, stage in rows:
+            lab = ident or (f"T{number}" if number else "")
+            if lab.upper() == ref.upper() and stage in ("doing", "review", "changes", "blocked"):
+                return True
+        return False
 
     def protocol_messages(self, source: str, limit: int = 3000) -> list[dict]:
         """The crew's recorded protocol messages (TR-429): SendMessage calls whose text starts
         `[TF:<TYPE>]`, oldest first, with the sending station (from its session) and the one it
         was sent to."""
+        # parsed once per new tool call on the source: a cheap count says whether anything came
+        with self._lock:
+            n = self.con.execute("SELECT count(*) FROM events WHERE source = ? AND "
+                                 "event_type = 'tool_use'", [source]).fetchone()[0]
+        hit = getattr(self, "_proto_cache", None)
+        if hit and hit[0] == (source, n):
+            return hit[1]
         with self._lock:
             rows = self.con.execute(
                 "SELECT e.key_value, e.event_time, e.payload, ss.station FROM events e "
                 "LEFT JOIN session_stations ss ON ss.session = e.key_value "
                 "WHERE e.source = ? AND e.event_type = 'tool_use' "
+                "AND e.text LIKE '%SendMessage%' "
                 "AND CAST(e.payload AS VARCHAR) LIKE '%[TF:%' "
                 "ORDER BY e.event_time DESC LIMIT ?", [source, limit]).fetchall()
         out = []
@@ -273,7 +336,81 @@ class FactoryStore:
                             str(inp.get("to") or ""), "type": m.group(1),
                             "first_line": m.group(2).splitlines()[0][:300] if m.group(2) else "",
                             "text": text[:4000]})
+        self._proto_cache = ((source, n), out)
         return out
+
+    # ── assumptions (TR-433) ──────────────────────────────────────────────────
+    _AS_COLS = ("id, project, number, question, choice, why, affects, tickets, state, words, batch, "
+                "made_by, made_role, made_at, decided_at")
+
+    @staticmethod
+    def _as_row(r) -> dict:
+        return {"id": r[0], "project": r[1], "number": r[2], "label": f"A{r[2]}",
+                "question": r[3], "choice": r[4], "why": r[5], "affects": r[6] or "",
+                "tickets": json.loads(r[7]) if r[7] else [], "state": r[8], "words": r[9],
+                "batch": r[10], "made_by": r[11], "made_role": r[12], "made_at": r[13],
+                "decided_at": r[14]}
+
+    def add_assumption(self, project: str, question: str, choice: str, why: str, affects: str,
+                       tickets: list[str], made_by: str, made_role: str, at) -> dict:
+        aid = "as_" + uuid.uuid4().hex[:10]
+        with self._lock:
+            n = (self.con.execute("SELECT max(number) FROM assumptions WHERE project = ?",
+                                  [project]).fetchone()[0] or 0) + 1
+            self.con.execute(
+                f"INSERT INTO assumptions ({self._AS_COLS}) VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, NULL, ?, ?, ?, NULL)",
+                [aid, project, n, question, choice, why, affects or None,
+                 json.dumps(tickets) if tickets else None, made_by or None, made_role or None, at])
+            r = self.con.execute(f"SELECT {self._AS_COLS} FROM assumptions WHERE id = ?",
+                                 [aid]).fetchone()
+        return self._as_row(r)
+
+    def list_assumptions(self, project: str, state: str | None = None,
+                         ticket: str | None = None) -> list[dict]:
+        q = f"SELECT {self._AS_COLS} FROM assumptions WHERE project = ?"
+        vals: list = [project]
+        if state:
+            q += " AND state = ?"; vals.append(state)
+        with self._lock:
+            rows = self.con.execute(q + " ORDER BY number", vals).fetchall()
+        out = [self._as_row(r) for r in rows]
+        return [a for a in out if ticket in a["tickets"]] if ticket else out
+
+    def get_assumption(self, project: str, ref: str) -> dict | None:
+        m = re.match(r"^[Aa]?(\d{1,6})$", (ref or "").strip())
+        with self._lock:
+            r = self.con.execute(
+                f"SELECT {self._AS_COLS} FROM assumptions WHERE project = ? AND (id = ? OR "
+                "number = ?)", [project, ref, int(m.group(1)) if m else -1]).fetchone()
+        return self._as_row(r) if r else None
+
+    def decide_assumption(self, aid: str, state: str, words: str | None, batch: str | None,
+                          at) -> None:
+        with self._lock:
+            self.con.execute("UPDATE assumptions SET state = ?, words = ?, batch = ?, "
+                             "decided_at = ? WHERE id = ?", [state, words, batch, at, aid])
+
+    # ── checks (TR-435) ───────────────────────────────────────────────────────
+    def add_check(self, project: str, ticket: str, command: str, result: str, commit: str,
+                  broke_test: str, by_station: str, by_session: str, at) -> str:
+        cid = "ck_" + uuid.uuid4().hex[:10]
+        with self._lock:
+            self.con.execute(
+                "INSERT INTO ticket_checks (id, project, ticket, command, result, commit_sha, "
+                "broke_test, by_station, by_session, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, "
+                "?, ?)", [cid, project, ticket, command, result, commit or None, broke_test or None,
+                          by_station or None, by_session or None, at])
+        return cid
+
+    def ticket_checks(self, ticket: str, limit: int = 50) -> list[dict]:
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT id, command, result, commit_sha, broke_test, by_station, checked_at FROM "
+                "ticket_checks WHERE ticket = ? ORDER BY checked_at DESC LIMIT ?",
+                [ticket, limit]).fetchall()
+        return [{"id": r[0], "command": r[1], "result": r[2], "commit": r[3], "broke_test": r[4],
+                 "by": r[5], "at": r[6]} for r in reversed(rows)]
 
     # ── hand-over to the crew (TR-425) ────────────────────────────────────────
     def set_handover(self, project: str, repo: str | None, by: str | None, at) -> None:

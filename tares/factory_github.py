@@ -35,6 +35,9 @@ def parse_pr(ref: str) -> tuple[str, int] | None:
     return (m.group(1), int(m.group(2))) if m else None
 
 
+ERROR_BACKOFF = 300   # a read that failed is tried again after this long, not every minute
+
+
 def stale(pr: dict | None) -> bool:
     if not pr or not pr.get("repo"):
         return False
@@ -45,7 +48,8 @@ def stale(pr: dict | None) -> bool:
         when = datetime.fromisoformat(str(at)) if at else None
     except ValueError:
         when = None
-    return when is None or (now_utc() - when).total_seconds() >= READ_EVERY
+    wait = ERROR_BACKOFF if pr.get("error") else READ_EVERY
+    return when is None or (now_utc() - when).total_seconds() >= wait
 
 
 def _ci(statuses: list[dict], runs: list[dict]) -> str:
@@ -68,12 +72,15 @@ def _ci(statuses: list[dict], runs: list[dict]) -> str:
     return "success"
 
 
-async def _tokens(store, repo: str) -> list[str]:
+async def _tokens(store, repo: str) -> list[tuple[str, str]]:
+    """[(token, API base)] for every credential that can give one; a GitHub Enterprise
+    credential uses its own API."""
     from .github_credentials import get_token
     out = []
     for c in store.list_github_credentials():
         try:
-            out.append(await get_token(store, c["name"], repo))
+            out.append((await get_token(store, c["name"], repo),
+                        (c.get("api_url") or API).rstrip("/")))
         except Exception:
             continue
     return out
@@ -90,30 +97,40 @@ async def read_pr(store, repo: str, number: int, prev: dict | None = None) -> di
         out["error"] = "no GitHub credential on this Tares can read it (Settings, GitHub)"
         return out
     last_err = ""
-    for tok in tokens:
+    for tok, api in tokens:
         headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {tok}",
                    "X-GitHub-Api-Version": "2022-11-28"}
         try:
             async with httpx.AsyncClient(timeout=8, transport=_transport, headers=headers) as cx:
-                r = await cx.get(f"{API}/repos/{repo}/pulls/{number}")
+                r = await cx.get(f"{api}/repos/{repo}/pulls/{number}")
                 if r.status_code in (401, 403, 404):
-                    last_err = f"GitHub answered {r.status_code} for {repo}#{number}"
+                    limited = r.status_code == 403 and r.headers.get("x-ratelimit-remaining") == "0"
+                    last_err = (f"GitHub's rate limit is spent; trying {repo}#{number} again later"
+                                if limited else f"GitHub answered {r.status_code} for {repo}#{number}")
                     continue
                 r.raise_for_status()
                 pr = r.json()
                 head = (pr.get("head") or {}).get("sha") or ""
-                st = await cx.get(f"{API}/repos/{repo}/commits/{head}/status")
-                runs = await cx.get(f"{API}/repos/{repo}/commits/{head}/check-runs")
-            statuses = (st.json().get("statuses") or []) if st.status_code == 200 else []
-            check_runs = (runs.json().get("check_runs") or []) if runs.status_code == 200 else []
+                statuses, check_runs = [], []
+                try:   # CI and the verdict are extra: the PR itself is already read
+                    st = await cx.get(f"{api}/repos/{repo}/commits/{head}/status",
+                                      params={"per_page": 100})
+                    runs = await cx.get(f"{api}/repos/{repo}/commits/{head}/check-runs",
+                                        params={"per_page": 100})
+                    statuses = (st.json().get("statuses") or []) if st.status_code == 200 else []
+                    check_runs = (runs.json().get("check_runs") or []) if runs.status_code == 200 else []
+                except Exception:
+                    pass
             review = next((s for s in statuses if s.get("context") == REVIEW_CONTEXT), None)
             out.update({
                 "title": pr.get("title"), "branch": (pr.get("head") or {}).get("ref"),
                 "head": head, "state": pr.get("state"), "merged": bool(pr.get("merged")),
                 "merge_commit": pr.get("merge_commit_sha") if pr.get("merged") else None,
                 "merged_at": pr.get("merged_at"), "ci": _ci(statuses, check_runs),
-                "verdict": {"success": "pass", "failure": "changes", "error": "changes",
+                # an `error` status is the reviewer failing to run, not a verdict
+                "verdict": {"success": "pass", "failure": "changes",
                             "pending": "pending"}.get(review.get("state")) if review else None,
+                "verdict_head": head if review else None,
                 "verdict_text": review.get("description") if review else None,
                 "url": pr.get("html_url") or out["url"], "error": None})
             return out

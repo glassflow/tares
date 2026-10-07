@@ -159,6 +159,9 @@ depends on how the project is built (step 1's last question).
 - if a ticket is already in progress when the session starts, an earlier session stopped on it:
   `pick_up` first and finish that ticket instead of starting it over
 - to keep the working doc's `## Progress` current after each step that works
+- to record every check it runs with `add_check` (the command, what it showed, the commit, and
+  for each test it adds, the test it saw fail when it broke the code), never one it did not run
+- to keep what it learns about the project with `remember_for_project`
 - where questions go: a `note` doc in the project when something is unclear
 
 **Built by a tares-factory crew:** the starting prompt is what every station and builder joins

@@ -760,6 +760,7 @@ def make_app() -> FastAPI:
         ("GET", re.compile(r"^/milestones$"), "read"),
         ("GET", re.compile(r"^/crew$"), "read"),
         ("GET", re.compile(r"^/tickets/[^/]+/messages$"), "read"),
+        ("GET", re.compile(r"^/assumptions$"), "read"),
         ("GET", re.compile(r"^/sessions$"), "read"),
         ("GET", re.compile(r"^/sessions/[^/]+$"), "read"),
         ("GET", re.compile(r"^/pickup$"), "read"),
@@ -4363,6 +4364,13 @@ def make_app() -> FastAPI:
         if with_doc:
             out["working_doc_body"] = doc["body"] if doc else None
             out["history"] = store.ticket_history(t["id"])
+            by_id = ctx["by_id"]
+            out["assumptions"] = [
+                {**{k: a[k] for k in ("label", "question", "choice", "why", "state", "words",
+                                      "made_by")},
+                 "tickets": [factory_mod.label(by_id[x]) for x in a["tickets"] if x in by_id]}
+                for a in store.list_assumptions(uid, ticket=t["id"])]
+            out["checks"] = store.ticket_checks(t["id"], 20)
         return out
 
     def _tickets_out(uid: str) -> list[dict]:
@@ -4652,7 +4660,11 @@ def make_app() -> FastAPI:
     def _pickup(uid: str) -> dict:
         tickets = store.list_tickets(uid)
         ready = factory_mod.readiness(tickets)
-        ticket = next((t for t in tickets if t["status"] == "in_progress"), None)
+        # the ticket a session stopped on: in progress, and not waiting on someone else (in
+        # review, changes asked, blocked: picking those up would redo work that is done)
+        ticket = next((t for t in tickets if t["status"] == "in_progress"
+                       and t["stage"] not in ("review", "changes", "blocked", "merged",
+                                              "shipped")), None)
         nxt = ticket or next((t for t in tickets if t["status"] == "todo"
                               and ready[t["id"]]["ready"]), None)
         sessions = store.project_sessions(uid)
@@ -4672,6 +4684,9 @@ def make_app() -> FastAPI:
                 "said_lately": store.said_lately(src, prev["session"], 3),
                 "files_touched": store.files_touched(src, prev["session"])}
             out["may_be_open"] = bool(open_)
+        gmem = _global_ids().get("memory")
+        mem = next((d for d in store.list_docs(uid, "memory") if d["id"] != gmem), None)
+        out["memory"] = (store.get_doc(uid, mem["id"]) or {}).get("body", "")[:6000] if mem else ""
         notes = [d for d in store.list_docs(uid, "note")]
         out["notes"] = [{"id": d["id"], "title": d["title"],
                          "body": (store.get_doc(uid, d["id"]) or {}).get("body", "")[:4000]}
@@ -4735,6 +4750,7 @@ def make_app() -> FastAPI:
         by=lambda request, body=None: _by(request, body), cc_source=lambda: _cc_source(),
         global_ids=lambda create=False: _global_ids(create), resolve_project=_factory_project_id,
         ticket_out=lambda uid, t, **kw: _ticket_out(uid, t, **kw),
+        ensure_globals=lambda uid: _ensure_globals(uid),
         tickets_out=lambda uid: _tickets_out(uid)))
 
     # ── Linear (TR-408): the cell's connection, and the Linear project a project's tickets live

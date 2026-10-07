@@ -283,6 +283,55 @@ async def main():
         ck("renaming a milestone keeps its goal and checks",
            out["name"] == "Storefront" and ms[0]["goal"] == "A shop" and ms[0]["checks"], ms)
 
+        print("== M4 review fixes ==")
+        await m.write_ticket("Wishlist", project="Shop")          # T4
+        await m.write_ticket("Search", project="Shop")            # T5
+        GH[9] = {"head": "ccc333", "state": "closed", "merged": True, "branch": "factory/T4",
+                 "statuses": [], "runs": []}
+        out = json.loads(await mf.set_stage("T4", "review", pr="acme/shop#9", project="Shop"))
+        g = json.loads(await m.get_ticket("T4", project="Shop"))
+        ck("linking a PR GitHub already merged makes the ticket merged", g["stage"] == "merged", g["stage"])
+        # project B uses the same repo and also has a T5 in the work: a factory/T5 branch is ambiguous
+        b = json.loads(await m.create_project("Shop B", ""))["id"]
+        for t in ("x", "y", "z", "w", "v"):
+            await m.write_ticket(t, project="Shop B")
+        tb5 = store.get_ticket(b, "T5")
+        store.update_ticket(tb5["id"], stage="doing",
+                            pr=None)
+        tb1 = store.get_ticket(b, "T1")
+        store.update_ticket(tb1["id"], pr={"repo": "acme/shop", "number": 7, "merged": True,
+                                           "checked_at": None})
+        await mf.set_stage("T5", "doing", project="Shop")
+        store.append([Envelope(source="github_shop", source_type="event_stream", key_value="acme/shop#10",
+                               event_type="pull_request", text="PR #10 opened",
+                               event_time=datetime.now(timezone.utc), payload={},
+                               labels={"repo": "acme/shop", "number": "10", "branch": "factory/T5",
+                                       "action": "opened"})])
+        g = json.loads(await m.get_ticket("T5", project="Shop"))
+        ck("a factory/T5 branch is not linked when another project's T5 works in the same repo",
+           not g.get("pr"), g.get("pr"))
+        async with mk() as cx:
+            pk = (await cx.get(f"/api/projects/{shop}/pickup")).json()
+        ck("pick-up does not resume a ticket waiting in review",
+           (pk.get("ticket") or {}).get("label") != "T1" and pk["in_progress"] is True
+           and pk["ticket"]["label"] == "T5", pk.get("ticket"))
+        # a slow GitHub: the ticket read answers from the cache instead of waiting
+        import time
+        real = factory_github._transport
+
+        async def slow(request):
+            await asyncio.sleep(6)
+            return fake_github(request)
+
+        factory_github._transport = httpx.MockTransport(slow)
+        t3 = store.get_ticket(shop, "T3")
+        store.update_ticket(t3["id"], pr={"repo": "acme/shop", "number": 8, "checked_at": None})
+        t0 = time.monotonic()
+        await m.list_tickets(project="Shop")
+        took = time.monotonic() - t0
+        ck("a slow GitHub does not hold the ticket list (under 4 s)", took < 4, took)
+        factory_github._transport = real
+
 
 asyncio.run(main())
 print(f"\n{P} passed, {F} failed")

@@ -81,6 +81,9 @@ class ClaudeCodeConnector(Connector):
         {"name": "station", "help": "the tares-factory station the session plays (crew-reviewer, "
                                     "<project>-build-<slug>); the plugin stamps it from "
                                     "FACTORY_STATION"},
+        {"name": "subagent", "help": "the subagent a line belongs to (its id), for lines from a "
+                                     "subagent's own transcript; the session key stays the "
+                                     "parent's"},
         {"name": "verdict", "help": "challenge events: PASS / FAIL / ERROR / TIMEOUT / INCONCLUSIVE"},
         {"name": "sha", "help": "challenge_commit: the reviewed commit"},
         {"name": "finding_count", "help": "challenge events: findings reported (number)"},
@@ -190,7 +193,9 @@ class ClaudeCodeConnector(Connector):
                 "sidechain": "true" if o.get("isSidechain") else "false",
                 "flow": str(o["flow"]) if o.get("flow") else None,
                 "tares_project": str(o["tares_project"]) if o.get("tares_project") else None,
-                "station": str(o["factory_station"]) if o.get("factory_station") else None}
+                "station": str(o["factory_station"]) if o.get("factory_station") else None,
+                "subagent": str(o.get("subagent") or o.get("agentId") or "") or None
+                if o.get("isSidechain") or o.get("subagent") else None}
 
     # ── mapping: one JSONL object → one Envelope ───────────────────────────────
     def _obj_to_envelope(self, o: dict, redact: bool, include_thinking: bool):
@@ -305,6 +310,8 @@ class ClaudeCodeConnector(Connector):
             return f"session plays station {o.get('station')}{role}"
         if o.get("type") == "session_warning":
             return f"warning: {o.get('warning')}"
+        if o.get("type") == "subagent_truncated":
+            return str(o.get("note") or "a subagent's transcript was cut off")
         if o.get("type") in ClaudeCodeConnector.CHALLENGE_TYPES:
             return ClaudeCodeConnector._render_challenge(o)
         content = msg.get("content")

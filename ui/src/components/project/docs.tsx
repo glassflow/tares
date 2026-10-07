@@ -385,9 +385,40 @@ function TicketCrew({ ctx, ticket }: { ctx: Ctx; ticket: Ticket }) {
   const { data } = usePolling(() => api.ticketMessages(ctx.id, ticket.id), 30000);
   const history = ticket.history ?? [];
   const msgs = data?.messages ?? [];
-  if (!history.length && !msgs.length) return null;
+  const assumptions = ticket.assumptions ?? [];
+  const checks = ticket.checks ?? [];
+  if (!history.length && !msgs.length && !assumptions.length && !checks.length) return null;
   return (
     <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+      {assumptions.length > 0 && (
+        <details className="panel" open={assumptions.some((a) => a.state === "open")}>
+          <summary><b>Assumptions</b> <span className="dim">· {assumptions.length} · {assumptions.filter((a) => a.state === "open").length} open</span></summary>
+          <ul className="tk-history">
+            {assumptions.map((a) => (
+              <li key={a.label}>
+                <b>{a.label}</b> <span className="dim">({a.state})</span> {a.question} <b>→</b> {a.choice}
+                <div className="dim">{a.why}{a.made_by && <> · by {a.made_by}</>}{a.words && <> · you said: "{a.words}"</>}</div>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {checks.length > 0 && (
+        <details className="panel">
+          <summary><b>Checks run</b> <span className="dim">· {checks.length}{checks.some((c) => c.match && c.match !== "matched") ? ` · ${checks.filter((c) => c.match && c.match !== "matched").length} not in the recording` : ""}</span></summary>
+          <ul className="tk-history">
+            {checks.map((c) => (
+              <li key={c.id}>
+                {c.commit && <span className="mono dim">{c.commit.slice(0, 7)} </span>}<code>{c.command}</code> → {c.result}
+                {c.broke_test && <span className="dim"> · broke the code under {c.broke_test}: it failed, then passed</span>}
+                {c.match === "not_found" && <div className="fo-warn">not found in the recording</div>}
+                {c.match === "differs" && <div className="fo-warn">the recording shows something else{c.recorded && <>: {c.recorded.slice(0, 200)}</>}</div>}
+                <div className="dim"><TimeAgo ts={c.at} />{c.by && <> · {c.by}</>}</div>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       {history.length > 0 && (
         <details className="panel">
           <summary><b>History</b> <span className="dim">· {history.length} {history.length === 1 ? "change" : "changes"}</span></summary>
@@ -549,19 +580,51 @@ export function ClaudeSessionView({ ctx, name }: { ctx: Ctx; name: string }) {
     : <ErrorState error={error} what="this session" onRetry={reload} />;
   if (!data) return <div className="dim">loading…</div>;
   // Claude Code's own bookkeeping lines carry no text worth reading here
-  const lines = data.lines.filter((l) => l.text && l.text.trim() !== (l.labels.type ?? l.event_type));
+  const all = data.lines.filter((l) => l.text && l.text.trim() !== (l.labels.type ?? l.event_type));
+  // a subagent's lines (TR-434) fold under it: the session's own lines first, then each subagent
+  // with the task it was given (its first line) and the summary it returned (its last)
+  const lines = all.filter((l) => !l.labels.subagent);
+  const subs = new Map<string, typeof all>();
+  for (const l of all) {
+    if (l.labels.subagent) subs.set(l.labels.subagent, [...(subs.get(l.labels.subagent) ?? []), l]);
+  }
   return (
     <>
       <ViewHead title="Claude Code session" sub={<span className="mono">{name}</span>} />
       <div className="panel" style={{ padding: 0 }}>
-        {lines.map((l, i) => (
-          <div key={i} className="cc-line" style={{ padding: "6px 12px", borderTop: i ? "1px solid var(--line)" : undefined }}>
-            <span className="help" style={{ marginRight: 8 }}><TimeAgo ts={l.event_time} /> · {l.labels.type ?? l.event_type}</span>
-            <span style={{ whiteSpace: "pre-wrap" }}>{l.text}</span>
-          </div>
-        ))}
+        {lines.map((l, i) => <SessionLine key={i} l={l} first={!i} />)}
         {!lines.length && <div className="empty">No lines recorded.</div>}
       </div>
+      {subs.size > 0 && (
+        <div style={{ display: "grid", gap: 8, marginTop: 14 }}>
+          <h3 style={{ margin: 0 }}>Subagents <span className="dim">· {subs.size}</span></h3>
+          {[...subs.entries()].map(([id, ls]) => (
+            <details key={id} className="panel" style={{ padding: 0 }}>
+              <summary style={{ padding: "8px 12px", cursor: "pointer" }}>
+                <span className="mono">{id.slice(0, 10)}</span> · {ls.length} lines · <TimeAgo ts={ls[0].event_time} />
+                <div className="dim" style={{ fontSize: 13, marginTop: 4 }}>
+                  <b>Task:</b> {ls[0].text.slice(0, 300)}{ls[0].text.length > 300 ? "…" : ""}
+                </div>
+                {ls.length > 1 && (
+                  <div className="dim" style={{ fontSize: 13, marginTop: 2 }}>
+                    <b>Returned:</b> {ls[ls.length - 1].text.slice(0, 300)}{ls[ls.length - 1].text.length > 300 ? "…" : ""}
+                  </div>
+                )}
+              </summary>
+              {ls.map((l, i) => <SessionLine key={i} l={l} first={false} />)}
+            </details>
+          ))}
+        </div>
+      )}
     </>
+  );
+}
+
+function SessionLine({ l, first }: { l: { event_type: string; text: string; event_time: string; labels: Record<string, string> }; first: boolean }) {
+  return (
+    <div className="cc-line" style={{ padding: "6px 12px", borderTop: first ? undefined : "1px solid var(--line)" }}>
+      <span className="help" style={{ marginRight: 8 }}><TimeAgo ts={l.event_time} /> · {l.labels.type ?? l.event_type}</span>
+      <span style={{ whiteSpace: "pre-wrap" }}>{l.text}</span>
+    </div>
   );
 }

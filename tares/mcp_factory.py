@@ -104,6 +104,75 @@ async def set_stage(ticket: str, stage: str, reason: str = "", pr: str = "",
     return json.dumps(out, default=str)
 
 
+# ── the build, recorded (TR-433, TR-435, TR-436) ──────────────────────────────
+
+@writable()
+async def assume(question: str, choice: str, why: str, tickets: list[str] | None = None,
+                 affects: str = "", project: str = "") -> str:
+    """Record an assumption you made so the work does not block: the `question` the plan did not
+    answer, the `choice` you made, `why`, the `tickets` it touches (T3, ...), and who it
+    `affects`. Returns its number (A1, A2, ...): tell the orchestrator that number in one line and
+    carry on. The orchestrator confirms open assumptions with the person once per milestone.
+    Never use this for what must go to the person directly (prod deploys, secrets, money, new
+    contacts, deleting data)."""
+    body = {"question": question, "choice": choice, "why": why, "affects": affects,
+            "tickets": tickets or []}
+    async with _cx(10) as cx:
+        uid, why_not = await _project_id(cx, project)
+        if uid is None:
+            return why_not
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/assumptions", json=body)
+    return _out(r, ("label", "question", "choice", "tickets", "state"))
+
+
+@mcp.tool()
+async def list_assumptions(state: str = "", project: str = "") -> str:
+    """The project's assumptions, A1 first: the question, the choice, why, the tickets, and the
+    state (open: not yet confirmed; kept; overturned, with the person's words). `state`
+    narrows the list."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/assumptions", params={"state": state})
+    if r.status_code >= 400:
+        return _out(r)
+    return json.dumps([{k: a.get(k) for k in ("label", "question", "choice", "why", "tickets",
+                                              "state", "words", "made_by")}
+                       for a in r.json().get("assumptions") or []], default=str)
+
+
+@writable()
+async def add_check(ticket: str, command: str, result: str, commit: str = "",
+                    broke_test: str = "", project: str = "") -> str:
+    """Record a check you ran on a ticket: the exact `command`, what it showed (`result`), the
+    `commit` it ran on, and, for a test you added, `broke_test`: the test you saw fail when you
+    broke the code it covers (then pass again once restored). One line goes into the Checks part
+    of the ticket's working doc; the rest of the doc is untouched. Record each check after you
+    run it, never one you did not run: the reviewer compares them with your session."""
+    body = {"command": command, "result": result, "commit": commit, "broke_test": broke_test}
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/tickets/{ticket}/checks", json=body)
+    return _out(r, ("line", "working_doc"))
+
+
+@writable()
+async def remember_for_project(line: str, project: str = "") -> str:
+    """Keep one thing you learned about this project (for example "tests need the dev database
+    running") in its memory, dated and signed; every session on the project reads it. A rule
+    worth keeping for every project goes to the orchestrator instead (an FYI); only it adds to
+    the shared memory."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/memory/lines", json={"text": line})
+    return _out(r, ("id", "added"))
+
+
 # ── the crew (TR-419, TR-420, TR-425) ─────────────────────────────────────────
 
 @mcp.tool()
