@@ -30,6 +30,8 @@ import uuid
 
 import httpx
 
+from . import decision as _decision
+from . import schedule as _schedule
 from . import metrics
 from . import results as _results
 from . import skills as _skills
@@ -40,6 +42,7 @@ from .envelope import now_utc
 from .models import ModelError, Provider, add_usage, empty_usage, tool_call_in_text, tool_message
 from .pricing import price_usage
 from .reads import resolve_read, resolve_sources_full
+from .stats import stats_rows
 
 MODEL = os.getenv("TARES_AGENT_MODEL", "claude-sonnet-4-6")
 # The model choices the console offers per agent. The instance default (TARES_AGENT_MODEL) is
@@ -119,7 +122,9 @@ def _canonical_tool(name: str, tools: list) -> str | None:
 
 def effective_max_rounds(agent: dict) -> int:
     """The round cap a run is held to: the agent's own setting when set, else the default for its
-    shape (higher when it reaches external MCP servers)."""
+    shape (higher when it reaches external MCP servers). A decision agent makes one call."""
+    if agent.get("decision"):
+        return 1
     own = agent.get("max_rounds")
     if own:
         return max(1, min(int(own), MAX_ROUNDS_LIMIT))
@@ -204,6 +209,23 @@ PRESETS = {
             "attribute, find which entity carries it (stats by the entity label with a `where` on "
             "that attribute, for example by service where code=404) and name that entity.\n"
             "Flag at most one entity per run, the most serious one."
+        ),
+    },
+    # The first level again, judged by a decision model instead of a chat model (TR-324): the
+    # prompt is what counts as a problem; the model gives it a probability per window and picks
+    # the entity, and the threshold decides. Starts in shadow mode: it scores, it never wakes.
+    "triage-decision": {
+        "label": "Triage with a decision model (on a schedule)",
+        "concludes": True,
+        "verdicts": [{"verdict": "investigate",
+                      "when": "one entity looks like a problem and needs a closer look"}],
+        "decision": {"threshold": 0.5, "shadow": True},
+        "prompt": (
+            "Something in this window needs a closer look from an SRE: errors, failures, 4xx "
+            "or 5xx codes, or a sudden new source of traffic, such as a value that grew at least "
+            "3x and by at least 50 events, or that is new with at least 50 events. Routine noise "
+            "such as uptime probes and health checks, and values that only went down, do not "
+            "count."
         ),
     },
     # The second level (TR-322, TR-334): handed a triage finding marked investigate, not the
@@ -815,8 +837,13 @@ class AgentRunner:
         results = [] if results is None else results
         started_at = now_utc()
         t0 = time.monotonic()
-        provider, key_origin, provider_id, provider_note = resolve_for_agent(self.store, agent)
-        if provider is None:
+        # a decision model instead of a chat model (TR-324): one call, no provider, no daily cap
+        decision = agent.get("decision") or {}
+        if decision:
+            provider, key_origin, provider_id, provider_note = None, "", "", ""
+        else:
+            provider, key_origin, provider_id, provider_note = resolve_for_agent(self.store, agent)
+        if provider is None and not decision:
             msg = ("no model provider configured: add one under Settings, or set "
                    "ANTHROPIC_API_KEY before `tares up`")
             self.store.finish_agent_run(run_id, "failed", error=msg)
@@ -825,7 +852,7 @@ class AgentRunner:
         # Count the runs BEFORE this one (its row is already inserted), so the cap fires at exactly
         # daily-cap runs rather than one over it.
         cap, source = effective_daily_cap(agent, self.store)
-        if self.store.agent_runs_today(agent["name"], exclude_run_id=run_id) >= cap:
+        if not decision and self.store.agent_runs_today(agent["name"], exclude_run_id=run_id) >= cap:
             where = "in its project's daily_cap" if source == "agent" else "under Settings, Agents"
             msg = f"cap of {cap} runs in the last 24h reached for this agent; raise it {where}"
             self.store.finish_agent_run(run_id, "capped", error=msg)
@@ -849,8 +876,16 @@ class AgentRunner:
 
         # Usage accumulates in a mutable dict rather than the loop's return value, so a run that
         # dies mid-loop still records the tokens it already paid for (the finally below).
-        model = agent.get("model") or default_model_for(self.store, provider_id)
-        if not model:
+        endpoint = _decision.entry(self.store, decision["endpoint"]) if decision else None
+        if decision and endpoint is None:
+            msg = (f"decision endpoint {decision['endpoint']!r} not found; add it under Settings, "
+                   "Decision models, or pick another for this agent")
+            self.store.finish_agent_run(run_id, "failed", error=msg)
+            obs.set_attribute(_tracing.SKIPPED_REASON, "no_decision_endpoint")
+            return "failed", msg
+        model = (_decision.model_for(endpoint, decision) if decision
+                 else agent.get("model") or default_model_for(self.store, provider_id))
+        if not model and not decision:   # a custom decision endpoint may take no model name
             msg = (f"provider {provider_id!r} lists no models yet; pick one for this agent under "
                    "Configuration, or refresh the provider's models under Settings")
             self.store.finish_agent_run(run_id, "failed", error=msg)
@@ -858,9 +893,13 @@ class AgentRunner:
             return "failed", msg
         if provider_note:
             print(f"[agent {agent['name']}] {provider_note}")
-        obs.set_attribute("tares.provider", provider_id)
         usage = empty_usage()
         concluded: dict = {}   # filled by a `conclude` call (TR-318)
+        if decision:
+            return await self._decide(agent, trigger_name, key, payload, run_id, dispatch_id,
+                                      obs, results, endpoint, decision, model,
+                                      (callback_key, callback_labels), started_at, t0)
+        obs.set_attribute("tares.provider", provider_id)
         try:
             finding, rounds, tool_calls, external_used, exhausted, partial = await self._loop(
                 agent, trigger_name, key, payload, provider, model, usage, tracer, obs,
@@ -890,6 +929,111 @@ class AgentRunner:
                                         tool_calls=tool_calls, finding=partial or None,
                                         error=msg, external_tools=external_used)
             return "exhausted", msg
+        return await self._conclude(agent, trigger_name, key, run_id, dispatch_id, obs, results,
+                                    concluded, finding, rounds, tool_calls, external_used,
+                                    model, usage, price_usage(provider.kind, model, usage),
+                                    (callback_key, callback_labels), started_at, t0)
+
+
+
+    def _window_rows(self, trigger_name: str) -> tuple[str | None, list]:
+        """(the entity label, its rows this window against the one before) for a schedule
+        trigger: the options of a decision run's `entity` question. (None, []) for a trigger that
+        fires on one entity, which is then the entity."""
+        catalog = getattr(getattr(self, "runtime", None), "catalog", None)
+        if catalog is None:
+            return None, []
+        trig = next((t for t in catalog.triggers if t.name == trigger_name), None)
+        every = getattr(getattr(trig, "condition", None), "every", None)
+        if trig is None or not every or not trig.sources:
+            return None, []
+        label = trigger_entity_label(trig, catalog.sources) or "key_value"
+        window = f"{int(every)}s" if every % 60 else f"{int(every // 60)}m"
+        rows = stats_rows(self.store, trig.sources, label, window, filters=trig.filters)["rows"]
+        # a value that only went down or is gone is not a candidate
+        return label, [r for r in rows if r["now"] > 0]
+
+    async def _decide(self, agent: dict, trigger_name: str, key: str, payload: str, run_id: str,
+                      dispatch_id: str | None, obs: _tracing.Observation, results: list,
+                      endpoint: dict, settings: dict, model: str, anchor: tuple[str, dict],
+                      started_at, t0: float) -> tuple[str, str | None]:
+        """A decision-model run (TR-324): ask `problem` and `entity` about the window the agent
+        was handed, store the probabilities, and conclude from the threshold."""
+        obs.set_attribute("tares.decision.endpoint", endpoint["id"])
+        obs.set_attribute("tares.model", model)
+        # a schedule hands over a window: the entity is one of its label values, asked about.
+        # A trigger that fired on one entity: that entity, only `problem` is asked.
+        scheduled = self._is_scheduled(trigger_name)
+        label, rows = None, []
+        if scheduled:
+            try:
+                label, rows = self._window_rows(trigger_name)
+            except Exception as e:   # the window could not be counted: no entity to name
+                print(f"[agent {agent['name']}] decision: counting the window failed: {e}")
+        else:
+            catalog = getattr(getattr(self, "runtime", None), "catalog", None)
+            trig = next((t for t in catalog.triggers if t.name == trigger_name), None) \
+                if catalog else None
+            label = trigger_entity_label(trig, catalog.sources) if trig else None
+        state = payload
+        used = settings.get("state") or _decision.DEFAULT_STATE
+        if not scheduled:
+            used = "timeline"
+        settings = {**settings, "state": used}
+        if used == "entities":
+            # one JSON row per entity instead of the text summary (TR-401)
+            try:
+                state, erows = _schedule.entity_state(self.store, self.runtime.catalog,
+                                                      self._trigger(trigger_name))
+                qs, ids = _decision.entity_questions(agent.get("prompt") or "", label, erows)
+            except Exception as e:
+                msg = f"decision model: building the entity state failed: {type(e).__name__}: {e}"
+                self.store.finish_agent_run(run_id, "failed", error=msg[:500])
+                return "failed", msg[:500]
+        else:
+            qs, ids = _decision.questions(agent.get("prompt") or "", label if scheduled else None,
+                                          rows)
+        # what the model read and was asked, on the run's trace
+        obs.set_input(json.dumps({"state": state, "questions": qs})[:60000])
+        try:
+            out = await _decision.decide(endpoint, model, state, qs)
+            concluded, scores = _decision.outcome(out["answers"], settings, label, ids,
+                                                  None if scheduled else key)
+        except _decision.DecisionError as e:
+            msg = f"decision model: {e}"
+            self.store.finish_agent_run(run_id, "failed", error=msg[:500])
+            return "failed", msg[:500]
+        tokens = out["input_tokens"]
+        cost = _decision.price(model, tokens)
+        usage = {**empty_usage(), "calls": 1, "input_tokens": tokens}
+        provider_id = f"decision:{endpoint['id']}"
+        self.store.record_run_usage(run_id, model, tokens, 0, 0, 0, cost, provider=provider_id)
+        self.store.record_model_usage("agent", agent["name"], run_id, model, 1, tokens, 0, 0, 0,
+                                      cost, key_source="console", provider=provider_id)
+        self.store.set_run_scores(run_id, scores)
+        obs.set_attribute("tares.decision.problem", scores["problem"])
+        obs.set_attribute("tares.decision.threshold", scores["threshold"])
+        obs.set_attribute("tares.decision.escalate", scores["escalate"])
+        obs.set_attribute("tares.decision.shadow", scores["shadow"])
+        if scores.get("entity") is not None:
+            obs.set_attribute("tares.decision.entity", str(scores["entity"]))
+        if cost is not None:
+            obs.set_attribute("tares.cost_usd", cost)
+        if concluded.get("headline"):
+            concluded["headline"] = concluded["headline"][:100]
+        finding = concluded["summary"] if concluded["outcome"] == "finding" else None
+        return await self._conclude(agent, trigger_name, key, run_id, dispatch_id, obs, results,
+                                    concluded, finding, 1, 0, [], model, usage, cost, anchor,
+                                    started_at, t0)
+
+    async def _conclude(self, agent: dict, trigger_name: str, key: str, run_id: str,
+                        dispatch_id: str | None, obs: _tracing.Observation, results: list,
+                        concluded: dict, finding: str | None, rounds: int, tool_calls: int,
+                        external_used: list, model: str, usage: dict, cost: float | None,
+                        anchor: tuple[str, dict], started_at, t0: float) -> tuple[str, str | None]:
+        """How a run ends once its model has spoken, chat or decision: no_op, a finding recorded
+        (Slack, the write-back, the handoff after it), or no conclusion at all."""
+        callback_key, callback_labels = anchor
         results.extend(_results.custom_results(concluded.get("produced")))
         if concluded.get("outcome") == "no_op":
             # A quiet success: nothing to hand on, so no finding, no Slack post, no write-back.
@@ -955,7 +1099,7 @@ class AgentRunner:
                 "model": model,
                 "rounds": rounds, "tool_calls": tool_calls,
                 "usage": {k: v for k, v in usage.items() if k != "calls"},
-                "cost_usd": price_usage(provider.kind, model, usage),
+                "cost_usd": cost,
                 "started_at": started_at.isoformat(), "finished_at": now_utc().isoformat(),
                 "duration_s": round(time.monotonic() - t0, 2),
                 "prompt_hash": prompt_hash(agent["prompt"]),
@@ -1219,6 +1363,9 @@ class AgentRunner:
                     seen.add(sk["name"])
                     out.append(sk)
         return out
+
+    def _trigger(self, trigger_name: str):
+        return next((t for t in self.runtime.catalog.triggers if t.name == trigger_name), None)
 
     def _is_scheduled(self, trigger_name: str) -> bool:
         """Whether the run was woken by a schedule trigger (TR-320), which ticks for all its

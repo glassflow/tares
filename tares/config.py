@@ -98,6 +98,8 @@ class Condition:
     # trigger, handing over a summary of the window counted per `summary_by` label.
     every: float | None = None
     summary_by: list = dc_field(default_factory=list)
+    # what else the summary carries (TR-400); {} = the plain tables, as before
+    summary: dict = dc_field(default_factory=dict)
 
 
 @dataclass
@@ -141,6 +143,8 @@ class AgentCfg:
     concludes: bool = False   # every run ends with the conclude tool, whatever the prompt says
     verdicts: list = dc_field(default_factory=list)   # [{verdict, when}]: the only ones it may give
     github: str = ""          # a GitHub credential the agent acts with (check runs); "" = none
+    # a decision model instead of a chat model (TR-324): {endpoint, model, threshold, shadow}
+    decision: dict = dc_field(default_factory=dict)
     enabled: bool = False
 
 
@@ -243,7 +247,8 @@ def _condition_from_dict(c: dict) -> Condition:
         # consulted (a count over the interval), but the clock, not them, decides the firing
         return Condition(aggregate="count", predicate="> 0", window=str(c["every"]),
                          every=parse_duration(c["every"]),
-                         summary_by=[str(x) for x in (c.get("summary_by") or [])])
+                         summary_by=[str(x) for x in (c.get("summary_by") or [])],
+                         summary=normalize_summary_options(c.get("summary")))
     return Condition(aggregate=c["aggregate"], predicate=c["predicate"], window=c["window"],
                      field=c.get("field"), group_by=c.get("group_by", ["key_value"]))
 
@@ -279,6 +284,7 @@ def _agent_from_dict(a: dict, enabled: bool = False) -> AgentCfg:
         concludes=bool(a.get("concludes")),
         verdicts=normalize_verdicts(a["name"], a.get("verdicts")),
         github=str(a.get("github") or ""),
+        decision=normalize_decision(a["name"], a.get("decision")),
         enabled=bool(a.get("enabled", enabled)),
     )
 
@@ -471,7 +477,9 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
                                    concludes=(bool(a["concludes"]) if "concludes" in a else None),
                                    verdicts=(normalize_verdicts(a["name"], a["verdicts"])
                                              if "verdicts" in a else None),
-                                   github=(str(a.get("github") or "") if "github" in a else None))
+                                   github=(str(a.get("github") or "") if "github" in a else None),
+                                   decision=(normalize_decision(a["name"], a["decision"])
+                                             if "decision" in a else None))
         # on/off belongs to the wiring of the project the agent is in; applied once it is placed
         # (below, or by the engine that applies a template)
         _turn_on_where_placed(store, a)
@@ -745,6 +753,7 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
          **({"concludes": True} if a.get("concludes") else {}),
          **({"verdicts": a["verdicts"]} if a.get("verdicts") else {}),
          **({"github": a["github"]} if a.get("github") else {}),
+         **({"decision": a["decision"]} if a.get("decision") else {}),
          **({"slack_webhook": a["slack_webhook"]}
             if include_secrets and a.get("slack_webhook") else {}),
          **({"webhook_token": a["webhook_token"]}
@@ -827,6 +836,66 @@ class CatalogError(ValueError):
 _AGGREGATES = {"count", "sum", "avg", "max", "min", "any"}
 SCHEDULE_MIN_SECONDS = 60.0
 SCHEDULE_MAX_SUMMARY_LABELS = 5
+# What a schedule's summary can carry beyond the plain tables (TR-400), each off unless set.
+#   by_entity  each other summary_by label counted per entity too (401 under ingress-nginx)
+#   baseline   windows of history behind each count: the usual value and how much it varies
+#   min_count  values below this in both windows are left out (1 -> 9 is not a spike)
+#   numbers    numeric fields: avg and max per entity, now against before
+#   examples   sample lines for each of the values that moved most, instead of the newest lines
+#   findings   how far back to look for an earlier finding on the entities in the window
+SUMMARY_DEFAULTS = {"by_entity": True, "baseline": 6, "min_count": 5, "numbers": [],
+                    "examples": 2, "findings": "6h"}
+SUMMARY_MAX_BASELINE = 48
+SUMMARY_MAX_EXAMPLES = 5
+
+
+def normalize_summary_options(o) -> dict:
+    """A schedule's summary options, checked; {} when none. Raises ValueError with what is
+    wrong. `"rich"` is shorthand for the defaults."""
+    if o in (None, "", {}, False):
+        return {}
+    if o in ("rich", True):
+        return {k: v for k, v in SUMMARY_DEFAULTS.items() if v}
+    if not isinstance(o, dict):
+        raise ValueError('summary must be a mapping of options, or "rich" for the defaults')
+    unknown = set(o) - set(SUMMARY_DEFAULTS)
+    if unknown:
+        raise ValueError(f"summary has unknown options {sorted(unknown)}; "
+                         f"known: {', '.join(SUMMARY_DEFAULTS)}")
+    out: dict = {}
+
+    def whole(k, hi):
+        v = o.get(k)
+        if v in (None, ""):
+            return 0
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"summary {k} must be a whole number")
+        if not 0 <= n <= hi:
+            raise ValueError(f"summary {k} must be between 0 and {hi}")
+        return n
+    if o.get("by_entity"):
+        out["by_entity"] = True
+    for k, hi in (("baseline", SUMMARY_MAX_BASELINE), ("min_count", 100000),
+                  ("examples", SUMMARY_MAX_EXAMPLES)):
+        n = whole(k, hi)
+        if n:
+            out[k] = n
+    nums = o.get("numbers") or []
+    if isinstance(nums, str):
+        nums = [x.strip() for x in nums.split(",") if x.strip()]
+    if not isinstance(nums, list) or len(nums) > SCHEDULE_MAX_SUMMARY_LABELS or not all(
+            isinstance(x, str) and re.match(r"^[A-Za-z0-9_.]+$", x) for x in nums):
+        raise ValueError(f"summary numbers must be up to {SCHEDULE_MAX_SUMMARY_LABELS} "
+                         "numeric field names")
+    if nums:
+        out["numbers"] = list(nums)
+    f = str(o.get("findings") or "").strip()
+    if f:
+        _check_duration(f, "summary findings")
+        out["findings"] = f
+    return out
 _PREDICATE_SYMS = (">=", "<=", "==", ">", "<")
 
 
@@ -1057,6 +1126,10 @@ def validate_trigger_dict(t: dict, source_names: set) -> None:
                 isinstance(x, str) and re.match(r"^[A-Za-z0-9_.]+$", x) for x in by):
             raise CatalogError(f"trigger {t['name']!r}: summary_by must be a list of up to "
                                f"{SCHEDULE_MAX_SUMMARY_LABELS} label names")
+        try:
+            normalize_summary_options(c.get("summary"))
+        except ValueError as e:
+            raise CatalogError(f"trigger {t['name']!r}: {e}")
         return
     if c.get("aggregate") not in _AGGREGATES:
         raise CatalogError(
@@ -1100,6 +1173,15 @@ HANDOFF_COOLDOWN = "30m"
 _VERDICT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 MAX_VERDICTS = 10
 VERDICT_WHEN_MAX = 300
+
+
+def normalize_decision(name: str, d) -> dict:
+    """An agent's decision-model settings (TR-324), or {} for a chat-model agent."""
+    from .decision import normalize
+    try:
+        return normalize(name, d)
+    except ValueError as e:
+        raise CatalogError(str(e))
 
 
 def normalize_verdicts(name: str, verdicts) -> list[dict]:
@@ -1266,6 +1348,7 @@ def validate_agent_dict(a: dict, trigger_names: set, triggers: dict | None = Non
                                "(or empty for the instance-wide cap)")
     normalize_handoffs(str(a["name"]), a.get("handoffs"))
     normalize_verdicts(str(a["name"]), a.get("verdicts"))
+    normalize_decision(str(a["name"]), a.get("decision"))
 
     # Loop guard: a Tares agent writes a finding into the `findings` source. If its trigger
     # watches that source, its own finding re-fires the trigger, which runs the agent again,

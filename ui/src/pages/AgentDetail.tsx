@@ -17,14 +17,42 @@ import type { AgentRun, BuiltinAgent } from "../types";
 
 type Tab = "overview" | "runs" | "configuration";
 
+/** What judges a decision agent's runs (TR-324): the endpoint, its model, threshold, shadow. */
+export function DecisionSummary({ agent }: { agent: BuiltinAgent }) {
+  const d = agent.decision ?? {};
+  return <>
+    <span className="mono">{d.endpoint}{d.model ? ` / ${d.model}` : ""}</span>
+    <span className="help"> · a decision model, threshold {d.threshold ?? 0.5}{d.state === "summary" ? ", reads the summary text" : ", reads one row per entity"}</span>
+    {d.shadow && <> <span className="badge warn" title="it scores every window but never hands anything on">shadow</span></>}
+  </>;
+}
+
+/** A decision run's probability (TR-324), and in shadow mode whether it would have escalated. */
+export function ScoreChip({ r }: { r: AgentRun }) {
+  const s = r.scores;
+  if (!s) return null;
+  return (
+    <>
+      <span className="chip mono" style={{ marginRight: 4 }}
+            title={`the decision model gives ${Math.round(s.problem * 100)}% that this window shows a problem; threshold ${s.threshold}`}>
+        {s.problem.toFixed(2)}
+      </span>
+      {s.shadow && s.escalate && (
+        <span className="badge warn" title={`in shadow mode; live, it would have handed ${s.entity ?? "the entity"} on`}>would escalate</span>
+      )}
+    </>
+  );
+}
+
 /** How a run ended, for an agent that concludes: its verdict (or that it gave none), or that
  *  there was nothing to report, with the headline beside it. */
 export function OutcomeCell({ r }: { r: AgentRun }) {
   if (r.status === "running") return <span className="dim">…</span>;
-  if (r.outcome === "no_op") return <span className="badge" title="concluded with nothing to report; no finding was recorded">no finding</span>;
+  if (r.outcome === "no_op") return <span className="run-outcome"><ScoreChip r={r} /><span className="badge" title="concluded with nothing to report; no finding was recorded">no finding</span></span>;
   if (r.status !== "ok") return <span className="dim">none</span>;
   return (
     <span className="run-outcome">
+      <ScoreChip r={r} />
       {r.verdict
         ? <span className="chip mono" title="the verdict the agent concluded with">{r.verdict}</span>
         : <span className="dim" title="a finding without a verdict: no handoff keys off it">no verdict</span>}
@@ -224,7 +252,7 @@ export default function AgentDetail() {
                   <td className="help" style={{ width: 150 }}>status</td>
                   <td>
                     {agent.enabled ? <span className="badge ok">enabled</span> : <span className="badge">disabled</span>}
-                    {!data.key_configured
+                    {!data.key_configured && !agent.decision?.endpoint
                       ? <span className="help"> · no model provider is configured: add one under <Link to="/settings?tab=anthropic">Settings, Model providers</Link>, or set ANTHROPIC_API_KEY before <span className="mono">tares up</span></span>
                       : <span className="help"> · credential from <span className="mono">{data.key_source}</span></span>}
                   </td>
@@ -241,6 +269,9 @@ export default function AgentDetail() {
                       ? <><TimeAgo ts={lastRun.started_at} /> for <span className="mono">{lastRun.key}</span>
                           {lastRun.dispatch_id && <> · <Link to={`/dispatches/${encodeURIComponent(lastRun.dispatch_id)}`}>the firing</Link></>}</>
                       : <span className="dim">never</span>}</td></tr>
+                {agent.decision?.endpoint
+                  ? <tr><td className="help">judged by</td><td><DecisionSummary agent={agent} /></td></tr>
+                  : <>
                 <tr><td className="help">provider</td>
                     <td>{(() => {
                       const eff = data.providers?.find((p) => p.id === (agent.effective_provider ?? data.default_provider));
@@ -251,6 +282,7 @@ export default function AgentDetail() {
                 <tr><td className="help">model</td>
                     <td><span className="mono">{agent.model || data.default_models?.[agent.effective_provider ?? ""] || data.default_model}</span>
                         {!agent.model && <span className="help"> · provider default</span>}</td></tr>
+                  </>}
                 <tr><td className="help">tokens used</td>
                     <td>{stats && (stats.input_tokens || stats.output_tokens)
                       ? <><span className="mono">{fmtTokens(stats.input_tokens)}</span> in
@@ -314,6 +346,9 @@ export default function AgentDetail() {
                 <tr><td className="help" style={{ width: 150 }}>trigger</td>
                     <td>{agent.trigger ? <Link to={`/triggers/${encodeURIComponent(agent.trigger)}`} className="mono">{agent.trigger}</Link>
                       : <span className="dim">none: only a handoff starts it</span>}</td></tr>
+                {agent.decision?.endpoint
+                  ? <tr><td className="help">judged by</td><td><DecisionSummary agent={agent} /></td></tr>
+                  : <>
                 <tr><td className="help">provider</td>
                     <td>{(() => {
                       const eff = data.providers?.find((p) => p.id === (agent.effective_provider ?? data.default_provider));
@@ -324,6 +359,7 @@ export default function AgentDetail() {
                 <tr><td className="help">model</td>
                     <td><span className="mono">{agent.model || data.default_models?.[agent.effective_provider ?? ""] || data.default_model}</span>
                         {!agent.model && <span className="help"> · provider default</span>}</td></tr>
+                  </>}
                 <tr><td className="help">max rounds</td>
                     <td><span className="mono">{agent.effective_max_rounds}</span>
                         {!agent.max_rounds && <span className="help"> · default{agent.mcp_servers.length ? " for an agent with external MCP servers" : ""}</span>}</td></tr>
@@ -420,6 +456,7 @@ export function RunsPanel({ name, agent, from = [], focusDispatch, focusRun, ope
       <div className="btnrow" style={{ marginBottom: 8 }}>
         <Picker value={filter} onChange={(v) => setFilter(v as RunFilter)} options={RUN_FILTERS}
                 labels={RUN_FILTER_LABELS} ariaLabel="filter runs" />
+        {agent.decision?.endpoint && <ExportCsv name={name} />}
       </div>
       <RunsTable runs={runs} runsError={error} agent={agent} emptyText={empty}
                  focusDispatch={focusDispatch} focusRun={focusRun}
@@ -431,6 +468,25 @@ export function RunsPanel({ name, agent, from = [], focusDispatch, focusRun, ope
       )}
     </>
   );
+}
+
+/** Every run as CSV: when, the probability, the entity, whether it would have escalated. */
+function ExportCsv({ name }: { name: string }) {
+  const [err, setErr] = useState<string>();
+  const download = async () => {
+    setErr(undefined);
+    try {
+      const text = await api.agentRunsCsv(name);
+      const url = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
+      const a = document.createElement("a");
+      a.href = url; a.download = `${name}-runs.csv`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) { setErr(String((e as Error).message ?? e)); }
+  };
+  return <>
+    <button onClick={download} title="every run with its probability, entity and whether it would have escalated">Export CSV</button>
+    {err && <span className="help" style={{ color: "var(--err)" }}>{err}</span>}
+  </>;
 }
 
 export function RunsTable({ runs, runsError, agent, emptyText, focusDispatch, focusRun, openRun, setOpenRun }: {
@@ -568,6 +624,15 @@ function RunRow({ r, open, focused, onToggle, outcomes = false }: {
                   </button>
                   {rerunErr && <span className="help" style={{ color: "var(--err)" }}>{rerunErr}</span>}
                 </div>
+              )}
+              {r.scores && (
+                <p className="help" style={{ margin: "0 0 8px", whiteSpace: "normal" }}>
+                  decision model: <strong>{Math.round(r.scores.problem * 100)}%</strong> that this window shows a problem
+                  (threshold {r.scores.threshold}){r.scores.shadow ? ", in shadow mode" : ""}
+                  {r.scores.kind && r.scores.kind !== "none" ? `; kind: ${r.scores.kind.replace(/_/g, " ")}` : ""}.
+                  {(r.scores.options ?? []).length > 0 && <> Entity: {(r.scores.options ?? []).map((o, i) => (
+                    <span key={o.value}>{i ? ", " : " "}<span className="mono">{o.value}</span> {Math.round(o.p * 100)}%</span>))}.</>}
+                </p>
               )}
               {outcomes && r.outcome === "finding" && (
                 <p style={{ margin: "0 0 8px", whiteSpace: "normal" }}>

@@ -3,7 +3,10 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type { TriggerBody } from "../api";
 import { Combo, Picker } from "./bits";
-import type { ConnectorSpec, Source, Trigger, TriggerFilter } from "../types";
+import type { ConnectorSpec, Source, SummaryOptions, Trigger, TriggerFilter } from "../types";
+
+// What "Richer summary" turns on (TR-400); the same as the API's "rich"
+const RICH_DEFAULTS: SummaryOptions = { by_entity: true, baseline: 6, min_count: 5, examples: 2, findings: "6h" };
 
 // The one trigger editor, used in place: on /triggers/new, on /triggers/<name> and inside a
 // project's page. A trigger belongs to one project and reads that project's sources: it counts the
@@ -136,6 +139,11 @@ export default function TriggerEditor({ initial, prefill, project, onSaved, onCa
   // mean nothing, so the saved condition carries only the schedule
   const scheduled = !!t.condition.every;
   const [summaryText, setSummaryText] = useState((t.condition.summary_by ?? []).join(", "));
+  const initialOpts = t.condition.summary === "rich" ? RICH_DEFAULTS : (t.condition.summary ?? {});
+  const [richOn, setRichOn] = useState(Object.keys(initialOpts).length > 0);
+  const [opts, setOpts] = useState<SummaryOptions>(Object.keys(initialOpts).length ? initialOpts : RICH_DEFAULTS);
+  const [numbersText, setNumbersText] = useState((initialOpts.numbers ?? []).join(", "));
+  const setOpt = (patch: Partial<SummaryOptions>) => setOpts((o) => ({ ...o, ...patch }));
   const setMode = (m: string) => {
     if (m === "schedule") setT({ ...t, condition: { ...t.condition, every: t.condition.every || "10m" } });
     else {
@@ -152,7 +160,8 @@ export default function TriggerEditor({ initial, prefill, project, onSaved, onCa
                        ? Number(r.value) : r.value }));
     const condition = scheduled
       ? { every: t.condition.every, aggregate: "count", predicate: "> 0", window: t.condition.every!,
-          summary_by: summaryText.split(",").map((x) => x.trim()).filter(Boolean) }
+          summary_by: summaryText.split(",").map((x) => x.trim()).filter(Boolean),
+          summary: richOn ? { ...opts, numbers: numbersText.split(",").map((x) => x.trim()).filter(Boolean) } : {} }
       : t.condition;
     return {
       name: t.name.trim(), sources, filters, key_field: (t.key_field ?? "").trim() || null,
@@ -306,7 +315,63 @@ export default function TriggerEditor({ initial, prefill, project, onSaved, onCa
             <span className="help">labels the agent gets counts for, this window against the last; empty = the entity label</span>
           </label>
         </div>
-      ) : (<>
+      ) : null}
+      {scheduled && (
+        <div className="field">
+          <label className="su-check">
+            <input type="checkbox" checked={richOn} onChange={(e) => setRichOn(e.target.checked)} />
+            <span>Richer summary</span>
+          </label>
+          <span className="help" style={{ display: "block", margin: "2px 0 8px" }}>
+            {richOn
+              ? "the agent also gets each label per entity, how today compares with the usual, sample lines for what moved and earlier findings on the same entities"
+              : "the agent gets the counts per label and the newest lines"}
+          </span>
+          {richOn && (
+            <>
+              <label className="su-check">
+                <input type="checkbox" checked={!!opts.by_entity} onChange={(e) => setOpt({ by_entity: e.target.checked })} />
+                <span>Count each label per entity too</span>
+              </label>
+              <div className="row2" style={{ marginTop: 8 }}>
+                <label className="field">
+                  <span className="lbl">compare with the last</span>
+                  <input type="number" min={0} max={48} value={opts.baseline ?? 0} style={{ width: 90 }}
+                         onChange={(e) => setOpt({ baseline: Number(e.target.value) })} aria-label="baseline windows" />
+                  <span className="help">windows, for the usual value and how much it varies; 0 = only the window before</span>
+                </label>
+                <label className="field">
+                  <span className="lbl">leave out values under</span>
+                  <input type="number" min={0} value={opts.min_count ?? 0} style={{ width: 90 }}
+                         onChange={(e) => setOpt({ min_count: Number(e.target.value) })} aria-label="minimum count" />
+                  <span className="help">events, so 1 to 9 does not read as a spike; 0 = keep all</span>
+                </label>
+              </div>
+              <div className="row2">
+                <label className="field">
+                  <span className="lbl">sample lines</span>
+                  <input type="number" min={0} max={5} value={opts.examples ?? 0} style={{ width: 90 }}
+                         onChange={(e) => setOpt({ examples: Number(e.target.value) })} aria-label="sample lines" />
+                  <span className="help">for each value that moved most, instead of the newest lines; 0 = the newest lines</span>
+                </label>
+                <label className="field">
+                  <span className="lbl">earlier findings from the last</span>
+                  <input type="text" value={opts.findings ?? ""} placeholder="6h" style={{ width: 90 }}
+                         onChange={(e) => setOpt({ findings: e.target.value.trim() })} aria-label="findings lookback" />
+                  <span className="help">on the same entities, so a known cause reads as known; empty = none</span>
+                </label>
+              </div>
+              <label className="field">
+                <span className="lbl">numeric fields <span className="help">(optional)</span></span>
+                <input type="text" className="mono" value={numbersText} placeholder="e.g. duration_ms, bytes"
+                       onChange={(e) => setNumbersText(e.target.value)} />
+                <span className="help">average and max per entity, this window against the one before</span>
+              </label>
+            </>
+          )}
+        </div>
+      )}
+      {scheduled ? null : (<>
       <div className="row2">
         <div className="field">
           <span className="lbl">aggregate</span>

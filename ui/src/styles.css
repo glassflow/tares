@@ -491,6 +491,7 @@ td .dim, .dim { color: var(--ink-faint); }
 .badge.ok { background: var(--ok-soft); color: var(--ok); }
 .badge.error { background: var(--err-soft); color: var(--err); }
 .badge.paused { background: var(--warn-soft); color: var(--warn); }
+.badge.warn { background: var(--warn-soft); color: var(--warn); }
 .badge.push { background: var(--slate-soft); color: var(--slate); }
 /* A value rewritten to nothing. Deliberately NOT `ok` — blanking is a legitimate rule, but it is
    not a success to be congratulated, and it must not look like a target that failed to render.

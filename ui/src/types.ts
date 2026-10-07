@@ -219,6 +219,17 @@ export interface TriggerCondition {
   // a schedule instead of a condition (TR-320): fire every interval, summarized by these labels
   every?: string;
   summary_by?: string[];
+  summary?: SummaryOptions | "rich";   // what else the summary carries (TR-400)
+}
+
+// A schedule summary's extras (TR-400); each off unless set.
+export interface SummaryOptions {
+  by_entity?: boolean;   // each other label counted per entity too
+  baseline?: number;     // windows of history: usual value and spread, z
+  min_count?: number;    // values under this in both windows (and usually) are left out
+  numbers?: string[];    // numeric fields: avg and max per entity
+  examples?: number;     // sample lines per value that moved most
+  findings?: string;     // how far back to look for earlier findings, e.g. 6h
 }
 
 // A trigger reads its own sources (members of its project), narrowed by filters, grouped by the
@@ -263,6 +274,7 @@ export interface BuiltinAgent {
   concludes?: boolean;         // every run ends with the conclude tool, whatever the prompt says
   verdicts?: Verdict[];        // the only verdicts it may give; empty: any word, or none
   github?: string;             // the GitHub credential it acts with (check runs); "" = none
+  decision?: AgentDecision;    // a decision model instead of a chat model (TR-324); {} = none
   offers_conclude?: boolean;   // it gets the conclude tool (set to, or its prompt names it)
   effective_max_rounds: number;   // the cap its next run will be held to
   updated_at?: string;
@@ -328,6 +340,7 @@ export interface AgentRun {
   results?: RunResult[];
   // the project skills the run loaded (TR-332), in order; [] when none
   skills?: string[];
+  scores?: RunScores | null;   // a decision run's probabilities (TR-324)
 }
 
 // A project's skill (TR-332): instructions its agents load by name when a task matches.
@@ -377,6 +390,7 @@ export interface AgentPreset {
   prompt: string;
   concludes?: boolean;          // the preset ends every run with conclude
   verdicts?: Verdict[];         // and gives these verdicts
+  decision?: { threshold?: number; shadow?: boolean };   // judged by a decision model (TR-324)
 }
 
 /** A verdict an agent may give when it concludes with a finding, and when to give it. */
@@ -688,6 +702,35 @@ export interface ModelProviders {
   providers: ModelProvider[];
   default: string | null;
   kinds: { id: ModelProvider["kind"]; label: string }[];
+}
+
+// A decision model endpoint (Settings, Decision models, TR-381): a System One model a watcher
+// agent can use instead of a chat model. The token is never returned: `key_stored` says one is.
+export interface DecisionEndpoint {
+  id: string;
+  kind: "cloudflare" | "typesafe" | "custom";
+  name: string;
+  account_id: string;         // cloudflare only
+  url: string;                // custom only
+  key_stored: boolean;
+  configured: boolean;
+  models: string[];
+}
+export interface DecisionEndpoints {
+  endpoints: DecisionEndpoint[];
+  kinds: { id: DecisionEndpoint["kind"]; label: string; models: string[] }[];
+}
+// An agent's decision settings (TR-324); {} for a chat-model agent.
+export interface AgentDecision {
+  endpoint?: string; model?: string; threshold?: number; shadow?: boolean;
+  state?: "summary" | "entities";   // what the model reads (TR-401); absent = one row per entity
+}
+// A decision run's probabilities, stored on the run.
+export interface RunScores {
+  problem: number; threshold: number; shadow: boolean; escalate: boolean;
+  label: string | null; entity: string | null; entity_p?: number;
+  state?: "entities" | "summary" | "timeline"; kind?: string;   // what it read (TR-401), the kind of problem it named
+  options?: { value: string; p: number }[];
 }
 
 // ── goal-first project setup (contract: setup-flow-contract.md, "The Plan object" and "Backend") ──

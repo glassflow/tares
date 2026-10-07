@@ -6,6 +6,39 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Entity rows for a decision model (TR-401): on a schedule trigger a decision watcher reads JSON
+  by default (`decision.state: "entities"`; `"summary"` gives it the text summary instead, as a
+  control when comparing models):
+  one row per entity, the most unusual first, each with its own counts and its signals (the
+  other labels' values under it) against the usual value, its spread and z, plus numbers, the
+  newest earlier finding and one example line. The `entity` options are the row ids, and a `kind`
+  question says what sort of problem it sees (stored on the run and in the CSV). Fixed caps keep
+  the price per tick steady. The trigger's summary options set the baseline, floor and lookback;
+  unset, they default to 6 windows, 5 events and 6h. What the model read is on the run's trace.
+- Richer schedule summary (TR-400): a schedule trigger can hand its agent more than the counts
+  per label. `condition.summary` (or "Richer summary" on the trigger form) turns on, each on its
+  own: every other label counted per entity (`by_entity`, so a 401 spike arrives tied to the
+  service), the usual value and how much it varies over the last N windows with a z score
+  (`baseline`), a volume floor (`min_count`), avg and max of numeric fields per entity
+  (`numbers`), sample lines for what moved most instead of the newest lines (`examples`), and the
+  newest earlier finding on the entities in the window (`findings`). `"rich"` is the defaults.
+  Bounded whatever the volume. Without it the summary is the same as before.
+- Decision models (TR-324, TR-381): a watcher agent can be judged by a System One decision model
+  instead of a chat model. Each run asks the model two typed questions about the window it was
+  handed: how likely it is that something needs a closer look (the agent's prompt says what
+  counts), and which entity. At or above the agent's threshold it concludes `investigate` on that
+  entity, so its handoffs wake the next agent; below it, nothing to report. Shadow mode scores
+  every window and records what it would have done, but never hands anything on. Decision runs do
+  not count toward the daily run cap.
+- Settings, Decision models: add Cloudflare Workers AI (Clef, Clef-flash; an Account ID and a
+  Workers AI API token), TypeSafe Jev (an API key), or any URL that takes the same request. The
+  token is write-only; Save and Test check it with one small request and say what is wrong in
+  plain words. API: `GET/PUT/DELETE /api/settings/decision-endpoints[/{id}]`,
+  `POST /api/settings/decision-endpoints/{id}/test`.
+- Agents take `decision: {endpoint, model, threshold, shadow}`; the preset "Triage with a decision
+  model" starts one in shadow mode. Each run stores its probabilities (`scores` on the run), shown
+  in the runs list with a "would escalate" mark for shadow runs, and
+  `GET /api/agents/builtin/{name}/runs.csv` exports every run with them (Export CSV on the runs tab).
 - The project page's results have a Show filter: everything, only findings (leaves out what had
   nothing to report), or one agent's conclusions, so a root-cause agent's notes are not buried
   under a watcher's quiet checks. Remembered per project in the browser.

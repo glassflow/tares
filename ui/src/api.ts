@@ -2,14 +2,14 @@ import type {
   AgentInfo,
   ApiKey, ExternalAgent,
   CatalogDescribe, ConnectorSpec, DiscoverProposal, DispatchDetail, DispatchLogEntry, Entity, EnvScan,
-  AgentPreset, AgentRun, BuiltinAgent, Handoff,
+  AgentDecision, AgentPreset, AgentRun, BuiltinAgent, Handoff, Verdict,
   GithubAppTest, GithubCredential,
   LabelFacet, ModelUsage, QueryLogEntry,
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults,
   Skill, SkillSummary,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
-  TimelineEventRow, Trigger, ModelProvider, ModelProviders,
+  TimelineEventRow, Trigger, ModelProvider, ModelProviders, DecisionEndpoints,
 } from "./types";
 import type { TimelineThread } from "./components/ProjectActivity";
 
@@ -328,6 +328,25 @@ export const api = {
   setDefaultProvider: (id: string) =>
     request<ModelProviders & { ok: boolean }>("/api/settings/providers/default",
       { method: "PUT", body: JSON.stringify({ id }) }),
+  // An agent's runs as CSV (TR-383), for comparing a decision watcher's shadow week elsewhere.
+  agentRunsCsv: async (name: string) => {
+    const res = await fetch(`/api/agents/builtin/${encodeURIComponent(name)}/runs.csv`, { headers: { ...authHeader() } });
+    if (res.status === 401) { unauthorized(); throw new Error("authentication required"); }
+    if (!res.ok) throw new ApiError(res.statusText, res.status);
+    return res.text();
+  },
+  // Decision model endpoints (TR-381). The token is write-only; blank keeps the stored one.
+  decisionEndpoints: () => request<DecisionEndpoints>("/api/settings/decision-endpoints"),
+  saveDecisionEndpoint: (id: string, body: { kind: string; name?: string; key?: string; account_id?: string; url?: string; model?: string }) =>
+    request<DecisionEndpoints & { ok: boolean; id: string }>(`/api/settings/decision-endpoints/${encodeURIComponent(id)}`,
+      { method: "PUT", body: JSON.stringify(body) }),
+  deleteDecisionEndpoint: (id: string) =>
+    request<DecisionEndpoints & { ok: boolean }>(`/api/settings/decision-endpoints/${encodeURIComponent(id)}`,
+      { method: "DELETE" }),
+  testDecisionEndpoint: (id: string, model = "") =>
+    request<{ ok: boolean; probability?: number; error?: string; model: string }>(
+      `/api/settings/decision-endpoints/${encodeURIComponent(id)}/test`,
+      { method: "POST", body: JSON.stringify({ model }) }),
   anthropicKeyStatus: () =>
     request<{ configured: boolean; source: string; stored: boolean; env_overrides: boolean }>(
       "/api/settings/anthropic-key"),
@@ -655,6 +674,8 @@ export type AgentBody = {
   slack_channel?: string; webhook_url?: string; webhook_token?: string; mcp_servers?: string[];
   max_rounds?: number | null; budget_usd?: number | null; webhook_key_label?: string;
   handoffs?: Handoff[];
+  concludes?: boolean; verdicts?: Verdict[];
+  decision?: AgentDecision;   // {} turns a decision agent back into a chat-model agent
 };
 
 export type AgentLimits = {

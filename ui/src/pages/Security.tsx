@@ -6,7 +6,7 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import { Close } from "../components/icons";
 import { InternalName, Picker, TimeAgo, keyTitle } from "../components/bits";
 import { type Cloud, cloudLink, useCloud } from "../cloud";
-import type { ApiKey, GithubAppTest, GithubCredential, ModelProvider, ModelProviders } from "../types";
+import type { ApiKey, DecisionEndpoint, DecisionEndpoints, GithubAppTest, GithubCredential, ModelProvider, ModelProviders } from "../types";
 import { UsagePanels } from "../components/UsagePanels";
 import WorkspaceSettings from "./WorkspaceSettings";
 
@@ -19,12 +19,13 @@ import WorkspaceSettings from "./WorkspaceSettings";
 // The per-source ingest URL is an address, not a secret — it lives on the source page, not here.
 //   · Workspace  (Tares Cloud only) team, plan, storage, credit and delete, held by the control
 //                  plane (TR-375); shown first, and the default tab, when /health has workspace_api_url
-type SettingsTab = "workspace" | "usage" | "access" | "anthropic" | "agents" | "github" | "slack" | "observability";
+type SettingsTab = "workspace" | "usage" | "access" | "anthropic" | "decision" | "agents" | "github" | "slack" | "observability";
 const TABS: { key: SettingsTab; label: string }[] = [
   { key: "workspace", label: "Workspace" },
   { key: "usage", label: "Usage" },
   { key: "access", label: "Access and API keys" },
   { key: "anthropic", label: "Model providers" },
+  { key: "decision", label: "Decision models" },
   { key: "agents", label: "Agents" },
   { key: "github", label: "GitHub" },
   { key: "slack", label: "Slack" },
@@ -119,6 +120,7 @@ export default function Security() {
       {tab === "usage" && <UsagePanels />}
       {tab === "access" && <><AccessPanel /><ApiKeysPanel /></>}
       {tab === "anthropic" && <ProvidersPanel />}
+      {tab === "decision" && <DecisionModelsPanel />}
       {tab === "agents" && <AgentLimitsPanel />}
       {tab === "github" && <GithubPanel cloud={cloud} />}
       {/* Until /health answers (it can be slow on a busy instance) the self-host panels show, so
@@ -778,6 +780,200 @@ function ProvidersPanel() {
           message={confirmDelete.kind === "anthropic"
             ? "The stored key and gateway are removed. If the deployment's environment carries a key, that one is used again."
             : "Agents that name this provider fall back to the default until you point them elsewhere."}
+          confirmLabel="Remove" danger
+          onConfirm={() => remove(confirmDelete.id)}
+          onCancel={() => setConfirmDelete(undefined)} />
+      )}
+    </div>
+  );
+}
+
+// Decision models (TR-381): System One models a watcher agent can use instead of a chat model.
+// They answer typed questions with probabilities, no text. Cloudflare Workers AI (Clef) and
+// TypeSafe (Jev) are presets; a custom URL takes anything that speaks the same request, such as a
+// self-hosted Kev or Laya. The token is write-only, like a provider key.
+type DecisionKind = DecisionEndpoint["kind"];
+const DECISION_HELP: Record<DecisionKind, React.ReactNode> = {
+  cloudflare: <>Clef and Clef-flash on Workers AI. In the Cloudflare dashboard, open <strong>Workers AI</strong>,
+    then <strong>Use REST API</strong>, then <strong>Create a Workers AI API Token</strong> (it has
+    Workers AI Read and Edit). The Account ID is on the same page.</>,
+  typesafe: <>Jev, TypeSafe's hosted decision model, with an API key from its dashboard.</>,
+  custom: <>Any URL that takes the same request (a state and typed questions), such as a
+    self-hosted Kev or Laya. The key is sent as a bearer token, if you give one.</>,
+};
+
+function DecisionModelsPanel() {
+  const [data, setData] = useState<DecisionEndpoints>();
+  const [err, setErr] = useState<string>();
+  const [msg, setMsg] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<{ id: string; kind: DecisionKind; name: string; key: string; account_id: string; url: string; model: string }>();
+  const [tests, setTests] = useState<Record<string, { ok: boolean; text: string }>>({});
+  const [confirmDelete, setConfirmDelete] = useState<DecisionEndpoint>();
+
+  const load = () => api.decisionEndpoints().then(setData).catch((e) => setErr(String((e as Error).message ?? e)));
+  useEffect(() => { load(); }, []);
+  const kindLabel = (k: DecisionKind) => data?.kinds.find((x) => x.id === k)?.label ?? k;
+
+  const startAdd = () => {
+    setEditing({ id: "new", kind: "cloudflare", name: "Cloudflare Workers AI", key: "", account_id: "", url: "", model: "" });
+    setMsg(undefined); setErr(undefined);
+  };
+  const startEdit = (e: DecisionEndpoint) => {
+    setEditing({ id: e.id, kind: e.kind, name: e.name, key: "", account_id: e.account_id, url: e.url, model: e.kind === "custom" ? (e.models[0] ?? "") : "" });
+    setMsg(undefined); setErr(undefined);
+  };
+  const test = async (id: string) => {
+    setBusy(true);
+    try {
+      const r = await api.testDecisionEndpoint(id);
+      setTests((t) => ({ ...t, [id]: r.ok
+        ? { ok: true, text: `works: ${r.model || "the model"} answered${r.probability !== undefined ? ` (probability ${r.probability})` : ""}` }
+        : { ok: false, text: r.error ?? "did not answer" } }));
+    } catch (e) { setTests((t) => ({ ...t, [id]: { ok: false, text: String((e as Error).message ?? e) } })); }
+    setBusy(false);
+  };
+  const save = async () => {
+    if (!editing) return;
+    setBusy(true); setErr(undefined); setMsg(undefined);
+    try {
+      const r = await api.saveDecisionEndpoint(editing.id, { kind: editing.kind, name: editing.name, key: editing.key,
+                                                             account_id: editing.account_id, url: editing.url, model: editing.model });
+      setData(r); setEditing(undefined);
+      setMsg("✓ saved; checking it works…");
+      await test(r.id);
+      setMsg(undefined);
+    } catch (e) { setErr(String((e as Error).message ?? e)); }
+    setBusy(false);
+  };
+  const remove = async (id: string) => {
+    setBusy(true); setErr(undefined);
+    try { setData(await api.deleteDecisionEndpoint(id)); }
+    catch (e) { setErr(String((e as Error).message ?? e)); }
+    setBusy(false); setConfirmDelete(undefined);
+  };
+
+  const existing = editing && data?.endpoints.find((e) => e.id === editing.id);
+  const isNew = editing?.id === "new";
+  const hasKey = !!editing?.key.trim() || !!existing?.key_stored;
+  const canSave = !!editing && !!editing.name.trim() && (
+    editing.kind === "cloudflare" ? /^[0-9a-fA-F]{32}$/.test(editing.account_id.trim()) && hasKey
+    : editing.kind === "typesafe" ? hasKey
+    : !!editing.url.trim());
+
+  return (
+    <div className="panel">
+      <div className="btnrow" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+        <h2 style={{ margin: 0 }}>Decision models</h2>
+        {!editing && <button className="primary" onClick={startAdd}>Add decision model</button>}
+      </div>
+      <p className="help">
+        A decision model judges a watcher agent's window instead of a chat model: it gives the
+        probability that something needs a closer look and picks the entity, and the agent's
+        threshold decides whether the next agent wakes. Pick one on an agent under
+        <strong> judged by</strong>. Tokens are never returned by the API and never included in a
+        catalog export.
+      </p>
+
+      {err && <div className="alert error">{err}</div>}
+      {msg && <p className="help">{msg}</p>}
+
+      {editing && (
+        <div className="panel" style={{ marginBottom: 12 }}>
+          {isNew ? (
+            <div className="field">
+              <span className="lbl">kind</span>
+              <Picker value={editing.kind} options={["cloudflare", "typesafe", "custom"]} style={{ width: 280 }}
+                      labels={{ cloudflare: "Cloudflare Workers AI", typesafe: "TypeSafe Jev", custom: "Custom URL" }}
+                      ariaLabel="kind"
+                      onChange={(k) => setEditing({ ...editing, kind: k as DecisionKind,
+                                                    name: k === "custom" ? "" : k === "typesafe" ? "TypeSafe Jev" : "Cloudflare Workers AI" })} />
+              <span className="help">{DECISION_HELP[editing.kind]}</span>
+            </div>
+          ) : <p className="help" style={{ marginTop: 0 }}><strong>{existing?.name}</strong>: {DECISION_HELP[editing.kind]}</p>}
+          <div className="row2">
+            <label className="field">
+              <span className="lbl">name</span>
+              <input type="text" value={editing.name} disabled={!isNew} placeholder="e.g. Kev on the GPU box"
+                     onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+              {isNew && <span className="help">agents refer to it by this name</span>}
+            </label>
+            {editing.kind === "cloudflare" && (
+              <label className="field">
+                <span className="lbl">Account ID</span>
+                <input type="text" className="mono" value={editing.account_id} placeholder="32 characters, from the Workers AI page"
+                       onChange={(e) => setEditing({ ...editing, account_id: e.target.value })} />
+                {editing.account_id.trim() && !/^[0-9a-fA-F]{32}$/.test(editing.account_id.trim()) &&
+                  <span className="help">the Account ID is 32 characters, letters a to f and digits</span>}
+              </label>
+            )}
+            {editing.kind === "custom" && (
+              <label className="field">
+                <span className="lbl">URL</span>
+                <input type="text" className="mono" value={editing.url} placeholder="http://gpu-box:8000/v1/decide"
+                       onChange={(e) => setEditing({ ...editing, url: e.target.value })} />
+              </label>
+            )}
+          </div>
+          <div className="row2">
+            <label className="field">
+              <span className="lbl">{editing.kind === "cloudflare" ? "API token" : "API key"} {editing.kind === "custom" && <span className="help">(optional)</span>}</span>
+              <input type="password" className="mono" autoComplete="new-password" value={editing.key}
+                     placeholder={existing?.key_stored ? "leave blank to keep the stored one" : editing.kind === "cloudflare" ? "the Workers AI API token" : "the key"}
+                     onChange={(e) => setEditing({ ...editing, key: e.target.value })} />
+            </label>
+            {editing.kind === "custom" && (
+              <label className="field">
+                <span className="lbl">model <span className="help">(optional)</span></span>
+                <input type="text" className="mono" value={editing.model} placeholder="the model name it expects, if any"
+                       onChange={(e) => setEditing({ ...editing, model: e.target.value })} />
+              </label>
+            )}
+          </div>
+          <div className="btnrow">
+            <button className="primary" disabled={busy || !canSave} onClick={save}>Save and test</button>
+            <button onClick={() => { setEditing(undefined); setErr(undefined); }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {!data ? <div className="muted">loading…</div>
+        : data.endpoints.length === 0 && !editing ? (
+          <div className="empty">no decision model yet. Add one to let a watcher agent judge its windows with one.</div>
+        ) : data.endpoints.length > 0 && (
+          <table>
+            <thead><tr><th>decision model</th><th>kind</th><th>models</th><th>status</th><th aria-label="actions" /></tr></thead>
+            <tbody>
+              {data.endpoints.map((e) => (
+                <tr key={e.id}>
+                  <td><strong>{e.name}</strong>
+                    {e.kind === "custom" && <div className="mono help">{e.url}</div>}
+                    {e.kind === "cloudflare" && <div className="mono help">account {e.account_id.slice(0, 8)}…</div>}</td>
+                  <td className="help">{kindLabel(e.kind)}</td>
+                  <td className="mono help">{e.models.join(", ") || "as the endpoint decides"}</td>
+                  <td>
+                    {!e.configured ? <span className="badge error">no token</span>
+                      : tests[e.id] ? <><span className={"badge " + (tests[e.id].ok ? "ok" : "error")}>{tests[e.id].ok ? "works" : "failed"}</span>
+                          <span className="help"> {tests[e.id].ok ? tests[e.id].text.replace(/^works: /, "") : tests[e.id].text}</span></>
+                      : <span className="badge ok">configured</span>}
+                  </td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <div className="btnrow" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
+                      {e.configured && <button disabled={busy} onClick={() => test(e.id)}>Test</button>}
+                      <button disabled={busy} onClick={() => startEdit(e)}>Edit</button>
+                      <button className="danger" disabled={busy} onClick={() => setConfirmDelete(e)}>Remove</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+      {confirmDelete && (
+        <ConfirmDialog
+          title={`Remove ${confirmDelete.name}?`}
+          message="Its token is removed from this cell. An agent that uses it has to be pointed elsewhere first."
           confirmLabel="Remove" danger
           onConfirm={() => remove(confirmDelete.id)}
           onCancel={() => setConfirmDelete(undefined)} />
