@@ -312,6 +312,16 @@ CREATE TABLE IF NOT EXISTS tickets (
   created_at  TIMESTAMPTZ,
   updated_at  TIMESTAMPTZ
 );
+-- Claude Code sessions that worked in a project (TR-405): the plugin tells Tares which project a
+-- session works in with a `session_project` line, and the whole session (its claude_code events,
+-- keyed by session id, the lines from before the project existed included) reads as the project's
+CREATE TABLE IF NOT EXISTS project_sessions (
+  project    TEXT,
+  session    TEXT,
+  repo       TEXT,
+  linked_at  TIMESTAMPTZ,
+  PRIMARY KEY (project, session)
+);
 CREATE TABLE IF NOT EXISTS skills (
   project     TEXT,
   name        TEXT,
@@ -2236,6 +2246,7 @@ class Store:
             self._forget_unused_skills()   # a skill another project uses stays
             self._forget_unused_docs()     # so does a doc
             self.con.execute("DELETE FROM tickets WHERE project = ?", [uid])
+            self.con.execute("DELETE FROM project_sessions WHERE project = ?", [uid])
             self.con.execute("DELETE FROM usecase_log WHERE usecase_id = ?", [uid])
             self.con.execute("DELETE FROM usecases WHERE id = ?", [uid])
 
@@ -2545,6 +2556,34 @@ class Store:
     def delete_ticket(self, tid: str) -> None:
         with self._lock:
             self.con.execute("DELETE FROM tickets WHERE id = ?", [tid])
+
+    def link_session(self, project: str, session: str, repo: str | None = None) -> bool:
+        """The Claude Code session works in the project. True when it was not linked before."""
+        with self._lock:
+            had = self.con.execute("SELECT 1 FROM project_sessions WHERE project = ? AND "
+                                   "session = ?", [project, session]).fetchone()
+            if not had:
+                self.con.execute("INSERT INTO project_sessions (project, session, repo, linked_at) "
+                                 "VALUES (?, ?, ?, ?)", [project, session, repo, now_utc()])
+        return not had
+
+    def project_sessions(self, project: str) -> list[dict]:
+        """The sessions that worked in the project, newest activity first, with when they started
+        and last did something and how many lines they have."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT s.session, s.repo, s.linked_at, min(e.event_time), max(e.event_time), "
+                "count(e.key_value) FROM project_sessions s LEFT JOIN events e ON "
+                "e.source = 'claude_code' AND e.key_value = s.session WHERE s.project = ? "
+                "GROUP BY s.session, s.repo, s.linked_at ORDER BY max(e.event_time) DESC NULLS LAST",
+                [project]).fetchall()
+        return [{"session": r[0], "repo": r[1], "linked_at": r[2], "started_at": r[3],
+                 "last_at": r[4], "lines": int(r[5] or 0)} for r in rows]
+
+    def session_projects(self, session: str) -> list[str]:
+        with self._lock:
+            return [r[0] for r in self.con.execute(
+                "SELECT project FROM project_sessions WHERE session = ?", [session]).fetchall()]
 
     def get_project_linear(self, uid: str) -> dict | None:
         """The Linear project a project's tickets live in, with the last sync's state, or None."""
@@ -3236,6 +3275,17 @@ class Store:
              "event_time": r[4], "ingest_time": r[5]}
             for r in rows
         ]
+
+    def key_events(self, source: str, key: str, limit: int = 200,
+                   offset: int = 0) -> list[dict]:
+        """One entity's events on one source, oldest first (a session read top to bottom)."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT event_type, text, event_time, labels FROM events WHERE source = ? AND "
+                "key_value = ? ORDER BY event_time, ingest_time LIMIT ? OFFSET ?",
+                [source, key, int(limit), int(offset)]).fetchall()
+        return [{"event_type": r[0], "text": r[1], "event_time": r[2],
+                 "labels": json.loads(r[3]) if r[3] else {}} for r in rows]
 
     def last_finding(self, source: str, agent: str, key: str) -> str | None:
         """The newest delivered finding this agent wrote for this key, or None. Feeds the next

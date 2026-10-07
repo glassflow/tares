@@ -753,6 +753,8 @@ def make_app() -> FastAPI:
         ("GET", re.compile(r"^/docs/[^/]+$"), "read"),
         ("GET", re.compile(r"^/tickets$"), "read"),
         ("GET", re.compile(r"^/tickets/[^/]+$"), "read"),
+        ("GET", re.compile(r"^/sessions$"), "read"),
+        ("GET", re.compile(r"^/sessions/[^/]+$"), "read"),
         ("GET", re.compile(r"^/results$"), "read"),
         ("GET", re.compile(r"^/results/[^/]+$"), "read"),
         ("GET", re.compile(r"^/outline$"), "read"),
@@ -4329,6 +4331,27 @@ def make_app() -> FastAPI:
                  409)
         store.delete_ticket(t["id"])
         return {"ok": True, "deleted": t["id"]}
+
+    # ── the Claude Code sessions that worked in a project (TR-405) ────────────
+    @app.get("/api/projects/{uid}/sessions")
+    async def list_project_sessions(uid: str):
+        """The sessions that worked in the project (the spec session among them), newest activity
+        first."""
+        _project_or_404(uid)
+        return {"sessions": store.project_sessions(uid)}
+
+    @app.get("/api/projects/{uid}/sessions/{sid}")
+    async def get_project_session(uid: str, sid: str, limit: int = 200, offset: int = 0):
+        """One session's lines, oldest first, the ones from before it named the project
+        included."""
+        _project_or_404(uid)
+        if not any(s["session"] == sid for s in store.project_sessions(uid)):
+            _err(KeyError(f"session {sid!r} did not work in this project"), 404)
+        src = next((n for n, c in runtime.catalog.sources.items()
+                    if c.connector == "claude_code"), "claude_code")
+        return {"session": sid,
+                "lines": store.key_events(src, sid, limit=min(max(limit, 1), 1000),
+                                          offset=max(offset, 0))}
 
     # ── Linear (TR-408): the cell's connection, and the Linear project a project's tickets live
     # in. Tares only reads from Linear; sessions write with Linear's own tools ───────────────

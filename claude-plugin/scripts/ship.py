@@ -222,6 +222,80 @@ def process_lines(raw_lines: list, flow: str, hook: dict) -> tuple:
     return out, flow, changed
 
 
+# ── the Tares project a session works in (TR-405), seen in the transcript ────
+# A session works in a project once it creates one (create_project) or a Tares tool names one
+# (`project` in the call). The shipper stamps `tares_project` on every line from then on and writes
+# a synthetic `session_project` line, which ties the whole session (the lines before included) to
+# the project on Tares.
+
+def _tares_tool(name) -> str:
+    """The Tares tool a tool_use block calls ("" when it is not a Tares tool). Claude Code names
+    MCP tools mcp__<server>__<tool>; the server is `tares`, or `plugin_tares_tares` from the
+    plugin."""
+    parts = str(name or "").split("__")
+    if len(parts) >= 3 and parts[0] == "mcp" and parts[1] in ("tares", "plugin_tares_tares"):
+        return parts[-1]
+    return ""
+
+
+def project_call(obj: dict):
+    """The project a Tares tool_use line works in, or None."""
+    msg = obj.get("message") if isinstance(obj.get("message"), dict) else {}
+    content = msg.get("content")
+    if not isinstance(content, list):
+        return None
+    for b in content:
+        if not (isinstance(b, dict) and b.get("type") == "tool_use"):
+            continue
+        tool = _tares_tool(b.get("name"))
+        if not tool:
+            continue
+        inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+        ref = inp.get("name") if tool == "create_project" else inp.get("project")
+        ref = str(ref or "").strip()
+        if ref:
+            return ref
+    return None
+
+
+def project_marker(data_dir: str, session_id: str) -> str:
+    return flow_marker(data_dir, session_id)[:-len(".flow")] + ".project"
+
+
+def read_project(data_dir: str, session_id: str) -> str:
+    try:
+        return open(project_marker(data_dir, session_id)).read().strip()
+    except OSError:
+        return ""
+
+
+def write_project(data_dir: str, session_id: str, project: str) -> None:
+    with open(project_marker(data_dir, session_id), "w") as f:
+        f.write(project)
+
+
+def stamp_project(objs: list, project: str, hook: dict) -> tuple:
+    """Stamp `tares_project` on each line once the session works in a project, and write a
+    `session_project` line after the call that named a new one. Returns (objects, project,
+    whether it changed)."""
+    out, changed = [], False
+    for o in objs:
+        asked = project_call(o)
+        switched = asked is not None and asked != project
+        if switched:
+            project, changed = asked, True
+        if project:
+            o["tares_project"] = project
+        out.append(o)
+        if switched:
+            sp = synthetic_line(hook, "session_project", o.get("flow") or "",
+                                tares_project=project)
+            if o.get("timestamp"):
+                sp["timestamp"] = o["timestamp"]   # right after the call, on the session's clock
+            out.append(sp)
+    return out, project, changed
+
+
 # ── SessionStart: hand accepted memory to Claude ─────────────────────────────
 
 def memory_context(cfg: dict, cwd: str) -> str:
@@ -310,7 +384,13 @@ def main() -> None:
                 objs, flow, changed = process_lines(raw_lines, flow, hook)
                 if changed and session_id:
                     write_flow(data_dir, session_id, flow)   # the local hooks gate on this
+                project = read_project(data_dir, session_id) if session_id else ""
+                objs, project, p_changed = stamp_project(objs, project, hook)
                 shipped_ok = ship_lines(cfg, objs)
+                if shipped_ok and p_changed and session_id:
+                    # only once shipped: a failed post retries these lines, the session_project
+                    # line with them
+                    write_project(data_dir, session_id, project)
                 if shipped_ok:
                     with open(off_file, "w") as f:
                         f.write(str(new_offset))   # advance only on success; failures retry next hook

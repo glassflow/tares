@@ -76,6 +76,8 @@ class ClaudeCodeConnector(Connector):
         {"name": "sidechain", "help": "sub-agent (sidechain) message"},
         {"name": "flow", "help": "session flow set from inside Claude Code (e.g. challenger); "
                                  "the plugin stamps it on every line of a marked session"},
+        {"name": "tares_project", "help": "the Tares project the session works in; the plugin "
+                                          "stamps it once the session creates or names one"},
         {"name": "verdict", "help": "challenge events: PASS / FAIL / ERROR / TIMEOUT / INCONCLUSIVE"},
         {"name": "sha", "help": "challenge_commit: the reviewed commit"},
         {"name": "finding_count", "help": "challenge events: findings reported (number)"},
@@ -105,11 +107,30 @@ class ClaudeCodeConnector(Connector):
         items = payload if isinstance(payload, list) else [payload]
         out = []
         for o in items:
+            if isinstance(o, dict) and o.get("type") == "session_project":
+                self._link_project(o)
             if isinstance(o, dict):
                 env = self._obj_to_envelope(o, redact, include_thinking)
                 if env is not None:
                     out.append(env)
         return out
+
+    def _link_project(self, o: dict) -> None:
+        """A `session_project` line (TR-405): the plugin saw the session work in a Tares project
+        (it created it, or a Tares tool named it). Tie the session to the project, and put this
+        source in the project so the session's lines read as the project's, the ones from before
+        the project existed included (they share the session key). An unknown project is
+        ignored: the line still lands on the session's timeline."""
+        ref, sid = str(o.get("tares_project") or "").strip(), str(o.get("sessionId") or "")
+        if not ref or not sid or self.store is None:
+            return
+        p = self.store.get_project(ref) or self.store.get_project_by_name(ref)
+        if p is None:
+            return
+        cwd = o.get("cwd")
+        self.store.link_session(p["id"], sid, Path(str(cwd)).name if cwd else None)
+        self.store.upsert_project_object(p["id"], "source", f"+source:{self.cfg.name}",
+                                         self.cfg.name)
 
     def label_context(self, o: dict | None) -> dict:
         """Synthesized label axes from a raw transcript object — the SAME mapping ingest uses
@@ -126,7 +147,8 @@ class ClaudeCodeConnector(Connector):
                 "model": str(msg["model"]) if msg.get("model") else None,
                 "type": str(o.get("type")) if o.get("type") else None,
                 "sidechain": "true" if o.get("isSidechain") else "false",
-                "flow": str(o["flow"]) if o.get("flow") else None}
+                "flow": str(o["flow"]) if o.get("flow") else None,
+                "tares_project": str(o["tares_project"]) if o.get("tares_project") else None}
 
     # ── mapping: one JSONL object → one Envelope ───────────────────────────────
     def _obj_to_envelope(self, o: dict, redact: bool, include_thinking: bool):
@@ -231,6 +253,8 @@ class ClaudeCodeConnector(Connector):
         if o.get("type") == "session_flow":
             # written by the plugin when Claude calls set_session_flow; `flow` empty = cleared
             return f"session flow: {o.get('flow') or 'cleared'}"
+        if o.get("type") == "session_project":
+            return f"session works in project {o.get('tares_project')}"
         if o.get("type") in ClaudeCodeConnector.CHALLENGE_TYPES:
             return ClaudeCodeConnector._render_challenge(o)
         content = msg.get("content")
