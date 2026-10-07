@@ -3,7 +3,7 @@ description: Spec a new project with Claude, and keep everything the build needs
 argument-hint: "[what you want to build]"
 ---
 
-The user invoked /tares:spec with: $ARGUMENTS
+The user ran this command with: $ARGUMENTS
 
-Load the `spec-project` skill of the tares plugin and follow it from step 1. If the user said what
+Load the `spec-project` skill of this plugin and follow it from step 1. If the user said what
 they want to build above, start the brainstorm from that; otherwise ask what they want to build.

@@ -29,6 +29,10 @@ ticket list (in Tares, or synced from Linear). To spec a new project, use the `s
 skill. When told to work on a Tares project, start with its `start` doc (`list_docs`, `get_doc`),
 then take tickets in order with `list_tickets` and `get_ticket`, which carries the working doc.
 
+Two docs belong to every project: the shared AGENTS.md (standing rules) and memory (facts that
+hold everywhere). Read them with `read_global_docs`. When the user states a rule or fact that
+holds beyond the current project, offer to add it with `add_to_global`.
+
 ## Challenger sessions
 
 When the user asks to make this a challenger session (any wording: "challenger session",

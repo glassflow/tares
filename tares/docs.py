@@ -7,6 +7,9 @@ one ticket. A ticket is one piece of work in a project's list. When the project 
 Linear owns its tickets and Tares keeps a synced record of them (tares/linear.py); otherwise Tares
 owns them. Working docs and every other doc live only in Tares.
 
+Two docs belong to every project: the cell's AGENTS.md and its memory (GLOBAL_DOCS). They are made
+when the first project gets docs, and a session adds to them a line at a time.
+
 This module validates what the API and the MCP tools hand the store.
 """
 from __future__ import annotations
@@ -18,9 +21,38 @@ DOC_KINDS = {
     "agents": "the AGENTS.md of the build: conventions, commands, how to test",
     "start": "the prompt a session that builds the project starts with",
     "note": "anything else worth keeping with the project",
+    "memory": "facts and preferences that hold across projects, one line each",
 }
 # the order the console and list_docs show them in
-KIND_ORDER = ["start", "spec", "plan", "agents", "note", "working"]
+KIND_ORDER = ["start", "spec", "plan", "agents", "memory", "note", "working"]
+
+# The cell's global docs: made once the first project has docs, included in every project that
+# has docs, and grown a line at a time by sessions (append_line). {kind: (title, starting body)}
+GLOBAL_DOCS = {
+    "agents": ("AGENTS.md (all projects)",
+               "# AGENTS.md for every project\n\n"
+               "Rules every session follows in every project on this Tares. One line each; a "
+               "project's own AGENTS.md adds to these.\n\n"),
+    "memory": ("Memory (all projects)",
+               "# Memory\n\n"
+               "Facts and preferences that hold across projects. One line each, newest last.\n\n"),
+}
+MAX_LINE = 500
+
+
+def append_line(body: str, text) -> tuple[str, bool]:
+    """(the body with `- text` added at the end, whether it changed). A line already there is
+    not added twice."""
+    line = " ".join(str(text or "").split())
+    if not line:
+        raise DocError("say what to add: one line")
+    if len(line) > MAX_LINE:
+        raise DocError(f"the line is {len(line)} characters; keep it to {MAX_LINE}")
+    entry = f"- {line.lstrip('- ').strip()}"
+    if entry in body.splitlines():
+        return body, False
+    sep = "" if not body or body.endswith("\n") else "\n"
+    return f"{body}{sep}{entry}\n", True
 
 TICKET_STATUSES = ("todo", "in_progress", "done", "canceled")
 TICKET_OWNERS = ("tares", "linear")

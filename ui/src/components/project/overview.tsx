@@ -377,7 +377,7 @@ export function Overview({ ctx, actions, onResume }: { ctx: Ctx; actions: React.
 function BuildRow({ ctx }: { ctx: Ctx }) {
   const { data: docs } = usePolling(() => api.docs(ctx.id), 30000);
   const { data: t } = usePolling(() => api.tickets(ctx.id), 30000);
-  const nDocs = (docs ?? []).filter((d) => d.kind !== "working").length;
+  const nDocs = (docs ?? []).filter((d) => d.kind !== "working" && !d.global).length;
   const tickets = t?.tickets ?? [];
   if (!nDocs && !tickets.length) return null;
   const done = tickets.filter((x) => x.status === "done").length;

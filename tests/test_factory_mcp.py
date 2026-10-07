@@ -66,6 +66,10 @@ async def main():
     m._cx = lambda timeout=10: httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                                  base_url="http://t", headers=root)
     async with app.router.lifespan_context(app):
+        print("== shared docs before any project has docs ==")
+        r = await m.read_global_docs()
+        ck("read_global_docs says there are none yet", "No shared docs yet" in r, r)
+
         print("== spec session, tickets in Tares ==")
         out = json.loads(await m.create_project("Invoices", "Turn emailed invoices into rows"))
         ck("create_project -> id, name, goal", out["id"].startswith("uc_")
@@ -98,10 +102,26 @@ async def main():
         ck("write_ticket with id changes status, keeps title", s["status"] == "in_progress"
            and s["title"] == "Parse invoices", s)
 
+        print("== shared docs ==")
+        a = json.loads(await m.add_to_global("agents", "Always build on a branch, never commit to main."))
+        ck("add_to_global agents", a["added"] and a["doc"] == "AGENTS.md (all projects)", a)
+        a = json.loads(await m.add_to_global("memory", "Prices are in euros."))
+        ck("add_to_global memory", a["added"], a)
+        a = json.loads(await m.add_to_global("memory", "Prices are in euros."))
+        ck("the same line twice is not added", a["added"] is False, a)
+        bad = await m.add_to_global("notes", "x")
+        ck("an unknown shared doc is a clear error", bad.startswith("error 404"), bad)
+        g = await m.read_global_docs()
+        ck("read_global_docs returns both with the lines",
+           "- Always build on a branch" in g and "- Prices are in euros." in g, g)
+
         print("== the session that builds it ==")
         docs = json.loads(await m.list_docs(project="Invoices"))
         ck("list_docs in reading order, starting prompt first",
-           [d["kind"] for d in docs] == ["start", "spec", "plan", "agents", "working"], docs)
+           [d["kind"] for d in docs if not d["global"]] == ["start", "spec", "plan", "agents", "working"], docs)
+        ck("and the shared docs marked global",
+           sorted(d["title"] for d in docs if d["global"])
+           == ["AGENTS.md (all projects)", "Memory (all projects)"], docs)
         d = json.loads(await m.get_doc(spec["id"], project="Invoices"))
         ck("get_doc -> body", d["body"] == "# Build\n\nv2"
            and d["updated_by"] == "claude code session", d)

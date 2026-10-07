@@ -28,6 +28,11 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
+# Claude Code's own bookkeeping lines in a transcript: no conversation in them, so they are not
+# shipped (about half of a session's lines otherwise)
+BOOKKEEPING = {"attachment", "queue-operation", "mode", "permission-mode", "atis-latch",
+               "ai-title", "last-prompt", "file-history-snapshot"}
+
 FLOW_TOOL = "set_session_flow"   # the tares MCP tool; Claude Code prefixes the server name
                                   # (mcp__tares__..., or mcp__plugin_tares_tares__... from a plugin)
 CHALLENGER = "challenger"
@@ -206,7 +211,7 @@ def process_lines(raw_lines: list, flow: str, hook: dict) -> tuple:
             o = json.loads(raw)
         except Exception:
             continue
-        if not isinstance(o, dict):
+        if not isinstance(o, dict) or o.get("type") in BOOKKEEPING:
             continue
         asked = flow_call(o)
         switched = asked is not None and asked != flow

@@ -13,17 +13,19 @@ import type { Doc, DocKind, Ticket, TicketStatus } from "../../types";
 // each (in Tares, or synced from Linear), and the Claude Code sessions that worked here.
 
 export const KIND_LABEL: Record<DocKind, string> = {
-  start: "Starting prompt", spec: "Spec", plan: "Plan", agents: "AGENTS.md", note: "Note",
-  working: "Working doc",
+  start: "Starting prompt", spec: "Spec", plan: "Plan", agents: "AGENTS.md", memory: "Memory",
+  note: "Note", working: "Working doc",
 };
 const KIND_HELP: Record<DocKind, string> = {
   start: "what a session that builds the project reads first",
   spec: "what is built and why",
   plan: "milestones and the order of work",
   agents: "conventions, commands, how to test",
+  memory: "facts and preferences that hold across projects",
   note: "anything else worth keeping with the project",
   working: "how to do one ticket: context, steps, files, how to verify",
 };
+// a person adds these kinds; memory is the shared one, made by Tares
 const KINDS: DocKind[] = ["start", "spec", "plan", "agents", "note", "working"];
 const STATUS_LABEL: Record<TicketStatus, string> = {
   todo: "to do", in_progress: "in progress", done: "done", canceled: "canceled",
@@ -75,7 +77,7 @@ export function DocEditor({ project, initial, fixedKind, onSaved, onCancel }: {
           <input type="text" autoFocus={!initial} value={title} maxLength={200}
                  onChange={(e) => setTitle(e.target.value)} />
         </label>
-        {!fixedKind && (
+        {!fixedKind && !initial?.global && (
           <div className="field" style={{ flex: "1 1 200px" }}>
             <span className="lbl">kind</span>
             <Picker value={kind} onChange={(v) => setKind(v as DocKind)} options={KINDS} labels={KIND_LABEL}
@@ -116,7 +118,8 @@ export function DocsView({ ctx }: { ctx: Ctx }) {
   const adding = ctx.params.get("add") === "1";
   const setAdding = (open: boolean) => ctx.go({ kind: "docs" }, open ? { add: "1" } : undefined, true);
   if (error && !data) return <ErrorState error={error} what="the docs" onRetry={reload} />;
-  const docs = (data ?? []).filter((d) => d.kind !== "working");
+  const docs = (data ?? []).filter((d) => d.kind !== "working" && !d.global);
+  const shared = (data ?? []).filter((d) => d.global);
   const working = (data ?? []).filter((d) => d.kind === "working").length;
   return (
     <>
@@ -148,6 +151,27 @@ export function DocsView({ ctx }: { ctx: Ctx }) {
           project with Claude, or add a doc with New doc.
         </div>
       )}
+      {shared.length > 0 && (
+        <>
+          <h3 style={{ margin: "22px 0 8px" }}>Shared by every project</h3>
+          <p className="help" style={{ margin: "0 0 8px" }}>
+            Your standing rules and what holds everywhere. Sessions read them in every project and
+            add a line when you tell them something that applies beyond one project.
+          </p>
+          <table>
+            <thead><tr><th>doc</th><th className="num">size</th><th>changed</th></tr></thead>
+            <tbody>
+              {shared.map((d) => (
+                <tr key={d.id} className="clickable" onClick={() => ctx.go({ kind: "doc", name: d.id })}>
+                  <td><VLink v={{ kind: "doc", name: d.id }}>{d.title}</VLink></td>
+                  <td className="num">{formatBytes(d.size ?? 0)}</td>
+                  <td><By d={d} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
       {working > 0 && (
         <p className="help" style={{ marginTop: 12 }}>
           {working} working {working === 1 ? "doc sits" : "docs sit"} with {working === 1 ? "its ticket" : "their tickets"}:{" "}
@@ -170,10 +194,12 @@ export function DocView({ ctx, name }: { ctx: Ctx; name: string }) {
   const shared = data.projects.filter((p) => p !== ctx.id);
   return (
     <>
-      <ViewHead title={data.title} sub={<>{KIND_LABEL[data.kind]} · {KIND_HELP[data.kind]}</>}>
+      <ViewHead title={data.title}
+                sub={data.global ? <>Shared by every project · {KIND_HELP[data.kind]}</>
+                  : <>{KIND_LABEL[data.kind]} · {KIND_HELP[data.kind]}</>}>
         {!editing && <>
           <button className="primary" onClick={() => setEditing(true)}>Edit</button>
-          <button className="danger" onClick={() => setConfirmDel(true)}>Remove</button>
+          {!data.global && <button className="danger" onClick={() => setConfirmDel(true)}>Remove</button>}
         </>}
       </ViewHead>
       {editing ? (
@@ -183,7 +209,7 @@ export function DocView({ ctx, name }: { ctx: Ctx; name: string }) {
         <>
           <Facts rows={[
             ["changed", <By d={data} />],
-            ...(shared.length ? [["also in", shared.map(ctx.projectName).join(", ")] as [string, React.ReactNode]] : []),
+            ...(shared.length && !data.global ? [["also in", shared.map(ctx.projectName).join(", ")] as [string, React.ReactNode]] : []),
           ]} />
           <div className="panel md" style={{ marginTop: 14 }}>
             {data.body.trim() ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{data.body}</ReactMarkdown>

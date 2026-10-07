@@ -9,6 +9,18 @@ You are the spec session. Your job ends when a fresh Claude Code session, told o
 name, can read everything it needs from Tares and start building without asking the user anything
 you could have written down. You do not build anything here.
 
+## 0. Read the shared docs
+
+Call `read_global_docs` first. It returns the AGENTS.md and the memory every project shares: the
+user's standing rules (for example how they use git) and facts that hold everywhere. Follow them
+and do not ask again for what they already answer.
+
+**Throughout the session:** when the user states something that holds beyond this project (a
+standing rule such as "always build on a branch", or a fact such as "prices are in euros"), ask
+once: "Should I add that to the shared AGENTS.md (or memory) so every project gets it?" On yes,
+call `add_to_global` with `agents` for a rule or `memory` for a fact, one short line. Rules that
+only fit this project go in its own AGENTS.md instead.
+
 ## 1. Brainstorm first
 
 Talk it through before writing anything. Ask, a few questions at a time, until these are clear:
@@ -54,7 +66,7 @@ conversation.
 ## 5. Create the tickets
 
 One ticket per piece of work a session can finish and verify on its own, in the order they should
-be done.
+be done. Titles say what the ticket does, without a number in front: the list keeps the order.
 
 - **Linear:** create a Linear project named like the Tares project, and one issue per ticket in
   order, with the title and a two or three line description only. Then call
@@ -81,6 +93,9 @@ reads. Say:
 
 - what the project is, in two lines, and that the spec, plan and AGENTS.md are in this Tares
   project (`list_docs`, `get_doc`)
+- to read the shared AGENTS.md and memory too (the docs marked `global`, or
+  `read_global_docs`): they hold the user's standing rules, and the project's AGENTS.md adds to
+  them
 - where the code lives: the repo's absolute path or clone URL and the branch, and what to do if
   it is not there yet
 - how to work: take tickets in order with `list_tickets`, read each with `get_ticket` (it carries

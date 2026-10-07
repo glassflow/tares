@@ -95,11 +95,39 @@ async def api():
                             ("working", "Working: parser")):
             await cx.post(base, json={"kind": kind, "title": title, "body": f"{kind} body"})
         r = await cx.get(base)
-        kinds = [d["kind"] for d in r.json()]
+        own = [d for d in r.json() if not d["global"]]
         ck("list in reading order, no bodies, sizes",
-           kinds == ["start", "spec", "plan", "agents", "working"]
-           and "body" not in r.json()[0] and r.json()[1]["size"] == len("# What\n\nbuild"),
-           r.text)
+           [d["kind"] for d in own] == ["start", "spec", "plan", "agents", "working"]
+           and "body" not in own[0] and own[1]["size"] == len("# What\n\nbuild"), r.text)
+
+        print("== global docs ==")
+        shared = [d for d in r.json() if d["global"]]
+        ck("the first project with docs gets the shared AGENTS.md and memory",
+           sorted((d["kind"], d["title"]) for d in shared)
+           == [("agents", "AGENTS.md (all projects)"), ("memory", "Memory (all projects)")], shared)
+        g = (await cx.get("/api/docs/global")).json()
+        ck("readable on the cell", g["agents"]["global"] and "every project" in g["agents"]["body"],
+           g)
+        r = await cx.post("/api/docs/global/agents/lines",
+                          json={"text": "Always build on a branch, never commit to main.",
+                                "by": "spec session"})
+        ck("add a line", r.status_code == 200 and r.json()["added"]
+           and r.json()["body"].endswith("- Always build on a branch, never commit to main.\n")
+           and r.json()["updated_by"] == "spec session", r.text)
+        r = await cx.post("/api/docs/global/agents/lines",
+                          json={"text": "Always build on a branch, never commit to main."})
+        ck("the same line again is not added twice", r.json()["added"] is False
+           and r.json()["body"].count("Always build on a branch") == 1, r.text)
+        r = await cx.post("/api/docs/global/memory/lines", json={"text": "  "})
+        ck("an empty line -> 400", r.status_code == 400, r.text)
+        r = await cx.post("/api/docs/global/notes/lines", json={"text": "x"})
+        ck("an unknown shared doc -> 404", r.status_code == 404, r.text)
+        r = await cx.post("/api/docs/global/memory/lines", json={"text": "x"}, headers=reader)
+        ck("a read key cannot add -> 403", r.status_code == 403, r.text)
+        r = await cx.delete(f"{base}/{g['agents']['id']}")
+        ck("a project cannot drop a shared doc -> 409", r.status_code == 409, r.text)
+        ck("a project without docs does not get them yet",
+           (await cx.get(f"/api/projects/{p2}/docs")).json() == [])
         r = await cx.get(base, params={"kind": "working"})
         ck("filter by kind", [d["kind"] for d in r.json()] == ["working"], r.text)
         r = await cx.put(f"{base}/{spec}", json={"body": "# What\n\nbuild v2"})
@@ -114,6 +142,8 @@ async def api():
         r = await cx.post(f"/api/projects/{p2}/docs/{spec}/use")
         ck("include in a second project", r.status_code == 200 and sorted(r.json()["projects"])
            == sorted([p1, p2]), r.text)
+        ck("which brings the shared docs with it",
+           sum(d["global"] for d in (await cx.get(f"/api/projects/{p2}/docs")).json()) == 2)
         await cx.put(f"/api/projects/{p2}/docs/{spec}", json={"body": "shared edit"})
         r = await cx.get(f"{base}/{spec}")
         ck("an edit shows in both", r.json()["body"] == "shared edit", r.text)
@@ -200,7 +230,7 @@ async def api():
         print("== project update and delete ==")
         r = await cx.put(f"/api/projects/{p1}", json={"objects": []})
         ck("updating a custom project's objects keeps its docs", r.status_code == 200
-           and len((await cx.get(base)).json()) == 5, r.text)
+           and len([d for d in (await cx.get(base)).json() if not d["global"]]) == 5, r.text)
         await cx.delete(f"{base}/{working}")
         r = await cx.get(f"{tb}/{t1}")
         ck("deleting a working doc unlinks its ticket", r.json()["working_doc"] is None, r.text)
@@ -210,8 +240,9 @@ async def api():
         ck("its tickets go", store.list_tickets(p2) == [])
         ck("a doc another project includes stays", store.get_doc(None, w2) is not None)
         await cx.delete(f"/api/projects/{p1}")
-        ck("the last project's docs go with it", store.list_cell_docs() == [],
-           store.list_cell_docs())
+        left = store.list_cell_docs()
+        ck("the last project's docs go with it; the shared ones stay",
+           sorted(d["kind"] for d in left) == ["agents", "memory"], left)
         await cx.aclose()
 
 

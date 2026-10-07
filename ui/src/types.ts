@@ -346,11 +346,12 @@ export interface Skill {
 }
 
 // Docs and tickets (TR-403): what a spec session leaves in a project for the session that builds it
-export type DocKind = "start" | "spec" | "plan" | "agents" | "note" | "working";
+export type DocKind = "start" | "spec" | "plan" | "agents" | "memory" | "note" | "working";
 export interface DocSummary {
   id: string;
   kind: DocKind;
   title: string;
+  global?: boolean;     // the AGENTS.md or memory every project shares
   made_by: string | null;
   updated_by: string | null;
   created_at: string;

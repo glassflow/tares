@@ -90,6 +90,12 @@ def plugin():
         hook)
     ck("naming another project switches it", changed3 and project3 == "Billing"
        and out3[1]["type"] == "session_project")
+    book = [{"type": t, "sessionId": SID} for t in ("attachment", "queue-operation", "mode",
+                                                     "permission-mode", "ai-title", "last-prompt")]
+    kept, _, _ = ship.process_lines([json.dumps(o) for o in book + [line(9, "a real line")]], "",
+                                    hook)
+    ck("Claude Code's bookkeeping lines are not shipped", [o["type"] for o in kept] == ["user"],
+       kept)
     d = tempfile.mkdtemp()
     ship.write_project(d, SID, "Invoices")
     ck("the marker round-trips", ship.read_project(d, SID) == "Invoices"

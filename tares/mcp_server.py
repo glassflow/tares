@@ -452,7 +452,8 @@ async def write_doc(kind: str, title: str, body: str, id: str = "", project: str
     the order of work), `agents` (the AGENTS.md of the build: conventions, commands, how to
     test), `working` (the working doc of one ticket: context, steps, files likely touched, how to
     verify; link it with attach_working_doc), `note` (anything else). Working docs and every
-    other doc stay in Tares; they never go to Linear. Returns the doc's id."""
+    other doc stay in Tares; they never go to Linear. A rule or fact that holds for every
+    project goes in the shared docs with add_to_global instead. Returns the doc's id."""
     payload = {"kind": kind, "title": title, "body": body, "by": "claude code session"}
     async with _cx(15) as cx:
         uid, why = await _project_id(cx, project)
@@ -467,9 +468,10 @@ async def write_doc(kind: str, title: str, body: str, id: str = "", project: str
 
 @mcp.tool()
 async def list_docs(kind: str = "", project: str = "") -> str:
-    """The project's docs in reading order (starting prompt, spec, plan, AGENTS.md, notes,
-    working docs): id, kind, title, size, when changed. No bodies: read one with get_doc.
-    `kind` narrows the list."""
+    """The project's docs in reading order (starting prompt, spec, plan, AGENTS.md, memory,
+    notes, working docs): id, kind, title, size, when changed. No bodies: read one with get_doc.
+    `kind` narrows the list. Docs marked `global` (the AGENTS.md and the memory for all
+    projects) belong to every project: read them too, they hold the user's standing rules."""
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -477,7 +479,8 @@ async def list_docs(kind: str = "", project: str = "") -> str:
         r = await cx.get(f"{TARESD}/api/projects/{uid}/docs", params={"kind": kind})
     if r.status_code >= 400:
         return _out(r)
-    return json.dumps([{k: d.get(k) for k in ("id", "kind", "title", "size", "updated_at")}
+    return json.dumps([{k: d.get(k) for k in ("id", "kind", "title", "global", "size",
+                                               "updated_at")}
                        for d in r.json()], default=str)
 
 
@@ -490,6 +493,38 @@ async def get_doc(id: str, project: str = "") -> str:
             return why
         r = await cx.get(f"{TARESD}/api/projects/{uid}/docs/{id}")
     return _out(r, ("id", "kind", "title", "body", "updated_at", "updated_by"))
+
+
+@mcp.tool()
+async def read_global_docs() -> str:
+    """The docs every project shares: the AGENTS.md for all projects (the user's standing rules)
+    and the memory (facts and preferences that hold across projects), as markdown. Read them at
+    the start of any work on a project and follow them; do not ask the user again for what they
+    already say."""
+    async with _cx(10) as cx:
+        r = await cx.get(f"{TARESD}/api/docs/global")
+    if r.status_code >= 400:
+        return _out(r)
+    data = r.json()
+    if not any(data.values()):
+        return "No shared docs yet: they are made with the first project that has docs."
+    return "\n\n".join(d["body"].rstrip() for d in data.values() if d)
+
+
+@writable()
+async def add_to_global(doc: str, line: str) -> str:
+    """Add one line to a doc every project shares: `doc` is `agents` (the AGENTS.md for all
+    projects: a rule every session should follow, e.g. "always build on a branch, never commit
+    to main") or `memory` (a fact or preference that holds across projects, e.g. "the household
+    uses euros"). Ask the user first, and add only what holds beyond this project; a project's
+    own rules go in its own AGENTS.md. A line already there is not added twice."""
+    async with _cx(15) as cx:
+        r = await cx.post(f"{TARESD}/api/docs/global/{doc.strip().lower()}/lines",
+                          json={"text": line, "by": "claude code session"})
+    if r.status_code >= 400:
+        return _out(r)
+    d = r.json()
+    return json.dumps({"doc": d["title"], "id": d["id"], "added": d["added"]})
 
 
 @mcp.tool()

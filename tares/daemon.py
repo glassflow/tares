@@ -4169,18 +4169,79 @@ def make_app() -> FastAPI:
         cred = getattr(request.state, "credential", None) or {}
         return said or cred.get("name") or ""
 
+    # The cell's global docs (its AGENTS.md and memory): made the first time a project has docs,
+    # included in every project that has docs, so every session working on a project reads them.
+    _GLOBAL_SETTING = "global_docs"
+
+    def _global_ids(create: bool = False) -> dict[str, str]:
+        """{kind: doc id} of the global docs that exist; with `create`, make the missing ones."""
+        try:
+            ids = json.loads(store.get_setting(_GLOBAL_SETTING) or "{}")
+        except ValueError:
+            ids = {}
+        ids = {k: v for k, v in ids.items() if store.get_doc(None, v) is not None}
+        if create and set(docs_mod.GLOBAL_DOCS) - set(ids):
+            for kind, (title, body) in docs_mod.GLOBAL_DOCS.items():
+                if kind not in ids:
+                    ids[kind] = store.create_doc(None, kind, title, body, by="tares")
+            store.set_setting(_GLOBAL_SETTING, json.dumps(ids))
+        return ids
+
+    def _ensure_globals(uid: str) -> dict[str, str]:
+        """A project with docs includes the global docs (made now if this is the first one)."""
+        mine = store.list_docs(uid)
+        if not mine:
+            return _global_ids()
+        ids = _global_ids(create=True)
+        have = {d["id"] for d in mine}
+        for doc_id in ids.values():
+            if doc_id not in have:
+                store.use_doc(uid, doc_id)
+        return ids
+
+    def _marked(d: dict, ids: dict[str, str]) -> dict:
+        return {**d, "global": d["id"] in ids.values()}
+
     def _doc_or_404(uid: str, doc_id: str) -> dict:
         d = store.get_doc(uid, doc_id)
         if d is None:
             _err(KeyError(f"project has no doc {doc_id!r}"), 404)
-        return d
+        return _marked(d, _global_ids())
 
     @app.get("/api/projects/{uid}/docs")
     async def list_project_docs(uid: str, kind: str = ""):
         """The docs the project includes, without bodies, in reading order (starting prompt,
-        spec, plan, AGENTS.md, notes, working docs)."""
+        spec, plan, AGENTS.md, memory, notes, working docs). The cell's global AGENTS.md and
+        memory are among them (`global`) once the project has any doc."""
         _project_or_404(uid)
-        return docs_mod.sort_docs(store.list_docs(uid, kind.strip().lower() or None))
+        ids = _ensure_globals(uid)
+        return [_marked(d, ids)
+                for d in docs_mod.sort_docs(store.list_docs(uid, kind.strip().lower() or None))]
+
+    @app.get("/api/docs/global")
+    async def get_global_docs():
+        """The cell's global AGENTS.md and memory, with their bodies; null until the first
+        project has docs."""
+        ids = _global_ids()
+        return {k: (_marked(store.get_doc(None, ids[k]), ids) if k in ids else None)
+                for k in docs_mod.GLOBAL_DOCS}
+
+    @app.post("/api/docs/global/{kind}/lines")
+    async def add_global_line(kind: str, request: Request, body: dict = Body(...)):
+        """{text}: add one line to the global AGENTS.md (`agents`) or memory (`memory`). A line
+        already there is not added twice (`added`: false)."""
+        if kind not in docs_mod.GLOBAL_DOCS:
+            _err(KeyError(f"no global doc {kind!r}; one of: " + ", ".join(docs_mod.GLOBAL_DOCS)),
+                 404)
+        ids = _global_ids(create=True)
+        cur = store.get_doc(None, ids[kind])
+        try:
+            text, added = docs_mod.append_line(cur["body"], body.get("text"))
+        except docs_mod.DocError as e:
+            _err(e)
+        if added:
+            store.update_doc(ids[kind], body=text, by=_by(request, body))
+        return {**_marked(store.get_doc(None, ids[kind]), ids), "added": added}
 
     @app.post("/api/projects/{uid}/docs", status_code=201)
     async def create_project_doc(uid: str, request: Request, body: dict = Body(...)):
@@ -4192,6 +4253,7 @@ def make_app() -> FastAPI:
         except docs_mod.DocError as e:
             _err(e)
         doc_id = store.create_doc(uid, kind, title, text, by=_by(request, body))
+        _ensure_globals(uid)
         return _doc_or_404(uid, doc_id)
 
     @app.get("/api/projects/{uid}/docs/{doc_id}")
@@ -4220,7 +4282,10 @@ def make_app() -> FastAPI:
         """The project stops including the doc; it is deleted when no other project includes
         it."""
         _project_or_404(uid)
-        others = [p for p in _doc_or_404(uid, doc_id)["projects"] if p != uid]
+        d = _doc_or_404(uid, doc_id)
+        if d["global"]:
+            _err(ValueError(f"{d['title']} belongs to every project; edit it instead"), 409)
+        others = [p for p in d["projects"] if p != uid]
         store.remove_doc(uid, doc_id)
         return {"ok": True, "removed": doc_id, "kept_for": others}
 
@@ -4236,7 +4301,9 @@ def make_app() -> FastAPI:
     async def list_cell_docs():
         """Every doc on Tares, with the projects that include it (no bodies)."""
         names = {p["id"]: p["name"] for p in store.list_projects()}
-        return [{**d, "projects": [{"id": p, "name": names.get(p, p)} for p in d["projects"]]}
+        ids = _global_ids()
+        return [{**_marked(d, ids),
+                 "projects": [{"id": p, "name": names.get(p, p)} for p in d["projects"]]}
                 for d in docs_mod.sort_docs(store.list_cell_docs())]
 
     def _ticket_out(uid: str, t: dict, with_doc: bool = False) -> dict:
