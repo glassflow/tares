@@ -417,6 +417,7 @@ class ProjectIn(BaseModel):
     params: dict = {}
     objects: list | None = None   # template "custom": the objects, each {kind, name}
     goal: str | None = None       # one line, at most 200 characters; none = the template's GOAL
+    kind: str | None = None       # "software_factory" for a project a spec session makes
 
     @model_validator(mode="before")
     @classmethod
@@ -3293,11 +3294,18 @@ def make_app() -> FastAPI:
 
     @app.post("/api/projects", status_code=201)
     async def create_project(body: ProjectIn):
+        if body.kind not in (None, "", "software_factory"):
+            _err(ValueError(f"unknown project kind {body.kind!r}; the one there is: "
+                            "software_factory"))
         try:
             params = {**body.params, "objects": body.objects} if body.objects is not None else body.params
-            return projects.create(body.template, params, name=body.name or None, goal=body.goal)
+            out = projects.create(body.template, params, name=body.name or None, goal=body.goal)
         except Exception as e:
             _uc_err(e)
+        if body.kind:
+            store.set_project_kind(out["id"], body.kind)
+            out = {**out, "kind": body.kind}
+        return out
 
     @app.get("/api/projects/{uid}")
     async def get_project(uid: str, request: Request):

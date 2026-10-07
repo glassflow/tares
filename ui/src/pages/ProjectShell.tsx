@@ -15,6 +15,7 @@ import { TriggerView, TriggersView } from "../components/project/triggers";
 import { AgentView, AgentsView, ExternalView } from "../components/project/agents";
 import { SkillView, SkillsView } from "../components/project/skills";
 import { ClaudeSessionView, ClaudeSessionsView, DocView, DocsView, TicketView, TicketsView } from "../components/project/docs";
+import FactoryOverview from "../components/project/factory";
 import { HistoryView, KeysView, McpView, SubscribersView } from "../components/project/settings";
 import type { ProjectSummary, Template, RecipeAction, RecipeActionOption, Source } from "../types";
 
@@ -290,7 +291,8 @@ export default function ProjectShell({ s, id, reload, template }: {
           </div>
         </div>
       )}
-      {view.kind === "overview" && (
+      {view.kind === "overview" && s.kind === "software_factory" && <FactoryOverview ctx={ctx} />}
+      {view.kind === "overview" && s.kind !== "software_factory" && (
         <Overview ctx={ctx} actions={<>{pauseButton}{templateActions}</>}
                   onResume={act(() => api.resumeProject(id))} />
       )}

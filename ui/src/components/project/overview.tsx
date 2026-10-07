@@ -66,7 +66,7 @@ function ResultBadge({ r }: { r: ProjectResult }) {
 // ── Overview ────────────────────────────────────────────────────────────────
 
 /** The goal, editable in place. A project without one asks for it. */
-function Goal({ ctx }: { ctx: Ctx }) {
+export function Goal({ ctx }: { ctx: Ctx }) {
   const goal = ctx.s.goal ?? null;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");

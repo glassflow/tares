@@ -74,6 +74,13 @@ async def main():
         out = json.loads(await m.create_project("Invoices", "Turn emailed invoices into rows"))
         ck("create_project -> id, name, goal", out["id"].startswith("uc_")
            and out["goal"] == "Turn emailed invoices into rows", out)
+        async with m._cx() as cx:
+            p = (await cx.get(f"http://t/api/projects/{out['id']}")).json()
+            bad = await cx.post("http://t/api/projects", json={"template": "custom", "name": "X",
+                                                                "objects": [], "kind": "factory"})
+        ck("create_project makes a software factory project", p.get("kind") == "software_factory",
+           p.get("kind"))
+        ck("an unknown kind -> 400", bad.status_code == 400, bad.text)
         out2 = await m.create_project("Invoices")
         ck("the same name again is a clear error", out2.startswith("error 4")
            and "Invoices" in out2, out2)

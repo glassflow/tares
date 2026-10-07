@@ -606,6 +606,7 @@ export interface Project {
   objects: ProjectObject[];
   default?: boolean;   // the Default project: holds whatever was made outside a project; never deleted
   goal?: string | null; // what the project should achieve, one line (<= 200 chars); null = not set yet
+  kind?: "software_factory" | null;   // its own page and tag; null = an ordinary project
 }
 
 // ── the goal-first project page (contract: goal-first-contract.md, "Backend") ──

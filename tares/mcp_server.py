@@ -437,7 +437,7 @@ async def create_project(name: str, goal: str = "") -> str:
     session to it. `name` is the project's handle (unique on Tares); `goal` is one line saying
     what it is for. Then write its docs with write_doc and its tickets (write_ticket, or
     link_linear_project when the tickets live in Linear). Returns the project's id and name."""
-    body = {"template": "custom", "name": name.strip(), "objects": [],
+    body = {"template": "custom", "kind": "software_factory", "name": name.strip(), "objects": [],
             **({"goal": goal.strip()} if goal.strip() else {})}
     async with _cx(15) as cx:
         r = await cx.post(f"{TARESD}/api/projects", json=body)

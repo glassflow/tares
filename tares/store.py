@@ -454,6 +454,9 @@ _MIGRATIONS = [
     # TR-408: the Linear project a project's tickets live in, and how the last sync went
     # ({id, name, url, synced_at, cursor, error}); NULL = the project does not use Linear
     "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS linear JSON",
+    # What kind of project it is, shown as a tag and choosing its page (NULL = an ordinary
+    # project). 'software_factory': specced in Claude Code, built from docs and tickets.
+    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS kind TEXT",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -652,6 +655,7 @@ class Store:
             self._lineage_upgrade()
             self._wiring_upgrade()
             self._skills_upgrade()
+            self._factory_kind_upgrade()
             self._init_source_stats()
             self._init_entity_counts()
             # Write the upgrade into the database file now. Left in the WAL, the new columns on
@@ -2216,21 +2220,40 @@ class Store:
     def _project_row(r) -> dict:
         return {"id": r[0], "template": r[1], "name": r[2], "params": json.loads(r[3] or "{}"),
                 "status": r[4], "created_at": r[5], "updated_at": r[6], "last_error": r[7],
-                "goal": r[8]}
+                "goal": r[8], "kind": r[9]}
 
     def list_projects(self) -> list[dict]:
         with self._lock:
             rows = self.con.execute(
                 "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
-                "goal FROM usecases ORDER BY created_at").fetchall()
+                "goal, kind FROM usecases ORDER BY created_at").fetchall()
         return [self._project_row(r) for r in rows]
 
     def get_project(self, uid: str) -> dict | None:
         with self._lock:
             r = self.con.execute(
                 "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
-                "goal FROM usecases WHERE id = ?", [uid]).fetchone()
+                "goal, kind FROM usecases WHERE id = ?", [uid]).fetchone()
         return self._project_row(r) if r else None
+
+    def set_project_kind(self, uid: str, kind: str | None) -> None:
+        with self._lock:
+            self.con.execute("UPDATE usecases SET kind = ? WHERE id = ?", [kind or None, uid])
+
+    def _factory_kind_upgrade(self) -> None:
+        """Once: a project from before project kinds that holds docs and tickets and no agent was
+        made by a spec session; it is a software factory project. Lock not needed (init)."""
+        if self.con.execute("SELECT value FROM settings WHERE key = 'factory_kind_filled'"
+                            ).fetchone():
+            return
+        self.con.execute(
+            "UPDATE usecases SET kind = 'software_factory' WHERE kind IS NULL AND recipe = 'custom' "
+            "AND id IN (SELECT project FROM tickets) "
+            "AND id IN (SELECT usecase_id FROM usecase_objects WHERE kind = 'doc') "
+            "AND id NOT IN (SELECT usecase_id FROM usecase_objects WHERE kind = 'agent')")
+        self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
+                         "('factory_kind_filled', '1', ?) ON CONFLICT (key) DO NOTHING",
+                         [now_utc()])
 
     def get_project_by_name(self, name: str) -> dict | None:
         return next((u for u in self.list_projects() if u["name"] == name), None)

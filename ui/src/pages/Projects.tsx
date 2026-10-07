@@ -70,7 +70,10 @@ export default function Projects() {
                 : `/projects/${encodeURIComponent(u.id)}`;
               return (
                 <tr key={u.id}>
-                  <td><Link to={to}><strong>{u.name}</strong></Link></td>
+                  <td>
+                    <Link to={to}><strong>{u.name}</strong></Link>
+                    {u.kind === "software_factory" && <span className="fo-tag" style={{ marginLeft: 8 }}>Software factory</span>}
+                  </td>
                   <td className="help"><span className="proj-goal">{projectGoal(u)}</span></td>
                   <td>
                     <span className={`badge ${statusClass(u.status)}`}>{u.status}</span>

@@ -1897,3 +1897,64 @@ pre.payload {
 .run-headline { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 /* a draft's own delete, under its setup and away from the plan's buttons */
 .su-draft-delete { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--line); }
+
+/* ── a software factory project's page (factory.tsx): build guide, next ticket, docs pinned,
+   tickets and sessions folded ── */
+.fo-name { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.fo-tag { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink); background: var(--accent-soft); border: 1px solid var(--accent); padding: 3px 8px; }
+.fo-label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
+.fo-link { color: var(--accent-deep); font-size: 13px; }
+.fo-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); background: var(--panel); }
+.fo-steps li { padding: 12px 16px; display: flex; flex-direction: column; gap: 2px; border-right: 1px solid var(--line); min-width: 0; }
+.fo-steps li:last-child { border-right: 0; }
+.fo-steps b { font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.fo-steps b i { width: 10px; height: 10px; border: 2px solid var(--ink-faint); display: inline-block; flex: none; }
+.fo-steps span { font-size: 13px; color: var(--ink-soft); }
+.fo-steps li.is-done b i { background: var(--ok); border-color: var(--ok); }
+.fo-steps li.is-now { background: var(--accent-soft); }
+.fo-steps li.is-now b i { background: var(--accent); border-color: var(--accent-deep); }
+.fo-progress { display: flex; flex-direction: column; gap: 8px; }
+.fo-progress-row { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 14px; }
+.fo-counts { display: flex; gap: 16px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.fo-counts b { color: var(--ink); }
+.fo-bar { display: flex; gap: 3px; }
+.fo-bar i { flex: 1; height: 10px; background: var(--bg); border: 1px solid var(--line); }
+.fo-bar i.done { background: var(--ok); border-color: var(--ok); }
+.fo-bar i.run { background: var(--accent); border-color: var(--accent); }
+.fo-next { border: 2px solid var(--accent); background: var(--panel); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+.fo-next h2 { margin: 0; font-size: 20px; }
+.fo-next-empty { border-width: 1px; border-color: var(--line); }
+.fo-gist { margin: 0; color: var(--ink-soft); border-left: 3px solid var(--line); padding-left: 12px; max-width: 80ch; }
+.fo-cmd { display: flex; gap: 8px; flex-wrap: wrap; align-items: stretch; }
+.fo-cmd code { flex: 1 1 320px; min-width: 0; font-family: var(--mono); font-size: 13px; background: var(--bg); border: 1px solid var(--line); padding: 8px 12px; overflow-x: auto; white-space: nowrap; user-select: all; }
+.fo-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+.fo-panel { border: 1px solid var(--line); background: var(--panel); min-width: 0; }
+.fo-panel > header { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.fo-panel > header h3 { margin: 0; font-size: 15px; }
+.fo-sub { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); padding: 10px 16px 4px; border-top: 1px solid var(--line); }
+.fo-docs { list-style: none; margin: 0; padding: 0; }
+.fo-docs li { display: flex; justify-content: space-between; gap: 10px; margin: 0; padding: 8px 16px; border-bottom: 1px solid var(--line); font-size: 14px; min-width: 0; }
+.fo-docs li:last-child { border-bottom: 0; }
+.fo-docs small { color: var(--ink-soft); font-size: 12px; white-space: nowrap; }
+.fo-empty { margin: 0; padding: 12px 16px; color: var(--ink-soft); font-size: 14px; }
+.fo-fold summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; padding: 12px 16px; }
+.fo-fold summary::-webkit-details-marker { display: none; }
+.fo-fold summary:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: -2px; }
+.fo-fold-h { font-weight: 600; font-size: 15px; display: inline-flex; gap: 8px; align-items: baseline; }
+.fo-fold-h::before { content: "›"; color: var(--ink-soft); display: inline-block; transition: transform 0.15s; }
+.fo-fold[open] .fo-fold-h::before { transform: rotate(90deg); }
+.fo-fold[open] summary { border-bottom: 1px solid var(--line); }
+.fo-meta { font-size: 13px; color: var(--ink-soft); }
+.fo-tickets { list-style: none; margin: 0; padding: 0; }
+.fo-tickets li { margin: 0; display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--line); font-size: 14px; }
+.fo-tickets li.is-next { background: var(--accent-soft); }
+.fo-n { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
+.fo-st { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; border: 1px solid var(--line); padding: 2px 7px; color: var(--ink-soft); white-space: nowrap; }
+.fo-st-done { color: var(--ok); border-color: var(--ok-border); }
+.fo-st-in_progress { color: var(--accent-deep); border-color: var(--accent); }
+.fo-tickets li.is-next .fo-st { color: var(--accent-deep); border-color: var(--accent-deep); }
+.fo-foot { padding: 10px 16px; }
+@media (max-width: 900px) { .fo-cols { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 640px) { .fo-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } .fo-steps li:nth-child(2) { border-right: 0; } .fo-steps li:nth-child(-n+2) { border-bottom: 1px solid var(--line); } }
+@media (prefers-reduced-motion: reduce) { .fo-fold-h::before { transition: none; } }
+.main .fo-steps, .main .fo-docs, .main .fo-tickets { margin: 0; padding: 0; list-style: none; }

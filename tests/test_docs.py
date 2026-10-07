@@ -246,8 +246,33 @@ async def api():
         await cx.aclose()
 
 
+def upgrade():
+    """A cell from before project kinds: a project with docs, tickets and no agent becomes a
+    software factory project, once; an ordinary project stays as it is."""
+    print("== project kind upgrade ==")
+    from tares.store import Store
+    path = os.path.join(_TMP, "upgrade.duckdb")
+    s = Store(path)
+    s.create_project("uc_spec", "custom", "Spec made", {"objects": []})
+    s.create_project("uc_plain", "custom", "Plain", {"objects": []})
+    s.create_doc("uc_spec", "spec", "Spec", "x")
+    s.create_ticket("uc_spec", "tares", "First")
+    s.con.execute("DELETE FROM settings WHERE key = 'factory_kind_filled'")
+    s.con.close()
+    s = Store(path)
+    ck("the spec-made project is a software factory project",
+       s.get_project("uc_spec")["kind"] == "software_factory")
+    ck("the plain one is not", s.get_project("uc_plain")["kind"] is None)
+    s.set_project_kind("uc_spec", None)
+    s.con.close()
+    s = Store(path)
+    ck("it runs once: a kind cleared later stays cleared", s.get_project("uc_spec")["kind"] is None)
+    s.con.close()
+
+
 def main():
     unit()
+    upgrade()
     asyncio.run(api())
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
