@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api";
@@ -127,7 +128,72 @@ export default function Crew() {
         </section>
       )}
 
+      <ReviewQueue />
+      <RuleProposals />
+
       {data && <Settings st={data.settings} grants={data.grants} />}
+    </div>
+  );
+}
+
+/** The pull requests waiting for the reviewer across projects, in the order it takes them. */
+function ReviewQueue() {
+  const { data } = usePolling(() => api.reviewQueue(), 20000);
+  const q = data?.queue ?? [];
+  if (!q.length) return null;
+  return (
+    <div className="fo-panel">
+      <h2 style={{ fontSize: 14, margin: 0, padding: "12px 16px 4px" }}>Waiting for review <span className="dim">· {q.length}</span></h2>
+      <ul className="crew-list">
+        {q.map((x) => (
+          <li key={`${x.project}-${x.ticket}`} className="crew-row">
+            <div className="crew-main">
+              <span className="crew-name">{x.ticket}</span>
+              <Link to={`/projects/${encodeURIComponent(x.project)}?view=ticket:${encodeURIComponent(x.ticket)}`}>{x.title}</Link>
+              <span className="crew-role">{x.project_name}</span>
+            </div>
+            <div className="crew-side">
+              {x.blocks_milestone && <span className="fo-st fo-st-wait" title="its milestone waits for it">blocks milestone</span>}
+              {!x.layer1_clean && <span className="fo-st fo-st-quiet" title="Codex findings still open on the builder's commits">Codex open</span>}
+              <small>{x.waiting_minutes != null ? `waiting ${x.waiting_minutes} min` : ""}</small>
+              {x.pr && <a href={x.pr} target="_blank" rel="noreferrer">PR</a>}
+            </div>
+            {x.verdict && !x.verdict.current && <p className="crew-what fo-warn">{x.verdict.note}</p>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Rules offered from findings that keep coming back: nothing is kept until you accept one, and
+ *  a rejected one is never offered again (TR-443). */
+function RuleProposals() {
+  const { data, reload } = usePolling(() => api.ruleProposals(), 30000);
+  const [busy, setBusy] = useState<string | null>(null);
+  const ps = data?.proposals ?? [];
+  if (!ps.length) return null;
+  const decide = async (id: string, d: "accept" | "reject") => {
+    setBusy(id);
+    try { await api.decideRule(id, d); reload(); } finally { setBusy(null); }
+  };
+  return (
+    <div className="fo-panel">
+      <h2 style={{ fontSize: 14, margin: 0, padding: "12px 16px 4px" }}>Rules offered from repeated findings</h2>
+      <ul className="crew-list">
+        {ps.map((p) => (
+          <li key={p.id} className="crew-row">
+            <div className="crew-main" style={{ display: "block" }}>
+              <div>{p.text}</div>
+              <small className="dim">{p.repo} · {p.kind} · {p.tickets.join(", ")} · goes into {p.scope === "all" ? "the shared AGENTS.md" : "the project's AGENTS.md"}</small>
+            </div>
+            <div className="crew-side">
+              <button type="button" className="primary" disabled={busy === p.id} onClick={() => decide(p.id, "accept")}>Add the rule</button>
+              <button type="button" disabled={busy === p.id} onClick={() => decide(p.id, "reject")}>No</button>
+            </div>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

@@ -372,6 +372,7 @@ def stamp_station(objs: list) -> list:
 # the subagent, each file from its own offset, capped per subagent.
 
 MAX_SUBAGENT_LINES = 3000
+MAX_SUBAGENT_READ = 4 * 1024 * 1024   # bytes read from one subagent file per hook
 
 
 def subagent_files(transcript: str) -> list:
@@ -415,11 +416,13 @@ def ship_subagents(cfg: dict, hook: dict, flow: str, project: str) -> None:
             size = os.path.getsize(path)
         except OSError:
             continue
+        if offset > size:          # the file was rewritten: start over
+            offset, count = 0, 0
         if offset >= size:
             continue
         with open(path, "rb") as f:
             f.seek(offset)
-            chunk = f.read()
+            chunk = f.read(MAX_SUBAGENT_READ)   # bounded: a huge file ships over several hooks
         last_nl = chunk.rfind(b"\n")
         if last_nl < 0:
             continue
@@ -444,12 +447,13 @@ def ship_subagents(cfg: dict, hook: dict, flow: str, project: str) -> None:
             if project:
                 o["tares_project"] = project
             objs.append(o)
-        room = MAX_SUBAGENT_LINES - count
-        dropped = 0
+        room = max(MAX_SUBAGENT_LINES - count, 0)
+        noted = os.path.exists(off_file[:-len(".off")] + ".cut")
+        cut = False
         if len(objs) > room:
-            dropped = len(objs) - max(room, 0)
-            objs = objs[:max(room, 0)]
-            if count < MAX_SUBAGENT_LINES:
+            objs = objs[:room]
+            if not noted:
+                cut = True
                 objs.append(synthetic_line(hook, "subagent_truncated", flow, subagent=agent,
                                            note=f"subagent {agent} passed {MAX_SUBAGENT_LINES} "
                                                 "lines; the rest is not recorded"))
@@ -457,7 +461,9 @@ def ship_subagents(cfg: dict, hook: dict, flow: str, project: str) -> None:
             with open(off_file, "w") as f:
                 f.write(str(offset + last_nl + 1))
             with open(cnt_file, "w") as f:
-                f.write(str(count + len(objs) + dropped))
+                f.write(str(min(count + len(objs) - (1 if cut else 0), MAX_SUBAGENT_LINES)))
+            if cut:
+                open(off_file[:-len(".off")] + ".cut", "w").write("1")
 
 
 # ── SessionStart: hand accepted memory to Claude ─────────────────────────────

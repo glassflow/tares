@@ -4370,7 +4370,10 @@ def make_app() -> FastAPI:
                                       "made_by")},
                  "tickets": [factory_mod.label(by_id[x]) for x in a["tickets"] if x in by_id]}
                 for a in store.list_assumptions(uid, ticket=t["id"])]
-            out["checks"] = store.ticket_checks(t["id"], 20)
+            out.update(factory_api.review_state(store, uid, t, _cc_source()))
+        else:
+            last = store.ticket_reviews(t["id"])[-1:] if t["stage"] else []
+            out["verdict"] = factory_api.verdict_now(t, last[0] if last else None)
         return out
 
     def _tickets_out(uid: str) -> list[dict]:
@@ -4686,7 +4689,10 @@ def make_app() -> FastAPI:
             out["may_be_open"] = bool(open_)
         gmem = _global_ids().get("memory")
         mem = next((d for d in store.list_docs(uid, "memory") if d["id"] != gmem), None)
-        out["memory"] = (store.get_doc(uid, mem["id"]) or {}).get("body", "")[:6000] if mem else ""
+        body = (store.get_doc(uid, mem["id"]) or {}).get("body", "") if mem else ""
+        if len(body) > 6000:   # newest last: keep the newest lines
+            body = "...\n" + body[-6000:].split("\n", 1)[-1]
+        out["memory"] = body
         notes = [d for d in store.list_docs(uid, "note")]
         out["notes"] = [{"id": d["id"], "title": d["title"],
                          "body": (store.get_doc(uid, d["id"]) or {}).get("body", "")[:4000]}

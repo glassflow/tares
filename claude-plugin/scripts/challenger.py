@@ -253,8 +253,16 @@ def record(gitdir_: str, entry: dict) -> None:
 
 
 def ship_challenge(cfg: dict, hook: dict, typ: str, challenge: dict) -> None:
+    """A challenge line, stamped like the session's own lines (its tares-factory station and
+    project), so Tares ties it to the ticket whose branch it was on (TR-440)."""
     try:
-        ship_lines(cfg, [synthetic_line(hook, typ, CHALLENGER, challenge=challenge)])
+        from ship import read_project, stamp_station
+        line = synthetic_line(hook, typ, CHALLENGER, challenge=challenge)
+        project = read_project(cfg["data_dir"], str(hook.get("session_id") or "")) \
+            or os.environ.get("TARES_PROJECT", "").strip()
+        if project:
+            line["tares_project"] = project
+        ship_lines(cfg, stamp_station([line]))
     except Exception:
         pass
 
@@ -473,7 +481,14 @@ def stop_loop(hook: dict, session_id: str) -> dict:
 
 # ── waive (the /tares:challenger-waive command) ──────────────────────────────
 
-def waive(which: str) -> int:
+def waive(which: str, reason: str = "") -> int:
+    """Waive a blocking finding. In a tares-factory station a waiver needs its reason (the
+    reviewer judges it); a person's own session may waive without one, as before."""
+    reason = " ".join(reason.split())
+    if os.environ.get("FACTORY_STATION", "").strip() and not reason:
+        print("a waiver in a tares-factory crew needs its reason: "
+              "/tares:challenger-waive <n> <why this finding does not apply>")
+        return 1
     root = repo_root(os.getcwd(), "")
     if not root:
         print("not in a git repository"); return 1
@@ -513,7 +528,8 @@ def waive(which: str) -> int:
     hook = {"session_id": last.get("session_id", ""), "cwd": root}
     ship_challenge(cfg, hook, "challenge_waived", {
         "sha": last.get("sha"), "finding_count": len(chosen),
-        "findings": [{"priority": c["priority"], "title": c["title"], "waived": True} for c in chosen]})
+        "findings": [{"priority": c["priority"], "title": c["title"], "waived": True,
+                      **({"reason": reason} if reason else {})} for c in chosen]})
     for c in chosen:
         print(f"waived: [{c['priority']}] {c['title']}")
     print(f"waivers live in {os.path.join(gd, WAIVED)}; the commit is no longer blocked")
@@ -524,7 +540,7 @@ def waive(which: str) -> int:
 
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "waive":
-        sys.exit(waive(sys.argv[2] if len(sys.argv) > 2 else ""))
+        sys.exit(waive(sys.argv[2] if len(sys.argv) > 2 else "", " ".join(sys.argv[3:])))
     try:
         hook = json.load(sys.stdin)
     except Exception:

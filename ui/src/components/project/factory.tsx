@@ -469,6 +469,11 @@ function TicketList({ tickets, nextId }: { tickets: Ticket[]; nextId?: string })
                 </small>
               )}
               {t.stage === "blocked" && t.stage_reason && <small className="fo-wait">blocked: {t.stage_reason}</small>}
+              {t.verdict && (
+                t.verdict.current
+                  ? <small className="fo-wait">review round {t.verdict.round}: {t.verdict.verdict === "pass" ? "Pass" : t.verdict.verdict === "changes" ? "changes asked" : "blocked"}</small>
+                  : <small className="fo-warn">{t.verdict.note}</small>
+              )}
               {t.pr_note && <small className="fo-warn">{t.pr_note}</small>}
             </span>
             {t.stage && t.stage !== "todo" && !(t.owner === "linear" && (t.status === "done" || t.status === "canceled")) ? (

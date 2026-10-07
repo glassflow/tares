@@ -8,7 +8,7 @@ import type {
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults,
   Skill, SkillSummary,
-  Assumption, CrewMessage, CrewSettings, CrewStation, Doc, DocKind, DocSummary, Handover, LinearLink, LinearStatus, Milestone,
+  Assumption, CrewMessage, CrewSettings, CrewStation, Doc, QueueItem, RuleProposal, DocKind, DocSummary, Handover, LinearLink, LinearStatus, Milestone,
   ProjectSession, Ticket, TicketStatus,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, ModelProvider, ModelProviders,
@@ -561,6 +561,11 @@ export const api = {
       { method: "DELETE" }),
   milestones: (id: string) =>
     request<{ milestones: Milestone[] }>(`/api/projects/${encodeURIComponent(id)}/milestones`),
+  reviewQueue: () => request<{ queue: QueueItem[]; now: string }>("/api/review-queue"),
+  ruleProposals: () => request<{ proposals: RuleProposal[] }>("/api/rule-proposals"),
+  decideRule: (pid: string, decision: "accept" | "reject", text?: string) =>
+    request<RuleProposal>(`/api/rule-proposals/${encodeURIComponent(pid)}/${decision}`,
+      { method: "POST", body: JSON.stringify(text ? { text } : {}) }),
   assumptions: (id: string) =>
     request<{ assumptions: Assumption[] }>(`/api/projects/${encodeURIComponent(id)}/assumptions`),
   ticketMessages: (id: string, ref: string) =>

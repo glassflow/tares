@@ -143,6 +143,21 @@ async def list_assumptions(state: str = "", project: str = "") -> str:
 
 
 @writable()
+async def decide_assumption(assumption: str, state: str, words: str = "",
+                            project: str = "") -> str:
+    """Record what the person said about an assumption (A3): `state` kept or overturned (or open
+    again), `words` the person's own words, required when overturned. Only the orchestrator, or
+    the person's own session, may. Answering a batch on the desk does this for you."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/assumptions/{assumption}/state",
+                          json={"state": state, "words": words})
+    return _out(r, ("label", "state", "words"))
+
+
+@writable()
 async def add_check(ticket: str, command: str, result: str, commit: str = "",
                     broke_test: str = "", project: str = "") -> str:
     """Record a check you ran on a ticket: the exact `command`, what it showed (`result`), the
@@ -171,6 +186,74 @@ async def remember_for_project(line: str, project: str = "") -> str:
             return why
         r = await cx.post(f"{TARESD}/api/projects/{uid}/memory/lines", json={"text": line})
     return _out(r, ("id", "added"))
+
+
+# ── review and merge (TR-441..445) ────────────────────────────────────────────
+
+@writable()
+async def record_review(ticket: str, head: str, verdict: str, verified: str,
+                        not_verified: str = "", findings: list[dict] | None = None,
+                        resolved: dict | None = None, project: str = "") -> str:
+    """Record your review of a ticket's pull request, the same verdict you post to GitHub:
+    `head` the commit you reviewed, `verdict` pass, changes or block, `verified` what you ran
+    and what it showed, `not_verified` what you did not cover and why, `findings`
+    [{"severity": "P1|P2|P3", "file": "", "line": 0, "blocking": true, "text": ""}], and on a
+    re-review `resolved` marking each earlier finding {"F1": "fixed", "F2": "open"}. A pass
+    leaves no blocking finding open. Only the reviewer records reviews."""
+    body = {"head": head, "verdict": verdict, "verified": verified,
+            "not_verified": not_verified, "findings": findings or [], "resolved": resolved or {}}
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/tickets/{ticket}/reviews", json=body)
+    if r.status_code >= 400:
+        return _out(r)
+    d = r.json()
+    return json.dumps({"round": d["round"], "verdict": d["verdict"],
+                       "findings": [f["label"] for f in d["findings"]], "fixed": d["fixed"],
+                       "still_open": d["open"]})
+
+
+@mcp.tool()
+async def review_queue() -> str:
+    """The pull requests waiting for review across every project, in the order to take them:
+    those blocking their milestone first, then the longest waiting. Each says whether the
+    builder's Codex layer is clean and whether an earlier verdict is for an older commit."""
+    async with _cx(15) as cx:
+        r = await cx.get(f"{TARESD}/api/review-queue")
+    if r.status_code >= 400:
+        return _out(r)
+    return json.dumps([{k: q.get(k) for k in ("project_name", "ticket", "title", "holder", "pr",
+                                              "head", "waiting_minutes", "blocks_milestone",
+                                              "layer1_clean")}
+                       | {"verdict_note": (q.get("verdict") or {}).get("note")}
+                       for q in r.json().get("queue") or []], default=str)
+
+
+@mcp.tool()
+async def review_brief(ticket: str, head: str = "", project: str = "") -> str:
+    """Start every review here: the pull request as GitHub has it (it says STOP when the PR is
+    merged or its head moved past `head`), the ticket and its working doc, the builder's checks
+    compared with its recorded session (unmatched first: check those yourself), Codex's
+    findings and the waivers to judge, earlier rounds and their open findings, assumptions and
+    decisions, and what keeps coming back in this repo. Then review to your own bar."""
+    async with _cx(30) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/tickets/{ticket}/brief",
+                         params={"head": head})
+    return r.json()["brief"] if r.status_code == 200 else _out(r)
+
+
+@mcp.tool()
+async def recurring_findings(repo: str) -> str:
+    """Kinds of finding that came back in several tickets of a repo (owner/name) in the last
+    30 days, with the tickets and examples. Check these first in a review."""
+    async with _cx(10) as cx:
+        r = await cx.get(f"{TARESD}/api/recurring-findings", params={"repo": repo})
+    return _out(r)
 
 
 # ── the crew (TR-419, TR-420, TR-425) ─────────────────────────────────────────

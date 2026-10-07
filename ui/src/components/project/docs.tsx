@@ -387,9 +387,51 @@ function TicketCrew({ ctx, ticket }: { ctx: Ctx; ticket: Ticket }) {
   const msgs = data?.messages ?? [];
   const assumptions = ticket.assumptions ?? [];
   const checks = ticket.checks ?? [];
-  if (!history.length && !msgs.length && !assumptions.length && !checks.length) return null;
+  const reviews = ticket.reviews ?? [];
+  const layer = ticket.challenger;
+  const openFindings = reviews.flatMap((r) => r.findings).filter((f) => f.state === "open");
+  if (!history.length && !msgs.length && !assumptions.length && !checks.length && !reviews.length && !layer?.rounds) return null;
   return (
     <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+      {ticket.verdict && !ticket.verdict.current && <p className="fo-warn" style={{ margin: 0, fontSize: 14 }}>{ticket.verdict.note}</p>}
+      {(reviews.length > 0 || (layer?.rounds ?? 0) > 0) && (
+        <details className="panel" open>
+          <summary>
+            <b>Review</b>{" "}
+            <span className="dim">
+              · {reviews.length ? `${reviews.length} ${reviews.length === 1 ? "round" : "rounds"}, last ${reviews[reviews.length - 1].verdict === "pass" ? "Pass" : reviews[reviews.length - 1].verdict}` : "not reviewed yet"}
+              {openFindings.length > 0 && ` · Findings (${openFindings.length}) open`}
+            </span>
+          </summary>
+          {layer && layer.rounds > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <b>Codex</b> <span className="dim">· {layer.rounds} {layer.rounds === 1 ? "round" : "rounds"} on the builder's commits · {layer.clean ? "clean" : "blocking findings open"}</span>
+              <ul className="tk-history">
+                {layer.open.map((f, i) => <li key={`o${i}`}><span className="mono">{f.priority}</span> open: {f.title}</li>)}
+                {layer.fixed.map((f, i) => <li key={`f${i}`} className="dim"><span className="mono">{f.priority}</span> fixed: {f.title}</li>)}
+                {layer.waived.map((f, i) => <li key={`w${i}`}><span className="mono">{f.priority}</span> waived: {f.title}<div className="dim">{f.reason ? `why: ${f.reason}` : "no reason given"}</div></li>)}
+              </ul>
+            </div>
+          )}
+          {reviews.map((r) => (
+            <div key={r.id} style={{ marginTop: 10 }}>
+              <b>Round {r.round}</b>{" "}
+              <span className="dim">· {r.verdict === "pass" ? "Pass" : r.verdict === "changes" ? "changes asked" : "blocked"} on <span className="mono">{r.head.slice(0, 7)}</span> · <TimeAgo ts={r.at} />{r.by && <> · {r.by}</>}{r.fixed.length > 0 && <> · fixed {r.fixed.join(", ")}</>}</span>
+              <div className="dim" style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>Verified: {r.verified}{r.not_verified && <>{"\n"}Not verified: {r.not_verified}</>}</div>
+              {r.findings.length > 0 && (
+                <ul className="tk-history">
+                  {r.findings.map((f) => (
+                    <li key={f.id}>
+                      <span className="mono">{f.label} {f.severity}</span>{f.blocking ? " blocking" : ""} · <span className={f.state === "open" ? "" : "dim"}>{f.state}</span> · {f.text}
+                      {f.file && <span className="dim"> ({f.file}{f.line ? `:${f.line}` : ""})</span>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+        </details>
+      )}
       {assumptions.length > 0 && (
         <details className="panel" open={assumptions.some((a) => a.state === "open")}>
           <summary><b>Assumptions</b> <span className="dim">· {assumptions.length} · {assumptions.filter((a) => a.state === "open").length} open</span></summary>

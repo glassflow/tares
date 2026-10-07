@@ -206,7 +206,8 @@ def assumption_ok(question, choice, why, affects) -> tuple[str, str, str, str]:
 def check_ok(command, result, commit, broke_test) -> tuple[str, str, str, str]:
     """A check a builder ran: the command, what it showed, the commit it ran on, and for a test
     it added, the test proven to fail against broken code."""
-    cmd = str(command or "").strip()
+    # one line, no backticks: it goes into the working doc inside a code span
+    cmd = " ".join(str(command or "").split()).replace("`", "'")
     if not cmd:
         raise DocError("say the command you ran")
     if len(cmd) > 1000:
@@ -244,6 +245,143 @@ def add_check_to_doc(body: str, line: str) -> str:
     while at > chk + 1 and not lines[at - 1].strip():
         at -= 1
     return "\n".join(lines[:at] + [line] + lines[at:]) + "\n"
+
+
+# ── review and merge (M6) ─────────────────────────────────────────────────────
+
+VERDICTS = ("pass", "changes", "block")
+SEVERITIES = ("P1", "P2", "P3")
+
+
+def review_ok(verdict, verified, not_verified, findings, head) -> tuple:
+    """(verdict, verified, not_verified, findings, head), cleaned; DocError on a bad value."""
+    v = str(verdict or "").strip().lower()
+    if v not in VERDICTS:
+        raise DocError("verdict is one of: " + ", ".join(VERDICTS))
+    head = str(head or "").strip()
+    if not re.match(r"^[0-9a-fA-F]{7,64}$", head):
+        raise DocError("head is the commit the review was made on (its hash)")
+    ver = str(verified or "").strip()[:4000]
+    if not ver:
+        raise DocError("say what you verified (the commands you ran and what they showed)")
+    out = []
+    for f in findings or []:
+        if not isinstance(f, dict):
+            raise DocError("each finding is {severity, file, line, blocking, text}")
+        sev = str(f.get("severity") or "P2").strip().upper()
+        if sev not in SEVERITIES:
+            raise DocError("a finding's severity is P1, P2 or P3")
+        text = _line(f.get("text"), "what the finding is", 2000)
+        try:
+            ln = int(f.get("line") or 0)
+        except (TypeError, ValueError):
+            ln = 0
+        out.append({"severity": sev, "file": str(f.get("file") or "").strip()[:300], "line": ln,
+                    "blocking": bool(f.get("blocking", sev in ("P1", "P2"))), "text": text})
+    if v == "pass" and any(f["blocking"] for f in out):
+        raise DocError("a pass cannot carry a blocking finding")
+    return v, ver, str(not_verified or "").strip()[:2000], out, head
+
+
+# what a finding is about, to see the same mistake come back (TR-443). A plain word bucket:
+# cheap, stable, and readable by a person deciding whether it is a rule
+FINDING_KINDS = [
+    ("migration", ("migration", "migrate", "schema change", "alter table")),
+    ("missing test", ("no test", "untested", "missing test", "test does not", "not covered",
+                      "without a test", "test passes against")),
+    ("error handling", ("error handling", "unhandled", "exception", "swallow", "raises")),
+    ("config key", ("config", "setting", "env var", "environment variable")),
+    ("null or empty", ("null", "none", "empty", "missing value", "undefined")),
+    ("concurrency", ("race", "concurren", "lock", "deadlock")),
+    ("security", ("secret", "token", "injection", "xss", "csrf", "auth")),
+    ("docs out of date", ("readme", "docs", "documentation", "comment says")),
+]
+
+
+def finding_kind(text: str) -> str:
+    t = (text or "").lower()
+    for kind, words in FINDING_KINDS:
+        if any(w in t for w in words):
+            return kind
+    words = [w for w in re.findall(r"[a-z]{4,}", t)][:4]
+    return " ".join(words) or "other"
+
+
+RECUR_MIN = 3          # the same kind in this many tickets of a repo is a pattern
+RECUR_DAYS = 30
+
+
+def _norm(s: str) -> str:
+    return " ".join(str(s or "").split()).lower()
+
+
+_FAILED = re.compile(r"\b(fail(ed|ure|ures|s)?|error(s)?|traceback)\b", re.I)
+
+
+def _says_failed(text: str) -> bool:
+    t = str(text or "")
+    if re.search(r"\b0 (failed|errors?)\b", t, re.I) and not re.search(r"\b[1-9]\d* (failed|errors?)\b", t, re.I):
+        return False
+    return bool(_FAILED.search(t))
+
+
+def match_check(check: dict, commands: list[dict]) -> tuple[str, str | None]:
+    """("matched" | "not_found" | "differs", what the recording shows) for a check a builder
+    claimed (TR-442): the command must be in the recording at or before the claim, and what it
+    printed must agree with the claimed result (every count in the claim, no failure where the
+    claim says it passed). A break check also needs the named test failing, then passing."""
+    cmd = _norm(check.get("command"))
+    when = check.get("at")
+    ran = [c for c in commands if cmd and (cmd in _norm(c["command"]) or _norm(c["command"]) in cmd)
+           and _norm(c["command"]) and (when is None or c["at"] <= when)]
+    if not ran:
+        return "not_found", None
+    run = ran[-1]
+    out = run["output"] or ""
+    claim = str(check.get("result") or "")
+    counts = re.findall(r"\b\d+\s+[a-z]+", claim.lower())
+    missing = [c for c in counts if c not in _norm(out)]
+    claims_pass = not _says_failed(claim)
+    if missing or (claims_pass and (run["is_error"] or _says_failed(out))):
+        tail = out.strip().splitlines()[-3:] if out.strip() else ["(no output recorded)"]
+        return "differs", " / ".join(tail)[:400]
+    test = str(check.get("broke_test") or "").strip()
+    if test:
+        about = [c for c in commands if test.lower() in (c["command"] + " " + c["output"]).lower()
+                 and (when is None or c["at"] <= when)]
+        failed_at = next((i for i, c in enumerate(about) if c["is_error"] or _says_failed(c["output"])), None)
+        passed_after = failed_at is not None and any(
+            not (c["is_error"] or _says_failed(c["output"])) for c in about[failed_at + 1:])
+        if not passed_after:
+            return "differs", f"the recording does not show {test} failing and then passing"
+    return "matched", None
+
+
+def challenger_layer(events: list[dict]) -> dict:
+    """The Codex challenger's say on a ticket (TR-440), from its recorded reviews and waivers:
+    rounds, the findings still open (the latest review's), the ones fixed since (in an earlier
+    review, not in the latest), the waivers with their reasons."""
+    commits = [e for e in events if e["type"] == "challenge_commit"]
+    waivers = [f for e in events if e["type"] == "challenge_waived"
+               for f in (e["challenge"].get("findings") or [])]
+    if not commits:
+        return {"rounds": 0, "open": [], "fixed": [], "waived": waivers, "verdict": None,
+                "sha": None, "clean": True}
+    last = commits[-1]["challenge"]
+    verdict = str(last.get("verdict") or "").upper()
+    open_ = [f for f in (last.get("findings") or []) if not f.get("waived")] if verdict == "FAIL" else []
+    open_titles = {f.get("title") for f in open_}
+    seen: dict[str, dict] = {}
+    for e in commits[:-1]:
+        for f in e["challenge"].get("findings") or []:
+            if not f.get("waived"):
+                seen.setdefault(f.get("title"), f)
+    waived_titles = {w.get("title") for w in waivers}
+    fixed = [f for t, f in seen.items() if t not in open_titles and t not in waived_titles]
+    blocking = [f for f in open_ if f.get("priority") in ("P1", "P2")]
+    return {"rounds": len(commits), "open": open_, "fixed": fixed, "waived": waivers,
+            "verdict": "pass" if verdict == "PASS" else "findings" if verdict == "FAIL" else verdict.lower() or None,
+            "sha": last.get("sha"), "clean": not blocking}
 
 
 # ── the crew (M3): one always-on crew serves every project ────────────────────

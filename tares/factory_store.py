@@ -92,6 +92,51 @@ FACTORY_SCHEMA = [
       by_session  TEXT,
       checked_at  TIMESTAMPTZ
     )""",
+    # The reviewer's verdicts (TR-441), one row per round, on the commit it was given on.
+    """CREATE TABLE IF NOT EXISTS reviews (
+      id           TEXT PRIMARY KEY,
+      project      TEXT,
+      ticket       TEXT,
+      round        INTEGER,
+      pr           TEXT,
+      head         TEXT,
+      verdict      TEXT,
+      verified     TEXT,
+      not_verified TEXT,
+      by_station   TEXT,
+      reviewed_at  TIMESTAMPTZ
+    )""",
+    # Findings of a review (F1, F2... per ticket), each open until a later round marks it fixed.
+    """CREATE TABLE IF NOT EXISTS review_findings (
+      id          TEXT PRIMARY KEY,
+      project     TEXT,
+      ticket      TEXT,
+      review      TEXT,
+      number      INTEGER,
+      severity    TEXT,
+      file        TEXT,
+      line        INTEGER,
+      blocking    BOOLEAN,
+      text        TEXT,
+      kind        TEXT,
+      state       TEXT,
+      fixed_in    TEXT,
+      found_at    TIMESTAMPTZ
+    )""",
+    # Rules offered from findings that keep coming back (TR-443): nothing is kept until the person
+    # accepts one; a rejected one is never offered again (its key stays).
+    """CREATE TABLE IF NOT EXISTS rule_proposals (
+      id          TEXT PRIMARY KEY,
+      repo        TEXT,
+      kind        TEXT,
+      project     TEXT,
+      scope       TEXT,
+      text        TEXT,
+      tickets     JSON,
+      state       TEXT,
+      created_at  TIMESTAMPTZ,
+      decided_at  TIMESTAMPTZ
+    )""",
     # A factory project handed to the crew at the end of its spec (TR-425): when, from where.
     """CREATE TABLE IF NOT EXISTS handovers (
       project     TEXT PRIMARY KEY,
@@ -139,6 +184,8 @@ class FactoryStore:
         self.con.execute("DELETE FROM ticket_history WHERE project = ?", [uid])
         self.con.execute("DELETE FROM assumptions WHERE project = ?", [uid])
         self.con.execute("DELETE FROM ticket_checks WHERE project = ?", [uid])
+        self.con.execute("DELETE FROM reviews WHERE project = ?", [uid])
+        self.con.execute("DELETE FROM review_findings WHERE project = ?", [uid])
         self.con.execute("DELETE FROM handovers WHERE project = ?", [uid])
 
     # ── milestones (TR-411) ───────────────────────────────────────────────────
@@ -411,6 +458,190 @@ class FactoryStore:
                 [ticket, limit]).fetchall()
         return [{"id": r[0], "command": r[1], "result": r[2], "commit": r[3], "broke_test": r[4],
                  "by": r[5], "at": r[6]} for r in reversed(rows)]
+
+    # ── reviews (TR-441) ──────────────────────────────────────────────────────
+    def add_review(self, project: str, ticket: str, pr: str | None, head: str, verdict: str,
+                   verified: str, not_verified: str, by: str, findings: list[dict],
+                   resolved: dict[str, str], kind_of, at) -> dict:
+        """A review round: earlier findings marked fixed or still open as `resolved` says
+        ({F<n> or id: fixed|open}), the new findings numbered on from the ticket's last."""
+        rid = "rv_" + uuid.uuid4().hex[:10]
+        with self._lock:
+            rnd = (self.con.execute("SELECT max(round) FROM reviews WHERE ticket = ?",
+                                    [ticket]).fetchone()[0] or 0) + 1
+            self.con.execute(
+                "INSERT INTO reviews (id, project, ticket, round, pr, head, verdict, verified, "
+                "not_verified, by_station, reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [rid, project, ticket, rnd, pr, head, verdict, verified, not_verified or None,
+                 by or None, at])
+            for ref, st in (resolved or {}).items():
+                m = re.match(r"^[Ff]?(\d{1,6})$", str(ref).strip())
+                self.con.execute(
+                    "UPDATE review_findings SET state = ?, fixed_in = ? WHERE ticket = ? AND "
+                    "(id = ? OR number = ?)", [st, rid if st == "fixed" else None, ticket, ref,
+                                               int(m.group(1)) if m else -1])
+            n = self.con.execute("SELECT max(number) FROM review_findings WHERE ticket = ?",
+                                 [ticket]).fetchone()[0] or 0
+            for f in findings:
+                n += 1
+                self.con.execute(
+                    "INSERT INTO review_findings (id, project, ticket, review, number, severity, "
+                    "file, line, blocking, text, kind, state, fixed_in, found_at) VALUES "
+                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?)",
+                    ["rf_" + uuid.uuid4().hex[:10], project, ticket, rid, n, f["severity"],
+                     f["file"] or None, f["line"] or None, f["blocking"], f["text"],
+                     kind_of(f["text"]), at])
+        return {"id": rid, "round": rnd}
+
+    def ticket_reviews(self, ticket: str) -> list[dict]:
+        with self._lock:
+            revs = self.con.execute(
+                "SELECT id, round, pr, head, verdict, verified, not_verified, by_station, "
+                "reviewed_at FROM reviews WHERE ticket = ? ORDER BY round", [ticket]).fetchall()
+            fs = self.con.execute(
+                "SELECT id, review, number, severity, file, line, blocking, text, kind, state, "
+                "fixed_in FROM review_findings WHERE ticket = ? ORDER BY number",
+                [ticket]).fetchall()
+        finds = [{"id": f[0], "review": f[1], "label": f"F{f[2]}", "severity": f[3], "file": f[4],
+                  "line": f[5], "blocking": bool(f[6]), "text": f[7], "kind": f[8],
+                  "state": f[9], "fixed_in": f[10]} for f in fs]
+        out = []
+        for r in revs:
+            mine = [f for f in finds if f["review"] == r[0]]
+            fixed_here = [f["label"] for f in finds if f["fixed_in"] == r[0]]
+            out.append({"id": r[0], "round": r[1], "pr": r[2], "head": r[3], "verdict": r[4],
+                        "verified": r[5], "not_verified": r[6], "by": r[7], "at": r[8],
+                        "findings": mine, "fixed": fixed_here})
+        return out
+
+    def open_findings(self, ticket: str) -> list[dict]:
+        return [f for r in self.ticket_reviews(ticket) for f in r["findings"] if f["state"] == "open"]
+
+    def repo_findings(self, repo: str, since) -> list[dict]:
+        """Every reviewer finding on tickets whose PR lives in `repo` since `since`, with the
+        ticket and project (TR-443)."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT f.ticket, f.project, f.kind, f.text, f.severity, f.found_at FROM "
+                "review_findings f JOIN tickets t ON t.id = f.ticket WHERE "
+                "json_extract_string(t.pr, '$.repo') = ? AND f.found_at >= ?",
+                [repo, since]).fetchall()
+        return [{"ticket": r[0], "project": r[1], "kind": r[2], "text": r[3], "severity": r[4],
+                 "at": r[5]} for r in rows]
+
+    # ── what the recording says (TR-440, TR-442) ──────────────────────────────
+    def challenge_events(self, source: str, project_name: str, ref: str) -> list[dict]:
+        """The Codex challenger's reviews and waivers on a ticket's branch (factory/<ref>...) in
+        sessions working on the project, oldest first."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT event_time, event_type, payload, key_value FROM events WHERE source = ? "
+                "AND event_type IN ('challenge_commit', 'challenge_waived', 'challenge_plan') "
+                "AND (json_extract_string(labels, '$.branch') = ? OR "
+                "     json_extract_string(labels, '$.branch') LIKE ?) "
+                "AND coalesce(json_extract_string(labels, '$.tares_project'), ?) = ? "
+                "ORDER BY event_time", [source, f"factory/{ref}", f"factory/{ref}-%",
+                                        project_name, project_name]).fetchall()
+        out = []
+        for at, typ, pj, sid in rows:
+            try:
+                o = json.loads(pj) if isinstance(pj, str) else (pj or {})
+            except ValueError:
+                o = {}
+            ch = o.get("challenge") if isinstance(o.get("challenge"), dict) else {}
+            out.append({"at": at, "type": typ, "session": sid, "challenge": ch})
+        return out
+
+    def recorded_commands(self, source: str, sessions: list[str], limit: int = 6000) -> list[dict]:
+        """The shell commands the sessions ran (their subagents included), each with what it
+        printed and whether it failed, oldest first: what a builder's claimed checks are
+        compared with."""
+        if not sessions:
+            return []
+        marks = ", ".join("?" for _ in sessions)
+        with self._lock:
+            rows = self.con.execute(
+                f"SELECT event_time, event_type, payload, key_value FROM events WHERE source = ? "
+                f"AND key_value IN ({marks}) AND event_type IN ('tool_use', 'tool_result') "
+                "ORDER BY event_time DESC LIMIT ?", [source, *sessions, limit]).fetchall()
+        uses: dict[str, dict] = {}
+        results: dict[str, dict] = {}
+        for at, typ, pj, sid in reversed(rows):
+            try:
+                o = json.loads(pj) if isinstance(pj, str) else (pj or {})
+            except ValueError:
+                continue
+            msg = o.get("message") if isinstance(o.get("message"), dict) else {}
+            for b in msg.get("content") or []:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "tool_use" and b.get("name") == "Bash":
+                    inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+                    uses[str(b.get("id"))] = {"at": at, "session": sid,
+                                              "command": str(inp.get("command") or "")}
+                elif b.get("type") == "tool_result":
+                    c = b.get("content")
+                    if isinstance(c, list):
+                        c = "\n".join(str(x.get("text") or "") for x in c if isinstance(x, dict))
+                    results[str(b.get("tool_use_id"))] = {"output": str(c or "")[:20000],
+                                                          "is_error": bool(b.get("is_error"))}
+        out = []
+        for tid, u in uses.items():
+            r = results.get(tid) or {"output": "", "is_error": False}
+            out.append({**u, **r})
+        return sorted(out, key=lambda x: x["at"])
+
+    # ── rule proposals (TR-443) ───────────────────────────────────────────────
+    def upsert_rule_proposal(self, repo: str, kind: str, project: str | None, scope: str,
+                             text: str, tickets: list[str], at) -> dict | None:
+        """Offer a rule for (repo, kind) unless one was already offered; an open offer gets its
+        ticket list refreshed. None when it was decided before (never offered again)."""
+        with self._lock:
+            cur = self.con.execute("SELECT id, state FROM rule_proposals WHERE repo = ? AND "
+                                   "kind = ?", [repo, kind]).fetchone()
+            if cur and cur[1] != "open":
+                return None
+            if cur:
+                self.con.execute("UPDATE rule_proposals SET tickets = ?, scope = ?, project = ? "
+                                 "WHERE id = ?", [json.dumps(tickets), scope, project, cur[0]])
+                pid = cur[0]
+            else:
+                pid = "rp_" + uuid.uuid4().hex[:10]
+                self.con.execute(
+                    "INSERT INTO rule_proposals (id, repo, kind, project, scope, text, tickets, "
+                    "state, created_at, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, NULL)",
+                    [pid, repo, kind, project, scope, text, json.dumps(tickets), at])
+        return self.get_rule_proposal(pid)
+
+    def get_rule_proposal(self, pid: str) -> dict | None:
+        with self._lock:
+            r = self.con.execute("SELECT id, repo, kind, project, scope, text, tickets, state, "
+                                 "created_at, decided_at FROM rule_proposals WHERE id = ?",
+                                 [pid]).fetchone()
+        return ({"id": r[0], "repo": r[1], "kind": r[2], "project": r[3], "scope": r[4],
+                 "text": r[5], "tickets": json.loads(r[6]) if r[6] else [], "state": r[7],
+                 "created_at": r[8], "decided_at": r[9]} if r else None)
+
+    def list_rule_proposals(self, state: str | None = "open") -> list[dict]:
+        q = "SELECT id FROM rule_proposals"
+        vals: list = []
+        if state:
+            q += " WHERE state = ?"; vals.append(state)
+        with self._lock:
+            ids = [r[0] for r in self.con.execute(q + " ORDER BY created_at", vals).fetchall()]
+        return [self.get_rule_proposal(i) for i in ids]
+
+    def decide_rule_proposal(self, pid: str, state: str, text: str | None, at) -> None:
+        with self._lock:
+            self.con.execute("UPDATE rule_proposals SET state = ?, text = coalesce(?, text), "
+                             "decided_at = ? WHERE id = ?", [state, text, at, pid])
+
+    def station_session_ids(self, station: str) -> list[str]:
+        """The sessions that played `station` or a helper it started."""
+        with self._lock:
+            return [r[0] for r in self.con.execute(
+                "SELECT session FROM session_stations WHERE station = ? OR parent = ?",
+                [station, station]).fetchall()]
 
     # ── hand-over to the crew (TR-425) ────────────────────────────────────────
     def set_handover(self, project: str, repo: str | None, by: str | None, at) -> None:

@@ -53,8 +53,11 @@ async def refresh_prs(store, uid: str) -> None:
         _REFRESHING[uid] = task
     try:
         await asyncio.wait_for(asyncio.shield(task), REFRESH_WAIT)
-    except (asyncio.TimeoutError, Exception):
-        pass
+    except asyncio.TimeoutError:
+        pass                     # the refresh carries on; this read serves what is cached
+    except Exception as e:       # a refresh must never fail a read, but say why it did not run
+        print(f"[tares] pull request refresh for {uid} failed: {type(e).__name__}: {e}",
+              flush=True)
 
 
 def merged_fields(t: dict, pr: dict) -> dict:
@@ -98,6 +101,14 @@ async def _refresh(store, uid: str) -> None:
             return
         fields: dict = {"pr": pr} if pr is not t["pr"] else {}
         fields.update(merged_fields(cur, pr))
+        # new commits after the reviewer asked for changes: it is back in review (TR-444)
+        last = store.ticket_reviews(cur["id"])[-1:]
+        if (not fields.get("stage") and cur["stage"] == "changes" and last and pr.get("head")
+                and not verdict_now({"pr": pr}, last[0])["current"]):
+            fields["stage"] = "review"
+            store.add_ticket_history(cur["id"], uid, "stage", "review",
+                                     "new commits pushed after the verdict", "github", "github",
+                                     now_utc())
         if fields:
             store.update_ticket(cur["id"], **fields)
         if fields.get("stage") == "merged":
@@ -107,6 +118,38 @@ async def _refresh(store, uid: str) -> None:
 
     await asyncio.gather(*(one(t) for t in tickets if t["pr"] and t["pr"].get("repo")),
                          return_exceptions=True)
+
+
+def verdict_now(t: dict, last: dict | None) -> dict | None:
+    """The reviewer's last verdict on the ticket and whether it still counts (TR-444): it was
+    given on a commit; once the pull request's head moves on, it is for an older commit."""
+    if not last:
+        return None
+    head = (t.get("pr") or {}).get("head")
+    current = not head or head.startswith(last["head"]) or last["head"].startswith(head)
+    return {"verdict": last["verdict"], "head": last["head"], "round": last["round"],
+            "at": last["at"], "current": bool(current),
+            "note": None if current else
+            f"verdict is for an older commit ({last['head'][:7]}); the PR is now at {head[:7]}"}
+
+
+def review_state(store, uid: str, t: dict, source: str) -> dict:
+    """What a ticket's full view adds for review (TR-440..444): its checks matched against the
+    recording, the challenger's layer, the review rounds, and whether the last verdict counts."""
+    p = store.get_project(uid) or {}
+    holder = t.get("holder")
+    sessions = (store.station_session_ids(holder) if holder
+                else [s["session"] for s in store.project_sessions(uid)])
+    commands = store.recorded_commands(source, sessions) if sessions else []
+    checks = []
+    for c in store.ticket_checks(t["id"], 50):
+        state, recorded = factory_mod.match_check(c, commands) if sessions else (None, None)
+        checks.append({**c, "match": state, "recorded": recorded})
+    reviews = store.ticket_reviews(t["id"])
+    layer = factory_mod.challenger_layer(
+        store.challenge_events(source, p.get("name") or "", factory_mod.label(t)))
+    return {"checks": checks, "reviews": reviews, "challenger": layer,
+            "verdict": verdict_now(t, reviews[-1] if reviews else None)}
 
 
 def pr_note(t: dict) -> str | None:
@@ -513,6 +556,247 @@ def register(app, store, h: SimpleNamespace) -> None:
             store.update_doc(doc_id, body=text, by=by)
         h.ensure_globals(uid)
         return {"id": doc_id, "added": added, "body": store.get_doc(uid, doc_id)["body"]}
+
+    # ── review and merge (TR-441..445) ────────────────────────────────────────
+    @app.post("/api/projects/{uid}/tickets/{ref}/reviews", status_code=201)
+    async def record_review(uid: str, ref: str, request: Request, body: dict = Body(...)):
+        """{head, verdict, verified, not_verified?, findings?, resolved?}: one review round, the
+        verdict on the commit it was given on. `resolved` marks earlier findings ({F1: fixed}).
+        Only the reviewer (or a person's own session) records one."""
+        h.project_or_404(uid)
+        deny(request, "review")
+        t = ticket_or_404(uid, ref)
+        try:
+            verdict, verified, not_verified, findings, head = factory_mod.review_ok(
+                body.get("verdict"), body.get("verified"), body.get("not_verified"),
+                body.get("findings"), body.get("head"))
+        except docs_mod.DocError as e:
+            h.err(e)
+        resolved = body.get("resolved") or {}
+        if not isinstance(resolved, dict) or any(v not in ("fixed", "open")
+                                                 for v in resolved.values()):
+            h.err(ValueError("resolved is {finding: fixed|open}, e.g. {\"F1\": \"fixed\"}"))
+        if verdict == "pass" and any(
+                f["blocking"] and resolved.get(f["label"], resolved.get(f["id"])) != "fixed"
+                for f in store.open_findings(t["id"])):
+            h.err(ValueError("a pass leaves no blocking finding open: mark the earlier ones "
+                             "fixed in `resolved`, or ask for changes"))
+        by, _ = who(request, body)
+        r = store.add_review(uid, t["id"], (t["pr"] or {}).get("url"), head, verdict, verified,
+                             not_verified, by, findings, resolved, factory_mod.finding_kind,
+                             now_utc())
+        repo = (t["pr"] or {}).get("repo")
+        if repo:
+            offer_rules(repo)
+        rv = next(x for x in store.ticket_reviews(t["id"]) if x["id"] == r["id"])
+        return {**rv, "open": [f["label"] for f in store.open_findings(t["id"])]}
+
+    def queue() -> list[dict]:
+        names = {p["id"]: p["name"] for p in store.list_projects()}
+        out = []
+        for uid, pname in names.items():
+            tickets = store.list_tickets(uid)
+            if not any(t["stage"] == "review" for t in tickets):
+                continue
+            ms_open = {}   # a ticket blocks its milestone when the milestone is not finished
+            for t in tickets:
+                if t["milestone"]:
+                    ms_open.setdefault(t["milestone"], False)
+                    if t["status"] not in factory_mod.DONE_STATUSES:
+                        ms_open[t["milestone"]] = True
+            for t in tickets:
+                if t["stage"] != "review":
+                    continue
+                since = next((x["at"] for x in reversed(store.ticket_history(t["id"]))
+                              if x["field"] == "stage" and x["value"] == "review"), t["updated_at"])
+                layer = factory_mod.challenger_layer(
+                    store.challenge_events(h.cc_source(), pname, factory_mod.label(t)))
+                last = store.ticket_reviews(t["id"])[-1:]
+                v = verdict_now(t, last[0] if last else None)
+                out.append({"project": uid, "project_name": pname, "ticket": factory_mod.label(t),
+                            "title": t["title"], "holder": t["holder"],
+                            "pr": (t["pr"] or {}).get("url"), "head": (t["pr"] or {}).get("head"),
+                            "waiting_since": since,
+                            "blocks_milestone": bool(t["milestone"] and ms_open.get(t["milestone"])),
+                            "layer1_clean": layer["clean"],
+                            "verdict": v})
+        now = now_utc()
+        for q in out:
+            q["waiting_minutes"] = (int((now - q["waiting_since"]).total_seconds() // 60)
+                                    if isinstance(q["waiting_since"], datetime) else None)
+        out.sort(key=lambda q: (not q["blocks_milestone"], -(q["waiting_minutes"] or 0)))
+        return out
+
+    @app.get("/api/review-queue")
+    async def review_queue():
+        """Tickets in review across every project: those blocking their milestone first, then
+        the longest waiting (TR-444)."""
+        return {"queue": queue(), "now": now_utc()}
+
+    @app.get("/api/projects/{uid}/tickets/{ref}/brief")
+    async def review_brief(uid: str, ref: str, head: str = ""):
+        """Everything the reviewer needs for one review, as markdown (TR-445)."""
+        p = h.project_or_404(uid)
+        await refresh_prs(store, uid)
+        t = ticket_or_404(uid, ref)
+        return {"brief": brief_md(p, t, head.strip())}
+
+    def brief_md(p: dict, t: dict, head: str) -> str:
+        full = h.ticket_out(p["id"], t, with_doc=True)
+        pr = t["pr"] or {}
+        lab = factory_mod.label(t)
+        L = [f"# Review brief: {lab} {t['title']} ({p['name']})", ""]
+        # 1. GitHub's facts first: stop early when there is nothing to review
+        L += ["## The pull request, as GitHub has it"]
+        if not pr.get("url"):
+            L += ["No pull request is linked to this ticket yet (set_stage review with pr=...).", ""]
+        else:
+            L += [f"- {pr['url']}, head {str(pr.get('head') or '?')[:12]}, CI {pr.get('ci') or 'unknown'}"
+                  + (f", read {pr.get('checked_at')}" if pr.get("checked_at") else "")]
+            if pr.get("error"):
+                L += [f"- Could not read it fresh: {pr['error']}"]
+            if pr.get("merged"):
+                L += ["", "STOP: the pull request is already merged. There is nothing to review."]
+                return "\n".join(L)
+            if head and pr.get("head") and not (pr["head"].startswith(head) or head.startswith(pr["head"])):
+                L += ["", f"STOP: the head moved. You were asked about {head[:12]}, the PR is now "
+                          f"at {pr['head'][:12]}. Review the new head and say so."]
+                return "\n".join(L)
+            L.append("")
+        # 2. what was asked
+        L += ["## The ticket and its working doc",
+              f"Milestone: {full.get('milestone_name') or 'none'}. Held by {t['holder'] or 'nobody'}.",
+              "", (full.get("working_doc_body") or "(no working doc)").strip(), ""]
+        # 3. the builder's claims against the recording, unmatched first
+        checks = sorted(full.get("checks") or [], key=lambda c: c.get("match") == "matched")
+        L += ["## The builder's checks, against the recording"]
+        if not checks:
+            L += ["The builder recorded no checks: verify everything yourself."]
+        for c in checks:
+            mark = {"matched": "matched", "not_found": "NOT IN THE RECORDING",
+                    "differs": "RECORDING DIFFERS"}.get(c.get("match") or "", "not checked")
+            L += [f"- [{mark}] `{c['command']}` -> {c['result']}"
+                  + (f" (broke {c['broke_test']})" if c.get("broke_test") else "")
+                  + (f". Recording: {c['recorded']}" if c.get("recorded") else "")]
+        L.append("")
+        # 4. layer 1: Codex
+        layer = full.get("challenger") or {}
+        L += ["## Codex (the builder's challenger)"]
+        if not layer.get("rounds"):
+            L += ["No Codex review is recorded for this ticket's branch."]
+        else:
+            L += [f"{layer['rounds']} rounds, last: {layer.get('verdict')}"
+                  + (f" on {str(layer.get('sha'))[:7]}" if layer.get("sha") else "")]
+            L += [f"- open [{f.get('priority')}] {f.get('title')}" for f in layer.get("open") or []]
+            L += [f"- fixed [{f.get('priority')}] {f.get('title')}" for f in layer.get("fixed") or []]
+            L += [f"- WAIVED [{f.get('priority')}] {f.get('title')}: "
+                  f"{f.get('reason') or 'no reason given'} (judge this waiver)"
+                  for f in layer.get("waived") or []]
+        L.append("")
+        # 5. earlier rounds
+        reviews = full.get("reviews") or []
+        L += ["## Earlier review rounds"]
+        if not reviews:
+            L += ["This is the first review."]
+        for r in reviews:
+            L += [f"- Round {r['round']} on {r['head'][:7]}: {r['verdict']}"]
+            L += [f"  - {f['label']} [{f['severity']}{', blocking' if f['blocking'] else ''}] "
+                  f"{f['state']}: {f['text']}" + (f" ({f['file']}:{f['line']})" if f.get("file") else "")
+                  for f in r["findings"]]
+        L.append("")
+        # 6. assumptions and decisions on it
+        if full.get("assumptions"):
+            L += ["## Assumptions made on this ticket"]
+            L += [f"- {a['label']} ({a['state']}): {a['question']} -> {a['choice']}"
+                  for a in full["assumptions"]] + [""]
+        if hasattr(store, "list_decisions"):
+            ds = [d for d in store.list_decisions(p["id"]) if lab in (d.get("tickets") or [])
+                  or not d.get("tickets")][:10]
+            if ds:
+                L += ["## Decisions the person made on this project"]
+                L += [f"- {d['question']}: \"{d['words']}\"" for d in ds] + [""]
+        # 7. recurring findings in this repo: check these first
+        if pr.get("repo"):
+            rec = recurring(pr["repo"])
+            if rec:
+                L += [f"## What keeps coming back in {pr['repo']} (check these first)"]
+                L += [f"- {r['kind']}: {r['count']} tickets ({', '.join(r['tickets'][:5])})" for r in rec]
+                L.append("")
+        # 8. links, not inlined
+        L += ["## Read as needed",
+              "- The spec, AGENTS.md (the project's and the shared one) and the project memory: "
+              "list_docs, then get_doc(id).", "- The crew's messages about it: get_ticket."]
+        return "\n".join(L)
+
+    # ── recurring findings and rules offered from them (TR-443) ───────────────
+    def recurring(repo: str) -> list[dict]:
+        from datetime import timedelta
+        rows = store.repo_findings(repo, now_utc() - timedelta(days=factory_mod.RECUR_DAYS))
+        names = {p["id"]: p["name"] for p in store.list_projects()}
+        by: dict[str, dict] = {}
+        for f in rows:
+            k = by.setdefault(f["kind"], {"kind": f["kind"], "tickets": set(), "examples": []})
+            t = store.get_ticket(f["project"], f["ticket"])
+            k["tickets"].add(f"{names.get(f['project'], '?')} {factory_mod.label(t) if t else '?'}")
+            if len(k["examples"]) < 3:
+                k["examples"].append(f["text"][:200])
+        out = [{"kind": k["kind"], "count": len(k["tickets"]), "tickets": sorted(k["tickets"]),
+                "examples": k["examples"]} for k in by.values()
+               if len(k["tickets"]) >= factory_mod.RECUR_MIN]
+        return sorted(out, key=lambda r: -r["count"])
+
+    def offer_rules(repo: str) -> None:
+        for r in recurring(repo):
+            projects = {x.split(" ")[0] for x in r["tickets"]}
+            scope = "all" if len(projects) > 1 else "project"
+            pid = None
+            if scope == "project":
+                pid = next((p["id"] for p in store.list_projects()
+                            if p["name"] == next(iter(projects))), None)
+            text = (f"In {repo}, check for {r['kind']} before asking for review: it came back in "
+                    f"{r['count']} tickets.")
+            store.upsert_rule_proposal(repo, r["kind"], pid, scope, text, r["tickets"], now_utc())
+
+    @app.get("/api/recurring-findings")
+    async def recurring_findings(repo: str):
+        return {"repo": repo, "recurring": recurring(repo.strip())}
+
+    @app.get("/api/rule-proposals")
+    async def list_rule_proposals(state: str = "open"):
+        return {"proposals": store.list_rule_proposals(state.strip() or None)}
+
+    @app.post("/api/rule-proposals/{pid}/{decision}")
+    async def decide_rule(pid: str, decision: str, request: Request,
+                          body: dict = Body(default={})):
+        """accept (optionally with the text edited) adds the rule to AGENTS.md (the project's,
+        or the shared one when it came back across projects); reject keeps it from being
+        offered again. A person decides: refused from any crew station."""
+        if caller(request)["station"]:
+            h.err(PermissionError("a rule is the person's call: accept or reject it in the "
+                                  "console"), 403)
+        rp = store.get_rule_proposal(pid)
+        if rp is None:
+            h.err(KeyError(f"no rule proposal {pid!r}"), 404)
+        if rp["state"] != "open":
+            h.err(ValueError(f"already {rp['state']}"), 409)
+        if decision == "reject":
+            store.decide_rule_proposal(pid, "rejected", None, now_utc())
+            return store.get_rule_proposal(pid)
+        if decision != "accept":
+            h.err(KeyError("accept or reject"), 404)
+        text = " ".join(str(body.get("text") or rp["text"]).split())
+        if rp["scope"] == "project" and rp["project"]:
+            doc = next((d for d in store.list_docs(rp["project"], "agents")
+                        if d["id"] not in h.global_ids(False).values()), None)
+            doc_id = doc["id"] if doc else store.create_doc(
+                rp["project"], "agents", "AGENTS.md", "# AGENTS.md\n\n", by="console")
+        else:
+            doc_id = h.global_ids(True)["agents"]
+        cur = store.get_doc(None, doc_id)["body"]
+        new, _ = docs_mod.append_line(cur, text)
+        store.update_doc(doc_id, body=new, by="console")
+        store.decide_rule_proposal(pid, "accepted", text, now_utc())
+        return {**store.get_rule_proposal(pid), "doc": doc_id}
 
     @app.post("/api/projects/{uid}/handover")
     async def hand_over(uid: str, request: Request, body: dict = Body(default={})):

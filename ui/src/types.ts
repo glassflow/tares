@@ -390,7 +390,17 @@ export interface Ticket {
   // the build, recorded (TR-433, TR-435)
   assumptions?: { label: string; question: string; choice: string; why: string; state: AssumptionState; words: string | null; made_by: string | null; tickets: string[] }[];
   checks?: TicketCheck[];
+  // review and merge (TR-440..444)
+  verdict?: VerdictNow | null;
+  reviews?: Review[];
+  challenger?: { rounds: number; open: ChallengeFinding[]; fixed: ChallengeFinding[]; waived: ChallengeFinding[]; verdict: string | null; sha: string | null; clean: boolean };
 }
+export interface VerdictNow { verdict: "pass" | "changes" | "block"; head: string; round: number; at: string; current: boolean; note: string | null }
+export interface ChallengeFinding { priority?: string; title?: string; waived?: boolean; reason?: string }
+export interface ReviewFinding { id: string; label: string; severity: "P1" | "P2" | "P3"; file: string | null; line: number | null; blocking: boolean; text: string; kind: string; state: "open" | "fixed"; fixed_in: string | null }
+export interface Review { id: string; round: number; pr: string | null; head: string; verdict: "pass" | "changes" | "block"; verified: string; not_verified: string | null; by: string | null; at: string; findings: ReviewFinding[]; fixed: string[] }
+export interface QueueItem { project: string; project_name: string; ticket: string; title: string; holder: string | null; pr: string | null; head: string | null; waiting_minutes: number | null; blocks_milestone: boolean; layer1_clean: boolean; verdict: VerdictNow | null }
+export interface RuleProposal { id: string; repo: string; kind: string; project: string | null; scope: "project" | "all"; text: string; tickets: string[]; state: "open" | "accepted" | "rejected"; created_at: string }
 export type AssumptionState = "open" | "kept" | "overturned";
 export interface Assumption {
   id: string; label: string; number: number; question: string; choice: string; why: string;
