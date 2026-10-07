@@ -8,6 +8,7 @@ import { InternalName, Picker, TimeAgo, keyTitle } from "../components/bits";
 import { type Cloud, cloudLink, useCloud } from "../cloud";
 import type { ApiKey, GithubAppTest, GithubCredential, ModelProvider, ModelProviders } from "../types";
 import { UsagePanels } from "../components/UsagePanels";
+import LinearSettings from "../components/LinearSettings";
 import WorkspaceSettings from "./WorkspaceSettings";
 
 // Four distinct credential concepts, one box each:
@@ -19,7 +20,7 @@ import WorkspaceSettings from "./WorkspaceSettings";
 // The per-source ingest URL is an address, not a secret — it lives on the source page, not here.
 //   · Workspace  (Tares Cloud only) team, plan, storage, credit and delete, held by the control
 //                  plane (TR-375); shown first, and the default tab, when /health has workspace_api_url
-type SettingsTab = "workspace" | "usage" | "access" | "anthropic" | "agents" | "github" | "slack" | "observability";
+type SettingsTab = "workspace" | "usage" | "access" | "anthropic" | "agents" | "github" | "linear" | "slack" | "observability";
 const TABS: { key: SettingsTab; label: string }[] = [
   { key: "workspace", label: "Workspace" },
   { key: "usage", label: "Usage" },
@@ -27,6 +28,7 @@ const TABS: { key: SettingsTab; label: string }[] = [
   { key: "anthropic", label: "Model providers" },
   { key: "agents", label: "Agents" },
   { key: "github", label: "GitHub" },
+  { key: "linear", label: "Linear" },
   { key: "slack", label: "Slack" },
   { key: "observability", label: "Observability" },
 ];
@@ -121,6 +123,7 @@ export default function Security() {
       {tab === "anthropic" && <ProvidersPanel />}
       {tab === "agents" && <AgentLimitsPanel />}
       {tab === "github" && <GithubPanel cloud={cloud} />}
+      {tab === "linear" && <LinearSettings />}
       {/* Until /health answers (it can be slow on a busy instance) the self-host panels show, so
           a self-hosted Slack tab never waits on it; a cloud cell swaps to its panel once it does. */}
       {tab === "slack" && (slackConnectUrl ? <SlackCloudPanel cloud={cloud} connectUrl={slackConnectUrl} />

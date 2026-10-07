@@ -345,6 +345,51 @@ export interface Skill {
   updated_at: string;
 }
 
+// Docs and tickets (TR-403): what a spec session leaves in a project for the session that builds it
+export type DocKind = "start" | "spec" | "plan" | "agents" | "note" | "working";
+export interface DocSummary {
+  id: string;
+  kind: DocKind;
+  title: string;
+  made_by: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+  size?: number;
+}
+export interface Doc extends DocSummary { body: string; projects: string[] }
+export type TicketStatus = "todo" | "in_progress" | "done" | "canceled";
+export interface Ticket {
+  id: string;
+  owner: "tares" | "linear";
+  identifier: string | null;
+  url: string | null;
+  title: string;
+  status: TicketStatus;
+  position: number;
+  working_doc: string | null;
+  working_doc_title: string | null;
+  working_doc_body?: string | null;
+  updated_at: string;
+}
+export interface LinearLink {
+  id: string; name: string; url: string;
+  synced_at?: string | null; error?: string | null; issues?: number;
+}
+export interface LinearStatus {
+  connected: boolean;
+  kind?: "api_key" | "oauth";
+  account?: { name?: string; email?: string; org?: string };
+  connected_at?: string;
+  oauth_available: boolean;
+  client_id: string;
+  client_id_from_env: boolean;
+}
+export interface ProjectSession {
+  session: string; repo: string | null; linked_at: string;
+  started_at: string | null; last_at: string | null; lines: number;
+}
+
 export interface RunResult {
   kind: "pr" | "commit" | "check" | "slack" | "email" | "webhook" | "custom";
   label: string;
