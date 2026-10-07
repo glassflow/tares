@@ -60,6 +60,9 @@ def plugin():
     ck("from the plugin's server too",
        ship.project_call(line(1, tool="mcp__plugin_tares_tares__write_doc",
                               inp={"project": "Invoices", "kind": "spec"})) == "Invoices")
+    ck("from a copy of the plugin under another name",
+       ship.project_call(line(1, tool="mcp__plugin_tares-dev_tares__create_project",
+                              inp={"name": "Invoices"})) == "Invoices")
     ck("a Tares tool without a project says nothing",
        ship.project_call(line(1, tool="mcp__tares__list_projects")) is None)
     ck("another server's create_project is not ours",

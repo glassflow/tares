@@ -230,10 +230,11 @@ def process_lines(raw_lines: list, flow: str, hook: dict) -> tuple:
 
 def _tares_tool(name) -> str:
     """The Tares tool a tool_use block calls ("" when it is not a Tares tool). Claude Code names
-    MCP tools mcp__<server>__<tool>; the server is `tares`, or `plugin_tares_tares` from the
-    plugin."""
+    MCP tools mcp__<server>__<tool>; the server is `tares`, or `plugin_<plugin>_tares` from a
+    plugin (`plugin_tares_tares`, or a copy installed under another name)."""
     parts = str(name or "").split("__")
-    if len(parts) >= 3 and parts[0] == "mcp" and parts[1] in ("tares", "plugin_tares_tares"):
+    if len(parts) >= 3 and parts[0] == "mcp" and (
+            parts[1] == "tares" or (parts[1].startswith("plugin_") and parts[1].endswith("_tares"))):
         return parts[-1]
     return ""
 

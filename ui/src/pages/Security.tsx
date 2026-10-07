@@ -100,7 +100,7 @@ export default function Security() {
       <h1>Settings</h1>
       <p className="subtitle">
         {workspaceApiUrl ? "Your team, plan, storage and model spend, API keys, model providers, agent limits, GitHub and Slack, and agent tracing."
-          : "Model spend and storage, who can get in, API keys, model providers, agent limits, GitHub and Slack credentials, and agent tracing."}
+          : "Model spend and storage, who can get in, API keys, model providers, agent limits, GitHub, Linear and Slack credentials, and agent tracing."}
       </p>
       <div className="tabs">
         {tab !== undefined && tabs.map((t) => (

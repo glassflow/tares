@@ -453,17 +453,19 @@ export function ClaudeSessionView({ ctx, name }: { ctx: Ctx; name: string }) {
     ? <NotHere what="session" name={name} back={{ kind: "claude" }} />
     : <ErrorState error={error} what="this session" onRetry={reload} />;
   if (!data) return <div className="dim">loading…</div>;
+  // Claude Code's own bookkeeping lines carry no text worth reading here
+  const lines = data.lines.filter((l) => l.text && l.text.trim() !== (l.labels.type ?? l.event_type));
   return (
     <>
       <ViewHead title="Claude Code session" sub={<span className="mono">{name}</span>} />
       <div className="panel" style={{ padding: 0 }}>
-        {data.lines.map((l, i) => (
+        {lines.map((l, i) => (
           <div key={i} className="cc-line" style={{ padding: "6px 12px", borderTop: i ? "1px solid var(--line)" : undefined }}>
             <span className="help" style={{ marginRight: 8 }}><TimeAgo ts={l.event_time} /> · {l.labels.type ?? l.event_type}</span>
             <span style={{ whiteSpace: "pre-wrap" }}>{l.text}</span>
           </div>
         ))}
-        {!data.lines.length && <div className="empty">No lines recorded.</div>}
+        {!lines.length && <div className="empty">No lines recorded.</div>}
       </div>
     </>
   );
