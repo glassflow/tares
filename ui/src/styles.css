@@ -1966,3 +1966,11 @@ pre.payload {
 .fo-sess { display: inline-flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .fo-st-wait { color: var(--accent-deep); border-color: var(--accent-deep); background: var(--accent-soft); }
 .fo-st-quiet { color: var(--err); border-color: var(--err); }
+/* a fold's pin: a pinned section is open on every visit and does not fold */
+.fo-fold-right { display: inline-flex; align-items: center; gap: 10px; }
+.fo-pin { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid transparent; background: transparent; color: var(--ink-faint); cursor: pointer; }
+.fo-pin:hover { color: var(--ink); border-color: var(--line); }
+.fo-pin.on { color: var(--accent-deep); }
+.fo-pin:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 1px; }
+.fo-fold.is-pinned > summary { cursor: default; }
+.fo-fold.is-pinned .fo-fold-h::before { visibility: hidden; }

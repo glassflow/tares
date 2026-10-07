@@ -69,6 +69,16 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const active = sessions.find((s) => s.state !== "replaced");
   const building = tickets.some((t) => t.status === "in_progress");
   const quietMin = active ? quiet(active, ss?.now) : 0;
+  // With nothing in progress, a session waiting at its prompt is not a stopped build: it is
+  // idle, and the one that finished the last ticket has finished. The stored state stays raw.
+  const ms = (t?: string | null) => (t ? Date.parse(t) : NaN);
+  const lastDone = phase === "done"
+    ? Math.max(...tickets.filter((t) => t.status === "done").map((t) => ms(t.updated_at))) : NaN;
+  const finisher = Number.isNaN(lastDone) ? undefined : sessions
+    .filter((s) => s.state !== "replaced" && ms(s.started_at) <= lastDone && ms(s.last_at) >= lastDone)
+    .sort((a, b) => ms(b.last_at) - ms(a.last_at))[0]?.session;
+  const shownState = (s: ProjectSession, _now?: string): Shown =>
+    building ? null : s.session === finisher ? "finished" : s.state === "waiting" ? "idle" : null;
   const attention: "waiting" | "silent" | null = !building || !active ? null
     : active.state === "waiting" ? "waiting"
     : active.state !== "ended" && quietMin >= SILENT_MIN ? "silent" : null;
@@ -143,8 +153,12 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
       )}
 
       <div className="fo-cols">
-        <section className="fo-panel" aria-labelledby="fo-docs-h">
-          <header><h3 id="fo-docs-h">Docs</h3><VLink v={{ kind: "docs" }} className="fo-link">All docs</VLink></header>
+        <Fold id="docs" title="Docs" pinnedByDefault
+              meta={docs === undefined ? "loading…" : [
+                `${own.length} ${own.length === 1 ? "doc" : "docs"}`,
+                questions.length ? `${questions.length} open ${questions.length === 1 ? "question" : "questions"}` : "",
+                shared.length ? `${shared.length} shared` : "",
+              ].filter(Boolean).join(" · ")}>
           {docs === undefined ? <p className="fo-empty">loading…</p> : (
             <>
               {own.length ? <DocList docs={own} /> : <p className="fo-empty">No docs yet.</p>}
@@ -158,13 +172,11 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
               </>}
             </>
           )}
-        </section>
+          <div className="fo-foot"><VLink v={{ kind: "docs" }} className="fo-link">All docs</VLink></div>
+        </Fold>
 
-        <details className="fo-panel fo-fold">
-          <summary>
-            <span className="fo-fold-h">Tickets</span>
-            <span className="fo-meta">{tickets.length} · {done} done · {tk?.linear ? "in Linear" : "in Tares"}</span>
-          </summary>
+        <Fold id="tickets" title="Tickets"
+              meta={`${tickets.length} · ${done} done · ${tk?.linear ? "in Linear" : "in Tares"}`}>
           <ol className="fo-tickets">
             {tickets.map((t, i) => (
               <li key={t.id} className={t.id === next?.id ? "is-next" : ""}>
@@ -175,16 +187,11 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
             ))}
           </ol>
           <div className="fo-foot"><VLink v={{ kind: "tickets" }} className="fo-link">All tickets</VLink></div>
-        </details>
+        </Fold>
       </div>
 
-      <details className="fo-panel fo-fold">
-        <summary>
-          <span className="fo-fold-h">Sessions</span>
-          <span className="fo-meta">
-            {sessions.length} · {sessions[0]?.last_at ? <>last active <TimeAgo ts={sessions[0].last_at} /></> : "none yet"}
-          </span>
-        </summary>
+      <Fold id="sessions" title="Sessions"
+            meta={<>{sessions.length} · {sessions[0]?.last_at ? <>last active <TimeAgo ts={sessions[0].last_at} /></> : "none yet"}</>}>
         {sessions.length ? (
           <ul className="fo-docs">
             {sessions.map((x) => (
@@ -193,14 +200,14 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
                   <VLink v={{ kind: "claude", name: x.session }}>
                     {x.session === firstLinked ? "Spec session" : "Build session"}{x.repo && <> · {x.repo}</>}
                   </VLink>
-                  <StateBadge s={x} now={ss?.now} />
+                  <StateBadge s={x} now={ss?.now} shown={shownState(x, ss?.now)} />
                 </span>
                 <small>{x.started_at ? <TimeAgo ts={x.started_at} /> : null} · {x.lines} lines</small>
               </li>
             ))}
           </ul>
         ) : <p className="fo-empty">No Claude Code session has worked in this project yet.</p>}
-      </details>
+      </Fold>
     </div>
   );
 }
@@ -212,7 +219,53 @@ function quiet(s: ProjectSession, now?: string): number {
   return s.last_at && now ? Math.floor((Date.parse(now) - Date.parse(s.last_at)) / 60000) : 0;
 }
 
-function StateBadge({ s, now }: { s: ProjectSession; now?: string }) {
+type Shown = "finished" | "idle" | null;
+
+/** A section that folds, with a pin: a pinned one is open on every visit and does not fold.
+ *  Pins are this browser's, per section, across projects. */
+function Fold({ id, title, meta, pinnedByDefault, children }: {
+  id: string; title: string; meta: React.ReactNode; pinnedByDefault?: boolean; children: React.ReactNode;
+}) {
+  const key = `tares.factory.pin.${id}`;
+  const [pinned, setPinned] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem(key);
+      return v === null ? !!pinnedByDefault : v === "1";
+    } catch { return !!pinnedByDefault; }
+  });
+  const [open, setOpen] = useState(pinned);
+  const togglePin = (e: React.MouseEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    const next = !pinned;
+    setPinned(next);
+    if (next) setOpen(true);
+    try { localStorage.setItem(key, next ? "1" : "0"); } catch { /* the pin lasts this visit */ }
+  };
+  return (
+    <details className={`fo-panel fo-fold${pinned ? " is-pinned" : ""}`} open={pinned || open}
+             onToggle={(e) => { if (!pinned) setOpen((e.target as HTMLDetailsElement).open); }}>
+      <summary onClick={(e) => { if (pinned) e.preventDefault(); }}>
+        <span className="fo-fold-h">{title}</span>
+        <span className="fo-fold-right">
+          <span className="fo-meta">{meta}</span>
+          <button type="button" className={`fo-pin${pinned ? " on" : ""}`} onClick={togglePin}
+                  aria-pressed={pinned} aria-label={pinned ? `Unpin ${title}` : `Pin ${title} open`}
+                  title={pinned ? "Pinned open: click to let it fold" : "Pin open: stays open on every visit"}>
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path d="M9.5 1.5l5 5-2 .5-2.5 2.5.5 3-1.5 1.5-3-3L2.5 14.5 1.5 13.5 5 10 2 7l1.5-1.5 3 .5L9 3.5z"
+                    fill={pinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+            </svg>
+          </button>
+        </span>
+      </summary>
+      {children}
+    </details>
+  );
+}
+
+function StateBadge({ s, now, shown }: { s: ProjectSession; now?: string; shown?: Shown }) {
+  if (shown === "finished") return <span className="fo-st fo-st-done" title="it finished the last ticket">finished</span>;
+  if (shown === "idle") return <span className="fo-st" title={`waiting at its prompt; nothing is in progress${s.state_reason ? ` (${s.state_reason})` : ""}`}>idle</span>;
   if (s.state === "waiting") return <span className="fo-st fo-st-wait" title={s.state_reason ?? undefined}>waiting</span>;
   if (s.state === "ended") return <span className="fo-st">ended</span>;
   if (s.state === "replaced") return <span className="fo-st" title={s.state_reason ?? undefined}>replaced</span>;
