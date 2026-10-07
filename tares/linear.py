@@ -296,10 +296,10 @@ async def list_projects(store, q: str = "") -> list[dict]:
 
 _ISSUES = """query($id: String!, $after: String) {
   project(id: $id) {
-    issues(first: 100, after: $after, includeArchived: false) {
+    issues(first: 50, after: $after, includeArchived: false) {
       nodes { id identifier title url sortOrder updatedAt state { name type }
               projectMilestone { id }
-              inverseRelations(first: 50) { nodes { type issue { id } } } }
+              inverseRelations(first: 20) { nodes { type issue { id } } } }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -461,8 +461,11 @@ def _sync_milestones(store, uid: str, milestones: list[dict]) -> dict[str, str]:
                 owner="linear", external_id=lm["id"])
             continue
         ids[lm["id"]] = cur["id"]
-        if cur["name"] != name or cur["position"] != pos:
-            store.update_milestone(cur["id"], name=name, position=pos)
+        clash = store.get_milestone(uid, name)
+        if cur["name"] != name and not (clash and clash["id"] != cur["id"]):
+            store.update_milestone(cur["id"], name=name)   # a rename onto another's name waits
+        if cur["position"] != pos:
+            store.update_milestone(cur["id"], position=pos)
     for ext, cur in have.items():
         if ext not in ids:
             store.delete_milestone(cur["id"])

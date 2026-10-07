@@ -8,7 +8,8 @@ import type {
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults,
   Skill, SkillSummary,
-  Doc, DocKind, DocSummary, LinearLink, LinearStatus, Milestone, ProjectSession, Ticket, TicketStatus,
+  CrewSettings, CrewStation, Doc, DocKind, DocSummary, Handover, LinearLink, LinearStatus, Milestone,
+  ProjectSession, Ticket, TicketStatus,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, ModelProvider, ModelProviders,
 } from "./types";
@@ -560,6 +561,10 @@ export const api = {
       { method: "DELETE" }),
   milestones: (id: string) =>
     request<{ milestones: Milestone[] }>(`/api/projects/${encodeURIComponent(id)}/milestones`),
+  crew: () => request<{ stations: CrewStation[]; settings: CrewSettings; grants: string; now: string }>("/api/crew"),
+  projectCrew: (id: string) =>
+    request<{ stations: CrewStation[]; handover: Handover | null; now: string }>(
+      `/api/projects/${encodeURIComponent(id)}/crew`),
   projectSessions: (id: string) =>
     request<{ sessions: ProjectSession[]; now: string }>(`/api/projects/${encodeURIComponent(id)}/sessions`),
   projectSession: (id: string, sid: string, offset = 0) =>

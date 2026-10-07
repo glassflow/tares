@@ -22,9 +22,10 @@ DOC_KINDS = {
     "start": "the prompt a session that builds the project starts with",
     "note": "anything else worth keeping with the project",
     "memory": "facts and preferences that hold across projects, one line each",
+    "grants": "what the person allows a tares-factory crew to do, in their words, dated",
 }
 # the order the console and list_docs show them in
-KIND_ORDER = ["start", "spec", "plan", "agents", "memory", "note", "working"]
+KIND_ORDER = ["start", "spec", "plan", "agents", "memory", "grants", "note", "working"]
 
 # The cell's global docs: made once the first project has docs, included in every project that
 # has docs, and grown a line at a time by sessions (append_line). {kind: (title, starting body)}
@@ -37,6 +38,13 @@ GLOBAL_DOCS = {
                "# Memory\n\n"
                "Facts and preferences that hold across projects. One line each, newest last.\n\n"),
 }
+# The grants for every project of a tares-factory crew (TR-419): on the cell, made with the first
+# grant, and included in the projects that read their grants (not in every project, like the two
+# above: only a crew-built project has grants).
+GRANTS_DOC = ("Grants (all projects)",
+              "# Grants\n\n"
+              "What the person allows a tares-factory crew to do in every project, in their own "
+              "words with the day they said it. Only the person's words become a grant.\n\n")
 MAX_LINE = 500
 
 

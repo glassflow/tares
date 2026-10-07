@@ -78,6 +78,9 @@ class ClaudeCodeConnector(Connector):
                                  "the plugin stamps it on every line of a marked session"},
         {"name": "tares_project", "help": "the Tares project the session works in; the plugin "
                                           "stamps it once the session creates or names one"},
+        {"name": "station", "help": "the tares-factory station the session plays (crew-reviewer, "
+                                    "<project>-build-<slug>); the plugin stamps it from "
+                                    "FACTORY_STATION"},
         {"name": "verdict", "help": "challenge events: PASS / FAIL / ERROR / TIMEOUT / INCONCLUSIVE"},
         {"name": "sha", "help": "challenge_commit: the reviewed commit"},
         {"name": "finding_count", "help": "challenge events: findings reported (number)"},
@@ -107,8 +110,15 @@ class ClaudeCodeConnector(Connector):
         items = payload if isinstance(payload, list) else [payload]
         out = []
         for o in items:
+            if isinstance(o, dict) and o.get("type") == "session_station":
+                self._record_station(o)
             if isinstance(o, dict) and o.get("type") == "session_project":
-                self._link_project(o)
+                if not self._link_project(o) and o.get("from_env"):
+                    # TARES_PROJECT named a project Tares does not have: say so on the session's
+                    # timeline instead of making one
+                    o = {**o, "type": "session_warning",
+                         "warning": f"TARES_PROJECT names project {o.get('tares_project')!r}, "
+                                    "which is not on Tares; the session is not tied to a project"}
             if isinstance(o, dict) and o.get("type") == "session_state":
                 self._record_state(o)
             if isinstance(o, dict):
@@ -117,7 +127,24 @@ class ClaudeCodeConnector(Connector):
                     out.append(env)
         return out
 
-    def _link_project(self, o: dict) -> None:
+    def _record_station(self, o: dict) -> None:
+        """A `session_station` line (TR-418): the session plays a station of a tares-factory crew
+        (its environment said FACTORY_STATION). Kept so Tares groups the crew's sessions by
+        station."""
+        sid = str(o.get("sessionId") or "")
+        if not sid or self.store is None:
+            return
+        from ..factory import DocError, station_ok
+        try:
+            name, role, parent = station_ok(o.get("station"), o.get("role"), o.get("parent"))
+        except DocError:
+            return
+        ref = str(o.get("tares_project") or "").strip()
+        p = (self.store.get_project(ref) or self.store.get_project_by_name(ref)) if ref else None
+        self.store.set_session_station(sid, name, role, parent, p["id"] if p else None,
+                                       self._ts(o))
+
+    def _link_project(self, o: dict) -> bool:
         """A `session_project` line (TR-405): the plugin saw the session work in a Tares project
         (it created it, or a Tares tool named it). Tie the session to the project, and put this
         source in the project so the session's lines read as the project's, the ones from before
@@ -125,14 +152,15 @@ class ClaudeCodeConnector(Connector):
         ignored: the line still lands on the session's timeline."""
         ref, sid = str(o.get("tares_project") or "").strip(), str(o.get("sessionId") or "")
         if not ref or not sid or self.store is None:
-            return
+            return False
         p = self.store.get_project(ref) or self.store.get_project_by_name(ref)
         if p is None:
-            return
+            return False
         cwd = o.get("cwd")
         self.store.link_session(p["id"], sid, Path(str(cwd)).name if cwd else None)
         self.store.upsert_project_object(p["id"], "source", f"+source:{self.cfg.name}",
                                          self.cfg.name)
+        return True
 
     STATES = ("working", "waiting", "ended")
 
@@ -161,7 +189,8 @@ class ClaudeCodeConnector(Connector):
                 "type": str(o.get("type")) if o.get("type") else None,
                 "sidechain": "true" if o.get("isSidechain") else "false",
                 "flow": str(o["flow"]) if o.get("flow") else None,
-                "tares_project": str(o["tares_project"]) if o.get("tares_project") else None}
+                "tares_project": str(o["tares_project"]) if o.get("tares_project") else None,
+                "station": str(o["factory_station"]) if o.get("factory_station") else None}
 
     # ── mapping: one JSONL object → one Envelope ───────────────────────────────
     def _obj_to_envelope(self, o: dict, redact: bool, include_thinking: bool):
@@ -271,6 +300,11 @@ class ClaudeCodeConnector(Connector):
         if o.get("type") == "session_state":
             why = f": {o.get('reason')}" if o.get("reason") else ""
             return f"session {o.get('state')}{why}"
+        if o.get("type") == "session_station":
+            role = f" ({o.get('role')})" if o.get("role") else ""
+            return f"session plays station {o.get('station')}{role}"
+        if o.get("type") == "session_warning":
+            return f"warning: {o.get('warning')}"
         if o.get("type") in ClaudeCodeConnector.CHALLENGE_TYPES:
             return ClaudeCodeConnector._render_challenge(o)
         content = msg.get("content")

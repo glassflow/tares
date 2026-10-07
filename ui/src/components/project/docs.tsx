@@ -14,7 +14,7 @@ import type { Doc, DocKind, Ticket, TicketStatus } from "../../types";
 
 export const KIND_LABEL: Record<DocKind, string> = {
   start: "Starting prompt", spec: "Spec", plan: "Plan", agents: "AGENTS.md", memory: "Memory",
-  note: "Note", working: "Working doc",
+  grants: "Grants", note: "Note", working: "Working doc",
 };
 const KIND_HELP: Record<DocKind, string> = {
   start: "what a session that builds the project reads first",
@@ -22,6 +22,7 @@ const KIND_HELP: Record<DocKind, string> = {
   plan: "milestones and the order of work",
   agents: "conventions, commands, how to test",
   memory: "facts and preferences that hold across projects",
+  grants: "what you allow a tares-factory crew to do, in your words, dated",
   note: "anything else worth keeping with the project",
   working: "how to do one ticket: context, steps, files, how to verify",
 };

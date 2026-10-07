@@ -138,7 +138,18 @@ async def main():
         lt = json.loads(await m.list_tickets(project=uid))["tickets"]
         ready = {t["label"]: (t["ready"], t.get("blocked_by")) for t in lt}
         ck("only T1 is ready; T2 waits for T1, T3 for T2",
-           ready == {"T1": (True, None), "T2": (False, ["T1"]), "T3": (False, ["T2"])}, ready)
+           ready == {"T1": (True, []), "T2": (False, ["T1"]), "T3": (False, ["T2"])}, ready)
+        async with cx_factory() as cx:
+            pk = (await cx.get(f"/api/projects/{uid}/pickup")).json()
+            ck("pickup offers the ready ticket", pk["ticket"]["label"] == "T1", pk["ticket"])
+            await cx.put(f"/api/projects/{uid}/tickets/T1", json={"status": "canceled"})
+            lt2 = (await cx.get(f"/api/projects/{uid}/tickets")).json()["tickets"]
+            pk = (await cx.get(f"/api/projects/{uid}/pickup")).json()
+            ck("a canceled dependency keeps its dependents blocked, and says so",
+               lt2[1]["blocked_by"] == ["T1 (canceled)"] and not lt2[1]["ready"], lt2[1])
+            ck("pickup with nothing ready names what waits for what",
+               pk["ticket"] is None and "T2 waits for T1 (canceled)" in pk["checklist"][0], pk)
+            await cx.put(f"/api/projects/{uid}/tickets/T1", json={"status": "todo"})
         await m.write_ticket("", status="done", id="T1", project=uid)
         lt = json.loads(await m.list_tickets(project=uid))["tickets"]
         ready = {t["label"]: t["ready"] for t in lt}
@@ -159,6 +170,26 @@ async def main():
                r.status_code == 200 and t3now["milestone"] is None, t3now)
             r = await cx.put(f"/api/projects/{uid}/tickets/T3", json={"depends_on": []})
             ck("dependencies can be cleared", r.json()["depends_on"] == [] and r.json()["ready"], r.json())
+            r = await cx.put(f"/api/projects/{uid}/milestones/Ingest", json={"name": "INGEST "})
+            ck("a rename to its own name (any case) is fine", r.status_code == 200, r.text)
+            await mf.write_milestone("Launch", "", [], project=uid)
+            r = await cx.put(f"/api/projects/{uid}/milestones/Launch", json={"name": "ingest"})
+            ck("a rename onto another milestone's name is refused", r.status_code == 409
+               and "unique" in r.text, r.text)
+        out = json.loads(await mf.write_milestone("Go live", "Shipped", [], id="Launch", project=uid))
+        ck("write_milestone with id renames", out["name"] == "Go live", out)
+        out = json.loads(await m.write_ticket("", milestone="", id="T2", project=uid))
+        ck("milestone '' takes a ticket out of its milestone", out.get("milestone_name") is None, out)
+        t4 = json.loads(await m.write_ticket("Throwaway", depends_on=["T2"], project=uid))
+        t5 = json.loads(await m.write_ticket("Needs T4", depends_on=["T4"], project=uid))
+        async with cx_factory() as cx:
+            await cx.delete(f"/api/projects/{uid}/tickets/T4")
+            t5now = (await cx.get(f"/api/projects/{uid}/tickets/T5")).json()
+            ck("deleting a ticket drops it from the tickets that depended on it",
+               t5now["depends_on"] == [], t5now)
+            await cx.delete(f"/api/projects/{uid}/tickets/T5")
+        t6 = json.loads(await m.write_ticket("After deletes", project=uid))
+        ck("a deleted ticket's number is never given out again", t6["label"] == "T6", t6)
 
         print("== a plan in Linear ==")
         async with cx_factory() as cx:

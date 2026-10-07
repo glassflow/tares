@@ -302,6 +302,68 @@ def stamp_project(objs: list, project: str, hook: dict) -> tuple:
     return out, project, changed
 
 
+# ── the tares-factory station a session plays (TR-418), from its environment ──
+# A crew station's settings set FACTORY_STATION (its stable name), FACTORY_ROLE, FACTORY_PARENT
+# (who started it) and, for builders, TARES_PROJECT. The hooks inherit them. The shipper sends one
+# `session_station` line per session, ties the session to TARES_PROJECT from its first line, and
+# stamps the station on every line, so Tares groups a station's sessions (revivals included)
+# without the session calling a Tares tool.
+
+def station_env() -> dict:
+    st = os.environ.get("FACTORY_STATION", "").strip()
+    if not st:
+        return {}
+    return {"station": st, "role": os.environ.get("FACTORY_ROLE", "").strip(),
+            "parent": os.environ.get("FACTORY_PARENT", "").strip()}
+
+
+def env_project() -> str:
+    return os.environ.get("TARES_PROJECT", "").strip()
+
+
+def station_marker(data_dir: str, session_id: str) -> str:
+    return flow_marker(data_dir, session_id)[:-len(".flow")] + ".station"
+
+
+def announce(cfg: dict, hook: dict, flow: str) -> None:
+    """The session's station and its TARES_PROJECT, each sent once (a marker per session, written
+    only after a successful ship)."""
+    sid = str(hook.get("session_id") or "")
+    if not sid:
+        return
+    data_dir = cfg["data_dir"]
+    lines = []
+    st = station_env()
+    mark = station_marker(data_dir, sid)
+    if st and not os.path.exists(mark):
+        line = synthetic_line(hook, "session_station", flow, **st)
+        if env_project():
+            line["tares_project"] = env_project()
+        lines.append(line)
+    proj = env_project()
+    if proj and not read_project(data_dir, sid):
+        lines.append(synthetic_line(hook, "session_project", flow, tares_project=proj,
+                                    from_env=True))
+    if not lines:
+        return
+    for o in lines:
+        if st:
+            o["factory_station"] = st["station"]
+    if ship_lines(cfg, lines):
+        if st:
+            open(mark, "w").write(st["station"])
+        if proj and not read_project(data_dir, sid):
+            write_project(data_dir, sid, proj)
+
+
+def stamp_station(objs: list) -> list:
+    st = station_env()
+    if st:
+        for o in objs:
+            o["factory_station"] = st["station"]
+    return objs
+
+
 # ── SessionStart: hand accepted memory to Claude ─────────────────────────────
 
 def memory_context(cfg: dict, cwd: str) -> str:
@@ -358,6 +420,7 @@ def main() -> None:
     # (the flow marker is left alone here: a resumed session keeps its mark, and SessionEnd
     # removes it)
     if event == "SessionStart":
+        announce(cfg, hook, read_flow(data_dir, session_id) if session_id else "")
         ctx = memory_context(cfg, hook.get("cwd") or "")
         if ctx:
             print(ctx)
@@ -365,6 +428,7 @@ def main() -> None:
 
     transcript = hook.get("transcript_path")
     flow = read_flow(data_dir, session_id) if session_id else ""
+    announce(cfg, hook, flow)   # a session the plugin joined after it started
 
     shipped_ok = True
     if transcript and os.path.isfile(transcript):
@@ -392,7 +456,7 @@ def main() -> None:
                     write_flow(data_dir, session_id, flow)   # the local hooks gate on this
                 project = read_project(data_dir, session_id) if session_id else ""
                 objs, project, p_changed = stamp_project(objs, project, hook)
-                shipped_ok = ship_lines(cfg, objs)
+                shipped_ok = ship_lines(cfg, stamp_station(objs))
                 if shipped_ok and p_changed and session_id:
                     # only once shipped: a failed post retries these lines, the session_project
                     # line with them
@@ -448,7 +512,7 @@ def report_state(cfg: dict, hook: dict, event: str, flow: str) -> None:
     line = synthetic_line(hook, "session_state", flow, state=state, reason=reason)
     if project:
         line["tares_project"] = project
-    if ship_lines(cfg, [line]):
+    if ship_lines(cfg, stamp_station([line])):
         if state == "ended":
             try:
                 os.remove(path)

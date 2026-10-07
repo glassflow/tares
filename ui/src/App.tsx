@@ -34,6 +34,7 @@ const NAV_GROUPS: { section: string; items: NavItem[] }[] = [
   { section: "", items: [
     { to: "/start", label: "Start", icon: Grid },
     { to: "/projects", label: "Projects", icon: Zap },
+    { to: "/crew", label: "Crew", icon: Terminal },
     { to: "/ask", label: "Ask", icon: Chat, kbd: "⌘K" },
   ] },
   { section: "Catalog", items: [
@@ -62,6 +63,7 @@ const SECTION_LABEL: Record<string, string> = {
   projects: "Projects",
   resources: "All resources",
   start: "Start",
+  crew: "Crew",
 };
 
 type Crumb = { label: string; to?: string; mono?: boolean };
@@ -178,9 +180,13 @@ export default function App() {
   const overview = useWorkspaceOverview(logoutUrl ? cloud.health?.workspace_api_url || undefined : undefined);
   const email = overview.result?.status === "ok" ? overview.result.data.you?.email : undefined;
   // Start is in the sidebar until the person has a project of their own (and while it is open)
-  const { own } = useOwnProjects();
-  const onStart = useLocation().pathname === "/start";
+  const { own, projects } = useOwnProjects();
+  const here = useLocation().pathname;
+  const onStart = here === "/start";
   const showStart = onStart || (own !== undefined && own.length === 0);
+  // the crew of a tares-factory: in the sidebar once there is a software factory project
+  const showCrew = here === "/crew" || (projects ?? []).some((p) => p.kind === "software_factory");
+  const shown = (to: string) => (to !== "/start" || showStart) && (to !== "/crew" || showCrew);
   useEffect(() => {
     api.capabilities().then((c) => setVersion(c.version ?? null)).catch(() => {});
   }, []);
@@ -197,7 +203,7 @@ export default function App() {
           <div className="nav-group" key={section}>
             {/* Start, Projects and Ask have no section heading: they sit above the groups. */}
             {section && <div className="nav-section">{section}</div>}
-            {items.filter((x) => x.to !== "/start" || showStart).map(({ to, end, label, icon: Icon, badge, locked, kbd }) => (
+            {items.filter((x) => shown(x.to)).map(({ to, end, label, icon: Icon, badge, locked, kbd }) => (
               <NavLink key={to} to={to} end={end} className={link}>
                 <Icon className="ico" />
                 <span className="nav-label">{label}</span>

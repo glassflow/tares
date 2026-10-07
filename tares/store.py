@@ -2288,8 +2288,10 @@ class Store(FactoryStore):
             self.con.execute("DELETE FROM tickets WHERE project = ?", [uid])
             self._factory_forget_project(uid)
             self.con.execute("DELETE FROM project_sessions WHERE project = ?", [uid])
+            # a crew station's session serves every project: its state stays
             self.con.execute("DELETE FROM session_states WHERE session NOT IN (SELECT session "
-                             "FROM project_sessions)")
+                             "FROM project_sessions) AND session NOT IN (SELECT session FROM "
+                             "session_stations)")
             self.con.execute("DELETE FROM usecase_log WHERE usecase_id = ?", [uid])
             self.con.execute("DELETE FROM usecases WHERE id = ?", [uid])
 
@@ -2558,8 +2560,7 @@ class Store(FactoryStore):
                 last = self.con.execute("SELECT max(position) FROM tickets WHERE project = ?",
                                         [project]).fetchone()[0]
                 position = (last or 0) + 1
-            num = (self.con.execute("SELECT max(number) FROM tickets WHERE project = ?",
-                                    [project]).fetchone()[0] or 0) + 1
+            num = self._next_ticket_number(project)
             self.con.execute(
                 f"INSERT INTO tickets ({self._TICKET_COLS}) VALUES "
                 "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -2603,17 +2604,27 @@ class Store(FactoryStore):
         num = int(m.group(1)) if m else -1
         with self._lock:
             r = self.con.execute(
-                f"SELECT {self._TICKET_COLS} FROM tickets WHERE project = ? AND (id = ? OR "
-                "upper(identifier) = upper(?) OR external_id = ?) "
-                "UNION ALL "
-                f"SELECT {self._TICKET_COLS} FROM tickets WHERE project = ? AND number = ? "
-                "LIMIT 1", [project, ref, ref, ref, project, num]
+                f"SELECT {self._TICKET_COLS} FROM (SELECT *, 0 AS rank FROM tickets WHERE "
+                "project = ? AND (id = ? OR upper(identifier) = upper(?) OR external_id = ?) "
+                "UNION ALL SELECT *, 1 AS rank FROM tickets WHERE project = ? AND number = ?) "
+                "ORDER BY rank LIMIT 1", [project, ref, ref, ref, project, num]
             ).fetchone()
         return self._ticket_row(r) if r else None
 
     def delete_ticket(self, tid: str) -> None:
+        """The ticket goes, and with it the other tickets' dependency on it."""
         with self._lock:
+            row = self.con.execute("SELECT project FROM tickets WHERE id = ?", [tid]).fetchone()
             self.con.execute("DELETE FROM tickets WHERE id = ?", [tid])
+            if row:
+                for oid, deps in self.con.execute(
+                        "SELECT id, depends_on FROM tickets WHERE project = ? AND depends_on IS "
+                        "NOT NULL", [row[0]]).fetchall():
+                    ids = json.loads(deps) if deps else []
+                    if tid in ids:
+                        ids = [d for d in ids if d != tid]
+                        self.con.execute("UPDATE tickets SET depends_on = ? WHERE id = ?",
+                                         [json.dumps(ids) if ids else None, oid])
 
     def link_session(self, project: str, session: str, repo: str | None = None) -> bool:
         """The Claude Code session works in the project. True when it was not linked before."""

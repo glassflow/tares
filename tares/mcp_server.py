@@ -25,11 +25,27 @@ AUTH_TOKEN = os.getenv("TARES_AUTH_TOKEN", "").strip()
 _CALLER_TOKEN = contextvars.ContextVar("tares_caller_token", default="")
 
 
+def _station_headers() -> dict:
+    """Which tares-factory station this proxy runs for (a Claude Code session spawns it, so it
+    sees the station's environment), sent with every call so Tares applies who may write what.
+    Empty for a session that is not a station."""
+    out = {}
+    for env, header in (("FACTORY_STATION", "X-Tares-Station"), ("FACTORY_ROLE", "X-Tares-Role"),
+                        ("FACTORY_PARENT", "X-Tares-Parent")):
+        v = os.getenv(env, "").strip()
+        if v:
+            out[header] = v
+    return out
+
+
 def _cx(timeout: float = 10):
-    """An httpx client that carries the caller's token to taresd (env token as stdio fallback)."""
+    """An httpx client that carries the caller's token to taresd (env token as stdio fallback)
+    and, over stdio, the station it runs for."""
     tok = _CALLER_TOKEN.get() or AUTH_TOKEN
-    return httpx.AsyncClient(timeout=timeout,
-                             headers={"Authorization": f"Bearer {tok}"} if tok else {})
+    headers = {"Authorization": f"Bearer {tok}"} if tok else {}
+    if not _CALLER_TOKEN.get():
+        headers.update(_station_headers())
+    return httpx.AsyncClient(timeout=timeout, headers=headers)
 
 # stdio (default) is what a local agent spawns. For remote agents (the demo / a server), run with
 # TARES_MCP_TRANSPORT=streamable-http (or sse) and the server listens on MCP_HOST:MCP_PORT — at
@@ -265,8 +281,9 @@ async def source_fields(name: str, limit: int = 500) -> str:
 # out while there is only one project.
 
 async def _project_id(cx, project: str = "") -> tuple[str | None, str | None]:
-    """(project id, None) or (None, the reason to tell the agent)."""
-    project = (project or "").strip()
+    """(project id, None) or (None, the reason to tell the agent). With no `project`, a builder
+    station's TARES_PROJECT names it."""
+    project = (project or "").strip() or os.getenv("TARES_PROJECT", "").strip()
     r = await cx.get(f"{TARESD}/api/whoami")
     who = r.json() if r.status_code == 200 else {}
     if who.get("project"):
@@ -611,10 +628,10 @@ async def list_tickets(project: str = "") -> str:
     lin = data.get("linear")
     out = {
         "linear": ({k: lin.get(k) for k in ("name", "url", "synced_at", "error")} if lin else None),
-        "tickets": [{k: t.get(k) for k in ("id", "label", "title", "status", "milestone_name",
-                                            "depends_on", "ready", "blocked_by", "url",
-                                            "working_doc", "working_doc_title")
-                     if t.get(k) not in (None, [], "")} | {"ready": t.get("ready")}
+        "tickets": [{k: t.get(k) for k in ("id", "label", "number", "identifier", "title",
+                                            "status", "milestone_name", "depends_on", "ready",
+                                            "blocked_by", "url", "working_doc",
+                                            "working_doc_title")}
                     for t in data.get("tickets") or []]}
     if any(t.get("status") == "in_progress" for t in data.get("tickets") or []):
         out["note"] = ("A ticket is already in progress: unless you are the session working on "
@@ -636,21 +653,21 @@ async def get_ticket(ticket: str, project: str = "") -> str:
 
 @writable()
 async def write_ticket(title: str, status: str = "", position: float | None = None,
-                       milestone: str = "", depends_on: list[str] | None = None,
+                       milestone: str | None = None, depends_on: list[str] | None = None,
                        id: str = "", project: str = "") -> str:
     """Add a ticket to the project's list, or change one when `id` is given (its id or T<n>).
     Only for a project whose tickets live in Tares: when they live in Linear, create and change
     them in Linear (milestones and "blocks" relations included) and Tares picks them up on its
     next sync. `status` is todo, in_progress, done or canceled; `position` orders the list (a
     new ticket goes to the end); `milestone` is the name of a milestone written with
-    write_milestone; `depends_on` lists the tickets (T<n> or id) that must be done first. Returns
-    the ticket with its label (T<n>)."""
+    write_milestone ("" takes it out of its milestone); `depends_on` lists the tickets (T<n> or
+    id) that must be done first ([] clears them). Returns the ticket with its label (T<n>)."""
     body: dict = {"title": title}
     if status:
         body["status"] = status
     if position is not None:
         body["position"] = position
-    if milestone:
+    if milestone is not None:
         body["milestone"] = milestone
     if depends_on is not None:
         body["depends_on"] = depends_on

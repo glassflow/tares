@@ -119,19 +119,122 @@ def find_loop(deps: dict[str, list[str]], start: str) -> list[str] | None:
 
 
 def finished(t: dict) -> bool:
-    """A ticket the ones depending on it no longer wait for: done or canceled, or (once the
-    factory's stages exist) merged or shipped."""
+    """A ticket nobody works on any more: done or canceled, or (once the factory's stages exist)
+    merged or shipped."""
     return t.get("status") in DONE_STATUSES or t.get("stage") in ("merged", "shipped")
+
+
+def delivered(t: dict) -> bool:
+    """A ticket whose work exists, so the ones depending on it may start: done, merged or
+    shipped. A canceled one did not deliver, so its dependents stay blocked until someone drops
+    the dependency or the plan changes."""
+    return t.get("status") == "done" or t.get("stage") in ("merged", "shipped")
 
 
 def readiness(tickets: list[dict]) -> dict[str, dict]:
     """{ticket id: {ready, blocked_by: [labels]}} for every ticket. A ticket is ready when it is
-    not finished and everything it depends on is finished; a dependency that no longer exists
-    does not block."""
+    not finished and everything it depends on is delivered; a dependency that no longer exists
+    does not block. A canceled dependency shows as "T2 (canceled)"."""
     by_id = {t["id"]: t for t in tickets}
     out = {}
     for t in tickets:
-        waits = [by_id[d] for d in t.get("depends_on") or [] if d in by_id and not finished(by_id[d])]
+        waits = [by_id[d] for d in t.get("depends_on") or [] if d in by_id and not delivered(by_id[d])]
         out[t["id"]] = {"ready": not finished(t) and not waits,
-                        "blocked_by": [label(w) for w in waits]}
+                        "blocked_by": [label(w) + (" (canceled)" if w.get("status") == "canceled"
+                                                   else "") for w in waits]}
     return out
+
+
+# ── the crew (M3): one always-on crew serves every project ────────────────────
+
+ROLES = ("orchestrator", "reviewer", "releaser", "builder", "helper", "comms")
+AUTONOMY = {
+    "L3-review": "you approve each merge",
+    "L4-ship": "a builder merges after the reviewer's pass and green CI",
+    "L5-dark": "the releaser may deploy to prod after verifying, you are told",
+}
+MAX_NAME = 120
+
+
+def station_ok(name, role, parent) -> tuple[str, str, str]:
+    """(station, role, parent), cleaned; DocError when the station has no name or an unknown
+    role."""
+    name = str(name or "").strip()[:MAX_NAME]
+    role = str(role or "").strip().lower()
+    parent = str(parent or "").strip()[:MAX_NAME]
+    if not name:
+        raise DocError("a station needs its name")
+    if role and role not in ROLES:
+        raise DocError(f"unknown role {role!r}; one of: " + ", ".join(ROLES))
+    return name, role, parent
+
+
+CREW_DEFAULTS = {"autonomy": None, "release_profile": None, "prod_pattern": None,
+                 "challenger": None, "builders_max": None}
+
+
+def crew_settings_ok(body: dict, cur: dict) -> dict:
+    """The crew's settings with the fields `body` sets changed; DocError on a bad value."""
+    out = {**CREW_DEFAULTS, **cur}
+    if body.get("autonomy") not in (None, ""):
+        a = str(body["autonomy"]).strip()
+        if a not in AUTONOMY:
+            raise DocError(f"unknown autonomy {a!r}; one of: " + ", ".join(AUTONOMY))
+        out["autonomy"] = a
+    for k in ("release_profile", "prod_pattern"):
+        if body.get(k) is not None:
+            v = " ".join(str(body[k]).split())
+            if len(v) > 300:
+                raise DocError(f"{k} is {len(v)} characters; keep it to 300")
+            out[k] = v or None
+    if body.get("challenger") is not None:
+        out["challenger"] = bool(body["challenger"])
+    if body.get("builders_max") is not None:
+        try:
+            n = int(body["builders_max"])
+        except (TypeError, ValueError):
+            raise DocError("builders_max is a whole number")
+        if not 1 <= n <= 20:
+            raise DocError("builders_max is between 1 and 20")
+        out["builders_max"] = n
+    return out
+
+
+def grant_line(words, when: str) -> str:
+    """One grant as it is kept: the person's words, quoted, and the day they said them."""
+    w = " ".join(str(words or "").split()).strip().strip('"')
+    if not w:
+        raise DocError("a grant quotes the person's words; there are none")
+    if len(w) > 400:
+        raise DocError(f"the grant is {len(w)} characters; keep it to 400")
+    return f'"{w}" ({when})'
+
+
+# Who may write what (the contract's table). A labeled station is any caller that says which
+# station it is (the MCP proxy forwards FACTORY_STATION and FACTORY_ROLE); an unlabeled one (a
+# person's own session, a single build session, the factory CLI) may do everything, as in M1.
+# Cooperative, not a security boundary.
+ONLY = {
+    "grants": ("orchestrator",),
+    "global_docs": ("orchestrator",),
+    "assign": ("orchestrator",),
+    "desk": ("orchestrator",),
+    "assumption_state": ("orchestrator",),
+    "review": ("reviewer",),
+    "shipped": ("releaser",),
+}
+WHO = {"grants": "the orchestrator", "global_docs": "the orchestrator",
+       "assign": "the orchestrator", "desk": "the orchestrator",
+       "assumption_state": "the orchestrator", "review": "the reviewer",
+       "shipped": "the releaser"}
+
+
+def may(caller: dict, action: str) -> str | None:
+    """None when `caller` ({station, role, parent}) may do `action`, else the reason to tell it."""
+    if not caller.get("station"):
+        return None
+    allowed = ONLY.get(action)
+    if allowed is None or caller.get("role") in allowed:
+        return None
+    return (f"{caller['station']} is a {caller.get('role') or 'station'}: only {WHO[action]} "
+            f"may do this. Send it to {WHO[action]}.")

@@ -346,7 +346,7 @@ export interface Skill {
 }
 
 // Docs and tickets (TR-403): what a spec session leaves in a project for the session that builds it
-export type DocKind = "start" | "spec" | "plan" | "agents" | "memory" | "note" | "working";
+export type DocKind = "start" | "spec" | "plan" | "agents" | "memory" | "grants" | "note" | "working";
 export interface DocSummary {
   id: string;
   kind: DocKind;
@@ -395,6 +395,34 @@ export interface Milestone {
   ready: string[];
   finished: boolean;
 }
+// The tares-factory crew (M3): stations are roles with stable names, played by a chain of sessions
+export type CrewState = "working" | "waiting" | "quiet" | "ended";
+export interface CrewStation {
+  name: string;
+  role: string | null;
+  parent: string | null;
+  project: string | null;
+  project_name: string | null;
+  projects: string[];
+  state: CrewState;
+  state_reason: string | null;
+  state_at: string | null;
+  quiet_minutes: number | null;
+  session: string;
+  started_at: string | null;
+  last_at: string | null;
+  lines: number;
+  earlier: { session: string; started_at: string | null; last_at: string | null; lines: number; state: "replaced" }[];
+  children: string[];
+}
+export interface CrewSettings {
+  autonomy: "L3-review" | "L4-ship" | "L5-dark" | null;
+  release_profile: string | null;
+  prod_pattern: string | null;
+  challenger: boolean | null;
+  builders_max: number | null;
+}
+export interface Handover { repo: string | null; by: string | null; at: string }
 export interface LinearLink {
   id: string; name: string; url: string;
   synced_at?: string | null; error?: string | null; issues?: number;

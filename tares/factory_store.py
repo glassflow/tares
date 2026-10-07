@@ -27,6 +27,31 @@ FACTORY_SCHEMA = [
       created_at  TIMESTAMPTZ,
       updated_at  TIMESTAMPTZ
     )""",
+    # Which station a Claude Code session plays (TR-418, TR-420), from the plugin's
+    # `session_station` line: the station's stable name, its role, the station that started it
+    # (builders and helpers), and the project it was started for (TARES_PROJECT, builders).
+    # A station is played over time by a chain of sessions; the newest live one is current.
+    """CREATE TABLE IF NOT EXISTS session_stations (
+      session     TEXT PRIMARY KEY,
+      station     TEXT,
+      role        TEXT,
+      parent      TEXT,
+      project     TEXT,
+      seen_at     TIMESTAMPTZ
+    )""",
+    # The last ticket number a project gave out: numbers are never reused, so T5 keeps meaning
+    # the same ticket in branch names and messages after a ticket is deleted.
+    """CREATE TABLE IF NOT EXISTS ticket_numbers (
+      project     TEXT PRIMARY KEY,
+      last        INTEGER
+    )""",
+    # A factory project handed to the crew at the end of its spec (TR-425): when, from where.
+    """CREATE TABLE IF NOT EXISTS handovers (
+      project     TEXT PRIMARY KEY,
+      repo        TEXT,
+      handed_by   TEXT,
+      handed_at   TIMESTAMPTZ
+    )""",
 ]
 
 
@@ -45,10 +70,26 @@ class FactoryStore:
                                     "ORDER BY position, created_at", [project]).fetchall()
             for i, (tid,) in enumerate(todo, top + 1):
                 self.con.execute("UPDATE tickets SET number = ? WHERE id = ?", [i, tid])
+            self.con.execute("INSERT INTO ticket_numbers (project, last) VALUES (?, ?) ON "
+                             "CONFLICT (project) DO UPDATE SET last = greatest(ticket_numbers.last, "
+                             "excluded.last)", [project, top + len(todo)])
+
+    def _next_ticket_number(self, project: str) -> int:
+        """The project's next ticket number, never one given out before. Lock held."""
+        row = self.con.execute("SELECT last FROM ticket_numbers WHERE project = ?",
+                               [project]).fetchone()
+        top = self.con.execute("SELECT max(number) FROM tickets WHERE project = ?",
+                               [project]).fetchone()[0] or 0
+        n = max(row[0] if row else 0, top) + 1
+        self.con.execute("INSERT INTO ticket_numbers (project, last) VALUES (?, ?) ON CONFLICT "
+                         "(project) DO UPDATE SET last = excluded.last", [project, n])
+        return n
 
     def _factory_forget_project(self, uid: str) -> None:
         """A project is deleted: its factory rows go. Lock held."""
         self.con.execute("DELETE FROM milestones WHERE project = ?", [uid])
+        self.con.execute("DELETE FROM ticket_numbers WHERE project = ?", [uid])
+        self.con.execute("DELETE FROM handovers WHERE project = ?", [uid])
 
     # ── milestones (TR-411) ───────────────────────────────────────────────────
     _MS_COLS = "id, project, owner, external_id, name, goal, checks, position, created_at, updated_at"
@@ -105,6 +146,60 @@ class FactoryStore:
                 "external_id = ? OR lower(name) = lower(?)) ORDER BY position LIMIT 1",
                 [project, ref, ref, ref]).fetchone()
         return self._ms_row(r) if r else None
+
+    # ── stations (TR-418, TR-420) ─────────────────────────────────────────────
+    def set_session_station(self, session: str, station: str, role: str, parent: str,
+                            project: str | None, at) -> None:
+        with self._lock:
+            self.con.execute(
+                "INSERT INTO session_stations (session, station, role, parent, project, seen_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (session) DO UPDATE SET "
+                "station = excluded.station, role = excluded.role, parent = excluded.parent, "
+                "project = coalesce(excluded.project, session_stations.project)",
+                [session, station, role or None, parent or None, project, at])
+
+    def session_station(self, session: str) -> dict | None:
+        with self._lock:
+            r = self.con.execute("SELECT station, role, parent, project FROM session_stations "
+                                 "WHERE session = ?", [session]).fetchone()
+        return {"station": r[0], "role": r[1], "parent": r[2], "project": r[3]} if r else None
+
+    def station_sessions(self, source: str) -> list[dict]:
+        """Every session that played a station, with its station, role, parent and project, when
+        it started and last did something (from its lines on `source`), its state, and the
+        project it last named (project_sessions), newest activity first."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT ss.session, ss.station, ss.role, ss.parent, ss.project, ss.seen_at, "
+                "min(e.event_time), max(e.event_time), count(e.key_value), "
+                "st.state, st.reason, st.state_at, "
+                "(SELECT p.project FROM project_sessions p WHERE p.session = ss.session "
+                " ORDER BY p.linked_at DESC LIMIT 1) "
+                "FROM session_stations ss "
+                "LEFT JOIN events e ON e.source = ? AND e.key_value = ss.session "
+                "LEFT JOIN session_states st ON st.session = ss.session "
+                "GROUP BY ss.session, ss.station, ss.role, ss.parent, ss.project, ss.seen_at, "
+                "st.state, st.reason, st.state_at "
+                "ORDER BY coalesce(max(e.event_time), ss.seen_at) DESC", [source]).fetchall()
+        return [{"session": r[0], "station": r[1], "role": r[2], "parent": r[3],
+                 "project": r[4] or r[12], "seen_at": r[5], "started_at": r[6] or r[5],
+                 "last_at": r[7] or r[5], "lines": int(r[8] or 0), "state": r[9],
+                 "state_reason": r[10], "state_at": r[11]} for r in rows]
+
+    # ── hand-over to the crew (TR-425) ────────────────────────────────────────
+    def set_handover(self, project: str, repo: str | None, by: str | None, at) -> None:
+        with self._lock:
+            self.con.execute(
+                "INSERT INTO handovers (project, repo, handed_by, handed_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT (project) DO UPDATE SET repo = excluded.repo, "
+                "handed_by = excluded.handed_by, handed_at = excluded.handed_at",
+                [project, repo or None, by or None, at])
+
+    def get_handover(self, project: str) -> dict | None:
+        with self._lock:
+            r = self.con.execute("SELECT repo, handed_by, handed_at FROM handovers WHERE "
+                                 "project = ?", [project]).fetchone()
+        return {"repo": r[0], "by": r[1], "at": r[2]} if r else None
 
     def delete_milestone(self, mid: str) -> None:
         """The milestone goes; its tickets stay, without a milestone."""

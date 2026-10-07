@@ -14,8 +14,9 @@ nothing may be left for them to guess. You do not build anything here.
 
 - Call `read_global_docs` first: the AGENTS.md and memory every project shares hold the user's
   standing rules and facts. Follow them and do not ask again for what they answer.
-- Call `read_grants` if it exists: the user's standing permissions for the factory. Only ask
-  about what is different for this project.
+- For a project a tares-factory crew will build, call `read_grants` and `get_crew_settings`:
+  the user's standing permissions and how far the crew may go alone. Only ask about what is
+  different for this project; save a new grant with `add_grant`, quoting the user's own words.
 - If the project builds on a repo that exists, **read the repo before asking about it**: layout,
   stack, how it builds and tests today, its own AGENTS.md or README.
 
@@ -183,6 +184,26 @@ missing. Then tell the user, briefly:
 - the next step:
   - one session: the exact sentence to start the build in a new session:
     `Work on Tares project "<name>": read its starting prompt and begin.`
-  - a crew: hand the project to the crew (see the hand-over step if this skill has one), or, if
-    no crew is running, run `factory crew up` in a terminal first. Starting stations hands them
-    the user's permissions, so the user starts them, not you.
+  - a crew: go on to step 9.
+
+## 9. Hand the project to the crew (crew-built projects only)
+
+Ask: "Hand this to the orchestrator now?" On yes:
+
+1. `hand_over` with the project and the repo path. Tares records it; the tool says which
+   orchestrator is running.
+2. Send that orchestrator (normally `crew-orchestrator`) one message with SendMessage:
+
+   ```
+   [TF:SHIP] <project> is ready to build
+   project: <project name on Tares>
+   repo: <absolute repo path>
+   autonomy: <only if this project differs from the crew's setting>
+   ```
+
+3. Tell the user the orchestrator has it and will start the first builder; they talk to it with
+   `factory attach orchestrator`.
+
+If `hand_over` says no orchestrator is running, tell the user to run `factory crew up` in a
+terminal first (starting stations hands them the user's permissions, so the user starts them,
+not you), then send the message when they say it is up.

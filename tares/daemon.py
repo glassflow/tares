@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs
 
 import httpx
@@ -53,6 +54,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_
 from . import metrics as _metrics
 from . import docs as docs_mod
 from . import factory as factory_mod
+from . import factory_api
 from . import linear as _linear
 from . import skills as skills_mod
 from . import providers as providers_mod
@@ -756,6 +758,7 @@ def make_app() -> FastAPI:
         ("GET", re.compile(r"^/tickets$"), "read"),
         ("GET", re.compile(r"^/tickets/[^/]+$"), "read"),
         ("GET", re.compile(r"^/milestones$"), "read"),
+        ("GET", re.compile(r"^/crew$"), "read"),
         ("GET", re.compile(r"^/sessions$"), "read"),
         ("GET", re.compile(r"^/sessions/[^/]+$"), "read"),
         ("GET", re.compile(r"^/pickup$"), "read"),
@@ -4241,9 +4244,15 @@ def make_app() -> FastAPI:
     async def add_global_line(kind: str, request: Request, body: dict = Body(...)):
         """{text}: add one line to the global AGENTS.md (`agents`) or memory (`memory`). A line
         already there is not added twice (`added`: false)."""
+        if kind == "grants":
+            _err(ValueError("a grant quotes the person and carries its date: add it with "
+                            "add_grant (POST /api/grants)"))
         if kind not in docs_mod.GLOBAL_DOCS:
             _err(KeyError(f"no global doc {kind!r}; one of: " + ", ".join(docs_mod.GLOBAL_DOCS)),
                  404)
+        why = factory_mod.may(factory_api.caller(request), "global_docs")
+        if why:
+            _err(PermissionError(why), 403)
         ids = _global_ids(create=True)
         cur = store.get_doc(None, ids[kind])
         try:
@@ -4482,12 +4491,13 @@ def make_app() -> FastAPI:
         out = []
         for m in store.list_milestones(uid):
             mine = [t for t in tickets if t["milestone"] == m["id"]]
-            done = sum(1 for t in mine if t["status"] in factory_mod.DONE_STATUSES)
+            live = [t for t in mine if t["status"] != "canceled"]
+            done = sum(1 for t in live if t["status"] == "done")
             out.append({**{k: m[k] for k in ("id", "owner", "name", "goal", "checks", "position",
                                               "updated_at")},
-                        "tickets": len(mine), "done": done,
+                        "tickets": len(live), "done": done,
                         "ready": [t["label"] for t in mine if t["ready"]],
-                        "finished": bool(mine) and done == len(mine)})
+                        "finished": bool(live) and done == len(live)})
         return out
 
     def _milestone_or_404(uid: str, ref: str) -> dict:
@@ -4541,6 +4551,10 @@ def make_app() -> FastAPI:
         try:
             if "name" in body:
                 fields["name"] = docs_mod.title_ok(body["name"])
+                other = store.get_milestone(uid, fields["name"])
+                if other and other["id"] != m["id"]:
+                    _err(ValueError(f"the project already has a milestone {other['name']!r}; "
+                                    "milestone names are unique"), 409)
             if "goal" in body:
                 fields["goal"] = factory_mod.goal_ok(body["goal"])
             if "checks" in body:
@@ -4655,7 +4669,14 @@ def make_app() -> FastAPI:
              "Finish what is left, run the ticket's Verify, commit, mark it done, then carry on "
              "with the next ticket."]
             if ticket else
-            ["No ticket is in progress: start with the next one, the way the starting prompt says."])
+            ["No ticket is in progress: start with the next one, the way the starting prompt says."]
+            if nxt else
+            ["No ticket is ready: " + "; ".join(
+                f"{factory_mod.label(t)} waits for {', '.join(ready[t['id']]['blocked_by'])}"
+                for t in tickets if t["status"] == "todo" and ready[t["id"]]["blocked_by"])
+             + ". Finish or re-plan what they wait for." if any(
+                t["status"] == "todo" for t in tickets) else
+             "Every ticket is finished."])
         return out
 
     @app.get("/api/projects/{uid}/pickup")
@@ -4683,6 +4704,19 @@ def make_app() -> FastAPI:
             store.set_session_state(prev["session"], "replaced",
                                     "a fresh session picked the build up", now_utc(), force=True)
         return {**out, "taken_over": prev["session"] if prev else None}
+
+    # ── the software factory's crew (M3 onward): routes in tares/factory_api.py ──
+    def _factory_project_id(ref: str) -> str:
+        """A project's id from its id or name (the ref itself when there is none: a 404 later)."""
+        p = store.get_project(ref) or store.get_project_by_name(ref)
+        return p["id"] if p else ref
+
+    factory_api.register(app, store, SimpleNamespace(
+        err=lambda e, code=400: _err(e, code), project_or_404=lambda uid: _project_or_404(uid),
+        by=lambda request, body=None: _by(request, body), cc_source=lambda: _cc_source(),
+        global_ids=lambda create=False: _global_ids(create), resolve_project=_factory_project_id,
+        ticket_out=lambda uid, t, **kw: _ticket_out(uid, t, **kw),
+        tickets_out=lambda uid: _tickets_out(uid)))
 
     # ── Linear (TR-408): the cell's connection, and the Linear project a project's tickets live
     # in. Tares only reads from Linear; sessions write with Linear's own tools ───────────────

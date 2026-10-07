@@ -1986,3 +1986,26 @@ pre.payload {
 .fo-checks li { margin: 2px 0; overflow-wrap: anywhere; }
 .fo-tk { display: flex; flex-direction: column; min-width: 0; }
 .fo-wait { color: var(--ink-soft); font-size: 12px; }
+
+/* the crew of a tares-factory (TR-422) */
+.crew { display: flex; flex-direction: column; gap: 16px; }
+.main .crew-list { list-style: none; margin: 0; padding: 0; }
+.crew-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+.crew-row:last-child { border-bottom: 0; }
+.crew-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; }
+.crew-name { font-family: var(--mono); font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.crew-role, .crew-proj { font-size: 12px; color: var(--ink-soft); }
+.crew-side { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+.crew-side small { color: var(--ink-soft); font-size: 12px; }
+.crew-what { grid-column: 1 / -1; margin: 0; color: var(--ink-soft); font-size: 13px; }
+.crew-earlier { grid-column: 1 / -1; font-size: 12px; color: var(--ink-soft); }
+.crew-earlier summary { cursor: pointer; }
+.main .crew-earlier ul { margin: 4px 0 0; padding-left: 16px; }
+.crew-settings { padding: 14px 16px; }
+.crew-settings h2 { font-size: 14px; margin: 0 0 8px; }
+.crew-settings h2 + dl, .crew-settings h2 + ul, .crew-settings h2 + p { margin-top: 0; }
+.crew-settings dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0 0 16px; font-size: 14px; }
+.crew-settings dt { color: var(--ink-soft); }
+.crew-settings dd { margin: 0; overflow-wrap: anywhere; }
+.main .crew-grants { margin: 0; padding-left: 18px; font-size: 14px; }
+@media (max-width: 640px) { .crew-row { grid-template-columns: minmax(0, 1fr); } .crew-settings dl { grid-template-columns: minmax(0, 1fr); } }

@@ -1,6 +1,8 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 
 import { api } from "../../api";
+import { CrewState } from "../../pages/Crew";
 import { TimeAgo, usePolling } from "../bits";
 import { VLink, type Ctx } from "./common";
 import { Goal } from "./overview";
@@ -53,6 +55,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const { data: tk } = usePolling(() => api.tickets(ctx.id), 15000);
   const { data: ss } = usePolling(() => api.projectSessions(ctx.id), 15000);
   const { data: msd } = usePolling(() => api.milestones(ctx.id), 15000);
+  const { data: crew } = usePolling(() => api.projectCrew(ctx.id), 15000);
   const tickets = tk?.tickets ?? [];
   const milestones = msd?.milestones ?? [];
   // the ticket a build takes next: the one in progress, else the first ready one (TR-414)
@@ -202,6 +205,31 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
           <div className="fo-foot"><VLink v={{ kind: "tickets" }} className="fo-link">All tickets</VLink></div>
         </Fold>
       </div>
+
+      {crew && (crew.handover || crew.stations.length > 0) && (
+        <Fold id="crew" title="Crew"
+              meta={[crew.handover ? "handed to the crew" : "",
+                     `${crew.stations.length} ${crew.stations.length === 1 ? "station" : "stations"}`].filter(Boolean).join(" · ")}>
+          {crew.handover && (
+            <p className="fo-empty">Handed to the crew <TimeAgo ts={crew.handover.at} />{crew.handover.repo && <> · <span className="mono">{crew.handover.repo}</span></>}.</p>
+          )}
+          {crew.stations.length ? (
+            <ul className="fo-docs">
+              {crew.stations.map((s) => (
+                <li key={s.name}>
+                  <span className="fo-sess">
+                    <VLink v={{ kind: "claude", name: s.session }}>{s.name}</VLink>
+                    <small> {s.role}</small>
+                    <CrewState s={s} />
+                  </span>
+                  <small>{s.last_at ? <TimeAgo ts={s.last_at} /> : null}</small>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="fo-empty">No station has worked on it yet. The orchestrator starts a builder once it reads the plan.</p>}
+          <div className="fo-foot"><Link to="/crew" className="fo-link">The whole crew</Link></div>
+        </Fold>
+      )}
 
       <Fold id="sessions" title="Sessions"
             meta={<>{sessions.length} · {sessions[0]?.last_at ? <>last active <TimeAgo ts={sessions[0].last_at} /></> : "none yet"}</>}>
