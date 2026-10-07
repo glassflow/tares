@@ -6,6 +6,7 @@ import { api } from "../../api";
 import ConfirmDialog from "../ConfirmDialog";
 import { Combo, ErrorState, Picker, TimeAgo, formatBytes, usePolling } from "../bits";
 import { Facts, NotHere, VLink, ViewHead, type Ctx } from "./common";
+import { prBrief } from "./factory";
 import type { Doc, DocKind, Ticket, TicketStatus } from "../../types";
 
 // What a spec session leaves in a project for the session that builds it (TR-403, TR-407): the
@@ -378,6 +379,51 @@ export function TicketsView({ ctx }: { ctx: Ctx }) {
   );
 }
 
+/** Who moved the ticket and when, and the crew's messages about it (TR-427, TR-429): folded,
+ *  shown only once there is something in them. */
+function TicketCrew({ ctx, ticket }: { ctx: Ctx; ticket: Ticket }) {
+  const { data } = usePolling(() => api.ticketMessages(ctx.id, ticket.id), 30000);
+  const history = ticket.history ?? [];
+  const msgs = data?.messages ?? [];
+  if (!history.length && !msgs.length) return null;
+  return (
+    <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+      {history.length > 0 && (
+        <details className="panel">
+          <summary><b>History</b> <span className="dim">· {history.length} {history.length === 1 ? "change" : "changes"}</span></summary>
+          <ul className="tk-history">
+            {history.map((h, i) => (
+              <li key={i}>
+                <TimeAgo ts={h.at} /> · {h.field === "holder" ? <>given to <span className="mono">{h.value}</span></> : <>moved to <b>{h.value}</b></>}
+                {h.reason && <span className="dim">: {h.reason}</span>}
+                {h.by && <span className="dim"> · by {h.by}</span>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {msgs.length > 0 && (
+        <details className="panel" open>
+          <summary><b>Crew messages</b> <span className="dim">· {msgs.length}</span></summary>
+          <ul className="tk-msgs">
+            {msgs.map((m, i) => (
+              <li key={i}>
+                <details>
+                  <summary>
+                    <span className="mono">{m.type}</span> · {m.from || "a session"} → {m.to} · <TimeAgo ts={m.at} />
+                    {m.first_line && <> · {m.first_line}</>}
+                  </summary>
+                  <pre>{m.text}</pre>
+                </details>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
 /** One ticket and its working doc. */
 export function TicketView({ ctx, name }: { ctx: Ctx; name: string }) {
   const { data, error, reload } = usePolling(() => api.ticket(ctx.id, name), 15000);
@@ -412,8 +458,19 @@ export function TicketView({ ctx, name }: { ctx: Ctx; name: string }) {
         ["ready", data.status === "todo"
           ? (data.ready ? "yes" : `no, waits for ${data.blocked_by.join(", ")}`)
           : <span className="dim">{data.status === "in_progress" ? "being worked on" : "finished"}</span>],
+        ...(data.holder || data.stage ? [
+          ["held by", data.holder ? <span className="mono">{data.holder}</span> : <span className="dim">nobody yet</span>],
+          ["stage", <>{data.stage ?? "todo"}{data.stage_reason && <span className="dim">: {data.stage_reason}</span>}</>],
+        ] as [string, React.ReactNode][] : []),
+        ...(data.pr?.url ? [
+          ["pull request", <><a href={data.pr.url} target="_blank" rel="noreferrer">{prBrief(data.pr)}</a>
+            {data.pr.head && <span className="dim"> · head {data.pr.head.slice(0, 7)}</span>}
+            {data.pr.error && <span className="dim"> · {data.pr.error}</span>}</>],
+        ] as [string, React.ReactNode][] : []),
         ["changed", <TimeAgo ts={data.updated_at} />],
       ]} />
+      {data.pr_note && <p className="fo-warn" style={{ marginTop: 10, fontSize: 14 }}>{data.pr_note}</p>}
+      <TicketCrew ctx={ctx} ticket={data} />
       {editingDoc ? (
         <div style={{ marginTop: 14 }}>
           <DocEditor project={ctx.id} initial={doc} fixedKind="working"

@@ -7,6 +7,7 @@ migrations (FACTORY_SCHEMA), so they can refer to columns those add.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 
 from .envelope import now_utc
@@ -44,6 +45,18 @@ FACTORY_SCHEMA = [
     """CREATE TABLE IF NOT EXISTS ticket_numbers (
       project     TEXT PRIMARY KEY,
       last        INTEGER
+    )""",
+    # Every change to a ticket's holder or stage (TR-427), with who made it (a station, or the
+    # caller's name when unlabeled, or "github" when Tares read a merge off the pull request).
+    """CREATE TABLE IF NOT EXISTS ticket_history (
+      ticket      TEXT,
+      project     TEXT,
+      changed_at  TIMESTAMPTZ,
+      field       TEXT,
+      value       TEXT,
+      reason      TEXT,
+      by_station  TEXT,
+      by_role     TEXT
     )""",
     # A factory project handed to the crew at the end of its spec (TR-425): when, from where.
     """CREATE TABLE IF NOT EXISTS handovers (
@@ -89,6 +102,7 @@ class FactoryStore:
         """A project is deleted: its factory rows go. Lock held."""
         self.con.execute("DELETE FROM milestones WHERE project = ?", [uid])
         self.con.execute("DELETE FROM ticket_numbers WHERE project = ?", [uid])
+        self.con.execute("DELETE FROM ticket_history WHERE project = ?", [uid])
         self.con.execute("DELETE FROM handovers WHERE project = ?", [uid])
 
     # ── milestones (TR-411) ───────────────────────────────────────────────────
@@ -186,6 +200,81 @@ class FactoryStore:
                  "last_at": r[7] or r[5], "lines": int(r[8] or 0), "state": r[9],
                  "state_reason": r[10], "state_at": r[11]} for r in rows]
 
+    # ── the ledger's history (TR-427) ─────────────────────────────────────────
+    def add_ticket_history(self, ticket: str, project: str, field: str, value: str | None,
+                           reason: str | None, by_station: str | None, by_role: str | None,
+                           at) -> None:
+        with self._lock:
+            self.con.execute(
+                "INSERT INTO ticket_history (ticket, project, changed_at, field, value, reason, "
+                "by_station, by_role) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [ticket, project, at, field, value, reason or None, by_station or None,
+                 by_role or None])
+
+    def ticket_history(self, ticket: str) -> list[dict]:
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT changed_at, field, value, reason, by_station, by_role FROM ticket_history "
+                "WHERE ticket = ? ORDER BY changed_at", [ticket]).fetchall()
+        return [{"at": r[0], "field": r[1], "value": r[2], "reason": r[3], "by": r[4],
+                 "role": r[5]} for r in rows]
+
+    def factory_branch_prs(self, repos: set[str]) -> dict[str, tuple[str, int]]:
+        """{ticket ref (upper case): (repo, number)} for the pull requests GitHub sources saw on
+        a `factory/<ref>` branch in one of `repos`, newest first wins (TR-410)."""
+        from .factory_github import branch_ref
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT labels FROM events WHERE event_type = 'pull_request' "
+                "ORDER BY event_time DESC LIMIT 1000").fetchall()
+        out: dict[str, tuple[str, int]] = {}
+        for (lj,) in rows:
+            try:
+                lab = json.loads(lj) if isinstance(lj, str) else (lj or {})
+            except ValueError:
+                continue
+            ref = branch_ref(lab.get("branch") or "")
+            if not ref or lab.get("repo") not in repos:
+                continue
+            try:
+                out.setdefault(ref.upper(), (lab["repo"], int(lab.get("number"))))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def protocol_messages(self, source: str, limit: int = 3000) -> list[dict]:
+        """The crew's recorded protocol messages (TR-429): SendMessage calls whose text starts
+        `[TF:<TYPE>]`, oldest first, with the sending station (from its session) and the one it
+        was sent to."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT e.key_value, e.event_time, e.payload, ss.station FROM events e "
+                "LEFT JOIN session_stations ss ON ss.session = e.key_value "
+                "WHERE e.source = ? AND e.event_type = 'tool_use' "
+                "AND CAST(e.payload AS VARCHAR) LIKE '%[TF:%' "
+                "ORDER BY e.event_time DESC LIMIT ?", [source, limit]).fetchall()
+        out = []
+        for sid, at, pj, station in reversed(rows):
+            try:
+                o = json.loads(pj) if pj else {}
+            except (TypeError, ValueError):
+                continue
+            msg = o.get("message") if isinstance(o.get("message"), dict) else {}
+            for b in msg.get("content") or []:
+                if not (isinstance(b, dict) and b.get("type") == "tool_use"
+                        and str(b.get("name") or "").split("__")[-1] == "SendMessage"):
+                    continue
+                inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+                text = str(inp.get("message") or inp.get("content") or "")
+                m = re.match(r"\s*\[TF:([A-Z_]+)\]\s*(.*)", text)
+                if not m:
+                    continue
+                out.append({"at": at, "session": sid, "from": station or "", "to":
+                            str(inp.get("to") or ""), "type": m.group(1),
+                            "first_line": m.group(2).splitlines()[0][:300] if m.group(2) else "",
+                            "text": text[:4000]})
+        return out
+
     # ── hand-over to the crew (TR-425) ────────────────────────────────────────
     def set_handover(self, project: str, repo: str | None, by: str | None, at) -> None:
         with self._lock:
@@ -194,6 +283,10 @@ class FactoryStore:
                 "ON CONFLICT (project) DO UPDATE SET repo = excluded.repo, "
                 "handed_by = excluded.handed_by, handed_at = excluded.handed_at",
                 [project, repo or None, by or None, at])
+
+    def handed_over_projects(self) -> list[str]:
+        with self._lock:
+            return [r[0] for r in self.con.execute("SELECT project FROM handovers").fetchall()]
 
     def get_handover(self, project: str) -> dict | None:
         with self._lock:

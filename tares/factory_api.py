@@ -9,6 +9,7 @@ from the station's environment (tares/factory.py `may`).
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -16,11 +17,15 @@ from fastapi import Body, Request
 
 from . import docs as docs_mod
 from . import factory as factory_mod
+from . import factory_github
 from .envelope import now_utc
 
 CREW_SETTING = "crew_settings"
 GRANTS_SETTING = "global_grants"   # the id of the cell's "Grants (all projects)" doc
 QUIET_MIN = 10   # a working station that sent nothing for this long shows as quiet
+# a waiting station silent this long is most likely gone: Claude Code retires idle background
+# sessions after about an hour, and a killed one never says so
+WAITING_QUIET_MIN = 90
 
 
 def caller(request: Request) -> dict:
@@ -29,6 +34,53 @@ def caller(request: Request) -> dict:
     return {"station": (h.get("x-tares-station") or "").strip()[:factory_mod.MAX_NAME],
             "role": (h.get("x-tares-role") or "").strip().lower(),
             "parent": (h.get("x-tares-parent") or "").strip()[:factory_mod.MAX_NAME]}
+
+
+async def refresh_prs(store, uid: str) -> None:
+    """Bring a project's pull requests up to date before its tickets are read (TR-410):
+    a linked PR read again when its last read is stale; a ticket in the work with no PR linked
+    by a `factory/<ref>` branch seen on a GitHub source of the project's repos; a merge seen on
+    GitHub marks the ticket merged even when the builder did not."""
+    tickets = store.list_tickets(uid)
+    repos = {t["pr"]["repo"] for t in tickets if t["pr"] and t["pr"].get("repo")}
+    if repos:
+        seen = store.factory_branch_prs(repos)
+        for t in tickets:
+            if t["pr"] or t["stage"] not in ("doing", "review", "changes", "blocked"):
+                continue
+            hit = seen.get(factory_mod.label(t).upper())
+            if hit:
+                t["pr"] = {"repo": hit[0], "number": hit[1], "checked_at": None}
+                store.update_ticket(t["id"], pr=t["pr"])
+    for t in tickets:
+        pr = t["pr"]
+        if not factory_github.stale(pr):
+            continue
+        new = await factory_github.read_pr(store, pr["repo"], int(pr["number"]), pr)
+        fields: dict = {"pr": new}
+        if new.get("merged") and t["stage"] not in ("merged", "shipped"):
+            fields["stage"] = "merged"
+            if t["owner"] != "linear":
+                fields["status"] = "done"
+            store.add_ticket_history(t["id"], uid, "stage", "merged",
+                                     "GitHub shows the pull request merged", "github", None,
+                                     now_utc())
+        store.update_ticket(t["id"], **fields)
+
+
+def pr_note(t: dict) -> str | None:
+    """When the ticket's stage and its pull request disagree, the sentence that says so."""
+    pr = t.get("pr") or {}
+    if not pr.get("repo"):
+        return None
+    if t.get("stage") in ("merged", "shipped") and pr.get("state") == "open":
+        return "the ticket says merged, but GitHub shows the pull request still open"
+    if t.get("stage") in ("merged", "shipped") and pr.get("state") == "closed" and not pr.get("merged"):
+        return "the ticket says merged, but GitHub shows the pull request closed without merging"
+    if t.get("stage") in ("todo", "doing", "review", "changes") and pr.get("state") == "closed" \
+            and not pr.get("merged"):
+        return "GitHub shows the pull request closed without merging"
+    return None
 
 
 def register(app, store, h: SimpleNamespace) -> None:
@@ -77,6 +129,8 @@ def register(app, store, h: SimpleNamespace) -> None:
         title, body = docs_mod.GRANTS_DOC
         gid = store.create_doc(None, "grants", title, body, by="tares")
         store.set_setting(GRANTS_SETTING, gid)
+        for uid in store.handed_over_projects():   # the crew's projects show it from now on
+            store.use_doc(uid, gid)
         return gid
 
     def include_shared_grants(uid: str) -> None:
@@ -160,14 +214,19 @@ def register(app, store, h: SimpleNamespace) -> None:
             by.setdefault(s["station"], []).append(s)
         out = []
         for name, ss in by.items():
+            # the newest session plays the station now; an older one that never reported its
+            # end (killed) does not outrank it
             ss.sort(key=lambda s: _ts(s["last_at"]), reverse=True)
-            live = [s for s in ss if s["state"] not in ("ended", "replaced")]
-            cur = live[0] if live else ss[0]
+            cur = ss[0]
             quiet = (int((now - cur["last_at"]).total_seconds() // 60)
                      if isinstance(cur["last_at"], datetime) else None)
             state = cur["state"] or "working"
-            if state == "working" and quiet is not None and quiet >= QUIET_MIN:
+            if quiet is not None and (
+                    (state == "working" and quiet >= QUIET_MIN)
+                    or (state == "waiting" and quiet >= WAITING_QUIET_MIN)):
                 state = "quiet"
+            elif state == "replaced":
+                state = "ended"
             # the sessions that played the station before the current one: replaced by it
             earlier = [{"session": s["session"], "started_at": s["started_at"],
                         "last_at": s["last_at"], "lines": s["lines"], "state": "replaced"}
@@ -209,6 +268,90 @@ def register(app, store, h: SimpleNamespace) -> None:
         h.project_or_404(uid)
         return {"stations": stations(uid), "handover": store.get_handover(uid),
                 "now": now_utc()}
+
+    # ── the ledger (TR-427, TR-428, TR-410, TR-429) ───────────────────────────
+    def ticket_or_404(uid: str, ref: str) -> dict:
+        t = store.get_ticket(uid, ref)
+        if t is None:
+            h.err(KeyError(f"project has no ticket {ref!r}"), 404)
+        return t
+
+    def who(request: Request, body: dict | None = None) -> tuple[str, str]:
+        c = caller(request)
+        return (c["station"] or h.by(request, body) or "a session"), c["role"]
+
+    @app.post("/api/projects/{uid}/tickets/{ref}/assign")
+    async def assign_ticket(uid: str, ref: str, request: Request, body: dict = Body(...)):
+        """{holder}: the station that works the ticket. Only the orchestrator (or a person's own
+        session) assigns. A ticket with no stage yet starts at todo."""
+        h.project_or_404(uid)
+        deny(request, "assign")
+        t = ticket_or_404(uid, ref)
+        holder = str(body.get("holder") or "").strip()[:factory_mod.MAX_NAME]
+        if not holder:
+            h.err(ValueError("name the station that holds it (holder)"))
+        fields = {"holder": holder}
+        if not t["stage"]:
+            fields["stage"] = "todo"
+        store.update_ticket(t["id"], **fields)
+        by, role = who(request, body)
+        store.add_ticket_history(t["id"], uid, "holder", holder, None, by, role, now_utc())
+        return h.ticket_out(uid, ticket_or_404(uid, t["id"]), with_doc=False)
+
+    @app.post("/api/projects/{uid}/tickets/{ref}/stage")
+    async def set_stage(uid: str, ref: str, request: Request, body: dict = Body(...)):
+        """{stage, reason?, pr?}: move the ticket. Only the station holding it (or a helper it
+        started) moves it; only the releaser marks it shipped; a person's own session may do
+        anything. `pr` (a PR URL or owner/repo#12) links the ticket to its pull request, read
+        from GitHub from then on. A Tares ticket's status follows its stage; a Linear ticket's
+        status stays Linear's."""
+        h.project_or_404(uid)
+        t = ticket_or_404(uid, ref)
+        try:
+            stage, reason = factory_mod.stage_ok(body.get("stage"), body.get("reason"))
+        except docs_mod.DocError as e:
+            h.err(e)
+        why = factory_mod.may_move(caller(request), t, stage)
+        if why:
+            h.err(PermissionError(why), 403)
+        fields: dict = {"stage": stage, "stage_reason": reason or None}
+        if t["owner"] != "linear":
+            fields["status"] = factory_mod.STATUS_OF_STAGE[stage]
+        pr_ref = str(body.get("pr") or "").strip()
+        if pr_ref:
+            parsed = factory_github.parse_pr(pr_ref)
+            if parsed is None:
+                h.err(ValueError("pr is the pull request's URL (https://github.com/o/r/pull/12) "
+                                 "or o/r#12"))
+            prev = t["pr"] if t["pr"] and (t["pr"].get("repo"), t["pr"].get("number")) == parsed else None
+            fields["pr"] = await factory_github.read_pr(store, parsed[0], parsed[1], prev)
+        store.update_ticket(t["id"], **fields)
+        by, role = who(request, body)
+        store.add_ticket_history(t["id"], uid, "stage", stage, reason, by, role, now_utc())
+        return h.ticket_out(uid, ticket_or_404(uid, t["id"]), with_doc=False)
+
+    @app.get("/api/projects/{uid}/tickets/{ref}/messages")
+    async def ticket_messages(uid: str, ref: str):
+        """The crew's protocol messages ([TF:<TYPE>]) that name this ticket, oldest first, from
+        the recorded SendMessage calls (TR-429)."""
+        p = h.project_or_404(uid)
+        t = ticket_or_404(uid, ref)
+        return {"messages": messages_for(p, t)}
+
+    def messages_for(project: dict, t: dict) -> list[dict]:
+        builders = {s["station"] for s in store.station_sessions(h.cc_source())
+                    if s["project"] == project["id"]}
+        lab = factory_mod.label(t)
+        out = []
+        for m in store.protocol_messages(h.cc_source()):
+            text = m["text"]
+            if not re.search(rf"(?<![\w-]){re.escape(lab)}(?![\w-])", text, re.I):
+                continue
+            if not (m["to"] in builders or m["from"] in builders
+                    or project["name"].lower() in text.lower()):
+                continue
+            out.append(m)
+        return out
 
     @app.post("/api/projects/{uid}/handover")
     async def hand_over(uid: str, request: Request, body: dict = Body(default={})):

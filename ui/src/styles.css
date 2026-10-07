@@ -2009,3 +2009,9 @@ pre.payload {
 .crew-settings dd { margin: 0; overflow-wrap: anywhere; }
 .main .crew-grants { margin: 0; padding-left: 18px; font-size: 14px; }
 @media (max-width: 640px) { .crew-row { grid-template-columns: minmax(0, 1fr); } .crew-settings dl { grid-template-columns: minmax(0, 1fr); } }
+.fo-warn { color: var(--err); font-size: 12px; }
+.tk-history, .tk-msgs { list-style: none; margin: 0; padding: 0; }
+.main .tk-history, .main .tk-msgs { margin: 0; padding: 0; list-style: none; }
+.tk-history li, .tk-msgs li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.tk-msgs summary { cursor: pointer; }
+.tk-msgs pre { white-space: pre-wrap; font-size: 12px; margin: 6px 0 0; }

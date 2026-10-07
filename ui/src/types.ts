@@ -380,7 +380,22 @@ export interface Ticket {
   depends_on: string[];           // labels of the tickets it waits for
   ready: boolean;                 // not finished, and everything it depends on is
   blocked_by: string[];           // labels of the unfinished tickets it depends on
+  // the ledger (TR-427, TR-410): who holds it, where it stands, its PR as GitHub has it
+  holder: string | null;
+  stage: TicketStage | null;
+  stage_reason: string | null;
+  pr: TicketPR | null;
+  pr_note: string | null;         // the stage and GitHub disagree
+  history?: { at: string; field: "holder" | "stage"; value: string | null; reason: string | null; by: string | null; role: string | null }[];
 }
+export type TicketStage = "todo" | "doing" | "review" | "changes" | "merged" | "shipped" | "blocked";
+export interface TicketPR {
+  url?: string; repo?: string; number?: number; title?: string; branch?: string; head?: string;
+  state?: "open" | "closed"; merged?: boolean; merge_commit?: string | null;
+  ci?: "success" | "failure" | "pending" | "none"; verdict?: "pass" | "changes" | "pending" | null;
+  verdict_text?: string | null; checked_at?: string | null; error?: string | null;
+}
+export interface CrewMessage { at: string; session: string; from: string; to: string; type: string; first_line: string; text: string }
 export interface MilestoneCheck { check: string; expect: string }
 export interface Milestone {
   id: string;

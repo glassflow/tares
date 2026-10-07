@@ -411,21 +411,54 @@ function MilestoneGroup({ m, tickets, nextId }: { m: Milestone; tickets: Ticket[
   );
 }
 
+const STAGE_TEXT: Record<NonNullable<Ticket["stage"]>, string> = {
+  todo: "to do", doing: "doing", review: "in review", changes: "changes asked", merged: "merged",
+  shipped: "shipped", blocked: "blocked",
+};
+const STAGE_CLASS: Record<NonNullable<Ticket["stage"]>, string> = {
+  todo: "", doing: "fo-st-in_progress", review: "fo-st-in_progress", changes: "fo-st-wait",
+  merged: "fo-st-done", shipped: "fo-st-done", blocked: "fo-st-quiet",
+};
+
+/** The pull request's state in a few words: CI and the reviewer's verdict, or merged. */
+export function prBrief(pr: Ticket["pr"]): string | null {
+  if (!pr || !pr.url) return null;
+  if (pr.merged) return `PR #${pr.number ?? ""} merged`;
+  const bits = [`PR #${pr.number ?? ""}`];
+  if (pr.ci && pr.ci !== "none") bits.push(`CI ${pr.ci === "success" ? "green" : pr.ci === "failure" ? "red" : "running"}`);
+  if (pr.verdict) bits.push(pr.verdict === "pass" ? "review passed" : pr.verdict === "changes" ? "changes asked" : "review pending");
+  return bits.join(" · ");
+}
+
 function TicketList({ tickets, nextId }: { tickets: Ticket[]; nextId?: string }) {
   return (
     <ol className="fo-tickets">
       {tickets.map((t) => {
         const waits = t.status === "todo" && t.blocked_by.length > 0;
+        const pr = prBrief(t.pr);
         return (
           <li key={t.id} className={t.id === nextId ? "is-next" : ""}>
             <span className="fo-n">{t.label}</span>
             <span className="fo-tk">
               <VLink v={{ kind: "ticket", name: t.id }}>{t.title}</VLink>
               {waits && <small className="fo-wait">waits for {t.blocked_by.join(", ")}</small>}
+              {(t.holder || pr) && (
+                <small className="fo-wait">
+                  {t.holder && <>held by <span className="mono">{t.holder}</span></>}
+                  {t.holder && pr && " · "}
+                  {pr && (t.pr?.url ? <a href={t.pr.url} target="_blank" rel="noreferrer">{pr}</a> : pr)}
+                </small>
+              )}
+              {t.stage === "blocked" && t.stage_reason && <small className="fo-wait">blocked: {t.stage_reason}</small>}
+              {t.pr_note && <small className="fo-warn">{t.pr_note}</small>}
             </span>
-            <span className={`fo-st fo-st-${t.status}`}>
-              {t.id === nextId && t.status === "todo" ? "next" : waits ? "blocked" : STATUS_TEXT[t.status]}
-            </span>
+            {t.stage && t.stage !== "todo" ? (
+              <span className={`fo-st ${STAGE_CLASS[t.stage]}`}>{STAGE_TEXT[t.stage]}</span>
+            ) : (
+              <span className={`fo-st fo-st-${t.status}`}>
+                {t.id === nextId && t.status === "todo" ? "next" : waits ? "blocked" : STATUS_TEXT[t.status]}
+              </span>
+            )}
           </li>
         );
       })}

@@ -630,8 +630,9 @@ async def list_tickets(project: str = "") -> str:
         "linear": ({k: lin.get(k) for k in ("name", "url", "synced_at", "error")} if lin else None),
         "tickets": [{k: t.get(k) for k in ("id", "label", "number", "identifier", "title",
                                             "status", "milestone_name", "depends_on", "ready",
-                                            "blocked_by", "url", "working_doc",
-                                            "working_doc_title")}
+                                            "blocked_by", "holder", "stage", "stage_reason",
+                                            "url", "working_doc", "working_doc_title")}
+                    | {"pr": _pr_brief(t.get("pr")), "pr_note": t.get("pr_note")}
                     for t in data.get("tickets") or []]}
     if any(t.get("status") == "in_progress" for t in data.get("tickets") or []):
         out["note"] = ("A ticket is already in progress: unless you are the session working on "
@@ -639,16 +640,32 @@ async def list_tickets(project: str = "") -> str:
     return json.dumps(out, default=str)
 
 
+def _pr_brief(pr: dict | None) -> dict | None:
+    if not pr:
+        return None
+    return {k: pr.get(k) for k in ("url", "head", "ci", "verdict", "merged", "state", "error")
+            if pr.get(k) not in (None, "")}
+
+
 @mcp.tool()
 async def get_ticket(ticket: str, project: str = "") -> str:
-    """One ticket, by its Tares id or its Linear identifier (for example ENG-12), with the body
-    of its working doc: everything you need to work on it."""
-    async with _cx(10) as cx:
+    """One ticket, by its Tares id, its number (T3) or its Linear identifier (for example
+    ENG-12), with the body of its working doc, who holds it and where it stands, its pull
+    request as GitHub has it (head, CI, the reviewer's verdict, merged), its history, and the
+    crew's messages about it: everything you need to work on it."""
+    async with _cx(15) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
             return why
         r = await cx.get(f"{TARESD}/api/projects/{uid}/tickets/{ticket}")
-    return _out(r)
+        if r.status_code >= 400:
+            return _out(r)
+        out = r.json()
+        msgs = await cx.get(f"{TARESD}/api/projects/{uid}/tickets/{out['id']}/messages")
+    if msgs.status_code == 200:
+        out["messages"] = [{k: m.get(k) for k in ("at", "from", "to", "type", "first_line")}
+                           for m in msgs.json().get("messages") or []]
+    return json.dumps(out, default=str)
 
 
 @writable()

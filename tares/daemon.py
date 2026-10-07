@@ -759,6 +759,7 @@ def make_app() -> FastAPI:
         ("GET", re.compile(r"^/tickets/[^/]+$"), "read"),
         ("GET", re.compile(r"^/milestones$"), "read"),
         ("GET", re.compile(r"^/crew$"), "read"),
+        ("GET", re.compile(r"^/tickets/[^/]+/messages$"), "read"),
         ("GET", re.compile(r"^/sessions$"), "read"),
         ("GET", re.compile(r"^/sessions/[^/]+$"), "read"),
         ("GET", re.compile(r"^/pickup$"), "read"),
@@ -4272,6 +4273,9 @@ def make_app() -> FastAPI:
                                                       body.get("body"))
         except docs_mod.DocError as e:
             _err(e)
+        if kind == "grants":
+            _err(ValueError("a grant quotes the person and carries its date: add it with "
+                            "add_grant (POST /api/grants)"))
         doc_id = store.create_doc(uid, kind, title, text, by=_by(request, body))
         _ensure_globals(uid)
         return _doc_or_404(uid, doc_id)
@@ -4294,6 +4298,14 @@ def make_app() -> FastAPI:
                                                       body.get("body", cur["body"]))
         except docs_mod.DocError as e:
             _err(e)
+        if "grants" in (kind, cur["kind"]) and (kind, title, text) != (cur["kind"], cur["title"],
+                                                                         cur["body"]):
+            _err(ValueError("grants change only through add_grant (POST /api/grants), which "
+                            "quotes the person and dates it"))
+        if cur["global"]:
+            why = factory_mod.may(factory_api.caller(request), "global_docs")
+            if why:
+                _err(PermissionError(why), 403)
         store.update_doc(doc_id, kind=kind, title=title, body=text, by=_by(request, body))
         return _doc_or_404(uid, doc_id)
 
@@ -4337,8 +4349,10 @@ def make_app() -> FastAPI:
     def _ticket_out(uid: str, t: dict, with_doc: bool = False, ctx: dict | None = None) -> dict:
         ctx = ctx or _plan_ctx(uid)
         out = {k: t[k] for k in ("id", "owner", "identifier", "url", "title", "status",
-                                 "position", "working_doc", "updated_at", "number", "milestone")}
+                                 "position", "working_doc", "updated_at", "number", "milestone",
+                                 "holder", "stage", "stage_reason", "pr")}
         out["label"] = factory_mod.label(t)
+        out["pr_note"] = factory_api.pr_note(t)
         out["milestone_name"] = ctx["ms"].get(t["milestone"]) if t["milestone"] else None
         out["depends_on"] = [factory_mod.label(ctx["by_id"][d]) for d in t["depends_on"]
                              if d in ctx["by_id"]]
@@ -4348,6 +4362,7 @@ def make_app() -> FastAPI:
         out["working_doc_title"] = doc["title"] if doc else None
         if with_doc:
             out["working_doc_body"] = doc["body"] if doc else None
+            out["history"] = store.ticket_history(t["id"])
         return out
 
     def _tickets_out(uid: str) -> list[dict]:
@@ -4412,6 +4427,7 @@ def make_app() -> FastAPI:
         Linear project they live in when the project uses Linear (`linear`, with the last
         sync's time and error)."""
         _project_or_404(uid)
+        await factory_api.refresh_prs(store, uid)
         return {"tickets": _tickets_out(uid), "linear": store.get_project_linear(uid)}
 
     @app.post("/api/projects/{uid}/tickets", status_code=201)
@@ -4438,8 +4454,10 @@ def make_app() -> FastAPI:
 
     @app.get("/api/projects/{uid}/tickets/{ref}")
     async def get_project_ticket(uid: str, ref: str):
-        """One ticket by its id or Linear identifier, with its working doc's body."""
+        """One ticket by its id, number or Linear identifier, with its working doc's body and
+        its history (who moved it, when)."""
         _project_or_404(uid)
+        await factory_api.refresh_prs(store, uid)
         return _ticket_out(uid, _ticket_or_404(uid, ref), with_doc=True)
 
     @app.put("/api/projects/{uid}/tickets/{ref}")
@@ -4676,7 +4694,8 @@ def make_app() -> FastAPI:
                 for t in tickets if t["status"] == "todo" and ready[t["id"]]["blocked_by"])
              + ". Finish or re-plan what they wait for." if any(
                 t["status"] == "todo" for t in tickets) else
-             "Every ticket is finished."])
+             "Every ticket is finished." if tickets else
+             "The project has no tickets yet: spec it first (/tares:spec)."])
         return out
 
     @app.get("/api/projects/{uid}/pickup")

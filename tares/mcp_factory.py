@@ -12,7 +12,7 @@ from .mcp_server import TARESD, _cx, _out, _project_id, mcp, writable
 # ── the plan (TR-411) ─────────────────────────────────────────────────────────
 
 @writable()
-async def write_milestone(name: str, goal: str = "", checks: list[dict] | None = None,
+async def write_milestone(name: str, goal: str | None = None, checks: list[dict] | None = None,
                           position: float | None = None, id: str = "", project: str = "") -> str:
     """Write one of the project's milestones, or change it when one with this `name` exists
     (names are unique). Each milestone ships something a person can check: `goal` says what in
@@ -22,7 +22,11 @@ async def write_milestone(name: str, goal: str = "", checks: list[dict] | None =
     `id` and the new `name`. Give tickets a milestone with write_ticket(milestone=<name>). When
     the project's tickets live in Linear, its milestones come from Linear: add and rename them
     there and write only the goal and checks here."""
-    body: dict = {"name": name, "goal": goal, "checks": checks or []}
+    body: dict = {"name": name}
+    if goal is not None or not id:
+        body["goal"] = goal or ""        # a rename keeps the goal and checks it was not given
+    if checks is not None or not id:
+        body["checks"] = checks or []
     if position is not None:
         body["position"] = position
     async with _cx(15) as cx:
@@ -56,6 +60,48 @@ async def list_milestones(project: str = "") -> str:
     return json.dumps([{k: m.get(k) for k in ("name", "goal", "checks", "tickets", "done",
                                               "ready", "finished")}
                        for m in r.json().get("milestones") or []], default=str)
+
+
+# ── the ledger (TR-427, TR-428, TR-410) ───────────────────────────────────────
+
+@writable()
+async def assign_ticket(ticket: str, holder: str, project: str = "") -> str:
+    """Give a ticket (T3, its id, or its Linear identifier) to the station that works it, by the
+    station's name (for example shop-build-m1). Only the orchestrator, or the person's own
+    session, assigns. A ticket with no stage yet starts at todo."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/tickets/{ticket}/assign",
+                          json={"holder": holder})
+    return _out(r, ("label", "title", "holder", "stage"))
+
+
+@writable()
+async def set_stage(ticket: str, stage: str, reason: str = "", pr: str = "",
+                    project: str = "") -> str:
+    """Move a ticket you hold: `stage` is doing (you started), review (its PR is up: pass `pr`,
+    the pull request's URL), changes (the reviewer asked for changes), merged, or blocked (say
+    why in `reason`). Only the releaser marks a ticket shipped. A ticket held by another station
+    is refused; ask the orchestrator. For a ticket that lives in Linear, also move it in Linear
+    with Linear's own tools. Name your branch factory/<ticket> (factory/T3) so Tares finds the
+    pull request on its own too."""
+    body = {"stage": stage, "reason": reason}
+    if pr:
+        body["pr"] = pr
+    async with _cx(20) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/tickets/{ticket}/stage", json=body)
+    if r.status_code >= 400:
+        return _out(r)
+    t = r.json()
+    out = {k: t.get(k) for k in ("label", "title", "holder", "stage", "stage_reason", "status")}
+    if t.get("pr"):
+        out["pr"] = {k: t["pr"].get(k) for k in ("url", "head", "ci", "verdict", "merged", "error")}
+    return json.dumps(out, default=str)
 
 
 # ── the crew (TR-419, TR-420, TR-425) ─────────────────────────────────────────
@@ -157,10 +203,15 @@ async def hand_over(project: str = "", repo: str = "") -> str:
             return _out(r)
         crew = await cx.get(f"{TARESD}/api/crew")
     orch = [s for s in (crew.json().get("stations") or []) if s.get("role") == "orchestrator"
-            and s.get("state") in ("working", "waiting")] if crew.status_code == 200 else []
+            and s.get("state") in ("working", "waiting", "quiet")] if crew.status_code == 200 else []
     if not orch:
         return ("Recorded as handed to the crew, but no orchestrator is running: tell the person "
                 "to run `factory crew up` in a terminal, then send the [TF:SHIP] message.")
-    return (f"Recorded. Now send {orch[0]['name']} a message with SendMessage:\n"
+    note = ""
+    if orch[0].get("state") == "quiet":
+        note = (f"\n{orch[0]['name']} has been silent for {orch[0].get('quiet_minutes')} min: if "
+                "the message bounces, tell the person to run `factory crew watch` or "
+                "`factory crew up`.")
+    return (f"Recorded. Now send {orch[0]['name']} a message with SendMessage:{note}\n"
             f"[TF:SHIP] {project or uid} is ready to build\nproject: {project or uid}\n"
             f"repo: {repo or '(the repo named in its AGENTS.md)'}")

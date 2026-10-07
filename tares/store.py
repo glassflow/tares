@@ -471,6 +471,14 @@ _MIGRATIONS = [
     "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS milestone TEXT",
     "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS depends_on JSON",
     "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS number INTEGER",
+    # The ledger (TR-427): the station holding the ticket, where it stands (todo, doing, review,
+    # changes, merged, shipped, blocked, with the reason when blocked), and its pull request as
+    # Tares last read it from GitHub (TR-410): {url, repo, number, head, branch, ci, verdict,
+    # verdict_head, merged, merge_commit, state, checked_at, error}
+    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS holder TEXT",
+    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS stage TEXT",
+    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS stage_reason TEXT",
+    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS pr JSON",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -2536,7 +2544,8 @@ class Store(FactoryStore):
                          "FROM usecase_objects WHERE kind = 'doc')")
 
     _TICKET_COLS = ("id, project, owner, external_id, identifier, url, title, status, position, "
-                    "working_doc, created_at, updated_at, milestone, depends_on, number")
+                    "working_doc, created_at, updated_at, milestone, depends_on, number, holder, "
+                    "stage, stage_reason, pr")
 
     @staticmethod
     def _ticket_row(r) -> dict:
@@ -2544,7 +2553,8 @@ class Store(FactoryStore):
                 "identifier": r[4], "url": r[5], "title": r[6], "status": r[7],
                 "position": r[8], "working_doc": r[9], "created_at": r[10], "updated_at": r[11],
                 "milestone": r[12], "depends_on": json.loads(r[13]) if r[13] else [],
-                "number": r[14]}
+                "number": r[14], "holder": r[15], "stage": r[16], "stage_reason": r[17],
+                "pr": json.loads(r[18]) if r[18] else None}
 
     def create_ticket(self, project: str, owner: str, title: str, status: str = "todo",
                       position: float | None = None, external_id: str | None = None,
@@ -2563,10 +2573,10 @@ class Store(FactoryStore):
             num = self._next_ticket_number(project)
             self.con.execute(
                 f"INSERT INTO tickets ({self._TICKET_COLS}) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [tid, project, owner, external_id, identifier, url, title, status,
                  float(position), working_doc, ts, ts, milestone,
-                 json.dumps(depends_on) if depends_on else None, num])
+                 json.dumps(depends_on) if depends_on else None, num, None, None, None, None])
         return tid
 
     def update_ticket(self, tid: str, **fields) -> None:
@@ -2574,11 +2584,14 @@ class Store(FactoryStore):
         external_id, milestone, depends_on); None clears working_doc or milestone only when passed
         explicitly."""
         allowed = {"title", "status", "position", "working_doc", "identifier", "url",
-                   "external_id", "milestone", "depends_on"}
+                   "external_id", "milestone", "depends_on", "holder", "stage", "stage_reason",
+                   "pr"}
         sets, vals = ["updated_at = ?"], [now_utc()]
         for col, v in fields.items():
             if col == "depends_on":
                 v = json.dumps(v) if v else None
+            if col == "pr":
+                v = json.dumps(v, default=str) if v else None
             if col in allowed:
                 sets.append(f"{col} = ?"); vals.append(v)
         vals.append(tid)
@@ -2646,6 +2659,10 @@ class Store(FactoryStore):
                 "count(e.key_value), st.state, st.reason, st.state_at FROM project_sessions s "
                 "LEFT JOIN events e ON e.source = 'claude_code' AND e.key_value = s.session "
                 "LEFT JOIN session_states st ON st.session = s.session WHERE s.project = ? "
+                # the crew's own stations serve every project: they show on the Crew page and
+                # never count as the project's build session (a pick-up must not replace them)
+                "AND s.session NOT IN (SELECT session FROM session_stations WHERE role IN "
+                "('orchestrator', 'reviewer', 'releaser', 'comms')) "
                 "GROUP BY s.session, s.repo, s.linked_at, st.state, st.reason, st.state_at "
                 "ORDER BY max(e.event_time) DESC NULLS LAST", [project]).fetchall()
         return [{"session": r[0], "repo": r[1], "linked_at": r[2], "started_at": r[3],

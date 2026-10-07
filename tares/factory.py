@@ -145,6 +145,43 @@ def readiness(tickets: list[dict]) -> dict[str, dict]:
     return out
 
 
+# ── the ledger (M4): who holds a ticket and where it stands ───────────────────
+
+STAGES = ("todo", "doing", "review", "changes", "merged", "shipped", "blocked")
+# a Tares-owned ticket's status follows its stage; a Linear one keeps Linear's
+STATUS_OF_STAGE = {"todo": "todo", "doing": "in_progress", "review": "in_progress",
+                   "changes": "in_progress", "blocked": "in_progress", "merged": "done",
+                   "shipped": "done"}
+
+
+def stage_ok(stage, reason) -> tuple[str, str]:
+    s = str(stage or "").strip().lower()
+    if s not in STAGES:
+        raise DocError(f"unknown stage {stage!r}; one of: " + ", ".join(STAGES))
+    r = " ".join(str(reason or "").split())[:500]
+    if s == "blocked" and not r:
+        raise DocError("say why it is blocked (reason)")
+    return s, r
+
+
+def may_move(caller: dict, ticket: dict, stage: str) -> str | None:
+    """None when `caller` may move `ticket` to `stage`, else the reason (TR-428): the station
+    holding the ticket (or a helper it started) moves its stage, only the releaser marks it
+    shipped, and an unlabeled session may do anything."""
+    if not caller.get("station"):
+        return None
+    if stage == "shipped":
+        return may(caller, "shipped")
+    holder = ticket.get("holder")
+    if holder and holder in (caller["station"], caller.get("parent")):
+        return None
+    name = label(ticket)
+    if not holder:
+        return (f"{name} has no holder yet: the orchestrator assigns it (assign_ticket) before "
+                "anyone moves it")
+    return f"{name} is held by {holder}; ask the orchestrator to reassign it"
+
+
 # ── the crew (M3): one always-on crew serves every project ────────────────────
 
 ROLES = ("orchestrator", "reviewer", "releaser", "builder", "helper", "comms")

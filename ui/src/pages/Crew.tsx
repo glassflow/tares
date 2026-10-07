@@ -87,7 +87,10 @@ export default function Crew() {
   if (error && !data) return <ErrorState error={error} what="the crew" onRetry={reload} />;
   const stations = data?.stations ?? [];
   const roots = stations.filter((s) => !s.parent || !stations.some((x) => x.name === s.parent));
-  const attention = stations.filter((s) => s.state === "waiting" || s.state === "quiet");
+  // the orchestrator waiting is you being asked something; another station waiting between jobs
+  // is its normal state. Any station gone quiet may have been retired or crashed.
+  const attention = stations.filter((s) =>
+    s.state === "quiet" || (s.state === "waiting" && s.role === "orchestrator"));
   return (
     <div className="crew">
       <div className="pagehead">
