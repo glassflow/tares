@@ -1,10 +1,14 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 
-import { api, type TracingStatus } from "../api";
+import { api, type AgentLimits, type TracingStatus } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { Close } from "../components/icons";
-import { Picker, TimeAgo } from "../components/bits";
-import type { ApiKey, GithubCredential, ModelProvider, ModelProviders } from "../types";
+import { InternalName, Picker, TimeAgo, keyTitle } from "../components/bits";
+import { type Cloud, cloudLink, useCloud } from "../cloud";
+import type { ApiKey, GithubAppTest, GithubCredential, ModelProvider, ModelProviders } from "../types";
+import { UsagePanels } from "../components/UsagePanels";
+import WorkspaceSettings from "./WorkspaceSettings";
 
 // Four distinct credential concepts, one box each:
 //   · Access     — is this instance open, or does it require a login? (tares up --auth)
@@ -13,87 +17,267 @@ import type { ApiKey, GithubCredential, ModelProvider, ModelProviders } from "..
 //   · Slack      — the bot token behind slack:// trigger subscriptions (outbound), and the
 //                  signing secret that authenticates the /tares slash command (inbound)
 // The per-source ingest URL is an address, not a secret — it lives on the source page, not here.
-type SettingsTab = "access" | "anthropic" | "github" | "slack" | "observability";
+//   · Workspace  (Tares Cloud only) team, plan, storage, credit and delete, held by the control
+//                  plane (TR-375); shown first, and the default tab, when /health has workspace_api_url
+type SettingsTab = "workspace" | "usage" | "access" | "anthropic" | "agents" | "github" | "slack" | "observability";
 const TABS: { key: SettingsTab; label: string }[] = [
+  { key: "workspace", label: "Workspace" },
+  { key: "usage", label: "Usage" },
   { key: "access", label: "Access and API keys" },
   { key: "anthropic", label: "Model providers" },
+  { key: "agents", label: "Agents" },
   { key: "github", label: "GitHub" },
   { key: "slack", label: "Slack" },
   { key: "observability", label: "Observability" },
 ];
 
+// Coming back from a Tares Cloud connect page (contract §3): `cloud` says what happened and
+// `cloud_detail` may add a sentence to show as is. Shown once, on the tab it belongs to.
+export const CLOUD_BACK: Record<string, { tab?: SettingsTab; text: string; kind: "ok" | "error" | "" }> = {
+  "github-connected": { tab: "github", kind: "ok",
+    text: "GitHub is connected. Events from the repositories you picked arrive here as they happen." },
+  "github-repos": { tab: "github", kind: "ok",
+    text: "Repositories saved. Events from them arrive here as they happen." },
+  "github-disconnected": { tab: "github", kind: "",
+    text: "GitHub is disconnected. Its events no longer reach this workspace." },
+  "slack-connected": { tab: "slack", kind: "ok",
+    text: "Slack is connected. Triggers and agents can post to its channels, and your team can ask Tares with /tares ask." },
+  "slack-disconnected": { tab: "slack", kind: "",
+    text: "Slack is disconnected. Nothing is posted to it any more." },
+  error: { kind: "error", text: "That did not work. Nothing was changed." },
+  cancelled: { kind: "", text: "Cancelled. Nothing was changed." },
+};
+
 export default function Security() {
-  // Cloud only (TR-142): the half of "settings" a user comes here looking for that lives in the
-  // control plane, named and linked, so nobody has to know the control plane exists.
-  const [workspaceUrl, setWorkspaceUrl] = useState<string>();
-  useEffect(() => {
-    api.health().then((h) => setWorkspaceUrl(h.workspace_url || undefined)).catch(() => {});
-  }, []);
-  const [tab, setTab] = useState<SettingsTab>(() => {
-    const t = new URLSearchParams(window.location.search).get("tab");
-    return (TABS.find((x) => x.key === t)?.key ?? "access");
+  const [cloudBack] = useState(() => {
+    const q = new URLSearchParams(window.location.search);
+    const m = CLOUD_BACK[q.get("cloud") ?? ""];
+    return m ? { ...m, detail: q.get("cloud_detail") ?? "" } : undefined;
   });
+  // the tab the address or a click asked for; none: Workspace on Tares Cloud, else Access
+  const [picked, setPicked] = useState<SettingsTab | undefined>(() => {
+    const t = new URLSearchParams(window.location.search).get("tab");
+    return cloudBack?.tab ?? TABS.find((x) => x.key === t)?.key;
+  });
+  const [backTab] = useState(picked);   // the tab the cloud message belongs to
+  useEffect(() => {   // the message is shown once; a reload starts clean
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("cloud") && !url.searchParams.has("cloud_detail")) return;
+    url.searchParams.delete("cloud"); url.searchParams.delete("cloud_detail");
+    if (backTab) url.searchParams.set("tab", backTab);
+    window.history.replaceState(null, "", url.toString());
+  }, []);
+  // an in-app link to another tab while Settings is open (the switcher's "Workspace settings")
+  const loc = useLocation();
+  const [firstKey] = useState(loc.key);   // the first render already read the address
+  useEffect(() => {
+    if (loc.key === firstKey) return;
+    const t = TABS.find((x) => x.key === new URLSearchParams(loc.search).get("tab"))?.key;
+    if (t) setPicked(t);
+  }, [loc.key, loc.search]);
   const pick = (t: SettingsTab) => {
-    setTab(t);
+    setPicked(t);
     const url = new URL(window.location.href); url.searchParams.set("tab", t);
     window.history.replaceState(null, "", url.toString());
   };
+  const cloud = useCloud();
+  const slackConnectUrl = cloud.health?.slack_connect_url;
+  const workspaceApiUrl = cloud.health?.workspace_api_url || undefined;
+  // Workspace exists only on Tares Cloud; asked for elsewhere (an old link), Access shows instead.
+  // With no tab asked for, the default waits for /health (Workspace on Tares Cloud, else Access),
+  // so a hard load does not show Access and then jump.
+  const tab: SettingsTab | undefined = workspaceApiUrl ? (picked ?? "workspace")
+    : picked === "workspace" ? (cloud.ready ? "access" : "workspace")
+    : picked ?? (cloud.ready ? "access" : undefined);
+  // Tares Cloud: Workspace (team, plan, storage, credit, model spend). Self-hosted: Usage (model
+  // spend and storage) in its place.
+  const tabs = TABS.filter((t) => t.key === "workspace" ? !!workspaceApiUrl
+    : t.key === "usage" ? !workspaceApiUrl : true);
   return (
     <>
       <h1>Settings</h1>
-      <p className="subtitle">access mode, API keys, model providers, the instance credentials (GitHub, Slack) and agent tracing</p>
-      {workspaceUrl && (
-        <div className="alert" style={{ marginBottom: 14 }}>
-          <strong>Users, the Slack app, plan and storage</strong> are managed in your workspace, not
-          here. The Slack <em>bot token</em> below is what this instance posts with; installing the
-          app into your Slack happens in the workspace.{" "}
-          <a href={workspaceUrl}>Open workspace ↗</a>
-        </div>
-      )}
+      <p className="subtitle">
+        {workspaceApiUrl ? "Your team, plan, storage and model spend, API keys, model providers, agent limits, GitHub and Slack, and agent tracing."
+          : "Model spend and storage, who can get in, API keys, model providers, agent limits, GitHub and Slack credentials, and agent tracing."}
+      </p>
       <div className="tabs">
-        {TABS.map((t) => (
+        {tab !== undefined && tabs.map((t) => (
           <button key={t.key} className={tab === t.key ? "active" : ""} onClick={() => pick(t.key)}>{t.label}</button>
         ))}
       </div>
+      {cloudBack && (backTab ? tab === backTab : picked === undefined) && (
+        <div className={"alert" + (cloudBack.kind ? ` ${cloudBack.kind}` : "")}
+             role={cloudBack.kind === "error" ? "alert" : "status"}>
+          {cloudBack.kind === "error" && cloudBack.detail ? cloudBack.detail
+            : <>{cloudBack.text}{cloudBack.detail && <> {cloudBack.detail}</>}</>}
+        </div>
+      )}
+      {tab === undefined && <div className="panel"><div className="muted">loading…</div></div>}
+      {tab === "workspace" && (workspaceApiUrl
+        ? <WorkspaceSettings cloud={cloud} apiUrl={workspaceApiUrl} onOpenTab={pick} />
+        : <div className="panel"><div className="muted">loading…</div></div>)}
+      {tab === "usage" && <UsagePanels />}
       {tab === "access" && <><AccessPanel /><ApiKeysPanel /></>}
       {tab === "anthropic" && <ProvidersPanel />}
-      {tab === "github" && <GithubPanel />}
-      {tab === "slack" && <><SlackTokenPanel /><SlackSigningSecretPanel /></>}
+      {tab === "agents" && <AgentLimitsPanel />}
+      {tab === "github" && <GithubPanel cloud={cloud} />}
+      {/* Until /health answers (it can be slow on a busy instance) the self-host panels show, so
+          a self-hosted Slack tab never waits on it; a cloud cell swaps to its panel once it does. */}
+      {tab === "slack" && (slackConnectUrl ? <SlackCloudPanel cloud={cloud} connectUrl={slackConnectUrl} />
+        : <><SlackTokenPanel /><SlackSigningSecretPanel /></>)}
       {tab === "observability" && <TracingPanel />}
     </>
   );
 }
 
-// GitHub: a token stored once, referenced by name from `github` sources (`credential: <name>`)
-// and from MCP servers (`credential:github/<name>`), so a rotation happens here and nowhere else.
-// Same write-only contract as the other credentials: the token never comes back.
-function GithubPanel() {
+/** Who may connect, when this person may not (TR-367): the control plane lets only the
+ *  workspace's owner connect and disconnect GitHub and Slack. */
+function OwnerOnly({ cloud, what }: { cloud: Cloud; what: string }) {
+  const email = cloud.current?.owner_email;
+  return (
+    <p className="help">
+      {email ? <>Only the workspace owner, <strong>{email}</strong>, can connect {what}.</>
+        : <>Only the workspace owner can connect {what}.</>}
+    </p>
+  );
+}
+
+/** The repositories a Tares Cloud App row follows: names without the owner when it is the
+ *  installation's account, the first three and a count, every full name on hover. */
+function RepoNames({ repos, account }: { repos: string[]; account: string }) {
+  const own = account.toLowerCase();
+  const names = repos.map((r) => {
+    const [owner, name] = r.split("/");
+    return owner.toLowerCase() === own && name ? name : r;
+  });
+  const shown = names.slice(0, 3).join(", ");
+  return (
+    <span className="mono" title={repos.join("\n")}>
+      {shown}{names.length > 3 && <span className="help"> and {names.length - 3} more</span>}
+    </span>
+  );
+}
+
+// Slack on Tares Cloud (TR-364): the control plane runs the Slack install and pushes the bot
+// token, signing secret and team name here, so instead of two paste boxes this is one Connect /
+// Disconnect, both links to the control plane that come back to this tab.
+function SlackCloudPanel({ cloud, connectUrl }: { cloud: Cloud; connectUrl: string }) {
+  const [st, setSt] = useState<Awaited<ReturnType<typeof api.slackTokenStatus>>>();
+  const [err, setErr] = useState<string>();
+  useEffect(() => {
+    api.slackTokenStatus().then(setSt).catch((e) => setErr(String((e as Error).message ?? e)));
+  }, []);
+  const canConnect = cloud.isOwner !== false;
+  return (
+    <div className="panel">
+      <h2 style={{ marginTop: 0 }}>Slack</h2>
+      {err && <div className="alert error">{err}</div>}
+      {!st ? (!err && <div className="muted">loading…</div>) : st.configured ? (
+        <>
+          <p style={{ margin: "0 0 6px" }}>
+            <strong>{st.team?.name ? `Connected to ${st.team.name}` : "Connected"}</strong>
+          </p>
+          <p className="help" style={{ marginTop: 0 }}>
+            Triggers and agents post what they find to the channels you pick, and your team can
+            ask Tares from any channel with <code>/tares ask</code>. Tares posts to any public
+            channel; for a private one, add it there first with <code>/invite @Tares</code>.
+          </p>
+          {canConnect
+            ? <a className="btn danger" href={cloudLink(connectUrl, { action: "disconnect" }, "slack")}>Disconnect</a>
+            : <OwnerOnly cloud={cloud} what="Slack" />}
+        </>
+      ) : (
+        <>
+          <p className="help" style={{ marginTop: 0 }}>
+            Connect Slack to have triggers and agents post what they find to a channel, and to let
+            your team ask Tares from Slack with <code>/tares ask</code>.
+          </p>
+          {canConnect
+            ? <a className="btn primary" href={cloudLink(connectUrl, {}, "slack")}>Connect Slack</a>
+            : <OwnerOnly cloud={cloud} what="Slack" />}
+        </>
+      )}
+    </div>
+  );
+}
+
+// GitHub: how Tares reads and acts on GitHub, stored once and picked by name. Two kinds:
+//   * the GitHub App (recommended): created here with GitHub's manifest flow, installed on an
+//     organization; every event of every repository arrives by webhook as it happens, and agents
+//     act as the App. On Tares Cloud the App is GlassFlow's and "Connect GitHub" replaces "Create".
+//   * a personal token: polls the repositories you add for commits and pull requests.
+// Same write-only contract as the other credentials: no token, key or secret ever comes back.
+//
+// On Tares Cloud (github_connect_url set) a "GitHub App (Tares Cloud)" row is a link the control
+// plane holds: picking repositories and disconnecting happen on its pages, which push the result
+// back here, so this console links to them instead of changing the local copy (TR-366, TR-372).
+function GithubPanel({ cloud }: { cloud: Cloud }) {
+  const connectUrl = cloud.health?.github_connect_url || undefined;
+  const canConnect = cloud.isOwner !== false;   // unknown: show, the control plane checks
   const [creds, setCreds] = useState<GithubCredential[]>();
   const [err, setErr] = useState<string>();
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState<"" | "token" | "app">("");
   const [name, setName] = useState("");
   const [token, setToken] = useState("");
   const [apiUrl, setApiUrl] = useState("");
+  const [org, setOrg] = useState("");
+  const [appName, setAppName] = useState("");
+  const [publicUrl, setPublicUrl] = useState(window.location.origin);
   const [busy, setBusy] = useState(false);
-  const [tests, setTests] = useState<Record<string, { busy?: boolean; ok?: boolean; error?: string;
-                                                     login?: string; scopes?: string[] }>>({});
+  const [tests, setTests] = useState<Record<string, { busy?: boolean } & Partial<GithubAppTest>>>({});
   const [confirmDelete, setConfirmDelete] = useState<GithubCredential>();
   const [rotating, setRotating] = useState<string>();
   const [newToken, setNewToken] = useState("");
+  // what GitHub sent the browser back with (?event=created|installed|requested, ?error=)
+  const [back] = useState(() => {
+    const q = new URLSearchParams(window.location.search);
+    return { event: q.get("event") ?? "", error: q.get("error") ?? "", github: q.get("github") ?? "",
+             account: q.get("account") ?? "", detail: q.get("detail") ?? "" };
+  });
 
   const load = () =>
     api.githubCredentials().then((r) => setCreds(r.credentials))
       .catch((e) => setErr(String((e as Error).message ?? e)));
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    if (back.event || back.error) {      // the message is shown once; a reload starts clean
+      const url = new URL(window.location.href);
+      for (const k of ["event", "error", "github", "account", "detail"]) url.searchParams.delete(k);
+      window.history.replaceState(null, "", url.toString());
+    }
+  }, []);
 
-  const add = async () => {
+  const addToken = async () => {
     setBusy(true); setErr(undefined);
     try {
       await api.createGithubCredential({ name: name.trim(), token: token.trim(), api_url: apiUrl.trim() });
-      setName(""); setToken(""); setApiUrl(""); setAdding(false);
+      setName(""); setToken(""); setApiUrl(""); setAdding("");
       await load();
     } catch (e) { setErr(String((e as Error).message ?? e)); }
     setBusy(false);
+  };
+
+  // GitHub's manifest flow: POST the manifest as a form, so the browser lands on GitHub's
+  // "create App" page with everything filled in; GitHub sends it back to the callback.
+  const createApp = async () => {
+    setBusy(true); setErr(undefined);
+    try {
+      const r = await api.createGithubApp({ name: name.trim(), org: org.trim(),
+                                            app_name: appName.trim(), public_url: publicUrl.trim() });
+      if (r.warning && !window.confirm(`${r.warning}\n\nCreate the App anyway?`)) {
+        setBusy(false); return;
+      }
+      const form = document.createElement("form");
+      form.method = "post"; form.action = r.action;
+      const input = document.createElement("input");
+      input.type = "hidden"; input.name = "manifest"; input.value = r.manifest;
+      form.appendChild(input); document.body.appendChild(form); form.submit();
+    } catch (e) { setErr(String((e as Error).message ?? e)); setBusy(false); }
+  };
+
+  const install = async (n: string) => {
+    try { window.location.href = (await api.githubAppInstallLink(n)).url; }
+    catch (e) { setErr(String((e as Error).message ?? e)); }
   };
 
   const rotate = async (n: string) => {
@@ -110,7 +294,7 @@ function GithubPanel() {
     setTests((t) => ({ ...t, [n]: { busy: true } }));
     try {
       const r = await api.testGithubCredential(n);
-      setTests((t) => ({ ...t, [n]: { ok: r.ok, error: r.error, login: r.login, scopes: r.scopes } }));
+      setTests((t) => ({ ...t, [n]: r }));
       if (r.ok) load();
     } catch (e) {
       setTests((t) => ({ ...t, [n]: { ok: false, error: String((e as Error).message ?? e) } }));
@@ -124,25 +308,97 @@ function GithubPanel() {
     setBusy(false); setConfirmDelete(undefined);
   };
 
+  const isApp = (c: GithubCredential) => c.kind === "app" || c.kind === "app_broker";
+  const backName = back.github && creds?.find((c) => c.name === back.github);
+
   return (
     <div className="panel">
       <div className="btnrow" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
         <h2 style={{ margin: 0 }}>GitHub</h2>
-        {!adding && <button className="primary" onClick={() => setAdding(true)}>Add credential</button>}
+        {!adding && (
+          <div className="btnrow">
+            {connectUrl
+              ? canConnect && <a className="btn primary" href={cloudLink(connectUrl, {}, "github")}>Connect GitHub</a>
+              : <button className="primary" onClick={() => { setAdding("app"); setName("github-app"); }}>Create GitHub App</button>}
+            <button onClick={() => { setAdding("token"); setName(""); }}>Add a personal token</button>
+          </div>
+        )}
       </div>
       <p className="help">
-        A GitHub token stored once. Pick it by name on a <em>GitHub</em> source instead of pasting a
-        token per repository, and on an MCP server as its authentication; rotate it here and every
-        source and server follows. Use a fine-grained token: the repositories you want, with{" "}
-        <strong>Contents</strong> read (read/write on a repository an agent should update),{" "}
-        <strong>Pull requests</strong> read/write, <strong>Metadata</strong> read. It is never
-        returned by the API and never included in a catalog export.
+        With the <strong>GitHub App</strong>, every event of the repositories it is installed on
+        reaches Tares as it happens: pull requests, pushes, reviews, comments, issues, releases and
+        CI runs. Agents act as the App. A <strong>personal token</strong> polls the repositories
+        you add for commits and pull requests opened, merged or closed. Either one is picked by
+        name on sources and MCP servers, and no token or key is ever shown again.
       </p>
+      {connectUrl && !canConnect && <OwnerOnly cloud={cloud} what="GitHub" />}
 
+      {back.error && <div className="alert error">GitHub: {back.error}</div>}
+      {back.event === "created" && (
+        <div className="alert">
+          GitHub App <strong className="mono">{back.github}</strong> created. Install it on the
+          organization whose repositories Tares should watch.{" "}
+          {backName && <button className="primary" onClick={() => install(back.github)}>Install on GitHub</button>}
+        </div>
+      )}
+      {back.event === "installed" && (
+        <div className="alert">
+          <strong className="mono">{back.github}</strong> is installed
+          {back.account && <> on <strong className="mono">{back.account}</strong></>}. Its events
+          arrive in the <em>GitHub</em> source.
+        </div>
+      )}
+      {back.event === "requested" && <div className="alert">Install requested: {back.detail}.</div>}
       {err && <div className="alert error">{err}</div>}
 
-      {adding && (
+      {adding === "app" && (
         <div className="panel" style={{ marginBottom: 12 }}>
+          <p className="help" style={{ marginTop: 0 }}>
+            Opens GitHub with the App filled in: its permissions, the events it sends and where it
+            sends them. You confirm there, then install it on your organization.
+          </p>
+          <div className="row2">
+            <label className="field">
+              <span className="lbl">GitHub organization <span className="help">(empty: your own account)</span></span>
+              <input type="text" className="mono" placeholder="e.g. acme" value={org}
+                     onChange={(e) => setOrg(e.target.value)} />
+            </label>
+            <label className="field">
+              <span className="lbl">name in Tares</span>
+              <input type="text" className="mono" value={name} onChange={(e) => setName(e.target.value)} />
+            </label>
+          </div>
+          <details>
+            <summary className="help">Address and App name</summary>
+            <div className="row2">
+              <label className="field">
+                <span className="lbl">this Tares, as GitHub reaches it</span>
+                <input type="text" className="mono" value={publicUrl}
+                       onChange={(e) => setPublicUrl(e.target.value)} />
+              </label>
+              <label className="field">
+                <span className="lbl">App name on GitHub <span className="help">(unique on GitHub)</span></span>
+                <input type="text" className="mono" placeholder="suggested from this address" value={appName}
+                       onChange={(e) => setAppName(e.target.value)} />
+              </label>
+            </div>
+          </details>
+          <div className="btnrow">
+            <button className="primary" disabled={busy || !name.trim()} onClick={createApp}>
+              {busy ? "Opening GitHub…" : "Continue on GitHub"}</button>
+            <button onClick={() => { setAdding(""); setErr(undefined); }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {adding === "token" && (
+        <div className="panel" style={{ marginBottom: 12 }}>
+          <p className="help" style={{ marginTop: 0 }}>
+            A fine-grained token with the repositories you want and <strong>Metadata</strong>,{" "}
+            <strong>Contents</strong> and <strong>Pull requests</strong> read (write on a
+            repository an agent should change). A classic token needs the <span className="mono">repo</span> scope
+            for private repositories.
+          </p>
           <div className="row2">
             <label className="field">
               <span className="lbl">name</span>
@@ -162,28 +418,57 @@ function GithubPanel() {
                    value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} />
           </label>
           <div className="btnrow">
-            <button className="primary" disabled={busy || !name.trim() || !token.trim()} onClick={add}>Save</button>
-            <button onClick={() => { setAdding(false); setErr(undefined); }}>Cancel</button>
+            <button className="primary" disabled={busy || !name.trim() || !token.trim()} onClick={addToken}>Save</button>
+            <button onClick={() => { setAdding(""); setErr(undefined); }}>Cancel</button>
           </div>
         </div>
       )}
 
       {!creds ? <div className="muted">loading…</div>
         : creds.length === 0 ? (
-          !adding && <div className="empty">no GitHub credential yet. Add one to pick it on sources and MCP servers.</div>
+          !adding && <div className="empty">Nothing connected yet. {!connectUrl ? "Create the GitHub App, or add a personal token."
+            : canConnect ? "Connect GitHub, or add a personal token." : "You can add a personal token."}</div>
         ) : (
           <table>
-            <thead><tr><th>name</th><th>account</th><th>used by</th><th>updated</th><th aria-label="actions" /></tr></thead>
+            <thead><tr><th>name</th><th>connects as</th><th>events</th><th>used by</th><th aria-label="actions" /></tr></thead>
             <tbody>
               {creds.map((c) => {
                 const t = tests[c.name];
                 const uses = c.sources.length + c.mcp_servers.length;
+                const insts = c.installations ?? [];
+                const d = c.deliveries;
+                // a Tares Cloud App row on a cell that knows where the control plane's pages are
+                const cloudApp = c.kind === "app_broker" && !!connectUrl;
+                const iid = insts[0]?.id;
+                const repos = c.repositories ?? [];
+                const repoLink = (params: Record<string, string>) =>
+                  cloudLink(connectUrl!, { installation: String(iid), ...params }, "github");
                 return (
-                  <>
-                    <tr key={c.name}>
+                  <Fragment key={c.name}>
+                    <tr>
                       <td className="mono"><strong>{c.name}</strong>
                         {c.api_url && <span className="help" style={{ marginLeft: 6 }}>{c.api_url}</span>}</td>
-                      <td>{c.account ? <span className="mono">{c.account}</span> : <span className="dim">unknown</span>}</td>
+                      <td>
+                        {isApp(c) ? (
+                          <>GitHub App{c.broker && " (Tares Cloud)"}{insts.length > 0
+                            ? <> on <span className="mono">{insts.map((i) => i.account || i.id).join(", ")}</span></>
+                            : <span className="dim">, not installed yet</span>}
+                            {cloudApp && (repos.length > 0
+                              ? <>: <RepoNames repos={repos} account={insts[0]?.account || c.account} /></>
+                              : <span className="dim">, no repositories picked yet</span>)}</>
+                        ) : (
+                          <>token{c.account && <> of <span className="mono">{c.account}</span></>}</>
+                        )}
+                      </td>
+                      <td className="help">
+                        {!isApp(c) ? "polls the repositories you add"
+                          : !d ? <span className="dim">no source</span>
+                          : d.last_at ? <>last delivery <TimeAgo ts={new Date(d.last_at * 1000).toISOString()} />
+                              {d.rejected_signature > 0 && <span className="badge error" style={{ marginLeft: 6 }}
+                                title="deliveries refused because their signature did not match the App's webhook secret">
+                                {d.rejected_signature} refused</span>}</>
+                          : <span className="dim">no deliveries yet</span>}
+                      </td>
                       <td>{uses === 0 ? <span className="dim">nothing yet</span> : (
                         <span className="help" title={[...c.sources, ...c.mcp_servers].join("\n")}>
                           {c.sources.length > 0 && <>{c.sources.length} source{c.sources.length === 1 ? "" : "s"}</>}
@@ -191,35 +476,47 @@ function GithubPanel() {
                           {c.mcp_servers.length > 0 && <>{c.mcp_servers.length} MCP server{c.mcp_servers.length === 1 ? "" : "s"}</>}
                         </span>
                       )}</td>
-                      <td style={{ whiteSpace: "nowrap" }}><TimeAgo ts={c.updated_at} /></td>
                       <td style={{ whiteSpace: "nowrap" }}>
                         <div className="btnrow" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
+                          {c.kind === "app" && c.slug && (
+                            <button className={insts.length === 0 ? "primary" : ""} onClick={() => install(c.name)}>
+                              {insts.length === 0 ? "Install on GitHub" : "Add an organization"}</button>
+                          )}
+                          {cloudApp && canConnect && iid != null && (repos.length === 0
+                            ? <a className="btn primary" href={repoLink({})}>Pick repositories</a>
+                            : <a className="btn" href={repoLink({})}>Change repositories</a>)}
                           <button onClick={() => test(c.name)} disabled={t?.busy}>{t?.busy ? "testing…" : "Test"}</button>
-                          <button onClick={() => { setRotating(rotating === c.name ? undefined : c.name); setNewToken(""); }}>Rotate</button>
-                          <button className="danger" onClick={() => setConfirmDelete(c)}>Delete</button>
+                          {!isApp(c) && <button onClick={() => { setRotating(rotating === c.name ? undefined : c.name); setNewToken(""); }}>Rotate</button>}
+                          {cloudApp
+                            ? canConnect && iid != null
+                              && <a className="btn danger" href={repoLink({ action: "disconnect" })}>Disconnect</a>
+                            : <button className="danger" onClick={() => setConfirmDelete(c)}>Delete</button>}
                         </div>
                       </td>
                     </tr>
                     {t && !t.busy && (
-                      <tr key={c.name + "-test"}>
+                      <tr>
                         <td colSpan={5} style={{ background: "var(--wash)" }}>
-                          {t.ok ? (
-                            <div style={{ padding: "6px 4px" }}>
-                              <span className="badge ok">token works</span>{" "}
-                              <span className="help">signed in as <span className="mono">{t.login}</span>
-                                {t.scopes && t.scopes.length > 0 && <> with scopes <span className="mono">{t.scopes.join(", ")}</span></>}</span>
-                            </div>
-                          ) : (
-                            <div style={{ padding: "6px 4px" }}>
-                              <span className="badge error">failed</span>{" "}
-                              <span className="help mono">{t.error}</span>
-                            </div>
-                          )}
+                          <div style={{ padding: "6px 4px" }}>
+                            {t.ok ? (
+                              t.installations ? (
+                                <><span className="badge ok">works</span>{" "}
+                                  <span className="help">{t.installations.map((i) =>
+                                    `${i.account}: ${i.repos} repositor${i.repos === 1 ? "y" : "ies"}`).join(" · ")}</span></>
+                              ) : (
+                                <><span className="badge ok">token works</span>{" "}
+                                  <span className="help">signed in as <span className="mono">{t.login}</span>
+                                    {t.scopes && t.scopes.length > 0 && <> with scopes <span className="mono">{t.scopes.join(", ")}</span></>}</span></>
+                              )
+                            ) : (
+                              <><span className="badge error">failed</span>{" "}<span className="help mono">{t.error}</span></>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     )}
                     {rotating === c.name && (
-                      <tr key={c.name + "-rotate"}>
+                      <tr>
                         <td colSpan={5} style={{ background: "var(--wash)" }}>
                           <div className="btnrow" style={{ alignItems: "center", maxWidth: 720, padding: "6px 4px" }}>
                             <input type="password" className="mono" style={{ flex: 1 }} autoComplete="new-password"
@@ -230,7 +527,7 @@ function GithubPanel() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -240,9 +537,11 @@ function GithubPanel() {
       {confirmDelete && (
         <ConfirmDialog
           title={`Delete GitHub credential ${confirmDelete.name}?`}
-          message={confirmDelete.sources.length + confirmDelete.mcp_servers.length > 0
+          message={(confirmDelete.sources.length + confirmDelete.mcp_servers.length > 0
             ? `${confirmDelete.sources.length} source(s) and ${confirmDelete.mcp_servers.length} MCP server(s) reference it and will stop authenticating until you point them at another credential.`
-            : "Nothing references it."}
+            : "Nothing references it.")
+            + (isApp(confirmDelete) && confirmDelete.kind === "app"
+              ? " The App itself stays on GitHub; uninstall or delete it there too." : "")}
           confirmLabel="Delete" danger
           onConfirm={() => remove(confirmDelete.name)}
           onCancel={() => setConfirmDelete(undefined)} />
@@ -491,6 +790,65 @@ function ProvidersPanel() {
 // preset (a key is enough); any OTLP/HTTP endpoint works. Same precedence as the Anthropic key:
 // a value saved here wins over the environment, so a cloud cell shows "from env" everywhere and
 // the switch is the one live control. The key and headers are write-only.
+// Runs per agent per day (TR-325). A guard against a runaway trigger, not a bill: spend is bounded
+// by each agent's budget. Saved here it replaces the deployment's value; cleared, that comes back.
+function AgentLimitsPanel() {
+  const [st, setSt] = useState<AgentLimits>();
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>();
+  const [msg, setMsg] = useState<string>();
+
+  const load = () => api.agentLimits()
+    .then((s) => { setSt(s); setValue(String(s.daily_cap)); })
+    .catch((e) => setErr(String((e as Error).message ?? e)));
+  useEffect(() => { load(); }, []);
+
+  const save = async (daily_cap: string | null, done: string) => {
+    setBusy(true); setErr(undefined); setMsg(undefined);
+    try { await api.setAgentLimits({ daily_cap }); setMsg(done); await load(); }
+    catch (e) { setErr(String((e as Error).message ?? e)); }
+    setBusy(false);
+  };
+
+  if (!st) return <div className="panel"><h2 style={{ marginTop: 0 }}>Agent limits</h2>
+    {err ? <div className="alert error">{err}</div> : <div className="muted">loading…</div>}</div>;
+
+  const from = st.daily_cap_source === "console" ? "saved here"
+    : st.daily_cap_source === "env" ? `from ${st.env}` : "the default";
+
+  return (
+    <div className="panel">
+      <h2 style={{ marginTop: 0 }}>Agent limits</h2>
+      <p className="help" style={{ marginTop: 0 }}>
+        How many times each Tares agent may run in 24 hours. When an agent reaches it, further
+        firings are recorded as capped and cost nothing until the window moves on. An agent on a
+        schedule every 10 minutes runs 144 times a day. Spend is bounded separately by each
+        agent's budget.
+      </p>
+      {err && <div className="alert error">{err}</div>}
+      {msg && <p className="help">{msg}</p>}
+      <div className="row2">
+        <label className="field">
+          <span className="lbl">runs per agent per day</span>
+          <input type="number" min={1} max={10000} value={value} disabled={busy}
+                 onChange={(e) => setValue(e.target.value)} />
+          <span className="help">now {st.daily_cap}, {from}</span>
+        </label>
+      </div>
+      <div className="btnrow">
+        <button className="primary" disabled={busy || value.trim() === String(st.daily_cap)}
+                onClick={() => save(value.trim(), "✓ saved; applies from the next run")}>Save</button>
+        {st.daily_cap_source === "console" && (
+          <button disabled={busy} onClick={() => save(null, "✓ cleared")}>
+            Use the deployment's value or the default
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TracingPanel() {
   const [st, setSt] = useState<TracingStatus>();
   const [provider, setProvider] = useState<string>();
@@ -649,12 +1007,14 @@ function SlackTokenPanel() {
     <div className="panel">
       <h2 style={{ marginTop: 0 }}>Slack bot token</h2>
       <p className="help" style={{ marginTop: 0 }}>
-        Lets a trigger post to a channel: subscribe{" "}
-        <code>slack://channel/C0123456789</code> on any trigger and every firing is delivered,
-        retried and logged like a webhook. Create a Slack app with the <code>chat:write</code>{" "}
-        scope, invite it to the channel, and paste its <strong>Bot User OAuth Token</strong> here —
-        or set <code>TARES_SLACK_BOT_TOKEN</code> in the daemon's environment. It is never
-        returned by the API and never included in a catalog export.
+        Lets triggers and agents post to Slack: pick a channel on a trigger or an agent and every
+        firing or finding is delivered, retried and logged like a webhook. Create a Slack app with
+        the bot scopes <code>chat:write</code>, <code>chat:write.public</code> (post to a public
+        channel without inviting the app), <code>channels:read</code> and{" "}
+        <code>groups:read</code> (list the channels to pick from), and <code>commands</code>{" "}
+        (<code>/tares ask</code>). Paste its <strong>Bot User OAuth Token</strong> here, or set{" "}
+        <code>TARES_SLACK_BOT_TOKEN</code> in the daemon's environment. It is never returned by
+        the API and never included in a catalog export.
       </p>
 
       {err && <div className="alert error">{err}</div>}
@@ -772,9 +1132,9 @@ function SlackSigningSecretPanel() {
 // Scope semantics (docs/design/api-keys.md): read = consume (queries, catalog reads, an agent's
 // own derive/subscribe) · ingest = contribute events · admin = configure the instance.
 const SCOPE_HELP: Record<string, string> = {
-  read: "consume: queries, timelines, catalog; agents' own views & subscriptions",
+  read: "consume: reads, timelines, catalog; agents' own subscriptions",
   ingest: "contribute: POST events to /ingest and /v1/*, write memories",
-  admin: "configure: sources/views/triggers, credentials, keys (implies the rest)",
+  admin: "configure: sources, triggers, projects, credentials, keys (implies the rest)",
 };
 
 function ApiKeysPanel() {
@@ -784,10 +1144,17 @@ function ApiKeysPanel() {
   const [minted, setMinted] = useState<{ name: string; secret: string }>();
   const [revoking, setRevoking] = useState<ApiKey>();
   const [creating, setCreating] = useState(false);
+  const [showRevoked, setShowRevoked] = useState(false);
 
   const load = () => api.keys().then((r) => { setKeys(r.keys); setEnforced(r.enforced); })
     .catch((e) => setErr(String((e as Error).message ?? e)));
   useEffect(() => { load(); }, []);
+  // a project key reads one project; the table names it (they are made on the project's page)
+  const [projectNames, setProjectNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    api.projects().then((r) => setProjectNames(Object.fromEntries(r.projects.map((p) => [p.id, p.name]))))
+      .catch(() => undefined);
+  }, []);
 
   return (
     <div className="panel">
@@ -820,13 +1187,16 @@ function ApiKeysPanel() {
       )}
 
       {keys && keys.length > 0 ? (
+        <>
         <table style={{ marginBottom: 14 }}>
           <thead><tr><th>name</th><th>scopes</th><th>key</th><th>created</th><th>last used</th><th></th></tr></thead>
           <tbody>
-            {keys.map((k) => (
+            {/* live keys first; revoked ones only on request, they are history */}
+            {[...keys.filter((k) => !k.revoked_at), ...(showRevoked ? keys.filter((k) => k.revoked_at) : [])].map((k) => (
               <tr key={k.id} style={k.revoked_at ? { opacity: 0.45 } : undefined}>
-                <td>{k.name}</td>
-                <td>{k.scopes.map((s) => <span className="chip" key={s} title={SCOPE_HELP[s]}>{s}</span>)}</td>
+                <td>{keyTitle(k.name) ? <>{keyTitle(k.name)}<InternalName name={k.name} /></> : k.name}</td>
+                <td>{k.scopes.map((s) => <span className="chip" key={s} title={SCOPE_HELP[s]}>{s}</span>)}
+                  {k.project && <span className="help"> · project {projectNames[k.project] ?? k.project} only</span>}</td>
                 <td className="mono">{k.prefix}…</td>
                 <td className="help"><TimeAgo ts={k.created_at} /></td>
                 <td className="help">{k.revoked_at ? "revoked" : k.last_used_at ? <TimeAgo ts={k.last_used_at} /> : "never"}</td>
@@ -839,6 +1209,12 @@ function ApiKeysPanel() {
             ))}
           </tbody>
         </table>
+        {keys.some((k) => k.revoked_at) && (
+          <button type="button" className="linklike" onClick={() => setShowRevoked((v) => !v)}>
+            {showRevoked ? "Hide revoked keys" : `Show ${keys.filter((k) => k.revoked_at).length} revoked`}
+          </button>
+        )}
+        </>
       ) : (
         <p className="help">no keys yet; <strong>Create key</strong> to issue one for a producer or agent.</p>
       )}
@@ -934,7 +1310,7 @@ function KeyModal({ onClose, onCreated }: {
   );
 }
 
-function CopySecret({ text }: { text: string }) {
+export function CopySecret({ text }: { text: string }) {
   const [done, setDone] = useState(false);
   return (
     <button onClick={() => {

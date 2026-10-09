@@ -1,0 +1,3 @@
+# Findings gitleaks reports that are not credentials, one fingerprint per line.
+# A made-up GitHub token in a test that checks secrets are stripped from a setup plan.
+924c39025bec7f20a40286c9e71b135d96ddf9c0:tests/test_setup_flow.py:generic-api-key:935

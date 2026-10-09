@@ -1,0 +1,47 @@
+{
+ "ref": "refs/heads/main",
+ "before": "000",
+ "after": "abc999",
+ "compare": "https://github.com/acme/app/compare/000...abc999",
+ "pusher": {
+  "name": "alice"
+ },
+ "commits": [
+  {
+   "id": "a1",
+   "message": "one"
+  },
+  {
+   "id": "a2",
+   "message": "two"
+  },
+  {
+   "id": "abc999",
+   "message": "Merge pull request #7\n\nAdd retry"
+  }
+ ],
+ "head_commit": {
+  "id": "abc999",
+  "message": "Merge pull request #7\n\nAdd retry",
+  "timestamp": "2026-10-01T10:00:01Z"
+ },
+ "repository": {
+  "id": 1,
+  "full_name": "acme/app",
+  "name": "app",
+  "owner": {
+   "login": "acme"
+  },
+  "private": true,
+  "html_url": "https://github.com/acme/app",
+  "default_branch": "main"
+ },
+ "installation": {
+  "id": 101,
+  "node_id": "x"
+ },
+ "sender": {
+  "login": "alice",
+  "type": "User"
+ }
+}

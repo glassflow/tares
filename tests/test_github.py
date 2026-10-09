@@ -25,7 +25,9 @@ env = conn._commit_envelope(commit, {"repo": "glassflow/tares", "branch": "main"
 ck("event_type=commit", env.event_type == "commit", env.event_type)
 ck("text = short-sha login: summary", env.text == "abc1234 alice: Fix the pool exhaustion", env.text)
 ck("keyed by repo (primary label)", env.key_value == "glassflow/tares", env.key_value)
-ck("labels = repo + author", env.labels == {"repo": "glassflow/tares", "author": "alice"}, str(env.labels))
+ck("labels = repo + author + the contract's sha",
+   env.labels == {"repo": "glassflow/tares", "author": "alice", "sha": "abc1234def567"},
+   str(env.labels))
 ck("event_time parsed from commit date", env.event_time is not None and env.event_time.year == 2026, str(env.event_time))
 ck("full commit kept in payload (lossless)", env.payload.get("sha") == "abc1234def567")
 # author falls back to commit author name when there's no GitHub login

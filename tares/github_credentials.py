@@ -5,8 +5,10 @@ another copy. A stored credential is one place to paste, test and rotate it: sou
 `credential: <name>` instead of `token`, an MCP server sets `auth_value: credential:github/<name>`,
 and both resolve the token at use time, so rotating the credential rotates everything at once.
 
-`kind` is `token` today. A GitHub App credential (app id, installation id, private key) will be
-another kind in the same table; callers only ever ask `resolve_github_token()` for a token.
+Kinds: `token` (a personal token), `app` (a GitHub App the cell holds: app id, private key,
+installations) and `app_broker` (an App whose key stays with a broker, Tares Cloud's control plane,
+which hands this cell tokens for its own installation). Callers ask `get_token()` for a token and
+never care which kind is behind it; github_app.py mints and caches App tokens.
 """
 from __future__ import annotations
 
@@ -35,17 +37,41 @@ def credential_name(ref: str) -> str:
     return ref[len(CREDENTIAL_PREFIX):] if ref.startswith(CREDENTIAL_PREFIX) else ref
 
 
+APP_KINDS = ("app", "app_broker")
+
+
+def is_app(cred: dict | None) -> bool:
+    return bool(cred) and cred.get("kind") in APP_KINDS
+
+
 def resolve_github_token(store, ref: str | None) -> str | None:
-    """The token behind a credential name or `credential:github/<name>`; None if unknown or empty.
-    Never raises: a missing credential is the caller's error to surface (the connector reports it
-    as its last error, the MCP client as a connect failure)."""
+    """The personal token behind a credential name or `credential:github/<name>`; None if unknown,
+    empty, or an App credential (whose tokens are minted: use `get_token`). Never raises."""
     name = credential_name(ref)
     if not name:
         return None
     cred = store.get_github_credential(name)
-    if not cred:
+    if not cred or is_app(cred):
         return None
     return cred.get("token") or None
+
+
+async def get_token(store, ref: str | None, repo: str | None = None,
+                    min_life: int | None = None) -> str:
+    """A token for the credential named by `ref`, whatever its kind: the stored personal token, or
+    an installation token (the installation covering `repo`, or the only one). Raises ValueError
+    with a message that names the cause, for the caller to surface (a source's last error, an MCP
+    connect failure, a test button)."""
+    name = credential_name(ref)
+    cred = store.get_github_credential(name) if name else None
+    if not cred:
+        raise ValueError(f"GitHub credential {name!r} not found (Settings > GitHub)")
+    if is_app(cred):
+        from .github_app import REFRESH_MARGIN, token_for
+        return await token_for(cred, repo, min_life or REFRESH_MARGIN)
+    if not cred.get("token"):
+        raise ValueError(f"GitHub credential {name!r} has no token (Settings > GitHub)")
+    return cred["token"]
 
 
 def resolve_api_url(store, ref: str | None) -> str | None:
@@ -54,12 +80,33 @@ def resolve_api_url(store, ref: str | None) -> str | None:
     return (cred or {}).get("api_url") or None
 
 
+# never on the wire: the key that mints tokens, the secrets that verify and broker them
+_SECRET_CONFIG = ("private_key", "webhook_secret", "client_secret", "broker_secret")
+
+
 def redact(cred: dict) -> dict:
-    """The wire form: everything except the token, plus whether one is set."""
-    return {"name": cred["name"], "kind": cred.get("kind") or "token",
-            "api_url": cred.get("api_url") or "", "account": cred.get("account") or "",
-            "token_configured": bool(cred.get("token")),
-            "created_at": cred.get("created_at"), "updated_at": cred.get("updated_at")}
+    """The wire form: everything except the token and the App's secrets, plus whether each is set."""
+    kind = cred.get("kind") or "token"
+    out = {"name": cred["name"], "kind": kind,
+           "api_url": cred.get("api_url") or "", "account": cred.get("account") or "",
+           "token_configured": bool(cred.get("token")),
+           "created_at": cred.get("created_at"), "updated_at": cred.get("updated_at")}
+    if kind in APP_KINDS:
+        cfg = cred.get("config") or {}
+        from .github_app import installations
+        out.update({
+            "app_id": cfg.get("app_id") or "", "slug": cfg.get("slug") or "",
+            "html_url": cfg.get("html_url") or "", "owner": cfg.get("owner") or "",
+            "source": cfg.get("source") or "",
+            "installations": installations(cred),
+            "key_configured": bool(cfg.get("private_key")) if kind == "app" else False,
+            "webhook_secret_configured": bool(cfg.get("webhook_secret")),
+            "broker": kind == "app_broker",
+        })
+        if kind == "app_broker":
+            # the repositories this workspace follows in the installation, [] until picked
+            out["repositories"] = list(cfg.get("repositories") or [])
+    return out
 
 
 async def test_credential(token: str, api_url: str | None = None) -> dict:
@@ -128,10 +175,31 @@ async def list_repos(name: str, token: str, api_url: str | None = None, query: s
     return [r for r in repos if q in r["full_name"].lower()]
 
 
+async def list_repos_for(cred: dict, query: str = "") -> list[dict]:
+    """Repos a credential can see, whatever its kind: a token's repos, or every repo of every
+    installation of an App (each listed by its installation, cached five minutes)."""
+    if not is_app(cred):
+        return await list_repos(cred["name"], cred["token"], cred.get("api_url") or None, query)
+    from .github_app import installation_repos, installations
+    repos: list[dict] = []
+    errors = []
+    for inst in installations(cred):
+        try:
+            repos += await installation_repos(cred, inst["id"])
+        except ValueError as e:     # one suspended or removed installation must not hide the rest
+            errors.append(e)
+    if errors and not repos:
+        raise errors[0]
+    q = (query or "").strip().lower()
+    return [r for r in repos if q in r["full_name"].lower()] if q else repos
+
+
 def forget_repos(name: str) -> None:
-    """Drop the cached listing for a credential (called when it is updated or deleted)."""
+    """Drop the cached listing (and minted tokens) for a credential (updated or deleted)."""
     for key in [k for k in _repos_cache if k.startswith(f"{name}@")]:
         _repos_cache.pop(key, None)
+    from .github_app import forget
+    forget(name)
 
 
 async def list_tree(token: str, repo: str, ref: str = "", path: str = "",

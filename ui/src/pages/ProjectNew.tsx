@@ -5,8 +5,8 @@ import { ErrorState, usePolling } from "../components/bits";
 import type { Template } from "../types";
 
 // The template gallery, at /projects/new/templates: one card per template, the deterministic
-// path. Create new itself (/projects/new) is the landing screen (Landing.tsx), which links here
-// and, per template sentence, straight to the wizard. Templates the console sets up with a
+// path. Create new itself (/projects/new) is the goal-first setup, whose goal step links here.
+// Templates the console sets up with a
 // dedicated wizard; anything else the API lists still gets a card, routed to the generic form.
 export const WIZARDS: Record<string, string> = {
   shared_code_context: "/projects/new/shared_code_context",
@@ -76,7 +76,7 @@ export default function ProjectTemplates() {
         <div>
           <h1>Templates</h1>
           <p className="subtitle">
-            the step-by-step path: answer a few questions and Tares creates the objects behind it,
+            The step-by-step path: answer a few questions and Tares creates the parts behind it,
             each visible and editable on its own page. Or assemble one from objects you already
             have. To describe what you need in your own words instead, <Link to="/projects/new">create a project</Link>.
           </p>
@@ -95,7 +95,7 @@ export default function ProjectTemplates() {
             <div className="uc-card-main">
               <div className="uc-card-title">From existing objects</div>
               <p className="help uc-card-desc">
-                Assemble a project from sources, views, triggers, agents and MCP servers you already have.
+                Assemble a project from sources, triggers, agents and MCP servers you already have.
                 Nothing is created; the project page shows their runs and firings.
               </p>
             </div>

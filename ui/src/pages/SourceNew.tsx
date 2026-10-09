@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
 import IngestSetup from "../components/IngestSetup";
+import ProjectBadge from "../components/ProjectBadge";
 import SourceForm from "../components/SourceForm";
 import type { ConnectorSpec } from "../types";
 
@@ -23,12 +24,11 @@ function YamlQuickAdd() {
       const r = await api.importYaml(text, "merge");
       const links = [
         ...r.names.sources.map((n) => ({ label: `source ${n}`, to: `/sources/${encodeURIComponent(n)}` })),
-        ...r.names.views.map((n) => ({ label: `view ${n}`, to: `/views/${encodeURIComponent(n)}` })),
         ...r.names.triggers.map((n) => ({ label: `trigger ${n}`, to: `/triggers/${encodeURIComponent(n)}` })),
         ...r.names.agents.map((n) => ({ label: `agent ${n}`, to: `/agents/${encodeURIComponent(n)}` })),
         ...r.names.mcp_servers.map((n) => ({ label: `mcp server ${n}`, to: "/mcp-servers" })),
       ];
-      if (!links.length) { setErr("nothing in that YAML; expected sources:, views:, triggers:, agents: or mcp_servers:"); }
+      if (!links.length) { setErr("nothing in that YAML; expected sources:, triggers:, agents: or mcp_servers:"); }
       else { setDone(links); setText(""); }
     } catch (e) { setErr(String((e as Error).message ?? e)); }
     setBusy(false);
@@ -67,6 +67,9 @@ function YamlQuickAdd() {
 
 export default function SourceNew() {
   const nav = useNavigate();
+  // ?project=<id>: the source joins that project (from a project's page); none = the Default project
+  const [params] = useSearchParams();
+  const project = params.get("project") ?? undefined;
   const [specs, setSpecs] = useState<Record<string, ConnectorSpec>>();
   const [connector, setConnector] = useState<string>();
   const [created, setCreated] = useState<Created>();
@@ -94,7 +97,8 @@ export default function SourceNew() {
       <div className="pagehead">
         <div>
           <h1>Add source</h1>
-          <p className="subtitle">pick a connector, configure it, save; <em>no restart needed</em></p>
+          <p className="subtitle">Pick a connector, fill in its settings and save. No restart needed.</p>
+          {project && <p className="help">joins <ProjectBadge ownedBy={project} compact /></p>}
         </div>
         {!connector && !created && (
           <button className={showYaml ? "" : "dim"} onClick={() => setShowYaml((v) => !v)}>
@@ -112,7 +116,7 @@ export default function SourceNew() {
           <div className="connector-cards">
             {/* `internal` connectors are provisioned by Tares itself (the agent findings
                 source); nothing to configure, so they're not offered here. */}
-            {Object.entries(specs).filter(([, s]) => !s.internal).map(([key, s]) => (
+            {Object.entries(specs).filter(([, s]) => !s.internal && !s.credential_managed).map(([key, s]) => (
               <button key={key} type="button"
                       className={"connector-card" + (unavailable(key) ? " unavailable" : "")}
                       disabled={unavailable(key)}
@@ -183,7 +187,7 @@ export default function SourceNew() {
             spec={spec}
             submitLabel="Create source"
             onSubmit={async (body) => {
-              const res = await api.createSource(body);
+              const res = await api.createSource(project ? { ...body, project } : body);
               if (spec.mode !== "push") {
                 nav(`/sources/${body.name}`);
                 return;

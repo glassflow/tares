@@ -14,7 +14,7 @@ export default function CatalogImport() {
     setBusy(true); setMsg(undefined);
     try {
       const r = await api.importYaml(text, mode);
-      setMsg({ ok: true, text: `imported ${r.sources} sources, ${r.views} views, ${r.triggers} triggers, `
+      setMsg({ ok: true, text: `imported ${r.sources} sources, ${r.triggers} triggers, `
         + `${r.agents} agents, ${r.mcp_servers} mcp servers (${mode})` });
       setText("");
     } catch (e) {
@@ -29,7 +29,7 @@ export default function CatalogImport() {
         <div>
           <p className="subtitle" style={{ marginBottom: 4 }}><Link to="/sources">Sources</Link> ›</p>
           <h1>Import catalog</h1>
-          <p className="subtitle">paste a catalog YAML; sources, views and triggers</p>
+          <p className="subtitle">Paste a catalog YAML with sources, triggers, agents and MCP servers.</p>
         </div>
       </div>
 
@@ -39,7 +39,7 @@ export default function CatalogImport() {
         <label className="field">
           <span className="lbl">catalog YAML</span>
           <textarea className="code" style={{ minHeight: 260 }} value={text}
-                    placeholder={"sources:\n  - name: ...\nviews:\n  - name: ...\ntriggers:\n  - name: ..."}
+                    placeholder={"sources:\n  - name: ...\ntriggers:\n  - name: ...\n    project: ...\n    sources: [...]"}
                     onChange={(e) => setText(e.target.value)} />
           <span className="help">secrets left empty in an export must be re-entered here</span>
         </label>

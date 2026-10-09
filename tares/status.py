@@ -125,7 +125,7 @@ def collect(base: str, token: str | None = None, mcp_url: str | None = None,
         "auth": {"on": None},
         "storage": {"used_bytes": None, "max_bytes": None},
         "sources": {"configured": 0, "receiving": 0, "last_event_at": None, "silent": []},
-        "views": {"count": 0, "names": []},
+        "projects": {"count": 0, "names": []},
         "triggers": {"enabled": 0, "last_fired_at": None},
         "agents": {"enabled": 0, "configured": 0, "model": None, "key_configured": None},
         "mcp": {"url": mcp_url, "running": None},
@@ -160,9 +160,10 @@ def collect(base: str, token: str | None = None, mcp_url: str | None = None,
                 last = li
         st["sources"]["last_event_at"] = last
 
-    views = _get(base, "/api/views", token)
-    if isinstance(views, list):
-        st["views"] = {"count": len(views), "names": [v.get("name") for v in views]}
+    projects = _get(base, "/api/projects", token)
+    if isinstance(projects, dict) and isinstance(projects.get("projects"), list):
+        names = [p.get("name") for p in projects["projects"]]
+        st["projects"] = {"count": len(names), "names": names}
 
     triggers = _get(base, "/api/triggers", token)
     if isinstance(triggers, list):
@@ -253,8 +254,8 @@ def render(st: dict) -> str:
         last = _ago(s["last_event_at"])
         L.append(f"{'Sources:':<19}{s['configured']} configured, {s['receiving']} receiving"
                  + (f" (last event {last})" if last else ""))
-    v = st["views"]
-    L.append(f"{'Views:':<19}{v['count']}" + (f" ({', '.join(v['names'][:3])})" if v["names"] else ""))
+    p = st["projects"]
+    L.append(f"{'Projects:':<19}{p['count']}" + (f" ({', '.join(p['names'][:3])})" if p["names"] else ""))
     t = st["triggers"]
     fired = _ago(t["last_fired_at"])
     L.append(f"{'Triggers:':<19}{t['enabled']} enabled" + (f", last fired {fired}" if fired else ""))

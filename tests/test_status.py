@@ -16,7 +16,7 @@ def base(**over):
           "daemon": {"running": True, "status": "ok", "uptime_seconds": 3700, "detail": None},
           "auth": {"on": False}, "storage": {"used_bytes": 12_000_000, "max_bytes": None},
           "sources": {"configured": 0, "receiving": 0, "last_event_at": None, "silent": []},
-          "views": {"count": 0, "names": []}, "triggers": {"enabled": 0, "last_fired_at": None},
+          "projects": {"count": 0, "names": []}, "triggers": {"enabled": 0, "last_fired_at": None},
           "agents": {"enabled": 0, "configured": 0, "model": None, "key_configured": False},
           "mcp": {"url": "http://127.0.0.1:8788/mcp", "running": False},
           "clients": {}, "slack": {"configured": False}, "entities": []}
@@ -49,6 +49,9 @@ ck("auth off wording", "off (open local instance)" in out)
 ck("key set", "model provider: set" in out)
 ck("ends with the next line", out.rstrip().splitlines()[-1].startswith("Ready."))
 ck("no em dash anywhere", "—" not in out)
+withp = render(base(projects={"count": 2, "names": ["Default", "checkout"]}))
+ck("projects line names them", "Projects:" in withp and "Default, checkout" in withp
+   and "Views" not in withp, withp)
 down = render(base(daemon={"running": False}))
 ck("down is short and says so", "not running" in down and "Next:" in down)
 

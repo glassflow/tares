@@ -20,6 +20,19 @@ that attribute is fixed per tracer provider. So each agent gets its own provider
 use and kept for the life of the process. A changed setting (endpoint, key, switch) rebuilds
 them on the next run; nothing needs a restart.
 
+What every span of an agent run carries (TR-317):
+    gen_ai.agent.name     the agent's name, the same in every instance, so a backend sees one
+                          agent across cells rather than one per service.name
+    gen_ai.agent.version  the Tares version that ran it
+    session.id            one run, one session: the firing's delivery id when the agent reports
+                          one (webhook_key_label), else the trigger dispatch id, else the run id
+    rius.main_agent.name  the same as gen_ai.agent.name; the name Rius's Agents view reads first
+    user.id               the instance, on every span of every run, so a backend's user view
+                          shows one user per cell
+The resource carries service.version, the Tares version, for comparing releases.
+LLM spans also carry gen_ai.tool.definitions, the tools the call offered. A run that stopped
+before calling the model says why on its root span, in tares.run.skipped_reason.
+
 Tracing must never break a run: every helper here swallows its own failures, the exporter
 batches in a background thread, and a backend that is down only costs dropped spans.
 """
@@ -51,6 +64,15 @@ GEN_AI_USAGE_CACHE_CREATION = "gen_ai.usage.cache_creation_input_tokens"
 GEN_AI_USAGE_CACHE_READ = "gen_ai.usage.cache_read_input_tokens"
 GEN_AI_FINISH_REASONS = "gen_ai.response.finish_reasons"
 GEN_AI_TOOL_NAME = "gen_ai.tool.name"
+GEN_AI_TOOL_CALL_ID = "gen_ai.tool.call.id"
+GEN_AI_TOOL_CALL_ARGUMENTS = "gen_ai.tool.call.arguments"
+GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions"
+GEN_AI_AGENT_NAME = "gen_ai.agent.name"
+GEN_AI_AGENT_VERSION = "gen_ai.agent.version"
+RIUS_MAIN_AGENT_NAME = "rius.main_agent.name"
+USER_ID = "user.id"
+ERROR_TYPE = "error.type"
+SKIPPED_REASON = "tares.run.skipped_reason"
 GEN_AI_FIRST_TOKEN = "gen_ai.first_token"
 _OPERATION_BY_KIND = {"AGENT": "invoke_agent", "CHAIN": "chain", "LLM": "chat",
                       "TOOL": "execute_tool"}
@@ -95,6 +117,14 @@ def parse_headers(raw: str) -> dict[str, str]:
 
 def instance_name() -> str:
     return os.getenv(ENV_INSTANCE, "").strip() or socket.gethostname() or "tares"
+
+
+def tares_version() -> str:
+    try:
+        from importlib.metadata import version as _v
+        return _v("tares")
+    except Exception:
+        return "dev"
 
 
 @dataclass(frozen=True)
@@ -212,20 +242,16 @@ class Tracing:
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-        try:
-            from importlib.metadata import version as _v
-            tares_version = _v("tares")
-        except Exception:
-            tares_version = "dev"
         resource = Resource.create({
             "service.name": f"{cfg.instance}/{name}",
             "service.instance.id": self._instance_id,
             "tares.instance": cfg.instance,
             "tares.agent": name,
-            "tares.version": tares_version,
+            "tares.version": tares_version(),
+            "service.version": tares_version(),
         })
         provider = TracerProvider(resource=resource)
-        provider.add_span_processor(_SessionProcessor())
+        provider.add_span_processor(_RunAttributesProcessor(cfg.instance))
         if self._exporter_factory is not None:
             exporter = self._exporter_factory(cfg)
         else:
@@ -258,20 +284,28 @@ class Tracing:
         self._fingerprint = None
 
 
-# ── session propagation (session.id on every span of a run) ───────────────────
-# Backends derive a per-span session id with the trace id as the fallback, so stamping the root
-# alone would scatter the children. The id rides the OTel context and a processor copies it onto
-# each span at start, the same way the Rius SDK does it.
+# ── run-wide attributes (session.id, gen_ai.agent.* on every span of a run) ──
+# Backends derive a per-span session id with the trace id as the fallback, and group per agent by
+# gen_ai.agent.name, so stamping the root alone would scatter the children. The values ride the
+# OTel context and a processor copies them onto each span at start, the same way the Rius SDK
+# does it. The processor also stamps user.id (the instance) on every span: Rius reads the user
+# from the spans, not the resource, and a cell is the user.
 try:
     from opentelemetry import context as _otel_context
     from opentelemetry.sdk.trace import SpanProcessor as _SpanProcessor
-    _SESSION_KEY = _otel_context.create_key("tares-session-id")
+    _RUN_ATTRS_KEY = _otel_context.create_key("tares-run-attributes")
 
-    class _SessionProcessor(_SpanProcessor):
+    class _RunAttributesProcessor(_SpanProcessor):
+        def __init__(self, instance: str = ""):
+            self._instance = instance
+
         def on_start(self, span, parent_context=None):
-            value = _otel_context.get_value(_SESSION_KEY, context=parent_context)
-            if isinstance(value, str) and value:
-                span.set_attribute(SESSION_ID, value)
+            if self._instance:
+                span.set_attribute(USER_ID, self._instance)
+            value = _otel_context.get_value(_RUN_ATTRS_KEY, context=parent_context)
+            if isinstance(value, dict):
+                for k, v in value.items():
+                    span.set_attribute(k, v)
 
         def on_end(self, span):
             pass
@@ -283,8 +317,8 @@ try:
             return True
 except ImportError:   # SDK absent: Tracing._build raises and tracer_for returns None
     _otel_context = None
-    _SESSION_KEY = None
-    _SessionProcessor = None   # type: ignore[assignment,misc]
+    _RUN_ATTRS_KEY = None
+    _RunAttributesProcessor = None   # type: ignore[assignment,misc]
 
 
 # ── serialisation ──────────────────────────────────────────────────────────────
@@ -385,6 +419,7 @@ class Observation:
         (a backend rolls span status up to the trace, and a trace with one fumbled tool call
         would read as a failed run)."""
         self.set_attribute("tares.tool_error", True)
+        self.set_attribute(ERROR_TYPE, "tool_error")
         self.set_output(detail)
 
     def error(self, detail: str | BaseException) -> None:
@@ -468,17 +503,27 @@ def _span(tracer, name: str, attributes: dict, cls=Observation) -> Iterator[Obse
 
 @contextmanager
 def run_span(tracer, name: str, *, kind: str = "AGENT", session: str | None = None,
-             attributes: dict | None = None) -> Iterator[Observation]:
-    """The root span of a run. `session` (the entity key) groups the runs that looked at the
-    same entity; it is stamped on every span of the run via the OTel context."""
+             agent: str | None = None, attributes: dict | None = None) -> Iterator[Observation]:
+    """The root span of a run. `session` groups the runs that belong together (the entity key,
+    or the label an agent names); `agent` is gen_ai.agent.name, the same for every copy of an
+    agent whatever instance runs it (service.name carries the instance). Both, with the agent's
+    version, are stamped on every span of the run via the OTel context."""
     attrs = {SPAN_KIND: kind, GEN_AI_OPERATION: _OPERATION_BY_KIND[kind]}
+    run_wide: dict = {}
+    if session:
+        run_wide[SESSION_ID] = session
+    if agent:
+        run_wide[GEN_AI_AGENT_NAME] = agent
+        run_wide[RIUS_MAIN_AGENT_NAME] = agent
+        run_wide[GEN_AI_AGENT_VERSION] = tares_version()
+    attrs.update(run_wide)
     for k, v in (attributes or {}).items():
         if v is not None and v != "":
             attrs[k] = v
     token = None
-    if tracer is not None and session and _otel_context is not None:
+    if tracer is not None and run_wide and _otel_context is not None:
         try:
-            token = _otel_context.attach(_otel_context.set_value(_SESSION_KEY, session))
+            token = _otel_context.attach(_otel_context.set_value(_RUN_ATTRS_KEY, run_wide))
         except Exception:
             token = None
     try:
@@ -492,14 +537,39 @@ def run_span(tracer, name: str, *, kind: str = "AGENT", session: str | None = No
                 pass
 
 
+def tool_definitions_json(tools: Any) -> str | None:
+    """The tools a model call offered, as gen_ai.tool.definitions. Tools arrive in the neutral
+    (Anthropic) shape. A list too long for one attribute drops the schemas, then the
+    descriptions, so it stays valid JSON and always names every tool."""
+    if not tools:
+        return None
+    try:
+        full = [{"type": "function", "name": t.get("name"), "description": t.get("description", ""),
+                 "parameters": t.get("input_schema") or {}} for t in tools]
+        for shape in (full,
+                      [{k: d[k] for k in ("type", "name", "description")} for d in full],
+                      [{"type": "function", "name": d["name"]} for d in full]):
+            out = json.dumps(shape, ensure_ascii=False, default=str)
+            if len(out) <= MAX_ATTR_CHARS:
+                return out
+        return out
+    except Exception:
+        return None
+
+
 @contextmanager
 def generation(tracer, model: str, messages: Any = None,
-               parameters: dict | None = None, provider: str = "anthropic") -> Iterator[Generation]:
+               parameters: dict | None = None, provider: str = "anthropic",
+               tools: Any = None) -> Iterator[Generation]:
     """One model call. Sets the request side up front; the caller records the response with
     `set_output` / `set_usage` / `set_response_model` / `set_finish_reason`. `provider` is the
-    adapter's kind (anthropic, openai), what gen_ai.provider.name names (TR-305)."""
+    adapter's kind (anthropic, openai), what gen_ai.provider.name names (TR-305). `tools` are
+    the definitions the call offered, recorded as gen_ai.tool.definitions."""
     attrs = {SPAN_KIND: "LLM", GEN_AI_OPERATION: "chat", GEN_AI_PROVIDER: provider or "anthropic",
              GEN_AI_REQUEST_MODEL: model}
+    definitions = tool_definitions_json(tools) if tracer is not None else None
+    if definitions:
+        attrs[GEN_AI_TOOL_DEFINITIONS] = definitions
     for k, v in (parameters or {}).items():
         if v is not None:
             attrs[f"gen_ai.request.{k}"] = v
@@ -510,9 +580,13 @@ def generation(tracer, model: str, messages: Any = None,
 
 
 @contextmanager
-def tool_span(tracer, name: str, arguments: Any = None) -> Iterator[Observation]:
+def tool_span(tracer, name: str, arguments: Any = None,
+              call_id: str | None = None) -> Iterator[Observation]:
     attrs = {SPAN_KIND: "TOOL", GEN_AI_OPERATION: "execute_tool", GEN_AI_TOOL_NAME: name}
+    if call_id:
+        attrs[GEN_AI_TOOL_CALL_ID] = call_id
     with _span(tracer, name, attrs) as obs:
         if arguments is not None:
             obs.set_input(arguments)
+            obs.set_attribute(GEN_AI_TOOL_CALL_ARGUMENTS, serialize(arguments))
         yield obs

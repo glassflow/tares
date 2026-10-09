@@ -2,20 +2,23 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
-import { Combo } from "../components/bits";
+import { Combo, sourceTitle } from "../components/bits";
+import { toolTitle } from "../components/setup/planEdit";
 import type { McpServer, Project, ProjectObjectKind } from "../types";
 
-// A project assembled by hand: name it, tick the objects that are not part of another project,
-// Start. Nothing is created; Tares adopts the objects (ownership badge) and the project page shows
-// their runs and firings. Edit reopens this page with the current list; removing an object from
-// the project releases it, it is never deleted.
+// A project assembled by hand: name it, pick the objects it is made of, Start. Nothing is created.
+// Sources are shared, so any source can be picked. A trigger, agent or MCP server belongs to one
+// project: the ones still in the Default project (or in none) can be moved here. Edit reopens this
+// page with the current list; removing an object from the project hands it back, it is never
+// deleted.
 
 type Pick = { kind: ProjectObjectKind; name: string };
-type Choice = { name: string; ownedBy: string | null | undefined; missing?: boolean };
+// `title`: what a person knows the part by when it is plainer than its name (a source's repo, a
+// tool's service), shown beside the name and searchable
+type Choice = { name: string; ownedBy: string | null | undefined; missing?: boolean; title?: string };
 
 const KINDS: { kind: ProjectObjectKind; label: string }[] = [
   { kind: "source", label: "Sources" },
-  { kind: "view", label: "Views" },
   { kind: "trigger", label: "Triggers" },
   { kind: "agent", label: "Tares agents" },
   { kind: "mcp_server", label: "MCP servers" },
@@ -39,18 +42,22 @@ export default function ProjectNewCustom() {
     let cancelled = false;
     (async () => {
       try {
-        const [sources, views, triggers, agents, mcp, current] = await Promise.all([
-          api.sources(), api.views(), api.triggers(), api.builtinAgents(), api.mcpServers(),
+        const [sources, triggers, agents, mcp, current] = await Promise.all([
+          api.sources(), api.triggers(), api.builtinAgents(), api.mcpServers(),
           editId ? api.project(editId) : Promise.resolve(undefined),
         ]);
         if (cancelled) return;
         const mine = current?.id;
-        const free = (rows: { name: string; owned_by?: string | null }[]) =>
-          rows.filter((r) => !r.owned_by || r.owned_by === mine)
-              .map((r) => ({ name: r.name, ownedBy: r.owned_by }));
+        // every part on the cell can be used (P-TR-216: parts are shared between projects)
+        const any = (rows: { name: string; owned_by?: string | null }[]) =>
+          rows.map((r) => ({ name: r.name, ownedBy: r.owned_by }));
+        const titled = (c: Choice, title: string | null) => (title && title !== c.name ? { ...c, title } : c);
         const byKind: Record<ProjectObjectKind, Choice[]> = {
-          source: free(sources), view: free(views), trigger: free(triggers),
-          agent: free(agents.agents), mcp_server: free(mcp.servers as McpServer[]),
+          source: any(sources).map((c, i) => titled(c, sourceTitle(sources[i].config))),
+          trigger: any(triggers),
+          agent: any(agents.agents),
+          mcp_server: any(mcp.servers as McpServer[]).map((c, i) =>
+            titled(c, toolTitle((mcp.servers as McpServer[])[i].url).title)),
         };
         // an object of this project that was deleted by hand is still on its list: show it as
         // missing so saving does not silently drop it
@@ -107,9 +114,9 @@ export default function ProjectNewCustom() {
         <div>
           <h1>{existing ? `Edit ${existing.name}` : "From existing objects"}</h1>
           <p className="subtitle">
-            A project assembled from sources, views, triggers, agents and MCP servers you already have.
-            Nothing is created; the project page shows their runs and firings. Removing an object from the
-            project leaves it in place.
+            A project assembled from sources, triggers, agents and MCP servers you already have.
+            Nothing is created; the project page shows their runs and firings. Sources can be in several
+            projects; a trigger, agent or MCP server moves here from the Default project.
           </p>
         </div>
       </div>
@@ -121,7 +128,7 @@ export default function ProjectNewCustom() {
         </label>
         {!choices && !err && <div className="dim">loading…</div>}
         {choices && total === 0 && (
-          <div className="empty">Every object on this instance is already part of a project. Create a source, view, trigger or agent first.</div>
+          <div className="empty">Nothing to pick yet. Connect a source first.</div>
         )}
         {choices && KINDS.map((k) => {
           const all = choices[k.kind];
@@ -135,6 +142,7 @@ export default function ProjectNewCustom() {
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
                   {chosen.map((c) => (
                     <span key={c.name} className="chip">
+                      {c.title && <span style={{ marginRight: 6 }}>{c.title}</span>}
                       <span className="mono">{c.name}</span>
                       {c.missing && <span className="badge error" style={{ marginLeft: 6 }}>missing</span>}
                       <button type="button" aria-label={`remove ${c.name}`} title="remove from the project"
@@ -145,7 +153,8 @@ export default function ProjectNewCustom() {
                 </div>
               )}
               {free.length > 0 ? (
-                <Combo value={adding[k.kind] ?? ""} options={free}
+                <Combo value={adding[k.kind] ?? ""} options={free} matchHints
+                       hints={Object.fromEntries(all.filter((c) => c.title).map((c) => [c.name, c.title!]))}
                        placeholder={`add a ${k.label.toLowerCase().replace(/s$/, "")}…`}
                        onChange={(v) => {
                          if (free.includes(v)) { toggle({ kind: k.kind, name: v }); setAdding({ ...adding, [k.kind]: "" }); }

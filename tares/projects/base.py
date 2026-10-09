@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-KINDS = ("source", "view", "trigger", "agent", "mcp_server")
+KINDS = ("source", "trigger", "agent", "mcp_server")
+# what a template may plan: the object kinds plus skills (TR-332), which live in the project
+# itself rather than in the catalog, so a hand-assembled project never lists one as an object
+PLANNED_KINDS = KINDS + ("skill",)
 
 
 class ProjectError(ValueError):
@@ -22,7 +25,7 @@ class PlannedObject:
     spec: dict = field(default_factory=dict)
 
     def __post_init__(self):
-        if self.kind not in KINDS:
+        if self.kind not in PLANNED_KINDS:
             raise ProjectError(f"unknown planned object kind {self.kind!r}")
         if not self.key:
             raise ProjectError("planned object needs a key")
@@ -44,6 +47,9 @@ class Template:
     # Free-form labels the console shows on the card ("demo" marks a project that needs the demo
     # stack rather than your systems).
     tags: tuple = ()
+    # The goal a project made from this template starts with when its creator gives none: one
+    # plain line saying what the project is for (the project page leads with it). "" = none.
+    GOAL: str = ""
     # An optional walkthrough the console links next to the description: {label, url}.
     guide: dict | None = None
     # What a person would type to get this template, in the first person ("watch my checkout
@@ -129,7 +135,7 @@ class Template:
         return {"key": self.key, "title": self.title, "description": self.description,
                 "params": self.PARAMS, "tags": list(self.tags), "setup": list(self.SETUP),
                 "actions": list(self.ACTIONS), "guide": dict(self.guide) if self.guide else None,
-                "sentence": self.sentence}
+                "sentence": self.sentence, "goal": self.GOAL or None}
 
 
 def _iso(v):

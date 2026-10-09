@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 
 import { api } from "../api";
 import { Picker } from "../components/bits";
+import { SlackPick } from "../components/SlackPick";
 import type { Project, Template, RecipeParam } from "../types";
 
 // The fallback wizard: a form rendered straight from a template's PARAMS, for templates without a
@@ -183,7 +184,15 @@ export default function ProjectNewGeneric() {
             <span className="lbl">name</span>
             <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
           </label>
-          {Object.entries(template.params).map(([k, p]) => (
+          {Object.entries(template.params).map(([k, p]) => k === "slack_channel" ? (
+            // picked from the workspace's channels, like an agent's channel
+            <div className="field" key={k}>
+              <span className="lbl">{p.label ?? k}</span>
+              <SlackPick value={vals[k] ?? ""} emptyLabel="No channel: the console only"
+                         onChange={(v) => setVals({ ...vals, [k]: v })} />
+              {p.help && <span className="help">{p.help}</span>}
+            </div>
+          ) : (
             <label className="field" key={k}>
               <span className="lbl">{p.label ?? k}{p.required && <span className="req"> *</span>}</span>
               {p.type === "bool" ? (

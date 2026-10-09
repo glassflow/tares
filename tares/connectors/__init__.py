@@ -18,6 +18,7 @@ from .base import UNIVERSAL_CONFIG
 from .claude_code import ClaudeCodeConnector
 from .docker_logs import DockerLogsConnector
 from .github import GithubConnector
+from .github_app import GithubAppConnector
 from .loki import LokiConnector
 from .memory import MemoryConnector
 from .otlp import OtlpConnector
@@ -41,6 +42,7 @@ REGISTRY = {
     "memory": MemoryConnector,
     "otlp": OtlpConnector,
     "github": GithubConnector,
+    "github_app": GithubAppConnector,
     "vercel": VercelConnector,
     "postgres": PostgresConnector,
     "claude_code": ClaudeCodeConnector,
@@ -81,14 +83,22 @@ SPECS = {
                                "into the envelope."},
     "memory": {"label": "Agent memory", "mode": "push",
                "description": "The agent's own observations, written back via the `remember` MCP tool "
-                              "(or POST /remember). Joinable into views like any other source."},
+                              "(or POST /remember). Readable by triggers and agents like any other source."},
     "otlp": {"label": "OpenTelemetry (OTLP)", "mode": "push",
              "description": "Receives OTLP/HTTP logs, traces and metrics at POST /v1/{logs,traces,"
                             "metrics}. One source ingests every service; resource attributes "
                             "(service.name) become labels."},
-    "github": {"label": "GitHub commits", "mode": "poll", "discover": True, "poll": "2m",
-               "description": "Polls a repo's commits (cursor by SHA); one event per commit, "
-                              "keyed by repo, with author as a label."},
+    "github": {"label": "GitHub", "mode": "poll", "discover": True, "poll": "2m",
+               "description": "Polls one repository with a personal token: its commits, and pull "
+                              "requests opened, merged or closed. Install the GitHub App instead "
+                              "(Settings > GitHub) for every event of every repo as it happens."},
+    # `credential_managed`: created with its credential (the GitHub App flow), never offered as a
+    # new kind in Add source or the planner; an existing one is picked like any other source.
+    "github_app": {"label": "GitHub (App)", "mode": "push", "credential_managed": True,
+                   "description": "Every event of a GitHub App installation as it happens: pull "
+                                  "requests, pushes, reviews, comments, issues, releases, workflow "
+                                  "runs, across all its repositories. Created with the App "
+                                  "(Settings > GitHub)."},
     "vercel": {"label": "Vercel logs", "mode": "push",
                "description": "Push source for Vercel logs; point a Vercel log drain (JSON) at this "
                               "source's ingest endpoint; one event per log entry, keyed by project, "
@@ -127,6 +137,8 @@ SPECS = {
 # A source's signal type is a property of its connector, not something the user authors. Mostly
 # descriptive - EXCEPT "reference", which the read path treats specially (always surfaced, never
 # time-windowed; see store.read_view_window).
+# descriptive — EXCEPT "reference", which the read path treats specially (always surfaced, never
+# time-windowed; see store.read_window).
 _SOURCE_TYPES = {"docker_logs": "application_log", "loki": "application_log",
                  "memory": "agent_memory",
                  "otlp": "application_log", "vercel": "application_log",

@@ -63,7 +63,7 @@ async def main():
                 await s.initialize()
                 ck("MCP with token: initialized", True)
                 names = {t.name for t in (await s.list_tools()).tools}
-                ck("tools listed with token", "query" in names and "list_connectors" in names, str(sorted(names)))
+                ck("tools listed with token", "read" in names and "list_connectors" in names, str(sorted(names)))
                 res = await s.call_tool("list_connectors", {})
                 ck("token forwarded to taresd (call succeeds)", "postgres" in res.content[0].text, res.content[0].text[:80])
     finally:

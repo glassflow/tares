@@ -119,8 +119,8 @@ function ProposalRows({ run, repo }: { run: Run; repo: string }) {
   );
 }
 
-export function SessionsPanel({ sessions, runs, view, onSummarize, busy, message }: {
-  sessions: ChallengerSession[]; runs?: Run[]; view: string;
+export function SessionsPanel({ sessions, runs, project, onSummarize, busy, message }: {
+  sessions: ChallengerSession[]; runs?: Run[]; project: string;   // the project whose sources hold the sessions
   onSummarize?: (session: string) => Promise<unknown>; busy?: boolean; message?: string;
 }) {
   const [params, setParams] = useSearchParams();
@@ -183,7 +183,7 @@ export function SessionsPanel({ sessions, runs, view, onSummarize, busy, message
               isOpen && (
                 <tr key={`${x.session}-detail`} className="sel-detail">
                   <td colSpan={6} style={{ padding: "14px 20px 18px 34px", background: "var(--panel)" }}>
-                    <SessionDetail s={x} run={runs?.find((r) => r.id && r.id === x.run_id)} view={view}
+                    <SessionDetail s={x} run={runs?.find((r) => r.id && r.id === x.run_id)} project={project}
                                    onSummarize={onSummarize} busy={busy} message={message} onClose={() => setOpen(undefined)} />
                   </td>
                 </tr>
@@ -196,8 +196,8 @@ export function SessionsPanel({ sessions, runs, view, onSummarize, busy, message
   );
 }
 
-function SessionDetail({ s, run, view, onSummarize, busy, message, onClose }: {
-  s: ChallengerSession; run?: Run; view: string;
+function SessionDetail({ s, run, project, onSummarize, busy, message, onClose }: {
+  s: ChallengerSession; run?: Run; project: string;
   onSummarize?: (session: string) => Promise<unknown>; busy?: boolean; message?: string; onClose: () => void;
 }) {
   const [all, setAll] = useState(false);
@@ -207,11 +207,11 @@ function SessionDetail({ s, run, view, onSummarize, busy, message, onClose }: {
     if (!all) return;
     let live = true;
     setRows(undefined); setErr(undefined);
-    api.runQueryWhere(view, { key_value: s.session }, "30d")
+    api.read({ session: s.session }, "30d", { project })
       .then((r) => { if (live) setRows(r.rows ?? []); })
       .catch((e) => { if (live) setErr(String((e as Error).message ?? e)); });
     return () => { live = false; };
-  }, [all, s.session, view]);
+  }, [all, s.session, project]);
 
   const blocking = s.commits.reduce((n, c) => n + (Number(c.blocking) || 0), 0);
   // the summary text without its proposals section: the proposals render as rows with a decision
@@ -320,7 +320,7 @@ function SessionDetail({ s, run, view, onSummarize, busy, message, onClose }: {
               ))}
             </tbody>
           </table>
-        ) : rows && <div className="empty" style={{ marginTop: 8 }}>the view holds nothing for this session in the last 30 days</div>}
+        ) : rows && <div className="empty" style={{ marginTop: 8 }}>the project's sources hold nothing for this session in the last 30 days</div>}
     </div>
   );
 }

@@ -71,8 +71,7 @@ async def main():
             store.upsert_catalog_source("evt", "webhook", "webhook", "5s",
                                         {"labels": [{"name": "service", "field": "service", "primary": True}]},
                                         ingest_key="ik_evt")
-            store.upsert_catalog_view("svc", "service", ["evt"])
-            store.upsert_catalog_trigger("errors", "svc", {"field": "service", "aggregate": "count", "predicate": ">= 2", "window": "5m"}, {}, "5m")
+            store.upsert_catalog_trigger("errors", ["evt"], {"field": "service", "aggregate": "count", "predicate": ">= 2", "window": "5m"}, {}, "5m")
             app.state.runtime.reload_catalog()
             for i in range(3):
                 r = await cx.post("/ingest/ik_evt", json={"service": "checkout", "message": f"e{i}"},

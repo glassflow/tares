@@ -118,9 +118,24 @@ async def post_raw(cx, body: bytes, headers: dict, url: str = f"{B}/api/slack/ev
     return await cx.post(url, content=body, headers=headers)
 
 
-async def slash(cx, text, **kw):
+async def slash(cx, text, host: str | None = None, **kw):
     body = command_body(text, **{k: v for k, v in kw.items() if k in ("user", "thread_ts", "response_url")})
-    return await post_raw(cx, body, signed_headers(body, "application/x-www-form-urlencoded"))
+    hdr = signed_headers(body, "application/x-www-form-urlencoded")
+    return await post_raw(cx, body, {**hdr, **({"host": host} if host else {})})
+
+
+async def asked(cx, text, host: str | None, user: str) -> str:
+    """Send one command and return what reached the model as the question ("" if nothing did)."""
+    before = len(MODEL_CALLS)
+    r = await slash(cx, text, host=host, user=user)
+    if r.json().get("response_type") == "ephemeral" and "asking Tares" not in r.text:
+        return ""
+    await _until(lambda: len(MODEL_CALLS) > before)
+    if len(MODEL_CALLS) <= before:
+        return ""
+    msgs = MODEL_CALLS[before].get("messages") or []
+    first = msgs[0].get("content") if msgs else ""
+    return first if isinstance(first, str) else json.dumps(first)
 
 
 async def _wait(url, tries=80):
@@ -154,7 +169,24 @@ def _stop(proc):
     except Exception: proc.kill()
 
 
+def pure_checks():
+    """parse_command and workspace_slug on their own, no daemon."""
+    from tares.slack import parse_command, workspace_slug
+    ck("slug: the workspace parameter of the connect URL",
+       workspace_slug("https://console.test/slack/install?workspace=glassflow-web") == "glassflow-web")
+    ck("slug: none self-hosted (no connect URL) or without the parameter",
+       workspace_slug("") is None and workspace_slug(None) is None
+       and workspace_slug("https://console.test/slack/install") is None)
+    ck("parse: no workspace (self-hosted), unchanged",
+       parse_command("ask acme what broke", workspace_slug("")) == ("acme what broke", None))
+    ck("parse: the slug after ask is dropped",
+       parse_command("ask acme what broke", "acme") == ("what broke", None))
+    ck("parse: a bare /tares <question> is not touched",
+       parse_command("acme what broke", "acme") == ("acme what broke", None))
+
+
 async def main():
+    pure_checks()
     for p in (DB, DB + ".wal"):
         if os.path.exists(p):
             os.remove(p)
@@ -165,7 +197,8 @@ async def main():
     base_env = {**os.environ, "TARES_DB": DB, "TARES_CATALOG": SEED, "TARES_PORT": PORT,
                 "TARES_OTLP_GRPC_PORT": "off",
                 "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{STUB_PORT}"}
-    for k in ("TARES_SLACK_SIGNING_SECRET", "TARES_AUTH_TOKEN", "ANTHROPIC_API_KEY"):
+    for k in ("TARES_SLACK_SIGNING_SECRET", "TARES_AUTH_TOKEN", "ANTHROPIC_API_KEY",
+              "TARES_SLACK_CONNECT_URL"):
         base_env.pop(k, None)
 
     # ── phase 1: no signing secret configured — 503, never 200 ──────────────
@@ -213,7 +246,8 @@ async def main():
 
     # ── phase 2: signed, keyed, capped ──────────────────────────────────────
     env2 = {**base_env, "TARES_SLACK_SIGNING_SECRET": SECRET, "ANTHROPIC_API_KEY": "sk-test",
-            "TARES_SLACK_DAILY_CAP": "2"}
+            "TARES_SLACK_DAILY_CAP": "2",
+            "TARES_SLACK_CONNECT_URL": "https://console.test/slack/install?workspace=glassflow-web"}
     proc = _spawn(env2)
     try:
         if not await _wait(f"{B}/health"):
@@ -231,6 +265,18 @@ async def main():
             ck("...echoes the challenge", r.json().get("challenge") == "abc123", r.text[:200])
             r = await post_raw(cx, hs, {"content-type": "application/json"})
             ck("an UNSIGNED handshake is rejected", r.status_code == 401, str(r.status_code))
+
+            # ── a click on a link button (View in Tares, Open timeline, TR-275) ──
+            from urllib.parse import urlencode
+            click = urlencode({"payload": json.dumps({
+                "type": "block_actions", "team": {"id": "T1"},
+                "actions": [{"action_id": "tares_link_0", "type": "button",
+                             "url": "https://cell.example.com/agents/a?tab=runs"}]})}).encode()
+            r = await post_raw(cx, click, signed_headers(click, "application/x-www-form-urlencoded"))
+            ck("a signed button click is ACKed with an empty 200 (no warning in Slack)",
+               r.status_code == 200 and r.content == b"", f"{r.status_code} {r.text[:200]}")
+            r = await post_raw(cx, click, {"content-type": "application/x-www-form-urlencoded"})
+            ck("an UNSIGNED button click is rejected", r.status_code == 401, str(r.status_code))
 
             # ── the negative cases: nothing runs, nothing leaks ──────────────
             good = command_body("ask what happened to checkout-svc")
@@ -316,6 +362,25 @@ async def main():
             ck("...in the thread it was asked in", rep.get("thread_ts") == "1700000000.000100",
                str(rep)[:200])
 
+            # ── /tares ask <workspace> <question> (TR-394) ────────────────────
+            # Tares Cloud forwards the text as typed when one Slack has several workspaces. This
+            # daemon runs with TARES_SLACK_CONNECT_URL=...?workspace=glassflow-web, the slug the
+            # cell drops; the request's Host plays no part.
+            q = await asked(cx, "ask glassflow-web what failed today", None, "U3")
+            ck("the workspace word is dropped when it is this workspace's slug",
+               q == "what failed today", repr(q))
+            q = await asked(cx, "ask Glassflow-Web what failed today", None, "U4")
+            ck("...whatever its case", q == "what failed today", repr(q))
+            q = await asked(cx, "ask glassflow what failed today", None, "U5")
+            ck("a first word that only resembles the slug stays in the question",
+               q == "glassflow what failed today", repr(q))
+            q = await asked(cx, "ask acme what failed today", "acme.tares-glassflow.com", "U6")
+            ck("the Host does not name the workspace: another slug in it strips nothing",
+               q == "acme what failed today", repr(q))
+            r = await slash(cx, "ask glassflow-web", user="U7")
+            ck("the slug alone is no question: usage", "ask what?" in r.text, r.text[:200])
+            REPLIES.clear()
+
             # ── the cost cap (TARES_SLACK_DAILY_CAP=2 for this daemon) ─────
             REPLIES.clear()
             before = len(MODEL_CALLS)
@@ -352,6 +417,16 @@ async def main():
             ck("no model provider -> a readable message, not silence",
                "no model provider" in r.text and "warning" in r.text, r.text[:300])
             ck("...and the model was never called", not MODEL_CALLS, str(MODEL_CALLS)[:200])
+
+            # the channel list's invalidation (TR-398) is a write: admin, like every other
+            r = await cx.post(f"{B}/api/slack/channels/changed",
+                              json={"event": "member_joined_channel", "channel": "G1"})
+            ck("POST /api/slack/channels/changed without a token -> 401", r.status_code == 401,
+               f"{r.status_code} {r.text[:200]}")
+            r = await cx.post(f"{B}/api/slack/channels/changed",
+                              json={"event": "member_joined_channel", "channel": "G1"},
+                              headers={"authorization": f"Bearer {AUTH}"})
+            ck("...with the admin token -> 200", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
 
             body = command_body("ask anything")
             r = await post_raw(cx, body, {"content-type": "application/x-www-form-urlencoded",

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { TriggerCondition } from "../types";
 
 export function StatusBadge({ status }: { status: string | undefined }) {
   const s = status ?? "starting";
@@ -31,7 +32,7 @@ export function usePolling<T>(fn: () => Promise<T>, intervalMs = 5000): {
   useEffect(() => {
     let live = true;
     // The FIRST load always runs, even in a hidden tab: skipping it leaves data undefined, which
-    // every page renders as its empty state — a background tab would claim you have no views.
+    // every page renders as its empty state — a background tab would claim you have no sources.
     // Only the polling refreshes pause while hidden.
     const load = (force = false) => {
       if (document.hidden && !force) return;
@@ -48,12 +49,12 @@ export function usePolling<T>(fn: () => Promise<T>, intervalMs = 5000): {
 }
 
 /** A failed load, said out loud. The rule: a fetch that failed is NEVER rendered as an empty
- *  state — "no views" and "the daemon couldn't answer" are different facts, and telling the user
+ *  state — "no sources" and "the daemon couldn't answer" are different facts, and telling the user
  *  the first when the second is true sends them off to fix nothing. Pair with usePolling's
  *  `error` (which keeps the last good `data`, so this sits above stale rows). */
 export function ErrorState({ error, what, onRetry }: {
   error: string;
-  what?: string;          // what failed to load, e.g. "views"; omit for the generic wording
+  what?: string;          // what failed to load, e.g. "sources"; omit for the generic wording
   onRetry?: () => void;   // usually usePolling's reload
 }) {
   return (
@@ -170,16 +171,18 @@ export function Picker({ value, onChange, options, labels, className, style, dis
 
 /** Input with styled suggestions — replaces native <datalist> (which can't be themed).
  *  Free text stays allowed; suggestions filter as you type. */
-export function Combo({ value, onChange, options, placeholder, style, className, hints, hintClass }: {
+export function Combo({ value, onChange, options, placeholder, style, className, hints, hintClass, matchHints }: {
   value: string; onChange: (v: string) => void; options: string[];
   placeholder?: string; style?: React.CSSProperties; className?: string;
   hints?: Record<string, string>;   // per-option annotation, right-aligned (e.g. coverage, a type tag)
   hintClass?: string;               // className for the annotation (default "dim"; "chip" for a tag)
+  matchHints?: boolean;             // typing also finds an option by its annotation (a source by its repo)
 }) {
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0);
   const needle = value.trim().toLowerCase();
-  const shown = options.filter((o) => !needle || o.toLowerCase().includes(needle));
+  const shown = options.filter((o) => !needle || o.toLowerCase().includes(needle)
+    || (matchHints && !!hints?.[o]?.toLowerCase().includes(needle)));
 
   const pick = (o: string) => { onChange(o); setOpen(false); };
 
@@ -211,4 +214,55 @@ export function Combo({ value, onChange, options, placeholder, style, className,
       )}
     </div>
   );
+}
+
+
+/** A trigger's condition in one line: the schedule, or the aggregate it watches. */
+export function conditionText(c: TriggerCondition): string {
+  if (c.every) {
+    const by = (c.summary_by ?? []).length ? `, counted by ${c.summary_by!.join(", ")}` : "";
+    return `every ${c.every}${by}`;
+  }
+  return `${c.aggregate}(${c.field || "*"}) ${c.predicate} over ${c.window}`;
+}
+
+/** What a person calls a source: the repo it watches, the table, the host it reads; null when its
+ *  settings say nothing plainer than its name (then the name is the title). Mirrors the daemon's
+ *  goal.source_title, so a pasted https://github.com/owner/name shows as owner/name. */
+export function sourceTitle(config: Record<string, unknown> | null | undefined): string | null {
+  const c = config || {};
+  for (const key of ["repo", "repository", "table", "container", "project"]) {
+    const v = c[key];
+    if (typeof v !== "string" || !v.trim()) continue;
+    let t = v.trim().replace(/\/+$/, "");
+    if ((key === "repo" || key === "repository") && t.includes("://")) {
+      const parts = t.split("://")[1].split("/").slice(1, 3);
+      if (parts.length === 2 && parts[0] && parts[1]) t = parts.join("/").replace(/\.git$/, "");
+    }
+    return t;
+  }
+  const url = c.url ?? c.base_url;
+  if (typeof url === "string" && url.includes("://")) {
+    try { return new URL(url).hostname || null; } catch { return null; }
+  }
+  return null;
+}
+
+/** A part's internal name, shown small under its plain title for whoever needs it (logs, the API). */
+export function InternalName({ name }: { name: string }) {
+  return <span className="internal-name">{name}</span>;
+}
+
+/** A plainer name for a key whose name a person did not choose: the workspace mints one per member
+ *  for signing in to the console, named user:<id>. null for a key someone named. */
+export function keyTitle(name: string): string | null {
+  return name.startsWith("user:") ? "Console sign-in for a workspace member" : null;
+}
+
+/** What a project is for, in a list: its goal; for the Default project, what it holds. The
+ *  template it started from says nothing to a person ("From existing objects"). */
+export function projectGoal(p: { goal?: string | null; default?: boolean; status?: string }): string {
+  if (p.goal?.trim()) return p.goal.trim();
+  if (p.default) return "Holds whatever was made outside another project.";
+  return p.status === "draft" ? "Being set up" : "No goal set";
 }

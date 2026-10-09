@@ -4,7 +4,7 @@ Run: PYTHONPATH=. .venv/bin/python tests/test_shared_code_context.py   (no netwo
 is served through httpx's MockTransport for every AsyncClient the daemon opens)
 
 Covers: describe() output, validate() rules, deterministic plan and names, create through
-POST /api/projects producing exactly the planned objects (sources with credential, view, trigger,
+POST /api/projects producing exactly the planned objects (sources with credential, trigger,
 MCP server with headers + credential ref, enabled agent with max_rounds and the rendered prompt),
 update adding and removing a repo, summary shape, commit payloads carrying the changed files with
 truncation, and the bootstrap hook scheduling runs.
@@ -122,8 +122,8 @@ async def main():
     check("defaults", d["params"]["context_path"]["default"] == "" and
           d["params"]["layout"]["default"] == "existing" and
           d["params"]["max_rounds"]["default"] == 12 and d["params"]["write_mode"]["default"] == "pull_request")
-    check("trigger offers every_commit only",
-          [o["value"] for o in d["params"]["trigger"]["options"]] == ["every_commit"])
+    check("trigger offers every commit and every merged PR",
+          [o["value"] for o in d["params"]["trigger"]["options"]] == ["every_commit", "every_merged_pr"])
 
     print("== validate ==")
     base = {"credential": "gh", "source_repos": [{"repo": "acme/app"}, "https://github.com/acme/lib.git"],
@@ -157,11 +157,11 @@ async def main():
     check("plan is deterministic",
           [(o.kind, o.key, o.spec) for o in plan1] == [(o.kind, o.key, o.spec) for o in plan2])
     kinds = [o.kind for o in plan1]
-    check("plan has 2 sources, view, trigger, mcp, agent",
-          kinds == ["source", "source", "view", "trigger", "mcp_server", "agent"], str(kinds))
+    check("plan has 2 sources, trigger, mcp, agent",
+          kinds == ["source", "source", "trigger", "mcp_server", "agent"], str(kinds))
     names = {o.key: o.name for o in plan1}
     check("names prefixed ctx_<slug>_",
-          names["view"] == "ctx_acme_context_repo_activity" and names["agent"] == "ctx_acme_context_maintainer"
+          names["trigger"] == "ctx_acme_context_changes" and names["agent"] == "ctx_acme_context_maintainer"
           and names["source:acme/app"] == "ctx_acme_context_acme_app", json.dumps(names))
     src = next(o for o in plan1 if o.key == "source:acme/app").spec
     check("source uses the credential, keyed by repo, poll 60s",
@@ -170,8 +170,11 @@ async def main():
     trig = next(o for o in plan1 if o.kind == "trigger").spec
     check("trigger counts commits per repo with 5m cooldown and 30m context",
           trig["condition"] == {"aggregate": "count", "predicate": "> 0", "window": "5m", "group_by": ["key_value"]}
-          and trig["cooldown"] == "5m" and trig["emit"]["attach_view"] is True
+          and trig["cooldown"] == "5m" and "attach_view" not in trig["emit"]
           and trig["emit"]["context_window"] == "30m", json.dumps(trig))
+    check("trigger reads every source repo, keyed by repo",
+          trig["sources"] == ["ctx_acme_context_acme_app", "ctx_acme_context_acme_lib"]
+          and trig["key_field"] == "repo" and "view" not in trig, json.dumps(trig))
     mcp = next(o for o in plan1 if o.kind == "mcp_server").spec
     check("mcp server: GitHub hosted, credential ref, toolsets header",
           mcp["url"] == "https://api.githubcopilot.com/mcp/" and mcp["auth_value"] == "credential:github/gh"
@@ -189,6 +192,38 @@ async def main():
     check("per_repo layout keeps the page template",
           "context/<repo-name>.md" in per_repo and "Page template" in per_repo)
     check("existing layout has no per-repo template", "Page template" not in prompt)
+    check("token, every commit: the trigger counts commits only (sources also report PRs)",
+          trig["filters"] == [{"field": "event_type", "op": "eq", "value": "commit"}], json.dumps(trig))
+    prs = template.plan(template.validate({**base, "trigger": "every_merged_pr"}))
+    ptrig = next(o for o in prs if o.kind == "trigger").spec
+    check("token, every merged PR: per-repo sources, trigger on pull_request + merged",
+          [o.kind for o in prs].count("source") == 2
+          and ptrig["filters"] == [{"field": "event_type", "op": "eq", "value": "pull_request"},
+                                   {"field": "action", "op": "eq", "value": "merged"}], json.dumps(ptrig))
+    pprompt = next(o for o in prs if o.kind == "agent").spec["prompt"]
+    check("merged PR prompt reads the PR and its files",
+          "github__get_pull_request_files" in pprompt and "merged pull requests" in pprompt)
+
+    print("== plan with a GitHub App ==")
+    app_params = {**template.validate(base), "app_source": "github"}
+    app_plan = template.plan(app_params)
+    akinds = [o.kind for o in app_plan]
+    atrig = next(o for o in app_plan if o.kind == "trigger").spec
+    check("App: no source per repo; trigger on the App's one source",
+          "source" not in akinds and atrig["sources"] == ["github"], str(akinds))
+    check("App, every commit: pushes to the default branch of the watched repos",
+          atrig["filters"] == [{"field": "repo", "op": "in", "value": ["acme/app", "acme/lib"]},
+                               {"field": "event_type", "op": "eq", "value": "push"},
+                               {"field": "on_default_branch", "op": "eq", "value": "true"}],
+          json.dumps(atrig["filters"]))
+    app_prs = template.plan({**app_params, "trigger": "every_merged_pr"})
+    atrig2 = next(o for o in app_prs if o.kind == "trigger").spec
+    check("App, every merged PR: repo in + pull_request + merged",
+          atrig2["filters"][0]["op"] == "in" and atrig2["filters"][1:] == [
+              {"field": "event_type", "op": "eq", "value": "pull_request"},
+              {"field": "action", "op": "eq", "value": "merged"}], json.dumps(atrig2["filters"]))
+    aprompt = next(o for o in app_plan if o.kind == "agent").spec["prompt"]
+    check("App push prompt reads each push's commits", "push to a repository" in aprompt)
     check("no em dashes in prompt", "—" not in prompt)
     direct = template.render_prompt(template.validate({**base, "write_mode": "commit_to_branch"}))
     check("commit_to_branch prompt has no PR step",
@@ -217,8 +252,8 @@ async def main():
             check("create -> 201", r.status_code == 201, r.text)
             inst = r.json()
             uid = inst["id"]
-            check("instance active with 6 objects, none missing",
-                  inst["status"] == "active" and len(inst["objects"]) == 6
+            check("instance active with 5 objects, none missing",
+                  inst["status"] == "active" and len(inst["objects"]) == 5
                   and not any(o["missing"] for o in inst["objects"]), json.dumps(inst)[:400])
 
             r = await cx.get("/api/sources")
@@ -257,9 +292,8 @@ async def main():
             check("connector fetched files per commit",
                   any(p == "/repos/acme/app/commits/bbb2222bbb" for p, _ in STATE["calls"]))
 
-            r = await cx.post("/query", json={"view": "ctx_acme_context_repo_activity",
-                                              "key": "acme/app", "window": "24h",
-                                              "include_payload": True})
+            r = await cx.post("/read", json={"project": uid, "selector": {"repo": "acme/app"},
+                                             "window": "24h", "include_payload": True})
             rows = r.json().get("rows") or r.json().get("events") or []
             payloads = {x.get("raw", {}).get("sha"): x.get("raw", {}) for x in rows if isinstance(x, dict)}
             big = payloads.get("bbb2222bbb") or {}
@@ -290,9 +324,9 @@ async def main():
             names_now = {x["name"] for x in r.json()}
             check("sources reflect the new list",
                   "ctx_acme_context_acme_app" not in names_now and "ctx_acme_context_acme_context2" in names_now)
-            r = await cx.get("/api/views")
-            v = next(x for x in r.json() if x["name"] == "ctx_acme_context_repo_activity")
-            check("view sources follow", set(v["sources"]) == {"ctx_acme_context_acme_lib", "ctx_acme_context_acme_context2"}, json.dumps(v))
+            r = await cx.get("/api/triggers")
+            v = next(x for x in r.json() if x["name"] == "ctx_acme_context_changes")
+            check("trigger sources follow", set(v["sources"]) == {"ctx_acme_context_acme_lib", "ctx_acme_context_acme_context2"}, json.dumps(v))
 
             print("== bootstrap hook ==")
             from tares.builtin_agents import AgentRunner
@@ -303,8 +337,7 @@ async def main():
             runner = runtime.dispatcher.agents
             before = len(app.state.store.list_agent_runs("ctx_acme_context_maintainer", limit=50))
             runner.bootstrap("ctx_acme_context_maintainer", "ctx_acme_context_changes",
-                             "ctx_acme_context_repo_activity", ["acme/lib", "acme/nothing"],
-                             window="7d", delay_s=0)
+                             ["acme/lib", "acme/nothing"], window="7d", delay_s=0)
             for _ in range(40):
                 await asyncio.sleep(0.25)
                 runs = app.state.store.list_agent_runs("ctx_acme_context_maintainer", limit=50)
@@ -320,7 +353,8 @@ async def main():
                   json.dumps(log)[:300])
 
             print("== delete ==")
-            r = await cx.delete(f"/api/projects/{uid}?purge_events=true")
+            srcs = ",".join(o["name"] for o in (await cx.get(f"/api/projects/{uid}")).json()["objects"] if o["kind"] == "source")
+            r = await cx.delete(f"/api/projects/{uid}?purge_events=true&delete_sources={srcs}")
             check("delete -> 200", r.status_code == 200, r.text)
             r = await cx.get("/api/sources")
             check("owned sources gone", not any(x["name"].startswith("ctx_acme_context_") for x in r.json()))

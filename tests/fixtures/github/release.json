@@ -1,0 +1,31 @@
+{
+ "action": "published",
+ "release": {
+  "tag_name": "v1.7.1",
+  "name": "1.7.1",
+  "author": {
+   "login": "alice"
+  },
+  "html_url": "https://github.com/acme/app/releases/tag/v1.7.1",
+  "published_at": "2026-10-01T12:00:00Z"
+ },
+ "repository": {
+  "id": 1,
+  "full_name": "acme/app",
+  "name": "app",
+  "owner": {
+   "login": "acme"
+  },
+  "private": true,
+  "html_url": "https://github.com/acme/app",
+  "default_branch": "main"
+ },
+ "installation": {
+  "id": 101,
+  "node_id": "x"
+ },
+ "sender": {
+  "login": "alice",
+  "type": "User"
+ }
+}

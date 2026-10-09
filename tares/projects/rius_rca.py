@@ -8,7 +8,7 @@ server and the write-back webhook POSTs the finding to Rius's callback, keyed by
 Every knob here is the hand-built configuration proven on a live cell on 2026-09-01 (TR-223
 comment: run_7a954505c5c7 and friends — 4/4 green against staging Rius), with the five traps from
 that session baked in:
-  1. the KEY is stamped at ingest by the source's PRIMARY LABEL, never by view.key_field
+  1. the KEY is stamped at ingest by the source's PRIMARY LABEL, never by a trigger's key_field
      (TR-226/TR-228). The entity is the SERVICE (TR-285): a delivery id is new on every firing,
      so a cooldown keyed by it never held and one noisy service woke the agent on every alert;
      keyed by service, one investigation per service per 5 minutes, and the timeline the agent
@@ -28,7 +28,6 @@ from .base import PlannedObject, ProjectError, Template
 from .registry import register
 
 SOURCE = "rius_alerts"
-VIEW = "rius_alerts_view"
 TRIGGER = "rius_alert_fired"
 AGENT = "rius_rca_agent"
 MCP = "rius"
@@ -68,6 +67,7 @@ class RiusRca(Template):
     description = ("Root-cause analysis for a Rius workspace: alert firings flow in, the agent "
                    "investigates over the Rius MCP server, and the report posts back to Rius.")
     tags = ("partner",)
+    GOAL = "Find the root cause of each Rius alert and report it back to Rius."
     # Hidden from the console's template gallery: this template is created by the Rius control
     # plane over the API, not picked by a person browsing cards.
     hidden = True
@@ -84,6 +84,8 @@ class RiusRca(Template):
                            "help": "bearer token for the callback POST"},
         "budget_usd": {"type": "number", "default": None, "label": "Budget (USD)",
                        "help": "lifetime spend cap for the agent; empty = no cap"},
+        "daily_cap": {"type": "number", "default": None, "label": "Daily run cap",
+                      "help": "runs per rolling 24h for the agent; empty = the instance-wide cap (50)"},
         "max_rounds": {"type": "number", "default": 10, "label": "Max rounds",
                        "help": "model rounds per run; a real MCP investigation uses 3 to 5"},
         "model": {"type": "string", "default": "", "label": "Model",
@@ -103,6 +105,15 @@ class RiusRca(Template):
                 raise ProjectError(f"{self.key}: budget_usd must be positive")
         else:
             p["budget_usd"] = None
+        if p.get("daily_cap") not in (None, ""):
+            try:
+                p["daily_cap"] = int(str(p["daily_cap"]).strip())
+            except ValueError:
+                raise ProjectError(f"{self.key}: daily_cap must be a whole number")
+            if p["daily_cap"] <= 0:
+                raise ProjectError(f"{self.key}: daily_cap must be positive")
+        else:
+            p["daily_cap"] = None
         p["max_rounds"] = int(p.get("max_rounds") or 10)
         return p
 
@@ -124,12 +135,11 @@ class RiusRca(Template):
                         {"name": "rule", "field": "rule"},
                     ],
                 }}),
-            PlannedObject("view", "view", {
-                "name": VIEW, "key_field": "service", "sources": [SOURCE]}),
             # one investigation per service per 5 minutes: a service that keeps alerting does
             # not wake the agent again until the cooldown is over (TR-285)
             PlannedObject("trigger", "trigger", {
-                "name": TRIGGER, "view": VIEW,
+                "name": TRIGGER, "sources": [SOURCE], "key_field": "service",
+                "description": "Rius sends an alert for a service",
                 "condition": {"aggregate": "count", "predicate": "> 0", "window": "5m"},
                 "cooldown": "5m"}),
             PlannedObject("mcp_server", "mcp", {
@@ -146,6 +156,8 @@ class RiusRca(Template):
                  "max_rounds": p["max_rounds"], "enabled": True}
         if p.get("budget_usd") is not None:
             agent["budget_usd"] = p["budget_usd"]
+        if p.get("daily_cap") is not None:
+            agent["daily_cap"] = p["daily_cap"]
         if p.get("model"):
             agent["model"] = p["model"]
         objs.append(PlannedObject("agent", "agent", agent))

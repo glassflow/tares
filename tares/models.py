@@ -136,7 +136,10 @@ class Provider:
     kind = ""
 
     async def complete(self, *, model: str, system: str, tools: list, messages: list,
-                       max_tokens: int, tools_allowed: bool = True, tracer=None) -> ModelReply:
+                       max_tokens: int, tools_allowed: bool = True, tracer=None,
+                       tool_choice: str | None = None) -> ModelReply:
+        """`tool_choice`: None lets the model choose, "any" makes it call some tool, a tool's
+        name makes it call that one (the project setup's propose_plan)."""
         raise NotImplementedError
 
     def stream(self, *, model: str, system: str, tools: list, messages: list,
@@ -190,20 +193,25 @@ class AnthropicProvider(Provider):
         return ModelReply(text=text, tool_calls=calls, usage=usage, model=msg.get("model"),
                           stop_reason=msg.get("stop_reason"), raw=content)
 
-    def _body(self, model, system, tools, messages, max_tokens, tools_allowed) -> dict:
+    def _body(self, model, system, tools, messages, max_tokens, tools_allowed,
+              tool_choice=None) -> dict:
         # The tools stay declared even when disabled (a conversation holding tool_use blocks
         # must define them); tool_choice none is what disables them.
         body = {"model": model, "max_tokens": max_tokens, "system": system,
                 "tools": tools, "messages": self.render(messages)}
         if not tools_allowed:
             body["tool_choice"] = {"type": "none"}
+        elif tool_choice == "any":
+            body["tool_choice"] = {"type": "any"}
+        elif tool_choice:
+            body["tool_choice"] = {"type": "tool", "name": tool_choice}
         return body
 
     async def complete(self, *, model, system, tools, messages, max_tokens,
-                       tools_allowed=True, tracer=None) -> ModelReply:
-        body = self._body(model, system, tools, messages, max_tokens, tools_allowed)
+                       tools_allowed=True, tracer=None, tool_choice=None) -> ModelReply:
+        body = self._body(model, system, tools, messages, max_tokens, tools_allowed, tool_choice)
         with _tracing.generation(tracer, model, body["messages"], {"max_tokens": max_tokens},
-                                 provider=self.kind) as gen:
+                                 provider=self.kind, tools=tools) as gen:
             async with httpx.AsyncClient(timeout=self.timeout) as cx:
                 r = await cx.post(f"{self.base_url}/v1/messages", headers=self.headers, json=body)
             if r.status_code >= 400:
@@ -225,7 +233,7 @@ class AnthropicProvider(Provider):
         client = anthropic.AsyncAnthropic(base_url=self.base_url, default_headers=self.headers)
         wire = self.render(messages)
         with _tracing.generation(tracer, model, wire, {"max_tokens": max_tokens},
-                                 provider=self.kind) as gen:
+                                 provider=self.kind, tools=tools) as gen:
             async with client.messages.stream(model=model, max_tokens=max_tokens, system=system,
                                               tools=tools, messages=wire) as stream:
                 async for event in stream:
@@ -342,13 +350,18 @@ class OpenAIProvider(Provider):
             usage["cost_usd"] = float(cost)
         return usage
 
-    def _body(self, model, system, tools, messages, max_tokens, tools_allowed, stream) -> dict:
+    def _body(self, model, system, tools, messages, max_tokens, tools_allowed, stream,
+              tool_choice=None) -> dict:
         body = {"model": model, "max_tokens": max_tokens,
                 "messages": self.render(system, messages)}
         if tools:
             body["tools"] = self.render_tools(tools)
             if not tools_allowed:
                 body["tool_choice"] = "none"
+            elif tool_choice == "any":
+                body["tool_choice"] = "required"
+            elif tool_choice:
+                body["tool_choice"] = {"type": "function", "function": {"name": tool_choice}}
         if stream:
             body["stream"] = True
             body["stream_options"] = {"include_usage": True}
@@ -362,10 +375,11 @@ class OpenAIProvider(Provider):
         return blocks
 
     async def complete(self, *, model, system, tools, messages, max_tokens,
-                       tools_allowed=True, tracer=None) -> ModelReply:
-        body = self._body(model, system, tools, messages, max_tokens, tools_allowed, False)
+                       tools_allowed=True, tracer=None, tool_choice=None) -> ModelReply:
+        body = self._body(model, system, tools, messages, max_tokens, tools_allowed, False,
+                          tool_choice)
         with _tracing.generation(tracer, model, body["messages"], {"max_tokens": max_tokens},
-                                 provider=self.kind) as gen:
+                                 provider=self.kind, tools=tools) as gen:
             async with httpx.AsyncClient(timeout=self.timeout) as cx:
                 r = await cx.post(f"{self.base_url}/chat/completions", headers=self.headers,
                                   json=body)
@@ -381,7 +395,7 @@ class OpenAIProvider(Provider):
     async def stream(self, *, model, system, tools, messages, max_tokens, tracer=None):
         body = self._body(model, system, tools, messages, max_tokens, True, True)
         with _tracing.generation(tracer, model, body["messages"], {"max_tokens": max_tokens},
-                                 provider=self.kind) as gen:
+                                 provider=self.kind, tools=tools) as gen:
             text_parts: list[str] = []
             calls: dict[int, dict] = {}       # index -> {id, name, arguments (str so far)}
             finish = resp_model = None

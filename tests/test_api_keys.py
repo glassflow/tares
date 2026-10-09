@@ -1,5 +1,5 @@
 """Scoped API keys — create/list/revoke via /api/keys, and scope enforcement across the surface:
-read (queries, catalog reads, derive/subscribe), ingest (/ingest, /v1/*, remember), admin (CRUD,
+read (reads, catalog reads, subscribe), ingest (/ingest, /v1/*, remember), admin (CRUD,
 credentials, keys). Env tokens act as implicit root keys. Revoking a key removes its subscriptions.
 """
 import asyncio, os, subprocess, sys
@@ -17,13 +17,10 @@ with open(SEED, "w") as fh:
     connector: webhook
     poll: 5s
     config: {}
-views:
-  - name: v_evt
-    key_field: key_value
-    sources: [evt]
 triggers:
   - name: t_evt
-    view: v_evt
+    sources: [evt]
+    key_field: key_value
     condition: {aggregate: max, field: value, predicate: "> 1.0", window: 1m}
 """)
 DB, PORT = "/tmp/keys.duckdb", "8806"
@@ -76,18 +73,28 @@ async def main():
                (await cx.get(f"{B}/api/keys", headers=H(read_key))).status_code == 403)
 
             # ── read scope ──
-            ck("read key: /query ok",
-               (await cx.post(f"{B}/query", json={"view": "v_evt", "key": "k"}, headers=H(read_key))).status_code == 200)
+            ck("read key: /read ok",
+               (await cx.post(f"{B}/read", json={"selector": {"key_value": "k"}},
+                              headers=H(read_key))).status_code == 200)
             ck("read key: catalog ok", (await cx.get(f"{B}/catalog", headers=H(read_key))).status_code == 200)
             ck("read key: sources list ok", (await cx.get(f"{B}/api/sources", headers=H(read_key))).status_code == 200)
             ck("read key: create source denied -> 403",
                (await cx.post(f"{B}/api/sources", json={"name": "n", "connector": "webhook", "config": {}},
                               headers=H(read_key))).status_code == 403)
+            # every write outside a short read list is admin (the read scope used to reach these)
+            for m, path, body in (("POST", "/api/projects", {"template": "custom", "name": "x", "objects": []}),
+                                  ("DELETE", "/api/projects/uc_nope", None),
+                                  ("POST", "/api/mcp-servers", {"name": "m", "url": "http://x"}),
+                                  ("POST", "/api/integrations/github", {"name": "g", "token": "t"}),
+                                  ("PUT", "/api/ask/sessions/s1", {}),
+                                  ("POST", "/api/projects/templates/custom/detect", {})):
+                r = await cx.request(m, f"{B}{path}", json=body, headers=H(read_key))
+                ck(f"read key: {m} {path} -> 403", r.status_code == 403, f"{r.status_code} {r.text[:120]}")
             ck("read key: cannot ingest -> 403 (authenticated, lacks ingest scope)",
                (await cx.post(f"{B}/ingest/evt", json={"m": 1}, headers=H(read_key))).status_code == 403)
-            ck("read key: derive ok",
-               (await cx.post(f"{B}/derive", json={"key_field": "key_value", "sources": ["evt"], "client": "t"},
-                              headers=H(read_key))).status_code == 201)
+            ck("read key: /read narrowed to sources ok",
+               (await cx.post(f"{B}/read", json={"selector": {"key_value": "k"}, "sources": ["evt"]},
+                              headers=H(read_key))).status_code == 200)
             sub = await cx.post(f"{B}/subscribe", json={"trigger": "t_evt", "url": "http://x/hook"},
                                 headers=H(read_key))
             ck("read key: subscribe ok", sub.status_code == 200, sub.text)
@@ -97,8 +104,9 @@ async def main():
                (await cx.post(f"{B}/ingest/evt", json={"m": 1}, headers=H(ing_key))).status_code == 202)
             ck("ingest key: remember ok",
                (await cx.post(f"{B}/remember", json={"key": "k", "content": "obs"}, headers=H(ing_key))).status_code == 202)
-            ck("ingest key: /query denied -> 403",
-               (await cx.post(f"{B}/query", json={"view": "v_evt", "key": "k"}, headers=H(ing_key))).status_code == 403)
+            ck("ingest key: /read denied -> 403",
+               (await cx.post(f"{B}/read", json={"selector": {"key_value": "k"}},
+                              headers=H(ing_key))).status_code == 403)
             ck("read+ingest key: both work",
                (await cx.post(f"{B}/ingest/evt", json={"m": 2}, headers=H(both_key))).status_code == 202
                and (await cx.get(f"{B}/catalog", headers=H(both_key))).status_code == 200)

@@ -1,6 +1,6 @@
 """Tares agents — a prompt attached to a trigger writes a finding back onto the entity's timeline.
 
-End-to-end against a stub Anthropic endpoint (TARES_ANTHROPIC_BASE): create source/view/trigger/
+End-to-end against a stub Anthropic endpoint (TARES_ANTHROPIC_BASE): create source/trigger/
 agent, enable it (= subscribe to the trigger), ingest until the trigger fires, and assert the agent
 runs as a unified subscriber — it appears in the roster and the firing's deliveries, the finding
 lands in the `findings` source, and the boundaries hold (disabled agents don't run, the loop guard
@@ -27,10 +27,10 @@ with open(SEED, "w") as fh:
         "sources:\n  - name: evt\n    connector: webhook\n    poll: 5s\n"
         "    config:\n      labels:\n        - name: service\n          field: service\n"
         "          primary: true\n"
-        "views:\n  - name: svc\n    key_field: service\n    sources: [evt]\n"
         # short cooldown: the first batch below fires while the agent is still disabled, and the
         # second must be able to fire again straight after it's enabled
-        "triggers:\n  - name: incident\n    view: svc\n    cooldown: 1s\n"
+        "triggers:\n  - name: incident\n    sources: [evt]\n    key_field: service\n"
+        "    cooldown: 1s\n"
         "    condition:\n      aggregate: count\n      predicate: '>= 2'\n      window: 1m\n")
 
 DB, PORT, STUB_PORT = "/tmp/agents.duckdb", "8806", "8807"
@@ -320,10 +320,9 @@ async def main():
                and fnd[0]["raw"].get("agent") == "first-look", str(fnd)[:200])
 
             # ── the loop guard: an agent may not be woken by findings ────────
-            await cx.post(f"{B}/api/views", json={"name": "loop", "key_field": "service",
-                                                  "sources": ["evt", "findings"]})
             await cx.post(f"{B}/api/triggers", json={
-                "name": "loopy", "view": "loop", "cooldown": "5m",
+                "name": "loopy", "sources": ["evt", "findings"], "key_field": "service",
+                "cooldown": "5m",
                 "condition": {"aggregate": "count", "predicate": ">= 1", "window": "1m"}})
             r = await cx.post(f"{B}/api/agents/builtin", json={
                 "name": "recursive", "trigger": "loopy", "prompt": "x"})
@@ -447,8 +446,7 @@ async def main():
             r = await cx.post("/api/catalog/import", json={"yaml": (
                 "sources:\n  - name: evt2\n    connector: webhook\n    poll: 5s\n"
                 "    config: {event_type: log, text_template: '{msg}', labels: [{name: service, const: checkout, primary: true}]}\n"
-                "views:\n  - name: svc2\n    key_field: service\n    sources: [evt2]\n"
-                "triggers:\n  - name: incident2\n    view: svc2\n"
+                "triggers:\n  - name: incident2\n    sources: [evt2]\n    key_field: service\n"
                 "    condition: {aggregate: count, predicate: '>= 2', window: 1m, group_by: [key_value]}\n"
                 "    cooldown: 1s\n")})
             ck("budget fixture catalog imported", r.status_code == 200, r.text[:200])
@@ -477,7 +475,7 @@ async def main():
             ck("the capped run cost nothing", not rs[0].get("cost_usd"), str(rs[0].get("cost_usd")))
             # deleting a trigger takes its subscriptions with it
             r = await cx.post("/api/catalog/import", json={"yaml": (
-                "triggers:\n  - name: doomed\n    view: svc2\n"
+                "triggers:\n  - name: doomed\n    sources: [evt2]\n"
                 "    condition: {aggregate: count, predicate: '>= 2', window: 1m, group_by: [key_value]}\n"
                 "    cooldown: 1s\n")})
             r = await cx.post("/subscribe", json={"trigger": "doomed", "url": "https://x.example/hook"})

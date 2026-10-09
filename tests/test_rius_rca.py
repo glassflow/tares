@@ -20,6 +20,8 @@ os.environ["TARES_CATALOG"] = CATALOG
 
 import httpx
 
+import tares.builtin_agents as ba
+
 PASS = FAIL = 0
 
 
@@ -29,6 +31,13 @@ def check(label, cond, detail=""):
         PASS += 1; print(f"  ok   {label}")
     else:
         FAIL += 1; print(f"  FAIL {label}  {detail}")
+
+
+class Settings:
+    """No console setting: the instance-wide cap falls to the env, else the default."""
+
+    def get_setting(self, k):
+        return None
 
 
 PARAMS = {
@@ -51,6 +60,10 @@ async def main():
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as cx:
+
+            async def agent():
+                return {a["name"]: a for a in
+                        (await cx.get("/api/agents/builtin")).json()["agents"]}["rius_rca_agent"]
 
             print("== template registration ==")
             r = await cx.get("/api/projects/templates")
@@ -75,6 +88,11 @@ async def main():
             r = await cx.post("/api/projects", json={"template": "rius_rca", "name": "r1",
                                                      "params": bad})
             check("negative budget -> 400", r.status_code == 400, r.text)
+            for cap in (0, -5, "lots", 2.5, True):
+                r = await cx.post("/api/projects", json={"template": "rius_rca", "name": "r1",
+                                                         "params": dict(PARAMS, daily_cap=cap)})
+                check(f"daily_cap {cap!r} -> 400", r.status_code == 400
+                      and "daily_cap" in r.text, r.text)
 
             print("== create ==")
             r = await cx.post("/api/projects", json={"template": "rius_rca",
@@ -82,7 +100,7 @@ async def main():
             check("create -> 201", r.status_code == 201, r.text[:300])
             inst = r.json(); uid = inst["id"]
             kinds = sorted(o["kind"] for o in inst["objects"])
-            check("five objects", kinds == ["agent", "mcp_server", "source", "trigger", "view"],
+            check("four objects, no view", kinds == ["agent", "mcp_server", "source", "trigger"],
                   str(kinds))
 
             print("== the five traps stay fixed ==")
@@ -93,10 +111,10 @@ async def main():
                   labels.get("service", {}).get("primary") is True
                   and labels.get("delivery_id", {}).get("primary") is not True, str(labels))
             check("rule and delivery id are labels", "rule" in labels and "delivery_id" in labels, str(labels))
-            views = {v["name"]: v for v in (await cx.get("/api/views")).json()}
-            check("view keyed by service", views.get("rius_alerts_view", {}).get("key_field") == "service",
-                  str(views.get("rius_alerts_view")))
             trig = {t["name"]: t for t in (await cx.get("/api/triggers")).json()}.get("rius_alert_fired", {})
+            check("trigger reads the alerts source, keyed by service",
+                  trig.get("sources") == ["rius_alerts"] and trig.get("key_field") == "service"
+                  and trig.get("project") == uid, str(trig))
             check("one investigation per service per 5 minutes", trig.get("cooldown") == "5m", str(trig))
             tmpl = (src.get("config") or {}).get("text_template", "")
             check("text template carries the query identifiers",
@@ -107,6 +125,12 @@ async def main():
             check("agent enabled", ag["enabled"] is True)
             check("max_rounds 10", ag["max_rounds"] == 10, str(ag.get("max_rounds")))
             check("budget passed through", ag["budget_usd"] == 5.0, str(ag.get("budget_usd")))
+            os.environ.pop(ba.DAILY_CAP_ENV, None)
+            check("no daily_cap: the agent carries none", ag.get("daily_cap") is None,
+                  str(ag.get("daily_cap")))
+            check("no daily_cap: the run cap stays 50",
+                  ba.effective_daily_cap(ag, Settings()) == (50, "default"),
+                  str(ba.effective_daily_cap(ag, Settings())))
             check("callback wired", ag["webhook_url"] == PARAMS["callback_url"]
                   and ag["webhook_token_configured"] is True, str(ag.get("webhook_url")))
             check("mcp server attached", ag["mcp_servers"] == ["rius"], str(ag.get("mcp_servers")))
@@ -118,6 +142,30 @@ async def main():
             check("mcp auth configured, not echoed",
                   mcp["auth_value_configured"] is True and not mcp.get("auth_value"),
                   str(mcp)[:200])
+
+            print("== an update re-plans daily_cap onto the agent (RIUS-1101) ==")
+            r = await cx.put(f"/api/projects/{uid}", json={"params": dict(PARAMS, daily_cap=7)})
+            check("update -> 200", r.status_code == 200, r.text[:300])
+            ag = await agent()
+            check("daily_cap 7 reaches the agent", ag.get("daily_cap") == 7, str(ag.get("daily_cap")))
+            check("and is the cap the run is held to",
+                  ba.effective_daily_cap(ag, Settings()) == (7, "agent"),
+                  str(ba.effective_daily_cap(ag, Settings())))
+            r = await cx.put(f"/api/projects/{uid}", json={"params": dict(PARAMS, daily_cap="12")})
+            ag = await agent()
+            check("a numeric string is accepted", r.status_code == 200 and ag.get("daily_cap") == 12,
+                  f"{r.status_code} {ag.get('daily_cap')}")
+            r = await cx.put(f"/api/projects/{uid}", json={"params": dict(PARAMS, daily_cap=0)})
+            ag = await agent()
+            check("an update to 0 -> 400, the cap is untouched",
+                  r.status_code == 400 and ag.get("daily_cap") == 12,
+                  f"{r.status_code} {ag.get('daily_cap')}")
+            r = await cx.put(f"/api/projects/{uid}", json={"params": PARAMS})
+            ag = await agent()
+            check("dropping daily_cap goes back to 50", r.status_code == 200
+                  and ag.get("daily_cap") is None
+                  and ba.effective_daily_cap(ag, Settings()) == (50, "default"),
+                  f"{r.status_code} {ag.get('daily_cap')}")
 
             print("== ingest stamps the service as the key ==")
             body = {"delivery_id": "dlv-test-001", "alert_id": "al-1", "workspace_id": "ws-1",
@@ -145,7 +193,7 @@ async def main():
                   and rows.get("reports go to") == PARAMS["callback_url"], str(rows))
 
             print("== delete releases nothing weird ==")
-            r = await cx.delete(f"/api/projects/{uid}", params={"purge": "true"})
+            r = await cx.delete(f"/api/projects/{uid}", params={"purge": "true", "delete_sources": "all"})
             check("delete -> 200", r.status_code == 200, r.text[:200])
             names = {s["name"] for s in (await cx.get("/api/sources")).json()}
             check("source gone", "rius_alerts" not in names, str(names))

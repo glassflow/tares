@@ -233,7 +233,7 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
       if (!attachments.length) throw new Error("add at least one document");
       if (!name.trim()) throw required("name");
       // declare the union of label names as real Tares labels, so the source's Labels panel shows
-      // them and views can correlate on them (field maps to the payload label surfaced by label_context)
+      // them and triggers can correlate on them (field maps to the payload label surfaced by label_context)
       const labelNames = [...new Set(refAttachments.flatMap(
         (a) => a.labels.map(([k]) => k.trim()).filter(Boolean)))];
       const cfg: Record<string, unknown> = { attachments };
@@ -797,7 +797,7 @@ export default function SourceForm({ connector, spec, initial, lockName, highlig
         <div className="fld-row">
           <div className="fld-meta">
             <span className="lbl">kind of event</span>
-            <span className="help">the word views filter on and triggers count by</span>
+            <span className="help">the word triggers filter on and count by</span>
           </div>
           <div className="fld-ctrl">
             <div className="kv-row">

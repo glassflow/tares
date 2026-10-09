@@ -88,17 +88,21 @@ def part1():
     tr = T.Tracing(st, exporter_factory=factory)
     tracer = tr.tracer_for("first-look")
     ck("tracer built when active", tracer is not None)
-    with T.run_span(tracer, "first-look", session="checkout",
+    TOOLS = [{"name": "read", "description": "read a timeline",
+              "input_schema": {"type": "object", "properties": {"selector": {"type": "object"}}}}]
+    with T.run_span(tracer, "first-look", session="checkout", agent="first-look",
                     attributes={"tares.run_id": "run_1", "tares.dispatch_id": ""}) as obs:
         obs.set_input("timeline")
         with T.generation(tracer, "claude-sonnet-4-6",
-                          [{"role": "user", "content": "hi"}], {"max_tokens": 10}) as gen:
+                          [{"role": "user", "content": "hi"}], {"max_tokens": 10},
+                          tools=TOOLS) as gen:
             gen.set_output([{"type": "text", "text": "ok"},
                             {"type": "tool_use", "id": "t1", "name": "read", "input": {"a": 1}}])
             gen.set_usage({"input_tokens": 100, "output_tokens": 50, "cache_read_input_tokens": 7})
             gen.set_response_model("claude-sonnet-4-6-x")
             gen.set_finish_reason("tool_use")
-        with T.tool_span(tracer, "read", {"selector": {"service": "checkout"}}) as tobs:
+        with T.tool_span(tracer, "read", {"selector": {"service": "checkout"}},
+                         call_id="t1") as tobs:
             tobs.set_output("payload")
         obs.set_output("the finding")
         obs.set_attribute("tares.status", "ok")
@@ -115,6 +119,17 @@ def part1():
     ck("empty attributes are dropped", "tares.dispatch_id" not in root.attributes, str(root.attributes))
     ck("session.id on every span", all(s.attributes.get("session.id") == "checkout" for s in spans),
        str([s.attributes.get("session.id") for s in spans]))
+    ck("gen_ai.agent.name + version on every span",
+       all(s.attributes.get("gen_ai.agent.name") == "first-look"
+           and s.attributes.get("gen_ai.agent.version") for s in spans),
+       str([s.attributes.get("gen_ai.agent.name") for s in spans]))
+    ck("rius.main_agent.name on every span",
+       all(s.attributes.get("rius.main_agent.name") == "first-look" for s in spans),
+       str([s.attributes.get("rius.main_agent.name") for s in spans]))
+    ck("user.id is the instance on every span", all(s.attributes.get("user.id") == "cell-a" for s in spans),
+       str([s.attributes.get("user.id") for s in spans]))
+    ck("service.version on the resource", root.resource.attributes.get("service.version") == T.tares_version(),
+       str(root.resource.attributes))
     ck("children nest under the root", all(s.parent and s.parent.span_id == root.context.span_id
                                            for s in spans if s is not root))
     llm = by["chat claude-sonnet-4-6"]
@@ -130,9 +145,20 @@ def part1():
     ck("tool_use block becomes a tool_call part", out[0]["role"] == "assistant"
        and out[0]["parts"][1] == {"type": "tool_call", "id": "t1", "name": "read", "arguments": {"a": 1}}, str(out))
     ck("request parameter recorded", a.get("gen_ai.request.max_tokens") == 10, str(a))
+    defs = json.loads(a.get("gen_ai.tool.definitions") or "[]")
+    ck("tool definitions on the llm span", defs == [{"type": "function", "name": "read",
+       "description": "read a timeline", "parameters": TOOLS[0]["input_schema"]}], str(defs))
+    many = [{"name": f"t{i}", "description": "d" * 400,
+             "input_schema": {"type": "object", "description": "x" * 400}} for i in range(100)]
+    slim = json.loads(T.tool_definitions_json(many))
+    ck("too many tools: still valid JSON naming every tool",
+       len(slim) == 100 and all("parameters" not in d for d in slim), str(slim[:1]))
     tool = by["read"]
     ck("tool span kind + name", tool.attributes.get("openinference.span.kind") == "TOOL"
        and tool.attributes.get("gen_ai.tool.name") == "read", str(tool.attributes))
+    ck("tool span: call id + gen_ai arguments", tool.attributes.get("gen_ai.tool.call.id") == "t1"
+       and json.loads(tool.attributes["gen_ai.tool.call.arguments"]) == {"selector": {"service": "checkout"}},
+       str(tool.attributes))
     # the provider attribute follows the adapter's kind (TR-305)
     with T.generation(tracer, "gpt-x", [{"role": "user", "content": "hi"}], provider="openai") as gen:
         gen.set_usage({"input_tokens": 1, "output_tokens": 1})
@@ -149,7 +175,8 @@ def part1():
     got = exporters[0].get_finished_spans()[-2:]
     tspan = next(s for s in got if s.name == "query"); rspan = next(s for s in got if s.name == "first-look")
     ck("tool error: flag + text on the tool span", tspan.attributes.get("tares.tool_error") is True
-       and "needs a key" in tspan.attributes.get("output.value", ""), str(tspan.attributes))
+       and "needs a key" in tspan.attributes.get("output.value", "")
+       and tspan.attributes.get("error.type") == "tool_error", str(tspan.attributes))
     ck("tool error: no ERROR status on the tool span", tspan.status.status_code.name != "ERROR", str(tspan.status))
     ck("tool error: run span stays unset", rspan.status.status_code.name == "UNSET", str(rspan.status))
 
@@ -292,8 +319,7 @@ async def part2():
             "sources:\n  - name: evt\n    connector: webhook\n    poll: 5s\n"
             "    config:\n      labels:\n        - name: service\n          field: service\n"
             "          primary: true\n"
-            "views:\n  - name: svc\n    key_field: service\n    sources: [evt]\n"
-            "triggers:\n  - name: incident\n    view: svc\n    cooldown: 1s\n"
+                "triggers:\n  - name: incident\n    sources: [evt]\n    key_field: service\n    cooldown: 1s\n"
             "    condition:\n      aggregate: count\n      predicate: '>= 2'\n      window: 1m\n")
     for p in (DB, DB + ".wal"):
         if os.path.exists(p):
@@ -353,7 +379,10 @@ async def part2():
                and _attr(root, "tares.run_id") == run["id"] and _attr(root, "tares.status") == "ok",
                str([(kv.key, kv.value) for kv in root.attributes]) if root else "no root")
             ck("root output is the finding", root is not None and _attr(root, "output.value") == FINDING)
-            ck("root session is the entity key", root is not None and _attr(root, "session.id") == "checkout")
+            ck("root session is the run's dispatch, not the entity key",
+               root is not None and _attr(root, "session.id") == run["dispatch_id"]
+               and _attr(root, "session.id") != "checkout", str(_attr(root, "session.id")) if root else "")
+            ck("every span names the agent", all(_attr(sp, "gen_ai.agent.name") == "first-look" for _s, sp in spans))
             ck("root carries the instance and agent as span attributes",
                root is not None and _attr(root, "tares.instance") == "local" and _attr(root, "tares.agent") == "first-look")
             ck("root records cost + calls", root is not None and _attr(root, "tares.model_calls") == 2)
@@ -361,12 +390,40 @@ async def part2():
             ck("one LLM span per model call", len(llms) == 2, str(len(llms)))
             ck("LLM spans carry usage", all(_attr(sp, "gen_ai.usage.input_tokens") == 100
                                            and _attr(sp, "gen_ai.usage.output_tokens") == 50 for sp in llms))
+            ck("LLM spans carry the tool definitions",
+               all("read" in [d["name"] for d in json.loads(_attr(sp, "gen_ai.tool.definitions") or "[]")] for sp in llms))
             ck("LLM spans carry the finish reason", all(_attr(sp, "gen_ai.response.finish_reasons") == ["end_turn"] for sp in llms))
             tools = [sp for svc, sp in spans if _attr(sp, "openinference.span.kind") == "TOOL"]
             ck("one TOOL span, named read", len(tools) == 1 and tools[0].name == "read"
                and _attr(tools[0], "gen_ai.tool.name") == "read", str([t.name for t in tools]))
             ck("tool span has the payload as output", bool(tools) and "checkout" in (_attr(tools[0], "output.value") or ""))
             ck("children share the root trace", all(sp.trace_id == root.trace_id for _s, sp in spans))
+
+            # ── the project builder traces as its own agent, one session per build (TR-298) ──
+            for step in ("sources", "watch"):
+                r = await cx.post(f"{B}/api/agent/chat", json={
+                    "messages": [{"role": "user", "content": f"build {step}"}],
+                    "mode": "build", "step": step, "session": "build-123"})
+                await r.aread()
+            r = await cx.post(f"{B}/api/agent/chat", json={
+                "messages": [{"role": "user", "content": "a question"}]})
+            await r.aread()
+            async def _built():
+                names = [sp.name for _s, sp in _spans()]
+                return names.count("project-builder") >= 2 and "ask" in names
+            ck("builder and Ask turns exported", await _until(_built), str([sp.name for _s, sp in _spans()]))
+            spans = _spans()
+            builds = [(svc, sp) for svc, sp in spans if sp.name == "project-builder"]
+            ck("builder: service.name <instance>/project-builder",
+               all(svc == "local/project-builder" for svc, _sp in builds), str([s for s, _ in builds]))
+            ck("builder: agent name, one session for the build, the step",
+               all(_attr(sp, "gen_ai.agent.name") == "project-builder"
+                   and _attr(sp, "session.id") == "build-123" for _s, sp in builds)
+               and {_attr(sp, "tares.build_step") for _s, sp in builds} == {"sources", "watch"},
+               str([(_attr(sp, "session.id"), _attr(sp, "tares.build_step")) for _s, sp in builds]))
+            ask = next((sp for svc, sp in spans if sp.name == "ask"), None)
+            ck("Ask keeps its name and has no session", ask is not None
+               and _attr(ask, "gen_ai.agent.name") == "ask" and _attr(ask, "session.id") is None)
 
             # ── switch off through the API; the next run exports nothing ────
             r = await cx.put(f"{B}/api/settings/tracing", json={"enabled": False})

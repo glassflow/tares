@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { useProjectName } from "./components/ProjectBadge";
+import { useOwnProjects } from "./components/readiness";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { api, auth } from "./api";
+import { useCloud, useWorkspaceOverview } from "./cloud";
 import CommandPalette from "./components/CommandPalette";
+import WorkspaceSwitcher from "./components/WorkspaceSwitcher";
 import {
-  Activity, Bolt, Book, Chat, ChevronRight, Database, Filter, GitHub, Grid, Lock, Moon,
+  Activity, Chat, ChevronRight, Database, GitHub, Grid, Lock, Moon,
   Settings, SignOut, Sun, Terminal, Zap,
 } from "./components/icons";
 import { applyTheme, currentTheme, type Theme } from "./theme";
@@ -22,24 +25,21 @@ type NavItem = {
   kbd?: string;     // keyboard-shortcut hint, e.g. "⌘K"
 };
 
-// Two named groups. Projects are the product, so they sit at the top with Overview and Ask;
+// Two named groups. Projects are the product, so they sit at the top with Ask (and Start, until
+// the person has a project of their own);
 // everything a project is made of is one flat Catalog group ordered along the pipeline
-// (sources feed views, views wake triggers, triggers run agents, agents leave firings).
+// (sources feed triggers, triggers run agents, agents leave firings).
 // The old Data / Automate split was mechanism vocabulary and is gone.
 const NAV_GROUPS: { section: string; items: NavItem[] }[] = [
   { section: "", items: [
-    { to: "/", end: true, label: "Overview", icon: Grid },
+    { to: "/start", label: "Start", icon: Grid },
     { to: "/projects", label: "Projects", icon: Zap },
     { to: "/ask", label: "Ask", icon: Chat, kbd: "⌘K" },
   ] },
   { section: "Catalog", items: [
     { to: "/sources", label: "Sources", icon: Database },
-    { to: "/views", label: "Views", icon: Book },
-    { to: "/triggers", label: "Triggers", icon: Bolt },
-    { to: "/agents", label: "Tares agents", icon: Chat },
-    { to: "/firings", label: "Firings", icon: Filter },
-    { to: "/mcp-servers", label: "MCP servers", icon: Terminal },
     { to: "/explore", label: "Explore", icon: Activity },
+    { to: "/resources", label: "All resources", icon: Grid },
   ] },
   { section: "Agent access", items: [
     { to: "/connect", label: "Connect", icon: Terminal },
@@ -50,7 +50,6 @@ const NAV_GROUPS: { section: string; items: NavItem[] }[] = [
 const SECTION_LABEL: Record<string, string> = {
   sources: "Sources",
   explore: "Explore",
-  views: "Views",
   triggers: "Triggers",
   agents: "Tares agents",
   firings: "Firings",
@@ -61,20 +60,22 @@ const SECTION_LABEL: Record<string, string> = {
   ask: "Ask",
   settings: "Settings",
   projects: "Projects",
+  resources: "All resources",
+  start: "Start",
 };
 
 type Crumb = { label: string; to?: string; mono?: boolean };
 
-/** Derive breadcrumbs from the current path. `/` is Overview; every section is a sibling of it,
+/** Derive breadcrumbs from the current path. Every section is a sibling of the others,
  *  so second-level pages link back to their own list (/sources/:name → Sources) rather than to
  *  the root the way they did when Sources *was* the root. */
 function useCrumbs(): Crumb[] {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const parts = pathname.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
   const projectId = parts[0] === "projects" && parts.length > 1 && parts[1] !== "new" ? decodeURIComponent(parts[1]) : undefined;
   const projectName = useProjectName(projectId);
 
-  if (parts.length === 0) return [{ label: "Overview" }];
+  if (parts.length === 0) return [];
 
   if (parts[0] === "sources") {
     if (parts.length === 1) return [{ label: "Sources" }];
@@ -90,7 +91,21 @@ function useCrumbs(): Crumb[] {
   if (parts[0] === "projects" && parts.length > 1) {
     const sub = decodeURIComponent(parts[1]);
     // the path carries the instance id; show its name once /api/projects has answered
-    const last: Crumb = sub === "new" ? { label: "Set up" } : { label: projectName?.name ?? "\u2026" };
+    const last: Crumb = sub === "new" ? { label: "New project" } : { label: projectName?.name ?? "\u2026" };
+    // the guided setup of a project that exists: Projects > name > Set up
+    if (sub !== "new" && parts[2] === "setup") {
+      return [{ label: "Projects", to: "/projects" }, { ...last, to: `/projects/${encodeURIComponent(sub)}` },
+              { label: "Set up" }];
+    }
+    // past the project's Overview: a result, How it works, or the full setup
+    const q = new URLSearchParams(search);
+    // old ?tab= and ?session= links land in the full setup too
+    const kind = sub === "new" ? undefined
+      : q.get("view")?.split(":")[0] || (q.get("tab") || q.get("session") ? "setup" : undefined);
+    if (kind && kind !== "overview") {
+      const here = kind === "result" ? "Result" : kind === "how" ? "Setup" : "Advanced setup";
+      return [{ label: "Projects", to: "/projects" }, { ...last, to: `/projects/${encodeURIComponent(sub)}` }, { label: here }];
+    }
     return [{ label: "Projects", to: "/projects" }, last];
   }
 
@@ -122,9 +137,12 @@ function Breadcrumbs() {
   );
 }
 
-function signOut() {
+/** Forget this console's key. On Tares Cloud (logout_url set, TR-377) then end the Tares Cloud
+ *  session too, which lands on its sign-in page; self-hosted, back to the login form. */
+function signOut(logoutUrl?: string) {
   auth.clear();
-  window.location.reload();
+  if (logoutUrl) window.location.assign(logoutUrl);
+  else window.location.reload();
 }
 
 function ThemeToggle() {
@@ -147,24 +165,39 @@ export default function App() {
   // Cloud only: the control-plane workspace this cell belongs to. Users, plan, storage and the
   // Slack app are managed there; the link is the missing half of Settings (TR-142). Self-host
   // sets no TARES_WORKSPACE_URL and never sees it.
-  const [workspaceUrl, setWorkspaceUrl] = useState<string>();
+  // With TARES_WORKSPACES_URL as well (TR-370), the top left is a workspace switcher and this
+  // link moves into it; an older control plane that only sets the workspace URL keeps it here.
+  // With TARES_WORKSPACE_API_URL (TR-375) the workspace is managed in Settings > Workspace, so the
+  // link out goes away whatever else is set.
+  const cloud = useCloud();
+  const workspaceUrl = cloud.switcher || cloud.health?.workspace_api_url
+    ? undefined : cloud.health?.workspace_url || undefined;
+  // Tares Cloud: who is signed in, from the control plane's view of this workspace (shared with
+  // Settings, loaded once). Nothing shows while it is unknown.
+  const logoutUrl = cloud.health?.logout_url || undefined;
+  const overview = useWorkspaceOverview(logoutUrl ? cloud.health?.workspace_api_url || undefined : undefined);
+  const email = overview.result?.status === "ok" ? overview.result.data.you?.email : undefined;
+  // Start is in the sidebar until the person has a project of their own (and while it is open)
+  const { own } = useOwnProjects();
+  const onStart = useLocation().pathname === "/start";
+  const showStart = onStart || (own !== undefined && own.length === 0);
   useEffect(() => {
     api.capabilities().then((c) => setVersion(c.version ?? null)).catch(() => {});
-    api.health().then((h) => setWorkspaceUrl(h.workspace_url || undefined)).catch(() => {});
   }, []);
   return (
     <>
       <nav className="sidebar">
-        <div className="brand">
+        <div className={"brand" + (cloud.switcher ? " with-switcher" : "")}>
           <img className="brand-mark" src="/tares-mark.svg" alt="Tares" />
           <span className="brand-word">tares</span>
         </div>
+        {cloud.switcher && <WorkspaceSwitcher cloud={cloud} />}
 
         {NAV_GROUPS.map(({ section, items }) => (
           <div className="nav-group" key={section}>
-            {/* Overview and Ask have no section heading: they sit above the groups. */}
+            {/* Start, Projects and Ask have no section heading: they sit above the groups. */}
             {section && <div className="nav-section">{section}</div>}
-            {items.map(({ to, end, label, icon: Icon, badge, locked, kbd }) => (
+            {items.filter((x) => x.to !== "/start" || showStart).map(({ to, end, label, icon: Icon, badge, locked, kbd }) => (
               <NavLink key={to} to={to} end={end} className={link}>
                 <Icon className="ico" />
                 <span className="nav-label">{label}</span>
@@ -191,8 +224,9 @@ export default function App() {
           </a>
         )}
         <ThemeToggle />
+        {logoutUrl && email && <div className="who" title={`Signed in as ${email}`}>{email}</div>}
         {auth.get() && (
-          <button className="navbtn" onClick={signOut}>
+          <button className="navbtn" onClick={() => signOut(logoutUrl)}>
             <SignOut className="ico" />
             <span className="nav-label">Sign out</span>
           </button>

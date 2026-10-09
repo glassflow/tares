@@ -31,8 +31,8 @@ type Part = { type: "text"; text: string } | ToolPart | { type: "proposal"; prop
 type Msg = { role: "user" | "assistant"; parts: Part[] };
 
 const ORGANIZE_PROMPT =
-  "Organize my data: inventory every source that has data, then propose the labels, keys and " +
-  "views that would let me correlate it. Check existing labels first and don't duplicate them.";
+  "Organize my data: inventory every source that has data, then propose the labels and keys " +
+  "that would let me correlate it across sources. Check existing labels first and don't duplicate them.";
 
 const STARTERS: { title: string; prompts: string[] }[] = [
   {

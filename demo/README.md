@@ -17,8 +17,8 @@ from this stack, exactly as it would read from your real systems.
                                     taresd ──▶ one correlated timeline + triggers
 ```
 
-Two files, no checkout needed: `docker-compose.yml` (the stack) and `catalog.demo.yaml` (Tares's
-view of it). The commands below curl them; from a checkout, run them from `demo/` instead.
+Two files, no checkout needed: `docker-compose.yml` (the stack) and `catalog.demo.yaml` (what
+Tares watches in it). The commands below curl them; from a checkout, run them from `demo/` instead.
 
 ## 1. Start the stack
 
@@ -39,8 +39,8 @@ curl -s 'localhost:9090/api/v1/query?query=up'   # prometheus is scraping
 Two ways to wire Tares to the stack: one click in the console, or the catalog file.
 
 **In the console:** start Tares (`tares up`), open **Projects**, pick the **AI SRE demo** template (tagged
-demo), click Start. That creates the same three sources, view, trigger and agent the catalog below
-does, and the project page gets a "Cause an incident" button so you never need `curl` for step 4.
+demo), click Start. That creates a project with the same three sources, trigger and agent the catalog
+below does, and the project page gets a "Cause an incident" button so you never need `curl` for step 4.
 
 **With the catalog file:**
 
@@ -50,7 +50,7 @@ directory:
 ```bash
 uv tool install tares          # or: pipx install tares  (or from source: uv pip install -e .)
 
-# seed the demo sources/views/triggers/agent and start the daemon + console
+# seed the demo sources, trigger and agent and start the daemon + console
 curl -O https://raw.githubusercontent.com/glassflow/tares/main/demo/catalog.demo.yaml
 export ANTHROPIC_API_KEY=sk-ant-…     # so the shipped Tares agent can run (or set one later in the console)
 TARES_CATALOG=catalog.demo.yaml tares up
@@ -67,10 +67,10 @@ or set one in the console → Settings); without a key it stays enabled but each
 ## 3. Look around
 
 - **Explore** — pick the `api-server` entity and watch metrics, logs, and the alerts Prometheus
-  fires merge into one time-ordered timeline. Flip **Agent view** to see the exact read an agent
+  fires merge into one time-ordered timeline. Flip **What the agent gets** to see the exact read an agent
   gets over MCP.
-- **Views / Triggers** — `service_timeline` is the saved read; the `incident` trigger watches it and
-  fires when Prometheus fires an alert, pushing the whole correlated timeline to a subscribed agent.
+- **Triggers**: the `incident` trigger watches the three demo sources together and fires when
+  Prometheus fires an alert, pushing the whole correlated timeline to a subscribed agent.
 
 Prometheus owns alerting here (the demo ships three rules — `HighErrorRate`, `HighLatency`,
 `DependencyDown`); Tares ingests the fired alerts (`prometheus_alerts`), correlates them, and wakes
@@ -118,5 +118,5 @@ delete that directory for a clean slate next time.
 - `docker-compose.build.yml` — override to build `api-server` from source instead of pulling.
 - `api-server/` — the monitored app (`app.py`): metrics, logs, and the `/demo/inject` fault switch.
   Published as `ghcr.io/glassflow/tares-demo-api-server`.
-- `catalog.demo.yaml` — Tares's view of the stack (sources, views, trigger, and the shipped agent).
+- `catalog.demo.yaml` — what Tares watches in the stack (sources, trigger, and the shipped agent).
 - `inject.sh` — cause/clear an incident.
