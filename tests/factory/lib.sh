@@ -20,6 +20,16 @@ start_tares() { # dir [token]
   echo "FAIL Tares did not start on $TARESD_URL"; cat "$dir/taresd.log"; exit 1
 }
 
+# Claude Code's trust of a folder, recorded as the trust prompt records it ($HOME/.claude.json).
+trust() { # folder...
+  local f="$HOME/.claude.json" d tmp
+  [ -f "$f" ] || echo '{}' > "$f"
+  for d in "$@"; do
+    mkdir -p "$d"
+    tmp=$(mktemp); jq --arg d "$d" '.projects[$d].hasTrustDialogAccepted = true' "$f" > "$tmp" && mv "$tmp" "$f"
+  done
+}
+
 api() { # method path [json]
   local -a a=(-sS -X "$1" -H 'Content-Type: application/json')
   [ -n "${TARES_AUTH_TOKEN:-}" ] && a+=(-H "Authorization: Bearer $TARES_AUTH_TOKEN")

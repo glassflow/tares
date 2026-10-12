@@ -18,8 +18,9 @@ check() { if eval "$2"; then :; else echo "FAIL $1"; fail=1; fi; }
 allow_has() { jq -e --arg s "$2" 'any(.autoMode.allow[]; contains($s))' "$FACTORY_CREW_HOME/stations/$1.settings.json" >/dev/null; }
 envof() { jq -r --arg k "$2" '.env[$k] // empty' "$FACTORY_CREW_HOME/stations/$1.settings.json"; }
 
-machine() { # name → sets HOME and FACTORY_CREW_HOME for one "machine"
+machine() { # name → sets HOME and FACTORY_CREW_HOME for one "machine", its crew home trusted
   export HOME="$T/$1/home" FACTORY_CREW_HOME="$T/$1/crew"; mkdir -p "$HOME"
+  trust "$FACTORY_CREW_HOME"
 }
 
 machine one

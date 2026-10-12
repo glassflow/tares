@@ -671,6 +671,32 @@ prime() {
 
 # ---------- crew commands ----------
 
+# The crew home is the crew's own folder, the same whichever folder you run from. Its stations run
+# there as background sessions, and Claude Code starts none in a folder it hasn't trusted; only an
+# interactive session can ask, so crew up offers to open one there and checks again after it.
+home_trusted() {
+  local real; real=$(cd -P "$CREW_HOME" 2>/dev/null && pwd) || return 1
+  jq -e --arg a "$CREW_HOME" --arg b "$real" \
+    '(.projects[$a].hasTrustDialogAccepted == true) or (.projects[$b].hasTrustDialogAccepted == true)' \
+    "$HOME/.claude.json" >/dev/null 2>&1
+}
+ensure_home_trusted() {
+  home_trusted && return 0
+  local how="cd $CREW_HOME && claude, pick \"Yes, I trust this folder\", then /exit"
+  if [ "$ASSUME_YES" = 1 ] || [ ! -t 0 ] || [ ! -t 1 ]; then
+    die "Claude Code has not trusted the crew home $CREW_HOME yet, and the stations run there. Trust it once ($how), then run crew up again."
+  fi
+  printf '\nThe crew keeps its own folder, %s, whichever folder you run this from (FACTORY_CREW_HOME moves it).\nIts stations run there, and Claude Code starts no session in a folder you have not trusted.\nOpen Claude Code there now to trust it? Pick "Yes, I trust this folder", then type /exit.\n  recommended: yes\n  press enter to take it, or type no\n> ' "$CREW_HOME" >&2
+  local ans; IFS= read -r ans || ans=no
+  case "${ans:-yes}" in
+    y|Y|yes|Yes) ;;
+    *) die "not starting the crew: its home $CREW_HOME is not trusted. Trust it once ($how), then run crew up again." ;;
+  esac
+  ( cd "$CREW_HOME" && "$CLAUDE" ) || true
+  home_trusted || die "Claude Code still has not trusted $CREW_HOME (did the trust prompt get a no?). Trust it once ($how), then run crew up again."
+  say "the crew home is trusted"
+}
+
 cmd_crew_up() {
   local roles=""
   while [ $# -gt 0 ]; do
@@ -679,6 +705,7 @@ cmd_crew_up() {
   local clash; clash=$(installed_tares)
   [ -z "$clash" ] || say "warning: $(clash_text "$clash")"
   ensure_crew_home
+  ensure_home_trusted
   keep_token
   ensure_settings
   prime
@@ -1193,7 +1220,7 @@ cmd_doctor() {
   if jq -e --arg r "$CREW_HOME" '.projects[$r].hasTrustDialogAccepted == true' "$HOME/.claude.json" >/dev/null 2>&1; then
     ok "Claude Code trusts $CREW_HOME"
   else
-    no "Claude Code has not trusted $CREW_HOME: mkdir -p $CREW_HOME, run \`claude\` there once, accept the trust prompt, exit"
+    no "Claude Code has not trusted the crew home $CREW_HOME (the crew's own folder, whichever folder you run from; its stations run there). $ME crew up offers to open Claude Code there to trust it, or: mkdir -p $CREW_HOME && cd $CREW_HOME && claude, accept the trust prompt, /exit"
   fi
   local clash; clash=$(installed_tares)
   if [ -n "$clash" ]; then warn "$(clash_text "$clash")"

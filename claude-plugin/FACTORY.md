@@ -39,14 +39,15 @@ It serves the console at http://127.0.0.1:8787. On another port, set `TARESD_URL
 
 ## 2. Bring up the crew
 
-The crew lives in a folder of its own, `~/factory`. Claude Code must trust it once:
-
 ```
-mkdir -p ~/factory && cd ~/factory && claude    # accept the trust prompt, then /exit
 tares factory crew up
 ```
 
-The first time, it asks how far the crew may go, one question at a time, each with a
+The crew lives in a folder of its own, `~/factory`, whichever folder you run this from
+(`FACTORY_CREW_HOME` moves it). Its stations run there, so Claude Code must trust it once: the
+first `crew up` offers to open Claude Code there; pick "Yes, I trust this folder", then `/exit`.
+
+Then it asks how far the crew may go, one question at a time, each with a
 recommendation:
 
 - **Autonomy**: L3-review (every merge waits for your yes) or L4-ship (builders merge after the

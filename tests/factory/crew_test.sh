@@ -25,6 +25,10 @@ TARESD_URL=http://127.0.0.1:9 "$F" crew up --yes >"$T/notares.out" 2>&1
 check "without Tares crew up stops plainly" 'grep -q "no Tares answers at http://127.0.0.1:9" "$T/notares.out" && grep -q "tares up" "$T/notares.out" && [ "$(launches)" = 0 ]'
 
 start_tares "$T/tares"
+# An untrusted crew home: without a terminal to ask in, crew up stops and says how to trust it.
+"$F" crew up --yes </dev/null >"$T/untrusted.out" 2>&1
+check "an untrusted crew home stops crew up plainly" 'grep -q "Claude Code has not trusted the crew home $FACTORY_CREW_HOME yet" "$T/untrusted.out" && grep -q "pick \"Yes, I trust this folder\"" "$T/untrusted.out" && [ "$(launches)" = 0 ]'
+trust "$FACTORY_CREW_HOME"
 # First run asks the settings one at a time; answers: L3-review, a releaser, no challenger, 3 builders,
 # then the release profile and prod pattern (defaults), and one grant.
 printf 'L3-review\nyes\nno\n3\n\n\nthe releaser may restart the staging database\n\n' | "$F" crew up >"$T/up.out" 2>&1
@@ -414,7 +418,7 @@ check "down retires all" '[ "$(jq "[.[] | select(.status == \"active\")] | lengt
 api PUT /api/crew/settings '{"releaser": false}' >/dev/null
 H="$T/hand"; mkdir -p "$H"; echo '{"stations": {"reviewer": {"model": "sonnet"}}}' > "$H/crew.json"
 before=$(launches)
-FACTORY_CREW_HOME="$H" "$F" crew up --yes >/dev/null 2>&1
+trust "$H"; FACTORY_CREW_HOME="$H" "$F" crew up --yes >/dev/null 2>&1
 check "hand-made crew.json keeps its choice" '[ "$(jq -r .stations.reviewer.model "$H/crew.json")/$(jq -r .stations.reviewer.effort "$H/crew.json")" = sonnet/high ]'
 check "hand-made crew.json gains defaults" '[ "$(jq -r .stations.orchestrator.model "$H/crew.json")" = opus ] && [ "$(jq -r .limits.autocompact_tokens "$H/crew.json")" = 200000 ]'
 check "no releaser unless asked for" '[ $(( $(launches) - before )) = 2 ] && [ -z "$(jq -r ".[\"crew-releaser\"].status // empty" "$H/stations.json")" ]'
@@ -435,7 +439,7 @@ L4="$T/l4"; mkdir -p "$L4" "$T/core"; git -C "$T/core" init -q; core1=$(git -C "
 api PUT /api/crew/settings '{"autonomy": "L4-ship"}' >/dev/null
 SP=$(hand_over strict "$core1")
 api POST "/api/projects/$SP/handover" '{"autonomy": "L3-review"}' >/dev/null
-FACTORY_CREW_HOME="$L4" "$F" crew up --yes >/dev/null 2>&1
+trust "$L4"; FACTORY_CREW_HOME="$L4" "$F" crew up --yes >/dev/null 2>&1
 FACTORY_CREW_HOME="$L4" "$F" spawn builder strict m1 "$core1" "T1" >/dev/null 2>&1
 check "a project handed over stricter keeps it" 'jq -e ".autoMode.allow | any(test(\"relayed .*yes\"))" "$L4/stations/strict-build-m1.settings.json" >/dev/null'
 FACTORY_CREW_HOME="$L4" "$F" spawn builder --autonomy L5-dark strict m2 "$core1" "T2" >"$T/l5.out" 2>&1
@@ -454,7 +458,7 @@ M="$T/multi"; mkdir -p "$M"
 for r in core charts; do mkdir -p "$T/argus/$r"; git -C "$T/argus/$r" init -q; done
 core=$(git -C "$T/argus/core" rev-parse --show-toplevel); charts=$(git -C "$T/argus/charts" rev-parse --show-toplevel)
 hand_over argus "$core" "$charts" >/dev/null
-FACTORY_CREW_HOME="$M" "$F" crew up --yes >/dev/null 2>&1
+trust "$M"; FACTORY_CREW_HOME="$M" "$F" crew up --yes >/dev/null 2>&1
 FACTORY_CREW_HOME="$M" "$F" spawn builder argus m1-core "$core" "T1" >/dev/null 2>&1
 FACTORY_CREW_HOME="$M" "$F" spawn builder argus m1-charts "$charts" "T2 after T1" >/dev/null 2>&1
 check "multi: each builder runs in its repo" '[ "$(jq -r .env.FACTORY_REPO "$M/stations/argus-build-m1-charts.settings.json")" = "$charts" ]'
