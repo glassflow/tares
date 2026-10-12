@@ -1,16 +1,13 @@
 #!/bin/bash
-# Local setup for trying the software factory branch (P-TR-176, M1..M7) with the tares-factory
-# kit. Run from the root of a tares checkout on ashish/software-factory-m2-m7.
+# Trying the software factory from a tares checkout (P-TR-176). The flow itself is in
+# claude-plugin/FACTORY.md; this script only does the setup steps a checkout needs.
 #
-#   scripts/factory-dev.sh install   uv venv + the branch's tares, and the console build
-#   scripts/factory-dev.sh up        a Tares on 127.0.0.1:8787, data in ~/.tares-factory-dev
-#   scripts/factory-dev.sh seed      a crew-built demo project ("Bakery orders") to look at
-#   scripts/factory-dev.sh env       the lines to paste into the shell that runs `factory crew up`
-#   scripts/factory-dev.sh claude    Claude Code with this branch's plugin (for /tares:spec)
+#   scripts/factory-dev.sh install   the console build, then a uv venv with this checkout's tares
+#   scripts/factory-dev.sh up        a Tares on 127.0.0.1:$TARES_DEV_PORT (default 8787), data in ~/.tares-factory-dev
+#   scripts/factory-dev.sh seed      a crew-built demo project ("Bakery orders") to look at, no crew needed
 #
-# The branch's plugin is loaded from claude-plugin/ with --plugin-dir. An installed `tares` plugin
-# from the marketplace wins over it (and the kit uses it for every station), so disable that one
-# while testing: `claude plugin disable tares@tares` (enable it again afterwards).
+# Then, in any terminal: `source .venv/bin/activate` (so `tares` is this checkout's), and
+# `tares factory crew up`, `tares factory spec`. Set TARESD_URL when Tares is not on 8787.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DATA=${TARES_DEV_HOME:-$HOME/.tares-factory-dev}
@@ -24,31 +21,19 @@ case "${1:-help}" in
     (cd ui && npm ci && npm run build)
     [ -d .venv ] || uv venv
     uv pip install -e ".[otlp-grpc]"
-    echo "installed: $ROOT/.venv, console built in ui/dist"
+    echo "installed: $ROOT/.venv (tares, tares-mcp), console built in ui/dist"
+    echo "next: source .venv/bin/activate, then scripts/factory-dev.sh up"
     ;;
   up)
     mkdir -p "$DATA"
     echo "Tares on http://127.0.0.1:$PORT (data in $DATA); Ctrl-C stops it"
+    [ "$PORT" = 8787 ] || echo "in the terminals where you run tares factory: export TARESD_URL=http://127.0.0.1:$PORT"
     TARES_OTLP_GRPC_PORT=off exec "$ROOT/.venv/bin/tares" up --port "$PORT" --data-dir "$DATA"
     ;;
   seed)
     exec "$ROOT/.venv/bin/python" "$ROOT/scripts/seed_factory_demo.py" "http://127.0.0.1:$PORT"
     ;;
-  env)
-    cat <<EOF
-export PATH="$ROOT/.venv/bin:\$PATH"            # this branch's tares-mcp for every station
-export TARES_URL=http://127.0.0.1:$PORT          # the kit finds Tares here
-export TARES_PLUGIN_DIR="$ROOT/claude-plugin"    # stations load this branch's plugin
-export CLAUDE_PLUGIN_OPTION_TARES_URL=http://127.0.0.1:$PORT
-EOF
-    ;;
-  claude)
-    shift
-    export PATH="$ROOT/.venv/bin:$PATH"
-    export CLAUDE_PLUGIN_OPTION_TARES_URL="http://127.0.0.1:$PORT"
-    exec claude --plugin-dir "$ROOT/claude-plugin" "$@"
-    ;;
   *)
-    sed -n '2,15p' "$0"
+    sed -n '2,11p' "$0"
     ;;
 esac

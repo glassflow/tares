@@ -1,0 +1,103 @@
+# The software factory on Tares
+
+One crew of Claude Code sessions on your machine builds every project you hand it. You plan a
+project with Claude, the crew takes it from tickets to pull requests merged on main, and Tares
+keeps the plan, the ledger, the reviews and the questions for you. You talk to one session, the
+orchestrator.
+
+The crew:
+
+- **orchestrator**: hands out work, answers the others, brings you what needs you. The only one
+  you talk to.
+- **reviewer**: reviews every pull request to a fixed bar and posts the verdict.
+- **builders**: one per milestone and repo of a project, started by the orchestrator. They merge
+  their own pull requests once the reviewer passes them and CI is green.
+- **releaser**: only if you ask for one. Without it, tickets end at merged on main.
+
+## What you need
+
+- Claude Code, signed in, on a plan that allows background sessions.
+- `gh`, signed in (`gh auth login`), with write access to the repos the crew works in.
+- `git`, `jq` and `curl`.
+- Tares: `pip install tares`, or from a checkout `scripts/factory-dev.sh install`, then
+  `source .venv/bin/activate`.
+- Optional: the Codex CLI, if you want builders to run the Codex challenger on every commit.
+
+If a `tares` plugin from a marketplace is enabled in Claude Code, the crew runs that one. While you
+try a branch, disable it: `claude plugin disable tares@tares`.
+
+## 1. Start Tares
+
+```
+tares up
+```
+
+It serves the console at http://127.0.0.1:8787. On another port, set `TARESD_URL` (for example
+`export TARESD_URL=http://127.0.0.1:8797`) in every terminal where you run `tares factory`.
+
+## 2. Bring up the crew
+
+The crew lives in a folder of its own, `~/factory`. Claude Code must trust it once:
+
+```
+mkdir -p ~/factory && cd ~/factory && claude    # accept the trust prompt, then /exit
+tares factory crew up
+```
+
+The first time, it asks how far the crew may go, one question at a time, each with a
+recommendation:
+
+- **Autonomy**: L3-review (every merge waits for your yes) or L4-ship (builders merge after the
+  reviewer's pass and green CI).
+- **Releaser**: no by default.
+- **Challenger**: no by default.
+- **Builders at once**: how many may run in parallel.
+- **Standing grants**, in your own words.
+
+The answers are kept on Tares; a second machine asks nothing. The Crew page
+(http://127.0.0.1:8787/crew) lists the crew as it starts.
+
+Keep it alive in a spare terminal: `tares factory crew watch`. `tares factory doctor` checks
+everything the crew needs.
+
+## 3. Plan a project
+
+In the repo the project builds on, or in a folder that holds its repos:
+
+```
+tares factory spec "what you want to build"
+```
+
+This opens Claude with `/tares:spec`. It interviews you one question at a time and has a second
+model attack the plan. Then it writes the plan into a Tares project:
+
+- the spec;
+- milestones with checks;
+- tickets, each with the repo it changes and what it depends on, and a working doc each;
+- an AGENTS.md.
+
+It ends by asking whether to hand the project to the crew. On yes, the orchestrator picks it up.
+
+## 4. Watch it build, answer its questions
+
+- **Crew page:** who is on the crew, what each member is doing, the projects it holds. Click a
+  member for its tickets and its last lines.
+- **Project page:** the repos, the milestones and tickets with their stage, pull request and
+  verdict, the reviews, assumptions and decisions.
+- **Questions for you** reach the orchestrator's session, one at a time, with a recommendation.
+  Answer there:
+
+  ```
+  tares factory crew attach orchestrator
+  ```
+
+  Your answer is kept on Tares in your own words. Say it holds from now on, and it becomes a
+  standing grant.
+
+## Stop and clean up
+
+- `tares factory crew halt "why"` stops merges, pushes and new sessions until `tares factory crew resume`.
+- `tares factory crew down` stops every station. Tares keeps the projects, tickets and answers;
+  `tares factory crew up` starts fresh sessions that carry on from them.
+- The crew's own files are in `~/factory` (`FACTORY_CREW_HOME` to move it). Deleting that folder
+  forgets the stations, not the projects.
