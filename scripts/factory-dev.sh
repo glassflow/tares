@@ -20,9 +20,10 @@ case "${1:-help}" in
   install)
     cd "$ROOT"
     command -v uv >/dev/null || { echo "needs uv: https://docs.astral.sh/uv/"; exit 1; }
+    # the console first: the package build includes ui/dist and fails without it
+    (cd ui && npm ci && npm run build)
     [ -d .venv ] || uv venv
     uv pip install -e ".[otlp-grpc]"
-    (cd ui && npm ci && npm run build)
     echo "installed: $ROOT/.venv, console built in ui/dist"
     ;;
   up)
