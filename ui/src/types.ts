@@ -476,9 +476,18 @@ export interface CrewSettings {
 export interface HandoverRepo { path: string | null; name: string | null }
 export interface Handover { repo: string | null; repos: HandoverRepo[]; autonomy: string | null; by: string | null; at: string }
 // A repo a project touches, with the tickets that change it and their open pull requests (TR-463)
+export interface RepoPR {
+  url: string; ticket: string; number: number | null; title: string; branch: string | null;
+  head: string | null; ci: "success" | "failure" | "pending" | "none" | null;
+  github_verdict: "pass" | "changes" | "pending" | null; stage: TicketStage | null; holder: string | null;
+  review: { verdict: "pass" | "changes" | "block"; round: number; current: boolean } | null;
+  merged_at: string | null; checked_at: string | null; error: string | null;
+}
 export interface ProjectRepo extends HandoverRepo {
   tickets: string[];
-  open_prs: { url: string; ticket: string; number: number | null }[];
+  open_prs: RepoPR[];
+  merged_prs: RepoPR[];
+  github_error: string | null;
 }
 // A project handed to the crew, as the orchestrator reads it (TR-462)
 export interface CrewProject {

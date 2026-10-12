@@ -1052,17 +1052,35 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {"tickets_done": len(done), "tickets_total": len(tickets), "stages": stages,
                 "milestone": current}
 
+    def pr_row(t: dict) -> dict:
+        """A ticket's pull request as the GitHub section shows it: what GitHub said when Tares last
+        read it (title, CI, the factory/review status), and the crew's own last verdict."""
+        pr = t["pr"] or {}
+        last = store.ticket_reviews(t["id"])[-1:]
+        v = verdict_now(t, last[0] if last else None)
+        return {"url": pr["url"], "ticket": factory_mod.label(t), "number": pr.get("number"),
+                "title": pr.get("title") or t["title"], "branch": pr.get("branch"),
+                "head": (pr.get("head") or "")[:7] or None, "ci": pr.get("ci"),
+                "github_verdict": pr.get("verdict"), "stage": t["stage"], "holder": t["holder"],
+                "review": ({"verdict": v["verdict"], "round": v["round"], "current": v["current"]}
+                           if v else None),
+                "merged_at": pr.get("merged_at"), "checked_at": pr.get("checked_at"),
+                "error": pr.get("error")}
+
     def repo_rows(uid: str, repos: list[dict]) -> list[dict]:
-        """Each hand-over repo with the tickets that change it and their open pull requests. A
-        ticket with no repo belongs to the first one; a repo only tickets name is added."""
+        """Each hand-over repo with the tickets that change it, their open pull requests (newest
+        first) and the ones merged. A ticket with no repo belongs to the first one; a repo only
+        tickets name is added. `github_error` says when Tares could not read GitHub for it."""
         tickets = store.list_tickets(uid)
-        rows = [{**r, "tickets": [], "open_prs": []} for r in repos]
+        rows = [{**r, "tickets": [], "open_prs": [], "merged_prs": [], "github_error": None}
+                for r in repos]
         for t in tickets:
             name = t.get("repo") or (t["pr"] or {}).get("repo")
             row = next((r for r in rows if name and (r["name"] or "").lower() == name.lower()),
                        None)
             if row is None and name:
-                row = {"path": None, "name": name, "tickets": [], "open_prs": []}
+                row = {"path": None, "name": name, "tickets": [], "open_prs": [], "merged_prs": [],
+                       "github_error": None}
                 rows.append(row)
             if row is None and rows:
                 row = rows[0]
@@ -1073,9 +1091,17 @@ def register(app, store, h: SimpleNamespace) -> None:
             # merged as far as the ticket knows (a builder sets it when Tares can't read GitHub)
             done = (t["stage"] in ("merged", "shipped")
                     or t["status"] in factory_mod.DONE_STATUSES)
-            if pr.get("url") and not done and not pr.get("merged") and pr.get("state") != "closed":
-                row["open_prs"].append({"url": pr["url"], "ticket": factory_mod.label(t),
-                                        "number": pr.get("number")})
+            if not pr.get("url"):
+                continue
+            if pr.get("error"):
+                row["github_error"] = pr["error"]
+            if pr.get("merged") or (done and pr.get("state") != "closed"):
+                row["merged_prs"].append(pr_row(t))
+            elif pr.get("state") != "closed":
+                row["open_prs"].append(pr_row(t))
+        for row in rows:
+            row["open_prs"].sort(key=lambda p: -(p["number"] or 0))
+            row["merged_prs"].sort(key=lambda p: -(p["number"] or 0))
         return rows
 
     @app.get("/api/projects/{uid}/repos")

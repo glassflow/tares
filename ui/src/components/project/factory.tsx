@@ -6,7 +6,7 @@ import { CrewState, Desk } from "../../pages/Crew";
 import { TimeAgo, usePolling } from "../bits";
 import { VLink, type Ctx } from "./common";
 import { Goal } from "./overview";
-import type { DocSummary, Milestone, ProjectRepo, ProjectSession, Ticket } from "../../types";
+import type { DocSummary, Milestone, ProjectRepo, ProjectSession, RepoPR, Ticket } from "../../types";
 
 // The page of a software factory project (kind "software_factory"): a project a spec session
 // made in Claude Code and sessions build from docs and tickets. Where the build stands (spec,
@@ -326,36 +326,84 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
 // a session that has sent nothing for this long while a ticket is in progress may be gone
 const SILENT_MIN = 10;
 
-/** The GitHub repos the project works on (TR-463): each links to the repo on GitHub, says where it
- *  is checked out on the crew's machine, lists its open pull requests, and narrows the ticket
- *  list to its tickets. */
+const CI_TEXT: Record<string, [string, string]> = {
+  success: ["CI passed", "fo-st-done"], failure: ["CI failed", "fo-st-quiet"],
+  pending: ["CI running", "fo-st-in_progress"], none: ["no CI", ""],
+};
+const PR_STAGE: Record<string, string> = {
+  doing: "being built", review: "waiting for review", changes: "changes asked", blocked: "blocked",
+};
+
+/** One pull request: what it is, which ticket, and where it stands on GitHub and with the crew. */
+function PRRow({ p }: { p: RepoPR }) {
+  const ci = p.ci ? CI_TEXT[p.ci] : null;
+  const rv = p.review;
+  return (
+    <li className="fo-gh-pr">
+      <div className="fo-gh-pr-head">
+        <a href={p.url} target="_blank" rel="noreferrer"><b>#{p.number ?? "?"}</b> {p.title}</a>
+        <VLink v={{ kind: "ticket", name: p.ticket }} className="fo-gh-tk">{p.ticket}</VLink>
+      </div>
+      <div className="fo-gh-pr-state">
+        {p.stage && PR_STAGE[p.stage] && <span className={`fo-st ${p.stage === "review" ? "fo-st-wait" : p.stage === "changes" || p.stage === "blocked" ? "fo-st-quiet" : "fo-st-in_progress"}`}>{PR_STAGE[p.stage]}</span>}
+        {ci && <span className={`fo-st ${ci[1]}`}>{ci[0]}</span>}
+        {rv && (rv.current
+          ? <span className={`fo-st ${rv.verdict === "pass" ? "fo-st-done" : "fo-st-quiet"}`}>
+              {rv.verdict === "pass" ? "review passed" : rv.verdict === "changes" ? "changes asked" : "review blocked"}{rv.round > 1 ? `, round ${rv.round}` : ""}
+            </span>
+          : <span className="fo-st">review is for an older commit</span>)}
+        {!rv && p.stage === "review" && <span className="fo-st">not reviewed yet</span>}
+      </div>
+      <small className="dim">
+        {p.branch && <span className="mono">{p.branch}</span>}
+        {p.head && <> at <span className="mono">{p.head}</span></>}
+        {p.holder && <> · held by <span className="mono">{p.holder}</span></>}
+        {p.checked_at && <> · read from GitHub <TimeAgo ts={p.checked_at} /></>}
+      </small>
+    </li>
+  );
+}
+
+/** The GitHub repos the project works on (TR-463): each repo, linked to GitHub, with its open pull
+ *  requests listed under it and where each stands; the merged ones folded below. */
 function GitHubRepos({ repos, on, pick }: { repos: ProjectRepo[]; on: string | null; pick: (k: string) => void }) {
   return (
-    <ul className="fo-docs fo-gh">
+    <div className="fo-gh">
       {repos.map((r) => {
         const k = (r.name ?? r.path) as string;
         return (
-          <li key={k} className={on === k ? "is-on" : ""}>
+          <section key={k} className={`fo-gh-repo${on === k ? " is-on" : ""}`}>
             <div className="fo-gh-name">
-              {r.name ? <a href={`https://github.com/${r.name}`} target="_blank" rel="noreferrer" className="mono">{r.name}</a>
+              {r.name ? <a href={`https://github.com/${r.name}`} target="_blank" rel="noreferrer" className="mono">{r.name} ↗</a>
                 : <span className="mono">{r.path}</span>}
               <button type="button" className="fo-link-btn" aria-pressed={on === k} onClick={() => pick(k)}>
-                {on === k ? "show all tickets" : `${r.tickets.length} ${r.tickets.length === 1 ? "ticket" : "tickets"}`}
+                {on === k ? "show all tickets" : `show its ${r.tickets.length} ${r.tickets.length === 1 ? "ticket" : "tickets"}`}
               </button>
             </div>
             {r.path && r.name && <small className="dim">checked out at <span className="mono">{r.path}</span></small>}
             {!r.path && <small className="fo-warn">not checked out on the crew's machine yet</small>}
-            {r.open_prs.length > 0 && (
-              <small className="fo-gh-prs">
-                Open: {r.open_prs.map((p, i) => (
-                  <span key={p.url}>{i ? ", " : ""}<a href={p.url} target="_blank" rel="noreferrer">PR #{p.number ?? "?"}</a> ({p.ticket})</span>
-                ))}
-              </small>
+            {r.github_error && <small className="fo-warn">Tares could not read GitHub for this repo ({r.github_error}); the state below may be out of date.</small>}
+            <div className="fo-sub">Open pull requests · {r.open_prs.length}</div>
+            {r.open_prs.length
+              ? <ul className="fo-gh-prs">{r.open_prs.map((p) => <PRRow key={p.url} p={p} />)}</ul>
+              : <p className="dim fo-gh-none">None open.</p>}
+            {(r.merged_prs ?? []).length > 0 && (
+              <details className="fo-gh-merged">
+                <summary>{(r.merged_prs ?? []).length} merged</summary>
+                <ul>
+                  {(r.merged_prs ?? []).map((p) => (
+                    <li key={p.url}>
+                      <a href={p.url} target="_blank" rel="noreferrer">#{p.number ?? "?"} {p.title}</a>
+                      {" "}<span className="dim">{p.ticket}{p.merged_at && <> · merged <TimeAgo ts={p.merged_at} /></>}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
             )}
-          </li>
+          </section>
         );
       })}
-    </ul>
+    </div>
   );
 }
 

@@ -221,6 +221,14 @@ async def main():
         ck("a PR in review counts as open", [p["ticket"] for p in open1] == ["T1"], open1)
         ck("a ticket set merged no longer counts its PR as open, with no GitHub to ask", open2 == [],
            open2)
+        ck("an open PR says its ticket, title, stage and where it was read from",
+           open1 and open1[0]["number"] == 7 and open1[0]["title"] and open1[0]["stage"] == "review"
+           and "ci" in open1[0] and "review" in open1[0] and "checked_at" in open1[0], open1)
+        async with mk() as cx:
+            row = (await cx.get(f"/api/projects/{shop}/repos")).json()["repos"][0]
+        ck("the merged one is listed as merged", [p["ticket"] for p in row["merged_prs"]] == ["T1"], row)
+        ck("a GitHub that could not be read is said for the repo",
+           row["github_error"] is not None, row.get("github_error"))
         ck("the brief says it too", "Repo: glassflow/factory-test-web." in brief, brief[:400])
 
         print("== a crew member's details (the Crew page) ==")
