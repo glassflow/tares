@@ -524,6 +524,7 @@ write_settings() { # station role parent project repo
         + (if $project != "" then {TARES_PROJECT: $project, FACTORY_PROJECT: $pslug} else {} end)
         + (if $repo != "" then {FACTORY_REPO: $repo} else {} end)),
       crossSessionInbound: "accept",
+      enabledPlugins: { "tares@inline": true },
       worktree: { bgIsolation: "none" },
       permissions: $perms,
       autoMode: { environment: ["$defaults", $env_line], allow: $allow, soft_deny: $deny }
@@ -532,8 +533,9 @@ write_settings() { # station role parent project repo
 }
 
 # Stations load this plugin (the Tares plugin, with the station skills and this CLI) from where this
-# script lives. A `tares` plugin installed from a marketplace, in any scope, enabled or not, takes its
-# place in every session: Claude Code drops a --plugin-dir copy with the same name.
+# script lives. Claude Code names a --plugin-dir plugin `tares@inline`, and a person who once turned
+# that off in their own settings would get stations without it, so every session this CLI starts
+# turns it on in its own --settings (stations in their settings file, the spec session in SPEC_SETTINGS).
 plugin_flags() { printf '%s\n' --plugin-dir "$KIT_PLUGIN"; }
 MY_VERSION=$(jq -r '.version // ""' "$KIT_PLUGIN/.claude-plugin/plugin.json" 2>/dev/null || true)
 installed_tares() { # → "name version scope" for each installed tares plugin of another version
@@ -543,7 +545,7 @@ installed_tares() { # → "name version scope" for each installed tares plugin o
 }
 clash_text() { # installed lines → what to do
   local l k; l=$(head -1 <<<"$1"); k=${l%% *}
-  echo "a tares plugin is installed from a marketplace ($(paste -sd ';' - <<<"$1" | sed 's/;/; /g')), and Claude Code loads it instead of this one ($KIT_PLUGIN, version $MY_VERSION) in every session, so stations would run without the factory skills. Remove it while you use this one: claude plugin uninstall $k$(grep -q ' project (' <<<"$l" && echo " --scope project (run it in $(sed 's/.*(\(.*\)).*/\1/' <<<"$l"))")"
+  echo "another version of the tares plugin is installed from a marketplace ($(paste -sd ';' - <<<"$1" | sed 's/;/; /g')). Where Claude Code loads it, it takes the place of this one ($KIT_PLUGIN, version $MY_VERSION) and stations run without the factory skills. If they report missing skills, remove it: claude plugin uninstall $k$(grep -q ' project (' <<<"$l" && echo " --scope project (run it in $(sed 's/.*(\(.*\)).*/\1/' <<<"$l"))")"
 }
 
 # Under about 150k tokens a station can refill its context within three steps of a compaction,
@@ -675,7 +677,7 @@ cmd_crew_up() {
     case "$1" in --yes|-y) ASSUME_YES=1; shift ;; *) roles="$roles $1"; shift ;; esac
   done
   local clash; clash=$(installed_tares)
-  [ -z "$clash" ] || die "$(clash_text "$clash")"
+  [ -z "$clash" ] || say "warning: $(clash_text "$clash")"
   ensure_crew_home
   keep_token
   ensure_settings
@@ -1119,7 +1121,7 @@ cmd_spec() {
     esac
   done
   local clash; clash=$(installed_tares)
-  [ -z "$clash" ] || die "$(clash_text "$clash")"
+  [ -z "$clash" ] || say "warning: $(clash_text "$clash")"
   local here root list n
   here=$(pwd -P)
   root=$(git rev-parse --show-toplevel 2>/dev/null || true)
@@ -1142,6 +1144,10 @@ SPEC
   local -a args=(-n "$slug-spec")
   local f; while IFS= read -r f; do [ -n "$f" ] && args+=("$f"); done < <(plugin_flags)
   if [ -n "${TARES_AUTH_TOKEN:-}" ]; then mkdir -p "$CREW_HOME"; keep_token; export TARES_FACTORY_TOKEN_FILE=$TOKEN_FILE; fi
+  mkdir -p "$CREW_HOME/stations"
+  local spec_settings="$CREW_HOME/stations/spec.settings.json"
+  jq -n '{enabledPlugins: {"tares@inline": true}}' > "$spec_settings"
+  args+=(--settings "$spec_settings")
   local prompt="/tares:spec"
   [ -n "$name" ] && prompt="$prompt (project name: $name)"
   [ -n "$idea" ] && prompt="$prompt $idea"
@@ -1190,7 +1196,7 @@ cmd_doctor() {
     no "Claude Code has not trusted $CREW_HOME: mkdir -p $CREW_HOME, run \`claude\` there once, accept the trust prompt, exit"
   fi
   local clash; clash=$(installed_tares)
-  if [ -n "$clash" ]; then no "$(clash_text "$clash")"
+  if [ -n "$clash" ]; then warn "$(clash_text "$clash")"
   else ok "stations load the plugin at $KIT_PLUGIN"; fi
   command -v tares-mcp >/dev/null && ok "tares-mcp on PATH" || no "tares-mcp is not on PATH; stations reach Tares through it: install tares (pip install -e . in a checkout) and put its bin folder on PATH"
   if [ -f "$CREW_CFG" ]; then

@@ -42,6 +42,7 @@ for r in orchestrator reviewer releaser; do
 done
 check "no Rius, no comms" '! grep -q -i -e rius -e comms "$FACTORY_CREW_HOME/stations/crew-reviewer.settings.json"'
 check "orchestrator started first" '[ "$(jq -r "select(.args[0] == \"--bg\") | .args[2]" "$FAKE_CLAUDE_STATE/calls.jsonl" | head -1)" = crew-orchestrator ]'
+check "stations turn the plugin on, whatever the person's settings say" 'jq -e ".enabledPlugins[\"tares@inline\"] == true" "$FACTORY_CREW_HOME/stations/crew-reviewer.settings.json" >/dev/null'
 check "stations load this plugin" '[ "$(jq -r "select(.args[0] == \"--bg\") | .args | index(\"--plugin-dir\") as \$i | .[\$i+1]" "$FAKE_CLAUDE_STATE/calls.jsonl" | sort -u)" = "$(cd -P "$T/kit-under-test" && pwd)" ]'
 check "settings saved on Tares" '[ "$(api GET /api/crew/settings | jq -c "[.autonomy, .releaser, .release_profile, .challenger, .builders_max]")" = "[\"L3-review\",true,\"kind\",false,3]" ]'
 check "settings not kept locally" '[ "$(jq -c .settings "$FACTORY_CREW_HOME/crew.json")" = null ]'
@@ -70,16 +71,16 @@ check "crew desk shows every question" 'grep -q "Keep the old endpoint?" "$T/des
 check "crew desk says where to answer" 'grep -q "tares factory crew attach orchestrator" "$T/desk.out"'
 check "factory desk is short for crew desk" '[ "$("$F" desk 2>&1)" = "$(cat "$T/desk.out")" ]'
 
-# An installed tares plugin of another version takes this one's place in every session: crew up and
-# doctor stop on it and say how to remove it.
+# An installed tares plugin of another version may take this one's place: crew up and doctor warn and
+# say how to remove it, and crew up still starts the crew.
 mkdir -p "$HOME/.claude/plugins"
 jq -n '{version: 2, plugins: {"tares@tares": [{scope: "project", projectPath: "/w/main", version: "0.2.1"}]}}' > "$HOME/.claude/plugins/installed_plugins.json"
 "$F" crew up --yes >"$T/clash.out" 2>&1
-check "an installed older tares plugin stops crew up" 'grep -q "Claude Code loads it instead of this one" "$T/clash.out" && grep -q "claude plugin uninstall tares@tares --scope project (run it in /w/main)" "$T/clash.out" && [ "$(launches)" = 3 ]'
-check "doctor says the same" 'grep -q "FIX   a tares plugin is installed from a marketplace (tares@tares 0.2.1 project (/w/main))" <<<"$("$F" doctor 2>&1)"'
+check "an installed older tares plugin is named with how to remove it" 'grep -q "warning: another version of the tares plugin is installed" "$T/clash.out" && grep -q "claude plugin uninstall tares@tares --scope project (run it in /w/main)" "$T/clash.out"'
+check "doctor says the same" 'grep -q "warn  another version of the tares plugin is installed from a marketplace (tares@tares 0.2.1 project (/w/main))" <<<"$("$F" doctor 2>&1)"'
 mine=$(jq -r .version "$T/kit-under-test/.claude-plugin/plugin.json")
 jq --arg v "$mine" '.plugins["tares@tares"][0].version = $v' "$HOME/.claude/plugins/installed_plugins.json" > "$T/ip" && mv "$T/ip" "$HOME/.claude/plugins/installed_plugins.json"
-check "the same version installed is fine" '! grep -q "loads it instead" <<<"$("$F" doctor 2>&1)"'
+check "the same version installed is fine" '! grep -q "another version of the tares plugin" <<<"$("$F" doctor 2>&1)"'
 rm -f "$HOME/.claude/plugins/installed_plugins.json"
 
 # A second run asks nothing and starts nothing new.
