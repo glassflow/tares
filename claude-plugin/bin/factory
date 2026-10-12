@@ -1,0 +1,1560 @@
+#!/usr/bin/env bash
+# factory: bring up and manage the tares-factory crew, one team of connected Claude Code sessions
+# that builds every project handed to it. Run `factory help` for commands.
+# Needs: claude, git, jq. Optional: curl (Tares), gh, docker, kind.
+set -euo pipefail
+
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir="$(cd -P "$(dirname "$src")" && pwd)"; src="$(readlink "$src")"
+  case "$src" in /*) ;; *) src="$dir/$src" ;; esac
+done
+KIT_PLUGIN="$(cd -P "$(dirname "$src")/.." && pwd)"
+TEMPLATES="$KIT_PLUGIN/templates"
+CREW_ROLES="orchestrator reviewer releaser"   # the default crew; comms only when crew.json enables it
+SETTING_KEYS="autonomy release_profile prod_pattern challenger builders_max"
+
+die() { echo "factory: $*" >&2; exit 1; }
+say() { echo "factory: $*" >&2; }
+
+usage() {
+  cat <<'EOF'
+factory: one crew of connected Claude Code sessions for all your projects
+
+  factory crew up [--yes] [roles...]  start the crew from the crew home (orchestrator first);
+                                      the first run asks the crew settings, one at a time
+  factory crew status                 the stations, the next question for you, a line per project
+  factory crew attach <role|station>  open a station in this terminal (answer questions in the orchestrator)
+  factory crew desk                   the questions waiting for you, each in full with its options
+  factory crew logs <role|station>    a station's recent output
+  factory crew watch [--once]         revive stations that stopped, under the same name; start fresh any
+                                      that Claude Code stopped for thrashing on autocompact; after a kit
+                                      update, move each station onto it when it's idle (same conversation)
+  factory crew halt ["<reason>"]      stop risky actions on every station until resume
+  factory crew resume                 lift a halt
+  factory crew down                   stop and remove all stations (state is kept)
+  factory restart <role|station> [--fresh]
+                                      restart a station with fresh settings, same conversation
+                                      (--fresh: a new conversation; its state is in files)
+  factory doctor                      check everything the crew needs
+  factory settings <station> [role]   print the settings a station launches with
+
+  without Tares, per project (run inside the project's git repo):
+  factory init [--project slug]       set up .factory/ in this repo
+  factory spec [--project name] [--repo folder] ["<idea>"]
+                                      plan a project with Claude in its own worktree under
+                                      ~/factory/projects/<name>/ (run it in the repo it builds on,
+                                      or in a folder of repos, which asks which one holds the plan;
+                                      run it again with --project to carry on; --here plans in place)
+  factory projects                    every project here: whether the crew holds it, progress, a rough time left
+  factory snippet [project]           the text an outside session needs to join the crew
+
+  used by the orchestrator:
+  factory roster                      stations, roles, projects, states (tab separated)
+  factory spawn builder [--autonomy L3-review|L4-ship] <project> <slug> <repo> "<task>"
+                                      one builder per repo of a project; the level sticks to the project
+  factory spawn helper <parent-station> <slug> "<task>"
+  factory revive <station> [--fresh] ["<prompt>"]
+
+  used by every station:
+  factory tidy [--force] <path>...    remove a worktree or scratch folder, only inside the crew's own
+                                      folders (instead of rm, which can stop a station on a prompt);
+                                      --force for your own worktree with uncommitted or unpushed work
+  factory retire <station>
+
+The crew home is ~/factory (FACTORY_CREW_HOME overrides).
+EOF
+}
+
+case "${1:-help}" in help|-h|--help) usage; exit 0 ;; esac
+
+need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required but not installed"; }
+need git; need jq
+
+# The real claude binary. Terminal shims (cmux) inject temp --settings files and socket tokens into
+# the launch flags Claude Code saves for respawn, which later breaks the respawn and leaks the token.
+claude_bin() {
+  if [ -n "${CLAUDE_BIN:-}" ]; then echo "$CLAUDE_BIN"; return; fi
+  local c
+  while IFS= read -r c; do
+    if head -c 2 "$c" 2>/dev/null | grep -q '#!' && grep -q cmux "$c" 2>/dev/null; then continue; fi
+    echo "$c"; return
+  done < <(which -a claude 2>/dev/null | awk '!seen[$0]++')
+  die "claude not found on PATH (set CLAUDE_BIN to its path)"
+}
+CLAUDE="$(claude_bin)"
+
+CREW_HOME="${FACTORY_CREW_HOME:-$HOME/factory}"
+CREW_CFG="$CREW_HOME/crew.json"
+STATIONS="$CREW_HOME/stations.json"
+PROJECTS="$CREW_HOME/projects.json"
+HALT_FILE="$CREW_HOME/HALT"
+EVENTS="$CREW_HOME/events.jsonl"
+
+ccfg() { jq -r "$1" "$CREW_CFG" 2>/dev/null || true; }
+slugify() { tr '[:upper:]' '[:lower:]' <<<"$1" | tr -c 'a-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//'; echo; }
+event() { [ -d "$CREW_HOME" ] && jq -cn --arg e "$1" --arg s "${2:-}" --arg d "${3:-}" \
+  '{at: (now | todate), station: $s, event: $e, detail: $d}' >> "$EVENTS" 2>/dev/null || true; }
+
+# A crew.json written by hand, or by an older kit, gets the template's defaults under it.
+merge_crew_defaults() {
+  [ -f "$CREW_CFG" ] || return 0
+  local tmp; tmp=$(mktemp)
+  jq -s '.[0] * .[1]' "$TEMPLATES/crew.json" "$CREW_CFG" > "$tmp" || die "$CREW_CFG is not valid JSON"
+  if cmp -s "$tmp" "$CREW_CFG"; then rm -f "$tmp"; else mv "$tmp" "$CREW_CFG"; fi
+}
+
+ensure_crew_home() {
+  mkdir -p "$CREW_HOME"/{stations,reports,worktrees,handovers/done}
+  merge_crew_defaults
+  if [ ! -f "$CREW_CFG" ]; then
+    local login="" name
+    command -v gh >/dev/null && login=$(gh api user -q .login 2>/dev/null || true)
+    name=$(git config --global user.name 2>/dev/null || echo "the user")
+    jq --arg n "$name" --arg g "$login" --arg at "$(date -u +%Y-%m-%d)" \
+      '.human.name=$n | .human.github=$g | .authorized={by:$n, at:$at}' "$TEMPLATES/crew.json" > "$CREW_CFG"
+    say "wrote $CREW_CFG"
+  fi
+}
+# A station of a per-project factory (an older kit: .factory/ in one repo, stations named <project>-*)
+# has FACTORY_HOME=<repo>/.factory with that factory's factory.json. This kit can't run it.
+older_factory() {
+  local h=${1:-${FACTORY_HOME:-}}
+  [ -n "$h" ] && [ "$h" != "$CREW_HOME" ] && [ -f "$h/stations.json" ] && jq -e '.level' "$h/factory.json" >/dev/null 2>&1
+}
+older_factory_die() {
+  die "$1 belongs to a per-project factory started by an older tares-factory kit, which this kit no longer runs (it runs one crew from $CREW_HOME). Keep that factory on the older kit until it is done (\`git -C <kit clone> checkout 57aa7e3\`), or stop it there (\`factory down\` with the older kit) and hand the project to the crew with /tares-factory:ship."
+}
+require_crew() {
+  older_factory && older_factory_die "This session (FACTORY_HOME=$FACTORY_HOME)"
+  [ -f "$CREW_CFG" ] || die "no crew yet in $CREW_HOME; run: factory crew up"
+}
+
+# ---------- Tares ----------
+# Connected when crew.json sets tares.url (or TARES_URL, or TARESD_URL as the Tares plugin names it,
+# is set) and <url>/health answers. Stations get the same URL as TARESD_URL; never the token.
+
+TARES=""; TARES_STATE=""
+tares_on() {
+  if [ -z "$TARES_STATE" ]; then
+    TARES=$(ccfg '.tares.url // empty'); [ -n "$TARES" ] || TARES=${TARES_URL:-${TARESD_URL:-}}
+    TARES=${TARES%/}; TARES_STATE=off
+    if [ -n "$TARES" ]; then
+      need curl
+      if curl -sf --max-time 5 "$TARES/health" >/dev/null 2>&1; then TARES_STATE=on
+      else say "Tares at $TARES does not answer on /health; using the local files in $CREW_HOME"; fi
+    fi
+  fi
+  [ "$TARES_STATE" = on ]
+}
+tares_http() { # method path [json body]
+  local -a a=(-sS -f --max-time 15 -X "$1" -H 'Accept: application/json')
+  [ -n "${TARES_AUTH_TOKEN:-}" ] && a+=(-H "Authorization: Bearer $TARES_AUTH_TOKEN")
+  [ $# -ge 3 ] && a+=(-H 'Content-Type: application/json' --data "$3")
+  curl "${a[@]}" "$TARES$2"
+}
+
+# The Tares plugin: already enabled in user settings, or loaded from TARES_PLUGIN_DIR.
+tares_plugin_flags() {
+  tares_on || return 0
+  jq -e 'any(.enabledPlugins // {} | to_entries[]; (.key | startswith("tares@")) and .value == true)' \
+    "$HOME/.claude/settings.json" >/dev/null 2>&1 && return 0
+  if [ -n "${TARES_PLUGIN_DIR:-}" ]; then printf '%s\n' --plugin-dir "$TARES_PLUGIN_DIR"; return 0; fi
+  say "Tares is connected but its Claude Code plugin is not enabled: stations won't reach Tares. Install it (claude plugin install tares@tares) or set TARES_PLUGIN_DIR."
+}
+
+# ---------- crew settings and grants ----------
+
+settings_defaults() {
+  local challenger=false
+  command -v codex >/dev/null 2>&1 && challenger=true
+  jq -n --argjson c "$challenger" \
+    '{autonomy: "L4-ship", release_profile: "kind", prod_pattern: "(^|[-_.])(prod|production)([-_.]|$)", challenger: $c, builders_max: 2}'
+}
+settings_raw() {
+  if tares_on; then
+    local s; s=$(tares_http GET /api/crew/settings) || die "could not read the crew settings from Tares at $TARES"
+    jq -c '.settings // .' <<<"$s"
+  else
+    jq -c '.settings // {}' "$CREW_CFG"
+  fi
+}
+settings_missing() { jq -r --arg k "$SETTING_KEYS" '. as $s | $k | split(" ")[] | select($s[.] == null)' <<<"$1"; }
+SETTINGS=""
+crew_settings() { # settings with defaults for anything unset, cached; fails when they can't be read
+  if [ -z "$SETTINGS" ]; then
+    local raw; raw=$(settings_raw) || return 1
+    SETTINGS=$(jq -c --argjson d "$(settings_defaults)" \
+      '. as $s | $d | with_entries(.value = (if $s[.key] == null then .value else $s[.key] end))' <<<"$raw")
+  fi
+  echo "$SETTINGS"
+}
+setting() { local s; s=$(crew_settings) || die "no crew settings to work from"; jq -r --arg k "$1" '.[$k] | tostring' <<<"$s"; }
+
+ASSUME_YES=0
+ask() { # question recommendation why validator-regex → the answer (empty input takes the recommendation)
+  local q=$1 rec=$2 why=$3 re=$4 ans
+  while :; do
+    ans=""
+    if [ "$ASSUME_YES" != 1 ]; then
+      printf '\n%s\n  recommended: %s (%s)\n  press enter to take it, or type your answer\n> ' "$q" "$rec" "$why" >&2
+      IFS= read -r ans || { ans=""; echo >&2; }
+    fi
+    ans=${ans:-$rec}
+    grep -Eq "$re" <<<"$ans" && { echo "$ans"; return; }
+    say "\"$ans\" is not one of the choices"
+  done
+}
+
+ask_settings() { # missing keys → saves the answers (Tares or crew.json)
+  local missing=$1 d answers='{}' k v
+  d=$(settings_defaults)
+  say "the crew has no settings yet. A few questions, one at a time; they are saved $(tares_on && echo "on Tares" || echo "in $CREW_CFG") and not asked again."
+  for k in $missing; do
+    case "$k" in
+      autonomy) v=$(ask "Autonomy: how far may the crew go without you? L3-review (every merge waits for your yes), L4-ship (builders merge after the reviewer's verdict and green CI; production waits for you), L5-dark (the releaser also deploys production after verifying it)" \
+        L4-ship "merges run on the reviewer's verdict, production stays yours" '^(L3-review|L4-ship|L5-dark)$'); answers=$(jq -c --arg v "$v" '.autonomy=$v' <<<"$answers") ;;
+      release_profile) v=$(ask "Release profile: how does the releaser ship? kind (a local kind cluster), github-release (tags and GitHub releases only), custom (each project's own steps)" \
+        kind "rehearses every release locally before anything real" '^(kind|github-release|custom)$'); answers=$(jq -c --arg v "$v" '.release_profile=$v' <<<"$answers") ;;
+      prod_pattern) v=$(ask "Production pattern: a regular expression; any environment, kube context or namespace it matches counts as production" \
+        "$(jq -r .prod_pattern <<<"$d")" "matches prod and production as a word in a name" '.'); answers=$(jq -c --arg v "$v" '.prod_pattern=$v' <<<"$answers") ;;
+      challenger) v=$(ask "Challenger: should builders run the Tares Codex challenger on every commit before they ask for review? yes or no" \
+        "$(jq -r 'if .challenger then "yes" else "no" end' <<<"$d")" "$(command -v codex >/dev/null 2>&1 && echo "Codex is installed here, so a second model checks each commit" || echo "the Codex CLI is not installed here")" '^(yes|no|true|false)$')
+        answers=$(jq -c --arg v "$v" '.challenger=($v == "yes" or $v == "true")' <<<"$answers") ;;
+      builders_max) v=$(ask "Builders: how many builder sessions may run at once, across all projects?" \
+        2 "each builder is a heavy Sonnet session" '^[1-9][0-9]*$'); answers=$(jq -c --argjson v "$v" '.builders_max=$v' <<<"$answers") ;;
+    esac
+  done
+  if tares_on; then
+    tares_http PUT /api/crew/settings "$answers" >/dev/null || die "could not save the crew settings on Tares at $TARES"
+  else
+    local tmp; tmp=$(mktemp); jq --argjson a "$answers" '.settings = ((.settings // {}) + $a)' "$CREW_CFG" > "$tmp" && mv "$tmp" "$CREW_CFG"
+  fi
+  SETTINGS=""
+}
+
+ask_grants() { # standing grants for all projects, one per question, until an empty answer
+  [ "$ASSUME_YES" = 1 ] && return 0
+  local words
+  while :; do
+    printf '\nA standing grant for all projects, in your own words (for example: the releaser may restart the staging database when a migration needs it).\n  recommended: none; your autonomy level already covers routine work\n  press enter when you have no more\n> ' >&2
+    IFS= read -r words || words=""
+    [ -n "$words" ] || { echo >&2; return 0; }
+    if tares_on; then
+      tares_http POST /api/grants "$(jq -cn --arg w "$words" '{words: $w, scope: "all"}')" >/dev/null || die "could not save the grant on Tares"
+    else
+      [ -f "$CREW_HOME/GRANTS.md" ] || cp "$TEMPLATES/state/GRANTS.md" "$CREW_HOME/GRANTS.md"
+      printf -- '- "%s" (%s)\n' "$words" "$(date -u +%Y-%m-%d)" >> "$CREW_HOME/GRANTS.md"
+    fi
+    say "saved"
+  done
+}
+
+ensure_settings() {
+  local raw missing; raw=$(settings_raw) || exit 1; missing=$(settings_missing "$raw")
+  [ -z "$missing" ] && return 0
+  ask_settings "$missing"
+  ask_grants
+}
+
+grants_md() { # [project] → markdown of grants for all projects, then the project's
+  if tares_on; then
+    local q=""; [ -n "${1:-}" ] && q="?project=$(jq -rn --arg p "$1" '$p | @uri')"
+    local g
+    # A project Tares doesn't know answers 404; the grants for all projects still apply.
+    g=$(tares_http GET "/api/grants$q" 2>/dev/null) || { [ -n "$q" ] && g=$(tares_http GET /api/grants 2>/dev/null); } \
+      || { say "could not read grants from Tares"; return 0; }
+    jq -r '.all // ""' <<<"$g"
+    [ -n "${1:-}" ] && jq -r '.project // ""' <<<"$g" | sed 's/^/@project /'
+  else
+    [ -f "$CREW_HOME/GRANTS.md" ] && cat "$CREW_HOME/GRANTS.md"
+    if [ -n "${1:-}" ]; then
+      local p repo
+      while IFS=$'\t' read -r p repo; do
+        [ "$p" = "$1" ] && [ -f "$repo/.factory/GRANTS.md" ] && sed 's/^/@project /' "$repo/.factory/GRANTS.md"
+      done < <(project_repo_rows)
+    fi
+  fi
+  return 0
+}
+# One allow rule per grant line. Tares keeps each as `- "<words>" (YYYY-MM-DD)`, and so does the local
+# GRANTS.md; `- YYYY-MM-DD: words` and undated list items are read too. Quotes the words and date.
+GRANT_QUOTED='^"(.*)"[[:space:]]*\(([0-9]{4}-[0-9]{2}-[0-9]{2})\)[[:space:]]*$'
+GRANT_DATED='^([0-9]{4}-[0-9]{2}-[0-9]{2})[[:space:]]*[:,-]?[[:space:]]*(.*)$'
+grant_rules() { # project-label human
+  local line scope words date
+  while IFS= read -r line; do
+    scope="all projects"
+    case "$line" in "@project "*) line=${line#@project }; scope="project $1" ;; esac
+    case "$line" in "- "*|"* "*) line=${line:2} ;; [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*) ;; *) continue ;; esac
+    date=""; words=$line
+    if [[ $line =~ $GRANT_QUOTED ]]; then words=${BASH_REMATCH[1]}; date=${BASH_REMATCH[2]}
+    elif [[ $line =~ $GRANT_DATED ]]; then date=${BASH_REMATCH[1]}; words=${BASH_REMATCH[2]}; fi
+    [ -n "$words" ] || continue
+    if [ -n "$date" ]; then echo "$2 granted this on $date for $scope, in their own words: \"$words\". Acting within that grant is expected work."
+    else echo "$2 granted this (undated) for $scope, in their own words: \"$words\". Acting within that grant is expected work."; fi
+  done
+}
+
+# ---------- stations ----------
+
+station_name() { # role-or-station → full station name
+  case "$1" in orchestrator|reviewer|releaser|comms) echo "crew-$1" ;; *) echo "$1" ;; esac
+}
+stations_get() { [ -f "$STATIONS" ] && jq -r --arg s "$1" ".[\$s]$2 // empty" "$STATIONS" || true; }
+stations_put() { # station, json object to merge
+  local tmp; tmp=$(mktemp)
+  [ -f "$STATIONS" ] || echo '{}' > "$STATIONS"
+  jq --arg s "$1" --argjson v "$2" '.[$s] = ((.[$s] // {}) + $v)' "$STATIONS" > "$tmp" && mv "$tmp" "$STATIONS"
+}
+# A project spans one or more repos: `repos` lists each in the order they were handed over, `repo` is
+# the first (where a plan without Tares lives). A level given at hand-over sticks to the project.
+projects_put() { # name repo [autonomy]
+  local tmp; tmp=$(mktemp)
+  [ -f "$PROJECTS" ] || echo '{}' > "$PROJECTS"
+  jq --arg p "$1" --arg r "$2" --arg s "$(slugify "$1")" --arg a "${3:-}" '
+    .[$p] = ((.[$p] // {addedAt: (now | todate)})
+      | .slug = $s
+      | .repos = (((.repos // [.repo | select(. != null)]) + [$r])
+                  | reduce .[] as $x ([]; if any(.[]; . == $x) then . else . + [$x] end))
+      | .repo = .repos[0]
+      | if $a != "" then .autonomy = $a else . end)' "$PROJECTS" > "$tmp" && mv "$tmp" "$PROJECTS"
+}
+project_autonomy() { jq -r --arg p "$1" '.[$p].autonomy // empty' "$PROJECTS" 2>/dev/null || true; }
+PROJECT_REPOS='to_entries[] | .key as $k | (.value.repos // [.value.repo])[] | select(. != null) | [$k, .]'
+project_repo_rows() { jq -r "$PROJECT_REPOS | @tsv" "$PROJECTS" 2>/dev/null || true; } # project<TAB>repo, per repo
+all_repos() { jq -r "[$PROJECT_REPOS | .[1]] | unique | .[]" "$PROJECTS" 2>/dev/null || true; }
+repo_tags_off() { [ "$(jq -r '.release.tags' "$1/.factory/factory.json" 2>/dev/null)" = false ]; }
+
+# The sessions Claude Code counts as active (`claude agents --json` without --all). A list that can't be
+# read is never taken for an empty one: that would make every station look stopped, and the watch would
+# start a second session under each name.
+active_json() {
+  local out; out=$("$CLAUDE" agents --json 2>/dev/null) && jq -e 'type == "array"' <<<"$out" >/dev/null || return 1
+  printf '%s\n' "$out"
+}
+UNREAD="could not read Claude Code's session list (claude agents --json)"
+job_state() { local f="$HOME/.claude/jobs/$1/state.json"; [ -f "$f" ] && cat "$f" || echo '{}'; }
+
+# Where a live session is in its turn: done between turns, working in one, blocked on a person. The
+# list's `status` says it; its `state` reads "working" for as long as a schedule is armed, and the job
+# file keeps "working" through a permission prompt.
+TURN='def turn: if (.state // "") | IN("stopped", "failed", "killed", "removed") then .state
+  else {idle: "done", busy: "working", waiting: "blocked"}[.status // ""] // .state end;'
+turn_state() { # job id → done, working or blocked; empty when it isn't live
+  active_json | jq -r --arg id "$1" "$GONE $TURN"' .[] | select(.id == $id and (gone | not)) | turn' | head -1
+}
+
+# `claude --bg` prints "backgrounded · <id> · <name>". From inside a Claude session the id comes
+# wrapped in colour codes, which hide it from a plain match, so strip them first.
+parse_bg_id() {
+  sed $'s/\x1b\\[[0-9;]*[A-Za-z]//g' | grep -Eo 'backgrounded[^0-9a-f]+[0-9a-f]{8}' | grep -Eo '[0-9a-f]{8}$' | head -1 || true
+}
+
+# A session is live while Claude Code lists it as active (`claude agents --json` without --all) and a
+# process holds it. One whose turn ended and whose process is gone drops out of that list, but one with
+# a schedule armed stays in it as "working" after its process is stopped, so the process is checked per
+# session. Only a session waiting on a person may have none and still be live: answering it starts one.
+GONE='def gone: ((.state // "") | IN("stopped", "failed", "killed", "removed")) or ((has("pid") | not) and .state != "blocked");'
+
+find_live_job() { # exact session name, cwd → id of the newest live session with that name there
+  active_json | jq -r --arg n "$1" --arg cwd "$2" "$GONE"'
+    [.[] | select(.name == $n and ($cwd == "" or .cwd == $cwd) and (gone | not))]
+    | sort_by(.startedAt) | last | .id // empty'
+}
+
+is_alive() { # station [cwd] → 0 if its session is running or waiting; dies when the session list can't be read
+  local cwd=${2:-} id agents; [ -n "$cwd" ] || cwd=$(stations_get "$1" '.cwd')
+  id=$(stations_get "$1" '.id')
+  agents=$(active_json) || die "$UNREAD; not guessing whether $1 runs"
+  jq -e --arg n "$1" --arg cwd "${cwd:-$CREW_HOME}" --arg id "$id" "$GONE"'
+    any(.[]; (gone | not) and ((.name == $n and .cwd == $cwd) or ($id != "" and .id == $id)))' <<<"$agents" >/dev/null
+}
+
+# One factory command at a time starts or stops a station: a restart and the watch's revive once both
+# found the same station down and both started it, leaving two sessions under one name.
+LOCKED=""
+station_lock() { # station → held until this shell exits; dies if another live command holds it
+  case " $LOCKED " in *" $1 "*) return 0 ;; esac
+  local lock="$CREW_HOME/stations/$1.lock" holder me tries=0 takes=0
+  me=$(exec sh -c 'echo "$PPID"') # this shell's own pid, in a subshell too
+  mkdir -p "$CREW_HOME/stations"
+  until mkdir "$lock" 2>/dev/null; do
+    holder=$(cat "$lock/pid" 2>/dev/null || true)
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+      die "another factory command (pid $holder) is starting or stopping $1; try again in a minute"
+    fi
+    # No pid yet may be a command that has only just taken the lock: give it a moment before calling it stale.
+    if [ -z "$holder" ] && [ $tries -lt 10 ]; then tries=$((tries + 1)); sleep 0.2; continue; fi
+    # Clear a stale lock only under a second one, and only if it is still the one judged stale: two
+    # commands clearing it at once could each end up holding a fresh one.
+    # It is held for an instant, so one still there after five seconds was left by a killed command.
+    if mkdir "$lock.takeover" 2>/dev/null; then
+      [ "$(cat "$lock/pid" 2>/dev/null || true)" = "$holder" ] && { rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null || true; }
+      rmdir "$lock.takeover"
+    elif [ $takes -ge 25 ]; then rmdir "$lock.takeover" 2>/dev/null || true; takes=0
+    else takes=$((takes + 1)); sleep 0.2; fi
+  done
+  echo "$me" > "$lock/pid"
+  LOCKED="$LOCKED $1"
+  trap release_locks EXIT
+}
+release_locks() {
+  local s; for s in $LOCKED; do rm -f "$CREW_HOME/stations/$s.lock/pid"; rmdir "$CREW_HOME/stations/$s.lock" 2>/dev/null || true; done
+}
+
+# Records live crew sessions that stations.json is missing (a spawn whose output could not be read),
+# so status, roster and the duplicate check see them.
+adopt_unrecorded() {
+  [ -f "$CREW_CFG" ] || return 0
+  local id name session cwd role project repo live
+  live=$(active_json) || return 0
+  while IFS=$'\t' read -r id name session cwd; do
+    [ -n "$id" ] || continue
+    # A second live session under a recorded live station is a duplicate for status to show, not a replacement.
+    jq -e --arg id "$(stations_get "$name" '.id')" "$GONE"' any(.[]; .id == $id and (gone | not))' <<<"$live" >/dev/null && continue
+    project=""; repo=""
+    case "$name" in
+      crew-orchestrator|crew-reviewer|crew-releaser|crew-comms) role=${name#crew-}; [ "$cwd" = "$CREW_HOME" ] || continue ;;
+      *-build-*) role=builder; repo=$cwd
+        project=$(jq -r --arg c "$cwd" "[$PROJECT_REPOS | select(.[1] == \$c) | .[0]][0] // empty" "$PROJECTS" 2>/dev/null || true)
+        [ -n "$project" ] || continue ;;
+      *) continue ;;
+    esac
+    local flags model effort
+    flags=$(job_state "$id" | jq -c '.respawnFlags // []')
+    model=$(jq -r 'index("--model") as $i | if $i then .[$i+1] else "" end' <<<"$flags")
+    effort=$(jq -r 'index("--effort") as $i | if $i then .[$i+1] else "" end' <<<"$flags")
+    stations_put "$name" "$(jq -n --arg role "$role" --arg id "$id" --arg session "$session" --arg model "$model" \
+      --arg effort "$effort" --arg cwd "$cwd" --arg settings "$CREW_HOME/stations/$name.settings.json" \
+      --arg project "$project" --arg repo "$repo" \
+      '{role: $role, parent: (if $role == "builder" then "crew-orchestrator" else "" end), project: $project, repo: $repo,
+        id: $id, sessionId: $session,
+        model: $model, effort: $effort, cwd: $cwd, settings: $settings, status: "active", startedAt: (now | todate), adopted: true}')"
+  done < <(jq -r "$GONE"'
+    .[] | select((.name // "") | test("^crew-|-build-"))
+    | select(gone | not)
+    | [.id, .name, .sessionId, .cwd] | @tsv' <<<"$live")
+}
+
+check_model() {
+  case "$1" in
+    *haiku*|*Haiku*) die "station '$2' is set to $1. Auto mode does not run on Haiku, so the station would stop on every permission prompt. Use sonnet or opus in crew.json." ;;
+  esac
+}
+
+level_text() {
+  case "$1" in
+    L3-review) echo "builders open PRs but every merge waits for the human's yes, relayed by the orchestrator; the releaser deploys to non-production environments automatically" ;;
+    L5-dark) echo "builders merge after the crew reviewer's verdict and green CI; the releaser deploys to every configured environment, production included, after verifying it" ;;
+    *) echo "builders merge after the crew reviewer's verdict and green CI; the releaser deploys to non-production environments automatically; production waits for the human" ;;
+  esac
+}
+
+level_rank() { case "$1" in L3-review) echo 3 ;; L4-ship) echo 4 ;; L5-dark) echo 5 ;; *) return 1 ;; esac; }
+
+parent_role() { # parent station → the role a helper works under
+  case "$1" in crew-*) echo "${1#crew-}" ;; *-build-*) echo builder ;; *) echo "" ;; esac
+}
+
+# Per-station settings, passed with --settings. Plugins can't ship permissions or auto-mode rules,
+# and project settings files are ignored for auto mode, so the human's grant has to travel this way.
+write_settings() { # station role parent project repo
+  local station=$1 role=$2 parent=$3 project=$4 repo=$5 file="$CREW_HOME/stations/$1.settings.json"
+  local human at level prod_pattern cluster work_role
+  human=$(ccfg '.human.name // "the user"'); [ -n "$human" ] || human="the user"; at=$(ccfg '.authorized.at // ""')
+  # A project handed over at a stricter level keeps it for its builder and the builder's helpers.
+  level=$(stations_get "$station" '.autonomy'); [ -n "$level" ] || [ -z "$parent" ] || level=$(stations_get "$parent" '.autonomy')
+  local crew_level; crew_level=$(setting autonomy)
+  level_rank "$crew_level" >/dev/null || die "no valid crew autonomy (got '$crew_level'); refusing to write settings for $station"
+  [ -n "$level" ] || level=$crew_level
+  level_rank "$level" >/dev/null || die "no valid autonomy level for $station (got '$level'); refusing to write its settings"
+  # A crew lowered since the project was handed over takes the project down with it.
+  [ "$(level_rank "$crew_level")" -lt "$(level_rank "$level")" ] && level=$crew_level
+  prod_pattern=$(setting prod_pattern); cluster=$(ccfg '.release.cluster // "factory"')
+  work_role=$role; [ "$role" = helper ] && work_role=$(parent_role "$parent")
+
+  local repos="the repositories of the projects handed to this crew (listed in $PROJECTS)"
+  local known; known=$(jq -r "[$PROJECT_REPOS | .[1]] | unique | join(\", \")" "$PROJECTS" 2>/dev/null || true)
+  [ -n "$known" ] && repos="$repos, today: $known"
+  local where=$repos; [ -n "$repo" ] && where="the repository of project $project, checked out at $repo"
+
+  local env_line="This session is the $role station \`$station\` of a tares-factory crew: one team of Claude Code sessions that $human started on $at with \`factory crew up\` to build the projects handed to it."
+  [ -n "$project" ] && env_line="$env_line It works on project $project in $repo."
+  [ -n "$parent" ] && env_line="$env_line It was started by the station \`$parent\`."
+  env_line="$env_line $human chose autonomy level $level, meaning: $(level_text "$level"). Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+
+  local notag="" state_repos=$repos
+  if [ -n "$project" ]; then # a builder and its helpers: the .factory folders of its own project's repos only
+    state_repos="the repositories of project $project: $(jq -r --arg p "$project" "[$PROJECT_REPOS | select(.[0] == \$p) | .[1]] | join(\", \")" "$PROJECTS" 2>/dev/null || true)"
+  fi
+  local -a allow=("Creating and editing files under $CREW_HOME (the crew's shared state), under the .factory/ folder of $state_repos, and git worktrees under those .factory/worktrees folders or $CREW_HOME/worktrees, is expected work for this crew station."
+                  "Removing git worktrees and scratch folders with \`factory tidy <path>\`, which deletes only inside the crew's own folders, is expected work for this crew station.")
+  case "$work_role" in
+    orchestrator) allow+=("Starting background Claude Code sessions for this crew with \`factory spawn\` (builders named \`<project>-build-<slug>\` inside a project's repo, helpers named \`<station>-<slug>\`), and stopping, removing or resuming the sessions recorded in $STATIONS with \`factory retire\`, \`factory revive\`, \`factory restart\`, \`claude stop\`, \`claude rm\` or \`claude --bg --resume\`, is expected work that $human authorized by running \`factory crew up\`. Sessions not recorded there are out of scope.") ;;
+    builder)
+      allow+=("Pushing \`factory/*\` branches to $where, and opening pull requests there, is expected work that $human authorized.")
+      [ "$level" != "L3-review" ] && allow+=("Merging a pull request in $where, that this crew opened from a \`factory/*\` branch is expected work that $human pre-authorized at level $level, once CI on its head commit is green (or the repository has no CI checks configured, in which case the reviewer's run of the tests stands in for CI) and the crew reviewer station's \`factory/review\` commit status on that head commit is \`success\`. The reviewer station's verdict is the review $human chose to rely on. Deleting the merged \`factory/*\` branch is expected.")
+      [ "$level" = "L3-review" ] && allow+=("Merging a pull request in $where, that this crew opened from a \`factory/*\` branch is expected work once the merge gate holds (CI green, or no CI checks configured with the reviewer's run of the tests standing in; the crew reviewer's \`factory/review\` status \`success\` on the head commit) and the orchestrator has relayed $human's yes for that pull request, quoted verbatim from the desk.") ;;
+    reviewer) allow+=("Posting review-verdict comments with \`gh pr comment\` on pull requests that this crew opened in $repos, and setting the \`factory/review\` commit status on their head commits with \`gh api repos/.../statuses/<sha>\`, is expected work that $human authorized.") ;;
+    comms) local channel; channel=$(ccfg '.comms.channel // ""')
+      [ -n "$channel" ] && allow+=("Posting crew updates in the Slack channel $channel, direct messages to $human about open questions, and review requests to the teammates listed in $CREW_CFG under comms.team, are expected work that $human authorized. Anyone else needs $human's explicit go-ahead.") ;;
+    releaser)
+      # A repo whose own .factory/factory.json says release.tags=false is one where a tag is a real release.
+      local r; while IFS= read -r r; do [ -n "$r" ] && repo_tags_off "$r" && notag="${notag:+$notag, }$r"; done < <(all_repos)
+      allow+=("Building container images, loading them into the local kind cluster \`$cluster\`, applying manifests, rolling out and rolling back in that cluster, creating \`v*\` git tags and GitHub releases in $repos${notag:+ (except in $notag, see below)}, are expected work that $human authorized.")
+      [ "$level" = "L5-dark" ] && allow+=("Deploying merged, verified releases to the production environments listed in $CREW_CFG is expected work that $human pre-authorized at level L5-dark, for projects handed over at that level; not for a project handed over at a stricter level (listed below, or named so in its RELEASE message).") ;;
+  esac
+  local rule
+  while IFS= read -r rule; do [ -n "$rule" ] && allow+=("$rule"); done < <(grants_md "$project" | grant_rules "$project" "$human")
+
+  local -a soft_deny=()
+  [ "$work_role" = "releaser" ] && [ "$level" = "L5-dark" ] || soft_deny+=("Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern $prod_pattern. That needs $human directly.")
+  [ -n "$notag" ] && soft_deny+=("Creating git tags or GitHub releases in $notag: release.tags is false in that repository's .factory/factory.json, because a tag there is a real release. That needs $human directly.")
+  if [ "$work_role" = "releaser" ] && [ "$level" = "L5-dark" ]; then
+    local strict_p strict_l
+    while IFS=$'\t' read -r strict_p strict_l; do
+      [ -n "$strict_p" ] && soft_deny+=("Deploying to, or changing, production (anything matching $prod_pattern, or marked production in $CREW_CFG) for project $strict_p: $human handed it over at $strict_l, stricter than the crew's L5-dark. That needs $human directly.")
+    done < <(jq -r 'to_entries[] | select((.value.autonomy // "L5-dark") != "L5-dark") | [.key, .value.autonomy] | @tsv' "$PROJECTS" 2>/dev/null || true)
+  fi
+
+  local perms_json='{"allow": ["Bash(factory tidy *)"]}'
+  [ "$role" = orchestrator ] && perms_json='{"allow": ["Bash(factory tidy *)", "Bash(factory spawn *)", "Bash(factory revive *)", "Bash(factory restart *)", "Bash(factory retire *)", "Bash(factory roster)", "Bash(factory status)", "Bash(factory crew status)", "Bash(factory crew halt)", "Bash(factory crew halt *)", "Bash(factory crew resume)"]}'
+
+  local allow_json deny_json wt
+  allow_json=$(printf '%s\n' "${allow[@]}" | jq -R . | jq -s '["$defaults"] + .')
+  deny_json=$( { [ ${#soft_deny[@]} -gt 0 ] && printf '%s\n' "${soft_deny[@]}" || true; } | jq -R . | jq -s '["$defaults"] + .')
+  wt="$CREW_HOME/worktrees"; [ -n "$repo" ] && wt="$repo/.factory/worktrees"
+
+  mkdir -p "$CREW_HOME/stations"
+  jq -n \
+    --arg role "$role" --arg station "$station" --arg parent "$parent" --arg project "$project" \
+    --arg pslug "$( [ -n "$project" ] && slugify "$project" || true)" --arg home "$CREW_HOME" --arg repo "$repo" \
+    --arg wt "$wt" --arg tares "$(tares_on && echo on || echo off)" --arg tares_url "$TARES" --arg tares_plugin "${TARES_PLUGIN_DIR:-}" \
+    --arg env_line "$env_line" --argjson allow "$allow_json" --argjson deny "$deny_json" --argjson perms "$perms_json" \
+    '{
+      env: ({
+        FACTORY_STATION: $station, FACTORY_ROLE: $role, FACTORY_PARENT: $parent,
+        FACTORY_HOME: $home, FACTORY_CREW_HOME: $home, FACTORY_WORKTREES: $wt, FACTORY_TARES: $tares,
+        RIUS_SERVICE_NAME: ("factory-" + $station)[0:64]
+      } + (if $tares == "on" then {TARESD_URL: $tares_url} else {} end)
+        + (if $tares == "on" and $tares_plugin != "" then {TARES_PLUGIN_DIR: $tares_plugin} else {} end)
+        + (if $project != "" then {TARES_PROJECT: $project, FACTORY_PROJECT: $pslug} else {} end)
+        + (if $repo != "" then {FACTORY_REPO: $repo, FACTORY_PROJECT_HOME: ($repo + "/.factory")} else {} end)),
+      crossSessionInbound: "accept",
+      worktree: { bgIsolation: "none" },
+      permissions: $perms,
+      autoMode: { environment: ["$defaults", $env_line], allow: $allow, soft_deny: $deny }
+    }' > "$file"
+  echo "$file"
+}
+
+plugin_flags() {
+  # Stations load this kit's plugin unless it is installed and enabled, and the Tares plugin when connected.
+  if ! jq -e 'any(.enabledPlugins // {} | to_entries[]; (.key | startswith("tares-factory@")) and .value == true)' "$HOME/.claude/settings.json" >/dev/null 2>&1; then
+    printf '%s\n' --plugin-dir "$KIT_PLUGIN"
+  fi
+  tares_plugin_flags
+}
+
+# Under about 150k tokens a station can refill its context within three steps of a compaction,
+# three times running, and Claude Code then stops it as thrashing (a 100k session did, 2026-10-08).
+COMPACT_MIN=150000
+compact_window() { # → the --autocompact value from crew.json, never under COMPACT_MIN
+  local w; w=$(ccfg '.limits.autocompact_tokens // 200000')
+  [ "$w" = auto ] && { echo auto; return; }
+  w=${w%%.*}
+  [[ "$w" =~ ^[0-9]+$ ]] || w=200000
+  if [ "$w" -lt $COMPACT_MIN ]; then
+    say "limits.autocompact_tokens is $w; stations use $COMPACT_MIN, since a smaller window can thrash"
+    w=$COMPACT_MIN
+  fi
+  echo "$w"
+}
+
+transcript_of() { # station → its conversation's transcript file, when there is one
+  local id s=""; id=$(stations_get "$1" '.id')
+  [ -n "$id" ] && s=$(job_state "$id" | jq -r '.sessionId // empty')
+  [ -n "$s" ] || s=$(stations_get "$1" '.sessionId'); [ -n "$s" ] || return 0
+  ls "$HOME"/.claude/projects/*/"$s".jsonl 2>/dev/null | head -1 || true
+}
+
+# Claude Code stops a session whose context refills right after each compaction, three times running,
+# and waits for someone to clear it. Resuming it would thrash again, so the watch starts it fresh.
+stuck_on_context() { # station → 0 when Claude Code's thrashing notice is the last thing said and nothing new runs
+  local t id; t=$(transcript_of "$1"); [ -n "$t" ] || return 1
+  tail -n 200 "$t" | jq -cR 'fromjson? | select(.type == "assistant" or .type == "user")' | tail -1 \
+    | grep -q '"<synthetic>".*Autocompact is thrashing' || return 1
+  local st; id=$(stations_get "$1" '.id'); st=$(turn_state "$id") || return 1
+  [ "$st" != working ]
+}
+
+kit_version() { # a fingerprint of the kit the stations run on: its CLI, hooks, skills and templates; never fails
+  { (cd "$KIT_PLUGIN" && find . -type f ! -name '.*' ! -name '*~' ! -name '4913' ! -name '*.orig' ! -name '*.rej' \
+      ! -name '*.swp' -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 cat 2>/dev/null) || true; } | cksum | cut -d' ' -f1
+}
+
+kit_clean() { # → 0 unless the kit is a git checkout with uncommitted changes: a checkout being edited is no release
+  git -C "$KIT_PLUGIN" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  [ -z "$(git --no-optional-locks -C "$KIT_PLUGIN" status --porcelain --untracked-files=no -- . 2>/dev/null)" ]
+}
+
+# A station is quiet between its turns with nothing running in the background or queued. Its own schedule
+# (a session cron) comes back on resume, so it doesn't count. One waiting on a person (a question or a
+# permission prompt) counts only after half an hour, so a restart never cuts off someone answering it.
+quiet() { # station → 0 when it is quiet
+  local id st; id=$(stations_get "$1" '.id')
+  st=$(turn_state "$id")
+  case "$st" in done|blocked) ;; *) return 1 ;; esac
+  job_state "$id" | jq -e --arg st "$st" --argjson wait "${FACTORY_QUIET_WAIT:-1800}" '
+    (.inFlight.queued // 0) == 0 and .inFlight.wake == null
+    and ([(.inFlight.kinds // [])[] | select(. != "session_cron")] | length) == 0
+    and (((.inFlight.kinds // []) | length) > 0 or (.inFlight.tasks // 0) == 0)
+    and ($st == "done"
+         or (now - (((.updatedAt // "") | sub("\\.[0-9]+"; "") | fromdateiso8601?) // now)) >= $wait)' >/dev/null
+}
+
+launch() { # station role parent project repo cwd model effort prompt [resume-session-id]
+  local station=$1 role=$2 parent=$3 project=$4 repo=$5 cwd=$6 model=$7 effort=$8 prompt=$9 resume=${10:-}
+  check_model "$model" "$station"
+  local settings; settings=$(write_settings "$station" "$role" "$parent" "$project" "$repo")
+  local skill=$role; [ "$role" = helper ] && skill=$(parent_role "$parent")
+  local identity="You are a tares-factory station: role $role, session name $station"
+  [ -n "$project" ] && identity="$identity, project $project, repo $repo"
+  [ -n "$parent" ] && identity="$identity, started by $parent"
+  identity="$identity. Your operating rules are the skills factory-protocol and station-$skill from the tares-factory plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role."
+  local -a args=(--bg -n "$station" --model "$model" --effort "$effort" --permission-mode auto
+                 --settings "$settings" --autocompact "$(compact_window)"
+                 --append-system-prompt "$identity")
+  local f; while IFS= read -r f; do [ -n "$f" ] && args+=("$f"); done < <(plugin_flags)
+  [ -n "$resume" ] && args+=(--resume "$resume")
+  args+=("$prompt")
+
+  local out id
+  out=$(cd "$cwd" && NO_COLOR=1 FORCE_COLOR=0 "$CLAUDE" "${args[@]}" 2>&1) || true
+  id=$(parse_bg_id <<<"$out")
+  if [ -z "$id" ] && ! grep -q 'not trusted' <<<"$out"; then
+    sleep "${FACTORY_PAUSE:-2}"; id=$(find_live_job "$station" "$cwd") || id=""
+  fi
+  if [ -z "$id" ]; then
+    echo "$out" >&2
+    grep -q 'not trusted' <<<"$out" && die "Claude Code has not trusted $cwd yet. Run \`claude\` there once, accept the trust prompt, exit, then retry."
+    die "could not start $station"
+  fi
+
+  local session=""
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    session=$(job_state "$id" | jq -r '.sessionId // empty')
+    [ -n "$session" ] && break; sleep 1
+  done
+  stations_put "$station" "$(jq -n --arg role "$role" --arg parent "$parent" --arg project "$project" --arg repo "$repo" \
+    --arg cwd "$cwd" --arg id "$id" --arg session "$session" --arg model "$model" --arg effort "$effort" --arg settings "$settings" \
+    --arg kit "$(kit_version)" \
+    '{role: $role, parent: $parent, project: $project, repo: $repo, cwd: $cwd, id: $id, sessionId: $session,
+      model: $model, effort: $effort, settings: $settings, kit: $kit, status: "active", startedAt: (now | todate)}')"
+  event started "$station" "$id"
+  say "started $station ($role, $model/$effort) as $id"
+}
+
+boot_prompt() { # role [task]
+  local p="Boot as the $1 station: load the skills factory-protocol and station-$1, follow their Boot sections, and send crew-orchestrator READY when you are set."
+  [ "$1" = orchestrator ] && p="Boot as the orchestrator station: load the skills factory-protocol and station-orchestrator, then follow the Boot section. The other stations will send you READY."
+  [ -n "${2:-}" ] && p="$p
+
+Your task:
+$2"
+  echo "$p"
+}
+
+halted() { [ -f "$HALT_FILE" ]; }
+
+# Decide once, in this shell, whether Tares is connected and what the crew settings are, so later
+# subshells reuse the answer instead of asking Tares again.
+prime() {
+  merge_crew_defaults
+  tares_on >/dev/null || true
+  if [ -f "$CREW_CFG" ]; then crew_settings >/dev/null || true; fi
+}
+
+# ---------- crew commands ----------
+
+cmd_crew_up() {
+  local roles=""
+  while [ $# -gt 0 ]; do
+    case "$1" in --yes|-y) ASSUME_YES=1; shift ;; *) roles="$roles $1"; shift ;; esac
+  done
+  ensure_crew_home
+  ensure_settings
+  prime
+  if ! tares_on; then
+    local f
+    for f in DESK.md ANSWERS.md DECISIONS.md GRANTS.md; do
+      [ -f "$CREW_HOME/$f" ] || cp "$TEMPLATES/state/$f" "$CREW_HOME/$f"
+    done
+  fi
+  [ -n "${roles// /}" ] || { roles=$CREW_ROLES; [ "$(ccfg '.stations.comms.enabled')" = true ] && roles="$roles comms"; }
+  # Orchestrator first so the others can check in with it.
+  local ordered="" r
+  for r in $roles; do [ "$r" = orchestrator ] && ordered="orchestrator"; done
+  for r in $roles; do [ "$r" = orchestrator ] || ordered="$ordered $r"; done
+
+  for r in $ordered; do
+    case " $CREW_ROLES comms " in *" $r "*) ;; *) die "unknown crew role '$r' (crew roles: $CREW_ROLES; builders start with factory spawn)" ;; esac
+    local station; station=$(station_name "$r")
+    station_lock "$station"
+    if is_alive "$station"; then say "$station is already running"; continue; fi
+    launch "$station" "$r" "" "" "" "$CREW_HOME" "$(ccfg ".stations.$r.model")" "$(ccfg ".stations.$r.effort")" "$(boot_prompt "$r")"
+    [ "$r" = orchestrator ] && sleep "${FACTORY_PAUSE:-5}"
+  done
+  cmd_status
+  if [ "$(ccfg '.rius.enabled // false')" = true ] && rius_plugin_on; then
+    local untraced; untraced=$(rius_untraced)
+    [ -z "$untraced" ] || say "Rius doesn't trace$untraced yet, so those stations send nothing: $RIUS_ON_HINT"
+  fi
+  cat >&2 <<NEXT
+
+factory: the stations take a few minutes to check in. Then:
+  factory crew attach orchestrator   answer the crew's questions here, one at a time (press ← to go back)
+  factory crew status                what every station is doing, and the next question for you
+  factory crew watch                 keep the crew alive (run it in a spare terminal)
+To hand a project to the crew, finish its spec with the hand-over, or run /tares-factory:ship in its repo.
+NEXT
+}
+
+cmd_spawn() {
+  require_crew
+  halted && die "the crew is halted ($(cat "$HALT_FILE")); factory crew resume first"
+  local kind=${1:-}; shift || true
+  local role station parent project="" repo="" cwd model effort task autonomy=""
+  case "$kind" in
+    builder)
+      if [ "${1:-}" = --autonomy ]; then autonomy=${2:-}; shift 2 || true; fi
+      [ $# -ge 4 ] || die "usage: factory spawn builder [--autonomy L3-review|L4-ship|L5-dark] <project> <slug> <repo> \"<task>\""
+      if [ -n "$autonomy" ]; then
+        # A project may be stricter than the crew, never looser: a looser level is a new grant from the person.
+        local want have
+        want=$(level_rank "$autonomy") || die "autonomy must be L3-review, L4-ship or L5-dark"
+        have=$(level_rank "$(setting autonomy)")
+        [ "$want" -le "$have" ] || die "a project can only be stricter than the crew (crew autonomy is $(setting autonomy)); the person raises the crew setting instead"
+      fi
+      project=$1; local slug; slug=$(slugify "$2"); task=$4
+      [ -n "$autonomy" ] || autonomy=$(project_autonomy "$project")
+      case "$(slugify "$project")" in crew|crew-*) die "a project name can't start with \"crew\": station names starting crew- belong to the crew itself" ;; esac
+      repo=$(git -C "$3" rev-parse --show-toplevel 2>/dev/null) || die "$3 is not a git repository"
+      role=builder; parent=crew-orchestrator; station="$(slugify "$project")-build-$slug"; cwd=$repo
+      model=$(ccfg '.stations.builder.model'); effort=$(ccfg '.stations.builder.effort')
+      local active max; max=$(setting builders_max)
+      active=$(jq -r '[to_entries[] | select(.value.role == "builder" and .value.status == "active")] | length' "$STATIONS" 2>/dev/null || echo 0)
+      [ "$active" -lt "$max" ] || die "already $active active builders (crew setting builders_max is $max); retire one first"
+      projects_put "$project" "$repo" "$autonomy"
+      local rel="$CREW_HOME/stations/crew-releaser.settings.json"
+      if [ "$(setting autonomy)" = L5-dark ] && [ -n "$autonomy" ] && [ "$autonomy" != L5-dark ] && [ -f "$rel" ] \
+        && ! jq -e --arg p "project $project:" 'any(.autoMode.soft_deny[]; contains($p))' "$rel" >/dev/null 2>&1; then
+        say "crew-releaser was started before $project was handed over at $autonomy; until \`factory restart crew-releaser\` its settings still allow production for it"
+      fi
+      mkdir -p "$repo/.factory/worktrees"
+      local exclude; exclude="$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)/info/exclude"
+      grep -qx '.factory/' "$exclude" 2>/dev/null || echo '.factory/' >> "$exclude" ;;
+    helper|releaser-helper)
+      if [ "$kind" = releaser-helper ]; then parent=crew-releaser; else parent=$(station_name "${1:-}"); shift || true; fi
+      [ $# -ge 2 ] || die "usage: factory spawn helper <parent-station> <slug> \"<task>\""
+      [ -n "$(stations_get "$parent" '.role')" ] || die "$parent is not a recorded station"
+      task=$2; role=helper; station="$parent-$(slugify "$1")"
+      project=$(stations_get "$parent" '.project'); repo=$(stations_get "$parent" '.repo'); cwd=$(stations_get "$parent" '.cwd')
+      model=$(stations_get "$parent" '.model'); effort=$(stations_get "$parent" '.effort') ;;
+    *) die "spawn takes builder or helper" ;;
+  esac
+  station_lock "$station"
+  is_alive "$station" "$cwd" && die "$station is already running; message it instead"
+  if [ "$role" = builder ]; then
+    stations_put "$station" "$(jq -n --arg a "$autonomy" '{autonomy: $a}')"
+    rm -f "$CREW_HOME/stations/$station.done"
+  fi
+  local prompt; prompt=$(boot_prompt builder "$task")
+  [ "$role" = helper ] && prompt="Boot as a helper of the station $parent: load the skills factory-protocol and station-$(parent_role "$parent"), do only the task below, write results to your report, and send $parent DONE when it is finished.
+
+Your task:
+$task"
+  launch "$station" "$role" "$parent" "$project" "$repo" "$cwd" "$model" "$effort" "$prompt"
+}
+
+cmd_revive() { # station [--fresh] [prompt]: same name, same env; the conversation resumed, or a new one
+  require_crew
+  local station; station=$(station_name "${1:?usage: factory revive <station> [--fresh] [prompt]}")
+  shift
+  local fresh=0; [ "${1:-}" = --fresh ] && { fresh=1; shift; }
+  local role parent project repo cwd model effort session old_id
+  role=$(stations_get "$station" '.role'); [ -n "$role" ] || die "$station is not a recorded station"
+  parent=$(stations_get "$station" '.parent'); project=$(stations_get "$station" '.project'); repo=$(stations_get "$station" '.repo')
+  cwd=$(stations_get "$station" '.cwd'); [ -n "$cwd" ] || cwd=$CREW_HOME
+  model=$(stations_get "$station" '.model'); effort=$(stations_get "$station" '.effort'); session=$(stations_get "$station" '.sessionId')
+  old_id=$(stations_get "$station" '.id')
+  local skill=$role; [ "$role" = helper ] && skill=$(parent_role "$parent")
+  local prompt=${1:-}
+  local again="Reload the skills factory-protocol and station-$skill, re-read your report and your work on Tares (or the local files when FACTORY_TARES is off), re-arm your schedule if you have one, then carry on where your report left off."
+  if [ -z "$prompt" ] && [ $fresh = 1 ]; then
+    prompt="You were started again under the same name, in a new conversation: the last one kept refilling its context right after each compaction, so Claude Code stopped it. Nothing from it carries over except what is in files. $again Read big files, logs and diffs in parts."
+  fi
+  [ -n "$prompt" ] || prompt="You were revived by the factory under the same name. $again"
+  station_lock "$station"
+  [ "$(stations_get "$station" '.status')" != retired ] || die "$station was retired; factory spawn starts it again"
+  is_alive "$station" && die "$station is running; message it instead"
+  local session_arg=$session; [ $fresh = 0 ] || session_arg=""
+  launch "$station" "$role" "$parent" "$project" "$repo" "$cwd" "$model" "$effort" "$prompt" "$session_arg"
+  # Resuming starts a copy under a new id; drop the stopped original so the agent view shows one row,
+  # and keep it in the station's history so Tares and status show it as an earlier session.
+  local new_id; new_id=$(stations_get "$station" '.id')
+  if [ -n "$old_id" ] && [ "$old_id" != "$new_id" ]; then
+    "$CLAUDE" rm "$old_id" >/dev/null 2>&1 || true
+    local tmp; tmp=$(mktemp)
+    jq --arg s "$station" --arg id "$old_id" --arg sess "$session" \
+      '.[$s].earlier = ((.[$s].earlier // []) + [{id: $id, sessionId: $sess, replacedAt: (now | todate)}])' "$STATIONS" > "$tmp" && mv "$tmp" "$STATIONS"
+  fi
+  event "$([ $fresh = 1 ] && echo restarted-fresh || echo revived)" "$station" "$new_id"
+}
+
+cmd_restart() { # station [--fresh]: stop it and start it again with freshly generated settings
+  require_crew
+  local station; station=$(station_name "${1:?usage: factory restart <station>}")
+  local id; id=$(stations_get "$station" '.id'); [ -n "$id" ] || die "$station is not a recorded station"
+  station_lock "$station"
+  active_json >/dev/null || die "$UNREAD; not stopping $station without being able to see it stop"
+  "$CLAUDE" stop "$id" >/dev/null 2>&1 || true
+  local _; for _ in $(seq "${FACTORY_STOP_WAIT:-10}"); do is_alive "$station" || break; sleep 1; done
+  is_alive "$station" && die "$station did not stop within ${FACTORY_STOP_WAIT:-10}s; try again"
+  cmd_revive "$station" "${@:2}"
+}
+
+cmd_retire() { # station
+  require_crew
+  local station; station=$(station_name "${1:?usage: factory retire <station>}")
+  local id; id=$(stations_get "$station" '.id'); [ -n "$id" ] || die "$station is not a recorded station"
+  station_lock "$station"
+  "$CLAUDE" stop "$id" >/dev/null 2>&1 || true
+  "$CLAUDE" rm "$id" >/dev/null 2>&1 || true
+  stations_put "$station" '{"status": "retired"}'
+  event retired "$station" "$id"
+  say "retired $station"
+}
+
+cmd_down() {
+  require_crew
+  [ -f "$STATIONS" ] || { say "no stations recorded"; return; }
+  local s
+  for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS"); do cmd_retire "$s"; done
+  say "all stations stopped. State in $CREW_HOME is kept; factory crew up starts fresh sessions."
+}
+
+cmd_watch() { # every interval: revive stopped stations, restart stuck ones fresh, move idle ones onto an updated kit
+  require_crew
+  local once=0 interval=${FACTORY_WATCH_INTERVAL:-180}
+  while [ $# -gt 0 ]; do
+    case "$1" in --once) once=1; shift ;; --interval) interval=$2; shift 2 ;; *) die "unknown option $1" ;; esac
+  done
+  local kit_start seen said_dirty=0; kit_start=$(kit_version); seen=$kit_start
+  [ $once = 1 ] || say "watching the crew every ${interval}s; Ctrl-C to stop"
+  while :; do
+    local s kit settled=0 down=0 candidate=""; kit=$(kit_version)
+    # A kit change counts once it has held for a whole round in a clean checkout: a pull or an edit in
+    # progress is not a release.
+    [ "$kit" = "$seen" ] && kit_clean && settled=1
+    if [ $said_dirty = 0 ] && ! kit_clean; then
+      say "the kit checkout at $KIT_PLUGIN has uncommitted changes; no station moves onto a new kit until it is clean"
+      said_dirty=1
+    fi
+    seen=$kit
+    if [ $settled = 1 ] && [ "$kit" != "$kit_start" ] && [ $once = 0 ]; then
+      say "the kit was updated; the watch restarts on the new version"
+      exec "$src" crew watch --interval "$interval"
+    fi
+    if ! active_json >/dev/null; then
+      say "$UNREAD; nothing is revived or restarted this round"
+      [ $once = 1 ] && return 0
+      sleep "$interval"; continue
+    fi
+    for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS" 2>/dev/null); do
+      # Never revive or restart what ended with nothing left to do (lesson 7): helpers are short-lived,
+      # and a builder whose tickets are all merged leaves stations/<name>.done for the orchestrator to retire.
+      case "$(stations_get "$s" '.role')" in
+        helper) continue ;;
+        builder) [ -f "$CREW_HOME/stations/$s.done" ] && continue ;;
+      esac
+      local up; up=$(is_alive "$s" && echo yes || echo no) || { say "skipping $s this round"; down=1; continue; }
+      if [ "$up" = yes ]; then
+        if stuck_on_context "$s"; then
+          say "$s is stuck: Claude Code stopped it for thrashing on autocompact; starting it fresh under the same name"
+          event thrashing "$s"
+          set +e
+          ( set -e; TARES_STATE=""; SETTINGS=""; prime; cmd_restart "$s" --fresh )
+          local rc=$?
+          set -e
+          [ $rc = 0 ] || say "could not restart $s; will try again next round"
+        elif [ -z "$candidate" ] && movable "$s" "$kit"; then
+          candidate=$s
+        fi
+        continue
+      fi
+      down=1
+      local fresh=""; stuck_on_context "$s" && fresh=--fresh
+      say "$s stopped; reviving it under the same name${fresh:+, in a new conversation since its last one thrashed}"
+      # Each revive in its own shell with errexit on, so a failure stops that revive (never a station
+      # started with half-made settings) and not the watcher. Tares and the settings are re-read each time.
+      set +e
+      ( set -e; TARES_STATE=""; SETTINGS=""; prime; cmd_revive "$s" $fresh )
+      local rc=$?
+      set -e
+      [ $rc = 0 ] || say "could not revive $s; will try again next round"
+    done
+    # One station a round moves onto an updated kit, and only while every station is up, so a kit that
+    # can't start a station never takes the crew down one station at a time.
+    if [ -n "$candidate" ] && [ $settled = 1 ] && [ $down = 0 ] && ! halted; then upgrade_station "$candidate" "$kit"; fi
+    [ $once = 1 ] && return 0
+    sleep "$interval"
+  done
+}
+
+movable() { # station kit → 0 when it runs another kit, has a conversation to resume, and is quiet
+  [ "$(stations_get "$1" '.kit')" != "$2" ] && [ -n "$(stations_get "$1" '.sessionId')" ] && quiet "$1"
+}
+
+upgrade_station() { # station kit: restart it on the new kit, in the same conversation
+  local s=$1 kit=$2 skill rc
+  skill=$(stations_get "$s" '.role')
+  set +e
+  ( set -e; TARES_STATE=""; SETTINGS=""; prime
+    # A Tares that doesn't answer would give the station the local settings, which may be looser.
+    if [ -n "${TARES:-}" ] && [ "$TARES_STATE" != on ]; then exit 3; fi
+    quiet "$s" || exit 4   # it started something since the first check
+    say "$s runs an older kit; restarting it on this one now that it's idle, in the same conversation"
+    cmd_restart "$s" "The tares-factory kit was updated, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-$skill (they may have changed), re-read your report, re-arm your schedule if you have one, then carry on where you were."
+    event upgraded "$s" "$kit" )
+  rc=$?
+  set -e
+  case $rc in
+    0|4) ;;
+    3) say "Tares doesn't answer; $s moves onto the new kit once it does" ;;
+    *) say "could not restart $s on the new kit; the watch revives it as before, and no other station moves until it is up" ;;
+  esac
+}
+
+cmd_halt() {
+  require_crew
+  jq -cn --arg r "${1:-halted by the human}" '{at: (now | todate), reason: $r}' > "$HALT_FILE"
+  event halt "" "${1:-}"
+  say "crew halted: stations finish their current step and start nothing risky (merges, pushes, deploys, tags, new sessions). factory crew resume lifts it."
+  say "tell the orchestrator too (factory crew attach orchestrator) so it sends HALT to every station"
+}
+cmd_resume() { require_crew; rm -f "$HALT_FILE"; event resume; say "crew resumed"; }
+
+desk_items() { # → the offline desk's open items, each from its "## D<n>" heading to the next
+  [ -f "$CREW_HOME/DESK.md" ] || return 0
+  awk '/^## D[0-9]/ { on = 1 } on' "$CREW_HOME/DESK.md"
+}
+
+desk_next() { # → the top open item: its heading, then its recommendation and options, indented
+  [ -f "$CREW_HOME/DESK.md" ] || return 0
+  awk '
+    { sub(/\r$/, "") }
+    /^## D[0-9]/ { if (n++) exit; sub(/^## /, ""); print "  " $0; next }
+    !n { next }
+    { l = $0; gsub(/\*\*/, "", l) }
+    tolower(l) ~ /^[-*] +(recommendation|options):/ { keep = 1; sub(/^[-*] +/, "", l); print "    " l; next }
+    keep && l ~ /^[-*] +[A-Za-z0-9][A-Za-z0-9]?[A-Za-z0-9]?[).]/ { print "      " l; next }
+    /^[-*] / { keep = 0; next }
+    keep && /^[ \t]+[^ \t]/ { print "    " $0 }' "$CREW_HOME/DESK.md"
+}
+
+cmd_desk() { # the questions waiting for the person, in full
+  require_crew
+  if tares_on; then
+    echo "The desk is on Tares: its Crew page and each project's page list the questions. Answer in the orchestrator's session: factory crew attach orchestrator"
+    return
+  fi
+  local items; items=$(desk_items)
+  [ -n "$items" ] || { echo "Nothing open on the desk."; return; }
+  echo "$items"
+  echo
+  echo "Answer in the orchestrator's session: factory crew attach orchestrator"
+}
+
+cmd_status() {
+  require_crew
+  adopt_unrecorded
+  [ -f "$STATIONS" ] || { say "no stations yet; run factory crew up"; return; }
+  local agents; agents=$(active_json) || die "$UNREAD"
+  printf '%-30s %-12s %-14s %-8s %-8s %s\n' STATION ROLE MODEL STATE TEMPO "DOING / NEEDS"
+  local s old=0 kit; kit=$(kit_version)
+  for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS"); do
+    case "$(stations_get "$s" '.role')" in helper) ;; *)
+      [ "$(stations_get "$s" '.kit')" = "$kit" ] || [ -f "$CREW_HOME/stations/$s.done" ] || old=$((old + 1)) ;;
+    esac
+    local id role model effort st job tempo detail needs
+    id=$(stations_get "$s" '.id'); role=$(stations_get "$s" '.role')
+    model=$(stations_get "$s" '.model'); effort=$(stations_get "$s" '.effort')
+    st=$(jq -r --arg id "$id" "$GONE $TURN"' .[] | select(.id == $id and (gone | not)) | turn' <<<"$agents" | head -1)
+    job=$(job_state "$id"); tempo=$(jq -r '.tempo // "-"' <<<"$job")
+    detail=$(jq -r '.detail // ""' <<<"$job"); needs=$(jq -r '.needs // ""' <<<"$job")
+    [ -n "$needs" ] && detail="NEEDS: $needs"
+    stuck_on_context "$s" && detail="STUCK on autocompact: factory crew watch starts it fresh"
+    printf '%-30s %-12s %-14s %-8s %-8s %s\n' "$s" "$role" "$model/$effort" "${st:-gone}" "$tempo" "${detail:0:70}"
+  done
+  active_json | jq -r "$GONE"' map(select(((.name // "") | test("^crew-|-build-")) and (gone | not))) | group_by(.name)[] | select(length > 1)
+    | "TWO SESSIONS named \(.[0].name): \(map(.id) | join(", ")); stop the one stations.json does not list (factory roster)"' || true
+  [ $old = 0 ] || echo "kit: $old station(s) run an older version; factory crew watch moves each onto this one when it's idle"
+  halted && echo "HALTED: $(jq -r .reason "$HALT_FILE" 2>/dev/null)"
+  if tares_on; then echo "desk: on Tares; answer in the orchestrator's session (factory crew attach orchestrator)"
+  else local open; open=$(grep -c '^## D[0-9]' "$CREW_HOME/DESK.md" 2>/dev/null || true)
+    if [ "${open:-0}" -gt 0 ]; then
+      echo "desk: $open open; the next one is below (factory crew desk shows all); answer in the orchestrator's session"
+      desk_next || true
+    else echo "desk: nothing open in $CREW_HOME/DESK.md"; fi
+  fi
+  local p held dir at done now left
+  while IFS=$'\t' read -r p held dir at; do
+    [ "$held" = yes ] || continue
+    IFS=$'\t' read -r done now left < <(project_progress "$dir" "$at") || { done='?'; now='?'; left='-'; }
+    case "$now/$left" in
+      "on Tares/"*) echo "project $p: progress is on Tares" ;;
+      */done) echo "project $p: all $done tickets done" ;;
+      */-) echo "project $p: $done tickets done, now $now, no estimate yet" ;;
+      *) echo "project $p: $done tickets done, now $now, about $left left" ;;
+    esac
+    stage_warning "$p" "$dir"
+  done < <(projects_rows)
+}
+
+# Stations clean up through this rather than rm: Claude Code's delete check stops a session on some rm
+# commands until a person approves (lesson 21). It deletes only inside the crew's own folders, removes a
+# worktree through git, and removes a link itself, never what it points at.
+tidy_roots() {
+  printf '%s\n' "$CREW_HOME/worktrees" "$CREW_HOME/tmp"
+  [ -z "${FACTORY_WORKTREES:-}" ] || printf '%s\n' "$FACTORY_WORKTREES"
+  [ -z "${CLAUDE_JOB_DIR:-}" ] || printf '%s\n' "$CLAUDE_JOB_DIR/tmp"
+  all_repos | sed 's|$|/.factory/worktrees|'
+}
+
+inside_tidy_roots() { # resolved path → 0 when it is strictly inside one of the roots
+  local r rr home top
+  home=$(CDPATH= cd -P -- "$HOME" 2>/dev/null && pwd) || home=$HOME
+  top=$(CDPATH= cd -P -- "$CREW_HOME" 2>/dev/null && pwd) || top=$CREW_HOME
+  while IFS= read -r r; do
+    [ -n "$r" ] && [ ! -L "$r" ] || continue   # a root that is a link could point anywhere
+    rr=$(CDPATH= cd -P -- "$r" 2>/dev/null && pwd) || continue
+    case "$rr" in /|"$home") continue ;; esac
+    case "$top/" in "$rr"/*) continue ;; esac   # never a folder that holds the crew home
+    case "$1" in "$rr"/*) return 0 ;; esac
+  done < <(tidy_roots)
+  return 1
+}
+
+worktree_has_work() { # worktree → 0 when it has uncommitted changes or new files, or commits no remote has
+  [ -n "$(git --no-optional-locks -C "$1" status --porcelain 2>/dev/null)" ] && return 0
+  [ -n "$(git -C "$1" log --oneline -1 HEAD --not --remotes 2>/dev/null)" ]
+}
+
+cmd_tidy() { # [--force] path...: --force also removes a worktree with uncommitted or unpushed work
+  local force=0 p dir real common
+  local -a paths=()
+  for p in "$@"; do case "$p" in --force) force=1 ;; *) paths+=("$p") ;; esac; done
+  [ ${#paths[@]} -gt 0 ] || die "usage: factory tidy [--force] <worktree or scratch folder>..."
+  for p in "${paths[@]}"; do
+    while [ "${p%/}" != "$p" ] && [ "$p" != / ]; do p=${p%/}; done
+    if [ -L "$p" ] || [ -f "$p" ]; then
+      dir=$(CDPATH= cd -P -- "$(dirname -- "$p")" 2>/dev/null && pwd) || die "$p: its folder doesn't exist"
+      real="$dir/$(basename -- "$p")"
+    elif [ -d "$p" ]; then
+      real=$(CDPATH= cd -P -- "$p" && pwd)
+    else
+      say "$p is already gone"; continue
+    fi
+    [ -e "$real" ] || [ -L "$real" ] || { say "$p is already gone"; continue; }
+    inside_tidy_roots "$real" || die "$p is outside the crew's folders. factory tidy removes only inside $CREW_HOME/worktrees, $CREW_HOME/tmp, the projects' .factory/worktrees and your job's scratch folder."
+    if [ -L "$real" ] || [ -f "$real" ]; then
+      rm -f -- "$real"
+    elif [ -f "$real/.git" ] && common=$(git -C "$real" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+      if [ $force = 0 ] && worktree_has_work "$real"; then
+        die "$p has uncommitted changes or commits no remote has. If it's your own worktree and the work is done (merged, or a review you've finished), run factory tidy --force $p"
+      fi
+      git --git-dir="$common" worktree remove --force "$real" \
+        || die "git could not remove the worktree $p; if it's locked, git worktree list shows why"
+    else
+      rm -rf -- "$real"
+    fi
+    say "removed $p"
+  done
+}
+
+cmd_roster() { # compact, for stations
+  require_crew
+  adopt_unrecorded
+  [ -f "$STATIONS" ] || { echo "no stations"; return; }
+  local agents; agents=$(active_json) || die "$UNREAD"
+  jq -r --argjson a "$agents" "$GONE $TURN"' to_entries[] | select(.value.status == "active") |
+    "\(.key)\t\(.value.role)\t\(.value.project // "")\t\((.value.id) as $id | ([$a[] | select(.id == $id and (gone | not)) | turn][0] // "gone"))"' "$STATIONS"
+}
+
+cmd_attach() { require_crew; local id; id=$(stations_get "$(station_name "${1:?usage: factory crew attach <role|station>}")" '.id'); [ -n "$id" ] || die "unknown station $1"; exec "$CLAUDE" attach "$id"; }
+cmd_logs() { require_crew; local id; id=$(stations_get "$(station_name "${1:?usage: factory crew logs <role|station>}")" '.id'); [ -n "$id" ] || die "unknown station $1"; exec "$CLAUDE" logs "$id"; }
+
+cmd_settings() { # station [role]: write and print the settings a station launches with
+  require_crew
+  local station; station=$(station_name "${1:?usage: factory settings <station> [role]}")
+  local role=${2:-$(stations_get "$station" '.role')}
+  [ -n "$role" ] || role=${station#crew-}
+  cat "$(write_settings "$station" "$role" "$(stations_get "$station" '.parent')" "$(stations_get "$station" '.project')" "$(stations_get "$station" '.repo')")"
+}
+
+cmd_crew() {
+  local sub=${1:-status}; shift || true
+  case "$sub" in
+    up) cmd_crew_up "$@" ;;
+    down) cmd_down ;;
+    status) cmd_status ;;
+    desk) cmd_desk ;;
+    attach) cmd_attach "$@" ;;
+    logs) cmd_logs "$@" ;;
+    watch) cmd_watch "$@" ;;
+    halt) cmd_halt "$@" ;;
+    resume) cmd_resume ;;
+    *) die "factory crew takes up, down, status, desk, attach, logs, watch, halt or resume" ;;
+  esac
+}
+
+# ---------- per-project commands (the offline fallback when Tares is not connected) ----------
+
+trusted() { # path → 0 when Claude Code trusts it; a linked worktree inherits its main repo's trust
+  local p=$1 main
+  jq -e --arg r "$p" '.projects[$r].hasTrustDialogAccepted == true' "$HOME/.claude.json" >/dev/null 2>&1 && return 0
+  main=$(git -C "$p" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+  main=$(dirname "$main")
+  [ "$main" != "$p" ] && jq -e --arg r "$main" '.projects[$r].hasTrustDialogAccepted == true' "$HOME/.claude.json" >/dev/null 2>&1
+}
+
+repo_root() {
+  if [ -n "${FACTORY_REPO:-}" ]; then echo "$FACTORY_REPO"; return; fi
+  git rev-parse --show-toplevel 2>/dev/null || die "run this inside the project's git repository"
+}
+
+cmd_init() {
+  local slug="" force=0 ROOT; ROOT=$(repo_root)
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --project) slug=$2; shift 2 ;;
+      --force) force=1; shift ;;
+      *) die "unknown option $1" ;;
+    esac
+  done
+  [ -z "$slug" ] && slug=$(slugify "$(basename "$ROOT")")
+  local PH="$ROOT/.factory" CFG="$ROOT/.factory/factory.json"
+  mkdir -p "$PH"/{docs,tickets,worktrees}
+  if [ ! -f "$CFG" ] || [ $force = 1 ]; then
+    local repo=""
+    command -v gh >/dev/null && repo=$(cd "$ROOT" && gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)
+    jq --arg p "$slug" --arg r "$repo" '.project=$p | .repo=$r' "$TEMPLATES/factory.json" > "$CFG"
+    say "wrote $CFG (project $slug)"
+  fi
+  local f
+  for f in ASSUMPTIONS.md docs/plan.md docs/agents.md; do
+    [ -f "$PH/$f" ] || cp "$TEMPLATES/state/$f" "$PH/$f"
+  done
+  [ -f "$PH/ledger.json" ] || echo '{"tickets": [], "pending": []}' > "$PH/ledger.json"
+
+  local exclude; exclude="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)/info/exclude"
+  grep -qx '.factory/' "$exclude" 2>/dev/null || echo '.factory/' >> "$exclude"
+
+  cat >&2 <<EOF
+factory: ready. This is the local fallback for a project planned without Tares. Next:
+  1. factory spec        plan the project with Claude (or write .factory/docs and tickets by hand,
+                         see examples/links in the tares-factory repo)
+  2. factory crew up     once, from anywhere, if the crew is not running yet
+  3. /tares-factory:ship in a Claude session in this repo hands the project to the crew
+EOF
+}
+
+project_dir() { echo "$CREW_HOME/projects/$1"; }
+
+default_ref() { # repo → where a new project worktree starts: origin's default branch, else HEAD
+  local r=$1 ref
+  git -C "$r" fetch -q origin 2>/dev/null || true
+  ref=$(git -C "$r" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)
+  if [ -z "$ref" ]; then
+    git -C "$r" rev-parse -q --verify origin/main >/dev/null 2>&1 && ref=origin/main
+  fi
+  echo "${ref:-HEAD}"
+}
+
+has_commit() { git -C "$1" rev-parse -q --verify HEAD >/dev/null 2>&1; }
+
+# A folder that holds repos rather than being one (a repo with no commits counts, like a workspace
+# root): the plan lives in one of them, picked by the person even when there is only one, and the
+# others join the project at the hand-over.
+repos_in() { # folder → each git repo directly beneath it that has a commit, one path per line
+  local d
+  for d in "$1"/*/; do
+    d=${d%/}; [ -d "$d" ] || continue
+    [ "$(git -C "$d" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$d" && pwd -P)" ] && has_commit "$d" && printf '%s\n' "$d"
+  done
+}
+
+plan_repo_in() { # folder → the repo under it that holds the plan, picked at a terminal; 3 when it holds none
+  local list n pick
+  list=$(repos_in "$1"); n=$(grep -c . <<<"$list" || true)
+  [ "$n" -gt 0 ] || return 3
+  [ -t 0 ] || die "$1 holds $n repo(s) ($(sed 's#.*/##' <<<"$list" | paste -sd ',' - | sed 's/,/, /g')); name the one that holds the plan: factory spec --repo <folder> ..."
+  say "$1 holds $n repo(s). Which one holds the plan? The others join the project at the hand-over."
+  sed 's#.*/##' <<<"$list" | awk '{printf "  %d) %s\n", NR, $0}' >&2
+  read -r -p "repo [1-$n]: " pick
+  case "$pick" in ''|*[!0-9]*) die "no repo picked" ;; esac
+  [ "$pick" -ge 1 ] && [ "$pick" -le "$n" ] || die "no repo $pick"
+  sed -n "${pick}p" <<<"$list"
+}
+
+is_linked_worktree() { # path → 0 when it is a worktree other than the repo's main checkout
+  [ "$(git -C "$1" rev-parse --path-format=absolute --git-dir 2>/dev/null)" != \
+    "$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" ]
+}
+
+# Each project gets its own git worktree under the crew home, so its plan (.factory/) and the spec
+# session's checkout are its own, and two projects in one repo never overwrite each other's plan.
+# Builders still make a worktree per ticket from origin's default branch.
+cmd_spec() {
+  local slug="" here=0 from="" idea="" repo_opt=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --project) slug=$(slugify "${2:?usage: factory spec --project <name> \"<idea>\"}"); shift 2 ;;
+      --here) here=1; shift ;;
+      --from) from=${2:?usage: factory spec --from <ref>}; shift 2 ;;
+      --repo) repo_opt=${2:?usage: factory spec --repo <folder>}; shift 2 ;;
+      --) shift; idea="$*"; break ;;
+      -*) die "unknown option $1" ;;
+      *) idea="${idea:+$idea }$1"; shift ;;
+    esac
+  done
+  local ROOT WT="" base=""
+  ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -n "$repo_opt" ]; then ROOT=$(git -C "$repo_opt" rev-parse --show-toplevel 2>/dev/null) || die "$repo_opt is not a git repository"; fi
+
+  if [ $here = 1 ]; then
+    [ -n "$ROOT" ] || die "run factory spec --here inside the project's git repository"
+    WT=$ROOT
+  elif [ -n "$ROOT" ] && [ -f "$ROOT/.factory/factory.json" ] && is_linked_worktree "$ROOT" && [ -z "$slug" ]; then
+    WT=$ROOT    # already in a project's worktree: carry on with that project
+  else
+    [ -n "$slug" ] || slug=$(slugify "$(tr -s '[:space:]' ' ' <<<"$idea" | sed 's/^ //' | cut -d' ' -f1-4)" | cut -c1-40 | sed 's/-$//')
+    [ -n "$slug" ] || die 'name the project: factory spec --project <name> "<idea>"'
+    case "$slug" in crew|crew-*) die "project names can't start with crew (that name is the crew's)";; esac
+    local existing; existing=$(ls -d "$(project_dir "$slug")"/*/ 2>/dev/null | head -1 || true)
+    if [ -n "$existing" ]; then
+      WT=${existing%/}
+      if [ -n "$repo_opt" ] && [ "$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir)" != "$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)" ]; then
+        die "project $slug already plans in $WT; drop --repo to carry on there, or name a new project"
+      fi
+      say "project $slug: carrying on in its worktree $WT"
+    else
+      local workspace="" picked="" rc=0
+      if [ -z "$repo_opt" ] && { [ -z "$ROOT" ] || ! has_commit "$ROOT"; }; then
+        picked=$(plan_repo_in "${ROOT:-$(pwd -P)}") || rc=$?
+        case $rc in 0) ROOT=$picked ;; 3) ;; *) exit 1 ;; esac
+      fi
+      # A repo named or picked from a folder has the project's other repos beside it.
+      [ -z "$repo_opt" ] && [ -z "$picked" ] || workspace=$(dirname "$ROOT")
+      [ -n "$ROOT" ] || die "run factory spec inside the git repository the project builds on, or in a folder of repos (or --project <name> of an existing project)"
+      base=${from:-$(default_ref "$ROOT")}
+      git -C "$ROOT" rev-parse -q --verify "$base^{commit}" >/dev/null 2>&1 \
+        || { [ -n "$from" ] && die "--from $from is not a commit in $ROOT"
+             die "$ROOT has no commit to start the project from ($base). Run factory spec inside the repository the project builds on; for a new repository, make a first commit and push it first"; }
+      WT="$(project_dir "$slug")/$(basename "$ROOT")"
+      mkdir -p "$(project_dir "$slug")"
+      if ! git -C "$ROOT" worktree add -q --detach "$WT" "$base"; then
+        rmdir "$(project_dir "$slug")" 2>/dev/null || true
+        die "could not create a worktree for $slug from $base"
+      fi
+      say "project $slug: new worktree $WT (from $base)"
+    fi
+  fi
+
+  if [ ! -f "$WT/.factory/factory.json" ]; then
+    ( FACTORY_REPO=$WT cmd_init ${slug:+--project "$slug"} ) 2>/dev/null
+    if [ -n "$base" ]; then
+      local tmp; tmp=$(mktemp)
+      jq --arg of "$ROOT" --arg base "$base" --arg ws "${workspace:-}" \
+        '.worktree = {of: $of, base: $base} | if $ws != "" then .workspace = $ws else . end' "$WT/.factory/factory.json" > "$tmp" \
+        && mv "$tmp" "$WT/.factory/factory.json"
+    fi
+  fi
+  local name; name=$(jq -r '.project // empty' "$WT/.factory/factory.json")
+  [ -n "$name" ] || name=$(slugify "$(basename "$WT")")
+
+  cat >&2 <<SPEC
+factory: opening Claude as $name-spec in $WT
+         It interviews you, one question at a time, then writes this project's plan into its .factory/.
+         Nothing else starts. It ends by asking whether to hand the project to the crew.
+         Come back to it with: factory spec --project $name   (or find $name-spec in \`claude agents\`)
+SPEC
+  local -a args=(-n "$name-spec")
+  local f; while IFS= read -r f; do [ -n "$f" ] && args+=("$f"); done < <(plugin_flags)
+  cd "$WT" && exec "$CLAUDE" "${args[@]}" "/tares-factory:spec ${idea}"
+}
+
+project_tickets() { # plan dir → JSON list of {id, m, s, u, by}: the ticket files, with the ledger's stage laid over them by id
+  local dir=$1 t files ledger
+  files=$(for t in "$dir"/.factory/tickets/*.md; do
+    [ -f "$t" ] || continue
+    jq -cn --arg id "$(basename "$t" .md | cut -d- -f1)" --arg m "$(sed -n 's/^milestone: *//p' "$t" | head -1)" \
+      --arg s "$(sed -n 's/^status: *//p' "$t" | head -1)" \
+      '{id: $id, m: (if $m == "" then "-" else $m end), s: (if $s == "" then "todo" else $s end), u: ""}'
+  done | jq -cs '.')
+  # The orchestrator adds ledger rows a milestone at a time, so the ledger alone can look finished early.
+  ledger=$(jq -c '[(.tickets // [])[] | objects
+    | {id: (.id // ""), m: (.milestone // "-"), s: (.stage // .status // "todo"), u: (.updated // ""),
+       by: (.by | if type == "string" then [splits("[, ]+") | select(. != "")] elif type == "array" then . else null end)}]' \
+    "$dir/.factory/ledger.json" 2>/dev/null || true)
+  jq -cn --argjson f "$files" --argjson l "${ledger:-[]}" '
+    ($l | map(select(.id != "")) | INDEX(.id)) as $by | ($f | map(.id)) as $fids
+    | [$f[] | . as $t | ($by[.id] // null) | if . == null then $t else (.m = (if .m == "-" then $t.m else .m end)) end]
+      + [$l[] | select(.id as $i | $fids | any(. == $i) | not)]'
+}
+
+# A ticket's stage without Tares, in the ledger or a ticket file's status line. A superseded ticket's
+# work moved to the tickets in its `by`, or was dropped (no `by`), so it is left out of the count, but
+# only once those tickets are planned: until then it is still open work.
+STAGE_LIST="todo doing review changes blocked merged shipped superseded"
+STAGES='def stage: .s | tostring | ascii_downcase | gsub("^\\s+|\\s+$"; "");
+  def known: stage as $s | ($stages | split(" ") | index([$s])) != null;
+  def unplanned($ids): [(.by // [])[] | tostring | select(. as $b | $ids | index([$b]) | not)];
+  def counted($ids): stage != "superseded" or (unplanned($ids) | length > 0);'
+
+stage_warning() { # project plan-dir → one line naming the tickets that count as open for a reason the kit can't act on
+  tares_on && return 0
+  local odd; odd=$(project_tickets "$2" | jq -r --arg stages "$STAGE_LIST" "$STAGES"'
+    (map(.id)) as $ids
+    | [.[] | if (known | not) then "\(.id) has an unknown stage (\(.s | tostring | gsub("\\s+"; " ")))"
+             elif (counted($ids)) and stage == "superseded" then "\(.id) is superseded by \(unplanned($ids) | join(", ")), not planned yet"
+             else empty end]
+    | select(length > 0) | join("; ")')
+  [ -z "$odd" ] || echo "project $1: $odd; counted as open. Stages are ${STAGE_LIST// /, }"
+}
+
+# One line of progress: done/total, where the work is now, and a rough time left from the pace of
+# tickets finished since the hand-over (needs two finished to guess). Rough on purpose.
+project_progress() { # plan dir, handed-over-at (ISO, may be empty) → done<TAB>now<TAB>left
+  if tares_on; then printf -- '-\ton Tares\t-\n'; return; fi
+  project_tickets "$1" | jq -r --arg since "${2:-}" --arg stages "$STAGE_LIST" "$STAGES"'
+    length as $all | (map(.id)) as $ids | map(select(counted($ids)))
+    | def done: stage | IN("merged", "shipped");
+    def ts: try (sub("\\.[0-9]+"; "") | sub("[+]00:00$"; "Z")
+                 | if test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$") then . + "T00:00:00Z" else . end | fromdateiso8601) catch null;
+    (map(select(done)) | length) as $d | length as $n
+    | ([.[] | .m] | reduce .[] as $m ([]; if index([$m]) then . else . + [$m] end)) as $ms
+    | ([$ms[] as $m | {m: $m, d: ([.[] | select(.m == $m and done)] | length), n: ([.[] | select(.m == $m)] | length)}]
+       | map(select(.d < .n)) | first) as $cur
+    | (if $since == "" then null else ($since | ts) end) as $t0
+    | ([.[] | select(done and .u != "" and $t0 != null and (((.u | ts) // 0) >= $t0))] | length) as $recent
+    | (if $t0 == null or $recent < 2 or $d >= $n then null
+       else ((now - $t0) / $recent) * ($n - $d) end) as $secs
+    | [ "\($d)/\($n)",
+        (if $all == 0 then "no tickets" elif $cur == null then "all done" else "\($cur.m) \($cur.d)/\($cur.n)" end),
+        (if $d >= $n and $all > 0 then "done"
+         elif $secs == null then "-"
+         elif $secs < 3600 then "~\(($secs / 60) | ceil)m"
+         else "~\(($secs / 3600) | floor)h\((($secs % 3600) / 60) | floor)m" end)
+      ] | @tsv'
+}
+
+projects_rows() { # every project this machine knows → name<TAB>held<TAB>plan dir<TAB>handed-over-at
+  local seen="" p dir at wt d
+  if [ -f "$PROJECTS" ]; then
+    while IFS=$'\t' read -r p dir at; do
+      [ -n "$p" ] || continue
+      printf '%s\tyes\t%s\t%s\n' "$p" "$dir" "$at"; seen="$seen|$p|"
+    done < <(jq -r 'to_entries[] | [.key, (.value.repos[0] // .value.repo // ""), (.value.addedAt // "")] | @tsv' "$PROJECTS")
+  fi
+  # A project can have a worktree per repo; list it by the one that holds its tickets.
+  local pass
+  for pass in tickets rest; do
+    for d in "$CREW_HOME"/projects/*/*/; do
+      wt=${d%/}
+      [ -f "$wt/.factory/factory.json" ] || continue
+      if has_tickets "$wt"; then [ $pass = tickets ] || continue; else [ $pass = rest ] || continue; fi
+      p=$(jq -r '.project // empty' "$wt/.factory/factory.json")
+      case "$seen" in *"|$p|"*) continue ;; esac
+      printf '%s\tno\t%s\t\n' "$p" "$wt"; seen="$seen|$p|"
+    done
+  done
+}
+
+RIUS_ON_HINT="in a Claude session in each, run /rius:enable-content-here (prompts, replies, file contents and command output, secrets removed) or /rius:enable-here (structure only)"
+rius_plugin_on() { jq -e '.enabledPlugins // {} | to_entries | any(.[]; (.key | startswith("rius@")) and .value == true)' "$HOME/.claude/settings.json" >/dev/null 2>&1; }
+rius_untraced() { # → " <folder>" for the crew home and each project repo the rius plugin doesn't trace
+  local d
+  while IFS= read -r d; do
+    [ -z "$d" ] || rius_traces "$d" || printf ' %s' "$d"
+  done < <(printf '%s\n' "$CREW_HOME"; all_repos)
+}
+
+# The rius plugin traces a folder only when one of its own path rules turns it on (/rius:enable-here,
+# which only the person can run), and any matching disable wins. It ignores a rule that isn't an
+# absolute folder below the root, and the environment can only turn it off.
+rius_traces() { # folder → 0 when the rius plugin's path rules turn tracing on there
+  local dir; dir=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+  jq -e --arg d "$dir" '
+    def usable($r): ($r | type) == "string" and (($r | sub("[*?\\[].*$"; "")) as $p
+      | ($p | startswith("/")) and ($p | startswith("//") | not) and ($p | test("[^/]")));
+    def glob($r): "^" + ($r | gsub("(?<c>[.+^${}()|\\\\])"; "\\\(.c)") | gsub("\\[!"; "[^")
+      | gsub("\\*"; ".*") | gsub("\\?"; ".")) + "$";
+    def hit($r): usable($r) and (($r | rtrimstr("/")) as $r
+      | $d == $r or ($d | startswith($r + "/")) or (($r | test("[*?\\[]")) and (try ($d | test(glob($r))) catch false)));
+    all(.disabled_paths[]?; hit(.) | not) and any(.enabled_paths[]?; hit(.))' "$HOME/.claude/rius/config.json" >/dev/null 2>&1
+}
+
+has_tickets() { local f; for f in "$1"/.factory/tickets/*.md; do [ -f "$f" ] && return 0; done; return 1; }
+
+project_builders() { # project → active builder stations
+  [ -f "$STATIONS" ] || { echo 0; return; }
+  jq -r --arg p "$1" '[.[] | select(.role == "builder" and .project == $p and .status == "active")] | length' "$STATIONS"
+}
+
+cmd_projects() { # every project: whether the crew has it, progress, a rough time left, and where its plan is
+  local rows; rows=$(projects_rows)
+  [ -n "$rows" ] || { echo "no projects yet: factory spec \"<idea>\" inside a repo starts one"; return; }
+  printf '%-24s %-5s %-7s %-12s %-8s %-10s %s\n' PROJECT CREW DONE NOW BUILDERS "LEFT~" PLAN
+  local p held dir at done now left
+  while IFS=$'\t' read -r p held dir at; do
+    IFS=$'\t' read -r done now left < <(project_progress "$dir" "$at") || { done='?'; now='?'; left='-'; }
+    printf '%-24s %-5s %-7s %-12s %-8s %-10s %s\n' "$p" "$held" "$done" "$now" "$(project_builders "$p")" "$left" "$dir"
+  done <<<"$rows"
+  echo "LEFT~ is a rough guess from the pace since the hand-over; '-' until two tickets have finished."
+  while IFS=$'\t' read -r p held dir at; do stage_warning "$p" "$dir"; done <<<"$rows"
+}
+
+cmd_snippet() {
+  local project=${1:-}
+  if [ -z "$project" ]; then
+    local ROOT; ROOT=$(repo_root)
+    project=$(jq -r '.project // empty' "$ROOT/.factory/factory.json" 2>/dev/null || true)
+    [ -n "$project" ] || project=$(slugify "$(basename "$ROOT")")
+  fi
+  local p h
+  p=$(printf '%s' "$project" | sed 's/[\\|&]/\\&/g'); h=$(printf '%s' "$CREW_HOME" | sed 's/[\\|&]/\\&/g')
+  sed -e "s|{{PROJECT}}|$p|g" -e "s|{{FACTORY_HOME}}|$h|g" "$TEMPLATES/join-snippet.md"
+}
+
+cmd_doctor() {
+  local bad=0
+  ok() { printf '  ok    %s\n' "$*"; }
+  no() { printf '  FIX   %s\n' "$*"; bad=1; }
+  warn() { printf '  warn  %s\n' "$*"; }
+  echo "factory doctor"
+  ok "claude: $CLAUDE ($("$CLAUDE" --version 2>/dev/null | head -1))"
+  ok "crew home: $CREW_HOME"
+  local list; if list=$(active_json); then
+    if jq -e 'all(.[]; .kind == "interactive" or (has("id") and has("name") and has("cwd") and has("state")))' <<<"$list" >/dev/null; then
+      ok "Claude Code's session list reads ($(jq length <<<"$list") active)"
+    else no "claude agents --json lists sessions without a name, cwd or state; the watch can't tell which stations run"; fi
+  else no "$UNREAD; the watch can't tell which stations run"; fi
+  if jq -e --arg r "$CREW_HOME" '.projects[$r].hasTrustDialogAccepted == true' "$HOME/.claude.json" >/dev/null 2>&1; then
+    ok "Claude Code trusts $CREW_HOME"
+  else
+    no "Claude Code has not trusted $CREW_HOME: mkdir -p $CREW_HOME, run \`claude\` there once, accept the trust prompt, exit"
+  fi
+  if [ -f "$CREW_CFG" ]; then
+    local r m
+    for r in orchestrator comms reviewer releaser builder; do
+      m=$(ccfg ".stations.$r.model // empty")
+      case "$m" in *haiku*) no "station $r uses $m: auto mode doesn't run on Haiku, use sonnet or opus" ;; esac
+    done
+    if tares_on; then
+      ok "Tares connected at $TARES"
+      local missing; missing=$(settings_missing "$(settings_raw)")
+      [ -z "$missing" ] && ok "crew settings on Tares: $(crew_settings)" || warn "crew settings not answered yet ($missing); factory crew up asks them"
+      if grep -q 'not enabled' <<<"$(tares_plugin_flags 2>&1)"; then no "Tares plugin not enabled for stations: claude plugin install tares@tares, or set TARES_PLUGIN_DIR"
+      else ok "Tares plugin for stations"; fi
+    else
+      ok "Tares not connected: crew settings, desk and grants are local files in $CREW_HOME"
+    fi
+    if [ "$(setting release_profile)" = kind ]; then
+      command -v docker >/dev/null && ok "docker" || no "docker not installed (release profile kind)"
+      command -v kind >/dev/null && ok "kind" || no "kind not installed (release profile kind): brew install kind"
+      command -v kubectl >/dev/null && ok "kubectl" || no "kubectl not installed (release profile kind)"
+    fi
+    if [ "$(ccfg '.rius.enabled // false')" = true ]; then
+      if ! rius_plugin_on; then
+        warn "the rius plugin is not installed or not enabled, so stations run untraced: claude plugin install rius (or enable it in /plugin), then /rius:login; or set rius.enabled to false in crew.json"
+      else
+        local untraced; untraced=$(rius_untraced)
+        [ -f "$HOME/.claude/rius/credentials.json" ] || no "the rius plugin is not logged in: /rius:login"
+        if [ -z "$untraced" ]; then ok "Rius traces the crew home and every project repo"
+        else no "Rius doesn't trace$untraced: $RIUS_ON_HINT"; fi
+      fi
+    fi
+    [ "$(setting challenger)" = true ] && { command -v codex >/dev/null && ok "codex (challenger on)" || no "challenger is on but the Codex CLI is not installed"; }
+    if [ -f "$PROJECTS" ]; then
+      local p repo gh_line perm odd held dir at
+      while IFS=$'\t' read -r p repo; do
+        if trusted "$repo"; then ok "project $p: $repo trusted"
+        else no "project $p: Claude Code has not trusted $repo (its git root must be trusted itself); run \`claude\` there once"; fi
+        if command -v gh >/dev/null; then
+          gh_line=$(cd "$repo" 2>/dev/null && gh repo view --json nameWithOwner,viewerPermission -q '.nameWithOwner + " " + .viewerPermission' 2>/dev/null || true)
+          perm=${gh_line##* }
+          case "$perm" in
+            ADMIN|MAINTAIN|WRITE) ok "project $p: $repo is ${gh_line% *} on GitHub ($perm)" ;;
+            "") no "project $p: gh can't read the GitHub repo of $repo (no GitHub remote, or no access); builders open PRs there" ;;
+            *) no "project $p: gh has $perm on ${gh_line% *}; builders need write access to push and merge" ;;
+          esac
+        fi
+        repo_tags_off "$repo" && ok "project $p: $repo has release.tags=false; the releaser won't tag it"
+      done < <(project_repo_rows)
+      while IFS=$'\t' read -r p held dir at; do
+        odd=$(stage_warning "$p" "$dir"); [ -z "$odd" ] || warn "$odd"
+      done < <(projects_rows)
+    fi
+  else
+    warn "no crew yet in $CREW_HOME: factory crew up creates it"
+  fi
+  if command -v gh >/dev/null; then
+    gh auth status >/dev/null 2>&1 && ok "gh signed in" || no "gh not signed in: gh auth login"
+  else
+    no "gh not installed (needed for PRs, reviews and merges): brew install gh"
+  fi
+  if [ -f "$STATIONS" ]; then
+    local id
+    for id in $(jq -r '.[] | select(.status == "active") | .id' "$STATIONS"); do
+      job_state "$id" | jq -e '.respawnFlags // [] | map(select(test("/var/folders/|/tmp/cmux|cmux-claude-settings"))) | length > 0' >/dev/null 2>&1 \
+        && no "station job $id has temp paths in its saved launch flags; it will fail to respawn. factory crew down + factory crew up"
+    done
+  fi
+  [ $bad = 0 ] && echo "all good" || { echo "fix the items marked FIX"; return 1; }
+}
+
+
+cmd=${1:-help}; shift || true
+case "$cmd" in init|spec|snippet|tidy|_parse-bg-id|help) ;; *) prime ;; esac
+case "$cmd" in
+  crew) cmd_crew "$@" ;;
+  up)
+    root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+    [ -n "$root" ] && older_factory "$root/.factory" && older_factory_die "$root"
+    say "factory up is now factory crew up"; cmd_crew_up "$@" ;;
+  down) cmd_down ;;
+  status) cmd_status ;;
+  desk) cmd_desk ;;
+  watch) cmd_watch "$@" ;;
+  halt) cmd_halt "$@" ;;
+  resume) cmd_resume ;;
+  attach) cmd_attach "$@" ;;
+  logs) cmd_logs "$@" ;;
+  roster) cmd_roster ;;
+  spawn) cmd_spawn "$@" ;;
+  revive) cmd_revive "$@" ;;
+  restart) cmd_restart "$@" ;;
+  retire) cmd_retire "$@" ;;
+  init) cmd_init "$@" ;;
+  snippet) cmd_snippet "$@" ;;
+  spec) cmd_spec "$@" ;;
+  projects) cmd_projects ;;
+  settings) cmd_settings "$@" ;;
+  tidy) cmd_tidy "$@" ;;
+  _parse-bg-id) parse_bg_id ;;
+  doctor) cmd_doctor ;;
+  *) usage; exit 1 ;;
+esac

@@ -1,0 +1,23 @@
+{
+  "human": { "name": "", "github": "" },
+  "authorized": { "by": "", "at": "" },
+  "tares": { "url": null },
+  "settings": { "autonomy": null, "release_profile": null, "prod_pattern": null, "challenger": null, "builders_max": null },
+  "stations": {
+    "orchestrator": { "model": "opus", "effort": "xhigh" },
+    "reviewer": { "model": "opus", "effort": "high" },
+    "releaser": { "model": "sonnet", "effort": "high" },
+    "builder": { "model": "sonnet", "effort": "high" },
+    "comms": { "model": "sonnet", "effort": "medium", "enabled": false }
+  },
+  "limits": { "autocompact_tokens": 200000 },
+  "review": { "challenge": true },
+  "release": {
+    "cluster": "factory",
+    "environments": [ { "name": "kind", "production": false } ],
+    "steps": {}
+  },
+  "comms": { "slack": false, "channel": null, "human": null, "team": [], "poll_minutes": 15 },
+  "budget": { "usd_per_day": null },
+  "rius": { "enabled": true }
+}
