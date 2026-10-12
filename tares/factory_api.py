@@ -1070,7 +1070,10 @@ def register(app, store, h: SimpleNamespace) -> None:
                 continue
             row["tickets"].append(factory_mod.label(t))
             pr = t["pr"] or {}
-            if pr.get("url") and not pr.get("merged") and pr.get("state") != "closed":
+            # merged as far as the ticket knows (a builder sets it when Tares can't read GitHub)
+            done = (t["stage"] in ("merged", "shipped")
+                    or t["status"] in factory_mod.DONE_STATUSES)
+            if pr.get("url") and not done and not pr.get("merged") and pr.get("state") != "closed":
                 row["open_prs"].append({"url": pr["url"], "ticket": factory_mod.label(t),
                                         "number": pr.get("number")})
         return rows

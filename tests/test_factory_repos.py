@@ -211,6 +211,16 @@ async def main():
             q = (await cx.get("/api/review-queue")).json()["queue"]
             brief = (await cx.get(f"/api/projects/{shop}/tickets/T2/brief")).json()["brief"]
         ck("the queue item says its repo", q and q[0].get("repo") == "glassflow/factory-test-web", q)
+        async with mk() as cx:
+            await cx.post(f"/api/projects/{shop}/tickets/T1/stage", json={"stage": "doing"})
+            await cx.post(f"/api/projects/{shop}/tickets/T1/stage", json={
+                "stage": "review", "pr": "https://github.com/glassflow/factory-test-api/pull/7"})
+            open1 = (await cx.get(f"/api/projects/{shop}/repos")).json()["repos"][0]["open_prs"]
+            await cx.post(f"/api/projects/{shop}/tickets/T1/stage", json={"stage": "merged"})
+            open2 = (await cx.get(f"/api/projects/{shop}/repos")).json()["repos"][0]["open_prs"]
+        ck("a PR in review counts as open", [p["ticket"] for p in open1] == ["T1"], open1)
+        ck("a ticket set merged no longer counts its PR as open, with no GitHub to ask", open2 == [],
+           open2)
         ck("the brief says it too", "Repo: glassflow/factory-test-web." in brief, brief[:400])
 
         print("== a crew member's details (the Crew page) ==")

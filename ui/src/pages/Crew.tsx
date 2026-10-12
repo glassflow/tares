@@ -91,14 +91,8 @@ function Notices({ stations, desk }: { stations: CrewStation[]; desk: DeskItem[]
       ),
     });
   }
+  // The orchestrator rests between turns all the time; what it needs from you comes as the desk above.
   for (const s of stations) {
-    if (s.state === "waiting" && s.role === "orchestrator" && !desk.length) {
-      notices.push({
-        id: `wait:${s.name}`, sig: String(s.state_at ?? s.last_at ?? ""), tone: "waiting",
-        title: <>{s.name} is waiting{s.state_at && <> since <TimeAgo ts={s.state_at} /></>}</>,
-        body: <p className="help" style={{ margin: 0 }}>{sentence(s.state_reason ?? "it waits for input")} Answer it with <span className="mono">{attachCmd(s.name)}</span>.</p>,
-      });
-    }
     if (s.state === "quiet") {
       notices.push({
         id: `quiet:${s.name}`, sig: String(s.last_at ?? ""), tone: "silent",
@@ -184,6 +178,9 @@ function MemberDetail({ name }: { name: string }) {
   if (error && !data) return <div className="fo-panel crew-detail"><ErrorState error={error} what={name} onRetry={reload} /></div>;
   if (!data) return <div className="fo-panel crew-detail"><p className="dim" style={{ padding: 16 }}>loading…</p></div>;
   const s = data;
+  // newest first, without the bookkeeping rows a transcript carries (titles, names, empty system lines)
+  const lines = s.recent.filter((l) => ["user", "assistant", "tool_use", "tool_result", "session_state"].includes(l.type ?? "")
+    && l.text.trim() && l.text.trim() !== l.type).reverse();
   return (
     <div className="fo-panel crew-detail">
       <header>
@@ -218,11 +215,11 @@ function MemberDetail({ name }: { name: string }) {
           ) : <p className="dim" style={{ margin: 0 }}>{s.role === "builder" ? "None right now." : "Crew stations don't hold tickets; they serve every project."}</p>}
         </div>
         <div>
-          <div className="crew-detail-label">Its last lines</div>
-          {s.recent.length ? (
+          <div className="crew-detail-label">Its last lines, newest first</div>
+          {lines.length ? (
             <ol className="crew-recent">
-              {s.recent.map((l, i) => (
-                <li key={i}><span className="dim">{l.type}</span> {l.text}</li>
+              {lines.map((l, i) => (
+                <li key={i}><span className="dim">{l.type === "session_state" ? "state" : l.type?.replace("_", " ")}</span> {l.text.replace(/^\[tool_result\]\s*/, "")}</li>
               ))}
             </ol>
           ) : <p className="dim" style={{ margin: 0 }}>Nothing recorded yet.</p>}
