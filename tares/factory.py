@@ -11,6 +11,7 @@ what", so every session reads the same plan.
 """
 from __future__ import annotations
 
+import os
 import re
 
 from .docs import DocError, title_ok
@@ -131,12 +132,18 @@ def handover_repos(repos) -> list[dict]:
                  else {"path": None, "name": x})
         if not isinstance(x, dict):
             raise DocError("each repo is {path, name}")
-        path = str(x.get("path") or "").strip().rstrip("/")[:500] or None
+        path = str(x.get("path") or "").strip()
+        if path.startswith("~"):
+            path = os.path.expanduser(path)
+        if path and not path.startswith("/"):
+            raise DocError(f"repo path {path!r} is not absolute; give the full folder the repo "
+                           "is cloned in on the crew's machine")
+        path = os.path.normpath(path)[:500] if path else None
         name = repo_ok(x.get("name"))
         if not path and not name:
             continue
         same = next((o for o in out if (path and o["path"] == path)
-                     or (name and o["name"] == name)), None)
+                     or (name and (o["name"] or "").lower() == name.lower())), None)
         if same:
             same["path"] = same["path"] or path
             same["name"] = same["name"] or name
@@ -523,7 +530,7 @@ def says_every_project(words: str) -> bool:
 
 # ── the crew (M3): one always-on crew serves every project ────────────────────
 
-ROLES = ("orchestrator", "reviewer", "releaser", "builder", "helper", "comms")
+ROLES = ("orchestrator", "reviewer", "releaser", "builder", "helper")
 AUTONOMY = {
     "L3-review": "you approve each merge",
     "L4-ship": "a builder merges after the reviewer's pass and green CI",

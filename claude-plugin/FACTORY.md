@@ -23,8 +23,11 @@ The crew:
   `source .venv/bin/activate`.
 - Optional: the Codex CLI, if you want builders to run the Codex challenger on every commit.
 
-If a `tares` plugin from a marketplace is enabled in Claude Code, the crew runs that one. While you
-try a branch, disable it: `claude plugin disable tares@tares`.
+If an older `tares` plugin is installed from a marketplace, in any scope and even when disabled,
+Claude Code loads it instead of this one in every session, so the stations would run without their
+skills. `tares factory doctor` names it; remove it while you use this version, for example
+`claude plugin uninstall tares@tares` (add `--scope project`, run in that project's folder, for a
+project install).
 
 ## 1. Start Tares
 

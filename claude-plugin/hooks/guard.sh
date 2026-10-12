@@ -73,6 +73,6 @@ grep -Eq 'gh[[:space:]]+pr[[:space:]]+merge|gh[[:space:]]+api[^;&|]*pulls/[0-9]+
 grep -Eq 'statuses/' <<<"$scan" && grep -Eq 'gh[[:space:]]+api' <<<"$scan" && owner_only reviewer "set commit statuses"
 grep -Eq '(git[[:space:]]+tag[[:space:]]+[^-]|git[[:space:]]+push[^;&|]*[[:space:]:](--tags|refs/tags|v[0-9]))|gh[[:space:]]+release[[:space:]]+(create|edit|delete)' <<<"$scan" && owner_only releaser "create tags or releases"
 grep -Eq '(kubectl([[:space:]]+[^[:space:];&|]+)*[[:space:]]+(apply|rollout|delete|scale|set|patch|replace|create)([[:space:]]|$)|helm([[:space:]]+[^[:space:];&|]+)*[[:space:]]+(install|upgrade|uninstall|rollback)([[:space:]]|$))' <<<"$scan" && owner_only releaser "deploy, roll out or roll back"
-grep -Eq '(^|[;&|[:space:]])(claude[[:space:]]+(--bg|--background|stop|kill|rm|respawn)|factory[[:space:]]+(spawn|retire|revive|down|halt)|factory[[:space:]]+crew[[:space:]]+(up|down|halt|resume))([[:space:]]|$)' <<<"$scan" && owner_only orchestrator "start, stop or revive stations"
+grep -Eq '(^|[;&|[:space:]])(claude[[:space:]]+(--bg|--background|stop|kill|rm|respawn)|factory[[:space:]]+(spawn|retire|revive|restart|down|halt)|factory[[:space:]]+crew[[:space:]]+(up|down|halt|resume))([[:space:]]|$)' <<<"$scan" && owner_only orchestrator "start, stop or revive stations"
 
 exit 0

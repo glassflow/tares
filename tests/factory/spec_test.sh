@@ -38,7 +38,7 @@ check "nothing is written into the repo" '[ -z "$(git -C "$T/shop" status --porc
 check "a project name names the session and goes to /tares:spec" '[ "$(last | jq -r ".args[1]")" = bakery-orders-spec ] && [ "$(last | jq -r ".args[-1]")" = "/tares:spec (project name: Bakery orders)" ]'
 
 # A folder that holds the project's repos: the spec runs there and sees them all.
-W="$T/work"; mkrepo "$W/api"; mkrepo "$W/web"; mkdir -p "$W/notes"
+W="$T/work"; mkrepo "$W/api"; mkrepo "$W/web"; mkdir -p "$W/notes" "$W/zz-not-a-repo"
 (cd "$W" && "$F" spec "orders across api and web" >"$T/multi.out" 2>&1)
 check "a folder of repos: the spec runs in the folder" '[ "$(last | jq -r .cwd)" = "$W" ]'
 check "and names the repos it holds" 'grep -q "holds 2 repo(s): api, web" "$T/multi.out"'

@@ -145,30 +145,38 @@ tares_on() {
 require_tares() {
   tares_on || die "no Tares answers at $TARES. Start one with \`tares up\` in another terminal (or set TARESD_URL to where yours runs), then try again."
 }
-tares_http() { # method path [json body]
-  local -a a=(-sS -f --max-time 15 -X "$1" -H 'Accept: application/json')
-  local tok; tok=$(tares_token)
-  [ -n "$tok" ] && a+=(-H "Authorization: Bearer $tok")
+tares_http() { # method path [json body]; the token goes to curl on stdin, never on its command line
+  local -a a=(-sS -f --max-time 15 -X "$1" -H 'Accept: application/json' -H @-)
   [ $# -ge 3 ] && a+=(-H 'Content-Type: application/json' --data "$3")
-  curl "${a[@]}" "$TARES$2"
+  local tok; tok=$(tares_token)
+  { [ -n "$tok" ] && printf 'Authorization: Bearer %s\n' "$tok"; true; } | curl "${a[@]}" "$TARES$2"
 }
 uri() { jq -rn --arg p "$1" '$p | @uri'; }
 
 # The person's token, kept for the stations in a file only they can read (TARES_FACTORY_TOKEN_FILE).
 keep_token() {
-  if [ -n "${TARES_AUTH_TOKEN:-}" ]; then
-    (umask 077; printf '%s\n' "$TARES_AUTH_TOKEN" > "$TOKEN_FILE")
-  fi
+  [ -n "${TARES_AUTH_TOKEN:-}" ] && [ -d "$CREW_HOME" ] || return 0
+  [ "$(cat "$TOKEN_FILE" 2>/dev/null)" = "$TARES_AUTH_TOKEN" ] && return 0
+  (umask 077; printf '%s\n' "$TARES_AUTH_TOKEN" > "$TOKEN_FILE"); chmod 600 "$TOKEN_FILE"
 }
 
 # The projects handed to the crew, as Tares lists them (cached for this command).
-CREW_PROJECTS=""
+CREW_PROJECTS=""; CREW_PROJECTS_ERR=""
 crew_projects() {
   if [ -z "$CREW_PROJECTS" ]; then
-    CREW_PROJECTS=$(tares_http GET /api/crew/projects 2>/dev/null | jq -c '.projects // []') || CREW_PROJECTS="[]"
-    [ -n "$CREW_PROJECTS" ] || CREW_PROJECTS="[]"
+    local out
+    if out=$(tares_http GET /api/crew/projects 2>&1) && CREW_PROJECTS=$(jq -c '.projects // []' <<<"$out" 2>/dev/null) && [ -n "$CREW_PROJECTS" ]; then
+      CREW_PROJECTS_ERR=""
+    else
+      CREW_PROJECTS="[]"; CREW_PROJECTS_ERR=$(tail -1 <<<"$out")
+    fi
   fi
   echo "$CREW_PROJECTS"
+}
+# Dies when Tares could not give the list, so a refusal is never read as "no such project".
+crew_projects_or_die() {
+  crew_projects >/dev/null
+  [ -z "$CREW_PROJECTS_ERR" ] || die "Tares at $TARES did not give the crew's projects ($CREW_PROJECTS_ERR)$( [ -z "$(tares_token)" ] && echo "; if it has auth on, set TARES_AUTH_TOKEN")"
 }
 project_row() { crew_projects | jq -c --arg p "$1" --arg s "$(slugify "$1")" \
   '[.[] | select(.name == $p or .id == $p or ((.name | ascii_downcase | gsub("[^a-z0-9]+"; "-") | gsub("^-|-$"; "")) == $s))][0] // empty'; }
@@ -188,7 +196,7 @@ settings_raw() {
 # Missing settings to ask: the release ones only matter with a releaser.
 settings_missing() {
   jq -r --arg k "$SETTING_KEYS" '. as $s | $k | split(" ")[]
-    | select($s[.] == null)
+    | select($s[.] == null or (. == "autonomy" and ($s.autonomy | IN("L3-review", "L4-ship") | not)))
     | select(((. == "release_profile" or . == "prod_pattern") | not) or $s.releaser == true)' <<<"$1"
 }
 SETTINGS=""
@@ -405,7 +413,7 @@ adopt_unrecorded() {
     case "$name" in
       crew-orchestrator|crew-reviewer|crew-releaser) role=${name#crew-}; [ "$cwd" = "$CREW_HOME" ] || continue ;;
       *-build-*) role=builder; repo=$cwd
-        project=$(project_repo_rows | awk -F'\t' -v c="$cwd" '$2 == c { print $1; exit }')
+        project=$(project_repo_rows | C="$cwd" awk -F'\t' '$2 == ENVIRON["C"] { print $1; exit }')
         [ -n "$project" ] || continue ;;
       *) continue ;;
     esac
@@ -473,7 +481,7 @@ write_settings() { # station role parent project repo
 
   local wt_repos=$repos
   if [ -n "$project" ]; then # a builder and its helpers: the worktree folders of its own project's repos only
-    wt_repos="the repositories of project $project: $(project_repo_rows | awk -F'\t' -v p="$project" '$1 == p { print $2 }' | paste -sd ',' - | sed 's/,/, /g')"
+    wt_repos="the repositories of project $project: $(project_repo_rows | P="$project" awk -F'\t' '$1 == ENVIRON["P"] { print $2 }' | paste -sd ',' - | sed 's/,/, /g')"
   fi
   local -a allow=("Creating and editing files under $CREW_HOME (the crew's own folder), and git worktrees under the .factory/worktrees folder of $wt_repos or under $CREW_HOME/worktrees, is expected work for this crew station."
                   "Removing git worktrees and scratch folders with \`factory tidy <path>\`, which deletes only inside the crew's own folders, is expected work for this crew station."
@@ -524,8 +532,19 @@ write_settings() { # station role parent project repo
 }
 
 # Stations load this plugin (the Tares plugin, with the station skills and this CLI) from where this
-# script lives. A `tares` plugin installed from a marketplace takes its place (doctor says so).
+# script lives. A `tares` plugin installed from a marketplace, in any scope, enabled or not, takes its
+# place in every session: Claude Code drops a --plugin-dir copy with the same name.
 plugin_flags() { printf '%s\n' --plugin-dir "$KIT_PLUGIN"; }
+MY_VERSION=$(jq -r '.version // ""' "$KIT_PLUGIN/.claude-plugin/plugin.json" 2>/dev/null || true)
+installed_tares() { # → "name version scope" for each installed tares plugin of another version
+  jq -r --arg v "$MY_VERSION" '.plugins // {} | to_entries[] | select(.key | startswith("tares@"))
+    | .key as $k | .value[] | select(.version != $v) | "\($k) \(.version) \(.scope)\(if .projectPath then " (" + .projectPath + ")" else "" end)"' \
+    "$HOME/.claude/plugins/installed_plugins.json" 2>/dev/null || true
+}
+clash_text() { # installed lines → what to do
+  local l k; l=$(head -1 <<<"$1"); k=${l%% *}
+  echo "a tares plugin is installed from a marketplace ($(paste -sd ';' - <<<"$1" | sed 's/;/; /g')), and Claude Code loads it instead of this one ($KIT_PLUGIN, version $MY_VERSION) in every session, so stations would run without the factory skills. Remove it while you use this one: claude plugin uninstall $k$(grep -q ' project (' <<<"$l" && echo " --scope project (run it in $(sed 's/.*(\(.*\)).*/\1/' <<<"$l"))")"
+}
 
 # Under about 150k tokens a station can refill its context within three steps of a compaction,
 # three times running, and Claude Code then stops it as thrashing (a 100k session did, 2026-10-08).
@@ -644,6 +663,7 @@ halted() { [ -f "$HALT_FILE" ]; }
 prime() {
   merge_crew_defaults
   require_tares
+  keep_token
   if [ -f "$CREW_CFG" ]; then crew_settings >/dev/null || true; fi
 }
 
@@ -654,6 +674,8 @@ cmd_crew_up() {
   while [ $# -gt 0 ]; do
     case "$1" in --yes|-y) ASSUME_YES=1; shift ;; *) roles="$roles $1"; shift ;; esac
   done
+  local clash; clash=$(installed_tares)
+  [ -z "$clash" ] || die "$(clash_text "$clash")"
   ensure_crew_home
   keep_token
   ensure_settings
@@ -700,14 +722,19 @@ cmd_spawn() {
         have=$(level_rank "$(setting autonomy)")
         [ "$want" -le "$have" ] || die "a project can only be stricter than the crew (crew autonomy is $(setting autonomy)); the person raises the crew setting instead"
       fi
+      crew_projects_or_die
       local row; row=$(project_row "$1")
       [ -n "$row" ] || die "$1 is not handed to the crew on Tares; the spec session hands it over (hand_over), or run /tares:ship in its repo"
       project=$(jq -r .name <<<"$row"); local slug; slug=$(slugify "$2"); task=$4
+      [ -n "$slug" ] && [ -n "$(slugify "$project")" ] || die "the project name and the slug need letters or digits a station name can use (a-z, 0-9)"
       [ -n "$autonomy" ] || autonomy=$(jq -r '.autonomy // empty' <<<"$row")
       case "$(slugify "$project")" in crew|crew-*) die "a project name can't start with \"crew\": station names starting crew- belong to the crew itself" ;; esac
       repo=$(git -C "$3" rev-parse --show-toplevel 2>/dev/null) || die "$3 is not a git repository"
-      jq -e --arg r "$repo" --arg g "$3" 'any(.repos[]; .path == $r or .path == $g)' <<<"$row" >/dev/null \
-        || die "$repo is not one of $project's repos on Tares ($(jq -r '[.repos[] | .path // .name] | join(", ")' <<<"$row")); a repo joins the project at its hand-over"
+      local rp ok="" real; real=$(cd -P "$repo" && pwd)
+      while IFS= read -r rp; do
+        [ -n "$rp" ] && [ -d "$rp" ] && [ "$(cd -P "$rp" && pwd)" = "$real" ] && ok=1
+      done < <(jq -r '.repos[] | .path // empty' <<<"$row")
+      [ -n "$ok" ] || die "$repo is not one of $project's repos on Tares ($(jq -r '[.repos[] | .path // .name] | join(", ")' <<<"$row")); a repo joins the project at its hand-over"
       role=builder; parent=crew-orchestrator; station="$(slugify "$project")-build-$slug"; cwd=$repo
       model=$(ccfg '.stations.builder.model'); effort=$(ccfg '.stations.builder.effort')
       local active max; max=$(setting builders_max)
@@ -965,6 +992,7 @@ cmd_status() {
 tidy_roots() {
   printf '%s\n' "$CREW_HOME/worktrees" "$CREW_HOME/tmp"
   [ -z "${FACTORY_WORKTREES:-}" ] || printf '%s\n' "$FACTORY_WORKTREES"
+  [ -z "${FACTORY_REPO:-}" ] || printf '%s\n' "$FACTORY_REPO/.factory/worktrees"
   [ -z "${CLAUDE_JOB_DIR:-}" ] || printf '%s\n' "$CLAUDE_JOB_DIR/tmp"
   { tares_on && all_repos; } 2>/dev/null | sed 's|$|/.factory/worktrees|' || true
 }
@@ -1072,8 +1100,9 @@ repos_in() { # folder → each git repo directly beneath it that has a commit, o
   local d
   for d in "$1"/*/; do
     d=${d%/}; [ -d "$d" ] || continue
-    [ "$(git -C "$d" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$d" && pwd -P)" ] && has_commit "$d" && printf '%s\n' "$d"
+    if [ "$(git -C "$d" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$d" && pwd -P)" ] && has_commit "$d"; then printf '%s\n' "$d"; fi
   done
+  return 0
 }
 
 # The spec runs in the person's own Claude Code session, in the repo the project builds on or in a
@@ -1089,6 +1118,8 @@ cmd_spec() {
       *) idea="${idea:+$idea }$1"; shift ;;
     esac
   done
+  local clash; clash=$(installed_tares)
+  [ -z "$clash" ] || die "$(clash_text "$clash")"
   local here root list n
   here=$(pwd -P)
   root=$(git rev-parse --show-toplevel 2>/dev/null || true)
@@ -1110,6 +1141,7 @@ $ME: opening Claude as $slug-spec in $here, with /tares:spec.
 SPEC
   local -a args=(-n "$slug-spec")
   local f; while IFS= read -r f; do [ -n "$f" ] && args+=("$f"); done < <(plugin_flags)
+  if [ -n "${TARES_AUTH_TOKEN:-}" ]; then mkdir -p "$CREW_HOME"; keep_token; export TARES_FACTORY_TOKEN_FILE=$TOKEN_FILE; fi
   local prompt="/tares:spec"
   [ -n "$name" ] && prompt="$prompt (project name: $name)"
   [ -n "$idea" ] && prompt="$prompt $idea"
@@ -1157,8 +1189,8 @@ cmd_doctor() {
   else
     no "Claude Code has not trusted $CREW_HOME: mkdir -p $CREW_HOME, run \`claude\` there once, accept the trust prompt, exit"
   fi
-  if jq -e 'any(.enabledPlugins // {} | to_entries[]; (.key | startswith("tares@")) and .value == true)' "$HOME/.claude/settings.json" >/dev/null 2>&1; then
-    warn "a tares plugin installed from a marketplace is enabled; stations run that one instead of $KIT_PLUGIN. If you are trying a branch: claude plugin disable tares@tares"
+  local clash; clash=$(installed_tares)
+  if [ -n "$clash" ]; then no "$(clash_text "$clash")"
   else ok "stations load the plugin at $KIT_PLUGIN"; fi
   command -v tares-mcp >/dev/null && ok "tares-mcp on PATH" || no "tares-mcp is not on PATH; stations reach Tares through it: install tares (pip install -e . in a checkout) and put its bin folder on PATH"
   if [ -f "$CREW_CFG" ]; then
@@ -1213,7 +1245,17 @@ cmd_doctor() {
 
 
 cmd=${1:-help}; shift || true
-case "$cmd" in tidy|_parse-bg-id|help|doctor) ;; *) prime ;; esac
+# Commands that only touch the sessions on this machine work while Tares is down: stopping the crew
+# must never wait for Tares.
+local_only() {
+  case "$1" in
+    tidy|_parse-bg-id|help|doctor|halt|resume|down|attach|logs|retire|roster) return 0 ;;
+    crew) case "${2:-status}" in halt|resume|down|attach|logs) return 0 ;; esac ;;
+  esac
+  return 1
+}
+if local_only "$cmd" "${1:-}"; then merge_crew_defaults; tares_on || true; keep_token
+else prime; fi
 case "$cmd" in
   crew) cmd_crew "$@" ;;
   status) cmd_status ;;

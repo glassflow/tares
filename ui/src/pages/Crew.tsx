@@ -266,7 +266,7 @@ function Settings({ st, grants }: { st: CrewSettings; grants: string }) {
 
 export default function Crew() {
   const { data, error, reload } = usePolling(() => api.crew(), 10000);
-  const { data: pdata } = usePolling(() => api.crewProjects(), 15000);
+  const { data: pdata, error: perror } = usePolling(() => api.crewProjects(), 15000);
   const { data: ddata } = usePolling(() => api.desk(), 15000);
   const [params] = useSearchParams();
   if (error && !data) return <ErrorState error={error} what="the crew" onRetry={reload} />;
@@ -276,7 +276,7 @@ export default function Crew() {
   const crew = stations.filter((s) => CREW_ROLES.includes(s.role ?? ""));
   const projectIds = new Set(projects.map((p) => p.id));
   const builders = stations.filter((s) => s.role === "builder");
-  const stray = builders.filter((b) => !b.project || !projectIds.has(b.project));
+  const stray = pdata ? builders.filter((b) => !b.project || !projectIds.has(b.project)) : [];
   const selected = params.get("member") ?? crew.find((s) => s.role === "orchestrator")?.name ?? "";
   const known = stations.some((s) => s.name === selected);
 
@@ -310,8 +310,8 @@ export default function Crew() {
               ) : <p className="dim" style={{ padding: "10px 16px", margin: 0 }}>No crew station has reported yet: <span className="mono">tares factory crew up</span>.</p>}
             </div>
             <div className="fo-panel">
-              <header><h3>Projects</h3><span className="dim">{projects.length} handed to the crew</span></header>
-              {projects.length ? (
+              <header><h3>Projects</h3><span className="dim">{pdata ? `${projects.length} handed to the crew` : ""}</span></header>
+              {perror && !pdata ? <div style={{ padding: "10px 16px" }}><ErrorState error={perror} what="the crew's projects" /></div> : projects.length ? (
                 <ul className="crew-list">
                   {projects.map((p) => (
                     <ProjectBlock key={p.id} p={p} all={stations} selected={selected}

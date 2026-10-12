@@ -70,6 +70,18 @@ check "crew desk shows every question" 'grep -q "Keep the old endpoint?" "$T/des
 check "crew desk says where to answer" 'grep -q "tares factory crew attach orchestrator" "$T/desk.out"'
 check "factory desk is short for crew desk" '[ "$("$F" desk 2>&1)" = "$(cat "$T/desk.out")" ]'
 
+# An installed tares plugin of another version takes this one's place in every session: crew up and
+# doctor stop on it and say how to remove it.
+mkdir -p "$HOME/.claude/plugins"
+jq -n '{version: 2, plugins: {"tares@tares": [{scope: "project", projectPath: "/w/main", version: "0.2.1"}]}}' > "$HOME/.claude/plugins/installed_plugins.json"
+"$F" crew up --yes >"$T/clash.out" 2>&1
+check "an installed older tares plugin stops crew up" 'grep -q "Claude Code loads it instead of this one" "$T/clash.out" && grep -q "claude plugin uninstall tares@tares --scope project (run it in /w/main)" "$T/clash.out" && [ "$(launches)" = 3 ]'
+check "doctor says the same" 'grep -q "FIX   a tares plugin is installed from a marketplace (tares@tares 0.2.1 project (/w/main))" <<<"$("$F" doctor 2>&1)"'
+mine=$(jq -r .version "$T/kit-under-test/.claude-plugin/plugin.json")
+jq --arg v "$mine" '.plugins["tares@tares"][0].version = $v' "$HOME/.claude/plugins/installed_plugins.json" > "$T/ip" && mv "$T/ip" "$HOME/.claude/plugins/installed_plugins.json"
+check "the same version installed is fine" '! grep -q "loads it instead" <<<"$("$F" doctor 2>&1)"'
+rm -f "$HOME/.claude/plugins/installed_plugins.json"
+
 # A second run asks nothing and starts nothing new.
 "$F" crew up </dev/null >"$T/up2.out" 2>&1
 check "second crew up asks nothing" '! grep -q "press enter to take it" "$T/up2.out"'
@@ -255,6 +267,14 @@ check "only the unfinished builder is revived" '[ $(( $(launches) - before )) = 
 er=$(earlier crew-reviewer)
 FACTORY_STOP_WAIT=2 "$F" restart reviewer >/dev/null 2>&1
 check "restart resumes the reviewer" '[ "$(earlier crew-reviewer)" = $((er + 1)) ]'
+
+# Stopping the crew never waits for Tares: halt, resume and status of the sessions work while it is down.
+TARESD_URL=http://127.0.0.1:9 "$F" crew halt "tares is down" >"$T/halt-down.out" 2>&1
+check "halt works while Tares is down" '[ -f "$FACTORY_CREW_HOME/HALT" ] && ! grep -q "no Tares answers" "$T/halt-down.out"'
+TARESD_URL=http://127.0.0.1:9 "$F" crew resume >/dev/null 2>&1
+check "and resume" '[ ! -f "$FACTORY_CREW_HOME/HALT" ]'
+TARESD_URL=http://127.0.0.1:9 "$F" roster >"$T/roster-down.out" 2>&1
+check "roster works while Tares is down" 'grep -q "^crew-orchestrator	orchestrator" "$T/roster-down.out"'
 
 # halt blocks risky actions in every station until resume.
 "$F" crew halt "testing" >/dev/null 2>&1
@@ -452,9 +472,6 @@ check "doctor: Tares answers" 'grep -q "ok    Tares answers at $TARESD_URL" "$T/
 check "multi doctor: trust per repo" 'grep -q "ok .*project argus: $core trusted" "$T/doctor.out" && grep -q "FIX .*project argus: Claude Code has not trusted $charts" "$T/doctor.out"'
 check "multi doctor: GitHub write access per repo" 'grep -q "ok .*$core is o/core on GitHub (WRITE)" "$T/doctor.out" && grep -q "FIX .*gh has READ on o/charts" "$T/doctor.out"'
 check "doctor: no Rius" '! grep -qi rius "$T/doctor.out"'
-mkdir -p "$HOME/.claude"; echo '{"enabledPlugins": {"tares@tares": true}}' > "$HOME/.claude/settings.json"
-check "doctor: a marketplace tares plugin is named, since it takes this one's place" 'grep -q "warn  a tares plugin installed from a marketplace is enabled" <<<"$(PATH="$T/bin:$PATH" FACTORY_CREW_HOME="$M" "$F" doctor 2>&1)"'
-rm -f "$HOME/.claude/settings.json"
 TARESD_URL=http://127.0.0.1:9 FACTORY_CREW_HOME="$M" "$F" doctor >"$T/doctor2.out" 2>&1
 check "doctor without Tares says how to start one" 'grep -q "FIX   no Tares answers at http://127.0.0.1:9: start one with \`tares up\`" "$T/doctor2.out"'
 

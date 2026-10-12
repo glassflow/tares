@@ -1059,7 +1059,8 @@ def register(app, store, h: SimpleNamespace) -> None:
         rows = [{**r, "tickets": [], "open_prs": []} for r in repos]
         for t in tickets:
             name = t.get("repo") or (t["pr"] or {}).get("repo")
-            row = next((r for r in rows if name and r["name"] == name), None)
+            row = next((r for r in rows if name and (r["name"] or "").lower() == name.lower()),
+                       None)
             if row is None and name:
                 row = {"path": None, "name": name, "tickets": [], "open_prs": []}
                 rows.append(row)

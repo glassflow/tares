@@ -60,6 +60,16 @@ def rules():
     more = factory_mod.merge_repos(got, factory_mod.handover_repos([{"path": "/w/chart",
                                                                      "name": "g/chart"}]))
     ck("a later list adds", [r["name"] for r in more] == ["g/api", "g/web", "g/chart"], more)
+    try:
+        factory_mod.handover_repos([{"path": "work/api", "name": "g/api"}])
+        ck("a relative path is refused", False)
+    except Exception as e:
+        ck("a relative path is refused", "not absolute" in str(e), e)
+    home = factory_mod.handover_repos(["~/code/api"])
+    ck("a path from the home folder is spelled out", home[0]["path"] == os.path.expanduser("~/code/api"),
+       home)
+    ck("the same repo in another case is one repo",
+       len(factory_mod.handover_repos([{"name": "G/Api"}, {"path": "/w/api", "name": "g/api"}])) == 1)
 
 
 def station_url():
