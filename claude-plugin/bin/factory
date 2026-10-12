@@ -113,7 +113,6 @@ ensure_crew_home() {
     name=$(git config --global user.name 2>/dev/null || echo "the user")
     jq --arg n "$name" --arg g "$login" --arg at "$(date -u +%Y-%m-%d)" \
       '.human.name=$n | .human.github=$g | .authorized={by:$n, at:$at}' "$TEMPLATES/crew.json" > "$CREW_CFG"
-    say "wrote $CREW_CFG"
   fi
 }
 require_crew() { [ -f "$CREW_CFG" ] || die "no crew yet in $CREW_HOME; run: $ME crew up"; }
@@ -197,7 +196,8 @@ settings_raw() {
 settings_missing() {
   jq -r --arg k "$SETTING_KEYS" '. as $s | $k | split(" ")[]
     | select($s[.] == null or (. == "autonomy" and ($s.autonomy | IN("L3-review", "L4-ship") | not)))
-    | select(((. == "release_profile" or . == "prod_pattern") | not) or $s.releaser == true)' <<<"$1"
+    | select(((. == "release_profile" or . == "prod_pattern") | not) or $s.releaser == true)
+    | select(. != "prod_pattern")' <<<"$1"   # the prod pattern comes with the release profile, unasked
 }
 SETTINGS=""
 crew_settings() { # settings with defaults for anything unset, cached; fails when they can't be read
@@ -227,36 +227,59 @@ ask() { # question recommendation why validator-regex → the answer (empty inpu
   done
 }
 
+# One question with numbered choices; Enter takes the recommended one. Takes the number or the value.
+# The same questions `tares factory crew up` asks in its box in a terminal (tares/factory_setup.py).
+choose() { # question default-number "value|label"... → the value chosen
+  local q=$1 def=$2; shift 2
+  local -a vals=() ; local o i=1 ans
+  if [ "$ASSUME_YES" = 1 ]; then o=${*:$def:1}; echo "${o%%|*}"; return; fi
+  printf '\n%s\n' "$q" >&2
+  for o in "$@"; do
+    vals+=("${o%%|*}")
+    printf '  %d) %s%s\n' "$i" "${o#*|}" "$( [ "$i" = "$def" ] && echo '   (recommended)')" >&2
+    i=$((i + 1))
+  done
+  while :; do
+    printf '  Choice [%d]: ' "$def" >&2
+    IFS= read -r ans || { ans=""; echo >&2; }
+    ans=${ans:-$def}
+    if [[ "$ans" =~ ^[0-9]+$ ]] && [ "$ans" -ge 1 ] && [ "$ans" -le ${#vals[@]} ]; then echo "${vals[$((ans - 1))]}"; return; fi
+    for o in "${vals[@]}"; do [ "$o" = "$ans" ] && { echo "$o"; return; }; done
+    echo "  Pick a number from 1 to ${#vals[@]}." >&2
+  done
+}
+
 ask_settings() { # missing keys → saves the answers on Tares
-  local missing=$1 d answers='{}' k v
-  d=$(settings_defaults)
-  say "the crew has no settings yet. A few questions, one at a time; they are saved on Tares and not asked again."
+  local missing=$1 answers='{}' k v n=0 total
+  total=$(wc -w <<<"$missing" | tr -d ' ')
+  printf '\nSetting up your crew. Asked once, saved on Tares.\n' >&2
   for k in $missing; do
     case "$k" in
-      autonomy) v=$(ask "Autonomy: how far may the crew go without you? L3-review (every merge waits for your yes) or L4-ship (builders merge after the reviewer's pass and green CI)" \
-        L4-ship "merges run on the reviewer's verdict; you answer only the questions the crew can't" '^(L3-review|L4-ship)$'); answers=$(jq -c --arg v "$v" '.autonomy=$v' <<<"$answers") ;;
-      releaser) v=$(ask "Releaser: should the crew run a releaser that tags and deploys each finished milestone? yes or no" \
-        no "the crew stops at merged on main; you release yourself" '^(yes|no)$')
+      autonomy) n=$((n + 1)); v=$(choose "$n/$total  Who merges pull requests?" 1 \
+          "L4-ship|The crew, once its reviewer approves and tests pass" "L3-review|You, each one")
+        answers=$(jq -c --arg v "$v" '.autonomy=$v' <<<"$answers") ;;
+      releaser) n=$((n + 1)); v=$(choose "$n/$total  Should the crew release and deploy finished work?" 1 \
+          "no|No, it stops when work is merged to main" "yes|Yes, a releaser tags and deploys each finished milestone")
         answers=$(jq -c --arg v "$v" '.releaser=($v == "yes")' <<<"$answers")
-        if [ "$v" = yes ]; then missing="$missing release_profile prod_pattern"; fi ;;
-      challenger) v=$(ask "Challenger: should builders run the Codex challenger on every commit before they ask for review? yes or no" \
-        no "the crew reviewer checks every pull request either way; the challenger needs the Codex CLI" '^(yes|no)$')
+        if [ "$v" = yes ]; then
+          v=$(choose "     How does the releaser ship?" 1 "kind|To a local kind cluster first" \
+              "github-release|Tags and GitHub releases only" "custom|Each project's own steps")
+          answers=$(jq -c --arg v "$v" --arg p "$(settings_defaults | jq -r .prod_pattern)" \
+            '.release_profile=$v | .prod_pattern=$p' <<<"$answers")
+        fi ;;
+      challenger) n=$((n + 1)); v=$(choose "$n/$total  Should a second AI (Codex) check every commit before review?" 1 \
+          "no|No" "yes|Yes, needs the Codex CLI")
         answers=$(jq -c --arg v "$v" '.challenger=($v == "yes")' <<<"$answers") ;;
-      builders_max) v=$(ask "Builders: how many builder sessions may run at once, across all projects?" \
-        2 "each builder is a heavy Sonnet session" '^[1-9][0-9]*$'); answers=$(jq -c --argjson v "$v" '.builders_max=$v' <<<"$answers") ;;
+      builders_max) n=$((n + 1)); v=$(choose "$n/$total  How many builders may work at the same time?" 2 \
+          "1|1" "2|2" "3|3" "4|4")
+        answers=$(jq -c --argjson v "$v" '.builders_max=$v' <<<"$answers") ;;
+      release_profile|prod_pattern)   # a releaser chosen earlier, its shipping not yet
+        jq -e '.release_profile' <<<"$answers" >/dev/null && continue
+        v=$(choose "How does the releaser ship?" 1 "kind|To a local kind cluster first" \
+            "github-release|Tags and GitHub releases only" "custom|Each project's own steps")
+        answers=$(jq -c --arg v "$v" --arg p "$(settings_defaults | jq -r .prod_pattern)" \
+          '.release_profile=$v | .prod_pattern=$p' <<<"$answers") ;;
     esac
-  done
-  # Asked only when the person said yes to a releaser above.
-  for k in release_profile prod_pattern; do
-    case " $missing " in *" $k "*) ;; *) continue ;; esac
-    jq -e --arg k "$k" '.[$k] != null' <<<"$answers" >/dev/null && continue
-    case "$k" in
-      release_profile) v=$(ask "Release profile: how does the releaser ship? kind (a local kind cluster), github-release (tags and GitHub releases only), custom (each project's own steps)" \
-        kind "rehearses every release locally before anything real" '^(kind|github-release|custom)$') ;;
-      prod_pattern) v=$(ask "Production pattern: a regular expression; any environment, kube context or namespace it matches counts as production, which stays yours" \
-        "$(jq -r .prod_pattern <<<"$d")" "matches prod and production as a word in a name" '.') ;;
-    esac
-    answers=$(jq -c --arg k "$k" --arg v "$v" '.[$k]=$v' <<<"$answers")
   done
   tares_http PUT /api/crew/settings "$answers" >/dev/null || die "could not save the crew settings on Tares at $TARES"
   SETTINGS=""
@@ -266,11 +289,11 @@ ask_grants() { # standing grants for all projects, one per question, until an em
   [ "$ASSUME_YES" = 1 ] && return 0
   local words
   while :; do
-    printf '\nA standing grant for all projects, in your own words (for example: builders may bump patch versions of dependencies).\n  recommended: none; your autonomy level already covers routine work\n  press enter when you have no more\n> ' >&2
+    printf '\nAnything you always allow the crew, in your own words? Press Enter to skip.\n  (for example: builders may bump patch versions of dependencies)\n> ' >&2
     IFS= read -r words || words=""
     [ -n "$words" ] || { echo >&2; return 0; }
     tares_http POST /api/grants "$(jq -cn --arg w "$words" '{words: $w, scope: "all"}')" >/dev/null || die "could not save the grant on Tares"
-    say "saved"
+    echo "  saved" >&2
   done
 }
 
@@ -645,7 +668,7 @@ launch() { # station role parent project repo cwd model effort prompt [resume-se
     '{role: $role, parent: $parent, project: $project, repo: $repo, cwd: $cwd, id: $id, sessionId: $session,
       model: $model, effort: $effort, settings: $settings, kit: $kit, status: "active", startedAt: (now | todate)}')"
   event started "$station" "$id"
-  say "started $station ($role, $model/$effort) as $id"
+  echo "  ✓ started $station ($model, $effort)" >&2
 }
 
 boot_prompt() { # role [task]
@@ -715,23 +738,22 @@ cmd_crew_up() {
   for r in $roles; do [ "$r" = orchestrator ] && ordered="orchestrator"; done
   for r in $roles; do [ "$r" = orchestrator ] || ordered="$ordered $r"; done
 
+  echo >&2; echo "Starting the crew" >&2
   for r in $ordered; do
     case "$r" in orchestrator|reviewer|releaser) ;; *) die "unknown crew role '$r' (crew roles: orchestrator, reviewer, releaser; builders start with factory spawn)" ;; esac
     local station; station=$(station_name "$r")
     station_lock "$station"
-    if is_alive "$station"; then say "$station is already running"; continue; fi
+    if is_alive "$station"; then echo "  ✓ $station is already running" >&2; continue; fi
     launch "$station" "$r" "" "" "" "$CREW_HOME" "$(ccfg ".stations.$r.model")" "$(ccfg ".stations.$r.effort")" "$(boot_prompt "$r")"
     [ "$r" = orchestrator ] && sleep "${FACTORY_PAUSE:-5}"
   done
-  cmd_status
   cat >&2 <<NEXT
 
-$ME: the stations take a few minutes to check in. Then:
-  $ME crew attach orchestrator   answer the crew's questions here, one at a time (press ← to go back)
-  $ME crew status                what every station is doing, and the questions for you
-  $ME crew watch                 keep the crew alive (run it in a spare terminal)
-  Crew page on Tares             $TARES/crew
-To give the crew a project, run \`$ME spec\` in its repo; the spec ends with the hand-over.
+The crew takes a few minutes to check in. Next:
+  Watch it              $TARES/crew
+  Answer its questions  $ME crew attach orchestrator   (← to leave it running)
+  Keep it alive         $ME crew watch   (in a spare terminal)
+  Give it a project     $ME spec "what to build"   (in the project's repo)
 NEXT
 }
 

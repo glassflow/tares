@@ -31,7 +31,7 @@ check "an untrusted crew home stops crew up plainly" 'grep -q "Claude Code has n
 trust "$FACTORY_CREW_HOME"
 # First run asks the settings one at a time; answers: L3-review, a releaser, no challenger, 3 builders,
 # then the release profile and prod pattern (defaults), and one grant.
-printf 'L3-review\nyes\nno\n3\n\n\nthe releaser may restart the staging database\n\n' | "$F" crew up >"$T/up.out" 2>&1
+printf 'L3-review\nyes\n\nno\n3\nthe releaser may restart the staging database\n\n' | "$F" crew up >"$T/up.out" 2>&1
 rc=$?
 check "crew up exits 0" '[ $rc -eq 0 ]'
 check "three crew stations started (a releaser was asked for)" '[ "$(launches)" = 3 ]'
@@ -89,7 +89,7 @@ rm -f "$HOME/.claude/plugins/installed_plugins.json"
 
 # A second run asks nothing and starts nothing new.
 "$F" crew up </dev/null >"$T/up2.out" 2>&1
-check "second crew up asks nothing" '! grep -q "press enter to take it" "$T/up2.out"'
+check "second crew up asks nothing" '! grep -q "Choice \[" "$T/up2.out"'
 check "second crew up starts nothing" '[ "$(launches)" = 3 ]'
 
 # Builders start inside a repo of a project handed over on Tares, with the project in their env.

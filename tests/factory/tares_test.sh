@@ -30,7 +30,7 @@ printf 'L4-ship\nno\nyes\n2\nthe reviewer may comment on draft PRs\n\n' | "$F" c
 rc=$?
 check "first crew up exits 0" '[ $rc -eq 0 ] && grep -q "started crew-reviewer" "$T/up1.out"'
 check "without a releaser, two stations" '! grep -q "started crew-releaser" "$T/up1.out"'
-check "the release questions are not asked without a releaser" '! grep -q "Release profile" "$T/up1.out"'
+check "the release questions are not asked without a releaser" '! grep -q "How does the releaser ship" "$T/up1.out"'
 check "settings saved on Tares" '[ "$(api GET /api/crew/settings | jq -c "[.autonomy, .releaser, .challenger, .builders_max]")" = "[\"L4-ship\",false,true,2]" ]'
 check "grant saved on Tares" 'api GET /api/grants | jq -r .all | grep -q "the reviewer may comment on draft PRs"'
 check "the token is kept in a file only the person reads" '[ "$(cat "$FACTORY_CREW_HOME/.tares-token")" = stub-token ] && [ "$(stat -f %Lp "$FACTORY_CREW_HOME/.tares-token" 2>/dev/null || stat -c %a "$FACTORY_CREW_HOME/.tares-token")" = 600 ]'
@@ -45,7 +45,7 @@ one_home=$FACTORY_CREW_HOME
 # A second machine: nothing is asked again and the station settings come out the same.
 machine two
 "$F" crew up </dev/null >"$T/up2.out" 2>&1
-check "second machine asks nothing" '! grep -q "press enter to take it" "$T/up2.out" && grep -q "started crew-reviewer" "$T/up2.out"'
+check "second machine asks nothing" '! grep -q "Choice \[" "$T/up2.out" && grep -q "started crew-reviewer" "$T/up2.out"'
 for r in orchestrator reviewer; do
   check "same settings for crew-$r" 'diff <(sed "s|$one_home|CREW|g" "$one_home/stations/crew-$r.settings.json") <(sed "s|$FACTORY_CREW_HOME|CREW|g" "$FACTORY_CREW_HOME/stations/crew-$r.settings.json") >/dev/null'
 done

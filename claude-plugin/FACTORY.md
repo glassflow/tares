@@ -47,17 +47,19 @@ The crew lives in a folder of its own, `~/factory`, whichever folder you run thi
 (`FACTORY_CREW_HOME` moves it). Its stations run there, so Claude Code must trust it once: the
 first `crew up` offers to open Claude Code there; pick "Yes, I trust this folder", then `/exit`.
 
-Then it asks how far the crew may go, one question at a time, each with a
-recommendation:
+Then it asks how far the crew may go, in a box like Claude Code's: one question per tab, the
+recommended answer preselected, ↑/↓ to choose, Enter to select, ←/→ to go back, and a last tab
+with all your answers before anything is saved:
 
-- **Autonomy**: L3-review (every merge waits for your yes) or L4-ship (builders merge after the
-  reviewer's pass and green CI).
-- **Releaser**: no by default.
-- **Challenger**: no by default.
-- **Builders at once**: how many may run in parallel.
-- **Standing grants**, in your own words.
+- **Merging**: the crew merges once its reviewer approves and tests pass (recommended), or every
+  merge waits for your yes.
+- **Releasing**: no by default; the crew stops when work is merged to main.
+- **Codex check**: a second AI checking every commit; no by default.
+- **Builders**: how many may work at the same time.
+- **Grants**: anything you always allow the crew, in your own words.
 
-The answers are kept on Tares; a second machine asks nothing. The Crew page
+The answers are kept on Tares; a second machine asks nothing. In a script, or with `--yes`, the
+same questions come as numbered prompts. The Crew page
 (http://127.0.0.1:8787/crew) lists the crew as it starts.
 
 Keep it alive in a spare terminal: `tares factory crew watch`. `tares factory doctor` checks

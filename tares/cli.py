@@ -202,6 +202,17 @@ def _factory(argv: list[str]):
     bindir = str(Path(sys.argv[0]).resolve().parent)
     if (Path(bindir) / "tares-mcp").exists() and bindir not in env.get("PATH", "").split(os.pathsep):
         env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
+    # The first `crew up` in a terminal asks its questions in a box like Claude Code's; the factory
+    # CLI then finds them answered. Scripts and --yes get its plain prompts.
+    if (argv[:2] == ["crew", "up"] and not {"--yes", "-y"} & set(argv)
+            and sys.stdin.isatty() and sys.stdout.isatty()):
+        import shutil
+
+        from .factory_setup import setup
+        home = Path(env.get("FACTORY_CREW_HOME") or Path.home() / "factory").expanduser()
+        claude = env.get("CLAUDE_BIN") or shutil.which("claude", path=env.get("PATH")) or "claude"
+        if not setup(env["TARES_FACTORY_URL"].rstrip("/"), env.get("TARES_AUTH_TOKEN", ""), home, claude):
+            raise SystemExit(1)
     os.execve("/bin/bash", ["bash", str(script), *argv], env)
 
 
