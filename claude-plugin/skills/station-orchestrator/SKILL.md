@@ -44,6 +44,27 @@ A project reaches you two ways: a `[TF:SHIP]` message from the spec session (sta
 - **Check a station's claims from the record.** When a station has stalled, or a `DONE` is something Tares or GitHub can't confirm, read its ticket (`get_ticket`: checks against the recording, messages, history) and its report, then ask it one line. Once per stall, not every tick.
 - **Learnings for every project.** A builder's `FYI` proposing a rule for all projects: decide, and if it holds, `add_to_global(doc="agents", line=...)` for a rule every session should follow, or `doc="memory"` for a fact that holds across projects.
 
+## Finishing a project
+
+A project is done when every ticket is merged (or canceled), every milestone's checks pass, and the
+person agrees. Then:
+
+1. Ask on the desk, as one item: "Is <project> done?", with what was delivered in two lines
+   (milestones, merged PRs, where it runs) and what is still open, if anything. Recommend yes only
+   when nothing is open. Options: **yes, it's done** and **no, there is more**.
+2. Record their answer with `desk_answer`, their words as typed. On a yes, call
+   `finish_project(project, decision="D<n>")`. Tares keeps their words, marks the project done and
+   takes it off `crew_projects`. On a no, ask what is missing and write it as tickets.
+3. Retire the project's builders still recorded (`factory retire <station>`), and check it left
+   no worktrees (`factory tidy` any that remain).
+4. If `finish_project` says the crew holds no other project, ask on the desk whether to stop the
+   crew: "No project is left. Stop the crew? Run `tares factory crew down` in your terminal." Recommend
+   yes: idle stations still wake on their schedules. You can't stop the crew yourself; the person
+   runs it.
+
+The person saying "it's done" or "wrap it up" in your session is the start of this, not a
+substitute for it: ask the desk item, so their words are recorded.
+
 ## Answering questions
 
 When a station sends `ASK`:
@@ -86,7 +107,7 @@ On each scheduled tick, and whenever you wake with nothing queued:
 1. `factory roster`. A station that should exist is missing or `gone`: `factory revive <station>` with a prompt that carries any pending hand-off. Don't revive a builder whose tickets are all merged.
 2. `crew_projects`: a project with work left and no active builder is new or stalled: start it (above).
 3. For each project, `list_tickets`: tickets in `doing`, `review` or `changes` with nothing new for 45 minutes: read the holder's report and the ticket's record, then ask it one line; unreachable, revive it. When Tares has no PR link for a ticket in review, check `gh pr list -R <owner>/<repo>` (you run in the crew home, so always name the repo).
-4. A ticket merged that another waits on (`depends_on`, any repo): assign the waiting one, starting its builder if needed. Milestone complete: tell the person, and start the next (with a releaser, `RELEASE` first).
+4. A ticket merged that another waits on (`depends_on`, any repo): assign the waiting one, starting its builder if needed. Milestone complete: tell the person, and start the next (with a releaser, `RELEASE` first). The last milestone complete: finish the project (above).
 5. Open desk items: as in "Keep it in view" under "The desk".
 6. Append a status block to your report: per project, milestone progress, blockers, open desk items.
 7. Stay silent unless something changed: on a quiet tick print nothing in your session, not even "nothing new", apart from step 5's hourly re-show (step 6 still happens).

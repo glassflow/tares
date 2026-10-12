@@ -79,7 +79,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const shared = (docs ?? []).filter((d) => d.global);
   const questions = (docs ?? []).filter((d) => d.kind === "note" && !d.global);
   const start = own.find((d) => d.kind === "start");
-  const phase = phaseOf(!!start, tickets);
+  const phase: Phase = crew?.handover?.finished ? "done" : phaseOf(!!start, tickets);
   const live = tickets.filter((t) => t.status !== "canceled");
   const done = live.filter((t) => t.status === "done").length;
   const doing = live.filter((t) => t.status === "in_progress").length;
@@ -163,7 +163,15 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
                    pickUp={`Pick up Tares project "${ctx.s.name}" where the last session stopped.`} />
       )}
 
-      {next ? (
+      {crew?.handover?.finished ? (
+        <section className="fo-next fo-done">
+          <h2>Done <TimeAgo ts={crew.handover.finished.at} /></h2>
+          <p className="help" style={{ margin: 0 }}>
+            You said: "{crew.handover.finished.words}"{crew.handover.finished.decision && <> ({crew.handover.finished.decision})</>}.
+            {" "}Every ticket is merged and the crew no longer works on it. Handing it over again opens it.
+          </p>
+        </section>
+      ) : next ? (
         <NextUp key={next.id} ctx={ctx} next={next} of={tickets.indexOf(next) + 1} total={tickets.length}
                 prompt={prompt} waiting={attention !== null && next.status === "in_progress"}
                 byCrew={byCrew} />

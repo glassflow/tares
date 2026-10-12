@@ -500,7 +500,30 @@ async def crew_projects() -> str:
     """The projects handed to the crew, oldest first: each with its repos (`path` on this
     machine, GitHub `name`) and the tickets and open PRs of each, the autonomy it was handed
     over at when stricter than the crew's, tickets done of all, and the milestone it is on. The
-    orchestrator works from this list: a project here with no builder is one to start."""
+    orchestrator works from this list: a project here with no builder is one to start. Projects
+    the person said are done are not in it (`finished` lists them apart)."""
     async with _cx(15) as cx:
         r = await cx.get(f"{TARESD}/api/crew/projects")
+    if r.status_code >= 400:
+        return _out(r)
+    data = r.json()
+    data["finished"] = [{"name": p["name"], "finished": p.get("finished")}
+                        for p in data.get("finished") or []]
+    return json.dumps(data, default=str)
+
+
+@writable()
+async def finish_project(project: str, decision: str) -> str:
+    """Mark a project done, once the person said so. Ask them first on the desk ("Is <project>
+    done? Tickets all merged, milestones checked."), record their answer with desk_answer, then
+    call this with that item (`decision`, D<n>). Tares keeps their words, sets the project done
+    and takes it off the crew's work list; a later hand-over opens it again. Refused while a
+    ticket is open. Only the orchestrator may. Returns how many projects the crew still holds:
+    with none left, ask the person on the desk whether to stop the crew (`tares factory crew down`
+    in their terminal)."""
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/finish", json={"decision": decision})
     return _out(r)

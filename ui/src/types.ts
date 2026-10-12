@@ -474,7 +474,8 @@ export interface CrewSettings {
   builders_max: number | null;
 }
 export interface HandoverRepo { path: string | null; name: string | null }
-export interface Handover { repo: string | null; repos: HandoverRepo[]; autonomy: string | null; by: string | null; at: string }
+export interface ProjectFinished { at: string; words: string; decision: string | null; by: string | null }
+export interface Handover { repo: string | null; repos: HandoverRepo[]; autonomy: string | null; by: string | null; at: string; finished?: ProjectFinished | null }
 // A repo a project touches, with the tickets that change it and their open pull requests (TR-463)
 export interface RepoPR {
   url: string; ticket: string; number: number | null; title: string; branch: string | null;
@@ -733,7 +734,7 @@ export interface Project {
   template_title: string;
   name: string;
   params: Record<string, unknown>;
-  status: "active" | "paused" | "error" | "draft";   // draft: being planned, nothing exists yet
+  status: "active" | "paused" | "error" | "draft" | "done";   // draft: being planned; done: the person said it is finished
   created_at: string;
   updated_at: string;
   last_error: string | null;

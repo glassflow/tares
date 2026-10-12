@@ -1086,7 +1086,7 @@ class Store(FactoryStore):
             status = {r[0]: r[1] for r in self.con.execute(
                 "SELECT id, status FROM usecases").fetchall()}
         return [p for p in self.projects_using(kind, name)
-                if status.get(p) not in ("paused", "draft", None)]
+                if status.get(p) not in ("paused", "draft", "done", None)]
 
     def projects_using(self, kind: str, name: str) -> list[str]:
         """The projects whose object list has this part (any kind), oldest membership first."""

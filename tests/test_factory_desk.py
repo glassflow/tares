@@ -205,6 +205,52 @@ async def main():
         out = json.loads(await mf.desk_add("A person's own question?", "yes", "testing", project="Blog"))
         ck("a person's own session may use the desk", out["label"] == "D7", out)
 
+        print("== finishing a project, on the person's word ==")
+        async with mk() as cx:
+            await cx.post(f"/api/projects/{blog}/handover", json={"repos": [{"path": "/w/blog"}]})
+            await cx.post(f"/api/projects/{shop}/handover", json={"repos": [{"path": "/w/shop"}]})
+        as_station("crew-orchestrator", "orchestrator")
+        bad = await mf.finish_project("Blog", "D2")
+        ck("not while a ticket is open", "still has open tickets: T1" in bad, bad)
+        as_station()   # the person's own session moves the stage here
+        async with mk() as cx:
+            await cx.post(f"/api/projects/{blog}/tickets/T1/stage", json={"stage": "doing"})
+            await cx.post(f"/api/projects/{blog}/tickets/T1/stage", json={"stage": "merged"})
+        as_station("crew-orchestrator", "orchestrator")
+        d8 = json.loads(await mf.desk_add("Is Blog done?", "yes, it's done", "every ticket merged",
+                                          ["yes, it's done", "no, there is more"], project="Blog"))
+        bad = await mf.finish_project("Blog", d8["label"])
+        ck("not before the person answered", "has no answer from the person yet" in bad, bad)
+        bad = await mf.finish_project("Blog", "D1")
+        ck("not on a question about another project", "another project" in bad, bad)
+        await ingest([{"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": now_plus(5),
+                       "message": {"role": "user", "content": "yes, the blog is done"}}])
+        json.loads(await mf.desk_answer(d8["label"], "yes, the blog is done"))
+        as_station("shop-build-m1", "builder", "crew-orchestrator")
+        bad = await mf.finish_project("Blog", d8["label"])
+        ck("a builder may not finish a project", "only the orchestrator" in bad, bad)
+        as_station("crew-orchestrator", "orchestrator")
+        out = json.loads(await mf.finish_project("Blog", d8["label"]))
+        ck("finished in the person's words, with the desk item", out["finished"]["words"]
+           == "yes, the blog is done" and out["finished"]["decision"] == d8["label"], out)
+        ck("it says how many projects the crew still holds", out["open_projects"] == 1, out)
+        async with mk() as cx:
+            ps = (await cx.get("/api/crew/projects")).json()
+            plist = (await cx.get("/api/projects")).json()
+            st = next(p for p in (plist.get("projects", []) if isinstance(plist, dict) else plist)
+                      if p["id"] == blog)
+        ck("off the crew's work list", [p["name"] for p in ps["projects"]] == ["Shop"], ps["projects"])
+        ck("listed as finished", [p["name"] for p in ps["finished"]] == ["Blog"], ps.get("finished"))
+        ck("the project is done", st["status"] == "done", st)
+        bad = await mf.finish_project("Blog", d8["label"])
+        ck("finishing twice is refused", "already finished" in bad, bad)
+        async with mk() as cx:
+            await cx.post(f"/api/projects/{blog}/handover", json={"repos": [{"path": "/w/blog"}]})
+            ps = (await cx.get("/api/crew/projects")).json()
+            ho = (await cx.get(f"/api/projects/{blog}/crew")).json()["handover"]
+        ck("a new hand-over opens it again", "Blog" in [p["name"] for p in ps["projects"]]
+           and ho["finished"] is None, ps)
+
 
 unit()
 asyncio.run(main())

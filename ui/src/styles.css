@@ -2077,3 +2077,9 @@ pre.payload {
 .fo-gh-merged > summary::-webkit-details-marker { display: none; }
 .fo-gh-merged > summary::before { content: "▸"; display: inline-block; width: 14px; }
 .fo-gh-merged[open] > summary::before { content: "▾"; }
+/* A finished factory project, and the Crew page's finished list */
+.fo-done { border-color: var(--ok-border, var(--line)); }
+.fo-done h2 { margin: 0; }
+.crew-finished { padding: 8px 16px 12px; border-top: 1px solid var(--line); font-size: 14px; }
+.crew-finished summary { cursor: pointer; color: var(--ink-soft); }
+.main .crew-finished ul { margin: 6px 0 0; padding-left: 18px; }

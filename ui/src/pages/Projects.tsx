@@ -13,7 +13,7 @@ import type { Project } from "../types";
 // (the demo, model provider, GitHub, Slack) sits on top until done or hidden.
 
 function statusClass(s: Project["status"]) {
-  return s === "active" ? "ok" : s === "paused" || s === "draft" ? "paused" : "error";
+  return s === "active" || s === "done" ? "ok" : s === "paused" || s === "draft" ? "paused" : "error";
 }
 
 export function projectKindCounts(u: Project) {

@@ -38,7 +38,7 @@ These come from a month of running this setup by hand. Each one exists because i
    | a ticket's stage (`set_stage`), except shipped | the station holding the ticket, and its helpers |
    | stage `shipped`, tags, releases, deploys, rollbacks | releaser, when the crew has one; without a releaser nobody releases and tickets end at `merged` |
    | starting, stopping or reviving stations | orchestrator |
-   | the desk, decisions, shared docs (`add_to_global`), confirming assumptions | orchestrator |
+   | the desk, decisions, shared docs (`add_to_global`), confirming assumptions, finishing a project | orchestrator |
    | talking to the person | orchestrator, in its own session |
    | messaging other people (Slack, email) | nobody: the crew never messages people |
 

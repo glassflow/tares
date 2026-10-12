@@ -357,7 +357,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         tickets each repo has. The orchestrator works from this list (TR-462)."""
         names = {p["id"]: p["name"] for p in store.list_projects()}
         out = []
-        for uid in store.handed_over_projects():
+        for uid in store.handed_over_projects(finished=False):
             if uid not in names:
                 continue
             ho = store.get_handover(uid) or {}
@@ -366,7 +366,14 @@ def register(app, store, h: SimpleNamespace) -> None:
                         "autonomy": ho.get("autonomy"), "handed_over_at": ho.get("at"),
                         "handed_over_by": ho.get("by")})
         out.sort(key=lambda p: str(p["handed_over_at"] or ""))
-        return {"projects": out, "now": now_utc()}
+        done = []
+        for uid in store.handed_over_projects(finished=True):
+            if uid in names:
+                ho = store.get_handover(uid) or {}
+                done.append({"id": uid, "name": names[uid], **project_progress(uid),
+                             "finished": ho.get("finished")})
+        done.sort(key=lambda p: str((p["finished"] or {}).get("at") or ""), reverse=True)
+        return {"projects": out, "finished": done, "now": now_utc()}
 
     @app.get("/api/crew/{name}")
     async def get_station(name: str, recent: int = 30):
@@ -1030,6 +1037,8 @@ def register(app, store, h: SimpleNamespace) -> None:
         repos = factory_mod.merge_repos(old.get("repos") or [], new)
         autonomy = autonomy or old.get("autonomy")
         store.set_handover(uid, repos, autonomy, h.by(request, body), now_utc())
+        if old.get("finished"):   # more work on a finished project: it is open again
+            store.update_project(uid, status="active")
         include_shared_grants(uid)   # a crew-built project shows the grants it is built under
         return {"handover": store.get_handover(uid)}
 
@@ -1103,6 +1112,45 @@ def register(app, store, h: SimpleNamespace) -> None:
             row["open_prs"].sort(key=lambda p: -(p["number"] or 0))
             row["merged_prs"].sort(key=lambda p: -(p["number"] or 0))
         return rows
+
+    @app.post("/api/projects/{uid}/finish")
+    async def finish_project(uid: str, request: Request, body: dict = Body(...)):
+        """{decision}: the person said the project is done. `decision` is the desk item (D<n>)
+        that asked them, answered in the orchestrator's session: its words, matched against what
+        they typed, are what is kept. Refused while a ticket is still open. The project's status
+        becomes done and it leaves the crew's work list; a later hand-over opens it again."""
+        deny(request, "finish")
+        p = h.project_or_404(uid)
+        ho = store.get_handover(uid)
+        if not ho:
+            h.err(ValueError(f"{p['name']} was never handed to the crew; there is nothing to finish"))
+        if ho.get("finished"):
+            h.err(ValueError(f"{p['name']} was already finished "
+                             f"({ho['finished']['decision'] or 'by hand'})"), 409)
+        open_ = [factory_mod.label(t) for t in store.list_tickets(uid)
+                 if not (t["stage"] in ("merged", "shipped")
+                         or t["status"] in factory_mod.DONE_STATUSES)]
+        if open_:
+            h.err(ValueError(f"{p['name']} still has open tickets: {', '.join(open_)}. Finish or "
+                             "cancel them first"), 409)
+        ref = str(body.get("decision") or "").strip()
+        if not ref:
+            h.err(ValueError("name the desk item where the person said the project is done "
+                             "(decision=D<n>): ask them on the desk first, then record their answer"))
+        d = store.get_desk_item(ref)
+        if d is None:
+            h.err(KeyError(f"no desk item {ref!r}"), 404)
+        if d["project"] not in (uid, None):
+            h.err(ValueError(f"{d['label']} was asked about another project"), 409)
+        dec = next((x for x in store.list_decisions(None) if x["desk_item"] == d["id"]), None)
+        if d["state"] != "answered" or dec is None or not dec["matched"]:
+            h.err(ValueError(f"{d['label']} has no answer from the person yet: record their words "
+                             "with desk_answer first"), 409)
+        by, _ = who(request, body)
+        store.finish_handover(uid, dec["words"], d["label"], by, now_utc())
+        store.update_project(uid, status="done")
+        return {"project": uid, "name": p["name"], "finished": store.get_handover(uid)["finished"],
+                "open_projects": len(store.handed_over_projects(finished=False))}
 
     @app.get("/api/projects/{uid}/repos")
     async def project_repos(uid: str):

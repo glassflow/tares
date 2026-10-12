@@ -269,6 +269,7 @@ export default function Crew() {
   if (error && !data) return <ErrorState error={error} what="the crew" onRetry={reload} />;
   const stations = data?.stations ?? [];
   const projects = pdata?.projects ?? [];
+  const finished = pdata?.finished ?? [];
   const desk = ddata?.desk ?? [];
   const crew = stations.filter((s) => CREW_ROLES.includes(s.role ?? ""));
   const projectIds = new Set(projects.map((p) => p.id));
@@ -288,7 +289,7 @@ export default function Crew() {
 
       <Notices stations={stations} desk={desk} />
 
-      {data === undefined ? <div className="dim">loading…</div> : stations.length === 0 && projects.length === 0 ? (
+      {data === undefined ? <div className="dim">loading…</div> : stations.length === 0 && projects.length === 0 && finished.length === 0 ? (
         <section className="fo-next fo-next-empty">
           <h2>No crew has reported yet</h2>
           <p className="help">Bring the crew up once, in a terminal, from a folder of its own:</p>
@@ -307,7 +308,7 @@ export default function Crew() {
               ) : <p className="dim" style={{ padding: "10px 16px", margin: 0 }}>No crew station has reported yet: <span className="mono">tares factory crew up</span>.</p>}
             </div>
             <div className="fo-panel">
-              <header><h3>Projects</h3><span className="dim">{pdata ? `${projects.length} handed to the crew` : ""}</span></header>
+              <header><h3>Projects</h3><span className="dim">{pdata ? `${projects.length} open${finished.length ? ` · ${finished.length} finished` : ""}` : ""}</span></header>
               {perror && !pdata ? <div style={{ padding: "10px 16px" }}><ErrorState error={perror} what="the crew's projects" /></div> : projects.length ? (
                 <ul className="crew-list">
                   {projects.map((p) => (
@@ -321,7 +322,20 @@ export default function Crew() {
                     </li>
                   )}
                 </ul>
-              ) : <p className="dim" style={{ padding: "10px 16px", margin: 0 }}>None yet. Plan one with <span className="mono">tares factory spec</span> in its repo; the spec ends with the hand-over.</p>}
+              ) : <p className="dim" style={{ padding: "10px 16px", margin: 0 }}>{finished.length ? "None open." : <>None yet. Plan one with <span className="mono">tares factory spec</span> in its repo; the spec ends with the hand-over.</>}</p>}
+              {finished.length > 0 && (
+                <details className="crew-finished">
+                  <summary>{finished.length} finished</summary>
+                  <ul>
+                    {finished.map((p) => (
+                      <li key={p.id}>
+                        <Link to={`/projects/${encodeURIComponent(p.id)}`}>{p.name}</Link>
+                        <span className="dim"> · {p.tickets_done} tickets{p.finished && <> · done <TimeAgo ts={p.finished.at} /></>}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
             </div>
           </div>
           <div className="crew-col">

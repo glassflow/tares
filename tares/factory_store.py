@@ -186,6 +186,12 @@ FACTORY_SCHEMA = [
     # autonomy the person handed it over at when stricter than the crew's (TR-456, TR-462).
     "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS repos JSON",
     "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS autonomy TEXT",
+    # A project the person said is done: when, their words, the desk decision that holds them, and
+    # who recorded it. A later hand-over clears it (the project is open again).
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ",
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS finished_words TEXT",
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS finished_decision TEXT",
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS finished_by TEXT",
 ]
 
 
@@ -818,21 +824,39 @@ class FactoryStore:
                 "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (project) DO UPDATE SET "
                 "repo = excluded.repo, handed_by = excluded.handed_by, "
                 "handed_at = excluded.handed_at, repos = excluded.repos, "
-                "autonomy = excluded.autonomy",
+                "autonomy = excluded.autonomy, finished_at = NULL, finished_words = NULL, "
+                "finished_decision = NULL, finished_by = NULL",
                 [project, first, by or None, at, json.dumps(repos), autonomy or None])
 
-    def handed_over_projects(self) -> list[str]:
+    def handed_over_projects(self, finished: bool | None = None) -> list[str]:
+        """The projects handed to the crew; `finished` False: only the open ones, True: only the
+        ones the person said are done."""
+        q = "SELECT project FROM handovers"
+        if finished is True:
+            q += " WHERE finished_at IS NOT NULL"
+        elif finished is False:
+            q += " WHERE finished_at IS NULL"
         with self._lock:
-            return [r[0] for r in self.con.execute("SELECT project FROM handovers").fetchall()]
+            return [r[0] for r in self.con.execute(q).fetchall()]
+
+    def finish_handover(self, project: str, words: str, decision: str | None, by: str | None,
+                        at) -> None:
+        with self._lock:
+            self.con.execute("UPDATE handovers SET finished_at = ?, finished_words = ?, "
+                             "finished_decision = ?, finished_by = ? WHERE project = ?",
+                             [at, words, decision, by, project])
 
     def get_handover(self, project: str) -> dict | None:
         with self._lock:
-            r = self.con.execute("SELECT repo, handed_by, handed_at, repos, autonomy FROM "
-                                 "handovers WHERE project = ?", [project]).fetchone()
+            r = self.con.execute("SELECT repo, handed_by, handed_at, repos, autonomy, "
+                                 "finished_at, finished_words, finished_decision, finished_by "
+                                 "FROM handovers WHERE project = ?", [project]).fetchone()
         if not r:
             return None
         repos = json.loads(r[3]) if r[3] else ([{"path": r[0], "name": None}] if r[0] else [])
-        return {"repo": r[0], "repos": repos, "autonomy": r[4], "by": r[1], "at": r[2]}
+        return {"repo": r[0], "repos": repos, "autonomy": r[4], "by": r[1], "at": r[2],
+                "finished": ({"at": r[5], "words": r[6], "decision": r[7], "by": r[8]}
+                             if r[5] else None)}
 
     def delete_milestone(self, mid: str) -> None:
         """The milestone goes; its tickets stay, without a milestone."""
