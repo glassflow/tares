@@ -1937,13 +1937,13 @@ pre.payload {
 .fo-docs li:last-child { border-bottom: 0; }
 .fo-docs small { color: var(--ink-soft); font-size: 12px; white-space: nowrap; }
 .fo-empty { margin: 0; padding: 12px 16px; color: var(--ink-soft); font-size: 14px; }
-.fo-fold summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; padding: 12px 16px; }
-.fo-fold summary::-webkit-details-marker { display: none; }
-.fo-fold summary:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: -2px; }
+.fo-fold > summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; padding: 12px 16px; }
+.fo-fold > summary::-webkit-details-marker { display: none; }
+.fo-fold > summary:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: -2px; }
 .fo-fold-h { font-weight: 600; font-size: 15px; display: inline-flex; gap: 8px; align-items: baseline; }
 .fo-fold-h::before { content: "›"; color: var(--ink-soft); display: inline-block; transition: transform 0.15s; }
 .fo-fold[open] .fo-fold-h::before { transform: rotate(90deg); }
-.fo-fold[open] summary { border-bottom: 1px solid var(--line); }
+.fo-fold[open] > summary { border-bottom: 1px solid var(--line); }
 .fo-meta { font-size: 13px; color: var(--ink-soft); }
 .fo-tickets { list-style: none; margin: 0; padding: 0; }
 .fo-tickets li { margin: 0; display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--line); font-size: 14px; }
@@ -2073,3 +2073,7 @@ pre.payload {
 .fo-gh-merged { margin: 4px 0 0 24px; font-size: 13px; }
 .fo-gh-merged summary { cursor: pointer; color: var(--ink-soft); }
 .fo-gh-merged .fo-gh-prs { padding-left: 0; }
+.fo-gh-merged > summary { list-style: none; }
+.fo-gh-merged > summary::-webkit-details-marker { display: none; }
+.fo-gh-merged > summary::before { content: "▸"; display: inline-block; width: 14px; }
+.fo-gh-merged[open] > summary::before { content: "▾"; }

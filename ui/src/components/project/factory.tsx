@@ -448,7 +448,11 @@ function Fold({ id, title, icon, meta, pinnedByDefault, children }: {
   };
   return (
     <details className={`fo-panel fo-fold${pinned ? " is-pinned" : ""}`} open={pinned || open}
-             onToggle={(e) => { if (!pinned) setOpen((e.target as HTMLDetailsElement).open); }}>
+             onToggle={(e) => {
+               // only its own: a fold inside (the merged pull requests) toggling is not this one
+               if (e.target !== e.currentTarget || pinned) return;
+               setOpen((e.target as HTMLDetailsElement).open);
+             }}>
       <summary onClick={(e) => { if (pinned) e.preventDefault(); }}>
         <span className="fo-fold-h">{icon}{title}</span>
         <span className="fo-fold-right">
