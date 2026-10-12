@@ -44,8 +44,13 @@ when you could explain the project to a new engineer. Cover:
 - how it ships: where it runs, how a release is done and checked, how it is rolled back
 - whether it will run on a tares-factory crew, or be built by one session (see step 8)
 
-Push back on vague answers. Do not call any Tares write tool until the user agrees the idea is
-clear enough to write down.
+**As soon as the user agrees the goal** (usually the first question), call `create_project` with a
+short unique name and the one-line goal, and tell the user its name in one line. From then on the
+project, and this session, show on Tares while you work; use that name as `project` in every call
+after this. Nothing else goes to Tares yet.
+
+Push back on vague answers. Write nothing more to Tares until the user agrees the idea is clear
+enough to write down.
 
 ## 2. Remove the unknowns before planning
 
@@ -103,8 +108,8 @@ Tares?"
 
 Write for a reader who was not here: no "as discussed", no references to this conversation.
 
-1. `create_project` with a short unique name and the one-line goal. Use that name as `project` in
-   every call after this.
+1. The project was made when the goal was agreed (step 1). If the goal changed since, the spec's
+   first line says the goal now agreed.
 2. `write_doc` kind `spec`: what is built and why, who it is for, scope in and out, constraints,
    decisions made here (with the user's words where they decided), assumptions still open.
 3. `write_doc` kind `plan`: the milestones in order with their goal and the tickets in each.
