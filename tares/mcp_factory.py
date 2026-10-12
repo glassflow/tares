@@ -361,29 +361,35 @@ async def list_decisions(project: str = "") -> str:
 
 # ── the crew (TR-419, TR-420, TR-425) ─────────────────────────────────────────
 
+SETTING_KEYS = ("autonomy", "releaser", "release_profile", "prod_pattern", "challenger",
+                "builders_max")
+
 @mcp.tool()
 async def get_crew_settings() -> str:
     """The tares-factory crew's settings for every project: `autonomy` (L3-review: the person
-    approves each merge; L4-ship: a builder merges after the reviewer's pass and green CI;
-    L5-dark: the releaser may deploy to prod after verifying), `release_profile`, `prod_pattern`
-    (what counts as prod), `challenger` (builders run the Codex challenger), `builders_max`.
-    Unset ones are null: ask the person, one at a time, with a recommendation."""
+    approves each merge; L4-ship: a builder merges after the reviewer's pass and green CI),
+    `releaser` (whether the crew runs a releaser; without one a ticket ends at merged),
+    `release_profile`, `prod_pattern` (what counts as prod), `challenger` (builders run the
+    Codex challenger), `builders_max`. Unset ones are null: ask the person, one at a time, with
+    a recommendation."""
     async with _cx(10) as cx:
         r = await cx.get(f"{TARESD}/api/crew/settings")
-    return _out(r, ("autonomy", "release_profile", "prod_pattern", "challenger", "builders_max"))
+    return _out(r, SETTING_KEYS)
 
 
 @writable()
 async def set_crew_settings(autonomy: str = "", release_profile: str | None = None,
                             prod_pattern: str | None = None, challenger: bool | None = None,
-                            builders_max: int | None = None) -> str:
+                            builders_max: int | None = None,
+                            releaser: bool | None = None) -> str:
     """Save the crew's settings the person chose (only the ones given change). Only the person's
     own session or the orchestrator may."""
     body = {"autonomy": autonomy or None, "release_profile": release_profile,
-            "prod_pattern": prod_pattern, "challenger": challenger, "builders_max": builders_max}
+            "prod_pattern": prod_pattern, "challenger": challenger, "builders_max": builders_max,
+            "releaser": releaser}
     async with _cx(10) as cx:
         r = await cx.put(f"{TARESD}/api/crew/settings", json=body)
-    return _out(r, ("autonomy", "release_profile", "prod_pattern", "challenger", "builders_max"))
+    return _out(r, SETTING_KEYS)
 
 
 @mcp.tool()
@@ -443,30 +449,58 @@ async def get_station(name: str) -> str:
 
 
 @writable()
-async def hand_over(project: str = "", repo: str = "") -> str:
-    """Hand a specced project to the crew: Tares records it (the project page says when). Then
-    send `crew-orchestrator` a `[TF:SHIP]` message with SendMessage naming the project and the
-    repo path. If no crew is running (list_crew shows no orchestrator working or waiting), tell
-    the person to run `factory crew up` first."""
+async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy: str = "",
+                    repo: str = "") -> str:
+    """Hand a specced project to the crew: Tares records it with every repo it spans, and the
+    orchestrator picks it up from Tares on its next tick. `repos` is one {path, name} per repo:
+    `path` the absolute folder it is checked out in on this machine, `name` its GitHub repo
+    (owner/name), the repo that holds the plan first. A later call adds repos, never replaces
+    them. `autonomy` only when the person wants this project stricter than the crew
+    (L3-review: every merge waits for their yes). `repo` (one path) is the older form. Then
+    send `crew-orchestrator` a `[TF:SHIP]` message with SendMessage so it starts now rather than
+    on its tick. If no crew is running (list_crew shows no orchestrator working or waiting),
+    tell the person to run `tares factory crew up` first."""
+    body: dict = {"repos": repos or [], "by": "claude code session"}
+    if repo:
+        body["repo"] = repo
+    if autonomy:
+        body["autonomy"] = autonomy
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
             return why
-        r = await cx.post(f"{TARESD}/api/projects/{uid}/handover",
-                          json={"repo": repo, "by": "claude code session"})
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/handover", json=body)
         if r.status_code >= 400:
             return _out(r)
         crew = await cx.get(f"{TARESD}/api/crew")
+    ho = r.json().get("handover") or {}
+    lines = [f"repo: {x.get('path') or '?'}" + (f" ({x['name']})" if x.get("name") else "")
+             for x in ho.get("repos") or []] or ["repo: (none given: pass repos=[{path, name}])"]
+    if ho.get("autonomy"):
+        lines.append(f"autonomy: {ho['autonomy']}")
     orch = [s for s in (crew.json().get("stations") or []) if s.get("role") == "orchestrator"
             and s.get("state") in ("working", "waiting", "quiet")] if crew.status_code == 200 else []
     if not orch:
-        return ("Recorded as handed to the crew, but no orchestrator is running: tell the person "
-                "to run `factory crew up` in a terminal, then send the [TF:SHIP] message.")
+        return ("Recorded as handed to the crew with:\n" + "\n".join(lines) + "\nNo orchestrator "
+                "is running: tell the person to run `tares factory crew up` in a terminal. The "
+                "orchestrator finds this project on Tares when it starts; no message is needed.")
     note = ""
     if orch[0].get("state") == "quiet":
         note = (f"\n{orch[0]['name']} has been silent for {orch[0].get('quiet_minutes')} min: if "
-                "the message bounces, tell the person to run `factory crew watch` or "
-                "`factory crew up`.")
-    return (f"Recorded. Now send {orch[0]['name']} a message with SendMessage:{note}\n"
+                "the message bounces, tell the person to run `tares factory crew watch`; the "
+                "orchestrator finds the project on Tares when it is back.")
+    return (f"Recorded. Now send {orch[0]['name']} a message with SendMessage, so it starts now "
+            f"rather than on its next tick:{note}\n"
             f"[TF:SHIP] {project or uid} is ready to build\nproject: {project or uid}\n"
-            f"repo: {repo or '(the repo named in its AGENTS.md)'}")
+            + "\n".join(lines))
+
+
+@mcp.tool()
+async def crew_projects() -> str:
+    """The projects handed to the crew, oldest first: each with its repos (`path` on this
+    machine, GitHub `name`) and the tickets and open PRs of each, the autonomy it was handed
+    over at when stricter than the crew's, tickets done of all, and the milestone it is on. The
+    orchestrator works from this list: a project here with no builder is one to start."""
+    async with _cx(15) as cx:
+        r = await cx.get(f"{TARESD}/api/crew/projects")
+    return _out(r)

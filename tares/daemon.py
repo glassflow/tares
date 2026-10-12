@@ -4352,7 +4352,7 @@ def make_app() -> FastAPI:
         ctx = ctx or _plan_ctx(uid)
         out = {k: t[k] for k in ("id", "owner", "identifier", "url", "title", "status",
                                  "position", "working_doc", "updated_at", "number", "milestone",
-                                 "holder", "stage", "stage_reason", "pr")}
+                                 "holder", "stage", "stage_reason", "pr", "repo")}
         out["label"] = factory_mod.label(t)
         out["pr_note"] = factory_api.pr_note(t)
         out["milestone_name"] = ctx["ms"].get(t["milestone"]) if t["milestone"] else None
@@ -4424,6 +4424,12 @@ def make_app() -> FastAPI:
                     factory_mod.label(by_id[x]) for x in loop if x in by_id)), 409)
         return ids
 
+    def _repo_ok(v) -> str | None:
+        try:
+            return factory_mod.repo_ok(v)
+        except docs_mod.DocError as e:
+            _err(e)
+
     def _ticket_or_404(uid: str, ref: str) -> dict:
         t = store.get_ticket(uid, ref)
         if t is None:
@@ -4448,8 +4454,9 @@ def make_app() -> FastAPI:
 
     @app.post("/api/projects/{uid}/tickets", status_code=201)
     async def create_project_ticket(uid: str, body: dict = Body(...)):
-        """{title, status?, position?, working_doc?, milestone?, depends_on?}: a ticket Tares
-        owns. Refused when the project's tickets live in Linear."""
+        """{title, status?, position?, working_doc?, milestone?, depends_on?, repo?}: a ticket
+        Tares owns. `repo` is the GitHub repo (owner/name) it changes, for a project that spans
+        several. Refused when the project's tickets live in Linear."""
         _project_or_404(uid)
         if store.get_project_linear(uid):
             _err(ValueError("this project's tickets live in Linear; add the ticket there and "
@@ -4465,7 +4472,8 @@ def make_app() -> FastAPI:
         tid = store.create_ticket(uid, "tares", title, status,
                                   float(pos) if pos is not None else None,
                                   working_doc=_working_doc_ok(uid, body.get("working_doc")),
-                                  milestone=milestone, depends_on=depends)
+                                  milestone=milestone, depends_on=depends,
+                                  repo=_repo_ok(body.get("repo")))
         return _ticket_out(uid, _ticket_or_404(uid, tid))
 
     @app.get("/api/projects/{uid}/tickets/{ref}")
@@ -4478,14 +4486,16 @@ def make_app() -> FastAPI:
 
     @app.put("/api/projects/{uid}/tickets/{ref}")
     async def update_project_ticket(uid: str, ref: str, body: dict = Body(...)):
-        """Change a ticket. A Linear ticket only takes `working_doc` (its title, status, order,
-        milestone and blocking relations change in Linear); a Tares ticket also takes title,
-        status, position, milestone and depends_on."""
+        """Change a ticket. A Linear ticket only takes `working_doc` and `repo` (its title,
+        status, order, milestone and blocking relations change in Linear); a Tares ticket also
+        takes title, status, position, milestone and depends_on."""
         _project_or_404(uid)
         t = _ticket_or_404(uid, ref)
         fields: dict = {}
         if "working_doc" in body:
             fields["working_doc"] = _working_doc_ok(uid, body.get("working_doc"))
+        if "repo" in body:
+            fields["repo"] = _repo_ok(body.get("repo"))
         own = {"title", "status", "position", "milestone", "depends_on"} & set(body)
         if own and t["owner"] == "linear":
             _err(ValueError(f"{t['identifier'] or t['id']} lives in Linear: change its "

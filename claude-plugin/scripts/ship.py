@@ -51,6 +51,17 @@ def _opt(name: str, default: str = "") -> str:
             or default)
 
 
+def _file_token() -> str:
+    path = (os.environ.get("TARES_FACTORY_TOKEN_FILE") or "").strip()
+    if not path:
+        return ""
+    try:
+        with open(os.path.expanduser(path)) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 def _post(url: str, data: bytes, headers: dict, timeout: float = 5):
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     return urllib.request.urlopen(req, timeout=timeout)
@@ -72,8 +83,12 @@ def _auth_only(headers: dict) -> dict:
 
 def config() -> dict:
     """Where Tares is, how to talk to it, and where this plugin keeps its state."""
-    base = (_opt("tares_url") or "http://127.0.0.1:8787").rstrip("/")
-    token = (_opt("access_token") or "").strip()
+    # A tares-factory station is told its crew's Tares (TARES_FACTORY_URL) and where its token is
+    # kept (TARES_FACTORY_TOKEN_FILE); both win over the plugin options, whose URL defaults to
+    # 127.0.0.1:8787.
+    base = (os.environ.get("TARES_FACTORY_URL") or _opt("tares_url")
+            or "http://127.0.0.1:8787").rstrip("/")
+    token = (_file_token() or _opt("access_token") or "").strip()
     headers = {"Content-Type": "application/x-ndjson"}
     if token:
         headers["Authorization"] = f"Bearer {token}"

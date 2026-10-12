@@ -479,6 +479,8 @@ _MIGRATIONS = [
     "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS stage TEXT",
     "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS stage_reason TEXT",
     "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS pr JSON",
+    # The GitHub repo (owner/name) a ticket changes, when its project spans several (TR-456)
+    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS repo TEXT",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -2545,7 +2547,7 @@ class Store(FactoryStore):
 
     _TICKET_COLS = ("id, project, owner, external_id, identifier, url, title, status, position, "
                     "working_doc, created_at, updated_at, milestone, depends_on, number, holder, "
-                    "stage, stage_reason, pr")
+                    "stage, stage_reason, pr, repo")
 
     @staticmethod
     def _ticket_row(r) -> dict:
@@ -2554,13 +2556,13 @@ class Store(FactoryStore):
                 "position": r[8], "working_doc": r[9], "created_at": r[10], "updated_at": r[11],
                 "milestone": r[12], "depends_on": json.loads(r[13]) if r[13] else [],
                 "number": r[14], "holder": r[15], "stage": r[16], "stage_reason": r[17],
-                "pr": json.loads(r[18]) if r[18] else None}
+                "pr": json.loads(r[18]) if r[18] else None, "repo": r[19]}
 
     def create_ticket(self, project: str, owner: str, title: str, status: str = "todo",
                       position: float | None = None, external_id: str | None = None,
                       identifier: str | None = None, url: str | None = None,
                       working_doc: str | None = None, milestone: str | None = None,
-                      depends_on: list[str] | None = None) -> str:
+                      depends_on: list[str] | None = None, repo: str | None = None) -> str:
         """A ticket at the end of the project's list unless `position` says where. It gets the
         project's next number (T1, T2, ...)."""
         tid = "tk_" + uuid.uuid4().hex[:10]
@@ -2573,10 +2575,11 @@ class Store(FactoryStore):
             num = self._next_ticket_number(project)
             self.con.execute(
                 f"INSERT INTO tickets ({self._TICKET_COLS}) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [tid, project, owner, external_id, identifier, url, title, status,
                  float(position), working_doc, ts, ts, milestone,
-                 json.dumps(depends_on) if depends_on else None, num, None, None, None, None])
+                 json.dumps(depends_on) if depends_on else None, num, None, None, None, None,
+                 repo])
         return tid
 
     def update_ticket(self, tid: str, **fields) -> None:
@@ -2585,7 +2588,7 @@ class Store(FactoryStore):
         explicitly."""
         allowed = {"title", "status", "position", "working_doc", "identifier", "url",
                    "external_id", "milestone", "depends_on", "holder", "stage", "stage_reason",
-                   "pr"}
+                   "pr", "repo"}
         sets, vals = ["updated_at = ?"], [now_utc()]
         for col, v in fields.items():
             if col == "depends_on":

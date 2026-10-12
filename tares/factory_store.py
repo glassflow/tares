@@ -182,6 +182,10 @@ FACTORY_SCHEMA = [
       handed_by   TEXT,
       handed_at   TIMESTAMPTZ
     )""",
+    # Every repo a project spans, [{path, name}], each later hand-over adding to the list, and the
+    # autonomy the person handed it over at when stricter than the crew's (TR-456, TR-462).
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS repos JSON",
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS autonomy TEXT",
 ]
 
 
@@ -803,13 +807,19 @@ class FactoryStore:
                 "SELECT session FROM session_stations WHERE role = ?", [role]).fetchall()]
 
     # ── hand-over to the crew (TR-425) ────────────────────────────────────────
-    def set_handover(self, project: str, repo: str | None, by: str | None, at) -> None:
+    def set_handover(self, project: str, repos: list[dict], autonomy: str | None,
+                     by: str | None, at) -> None:
+        """Record the hand-over: `repos` is the whole list (the caller merges it with the one
+        already kept); `repo` keeps the first path for older readers."""
+        first = next((r["path"] for r in repos if r.get("path")), None)
         with self._lock:
             self.con.execute(
-                "INSERT INTO handovers (project, repo, handed_by, handed_at) VALUES (?, ?, ?, ?) "
-                "ON CONFLICT (project) DO UPDATE SET repo = excluded.repo, "
-                "handed_by = excluded.handed_by, handed_at = excluded.handed_at",
-                [project, repo or None, by or None, at])
+                "INSERT INTO handovers (project, repo, handed_by, handed_at, repos, autonomy) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (project) DO UPDATE SET "
+                "repo = excluded.repo, handed_by = excluded.handed_by, "
+                "handed_at = excluded.handed_at, repos = excluded.repos, "
+                "autonomy = excluded.autonomy",
+                [project, first, by or None, at, json.dumps(repos), autonomy or None])
 
     def handed_over_projects(self) -> list[str]:
         with self._lock:
@@ -817,9 +827,12 @@ class FactoryStore:
 
     def get_handover(self, project: str) -> dict | None:
         with self._lock:
-            r = self.con.execute("SELECT repo, handed_by, handed_at FROM handovers WHERE "
-                                 "project = ?", [project]).fetchone()
-        return {"repo": r[0], "by": r[1], "at": r[2]} if r else None
+            r = self.con.execute("SELECT repo, handed_by, handed_at, repos, autonomy FROM "
+                                 "handovers WHERE project = ?", [project]).fetchone()
+        if not r:
+            return None
+        repos = json.loads(r[3]) if r[3] else ([{"path": r[0], "name": None}] if r[0] else [])
+        return {"repo": r[0], "repos": repos, "autonomy": r[4], "by": r[1], "at": r[2]}
 
     def delete_milestone(self, mid: str) -> None:
         """The milestone goes; its tickets stay, without a milestone."""

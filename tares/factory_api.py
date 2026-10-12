@@ -195,9 +195,9 @@ def register(app, store, h: SimpleNamespace) -> None:
 
     @app.get("/api/crew/settings")
     async def get_crew_settings():
-        """The crew's settings for every project: autonomy (L3-review, L4-ship, L5-dark),
-        release profile, prod pattern, challenger on builders, most builders at once. Unset
-        ones are null."""
+        """The crew's settings for every project: autonomy (L3-review, L4-ship), whether it runs
+        a releaser, release profile, prod pattern, challenger on builders, most builders at
+        once. Unset ones are null."""
         return {**settings(), "autonomy_levels": factory_mod.AUTONOMY}
 
     @app.put("/api/crew/settings")
@@ -348,6 +348,25 @@ def register(app, store, h: SimpleNamespace) -> None:
         that played it, the stations it started), the crew's settings, and the shared grants."""
         return {"stations": stations(), "settings": settings(), "grants": grants_out(None)["all"],
                 "now": now_utc()}
+
+    @app.get("/api/crew/projects")
+    async def crew_projects():
+        """The projects handed to the crew, oldest hand-over first: each with its repos (the
+        folder on the crew's machine and the GitHub name), the autonomy it was handed over at
+        when stricter than the crew's, its tickets by stage, the milestone it is on, and which
+        tickets each repo has. The orchestrator works from this list (TR-462)."""
+        names = {p["id"]: p["name"] for p in store.list_projects()}
+        out = []
+        for uid in store.handed_over_projects():
+            if uid not in names:
+                continue
+            ho = store.get_handover(uid) or {}
+            out.append({"id": uid, "name": names[uid], **project_progress(uid),
+                        "repos": repo_rows(uid, ho.get("repos") or []),
+                        "autonomy": ho.get("autonomy"), "handed_over_at": ho.get("at"),
+                        "handed_over_by": ho.get("by")})
+        out.sort(key=lambda p: str(p["handed_over_at"] or ""))
+        return {"projects": out, "now": now_utc()}
 
     @app.get("/api/crew/{name}")
     async def get_station(name: str):
@@ -635,6 +654,7 @@ def register(app, store, h: SimpleNamespace) -> None:
                 v = verdict_now(t, last[0] if last else None)
                 out.append({"project": uid, "project_name": pname, "ticket": factory_mod.label(t),
                             "title": t["title"], "holder": t["holder"],
+                            "repo": t.get("repo") or (t["pr"] or {}).get("repo"),
                             "pr": (t["pr"] or {}).get("url"), "head": (t["pr"] or {}).get("head"),
                             "waiting_since": since,
                             "blocks_milestone": blocks,
@@ -685,8 +705,10 @@ def register(app, store, h: SimpleNamespace) -> None:
                 return "\n".join(L)
             L.append("")
         # 2. what was asked
+        repo = t.get("repo") or pr.get("repo")
         L += ["## The ticket and its working doc",
-              f"Milestone: {full.get('milestone_name') or 'none'}. Held by {t['holder'] or 'nobody'}.",
+              f"Milestone: {full.get('milestone_name') or 'none'}. Held by {t['holder'] or 'nobody'}."
+              + (f" Repo: {repo}." if repo else ""),
               "", (full.get("working_doc_body") or "(no working doc)").strip(), ""]
         # 3. the builder's claims against the recording, unmatched first
         checks = sorted(full.get("checks") or [], key=lambda c: c.get("match") == "matched")
@@ -971,10 +993,75 @@ def register(app, store, h: SimpleNamespace) -> None:
 
     @app.post("/api/projects/{uid}/handover")
     async def hand_over(uid: str, request: Request, body: dict = Body(default={})):
-        """{repo?}: the spec session hands the project to the crew. Recorded with the time; the
-        session then messages the orchestrator itself."""
+        """{repos?: [{path, name}], repo?, autonomy?}: the spec session hands the project to the
+        crew. Each repo is the folder it is checked out in on the crew's machine and its GitHub
+        name (owner/name). A later hand-over adds repos, never replaces them. `autonomy` only
+        when the person wants this project stricter than the crew (L3-review). Recorded with
+        the time; the orchestrator finds it in /api/crew/projects."""
         h.project_or_404(uid)
-        repo = str(body.get("repo") or "").strip()[:500]
-        store.set_handover(uid, repo, h.by(request, body), now_utc())
+        try:
+            new = factory_mod.handover_repos(body.get("repos"))
+            if body.get("repo"):
+                new = factory_mod.merge_repos(new, factory_mod.handover_repos(body.get("repo")))
+            autonomy = str(body.get("autonomy") or "").strip() or None
+            if autonomy and autonomy not in factory_mod.AUTONOMY:
+                raise docs_mod.DocError(f"unknown autonomy {autonomy!r}; one of: "
+                                        + ", ".join(factory_mod.AUTONOMY))
+        except docs_mod.DocError as e:
+            h.err(e)
+        old = store.get_handover(uid) or {}
+        repos = factory_mod.merge_repos(old.get("repos") or [], new)
+        autonomy = autonomy or old.get("autonomy")
+        store.set_handover(uid, repos, autonomy, h.by(request, body), now_utc())
         include_shared_grants(uid)   # a crew-built project shows the grants it is built under
         return {"handover": store.get_handover(uid)}
+
+    def project_progress(uid: str) -> dict:
+        """Tickets done of all, by stage, and the first milestone with work left."""
+        tickets = store.list_tickets(uid)
+        done = [t for t in tickets if (t["stage"] in ("merged", "shipped")
+                                       or t["status"] in factory_mod.DONE_STATUSES)]
+        stages: dict[str, int] = {}
+        for t in tickets:
+            k = t["stage"] or ("done" if t in done else "todo")
+            stages[k] = stages.get(k, 0) + 1
+        current = None
+        for m in store.list_milestones(uid):
+            mine = [t for t in tickets if t["milestone"] == m["id"]]
+            if any(t not in done for t in mine):
+                current = {"name": m["name"], "done": sum(t in done for t in mine),
+                           "total": len(mine)}
+                break
+        return {"tickets_done": len(done), "tickets_total": len(tickets), "stages": stages,
+                "milestone": current}
+
+    def repo_rows(uid: str, repos: list[dict]) -> list[dict]:
+        """Each hand-over repo with the tickets that change it and their open pull requests. A
+        ticket with no repo belongs to the first one; a repo only tickets name is added."""
+        tickets = store.list_tickets(uid)
+        rows = [{**r, "tickets": [], "open_prs": []} for r in repos]
+        for t in tickets:
+            name = t.get("repo") or (t["pr"] or {}).get("repo")
+            row = next((r for r in rows if name and r["name"] == name), None)
+            if row is None and name:
+                row = {"path": None, "name": name, "tickets": [], "open_prs": []}
+                rows.append(row)
+            if row is None and rows:
+                row = rows[0]
+            if row is None:
+                continue
+            row["tickets"].append(factory_mod.label(t))
+            pr = t["pr"] or {}
+            if pr.get("url") and not pr.get("merged") and pr.get("state") != "closed":
+                row["open_prs"].append({"url": pr["url"], "ticket": factory_mod.label(t),
+                                        "number": pr.get("number")})
+        return rows
+
+    @app.get("/api/projects/{uid}/repos")
+    async def project_repos(uid: str):
+        """The repos this project touches, each with its tickets and open pull requests
+        (TR-463). Empty for a project nobody handed over and whose tickets name no repo."""
+        h.project_or_404(uid)
+        ho = store.get_handover(uid) or {}
+        rows = repo_rows(uid, ho.get("repos") or [])
+        return {"repos": [r for r in rows if r["path"] or r["name"]]}

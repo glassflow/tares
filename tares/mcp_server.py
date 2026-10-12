@@ -17,11 +17,28 @@ import os
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-TARESD = os.getenv("TARESD_URL", "http://127.0.0.1:8787")
+def _factory_token() -> str:
+    """The token a tares-factory station presents: `tares factory` keeps it in a file only the
+    person can read and names the file in the station's settings (never the token itself)."""
+    path = os.getenv("TARES_FACTORY_TOKEN_FILE", "").strip()
+    if not path:
+        return ""
+    try:
+        with open(os.path.expanduser(path)) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+# A tares-factory station names the Tares its crew uses in TARES_FACTORY_URL. It wins over
+# TARESD_URL, which the plugin's MCP config sets from the plugin option (127.0.0.1:8787 unless the
+# person changed it), so stations reach the same Tares as `tares factory` on any address.
+TARESD = (os.getenv("TARES_FACTORY_URL", "").strip()
+          or os.getenv("TARESD_URL", "http://127.0.0.1:8787")).rstrip("/")
 # Bearer credentials. Over HTTP transports each caller presents its own token (the root auth token
 # or a scoped API key) and we forward it per-request — the daemon enforces scopes per route. Over
 # stdio (a local agent spawned the proxy) there is no inbound token; the env token is used.
-AUTH_TOKEN = os.getenv("TARES_AUTH_TOKEN", "").strip()
+AUTH_TOKEN = _factory_token() or os.getenv("TARES_AUTH_TOKEN", "").strip()
 _CALLER_TOKEN = contextvars.ContextVar("tares_caller_token", default="")
 
 
@@ -629,7 +646,8 @@ async def pick_up(project: str = "", take_over: bool = False) -> str:
 @mcp.tool()
 async def list_tickets(project: str = "") -> str:
     """The project's tickets in plan order: id, label (the Linear identifier, else T<n>), title,
-    status (todo, in_progress, done, canceled), milestone, depends_on, whether it is ready (all
+    status (todo, in_progress, done, canceled), milestone, depends_on, the GitHub repo it changes
+    (`repo`, owner/name, for a project that spans several), whether it is ready (all
     it depends on is done) or which tickets block it, the link when it lives in Linear, and the
     id and title of each one's working doc. Work the ready tickets in this order. Also says
     which Linear project they live in, if any, and when it was last synced. Read one with
@@ -648,7 +666,7 @@ async def list_tickets(project: str = "") -> str:
         "tickets": [{k: t.get(k) for k in ("id", "label", "number", "identifier", "title",
                                             "status", "milestone_name", "depends_on", "ready",
                                             "blocked_by", "holder", "stage", "stage_reason",
-                                            "url", "working_doc", "working_doc_title")}
+                                            "repo", "url", "working_doc", "working_doc_title")}
                     | {"pr": _pr_brief(t.get("pr")), "pr_note": t.get("pr_note")}
                     for t in data.get("tickets") or []]}
     if any(t.get("status") == "in_progress" for t in data.get("tickets") or []):
@@ -688,15 +706,19 @@ async def get_ticket(ticket: str, project: str = "") -> str:
 @writable()
 async def write_ticket(title: str, status: str = "", position: float | None = None,
                        milestone: str | None = None, depends_on: list[str] | None = None,
-                       id: str = "", project: str = "") -> str:
+                       id: str = "", project: str = "", repo: str | None = None) -> str:
     """Add a ticket to the project's list, or change one when `id` is given (its id or T<n>).
     Only for a project whose tickets live in Tares: when they live in Linear, create and change
     them in Linear (milestones and "blocks" relations included) and Tares picks them up on its
     next sync. `status` is todo, in_progress, done or canceled; `position` orders the list (a
     new ticket goes to the end); `milestone` is the name of a milestone written with
     write_milestone ("" takes it out of its milestone); `depends_on` lists the tickets (T<n> or
-    id) that must be done first ([] clears them). Returns the ticket with its label (T<n>)."""
+    id) that must be done first ([] clears them); `repo` is the GitHub repo the ticket changes
+    (owner/name), for a project that spans several repos ("" clears it; a Linear ticket takes
+    only this). Returns the ticket with its label (T<n>)."""
     body: dict = {"title": title}
+    if repo is not None:
+        body["repo"] = repo
     if status:
         body["status"] = status
     if position is not None:
@@ -716,7 +738,7 @@ async def write_ticket(title: str, status: str = "", position: float | None = No
         else:
             r = await cx.post(f"{TARESD}/api/projects/{uid}/tickets", json=body)
     return _out(r, ("id", "label", "title", "status", "position", "milestone_name",
-                    "depends_on"))
+                    "depends_on", "repo"))
 
 
 @writable()

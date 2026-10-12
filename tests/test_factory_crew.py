@@ -190,17 +190,25 @@ async def main():
 
         print("== crew settings and grants ==")
         s = json.loads(await mf.get_crew_settings())
-        ck("settings start unset", s == {"autonomy": None, "release_profile": None, "prod_pattern": None,
-                                         "challenger": None, "builders_max": None}, s)
+        ck("settings start unset", s == {"autonomy": None, "releaser": None, "release_profile": None,
+                                         "prod_pattern": None, "challenger": None,
+                                         "builders_max": None}, s)
         s = json.loads(await mf.set_crew_settings(autonomy="L4-ship", release_profile="kind",
                                                   prod_pattern="prod-*", challenger=True))
         ck("the person's session saves them", s["autonomy"] == "L4-ship" and s["challenger"] is True, s)
         bad = await mf.set_crew_settings(autonomy="L9")
         ck("an unknown autonomy is refused", "unknown autonomy" in bad, bad)
+        bad = await mf.set_crew_settings(autonomy="L5-dark")
+        ck("L5 is not offered: the factory stops at merged", "unknown autonomy" in bad, bad)
+        s = json.loads(await mf.get_crew_settings())
+        ck("no releaser until the person says so", s["releaser"] is None, s)
+        s = json.loads(await mf.set_crew_settings(releaser=False))
+        ck("the releaser is a setting of its own", s["releaser"] is False
+           and s["autonomy"] == "L4-ship", s)
         s = json.loads(await mf.set_crew_settings(builders_max=2))
         ck("a later change keeps the rest", s["autonomy"] == "L4-ship" and s["builders_max"] == 2, s)
         as_station("crew-reviewer", "reviewer")
-        bad = await mf.set_crew_settings(autonomy="L5-dark")
+        bad = await mf.set_crew_settings(autonomy="L3-review")
         ck("a reviewer may not change them", "only the orchestrator" in bad, bad)
         bad = await mf.add_grant("deploy anything", "all")
         ck("a reviewer may not add a grant", "only the orchestrator" in bad, bad)

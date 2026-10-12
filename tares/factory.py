@@ -92,6 +92,66 @@ def depends_ok(depends_on) -> list[str]:
     return out
 
 
+_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_GITHUB_RE = re.compile(r"^(?:https?://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+                        r"([^/\s]+/[^/\s]+?)(?:\.git)?/?$")
+
+
+def repo_ok(repo) -> str | None:
+    """A GitHub repo as `owner/name`, from that, a github.com URL or a git remote; None for empty.
+    DocError for anything else."""
+    r = str(repo or "").strip()
+    if not r:
+        return None
+    m = _GITHUB_RE.match(r)
+    if m:
+        r = m.group(1)
+    if r.endswith(".git"):
+        r = r[:-4]
+    if not _REPO_RE.match(r):
+        raise DocError(f"repo {repo!r} is not a GitHub repo; give it as owner/name")
+    return r
+
+
+def handover_repos(repos) -> list[dict]:
+    """The repos a project is handed over with, each {path, name}: the folder it is checked out
+    in on the crew's machine and its GitHub name (owner/name, may be empty). Takes strings (a
+    path, or owner/name) or {path, name} objects. DocError for a bad one."""
+    if repos is None:
+        return []
+    if isinstance(repos, (str, dict)):
+        repos = [repos]
+    if not isinstance(repos, list):
+        raise DocError("repos is a list of {path, name}")
+    out: list[dict] = []
+    for x in repos:
+        if isinstance(x, str):
+            x = x.strip()
+            x = ({"path": x, "name": None} if x.startswith(("/", "~", "."))
+                 else {"path": None, "name": x})
+        if not isinstance(x, dict):
+            raise DocError("each repo is {path, name}")
+        path = str(x.get("path") or "").strip().rstrip("/")[:500] or None
+        name = repo_ok(x.get("name"))
+        if not path and not name:
+            continue
+        same = next((o for o in out if (path and o["path"] == path)
+                     or (name and o["name"] == name)), None)
+        if same:
+            same["path"] = same["path"] or path
+            same["name"] = same["name"] or name
+        else:
+            out.append({"path": path, "name": name})
+    if len(out) > 20:
+        raise DocError(f"{len(out)} repos; a project handed to the crew takes up to 20")
+    return out
+
+
+def merge_repos(old: list[dict], new: list[dict]) -> list[dict]:
+    """A later hand-over adds its repos to the ones already handed over, never replaces them."""
+    return handover_repos([*(old or []), *(new or [])])
+
+
 def find_loop(deps: dict[str, list[str]], start: str) -> list[str] | None:
     """A dependency loop through `start` in {ticket id: [ids it depends on]}, as the path that
     closes it, or None."""
@@ -467,7 +527,6 @@ ROLES = ("orchestrator", "reviewer", "releaser", "builder", "helper", "comms")
 AUTONOMY = {
     "L3-review": "you approve each merge",
     "L4-ship": "a builder merges after the reviewer's pass and green CI",
-    "L5-dark": "the releaser may deploy to prod after verifying, you are told",
 }
 MAX_NAME = 120
 
@@ -485,8 +544,8 @@ def station_ok(name, role, parent) -> tuple[str, str, str]:
     return name, role, parent
 
 
-CREW_DEFAULTS = {"autonomy": None, "release_profile": None, "prod_pattern": None,
-                 "challenger": None, "builders_max": None}
+CREW_DEFAULTS = {"autonomy": None, "releaser": None, "release_profile": None,
+                 "prod_pattern": None, "challenger": None, "builders_max": None}
 
 
 def crew_settings_ok(body: dict, cur: dict) -> dict:
@@ -503,8 +562,9 @@ def crew_settings_ok(body: dict, cur: dict) -> dict:
             if len(v) > 300:
                 raise DocError(f"{k} is {len(v)} characters; keep it to 300")
             out[k] = v or None
-    if body.get("challenger") is not None:
-        out["challenger"] = bool(body["challenger"])
+    for k in ("challenger", "releaser"):
+        if body.get(k) is not None:
+            out[k] = bool(body[k])
     if body.get("builders_max") is not None:
         try:
             n = int(body["builders_max"])
