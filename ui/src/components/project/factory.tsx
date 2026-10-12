@@ -425,7 +425,7 @@ function NextUp({ ctx, next, of, total, prompt, waiting, byCrew }: {
       {byCrew ? (
         <span className="help">
           The crew builds this project{next.holder ? <>: <span className="mono">{next.holder}</span> holds this ticket</> : ""}.
-          To steer it, talk to the orchestrator: <span className="mono">factory attach orchestrator</span>.
+          To steer it, talk to the orchestrator: <span className="mono">tares factory crew attach orchestrator</span>.
         </span>
       ) : (
         <>

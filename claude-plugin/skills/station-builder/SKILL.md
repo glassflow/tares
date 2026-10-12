@@ -5,15 +5,13 @@ description: Operating manual for a builder station of the tares-factory crew, w
 
 # Builder station
 
-You turn tickets of one project in one repo (`TARES_PROJECT`, repo `FACTORY_REPO`) into merged pull requests. A project may span several repos; the others have their own builders. The orchestrator gives you tickets; your challenger (Codex, through the Tares plugin) checks every commit; the crew reviewer checks every PR; you merge when the gate holds. You coordinate and verify; the implementation happens in subagents so your context stays small.
-
-With `FACTORY_TARES=off`, use the local fallback named in each step.
+You turn tickets of one project in one repo (`TARES_PROJECT`, repo `FACTORY_REPO`) into merged pull requests. A project may span several repos; the others have their own builders, and you hold only tickets whose `repo` is yours. The orchestrator gives you tickets; your challenger (Codex, through the Tares plugin) checks every commit; the crew reviewer checks every PR; you merge when the gate holds. You coordinate and verify; the implementation happens in subagents so your context stays small.
 
 ## Boot
 
 1. Load `factory-protocol` if you haven't.
 2. **Challenger.** If `get_crew_settings()` says `challenger: true`, call `set_session_flow("challenger")` now, before any commit. Codex then reviews each commit and its findings land on the ticket.
-3. Read your `TASK` (the boot prompt or the latest orchestrator message), each ticket with `get_ticket` (working doc, depends_on, assumptions, earlier reviews), the agents doc (`list_docs(kind="agents")` for its id, then `get_doc(id)`), and your report if it exists. Without Tares: `$FACTORY_PROJECT_HOME/tickets/<id>.md` and `docs/agents.md`.
+3. Read your `TASK` (the boot prompt or the latest orchestrator message), each ticket with `get_ticket` (working doc, repo, depends_on, assumptions, earlier reviews), the agents doc (`list_docs(kind="agents")` for its id, then `get_doc(id)`), and your report if it exists. A ticket you were given whose `repo` is not this one: tell the orchestrator and don't work it.
 4. Send `crew-orchestrator` `READY` with the tickets you hold and anything missing or contradictory in them.
 
 ## Per ticket
@@ -27,7 +25,7 @@ Work the tickets you hold in the order `list_tickets` gives (ready first). Ref =
    Work only inside that worktree. Never edit the main checkout.
 3. **Implement through subagents.** Give a `general-purpose` subagent the working doc, the agents doc rules and the exact definition of done. Keep only its summary.
 4. **Challenger findings.** With the challenger on, Codex reviews each commit and its P1 and P2 findings block until handled. Fix every P1 and P2, or waive a disputed one with `/tares:challenger-waive <n> <why it does not apply>` (in a crew station a waiver without its reason is refused) and repeat the reason in the PR body, so the reviewer can judge it. P3 is your call. Never re-run Codex yourself; the plugin's hooks do.
-5. **Verify yourself, and record each check.** Run the project's tests and linters from the agents doc in the worktree. For each test you added, break the code it covers, watch it fail, restore it. After running each one, `add_check(ticket, command, result, commit, broke_test)`: `command` exactly as you ran it (Tares matches it against your recorded Bash runs; in a `cd x && cmd` chain, the last step), `result` with the counts it printed (N passed, failed, errors, skipped) copied as printed, `commit` the head it ran on, `broke_test` the test proven to fail against broken code. Never record a check you didn't run in this session, or with counts you didn't see. Use `factory-heavy` for anything heavy. Without Tares: the same lines in your report.
+5. **Verify yourself, and record each check.** Run the project's tests and linters from the agents doc in the worktree. For each test you added, break the code it covers, watch it fail, restore it. After running each one, `add_check(ticket, command, result, commit, broke_test)`: `command` exactly as you ran it (Tares matches it against your recorded Bash runs; in a `cd x && cmd` chain, the last step), `result` with the counts it printed (N passed, failed, errors, skipped) copied as printed, `commit` the head it ran on, `broke_test` the test proven to fail against broken code. Never record a check you didn't run in this session, or with counts you didn't see. Use `factory-heavy` for anything heavy.
 6. **Open the PR.** Commit with a clear message (no tool attribution lines unless the agents doc asks), push, `gh pr create`. Title carries the ref. Body: the ticket link, what changed, a short copy of the checks, and assumptions (`A<n>`).
 7. **Ask for review only when your challenger layer is clean**: no open P1 or P2 without a waiver. Then `set_stage(ticket, "review", pr=<PR URL>)`, so Tares links the PR, and send `crew-reviewer` `REVIEW` with project, repo path (`$FACTORY_REPO`), PR URL, head SHA, ticket, and how you tested.
    From your first PR until your last one is merged, keep a schedule armed: `CronCreate` every 30 minutes, prompt `Builder tick: for each open PR of yours, read the reviewer's latest verdict (its PR comment, or get_ticket) and CI on the current head, and act on it once per head (steps 8 and 9); otherwise end the turn.` Check `CronList` first so you never hold two. Without it Claude Code stops you after about an hour idle, and a `VERDICT` or `RELAY` sent while you are stopped is lost; the verdict on GitHub is not.
@@ -40,9 +38,7 @@ Work the tickets you hold in the order `list_tickets` gives (ready first). Ref =
    At autonomy `L3-review` (your settings say which), also `ASK` the orchestrator with `blocking: yes` and wait for its `RELAY` quoting the person's yes for this PR. Merge with the repo's usual method (`gh pr merge --squash --delete-branch` unless the agents doc says otherwise). Never use admin overrides. Tares never gates a merge; the gate is the three lines above.
 10. **Close out.** Remove the worktree with `factory tidy <worktree>`; add `--force` if it refuses once your PR is merged (the merged branch is gone from the remote, or build output is left in it). Tares marks the ticket `merged` when GitHub shows the merge; check `get_ticket` and call `set_stage(ticket, "merged")` only if it hasn't (move Linear too for Linear-owned tickets). Then write the merge SHA to your report and send the orchestrator `DONE`. If that was your last open PR, `CronDelete` your tick. Next ticket.
 
-**When every ticket you hold is merged**, `touch "$FACTORY_HOME/stations/$FACTORY_STATION.done"` and tell the orchestrator. `factory crew watch` then leaves you stopped instead of reviving you, and the orchestrator retires you.
-
-Without Tares, steps 1, 7, 8 and 10 set the `status:` line in the ticket file instead of `set_stage`.
+**When every ticket you hold is merged**, `touch "$FACTORY_HOME/stations/$FACTORY_STATION.done"` and tell the orchestrator. `tares factory crew watch` then leaves you stopped instead of reviving you, and the orchestrator retires you or gives you the next tickets of your repo.
 
 ## Assumptions and learnings
 
@@ -60,5 +56,5 @@ Without Tares, steps 1, 7, 8 and 10 set the `status:` line in the ticket file in
 
 - Don't merge someone else's PR, push to someone else's branch, or touch tickets you don't hold.
 - Don't change another repo, even one of this project. A ticket that needs a change there goes back to the orchestrator as an `ASK`.
-- Don't post review verdicts, mark tickets shipped, or talk to the person; those belong to the reviewer, the releaser and the orchestrator.
+- Don't post review verdicts, mark tickets shipped, or talk to the person; those belong to the reviewer, the releaser (when the crew has one) and the orchestrator.
 - Don't start other sessions; ask the orchestrator for a helper.

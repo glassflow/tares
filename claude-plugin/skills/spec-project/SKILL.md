@@ -19,6 +19,9 @@ nothing may be left for them to guess. You do not build anything here.
   different for this project; save a new grant with `add_grant`, quoting the user's own words.
 - If the project builds on a repo that exists, **read the repo before asking about it**: layout,
   stack, how it builds and tests today, its own AGENTS.md or README.
+- When this session runs in a folder that holds several repos (`tares factory spec` started in a
+  workspace), the project may span them, for example an API, its UI and its chart. Read each, and
+  ask which ones the project changes, recommending the ones the idea touches.
 
 **Throughout the session:** when the user states something that holds beyond this project (a
 standing rule such as "always build on a branch", or a fact such as "prices are in euros"), ask
@@ -34,7 +37,8 @@ when you could explain the project to a new engineer. Cover:
 - the goal in one line, who it is for, and what a user can do when it is done
 - what is in and what is explicitly out of scope
 - constraints: stack, hosting, data, deadlines, budget, what must not change
-- where the code lives (repo path or URL, branch) and the git rules (push or not, PRs or not)
+- where the code lives: every repo the project changes, each with its folder on this machine, its
+  GitHub name (`owner/name`) and branch, and the git rules (push or not, PRs or not)
 - how we will know it works, and where it is checked (a performance target needs the machine it
   is measured on)
 - how it ships: where it runs, how a release is done and checked, how it is rolled back
@@ -65,6 +69,11 @@ assumption written in the spec.
 - **Tickets** are an hour or two of agent work each, one PR each, in order. Each belongs to a
   milestone and names the tickets it depends on. A ticket a cheaper model cannot finish without
   guessing is too big or too vague: split it or say more.
+- **Several repos:** a ticket changes one repo, since one PR lives in one repo. A change that needs
+  two repos is two tickets joined by `depends_on`, the one that provides first (the API endpoint
+  before the UI that calls it), and both working docs say what crosses the line between them (the
+  route, the field names, the version). Each repo gets its own builder, so tickets in different
+  repos run side by side unless a dependency holds one back.
 
 ## 4. Have a second model attack the plan
 
@@ -99,8 +108,9 @@ Write for a reader who was not here: no "as discussed", no references to this co
 2. `write_doc` kind `spec`: what is built and why, who it is for, scope in and out, constraints,
    decisions made here (with the user's words where they decided), assumptions still open.
 3. `write_doc` kind `plan`: the milestones in order with their goal and the tickets in each.
-4. `write_doc` kind `agents`, the AGENTS.md of the build: where the code lives (absolute path or
-   clone URL, branch), layout, exact commands to install, build, run, test, lint; conventions; the
+4. `write_doc` kind `agents`, the AGENTS.md of the build: where the code lives (each repo's
+   absolute path or clone URL, GitHub name and branch), layout, exact commands to install, build,
+   run, test, lint, per repo when they differ; conventions; the
    git rules; what not to touch; and the **release section**: how to release, where it runs, how
    to check it went out, how to roll back, as exact commands. Propose the release section and get
    the user's yes. Ask for anything you do not know; a builder cannot guess it.
@@ -111,9 +121,11 @@ Write for a reader who was not here: no "as discussed", no references to this co
      issue per ticket in its milestone, with a two or three line description; add a "blocks"
      relation for each dependency. Then `link_linear_project` with the Linear project's URL, and
      `write_milestone` again for each milestone to add its checks (Linear has no place for them).
-     Check the ticket list Tares returns matches what you created.
-   - **Tares only:** `write_ticket` once per ticket with `milestone` and `depends_on` (the
-     tickets' labels, `T1`, `T2`, ...). Titles say what the ticket does, without a number.
+     Check the ticket list Tares returns matches what you created. For a project that spans
+     several repos, then `write_ticket(id=<label>, repo="owner/name", title="")` for each ticket.
+   - **Tares only:** `write_ticket` once per ticket with `milestone`, `depends_on` (the
+     tickets' labels, `T1`, `T2`, ...) and, for a project that spans several repos, `repo` (the
+     GitHub `owner/name` it changes). Titles say what the ticket does, without a number.
 7. A working doc per ticket: `write_doc` kind `working`, titled `Working: <ticket title>`, then
    `attach_working_doc`. Working docs never go to Linear. Use exactly these sections:
 
@@ -164,15 +176,14 @@ depends on how the project is built (step 1's last question).
 - to keep what it learns about the project with `remember_for_project`
 - where questions go: a `note` doc in the project when something is unclear
 
-**Built by a tares-factory crew:** the starting prompt is what every station and builder joins
-from.
+**Built by a tares-factory crew:** the stations' own skills say how to work, so the starting
+prompt only says what this project is:
 
-- Get the join snippet: run `factory snippet` in a terminal if the `factory` CLI is installed;
-  otherwise use the kit's `plugin/templates/join-snippet.md`. Put it in the starting prompt as
-  is, then the two lines on what the project is, where the code lives, and that the plan,
-  milestones, tickets and AGENTS.md are on this Tares project.
-- Builders ask the crew's orchestrator, not the user, and record what they assume with `assume`;
-  they do not leave `note` docs.
+- what the project is, in two lines, and that the spec, plan, milestones, tickets and AGENTS.md
+  are on this Tares project
+- each repo it changes: folder on this machine, GitHub name, branch
+- that builders ask the crew's orchestrator, not the user, and record what they assume with
+  `assume`; they do not leave `note` docs
 - Do not include the single-session instructions above.
 
 ## 8. Check, then hand over
@@ -193,20 +204,16 @@ missing. Then tell the user, briefly:
 
 Ask: "Hand this to the orchestrator now?" On yes:
 
-1. `hand_over` with the project and the repo path. Tares records it; the tool says which
-   orchestrator is running.
-2. Send that orchestrator (normally `crew-orchestrator`) one message with SendMessage:
+1. `hand_over(project, repos=[{"path": <absolute folder>, "name": "owner/name"}, ...])`, every
+   repo the tickets change, the one holding the plan first; add `autonomy="L3-review"` only when
+   the user wants this project stricter than the crew. Tares records it, the project page shows
+   its repos, and the orchestrator finds it in `crew_projects`. The tool says which orchestrator
+   is running.
+2. Send that orchestrator (normally `crew-orchestrator`) the `[TF:SHIP]` message the tool returns,
+   with SendMessage, so it starts now rather than on its next tick.
+3. Tell the user the orchestrator has it and will start the builders; they talk to it with
+   `tares factory crew attach orchestrator`, and watch the crew on the Crew page.
 
-   ```
-   [TF:SHIP] <project> is ready to build
-   project: <project name on Tares>
-   repo: <absolute repo path>
-   autonomy: <only if this project differs from the crew's setting>
-   ```
-
-3. Tell the user the orchestrator has it and will start the first builder; they talk to it with
-   `factory attach orchestrator`.
-
-If `hand_over` says no orchestrator is running, tell the user to run `factory crew up` in a
-terminal first (starting stations hands them the user's permissions, so the user starts them,
-not you), then send the message when they say it is up.
+If `hand_over` says no orchestrator is running, tell the user to run `tares factory crew up` in a
+terminal (starting stations hands them the user's permissions, so the user starts them, not you).
+The orchestrator finds the project on Tares when it starts; no message is needed.
