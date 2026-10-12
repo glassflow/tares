@@ -63,6 +63,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const repos = rp?.repos ?? [];
   const [repoKey, setRepoKey] = useState<string | null>(null);
   const repoOn = repos.find((r) => (r.name ?? r.path) === repoKey) ?? null;
+  const openPrs = repos.reduce((n, r) => n + r.open_prs.length, 0);
   // handed to the crew: the crew builds it, there is no build prompt to copy
   const byCrew = !!crew?.handover;
   const allTickets = tk?.tickets ?? [];
@@ -155,10 +156,6 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
         </div>
       )}
 
-      {repos.length > 0 && (
-        <Repos repos={repos} on={repoKey} pick={(k) => setRepoKey(k === repoKey ? null : k)} />
-      )}
-
       {attention && active && (
         <Attention kind={attention} session={active} quietMin={quietMin}
                    label={active.station ?? (active.session === firstLinked ? "spec session" : "build session")}
@@ -232,6 +229,13 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
           <div className="fo-foot"><VLink v={{ kind: "tickets" }} className="fo-link">All tickets</VLink></div>
         </Fold>
       </div>
+
+      {repos.length > 0 && (
+        <Fold id="github" title="GitHub"
+              meta={`${repos.length} ${repos.length === 1 ? "repo" : "repos"}${openPrs ? ` · ${openPrs} open ${openPrs === 1 ? "PR" : "PRs"}` : ""}`}>
+          <GitHubRepos repos={repos} on={repoKey} pick={(k) => setRepoKey(k === repoKey ? null : k)} />
+        </Fold>
+      )}
 
       <Desk project={ctx.id} />
 
@@ -322,23 +326,36 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
 // a session that has sent nothing for this long while a ticket is in progress may be gone
 const SILENT_MIN = 10;
 
-/** The repos the project touches, from its hand-over and its tickets (TR-463). Picking one
- *  narrows the ticket list to its tickets; picking it again shows all. */
-function Repos({ repos, on, pick }: { repos: ProjectRepo[]; on: string | null; pick: (k: string) => void }) {
+/** The GitHub repos the project works on (TR-463): each links to the repo on GitHub, says where it
+ *  is checked out on the crew's machine, lists its open pull requests, and narrows the ticket
+ *  list to its tickets. */
+function GitHubRepos({ repos, on, pick }: { repos: ProjectRepo[]; on: string | null; pick: (k: string) => void }) {
   return (
-    <div className="fo-repos" aria-label="Repos this project touches">
-      <span className="fo-repos-label">{repos.length === 1 ? "Repo" : "Repos"}</span>
+    <ul className="fo-docs fo-gh">
       {repos.map((r) => {
         const k = (r.name ?? r.path) as string;
         return (
-          <button key={k} type="button" className={`fo-repo${on === k ? " is-on" : ""}`} aria-pressed={on === k}
-                  title={r.path ? `checked out at ${r.path}` : "not checked out on the crew's machine yet"} onClick={() => pick(k)}>
-            <span className="mono">{r.name ?? r.path}</span>
-            <span className="dim">{r.tickets.length} {r.tickets.length === 1 ? "ticket" : "tickets"}{r.open_prs.length > 0 && ` · ${r.open_prs.length} open ${r.open_prs.length === 1 ? "PR" : "PRs"}`}</span>
-          </button>
+          <li key={k} className={on === k ? "is-on" : ""}>
+            <div className="fo-gh-name">
+              {r.name ? <a href={`https://github.com/${r.name}`} target="_blank" rel="noreferrer" className="mono">{r.name}</a>
+                : <span className="mono">{r.path}</span>}
+              <button type="button" className="fo-link-btn" aria-pressed={on === k} onClick={() => pick(k)}>
+                {on === k ? "show all tickets" : `${r.tickets.length} ${r.tickets.length === 1 ? "ticket" : "tickets"}`}
+              </button>
+            </div>
+            {r.path && r.name && <small className="dim">checked out at <span className="mono">{r.path}</span></small>}
+            {!r.path && <small className="fo-warn">not checked out on the crew's machine yet</small>}
+            {r.open_prs.length > 0 && (
+              <small className="fo-gh-prs">
+                Open: {r.open_prs.map((p, i) => (
+                  <span key={p.url}>{i ? ", " : ""}<a href={p.url} target="_blank" rel="noreferrer">PR #{p.number ?? "?"}</a> ({p.ticket})</span>
+                ))}
+              </small>
+            )}
+          </li>
         );
       })}
-    </div>
+    </ul>
   );
 }
 
@@ -527,11 +544,13 @@ export function prBrief(pr: Ticket["pr"]): string | null {
 }
 
 function TicketList({ tickets, nextId }: { tickets: Ticket[]; nextId?: string }) {
+  const many = new Set(tickets.map((t) => t.repo ?? t.pr?.repo).filter(Boolean)).size > 1;
   return (
     <ol className="fo-tickets">
       {tickets.map((t) => {
         const waits = t.status === "todo" && t.blocked_by.length > 0;
-        const pr = prBrief(t.pr);
+        const prRepo = t.pr?.repo ?? t.repo;
+        const pr = prBrief(t.pr) && (many && prRepo ? `${prRepo.split("/").pop()} ${prBrief(t.pr)}` : prBrief(t.pr));
         return (
           <li key={t.id} className={t.id === nextId ? "is-next" : ""}>
             <span className="fo-n">{t.label}</span>

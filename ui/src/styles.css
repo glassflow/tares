@@ -2053,3 +2053,8 @@ pre.payload {
 .fo-repo.is-on { border-color: var(--accent-deep); background: var(--accent-soft); }
 .fo-repo-on { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; padding: 8px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
 .fo-link-btn { background: none; border: 0; padding: 0; color: var(--accent-deep); cursor: pointer; font: inherit; text-decoration: underline; }
+/* The GitHub section of a factory project (TR-463) */
+.fo-gh li { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
+.fo-gh li.is-on { background: var(--accent-soft); }
+.fo-gh-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.fo-gh small { font-size: 12px; overflow-wrap: anywhere; }
