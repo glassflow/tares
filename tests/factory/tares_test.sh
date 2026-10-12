@@ -33,7 +33,7 @@ check "without a releaser, two stations" '! grep -q "started crew-releaser" "$T/
 check "the release questions are not asked without a releaser" '! grep -q "How does the releaser ship" "$T/up1.out"'
 check "settings saved on Tares" '[ "$(api GET /api/crew/settings | jq -c "[.autonomy, .releaser, .challenger, .builders_max]")" = "[\"L4-ship\",false,true,2]" ]'
 check "grant saved on Tares" 'api GET /api/grants | jq -r .all | grep -q "the reviewer may comment on draft PRs"'
-check "the token is kept in a file only the person reads" '[ "$(cat "$FACTORY_CREW_HOME/.tares-token")" = stub-token ] && [ "$(stat -f %Lp "$FACTORY_CREW_HOME/.tares-token" 2>/dev/null || stat -c %a "$FACTORY_CREW_HOME/.tares-token")" = 600 ]'
+check "the token is kept in a file only the person reads" '[ "$(cat "$FACTORY_CREW_HOME/.tares-token")" = stub-token ] && [ "$(stat -c %a "$FACTORY_CREW_HOME/.tares-token" 2>/dev/null || stat -f %Lp "$FACTORY_CREW_HOME/.tares-token")" = 600 ]'
 check "stations are told where the token is" '[ "$(envof crew-reviewer TARES_FACTORY_TOKEN_FILE)" = "$FACTORY_CREW_HOME/.tares-token" ]'
 check "no token in settings files" '! grep -rq stub-token "$FACTORY_CREW_HOME/stations"'
 check "stations reach the same Tares" '[ "$(envof crew-reviewer TARES_FACTORY_URL)" = "$TARESD_URL" ]'

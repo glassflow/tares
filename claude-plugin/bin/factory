@@ -87,7 +87,11 @@ claude_bin() {
   done < <(which -a claude 2>/dev/null | awk '!seen[$0]++')
   die "claude not found on PATH (set CLAUDE_BIN to its path)"
 }
-CLAUDE="$(claude_bin)"
+# Commands that never start or read a Claude Code session work where Claude Code isn't installed.
+case "${1:-}" in
+  _parse-bg-id|tidy|finish|projects) CLAUDE=claude ;;
+  *) CLAUDE="$(claude_bin)" ;;
+esac
 
 CREW_HOME="${FACTORY_CREW_HOME:-$HOME/factory}"
 CREW_CFG="$CREW_HOME/crew.json"
