@@ -231,7 +231,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
       </div>
 
       {repos.length > 0 && (
-        <Fold id="github" title="GitHub"
+        <Fold id="github" title="GitHub" icon={<GitHubMark />}
               meta={`${repos.length} ${repos.length === 1 ? "repo" : "repos"}${openPrs ? ` · ${openPrs} open ${openPrs === 1 ? "PR" : "PRs"}` : ""}`}>
           <GitHubRepos repos={repos} on={repoKey} pick={(k) => setRepoKey(k === repoKey ? null : k)} />
         </Fold>
@@ -326,84 +326,96 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
 // a session that has sent nothing for this long while a ticket is in progress may be gone
 const SILENT_MIN = 10;
 
-const CI_TEXT: Record<string, [string, string]> = {
-  success: ["CI passed", "fo-st-done"], failure: ["CI failed", "fo-st-quiet"],
-  pending: ["CI running", "fo-st-in_progress"], none: ["no CI", ""],
-};
-const PR_STAGE: Record<string, string> = {
-  doing: "being built", review: "waiting for review", changes: "changes asked", blocked: "blocked",
-};
-
-/** One pull request: what it is, which ticket, and where it stands on GitHub and with the crew. */
-function PRRow({ p }: { p: RepoPR }) {
-  const ci = p.ci ? CI_TEXT[p.ci] : null;
-  const rv = p.review;
+// GitHub's own marks (octicons), drawn inline: the logo, a repo, a pull request
+function GitHubMark() {
   return (
-    <li className="fo-gh-pr">
-      <div className="fo-gh-pr-head">
-        <a href={p.url} target="_blank" rel="noreferrer"><b>#{p.number ?? "?"}</b> {p.title}</a>
-        <VLink v={{ kind: "ticket", name: p.ticket }} className="fo-gh-tk">{p.ticket}</VLink>
-      </div>
-      <div className="fo-gh-pr-state">
-        {p.stage && PR_STAGE[p.stage] && <span className={`fo-st ${p.stage === "review" ? "fo-st-wait" : p.stage === "changes" || p.stage === "blocked" ? "fo-st-quiet" : "fo-st-in_progress"}`}>{PR_STAGE[p.stage]}</span>}
-        {ci && <span className={`fo-st ${ci[1]}`}>{ci[0]}</span>}
-        {rv && (rv.current
-          ? <span className={`fo-st ${rv.verdict === "pass" ? "fo-st-done" : "fo-st-quiet"}`}>
-              {rv.verdict === "pass" ? "review passed" : rv.verdict === "changes" ? "changes asked" : "review blocked"}{rv.round > 1 ? `, round ${rv.round}` : ""}
-            </span>
-          : <span className="fo-st">review is for an older commit</span>)}
-        {!rv && p.stage === "review" && <span className="fo-st">not reviewed yet</span>}
-      </div>
-      <small className="dim">
-        {p.branch && <span className="mono">{p.branch}</span>}
-        {p.head && <> at <span className="mono">{p.head}</span></>}
-        {p.holder && <> · held by <span className="mono">{p.holder}</span></>}
-        {p.checked_at && <> · read from GitHub <TimeAgo ts={p.checked_at} /></>}
-      </small>
-    </li>
+    <svg className="fo-gh-logo" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+    </svg>
+  );
+}
+function RepoIcon() {
+  return (
+    <svg className="fo-gh-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <path fill="currentColor" d="M2 2.5A2.5 2.5 0 014.5 0h8.75a.75.75 0 01.75.75v12.5a.75.75 0 01-.75.75h-2.5a.75.75 0 010-1.5h1.75v-2h-8a1 1 0 00-.714 1.7.75.75 0 11-1.072 1.05A2.495 2.495 0 012 11.5v-9zm10.5-1h-8a1 1 0 00-1 1v6.708A2.486 2.486 0 014.5 9h8V1.5zM5 12.25v3.25a.25.25 0 00.4.2l1.45-1.087a.25.25 0 01.3 0L8.6 15.7a.25.25 0 00.4-.2v-3.25a.25.25 0 00-.25-.25h-3.5a.25.25 0 00-.25.25z" />
+    </svg>
+  );
+}
+function PRIcon() {
+  return (
+    <svg className="fo-gh-ico" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path fill="currentColor" d="M1.5 3.25a2.25 2.25 0 113 2.122v5.256a2.251 2.251 0 11-1.5 0V5.372A2.25 2.25 0 011.5 3.25zm5.677-.177L9.573.677A.25.25 0 0110 .854V2.5h1A2.5 2.5 0 0113.5 5v5.628a2.251 2.251 0 11-1.5 0V5a1 1 0 00-1-1h-1v1.646a.25.25 0 01-.427.177L7.177 3.427a.25.25 0 010-.354zM3.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm0 9.5a.75.75 0 100 1.5.75.75 0 000-1.5zm8.25.75a.75.75 0 101.5 0 .75.75 0 00-1.5 0z" />
+    </svg>
   );
 }
 
-/** The GitHub repos the project works on (TR-463): each repo, linked to GitHub, with its open pull
- *  requests listed under it and where each stands; the merged ones folded below. */
+/** Where a pull request stands, in a few words: the crew's stage, CI, the reviewer's verdict. */
+function prStatus(p: RepoPR): string {
+  const bits: string[] = [];
+  const stage: Record<string, string> = { doing: "being built", review: "waiting for review",
+    changes: "changes asked", blocked: "blocked" };
+  if (p.review && p.review.current && p.stage !== "changes")
+    bits.push(p.review.verdict === "pass" ? "review passed" : p.review.verdict === "changes" ? "changes asked" : "review blocked");
+  else if (p.stage && stage[p.stage]) bits.push(stage[p.stage]);
+  if (p.ci === "success") bits.push("CI passed");
+  else if (p.ci === "failure") bits.push("CI failed");
+  else if (p.ci === "pending") bits.push("CI running");
+  return bits.join(" · ");
+}
+
+/** The GitHub repos the project works on (TR-463): each repo, where it is checked out, and its open
+ *  pull requests under it, each linked to GitHub. Merged ones fold away below them. */
 function GitHubRepos({ repos, on, pick }: { repos: ProjectRepo[]; on: string | null; pick: (k: string) => void }) {
   return (
-    <div className="fo-gh">
+    <ul className="fo-gh">
       {repos.map((r) => {
         const k = (r.name ?? r.path) as string;
+        const merged = r.merged_prs ?? [];
         return (
-          <section key={k} className={`fo-gh-repo${on === k ? " is-on" : ""}`}>
+          <li key={k} className={`fo-gh-repo${on === k ? " is-on" : ""}`}>
             <div className="fo-gh-name">
-              {r.name ? <a href={`https://github.com/${r.name}`} target="_blank" rel="noreferrer" className="mono">{r.name} ↗</a>
+              <RepoIcon />
+              {r.name ? <a href={`https://github.com/${r.name}`} target="_blank" rel="noreferrer">{r.name}</a>
                 : <span className="mono">{r.path}</span>}
-              <button type="button" className="fo-link-btn" aria-pressed={on === k} onClick={() => pick(k)}>
-                {on === k ? "show all tickets" : `show its ${r.tickets.length} ${r.tickets.length === 1 ? "ticket" : "tickets"}`}
+              {r.path && r.name && <span className="dim fo-gh-path">(checked out at <span className="mono">{r.path}</span>)</span>}
+              {!r.path && <span className="fo-warn">(not checked out on the crew's machine yet)</span>}
+              <button type="button" className="fo-link-btn fo-gh-filter" aria-pressed={on === k} onClick={() => pick(k)}>
+                {on === k ? "all tickets" : `${r.tickets.length} ${r.tickets.length === 1 ? "ticket" : "tickets"}`}
               </button>
             </div>
-            {r.path && r.name && <small className="dim">checked out at <span className="mono">{r.path}</span></small>}
-            {!r.path && <small className="fo-warn">not checked out on the crew's machine yet</small>}
-            {r.github_error && <small className="fo-warn">Tares could not read GitHub for this repo ({r.github_error}); the state below may be out of date.</small>}
-            <div className="fo-sub">Open pull requests · {r.open_prs.length}</div>
-            {r.open_prs.length
-              ? <ul className="fo-gh-prs">{r.open_prs.map((p) => <PRRow key={p.url} p={p} />)}</ul>
-              : <p className="dim fo-gh-none">None open.</p>}
-            {(r.merged_prs ?? []).length > 0 && (
+            {r.github_error && <div className="fo-warn fo-gh-err">Tares could not read GitHub for this repo ({r.github_error}).</div>}
+            <ul className="fo-gh-prs">
+              {r.open_prs.map((p) => (
+                <li key={p.url}>
+                  <span className="fo-gh-branch" aria-hidden="true">↳</span>
+                  <PRIcon />
+                  <a href={p.url} target="_blank" rel="noreferrer">PR #{p.number ?? "?"}</a>
+                  <span className="fo-gh-title">{p.title}</span>
+                  {prStatus(p) && <span className="dim fo-gh-status">{prStatus(p)}</span>}
+                </li>
+              ))}
+              {!r.open_prs.length && <li className="dim"><span className="fo-gh-branch" aria-hidden="true">↳</span>no open pull requests</li>}
+            </ul>
+            {merged.length > 0 && (
               <details className="fo-gh-merged">
-                <summary>{(r.merged_prs ?? []).length} merged</summary>
-                <ul>
-                  {(r.merged_prs ?? []).map((p) => (
+                <summary>{merged.length} merged</summary>
+                <ul className="fo-gh-prs">
+                  {merged.map((p) => (
                     <li key={p.url}>
-                      <a href={p.url} target="_blank" rel="noreferrer">#{p.number ?? "?"} {p.title}</a>
-                      {" "}<span className="dim">{p.ticket}{p.merged_at && <> · merged <TimeAgo ts={p.merged_at} /></>}</span>
+                      <span className="fo-gh-branch" aria-hidden="true">↳</span>
+                      <PRIcon />
+                      <a href={p.url} target="_blank" rel="noreferrer">PR #{p.number ?? "?"}</a>
+                      <span className="fo-gh-title">{p.title}</span>
+                      <span className="dim fo-gh-status">merged{p.merged_at && <> <TimeAgo ts={p.merged_at} /></>}</span>
                     </li>
                   ))}
                 </ul>
               </details>
             )}
-          </section>
+          </li>
         );
       })}
-    </div>
+    </ul>
   );
 }
 
@@ -415,8 +427,9 @@ type Shown = "finished" | "idle" | null;
 
 /** A section that folds, with a pin: a pinned one is open on every visit and does not fold.
  *  Pins are this browser's, per section, across projects. */
-function Fold({ id, title, meta, pinnedByDefault, children }: {
-  id: string; title: string; meta: React.ReactNode; pinnedByDefault?: boolean; children: React.ReactNode;
+function Fold({ id, title, icon, meta, pinnedByDefault, children }: {
+  id: string; title: string; icon?: React.ReactNode; meta: React.ReactNode; pinnedByDefault?: boolean;
+  children: React.ReactNode;
 }) {
   const key = `tares.factory.pin.${id}`;
   const [pinned, setPinned] = useState<boolean>(() => {
@@ -437,7 +450,7 @@ function Fold({ id, title, meta, pinnedByDefault, children }: {
     <details className={`fo-panel fo-fold${pinned ? " is-pinned" : ""}`} open={pinned || open}
              onToggle={(e) => { if (!pinned) setOpen((e.target as HTMLDetailsElement).open); }}>
       <summary onClick={(e) => { if (pinned) e.preventDefault(); }}>
-        <span className="fo-fold-h">{title}</span>
+        <span className="fo-fold-h">{icon}{title}</span>
         <span className="fo-fold-right">
           <span className="fo-meta">{meta}</span>
           <button type="button" className={`fo-pin${pinned ? " on" : ""}`} onClick={togglePin}

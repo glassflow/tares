@@ -2053,23 +2053,23 @@ pre.payload {
 .fo-repo.is-on { border-color: var(--accent-deep); background: var(--accent-soft); }
 .fo-repo-on { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; padding: 8px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
 .fo-link-btn { background: none; border: 0; padding: 0; color: var(--accent-deep); cursor: pointer; font: inherit; text-decoration: underline; }
-/* The GitHub section of a factory project (TR-463): each repo, its open pull requests under it */
-.fo-gh { display: flex; flex-direction: column; }
-.fo-gh-repo { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
-.fo-gh-repo:last-child { border-bottom: 0; }
+/* The GitHub section of a factory project (TR-463): each repo, its pull requests branching under it */
+.fo-fold-h .fo-gh-logo { vertical-align: -2px; margin-right: 6px; }
+.main .fo-gh { list-style: none; margin: 0; padding: 4px 0; }
+.fo-gh-repo { padding: 10px 16px; }
+.fo-gh-repo + .fo-gh-repo { border-top: 1px solid var(--line); }
 .fo-gh-repo.is-on { background: var(--accent-soft); }
-.fo-gh-repo > small { font-size: 12px; overflow-wrap: anywhere; }
-.fo-gh-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 15px; }
-.fo-gh-repo .fo-sub { padding-left: 0; margin-top: 6px; }
-.main .fo-gh-prs { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); background: var(--bg); }
-.fo-gh-pr { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
-.fo-gh-pr:last-child { border-bottom: 0; }
-.fo-gh-pr-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-.fo-gh-pr-head a { overflow-wrap: anywhere; }
-.fo-gh-tk { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
-.fo-gh-pr-state { display: flex; flex-wrap: wrap; gap: 6px; }
-.fo-gh-pr small { font-size: 12px; overflow-wrap: anywhere; }
-.fo-gh-none { margin: 0; font-size: 13px; }
-.fo-gh-merged { font-size: 13px; margin-top: 4px; }
+.fo-gh-name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.fo-gh-name > a { font-weight: 600; }
+.fo-gh-ico { flex: none; color: var(--ink-soft); }
+.fo-gh-path { font-size: 12px; overflow-wrap: anywhere; }
+.fo-gh-filter { margin-left: auto; font-size: 12px; }
+.fo-gh-err { font-size: 12px; margin: 4px 0 0 24px; }
+.main .fo-gh-prs { list-style: none; margin: 6px 0 0; padding: 0 0 0 24px; }
+.fo-gh-prs li { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; padding: 3px 0; font-size: 14px; }
+.fo-gh-branch { color: var(--ink-soft); width: 14px; }
+.fo-gh-title { overflow-wrap: anywhere; }
+.fo-gh-status { font-size: 12px; }
+.fo-gh-merged { margin: 4px 0 0 24px; font-size: 13px; }
 .fo-gh-merged summary { cursor: pointer; color: var(--ink-soft); }
-.main .fo-gh-merged ul { margin: 4px 0 0; padding-left: 16px; }
+.fo-gh-merged .fo-gh-prs { padding-left: 0; }
