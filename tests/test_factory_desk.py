@@ -250,6 +250,14 @@ async def main():
             ho = (await cx.get(f"/api/projects/{blog}/crew")).json()["handover"]
         ck("a new hand-over opens it again", "Blog" in [p["name"] for p in ps["projects"]]
            and ho["finished"] is None, ps)
+        bad = await mf.finish_project("Blog", "")
+        ck("a station must name the desk item", "name the desk item" in bad, bad)
+        as_station()
+        async with mk() as cx:
+            r = await cx.post(f"/api/projects/{blog}/finish", json={"words": "shipped, closing it"})
+        ck("the person's own session finishes it in their words", r.status_code == 200
+           and r.json()["finished"]["words"] == "shipped, closing it"
+           and r.json()["finished"]["decision"] is None, r.text)
 
 
 unit()

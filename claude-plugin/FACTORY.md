@@ -100,6 +100,18 @@ It ends by asking whether to hand the project to the crew. On yes, the orchestra
   Your answer is kept on Tares in your own words. Say it holds from now on, and it becomes a
   standing grant.
 
+## When a project is done
+
+When its last milestone is done, the orchestrator asks you on the desk whether the project is
+finished. Your yes marks it done on Tares: the project page says Done with your words, the Crew page
+lists it as finished, and the crew stops working on it. You can also mark one done yourself:
+
+```
+tares factory finish <project> "your words"
+```
+
+Handing it to the crew again opens it. With no project left, stop the crew (below).
+
 ## Stop and clean up
 
 - `tares factory crew halt "why"` stops merges, pushes and new sessions until `tares factory crew resume`.

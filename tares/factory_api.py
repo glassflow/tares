@@ -1115,10 +1115,12 @@ def register(app, store, h: SimpleNamespace) -> None:
 
     @app.post("/api/projects/{uid}/finish")
     async def finish_project(uid: str, request: Request, body: dict = Body(...)):
-        """{decision}: the person said the project is done. `decision` is the desk item (D<n>)
-        that asked them, answered in the orchestrator's session: its words, matched against what
-        they typed, are what is kept. Refused while a ticket is still open. The project's status
-        becomes done and it leaves the crew's work list; a later hand-over opens it again."""
+        """{decision} or {words}: the person said the project is done. A station names the desk
+        item (`decision`, D<n>) that asked them, answered in the orchestrator's session: its words,
+        matched against what they typed, are what is kept. The person's own session (no station:
+        `tares factory finish` in their terminal) may give `words` instead. Refused while a ticket
+        is still open. The project's status becomes done and it leaves the crew's work list; a
+        later hand-over opens it again."""
         deny(request, "finish")
         p = h.project_or_404(uid)
         ho = store.get_handover(uid)
@@ -1134,6 +1136,15 @@ def register(app, store, h: SimpleNamespace) -> None:
             h.err(ValueError(f"{p['name']} still has open tickets: {', '.join(open_)}. Finish or "
                              "cancel them first"), 409)
         ref = str(body.get("decision") or "").strip()
+        by, _ = who(request, body)
+        if not ref and not caller(request)["station"]:
+            # the person, in their own terminal: their words, or that they marked it themselves
+            words = " ".join(str(body.get("words") or "").split())[:500] or \
+                "Marked done by the person with tares factory finish"
+            store.finish_handover(uid, words, None, by, now_utc())
+            store.update_project(uid, status="done")
+            return {"project": uid, "name": p["name"], "finished": store.get_handover(uid)["finished"],
+                    "open_projects": len(store.handed_over_projects(finished=False))}
         if not ref:
             h.err(ValueError("name the desk item where the person said the project is done "
                              "(decision=D<n>): ask them on the desk first, then record their answer"))
@@ -1146,7 +1157,6 @@ def register(app, store, h: SimpleNamespace) -> None:
         if d["state"] != "answered" or dec is None or not dec["matched"]:
             h.err(ValueError(f"{d['label']} has no answer from the person yet: record their words "
                              "with desk_answer first"), 409)
-        by, _ = who(request, body)
         store.finish_handover(uid, dec["words"], d["label"], by, now_utc())
         store.update_project(uid, status="done")
         return {"project": uid, "name": p["name"], "finished": store.get_handover(uid)["finished"],

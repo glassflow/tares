@@ -41,6 +41,8 @@ t orchestrator Bash 'factory spawn builder shop m1-api glassflow/api "$(gh pr me
 t builder Bash 'factory spawn builder shop m1 glassflow/api "T1"' deny
 t reviewer mcp__plugin_slack_slack__slack_send_message '' deny   # no station messages people
 t builder Bash 'factory restart crew-reviewer' deny
+t orchestrator Bash 'factory finish shop' deny
+t orchestrator Bash 'cd ~/factory && factory finish shop' deny
 t orchestrator Bash 'factory restart crew-reviewer' allow
 t builder mcp__plugin_slack_slack__slack_send_message '' deny
 t builder mcp__plugin_slack_slack__slack_read_channel '' allow

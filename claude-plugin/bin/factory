@@ -44,6 +44,8 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
                                             hand-over to the crew
   tares factory projects                    every project handed to the crew: progress, the milestone
                                             it is on, its builders and repos
+  tares factory finish <project> ["words"]  mark a project done yourself (the orchestrator otherwise
+                                            asks you on the desk when its last milestone is done)
   tares factory restart <role|station> [--fresh]
                                             restart a station with fresh settings, same conversation
                                             (--fresh: a new conversation; its state is on Tares)
@@ -1234,6 +1236,24 @@ SPEC
   cd "$here" && TARES_FACTORY_URL=$TARES TARESD_URL=$TARES exec "$CLAUDE" "${args[@]}" "$prompt"
 }
 
+cmd_finish() { # project ["words"]: the person marks a project done, from their own terminal
+  [ -z "${FACTORY_STATION:-}" ] || die "only the person runs this. As a station, ask the person on the desk and call finish_project with their answer."
+  local name=${1:?usage: $ME finish <project> [\"your words\"]}; shift
+  local words="$*" row id out
+  row=$(project_row "$name"); [ -n "$row" ] || die "$name is not a project the crew holds (open projects: $(crew_projects | jq -r '[.[].name] | join(", ")'))"
+  id=$(jq -r .id <<<"$row")
+  local code tok; tok=$(tares_token)
+  out=$({ [ -n "$tok" ] && printf 'Authorization: Bearer %s\n' "$tok"; true; } | curl -sS --max-time 15 -H @- \
+    -H 'Content-Type: application/json' -X POST --data "$(jq -cn --arg w "$words" '{words: $w}')" \
+    -w '\n%{http_code}' "$TARES/api/projects/$id/finish" 2>&1) || die "could not reach Tares at $TARES"
+  code=$(tail -1 <<<"$out"); out=$(sed '$d' <<<"$out")
+  [ "$code" = 200 ] || die "Tares did not finish $name: $(jq -r '.detail // .' <<<"$out" 2>/dev/null || echo "$out")"
+  echo "✓ $(jq -r .name <<<"$row") is done. It is off the crew's work list; $TARES/projects/$id shows it."
+  if [ "$(jq -r .open_projects <<<"$out")" = 0 ]; then
+    echo "  The crew holds no other project. Stop it with: $ME crew down"
+  fi
+}
+
 cmd_projects() { # every project handed to the crew: progress, milestone, builders, repos
   local rows; rows=$(crew_projects)
   [ "$(jq length <<<"$rows")" -gt 0 ] || { echo "no projects handed to the crew yet: $ME spec in a repo starts one"; return; }
@@ -1359,6 +1379,7 @@ case "$cmd" in
   retire) cmd_retire "$@" ;;
   spec) cmd_spec "$@" ;;
   projects) cmd_projects ;;
+  finish) cmd_finish "$@" ;;
   settings) cmd_settings "$@" ;;
   tidy) cmd_tidy "$@" ;;
   _parse-bg-id) parse_bg_id ;;

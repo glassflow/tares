@@ -67,6 +67,8 @@ while IFS= read -r part; do
   fi
 done < <(perl -pe 's/\|\||&&|[;&|]/\n/g' <<<"$scan")
 
+grep -Eq '(^|[;&|[:space:]])factory[[:space:]]+finish([[:space:]]|$)' <<<"$scan" && \
+  deny "Only the person marks a project done from their terminal. Ask them on the desk, record their answer with desk_answer, then call finish_project."
 grep -Eq 'gh[[:space:]]+pr[[:space:]]+review' <<<"$scan" && \
   deny "Factory sessions share one GitHub account and GitHub refuses self-approval. The reviewer posts a PR comment plus the factory/review commit status instead."
 grep -Eq 'gh[[:space:]]+pr[[:space:]]+merge|gh[[:space:]]+api[^;&|]*pulls/[0-9]+/merge' <<<"$scan" && owner_only builder "merge pull requests"

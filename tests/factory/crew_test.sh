@@ -423,6 +423,19 @@ check "hand-made crew.json keeps its choice" '[ "$(jq -r .stations.reviewer.mode
 check "hand-made crew.json gains defaults" '[ "$(jq -r .stations.orchestrator.model "$H/crew.json")" = opus ] && [ "$(jq -r .limits.autocompact_tokens "$H/crew.json")" = 200000 ]'
 check "no releaser unless asked for" '[ $(( $(launches) - before )) = 2 ] && [ -z "$(jq -r ".[\"crew-releaser\"].status // empty" "$H/stations.json")" ]'
 
+# The person marks a project done from their terminal; a station can't.
+FP=$(hand_over finishing "$repo")
+api POST "/api/projects/$FP/tickets" '{"title": "only one"}' >/dev/null
+"$F" finish finishing "all shipped" >"$T/fin1.out" 2>&1
+check "finish refuses a project with an open ticket" 'grep -q "still has open tickets: T1" "$T/fin1.out"'
+api POST "/api/projects/$FP/tickets/T1/stage" '{"stage": "doing"}' >/dev/null
+api POST "/api/projects/$FP/tickets/T1/stage" '{"stage": "merged"}' >/dev/null
+FACTORY_STATION=crew-orchestrator "$F" finish finishing >"$T/fin2.out" 2>&1
+check "a station can't run finish" 'grep -q "only the person runs this" "$T/fin2.out"'
+"$F" finish finishing "all shipped" >"$T/fin3.out" 2>&1
+check "the person finishes it" 'grep -q "✓ finishing is done" "$T/fin3.out" && [ "$(api GET /api/crew/projects | jq -r "[.finished[].name] | index(\"finishing\") != null")" = true ]'
+check "and it is off the crew's list" '! "$F" projects 2>/dev/null | grep -q "^finishing "'
+
 # crew up starts the watch in the background, once; status says so; crew down stops it first.
 WH="$T/watched"; trust "$WH"
 FACTORY_NO_WATCH= FACTORY_WATCH_INTERVAL=1 FACTORY_CREW_HOME="$WH" "$F" crew up --yes >"$T/w1.out" 2>&1
