@@ -35,6 +35,12 @@ jobs:
             echo "== $t =="
             python "tests/$t.py"
           done
+      - name: Factory CLI — tests (bash, against a real Tares)
+        run: |
+          for t in parse guard heavy tidy spec tares crew; do
+            echo "== factory $t =="
+            bash "tests/factory/${t}_test.sh"
+          done
 
   secrets:
     runs-on: ubuntu-latest

@@ -3,13 +3,16 @@
 # folders, never follows a link out, and refuses anything else. Every station may run it.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-F="$here/../plugin/bin/factory"
+. "$here/lib.sh"
+F="$here/../../claude-plugin/bin/factory"
 T=$(cd "$(mktemp -d)" && pwd -P)
 export HOME="$T/home" FACTORY_CREW_HOME="$T/crew" FAKE_CLAUDE_STATE="$T/claude" CLAUDE_BIN="$here/fake-claude" FACTORY_PAUSE=0
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
-unset TARES_URL TARES_AUTH_TOKEN TARES_PLUGIN_DIR FACTORY_REPO FACTORY_WORKTREES CLAUDE_JOB_DIR
+unset TARES_URL TARES_AUTH_TOKEN TARES_FACTORY_URL TARES_FACTORY_TOKEN_FILE FACTORY_REPO FACTORY_WORKTREES CLAUDE_JOB_DIR
 mkdir -p "$HOME" "$FACTORY_CREW_HOME/worktrees" "$FACTORY_CREW_HOME/tmp"
 chmod +x "$CLAUDE_BIN"
+trap 'stop_tares; rm -rf "$T"' EXIT
+start_tares "$T/tares"
 fail=0
 check() { if eval "$2"; then :; else echo "FAIL $1"; fail=1; fi; }
 
@@ -17,7 +20,7 @@ check() { if eval "$2"; then :; else echo "FAIL $1"; fail=1; fi; }
 R="$T/repo"; git init -q --bare "$T/origin.git"; git clone -q "$T/origin.git" "$R" 2>/dev/null
 echo a > "$R/tracked.txt" && git -C "$R" add . && git -C "$R" commit -q -m init && git -C "$R" push -q origin HEAD 2>/dev/null
 O="$T/outside"; mkdir -p "$O/node_modules" && echo keep > "$O/node_modules/keep" && echo keep > "$O/file"
-jq -n --arg r "$R" '{p: {repo: $r, repos: [$r]}}' > "$FACTORY_CREW_HOME/projects.json"
+hand_over p "$R" >/dev/null   # the project's repos are where its worktrees may be tidied
 
 # A review worktree with a node_modules link to the real checkout and an untracked file.
 W="$FACTORY_CREW_HOME/worktrees/p-pr1"
@@ -84,9 +87,8 @@ check "the home folder is never a root" '[ -d "$HOME/x" ]'
 check "something already gone is fine" '[ $rc = 0 ] && grep -q "already gone" "$T/gone.txt"'
 
 # Every station may run it without a prompt.
-cp "$here/../plugin/templates/crew.json" "$FACTORY_CREW_HOME/crew.json"
-jq '.settings = {autonomy: "L4-ship", release_profile: "kind", prod_pattern: "prod", challenger: false, builders_max: 2}' \
-  "$FACTORY_CREW_HOME/crew.json" > "$T/c" && mv "$T/c" "$FACTORY_CREW_HOME/crew.json"
+cp "$here/../../claude-plugin/templates/crew.json" "$FACTORY_CREW_HOME/crew.json"
+api PUT /api/crew/settings '{"autonomy": "L4-ship", "releaser": true, "release_profile": "kind", "prod_pattern": "prod", "challenger": false, "builders_max": 2}' >/dev/null
 for s in crew-orchestrator crew-reviewer crew-releaser; do
   "$F" settings "$s" >"$T/$s.json" 2>/dev/null
   check "$s may run factory tidy" 'jq -e ".permissions.allow | index(\"Bash(factory tidy *)\")" "$T/$s.json" >/dev/null'

@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# Checks one crew for all projects, without Tares: crew up from a home folder, builders in their
-# project's repo, revive under the same name, halt and resume, down. Uses a fake claude.
+# Checks one crew for all projects, on a real Tares: crew up from a home folder (settings asked once and
+# kept on Tares, the releaser only when asked for), builders in the repos of a project handed over on
+# Tares, revive under the same name, halt and resume, the desk read from Tares, down. Uses a fake claude.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
+. "$here/lib.sh"
 T=$(mktemp -d)
-cp -R "$here/../plugin" "$T/kit-under-test"; F="$T/kit-under-test/bin/factory"
+mkdir -p "$T/kit-under-test"; cp -R "$here/../../claude-plugin/." "$T/kit-under-test/"; F="$T/kit-under-test/bin/factory"
 export HOME="$T/home" FACTORY_CREW_HOME="$T/crew" FAKE_CLAUDE_STATE="$T/claude" CLAUDE_BIN="$here/fake-claude" FACTORY_PAUSE=0
-unset TARES_URL TARES_AUTH_TOKEN TARES_PLUGIN_DIR
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+unset TARES_URL TARES_AUTH_TOKEN TARES_FACTORY_URL TARES_FACTORY_TOKEN_FILE FACTORY_REPO FACTORY_WORKTREES CLAUDE_JOB_DIR
 mkdir -p "$HOME"
 chmod +x "$CLAUDE_BIN"
+trap 'stop_tares; rm -rf "$T"' EXIT
 fail=0
 check() { if eval "$2"; then :; else echo "FAIL $1"; fail=1; fi; }
 st() { jq -r --arg s "$1" ".[\$s]$2 // empty" "$FACTORY_CREW_HOME/stations.json"; }
@@ -16,11 +20,17 @@ envof() { jq -r --arg k "$2" '.env[$k] // empty' "$FACTORY_CREW_HOME/stations/$1
 allow_has() { jq -e --arg s "$2" 'any(.autoMode.allow[]; contains($s))' "$FACTORY_CREW_HOME/stations/$1.settings.json" >/dev/null; }
 launches() { grep -c '"--bg"' "$FAKE_CLAUDE_STATE/calls.jsonl" 2>/dev/null || echo 0; }
 
-# First run asks the settings one at a time; answers: L3-review, defaults, no challenger, 3 builders, one grant.
-printf 'L3-review\n\n\nno\n3\nthe releaser may restart the staging database\n\n' | "$F" crew up >"$T/up.out" 2>&1
+# No Tares: every command says so plainly and starts nothing.
+TARESD_URL=http://127.0.0.1:9 "$F" crew up --yes >"$T/notares.out" 2>&1
+check "without Tares crew up stops plainly" 'grep -q "no Tares answers at http://127.0.0.1:9" "$T/notares.out" && grep -q "tares up" "$T/notares.out" && [ "$(launches)" = 0 ]'
+
+start_tares "$T/tares"
+# First run asks the settings one at a time; answers: L3-review, a releaser, no challenger, 3 builders,
+# then the release profile and prod pattern (defaults), and one grant.
+printf 'L3-review\nyes\nno\n3\n\n\nthe releaser may restart the staging database\n\n' | "$F" crew up >"$T/up.out" 2>&1
 rc=$?
 check "crew up exits 0" '[ $rc -eq 0 ]'
-check "three crew stations started" '[ "$(launches)" = 3 ]'
+check "three crew stations started (a releaser was asked for)" '[ "$(launches)" = 3 ]'
 for r in orchestrator reviewer releaser; do
   check "crew-$r recorded" '[ "$(st crew-$r .status)" = active ]'
   check "crew-$r runs in the crew home" '[ "$(st crew-$r .cwd)" = "$FACTORY_CREW_HOME" ]'
@@ -28,78 +38,47 @@ for r in orchestrator reviewer releaser; do
   check "crew-$r env FACTORY_ROLE" '[ "$(envof crew-$r FACTORY_ROLE)" = $r ]'
   check "crew-$r env FACTORY_PARENT empty" 'jq -e ".env.FACTORY_PARENT == \"\"" "$FACTORY_CREW_HOME/stations/crew-$r.settings.json" >/dev/null'
   check "crew-$r has no TARES_PROJECT" '[ -z "$(envof crew-$r TARES_PROJECT)" ]'
-  check "crew-$r FACTORY_TARES off" '[ "$(envof crew-$r FACTORY_TARES)" = off ]'
+  check "crew-$r reaches the same Tares" '[ "$(envof crew-$r TARES_FACTORY_URL)" = "$TARESD_URL" ]'
 done
-check "no comms by default" '[ -z "$(st crew-comms .id)" ]'
-check "Rius on by default" '[ "$(jq -r .rius.enabled "$FACTORY_CREW_HOME/crew.json")" = true ]'
+check "no Rius, no comms" '! grep -q -i -e rius -e comms "$FACTORY_CREW_HOME/stations/crew-reviewer.settings.json"'
 check "orchestrator started first" '[ "$(jq -r "select(.args[0] == \"--bg\") | .args[2]" "$FAKE_CLAUDE_STATE/calls.jsonl" | head -1)" = crew-orchestrator ]'
-check "settings saved in crew.json" '[ "$(jq -c ".settings | [.autonomy, .release_profile, .challenger, .builders_max]" "$FACTORY_CREW_HOME/crew.json")" = "[\"L3-review\",\"kind\",false,3]" ]'
+check "stations load this plugin" '[ "$(jq -r "select(.args[0] == \"--bg\") | .args | index(\"--plugin-dir\") as \$i | .[\$i+1]" "$FAKE_CLAUDE_STATE/calls.jsonl" | sort -u)" = "$(cd -P "$T/kit-under-test" && pwd)" ]'
+check "settings saved on Tares" '[ "$(api GET /api/crew/settings | jq -c "[.autonomy, .releaser, .release_profile, .challenger, .builders_max]")" = "[\"L3-review\",true,\"kind\",false,3]" ]'
+check "settings not kept locally" '[ "$(jq -c .settings "$FACTORY_CREW_HOME/crew.json")" = null ]'
+check "no local desk or grant files" '[ ! -f "$FACTORY_CREW_HOME/DESK.md" ] && [ ! -f "$FACTORY_CREW_HOME/GRANTS.md" ]'
 today=$(date -u +%Y-%m-%d)
-check "grant saved as Tares writes it" 'grep -qx -- "- \"the releaser may restart the staging database\" ($today)" "$FACTORY_CREW_HOME/GRANTS.md"'
+check "grant saved on Tares as the person said it" 'api GET /api/grants | jq -r .all | grep -qx -- "- \"the releaser may restart the staging database\" ($today)"'
 check "grant quoted in the allow rules" 'allow_has crew-releaser "granted this on $today for all projects, in their own words: \"the releaser may restart the staging database\". Acting"'
-check "template example is not a grant" '! jq -e ".autoMode.allow | any(contains(\"when a migration needs it\"))" "$FACTORY_CREW_HOME/stations/crew-releaser.settings.json" >/dev/null'
 check "orchestrator may spawn" 'jq -e ".permissions.allow | index(\"Bash(factory spawn *)\")" "$FACTORY_CREW_HOME/stations/crew-orchestrator.settings.json" >/dev/null'
 check "stations launch with a 200k autocompact window" 'jq -e "select(.args[2] == \"crew-orchestrator\") | .args | index(\"--autocompact\") as \$i | .[\$i+1] == \"200000\"" "$FAKE_CLAUDE_STATE/calls.jsonl" >/dev/null'
-check "offline desk files in the crew home" '[ -f "$FACTORY_CREW_HOME/DESK.md" ] && [ -f "$FACTORY_CREW_HOME/DECISIONS.md" ]'
+check "nothing goes to production without the person" 'jq -e ".autoMode.soft_deny | any(contains(\"needs\") and contains(\"prod\"))" "$FACTORY_CREW_HOME/stations/crew-releaser.settings.json" >/dev/null && ! grep -q L5 "$FACTORY_CREW_HOME/stations/crew-releaser.settings.json"'
+check "crew up points at the Crew page" 'grep -q "$TARESD_URL/crew" "$T/up.out"'
 
-# The desk: status shows the next question with its options, crew desk shows every question in full.
-check "empty desk: crew desk says nothing is open" 'grep -q "Nothing open on the desk" <<<"$("$F" crew desk 2>&1)"'
-check "empty desk: status says nothing is open" 'grep -q "^desk: nothing open" <<<"$("$F" crew status 2>&1)"'
-{ head -3 "$FACTORY_CREW_HOME/DESK.md"; cat <<'DESK'
-- options: a header line, not a question
-## D4: keep the old endpoint? (added 2026-10-08T18:02Z, blocking)
-- project: p1. Two callers still use it.
-- recommendation: A, since two callers remain.
-- options:
-  - A) keep it until v2 ships
-  - B) drop it now
-- blocks: T7
-
-## D5: rename the bucket? (added 2026-10-08T18:05Z, not blocking)
-- recommendation: B
-- options: A) rename now; B) leave it
-DESK
-} > "$T/desk.md" && mv "$T/desk.md" "$FACTORY_CREW_HOME/DESK.md"
+# The desk lives on Tares: status shows the next question with its options, crew desk shows every one.
+check "empty desk: crew desk says nothing waits" 'grep -q "Nothing waits for you" <<<"$("$F" crew desk 2>&1)"'
+check "empty desk: status says nothing waits" 'grep -q "^desk: nothing waits" <<<"$("$F" crew status 2>&1)"'
+P1=$(hand_over "Links App" "$T/none")
+api POST /api/desk "$(jq -cn --arg p "$P1" '{question: "Keep the old endpoint?", recommendation: "keep it until v2 ships", why: "two callers still use it", options: ["keep it until v2 ships", "drop it now"], blocks: "T7", blocking: true, project: $p}')" >/dev/null
+api POST /api/desk "$(jq -cn '{question: "Rename the bucket?", recommendation: "leave it", why: "nothing reads the name", options: ["rename now", "leave it"]}')" >/dev/null
 "$F" crew status >"$T/status-desk.out" 2>&1
 "$F" crew desk >"$T/desk.out" 2>&1
-check "status counts the open questions" 'grep -q "^desk: 2 open" "$T/status-desk.out"'
-check "status shows the next question" 'grep -q "^  D4: keep the old endpoint?" "$T/status-desk.out"'
-check "status shows its recommendation" 'grep -q "^    recommendation: A, since two callers remain" "$T/status-desk.out"'
-check "status shows each option, also on lines of their own" 'grep -q "A) keep it until v2 ships" "$T/status-desk.out" && grep -q "B) drop it now" "$T/status-desk.out"'
-check "status leaves out the context and the later questions" '! grep -q -e "Two callers" -e "blocks: T7" -e "D5" "$T/status-desk.out"'
-check "status skips the file header" '! grep -q "a header line" "$T/status-desk.out"'
-check "crew desk shows every question in full" 'grep -q "^## D4" "$T/desk.out" && grep -q "Two callers" "$T/desk.out" && grep -q "^- options: A) rename now; B) leave it" "$T/desk.out"'
-check "crew desk leaves out the file header" '! grep -q -e "^# Desk" -e "a header line" "$T/desk.out"'
-check "crew desk says where to answer" 'grep -q "factory crew attach orchestrator" "$T/desk.out"'
+check "status counts the questions" 'grep -q "^desk: 2 waiting for you" "$T/status-desk.out"'
+check "status shows the blocking one first, with its project" 'grep -q "D1 (blocks work) · Links App: Keep the old endpoint?" "$T/status-desk.out"'
+check "status shows its options and recommendation" 'grep -q "A) keep it until v2 ships" "$T/status-desk.out" && grep -q "B) drop it now" "$T/status-desk.out" && grep -q "recommended: keep it until v2 ships, since two callers still use it" "$T/status-desk.out"'
+check "status leaves out the later question" '! grep -q "Rename the bucket" "$T/status-desk.out"'
+check "crew desk shows every question" 'grep -q "Keep the old endpoint?" "$T/desk.out" && grep -q "D2: Rename the bucket?" "$T/desk.out" && grep -q "blocks: T7" "$T/desk.out"'
+check "crew desk says where to answer" 'grep -q "tares factory crew attach orchestrator" "$T/desk.out"'
 check "factory desk is short for crew desk" '[ "$("$F" desk 2>&1)" = "$(cat "$T/desk.out")" ]'
-
-# The same, written another way: bold and capitalised labels, a * bullet, options as flat bullets,
-# Windows line endings, and an indented line under a later bullet.
-{ head -3 "$FACTORY_CREW_HOME/DESK.md"; cat <<'DESK'
-## D6: move the cron? (added 2026-10-08T19:00Z, not blocking)
-- Two jobs collide at 03:00.
-- **Recommendation:** B, the quieter hour.
-* Options:
-- A) keep 03:00
-- B) move to 04:00
-- blocks: T9
-  more about T9
-DESK
-} | sed 's/$/\r/' > "$T/desk.md" && mv "$T/desk.md" "$FACTORY_CREW_HOME/DESK.md"
-"$F" crew status >"$T/status-desk2.out" 2>&1
-check "variant: status shows the recommendation without the bold" 'grep -q "^    Recommendation: B, the quieter hour" "$T/status-desk2.out"'
-check "variant: status shows the options label and the flat options" 'grep -q "^    Options:" "$T/status-desk2.out" && grep -q "A) keep 03:00" "$T/status-desk2.out" && grep -q "B) move to 04:00" "$T/status-desk2.out"'
-check "variant: status stops at the next bullet" '! grep -q -e "blocks: T9" -e "more about T9" -e "collide" "$T/status-desk2.out"'
-check "variant: no carriage returns" '! grep -q $'"'"'\r'"'"' "$T/status-desk2.out"'
 
 # A second run asks nothing and starts nothing new.
 "$F" crew up </dev/null >"$T/up2.out" 2>&1
-check "second crew up asks nothing" '! grep -q "recommended:" "$T/up2.out"'
+check "second crew up asks nothing" '! grep -q "press enter to take it" "$T/up2.out"'
 check "second crew up starts nothing" '[ "$(launches)" = 3 ]'
 
-# Builders start inside their project's repo, with the project in their env.
+# Builders start inside a repo of a project handed over on Tares, with the project in their env.
 repo="$T/links"; mkdir -p "$repo"; git -C "$repo" init -q
 repo=$(git -C "$repo" rev-parse --show-toplevel)
+api POST "/api/projects/$P1/handover" "$(jq -cn --arg r "$repo" '{repos: [{path: $r}]}')" >/dev/null
 "$F" spawn builder "Links App" m1 "$repo" "work T1 and T2" >/dev/null 2>&1
 b=links-app-build-m1
 check "builder recorded" '[ "$(st $b .role)" = builder ]'
@@ -108,22 +87,30 @@ check "builder TARES_PROJECT" '[ "$(envof $b TARES_PROJECT)" = "Links App" ]'
 check "builder FACTORY_PARENT" '[ "$(envof $b FACTORY_PARENT)" = crew-orchestrator ]'
 check "builder FACTORY_REPO" '[ "$(envof $b FACTORY_REPO)" = "$repo" ]'
 check "builder worktrees in its repo" '[ "$(envof $b FACTORY_WORKTREES)" = "$repo/.factory/worktrees" ]'
-check "project recorded" '[ "$(jq -r ".[\"Links App\"].repo" "$FACTORY_CREW_HOME/projects.json")" = "$repo" ]'
 check "L3: builder waits for the relayed yes" 'jq -e ".autoMode.allow | any(test(\"relayed .*yes\"))" "$FACTORY_CREW_HOME/stations/$b.settings.json" >/dev/null'
 check "L3: the no-CI clause holds at L3 too" 'jq -e ".autoMode.allow | any(test(\"relayed .*yes\") and contains(\"no CI checks configured\"))" "$FACTORY_CREW_HOME/stations/$b.settings.json" >/dev/null'
 check "L3: no pre-authorized merge" '! jq -e ".autoMode.allow | any(test(\"pre-authorized at level\"))" "$FACTORY_CREW_HOME/stations/$b.settings.json" >/dev/null'
 "$F" spawn builder "Links App" m1 "$repo" "again" >/dev/null 2>&1
 check "no duplicate builder" '[ "$(launches)" = 4 ]'
-repo2="$T/shop"; mkdir -p "$repo2"; git -C "$repo2" init -q
+"$F" spawn builder "Nobody's" m1 "$repo" "x" >"$T/unknown.out" 2>&1
+check "a project not handed over is refused" 'grep -q "is not handed to the crew on Tares" "$T/unknown.out" && [ "$(launches)" = 4 ]'
+other="$T/other"; mkdir -p "$other"; git -C "$other" init -q
+"$F" spawn builder "Links App" m2 "$other" "x" >"$T/norepo.out" 2>&1
+check "a repo the project was not handed over with is refused" 'grep -q "is not one of Links App.s repos on Tares" "$T/norepo.out" && [ "$(launches)" = 4 ]'
+repo2="$T/shop"; mkdir -p "$repo2"; git -C "$repo2" init -q; repo2=$(git -C "$repo2" rev-parse --show-toplevel)
+hand_over shop "$repo2" >/dev/null
 "$F" spawn builder shop m1 "$repo2" "work T1" >/dev/null 2>&1
 "$F" spawn builder shop m2 "$repo2" "work T2" >/dev/null 2>&1
-repo3="$T/blog"; mkdir -p "$repo3"; git -C "$repo3" init -q
+repo3="$T/blog"; mkdir -p "$repo3"; git -C "$repo3" init -q; repo3=$(git -C "$repo3" rev-parse --show-toplevel)
+hand_over blog "$repo3" >/dev/null
 "$F" spawn builder blog m1 "$repo3" "work T1" >"$T/max.out" 2>&1
 check "builders_max is honoured" 'grep -q "builders_max is 3" "$T/max.out"'
+hand_over "Crew Tools" "$repo3" >/dev/null
 "$F" spawn builder "Crew Tools" m1 "$repo3" "x" >"$T/crewname.out" 2>&1
 check "a project can't be named like the crew" 'grep -q "can.t start with" "$T/crewname.out" && [ -z "$(st crew-tools-build-m1 .role)" ]'
 check "roster lists project" '"$F" roster | grep -q "^links-app-build-m1	builder	Links App	working$"'
-
+"$F" projects >"$T/projects.out" 2>&1
+check "projects lists each handed-over project with its builders and repos" 'grep -E "^Links App +0/0 +- +1 +.*$repo" "$T/projects.out" >/dev/null && grep -E "^shop +0/0 +- +2 " "$T/projects.out" >/dev/null'
 # A helper keeps the parent's project and works under its role.
 "$F" spawn helper "$b" rebase "rebase T2" >/dev/null 2>&1
 check "helper name" '[ "$(st $b-rebase .role)" = helper ]'
@@ -264,29 +251,23 @@ before=$(launches); eb=$(earlier "$b"); es=$(earlier shop-build-m1)
 check "only the unfinished builder is revived" '[ $(( $(launches) - before )) = 1 ] && [ "$(earlier shop-build-m1)" = $((es + 1)) ] && [ "$(earlier "$b")" = "$eb" ]'
 "$F" retire "$b-probe" >/dev/null 2>&1
 
-# restart waits for the stop before resuming. The kit installed from any marketplace is not loaded twice.
-mkdir -p "$HOME/.claude"; echo '{"enabledPlugins": {"tares-factory@glassflow": true}}' > "$HOME/.claude/settings.json"
+# restart waits for the stop before resuming.
 er=$(earlier crew-reviewer)
 FACTORY_STOP_WAIT=2 "$F" restart reviewer >/dev/null 2>&1
 check "restart resumes the reviewer" '[ "$(earlier crew-reviewer)" = $((er + 1)) ]'
-check "installed kit: no --plugin-dir" '[ "$(jq -r "select(.args[2] == \"crew-reviewer\") | .args | index(\"--plugin-dir\") != null" "$FAKE_CLAUDE_STATE/calls.jsonl" | tail -1)" = false ]'
-rm -f "$HOME/.claude/settings.json"
-
-# The snippet takes any project name.
-check "snippet escapes the project name" '"$F" snippet "a|b & c" | grep -q "crew on a|b & c$"'
 
 # halt blocks risky actions in every station until resume.
 "$F" crew halt "testing" >/dev/null 2>&1
 check "halt file" '[ -f "$FACTORY_CREW_HOME/HALT" ]'
 "$F" spawn builder blog m1 "$repo3" "x" >"$T/halt.out" 2>&1
 check "spawn refused while halted" 'grep -q "halted" "$T/halt.out"'
-out=$(jq -n '{tool_name: "Bash", tool_input: {command: "gh pr merge 3 --squash"}}' | FACTORY_ROLE=builder FACTORY_HOME="$FACTORY_CREW_HOME" bash "$here/../plugin/hooks/guard.sh")
+out=$(jq -n '{tool_name: "Bash", tool_input: {command: "gh pr merge 3 --squash"}}' | FACTORY_ROLE=builder FACTORY_HOME="$FACTORY_CREW_HOME" bash "$here/../../claude-plugin/hooks/guard.sh")
 check "guard denies merge while halted" 'grep -q "halted" <<<"$out"'
 "$F" crew resume >/dev/null 2>&1
-out=$(jq -n '{tool_name: "Bash", tool_input: {command: "gh pr merge 3 --squash"}}' | FACTORY_ROLE=builder FACTORY_HOME="$FACTORY_CREW_HOME" bash "$here/../plugin/hooks/guard.sh")
+out=$(jq -n '{tool_name: "Bash", tool_input: {command: "gh pr merge 3 --squash"}}' | FACTORY_ROLE=builder FACTORY_HOME="$FACTORY_CREW_HOME" bash "$here/../../claude-plugin/hooks/guard.sh")
 check "guard allows merge after resume" '[ -z "$out" ]'
 
-ctx=$(echo '{"source": "resume"}' | env $(jq -r '.env | to_entries[] | "\(.key)=\(.value)"' "$FACTORY_CREW_HOME/stations/$b.settings.json" | tr ' ' '_') bash "$here/../plugin/hooks/session-start.sh")
+ctx=$(echo '{"source": "resume"}' | env $(jq -r '.env | to_entries[] | "\(.key)=\(.value)"' "$FACTORY_CREW_HOME/stations/$b.settings.json" | tr ' ' '_') bash "$here/../../claude-plugin/hooks/session-start.sh")
 check "session start names the station and project" 'grep -q "links-app-build-m1" <<<"$ctx" && grep -q "Links_App" <<<"$ctx" && grep -q "resumed" <<<"$ctx"'
 
 # A station Claude Code stopped for thrashing on autocompact is started fresh, not resumed; one whose
@@ -365,7 +346,7 @@ older() { local tmp; tmp=$(mktemp); jq --arg s "$1" '.[$s].kit = "older"' "$FACT
 job() { local f="$HOME/.claude/jobs/$(st "$1" .id)/state.json"; jq "$2" "$f" > "$T/js" && mv "$T/js" "$f"; }
 moved() { [ "$(st "$1" .id)" != "$2" ]; }
 for s in crew-orchestrator crew-reviewer crew-releaser; do older $s; done
-check "status counts stations on an older kit" 'grep -q "^kit: 3 station(s) run an older version" <<<"$("$F" crew status 2>/dev/null)"'
+check "status counts stations on an older kit" 'grep -q "^plugin: 3 station(s) run an older version" <<<"$("$F" crew status 2>/dev/null)"'
 # With a schedule armed the list's state says "working" even between turns; its status has the turn. On a
 # permission prompt the list says "waiting" while the job file still says "working".
 agent crew-orchestrator '.state = "working" | .status = "busy"'
@@ -386,7 +367,7 @@ rs=$(st crew-reviewer .sessionId); ls_=$(st crew-releaser .sessionId)
 check "one quiet station moves per round (a cron doesn't count)" '[ $(( $(moved crew-reviewer "$r" && echo 1 || echo 0) + $(moved crew-releaser "$l" && echo 1 || echo 0) )) = 1 ]'
 "$F" crew watch --once >/dev/null 2>&1
 check "then the next, after half an hour of waiting on a person" 'moved crew-reviewer "$r" && moved crew-releaser "$l"'
-check "in the same conversation, told why" 'last crew-reviewer | jq -e --arg s "$rs" "index(\"--resume\") as \$i | \$i != null and .[\$i+1] == \$s" >/dev/null && last crew-releaser | grep -q "kit was updated"'
+check "in the same conversation, told why" 'last crew-reviewer | jq -e --arg s "$rs" "index(\"--resume\") as \$i | \$i != null and .[\$i+1] == \$s" >/dev/null && last crew-releaser | grep -q "Tares plugin was updated"'
 check "the working station still waits" '! moved crew-orchestrator "$o"'
 "$F" crew halt "testing" >/dev/null 2>&1
 agent crew-orchestrator '.status = "idle"'
@@ -407,15 +388,18 @@ check "it comes back once the kit works" '"$F" roster 2>/dev/null | grep -q "^cr
 "$F" crew down >/dev/null 2>&1
 check "down retires all" '[ "$(jq "[.[] | select(.status == \"active\")] | length" "$FACTORY_CREW_HOME/stations.json")" = 0 ]'
 
-# A crew.json written by hand gets the template's defaults under it.
+# A crew.json written by hand gets the template's defaults under it. Without a releaser (the default),
+# crew up starts only the orchestrator and the reviewer.
+api PUT /api/crew/settings '{"releaser": false}' >/dev/null
 H="$T/hand"; mkdir -p "$H"; echo '{"stations": {"reviewer": {"model": "sonnet"}}}' > "$H/crew.json"
+before=$(launches)
 FACTORY_CREW_HOME="$H" "$F" crew up --yes >/dev/null 2>&1
 check "hand-made crew.json keeps its choice" '[ "$(jq -r .stations.reviewer.model "$H/crew.json")/$(jq -r .stations.reviewer.effort "$H/crew.json")" = sonnet/high ]'
 check "hand-made crew.json gains defaults" '[ "$(jq -r .stations.orchestrator.model "$H/crew.json")" = opus ] && [ "$(jq -r .limits.autocompact_tokens "$H/crew.json")" = 200000 ]'
-check "handovers/done exists" '[ -d "$H/handovers/done" ]'
+check "no releaser unless asked for" '[ $(( $(launches) - before )) = 2 ] && [ -z "$(jq -r ".[\"crew-releaser\"].status // empty" "$H/stations.json")" ]'
 
-# A running watch whose kit is updated starts again on the new version, once the update has settled.
-K="$T/kit"; cp -R "$here/../plugin" "$K"
+# A running watch whose plugin is updated starts again on the new version, once the update has settled.
+K="$T/kit"; mkdir -p "$K"; cp -R "$here/../../claude-plugin/." "$K/"
 FACTORY_CREW_HOME="$H" FACTORY_WATCH_INTERVAL=1 "$K/bin/factory" crew watch >"$T/kw.out" 2>&1 &
 kw=$!
 for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q "watching the crew" "$T/kw.out" && break; sleep 0.3; done
@@ -423,89 +407,56 @@ sleep 1
 echo "# updated" >> "$K/skills/factory-protocol/SKILL.md"
 for _ in $(seq 40); do [ "$(grep -c "watching the crew" "$T/kw.out")" -ge 2 ] && break; sleep 0.5; done
 kill "$kw" 2>/dev/null; wait "$kw" 2>/dev/null
-check "the watch restarts itself on an updated kit" 'grep -q "the kit was updated" "$T/kw.out" && [ "$(grep -c "watching the crew" "$T/kw.out")" -ge 2 ]'
+check "the watch restarts itself on an updated plugin" 'grep -q "the plugin was updated" "$T/kw.out" && [ "$(grep -c "watching the crew" "$T/kw.out")" -ge 2 ]'
 
-# An L5 crew: a project handed over stricter keeps production for the person, for every builder of it.
-L="$T/l5"; mkdir -p "$L" "$T/core"; git -C "$T/core" init -q
-printf 'L5-dark\n\n\nno\n4\n\n' | FACTORY_CREW_HOME="$L" "$F" crew up >/dev/null 2>&1
-FACTORY_CREW_HOME="$L" "$F" spawn builder --autonomy L4-ship shop m1 "$T/core" "T1" >"$T/l5.out" 2>&1
-check "L5: releaser started earlier is flagged for a restart" 'grep -q "factory restart crew-releaser" "$T/l5.out"'
-FACTORY_CREW_HOME="$L" "$F" settings crew-releaser >"$T/rel.json" 2>/dev/null
-check "L5: production soft-denied for the stricter project" 'jq -e ".autoMode.soft_deny | any(contains(\"for project shop: \"))" "$T/rel.json" >/dev/null'
-check "L5: production still pre-authorized for the rest" 'jq -e ".autoMode.allow | any(contains(\"pre-authorized at level L5-dark\"))" "$T/rel.json" >/dev/null'
-FACTORY_CREW_HOME="$L" "$F" retire shop-build-m1 >/dev/null 2>&1
-FACTORY_CREW_HOME="$L" "$F" spawn builder shop m2 "$T/core" "T2" >/dev/null 2>&1
-check "the project's level sticks to its next builder" 'jq -e ".autoMode.allow | any(test(\"pre-authorized at level L4-ship\"))" "$L/stations/shop-build-m2.settings.json" >/dev/null'
-jq '.settings.autonomy = "L3-review"' "$L/crew.json" > "$T/c.json" && mv "$T/c.json" "$L/crew.json"
-FACTORY_CREW_HOME="$L" "$F" settings shop-build-m2 >"$T/b.json" 2>/dev/null
+# A project handed over stricter keeps it for every builder of it; a crew lowered later takes it down.
+L4="$T/l4"; mkdir -p "$L4" "$T/core"; git -C "$T/core" init -q; core1=$(git -C "$T/core" rev-parse --show-toplevel)
+api PUT /api/crew/settings '{"autonomy": "L4-ship"}' >/dev/null
+SP=$(hand_over strict "$core1")
+api POST "/api/projects/$SP/handover" '{"autonomy": "L3-review"}' >/dev/null
+FACTORY_CREW_HOME="$L4" "$F" crew up --yes >/dev/null 2>&1
+FACTORY_CREW_HOME="$L4" "$F" spawn builder strict m1 "$core1" "T1" >/dev/null 2>&1
+check "a project handed over stricter keeps it" 'jq -e ".autoMode.allow | any(test(\"relayed .*yes\"))" "$L4/stations/strict-build-m1.settings.json" >/dev/null'
+FACTORY_CREW_HOME="$L4" "$F" spawn builder --autonomy L5-dark strict m2 "$core1" "T2" >"$T/l5.out" 2>&1
+check "L5 is no level any more" 'grep -q "autonomy must be L3-review or L4-ship" "$T/l5.out"'
+FACTORY_CREW_HOME="$L4" "$F" retire strict-build-m1 >/dev/null 2>&1
+LP=$(hand_over loose "$core1")
+FACTORY_CREW_HOME="$L4" "$F" spawn builder loose m1 "$core1" "T1" >/dev/null 2>&1
+check "L4: the builder merges on the gate" 'jq -e ".autoMode.allow | any(test(\"pre-authorized at level L4-ship\"))" "$L4/stations/loose-build-m1.settings.json" >/dev/null'
+api PUT /api/crew/settings '{"autonomy": "L3-review"}' >/dev/null
+FACTORY_CREW_HOME="$L4" "$F" settings loose-build-m1 >"$T/b.json" 2>/dev/null
 check "a crew lowered later takes the project down with it" 'jq -e ".autoMode.allow | any(test(\"relayed .*yes\"))" "$T/b.json" >/dev/null'
 
 # One project, several repos: each repo gets its own builder, scoped to that repo; the crew stations,
-# doctor and adoption see every repo; a repo where a tag is a real release is not tagged.
+# doctor and adoption see every repo.
 M="$T/multi"; mkdir -p "$M"
 for r in core charts; do mkdir -p "$T/argus/$r"; git -C "$T/argus/$r" init -q; done
 core=$(git -C "$T/argus/core" rev-parse --show-toplevel); charts=$(git -C "$T/argus/charts" rev-parse --show-toplevel)
-mkdir -p "$charts/.factory"; echo '{"release": {"tags": false}}' > "$charts/.factory/factory.json"
+hand_over argus "$core" "$charts" >/dev/null
 FACTORY_CREW_HOME="$M" "$F" crew up --yes >/dev/null 2>&1
 FACTORY_CREW_HOME="$M" "$F" spawn builder argus m1-core "$core" "T1" >/dev/null 2>&1
 FACTORY_CREW_HOME="$M" "$F" spawn builder argus m1-charts "$charts" "T2 after T1" >/dev/null 2>&1
-check "multi: project keeps both repos in order" '[ "$(jq -c ".argus | [.repo, .repos]" "$M/projects.json")" = "$(jq -cn --arg a "$core" --arg b "$charts" "[\$a, [\$a, \$b]]")" ]'
 check "multi: each builder runs in its repo" '[ "$(jq -r .env.FACTORY_REPO "$M/stations/argus-build-m1-charts.settings.json")" = "$charts" ]'
 check "multi: a builder may push and merge only in its own repo" 'jq -e --arg c "$core" --arg h "$charts" "[.autoMode.allow[] | select(test(\"^(Pushing|Merging)\"))] | length == 2 and all(contains(\$h) and (contains(\$c) | not))" "$M/stations/argus-build-m1-charts.settings.json" >/dev/null'
-tmp=$(mktemp); jq --arg l "$repo" '.other = {repo: $l, repos: [$l], slug: "other"}' "$M/projects.json" > "$tmp" && mv "$tmp" "$M/projects.json"
-FACTORY_CREW_HOME="$M" "$F" settings argus-build-m1-charts >"$T/b2.json" 2>/dev/null
-check "multi: a builder's state files stay within its project" 'jq -e --arg l "$repo" --arg c "$core" ".autoMode.allow[1] | contains(\"repositories of project argus: \") and contains(\$c) and (contains(\$l) | not)" "$T/b2.json" >/dev/null'
+check "multi: a builder's worktrees stay within its project" 'jq -e --arg l "$repo" --arg c "$core" ".autoMode.allow[1] | contains(\"repositories of project argus: \") and contains(\$c) and (contains(\$l) | not)" "$M/stations/argus-build-m1-charts.settings.json" >/dev/null'
 FACTORY_CREW_HOME="$M" "$F" settings crew-reviewer >"$T/rev.json" 2>/dev/null
 check "multi: the reviewer's grant names every repo" 'jq -e --arg c "$core" --arg h "$charts" ".autoMode.allow | any(contains(\$c) and contains(\$h) and contains(\"factory/review\"))" "$T/rev.json" >/dev/null'
-FACTORY_CREW_HOME="$M" "$F" settings crew-releaser >"$T/rel2.json" 2>/dev/null
-check "multi: no tags where release.tags is false" 'jq -e --arg h "$charts" ".autoMode.soft_deny | any(contains(\"tags or GitHub releases in \" + \$h))" "$T/rel2.json" >/dev/null'
-check "multi: tags still allowed elsewhere" 'jq -e --arg h "$charts" ".autoMode.allow | any(contains(\"(except in \" + \$h))" "$T/rel2.json" >/dev/null'
 tmp=$(mktemp); jq --arg c "$charts" '. + [{id: "0000beef", name: "argus-build-m2-charts", cwd: $c, state: "working", sessionId: "s-beef", startedAt: 99, pid: 4343}]' "$FAKE_CLAUDE_STATE/agents.json" > "$tmp" && mv "$tmp" "$FAKE_CLAUDE_STATE/agents.json"
 FACTORY_CREW_HOME="$M" "$F" roster >/dev/null 2>&1
 check "multi: an unrecorded builder in the second repo is adopted with its project" '[ "$(jq -r ".[\"argus-build-m2-charts\"] | [.project, .repo] | join(\" \")" "$M/stations.json")" = "argus $charts" ]'
 mkdir -p "$T/bin"; printf '%s\n' '#!/usr/bin/env bash' 'case "$1 $2" in' '  "auth status") exit 0 ;;' '  "repo view") case "$PWD" in *charts) echo "o/charts READ" ;; *) echo "o/core WRITE" ;; esac ;;' 'esac' > "$T/bin/gh"; chmod +x "$T/bin/gh"
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$T/bin/tares-mcp"; chmod +x "$T/bin/tares-mcp"
 jq -n --arg c "$core" '{projects: {($c): {hasTrustDialogAccepted: true}}}' > "$HOME/.claude.json"
 PATH="$T/bin:$PATH" FACTORY_CREW_HOME="$M" "$F" doctor >"$T/doctor.out" 2>&1
+check "doctor: Tares answers" 'grep -q "ok    Tares answers at $TARESD_URL" "$T/doctor.out" && grep -q "ok    Tares lets this crew in" "$T/doctor.out"'
 check "multi doctor: trust per repo" 'grep -q "ok .*project argus: $core trusted" "$T/doctor.out" && grep -q "FIX .*project argus: Claude Code has not trusted $charts" "$T/doctor.out"'
 check "multi doctor: GitHub write access per repo" 'grep -q "ok .*$core is o/core on GitHub (WRITE)" "$T/doctor.out" && grep -q "FIX .*gh has READ on o/charts" "$T/doctor.out"'
-check "multi doctor: tag setting shown" 'grep -q "$charts has release.tags=false" "$T/doctor.out"'
+check "doctor: no Rius" '! grep -qi rius "$T/doctor.out"'
+mkdir -p "$HOME/.claude"; echo '{"enabledPlugins": {"tares@tares": true}}' > "$HOME/.claude/settings.json"
+check "doctor: a marketplace tares plugin is named, since it takes this one's place" 'grep -q "warn  a tares plugin installed from a marketplace is enabled" <<<"$(PATH="$T/bin:$PATH" FACTORY_CREW_HOME="$M" "$F" doctor 2>&1)"'
+rm -f "$HOME/.claude/settings.json"
+TARESD_URL=http://127.0.0.1:9 FACTORY_CREW_HOME="$M" "$F" doctor >"$T/doctor2.out" 2>&1
+check "doctor without Tares says how to start one" 'grep -q "FIX   no Tares answers at http://127.0.0.1:9: start one with \`tares up\`" "$T/doctor2.out"'
 
-# A station of a per-project factory from the older kit gets a plain refusal, even with a crew up,
-# and `factory up` in its repo doesn't start a second team.
-old="$T/oldproj"; mkdir -p "$old/.factory"; git -C "$old" init -q
-echo '{"project": "oldproj", "level": "L5-dark"}' > "$old/.factory/factory.json"; echo '{}' > "$old/.factory/stations.json"
-FACTORY_HOME="$old/.factory" FACTORY_ROLE=orchestrator FACTORY_CREW_HOME="$M" "$F" roster >"$T/old.out" 2>&1
-check "older per-project station: plain refusal" 'grep -q "per-project factory started by an older" "$T/old.out" && ! grep -q "^crew-" "$T/old.out"'
-(cd "$old" && FACTORY_CREW_HOME="$T/never" "$F" up --yes >"$T/oldup.out" 2>&1)
-check "factory up in an older factory's repo starts nothing" 'grep -q "older tares-factory kit" "$T/oldup.out" && [ ! -d "$T/never" ]'
-
-# Rius: the service name fits the 64 characters Rius takes. With Rius on in crew.json, doctor checks the
-# plugin is enabled and that its own path rules trace the crew home and every project repo.
-long=$(printf 'p%.0s' $(seq 70))
-"$F" settings "$long" builder >"$T/long.json" 2>/dev/null
-check "the Rius service name is cut to 64 characters" '[ "$(jq -r ".env.RIUS_SERVICE_NAME | length" "$T/long.json")" = 64 ]'
-mkdir -p "$HOME/.claude/rius"; echo '{"enabledPlugins": {"rius@rius-coding-agents": false, "slack@x": true}}' > "$HOME/.claude/settings.json"
-check "Rius on but the plugin off: doctor notes it, without failing on it" 'grep -q "warn  the rius plugin is not installed or not enabled, so stations run untraced" <<<"$("$F" doctor 2>/dev/null)"'
-check "and crew up says nothing about Rius" '! grep -q "Rius doesn.t trace" <<<"$("$F" crew up --yes 2>&1)"'
-echo '{"enabledPlugins": {"rius@rius-coding-agents": true}}' > "$HOME/.claude/settings.json"
-crew_real=$(cd "$FACTORY_CREW_HOME" && pwd -P)
-jq -n --arg c "$crew_real" '{enabled_paths: [$c]}' > "$HOME/.claude/rius/config.json"
-out=$("$F" doctor 2>/dev/null)
-check "crew up names the folders Rius doesn't trace yet" 'grep -q "Rius doesn.t trace.*$repo.*yet, so those stations send nothing: in a Claude session in each, run /rius:enable-content-here" <<<"$("$F" crew up --yes 2>&1)"'
-check "a project repo the rules don't cover is named, with the command" 'grep "FIX   Rius doesn.t trace" <<<"$out" | grep -q "$repo" && ! grep "FIX   Rius doesn.t trace" <<<"$out" | grep -q " $FACTORY_CREW_HOME" && grep -q "/rius:enable-here" <<<"$out"'
-jq -n --arg c "$crew_real" '{enabled_paths: ["/"], disabled_paths: [$c]}' > "$HOME/.claude/rius/config.json"
-check "a disable rule wins over an enable" 'grep "FIX   Rius doesn.t trace" <<<"$("$F" doctor 2>/dev/null)" | grep -q " $FACTORY_CREW_HOME"'
-jq -n '{enabled_paths: ["/"]}' > "$HOME/.claude/rius/config.json"
-check "a rule the plugin ignores (the root) covers nothing" 'grep "FIX   Rius doesn.t trace" <<<"$("$F" doctor 2>/dev/null)" | grep -q " $FACTORY_CREW_HOME"'
-jq -n --arg t "$(cd "$T" && pwd -P)" '{enabled_paths: ($t + "/*")}' | jq '.enabled_paths |= [.]' > "$HOME/.claude/rius/config.json"
-out=$("$F" doctor 2>/dev/null)
-check "a glob rule covering everything: no folder named" '! grep -q "Rius doesn.t trace" <<<"$out"'
-check "but not logged in: doctor says so" 'grep -q "FIX   the rius plugin is not logged in" <<<"$out"'
-echo '{}' > "$HOME/.claude/rius/credentials.json"
-check "all covered and logged in: doctor is content" 'grep -q "ok    Rius traces the crew home and every project repo" <<<"$("$F" doctor 2>/dev/null)" && ! grep -q "not logged in" <<<"$("$F" doctor 2>/dev/null)"'
-rm -rf "$HOME/.claude/rius" "$HOME/.claude/settings.json"
-jq '.rius.enabled = false' "$FACTORY_CREW_HOME/crew.json" > "$T/c.json" && mv "$T/c.json" "$FACTORY_CREW_HOME/crew.json"
-
-rm -rf "$T"
 [ $fail = 0 ] && echo "crew: all cases pass"
 exit $fail

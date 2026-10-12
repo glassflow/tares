@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Checks that factory reads the session id from `claude --bg` output, with and without colour codes.
 set -uo pipefail
-F="$(cd "$(dirname "$0")/.." && pwd)/plugin/bin/factory"
-cd "$(dirname "$0")/.."
+F="$(cd "$(dirname "$0")/../.." && pwd)/claude-plugin/bin/factory"
+cd "$(dirname "$0")/../.."
 fail=0
 t() { local got; got=$(printf "$1" | "$F" _parse-bg-id); [ "$got" = "$2" ] || { echo "FAIL: expected '$2', got '$got' for: $1"; fail=1; }; }
 t 'backgrounded · feb401c6 · tfspike-alpha\n' feb401c6

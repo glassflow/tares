@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Checks the PreToolUse guard: each rule fires for the wrong station and lets the owner through.
 set -uo pipefail
-G="$(cd "$(dirname "$0")/.." && pwd)/plugin/hooks/guard.sh"
+G="$(cd "$(dirname "$0")/../.." && pwd)/claude-plugin/hooks/guard.sh"
 export FACTORY_HOME=/nonexistent FACTORY_STATION=test
 fail=0
 t() { # role tool command expected
@@ -39,7 +39,7 @@ t orchestrator Bash 'factory spawn builder shop m1-api glassflow/api "[TF:TASK] 
 t orchestrator Bash 'factory revive shop-build-m1 "carry on; the gate is gh pr merge after the verdict"' allow
 t orchestrator Bash 'factory spawn builder shop m1-api glassflow/api "$(gh pr merge 1)"' deny
 t builder Bash 'factory spawn builder shop m1 glassflow/api "T1"' deny
-t comms mcp__plugin_slack_slack__slack_send_message '' allow
+t reviewer mcp__plugin_slack_slack__slack_send_message '' deny   # no station messages people
 t builder mcp__plugin_slack_slack__slack_send_message '' deny
 t builder mcp__plugin_slack_slack__slack_read_channel '' allow
 t reviewer Bash 'git commit -m "fix the gh pr merge race and the docker build cache"' allow

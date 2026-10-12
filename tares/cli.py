@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
 DEFAULT_HOME = Path(os.getenv("TARES_HOME", str(Path.home() / ".tares")))
@@ -178,9 +179,37 @@ def _mcp(args: argparse.Namespace):
     run_mcp()
 
 
+def plugin_dir() -> Path:
+    """The Claude Code plugin for Tares: inside the installed package, or claude-plugin/ in a
+    checkout (an editable install)."""
+    here = Path(__file__).resolve().parent
+    for d in (here / "claude-plugin", here.parent / "claude-plugin"):
+        if (d / "bin" / "factory").is_file():
+            return d
+    raise SystemExit("tares: the Claude Code plugin is missing from this install "
+                     f"(looked in {here / 'claude-plugin'} and {here.parent / 'claude-plugin'})")
+
+
+def _factory(argv: list[str]):
+    """`tares factory ...`: the tares-factory crew, run by the factory CLI the plugin ships. It
+    finds this Tares through TARESD_URL (default the local daemon) and the token in
+    TARES_AUTH_TOKEN; stations get the same address."""
+    script = plugin_dir() / "bin" / "factory"
+    env = dict(os.environ)
+    env.setdefault("TARESD_URL", f"http://127.0.0.1:{os.getenv('TARES_PORT', '8787')}")
+    env["TARES_FACTORY_URL"] = env.get("TARES_FACTORY_URL") or env["TARESD_URL"]
+    # tares-mcp sits next to this python; stations need it on their PATH to reach Tares.
+    bindir = str(Path(sys.argv[0]).resolve().parent)
+    if (Path(bindir) / "tares-mcp").exists() and bindir not in env.get("PATH", "").split(os.pathsep):
+        env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
+    os.execve("/bin/bash", ["bash", str(script), *argv], env)
+
+
 def main():
     from .config import reject_legacy_env
     reject_legacy_env()
+    if len(sys.argv) > 1 and sys.argv[1] == "factory":
+        _factory(sys.argv[2:])
     p = argparse.ArgumentParser(prog="tares", description="Tares; a data plane for AI agents.")
     p.add_argument("--version", action="version", version=f"tares {_pkg_version()}")
     sub = p.add_subparsers(dest="cmd")
@@ -215,6 +244,9 @@ def main():
     m.add_argument("--taresd", default=os.getenv("TARESD_URL", ""),
                    help="taresd base URL to proxy to (default http://127.0.0.1:8787)")
     m.set_defaults(func=_mcp)
+
+    sub.add_parser("factory", help="the tares-factory crew of Claude Code sessions: "
+                                   "`tares factory help` lists its commands")
 
     st = sub.add_parser("status", help="readiness checklist for a running instance, and the next step")
     st.add_argument("--taresd", default=os.getenv("TARESD_URL", ""),

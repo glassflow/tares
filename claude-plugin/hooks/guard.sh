@@ -29,7 +29,7 @@ owner_only() { # $1 = owning role, $2 = action description
 case "$tool" in
   # Posting to people only; reading Slack, and every other tool, stays open to all stations.
   mcp__*slack*send*|mcp__*slack*schedule*|mcp__*slack*post*|mcp__*slack*update*message*)
-    owner_only comms "send Slack messages" ;;
+    deny "Crew stations don't message people. The person reads the crew in the orchestrator's session and on Tares; send the orchestrator an ASK instead." ;;
 esac
 
 [ "$tool" = "Bash" ] || exit 0

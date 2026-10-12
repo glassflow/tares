@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Checks factory-heavy: two commands never overlap, and the timeout kills.
 set -uo pipefail
-H="$(cd "$(dirname "$0")/.." && pwd)/plugin/bin/factory-heavy"
+H="$(cd "$(dirname "$0")/../.." && pwd)/claude-plugin/bin/factory-heavy"
 export TMPDIR; TMPDIR=$(mktemp -d)
 log="$TMPDIR/log"
 "$H" 30 bash -c "echo start-a >> $log; sleep 2; echo end-a >> $log" &
