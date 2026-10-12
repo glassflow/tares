@@ -62,8 +62,9 @@ The answers are kept on Tares; a second machine asks nothing. In a script, or wi
 same questions come as numbered prompts. The Crew page
 (http://127.0.0.1:8787/crew) lists the crew as it starts.
 
-Keep it alive in a spare terminal: `tares factory crew watch`. `tares factory doctor` checks
-everything the crew needs.
+`crew up` also starts the watch in the background, which brings back any station that stops (Claude
+Code stops idle sessions after about an hour); its log is `~/factory/watch.log`, and `crew down`
+stops it. `tares factory doctor` checks everything the crew needs.
 
 ## 3. Plan a project
 

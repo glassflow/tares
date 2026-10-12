@@ -22,20 +22,23 @@ usage() {
   cat <<'EOF'
 tares factory: one crew of connected Claude Code sessions for all your projects, kept on Tares
 
-  tares factory crew up [--yes] [roles...]  start the crew from the crew home (orchestrator first);
-                                            the first run asks the crew settings, one at a time
+  tares factory crew up [--yes] [--no-watch] [roles...]
+                                            start the crew from the crew home (orchestrator first),
+                                            and the watch in the background; the first run asks the
+                                            crew settings
   tares factory crew status                 the stations, the questions for you, a line per project
   tares factory crew attach <role|station>  open a station in this terminal (answer the crew's
                                             questions in the orchestrator)
   tares factory crew desk                   the questions waiting for you, each in full
   tares factory crew logs <role|station>    a station's recent output
-  tares factory crew watch [--once]         revive stations that stopped, under the same name; start
+  tares factory crew watch [--once]         (crew up runs it in the background) revive stations
+                                            that stopped, under the same name; start
                                             fresh any that Claude Code stopped for thrashing on
                                             autocompact; after an update, move each station onto it
                                             when it's idle (same conversation)
   tares factory crew halt ["<reason>"]      stop risky actions on every station until resume
   tares factory crew resume                 lift a halt
-  tares factory crew down                   stop and remove all stations (Tares keeps the record)
+  tares factory crew down                   stop the watch and every station (Tares keeps the record)
   tares factory spec ["<idea>"]             plan a project with Claude and /tares:spec, in the repo it
                                             builds on or a folder of its repos; it ends with the
                                             hand-over to the crew
@@ -720,10 +723,34 @@ ensure_home_trusted() {
   say "the crew home is trusted"
 }
 
+# The watch runs in the background once crew up starts it, so nobody has to keep a terminal open
+# for it: its pid in WATCH_PID, its output in WATCH_LOG. crew down stops it.
+WATCH_PID="$CREW_HOME/watch.pid"
+WATCH_LOG="$CREW_HOME/watch.log"
+watch_pid() { # → the pid of the background watch when it runs
+  local pid; pid=$(cat "$WATCH_PID" 2>/dev/null) || return 1
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && ps -p "$pid" -o command= 2>/dev/null | grep -q "crew watch" && echo "$pid"
+}
+start_watch() {
+  [ -n "${FACTORY_NO_WATCH:-}" ] && return 0
+  local pid
+  if pid=$(watch_pid); then echo "  ✓ the watch keeps the crew alive (already running, pid $pid)" >&2; return 0; fi
+  nohup bash "$src" crew watch >>"$WATCH_LOG" 2>&1 </dev/null &
+  echo $! > "$WATCH_PID"
+  disown 2>/dev/null || true
+  echo "  ✓ started the watch, which revives any station that stops (log: $WATCH_LOG)" >&2
+}
+stop_watch() {
+  local pid; pid=$(watch_pid) || { rm -f "$WATCH_PID"; return 0; }
+  kill "$pid" 2>/dev/null || true
+  rm -f "$WATCH_PID"
+  say "stopped the watch"
+}
+
 cmd_crew_up() {
-  local roles=""
+  local roles="" watch=1
   while [ $# -gt 0 ]; do
-    case "$1" in --yes|-y) ASSUME_YES=1; shift ;; *) roles="$roles $1"; shift ;; esac
+    case "$1" in --yes|-y) ASSUME_YES=1; shift ;; --no-watch) watch=0; shift ;; *) roles="$roles $1"; shift ;; esac
   done
   local clash; clash=$(installed_tares)
   [ -z "$clash" ] || say "warning: $(clash_text "$clash")"
@@ -747,13 +774,14 @@ cmd_crew_up() {
     launch "$station" "$r" "" "" "" "$CREW_HOME" "$(ccfg ".stations.$r.model")" "$(ccfg ".stations.$r.effort")" "$(boot_prompt "$r")"
     [ "$r" = orchestrator ] && sleep "${FACTORY_PAUSE:-5}"
   done
+  [ $watch = 1 ] && start_watch
   cat >&2 <<NEXT
 
 The crew takes a few minutes to check in. Next:
   Watch it              $TARES/crew
   Answer its questions  $ME crew attach orchestrator   (← to leave it running)
-  Keep it alive         $ME crew watch   (in a spare terminal)
   Give it a project     $ME spec "what to build"   (in the project's repo)
+  Stop it               $ME crew down
 NEXT
 }
 
@@ -878,6 +906,7 @@ cmd_retire() { # station
 
 cmd_down() {
   require_crew
+  stop_watch   # first, so it doesn't revive what is being stopped
   [ -f "$STATIONS" ] || { say "no stations recorded"; return; }
   local s
   for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS"); do cmd_retire "$s"; done
@@ -1028,6 +1057,8 @@ cmd_status() {
     | "TWO SESSIONS named \(.[0].name): \(map(.id) | join(", ")); stop the one stations.json does not list (factory roster)"' || true
   [ $old = 0 ] || echo "plugin: $old station(s) run an older version; $ME crew watch moves each onto this one when it's idle"
   halted && echo "HALTED: $(jq -r .reason "$HALT_FILE" 2>/dev/null)"
+  local wp; if wp=$(watch_pid); then echo "watch: running (pid $wp), it revives any station that stops; log in $WATCH_LOG"
+  else echo "watch: not running; $ME crew up starts it (or run $ME crew watch yourself)"; fi
   local items n; items=$(desk_json); n=$(jq length <<<"$items")
   if [ "$n" -gt 0 ]; then
     echo "desk: $n waiting for you; the next one ($ME crew desk shows all; answer in the orchestrator's session):"

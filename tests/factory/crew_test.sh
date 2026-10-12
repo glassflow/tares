@@ -423,6 +423,23 @@ check "hand-made crew.json keeps its choice" '[ "$(jq -r .stations.reviewer.mode
 check "hand-made crew.json gains defaults" '[ "$(jq -r .stations.orchestrator.model "$H/crew.json")" = opus ] && [ "$(jq -r .limits.autocompact_tokens "$H/crew.json")" = 200000 ]'
 check "no releaser unless asked for" '[ $(( $(launches) - before )) = 2 ] && [ -z "$(jq -r ".[\"crew-releaser\"].status // empty" "$H/stations.json")" ]'
 
+# crew up starts the watch in the background, once; status says so; crew down stops it first.
+WH="$T/watched"; trust "$WH"
+FACTORY_NO_WATCH= FACTORY_WATCH_INTERVAL=1 FACTORY_CREW_HOME="$WH" "$F" crew up --yes >"$T/w1.out" 2>&1
+wpid=$(cat "$WH/watch.pid" 2>/dev/null)
+check "crew up starts the watch in the background" 'grep -q "started the watch" "$T/w1.out" && [ -n "$wpid" ] && kill -0 "$wpid" 2>/dev/null'
+for _ in $(seq 20); do grep -q "watching the crew" "$WH/watch.log" 2>/dev/null && break; sleep 0.3; done
+check "it writes to its log" 'grep -q "watching the crew" "$WH/watch.log"'
+FACTORY_NO_WATCH= FACTORY_CREW_HOME="$WH" "$F" crew up --yes >"$T/w2.out" 2>&1
+check "a second crew up keeps the one watch" 'grep -q "already running, pid $wpid" "$T/w2.out" && [ "$(cat "$WH/watch.pid")" = "$wpid" ]'
+FACTORY_CREW_HOME="$WH" "$F" crew status >"$T/ws.out" 2>&1; check "status says the watch runs" 'grep -q "^watch: running (pid $wpid)" "$T/ws.out"'
+FACTORY_CREW_HOME="$WH" "$F" crew down >"$T/wd.out" 2>&1
+for _ in $(seq 20); do kill -0 "$wpid" 2>/dev/null || break; sleep 0.2; done
+check "crew down stops the watch" '! kill -0 "$wpid" 2>/dev/null && [ ! -f "$WH/watch.pid" ] && grep -q "stopped the watch" "$T/wd.out"'
+FACTORY_NO_WATCH= FACTORY_CREW_HOME="$WH" "$F" crew up --yes --no-watch >"$T/w3.out" 2>&1
+check "--no-watch starts none" '! grep -q "the watch" "$T/w3.out" && [ ! -f "$WH/watch.pid" ]'
+FACTORY_CREW_HOME="$WH" "$F" crew down >/dev/null 2>&1
+
 # A running watch whose plugin is updated starts again on the new version, once the update has settled.
 K="$T/kit"; mkdir -p "$K"; cp -R "$here/../../claude-plugin/." "$K/"
 FACTORY_CREW_HOME="$H" FACTORY_WATCH_INTERVAL=1 "$K/bin/factory" crew watch >"$T/kw.out" 2>&1 &

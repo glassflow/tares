@@ -3,6 +3,8 @@
 # the daemon stops when the test exits. `api METHOD PATH [JSON]` calls it.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PY="$ROOT/.venv/bin/python"; [ -x "$PY" ] || PY=python3
+# crew up starts the watch in the background; tests leave it off unless they test it
+export FACTORY_NO_WATCH=1
 TARES_PIDS=""
 stop_tares() { local p; for p in $TARES_PIDS; do kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; done; TARES_PIDS=""; }
 
