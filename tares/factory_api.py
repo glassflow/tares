@@ -369,11 +369,28 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {"projects": out, "now": now_utc()}
 
     @app.get("/api/crew/{name}")
-    async def get_station(name: str):
+    async def get_station(name: str, recent: int = 30):
+        """One station: its row as in /api/crew, the tickets it holds in every project, its
+        current session's last lines (`recent`, at most 200), and the command that opens it."""
         st = next((s for s in stations() if s["name"] == name), None)
         if st is None:
             h.err(KeyError(f"no station {name!r} has reported to Tares"), 404)
-        return st
+        held = []
+        for p in store.list_projects():
+            for t in store.list_tickets(p["id"]):
+                if t["holder"] == name:
+                    held.append({"project": p["id"], "project_name": p["name"],
+                                 "ticket": factory_mod.label(t), "title": t["title"],
+                                 "stage": t["stage"], "repo": t.get("repo"),
+                                 "pr": (t["pr"] or {}).get("url")})
+        n = min(max(recent, 0), 200)
+        lines = store.key_events(h.cc_source(), st["session"], limit=n,
+                                 offset=max((st["lines"] or 0) - n, 0)) if n else []
+        role_name = name[len("crew-"):] if name.startswith("crew-") else name
+        return {**st, "tickets": held,
+                "recent": [{"at": x.get("event_time"), "type": x.get("event_type"),
+                            "text": str(x.get("text") or "")[:600]} for x in lines],
+                "attach": f"tares factory crew attach {role_name}"}
 
     # ── the crew on a project, and the hand-over (TR-422, TR-425) ─────────────
     @app.get("/api/projects/{uid}/crew")

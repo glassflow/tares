@@ -6,7 +6,7 @@ import { CrewState, Desk } from "../../pages/Crew";
 import { TimeAgo, usePolling } from "../bits";
 import { VLink, type Ctx } from "./common";
 import { Goal } from "./overview";
-import type { DocSummary, Milestone, ProjectSession, Ticket } from "../../types";
+import type { DocSummary, Milestone, ProjectRepo, ProjectSession, Ticket } from "../../types";
 
 // The page of a software factory project (kind "software_factory"): a project a spec session
 // made in Claude Code and sessions build from docs and tickets. Where the build stands (spec,
@@ -58,9 +58,16 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const { data: crew } = usePolling(() => api.projectCrew(ctx.id), 15000);
   const { data: asm } = usePolling(() => api.assumptions(ctx.id), 30000);
   const { data: decisions } = usePolling(() => api.projectDecisions(ctx.id), 30000);
+  const { data: rp } = usePolling(() => api.projectRepos(ctx.id), 30000);
+  // the repos the project touches (TR-463); picking one narrows the ticket list to its tickets
+  const repos = rp?.repos ?? [];
+  const [repoKey, setRepoKey] = useState<string | null>(null);
+  const repoOn = repos.find((r) => (r.name ?? r.path) === repoKey) ?? null;
   // handed to the crew: the crew builds it, there is no build prompt to copy
   const byCrew = !!crew?.handover;
-  const tickets = tk?.tickets ?? [];
+  const allTickets = tk?.tickets ?? [];
+  const tickets = allTickets;
+  const shownTickets = repoOn ? allTickets.filter((t) => repoOn.tickets.includes(t.label)) : allTickets;
   const milestones = msd?.milestones ?? [];
   // the ticket a build takes next: the one in progress, else the first ready one (TR-414)
   const next = tickets.find((t) => t.status === "in_progress")
@@ -148,6 +155,10 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
         </div>
       )}
 
+      {repos.length > 0 && (
+        <Repos repos={repos} on={repoKey} pick={(k) => setRepoKey(k === repoKey ? null : k)} />
+      )}
+
       {attention && active && (
         <Attention kind={attention} session={active} quietMin={quietMin}
                    label={active.station ?? (active.session === firstLinked ? "spec session" : "build session")}
@@ -193,22 +204,31 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
         </Fold>
 
         <Fold id="tickets" title="Tickets"
-              meta={[`${tickets.length} · ${done} done`,
+              meta={[repoOn ? `${shownTickets.length} in ${repoOn.name ?? repoOn.path}` : `${tickets.length} · ${done} done`,
                      milestones.length ? `${milestones.length} ${milestones.length === 1 ? "milestone" : "milestones"}` : "",
                      tk?.linear ? "in Linear" : "in Tares"].filter(Boolean).join(" · ")}>
+          {repoOn && (
+            <div className="fo-repo-on">
+              <span>Only the tickets of <b>{repoOn.name ?? repoOn.path}</b>.</span>
+              {repoOn.open_prs.map((p) => <a key={p.url} href={p.url} target="_blank" rel="noreferrer">{p.ticket} PR{p.number ? ` #${p.number}` : ""}</a>)}
+              <button type="button" className="fo-link-btn" onClick={() => setRepoKey(null)}>Show all</button>
+            </div>
+          )}
           {milestones.length ? (
             <>
-              {milestones.map((m) => (
-                <MilestoneGroup key={m.id} m={m} tickets={tickets.filter((t) => t.milestone === m.id)} nextId={next?.id} />
-              ))}
-              {tickets.some((t) => !t.milestone) && (
+              {milestones.map((m) => {
+                const mine = shownTickets.filter((t) => t.milestone === m.id);
+                return repoOn && !mine.length ? null
+                  : <MilestoneGroup key={m.id} m={m} tickets={mine} nextId={next?.id} />;
+              })}
+              {shownTickets.some((t) => !t.milestone) && (
                 <>
                   <div className="fo-sub">No milestone</div>
-                  <TicketList tickets={tickets.filter((t) => !t.milestone)} nextId={next?.id} />
+                  <TicketList tickets={shownTickets.filter((t) => !t.milestone)} nextId={next?.id} />
                 </>
               )}
             </>
-          ) : <TicketList tickets={tickets} nextId={next?.id} />}
+          ) : <TicketList tickets={shownTickets} nextId={next?.id} />}
           <div className="fo-foot"><VLink v={{ kind: "tickets" }} className="fo-link">All tickets</VLink></div>
         </Fold>
       </div>
@@ -257,7 +277,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
               meta={[crew.handover ? "handed to the crew" : "",
                      `${crew.stations.length} ${crew.stations.length === 1 ? "station" : "stations"}`].filter(Boolean).join(" · ")}>
           {crew.handover && (
-            <p className="fo-empty">Handed to the crew <TimeAgo ts={crew.handover.at} />{crew.handover.repo && <> · <span className="mono">{crew.handover.repo}</span></>}.</p>
+            <p className="fo-empty">Handed to the crew <TimeAgo ts={crew.handover.at} />{crew.handover.repos.length > 0 && <> with {crew.handover.repos.length === 1 ? "its repo" : `its ${crew.handover.repos.length} repos`}</>}{crew.handover.autonomy && <>, at {crew.handover.autonomy}</>}.</p>
           )}
           {crew.stations.length ? (
             <ul className="fo-docs">
@@ -301,6 +321,26 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
 
 // a session that has sent nothing for this long while a ticket is in progress may be gone
 const SILENT_MIN = 10;
+
+/** The repos the project touches, from its hand-over and its tickets (TR-463). Picking one
+ *  narrows the ticket list to its tickets; picking it again shows all. */
+function Repos({ repos, on, pick }: { repos: ProjectRepo[]; on: string | null; pick: (k: string) => void }) {
+  return (
+    <div className="fo-repos" aria-label="Repos this project touches">
+      <span className="fo-repos-label">{repos.length === 1 ? "Repo" : "Repos"}</span>
+      {repos.map((r) => {
+        const k = (r.name ?? r.path) as string;
+        return (
+          <button key={k} type="button" className={`fo-repo${on === k ? " is-on" : ""}`} aria-pressed={on === k}
+                  title={r.path ? `checked out at ${r.path}` : "not checked out on the crew's machine yet"} onClick={() => pick(k)}>
+            <span className="mono">{r.name ?? r.path}</span>
+            <span className="dim">{r.tickets.length} {r.tickets.length === 1 ? "ticket" : "tickets"}{r.open_prs.length > 0 && ` · ${r.open_prs.length} open ${r.open_prs.length === 1 ? "PR" : "PRs"}`}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function quiet(s: ProjectSession, now?: string): number {
   return s.last_at && now ? Math.floor((Date.parse(now) - Date.parse(s.last_at)) / 60000) : 0;

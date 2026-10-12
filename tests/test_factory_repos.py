@@ -203,6 +203,32 @@ async def main():
         ck("the queue item says its repo", q and q[0].get("repo") == "glassflow/factory-test-web", q)
         ck("the brief says it too", "Repo: glassflow/factory-test-web." in brief, brief[:400])
 
+        print("== a crew member's details (the Crew page) ==")
+        lines = [{"type": "session_station", "sessionId": "b-web", "cwd": "/w/web",
+                  "timestamp": "2026-10-12T10:00:00.000Z", "station": "shop-build-m1-web",
+                  "role": "builder", "parent": "crew-orchestrator", "tares_project": "Shop"},
+                 {"type": "assistant", "sessionId": "b-web", "cwd": "/w/web",
+                  "timestamp": "2026-10-12T10:01:00.000Z", "factory_station": "shop-build-m1-web",
+                  "message": {"role": "assistant", "content": "Opening the PR for T2"}}]
+        async with mk() as cx:
+            r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
+                                                    "poll": "10s", "config": {"push": True},
+                                                    "project": shop})
+            r = await cx.post("/ingest/claude_code",
+                              content="\n".join(json.dumps(x) for x in lines) + "\n",
+                              headers={"Content-Type": "application/x-ndjson"})
+            ck("the builder's lines are taken in", r.status_code < 300, r.text)
+            await cx.post(f"/api/projects/{shop}/tickets/T2/assign",
+                          json={"holder": "shop-build-m1-web"})
+            d = (await cx.get("/api/crew/shop-build-m1-web")).json()
+        ck("the tickets it holds, with their repo",
+           [(t["ticket"], t["repo"]) for t in d.get("tickets", [])]
+           == [("T2", "glassflow/factory-test-web")], d.get("tickets"))
+        ck("its last lines", any("Opening the PR for T2" in x["text"] for x in d.get("recent", [])),
+           d.get("recent"))
+        ck("the command that opens it", d.get("attach") == "tares factory crew attach shop-build-m1-web",
+           d.get("attach"))
+
 
 rules()
 station_url()

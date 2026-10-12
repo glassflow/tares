@@ -377,6 +377,7 @@ export interface Ticket {
   label: string;                  // the Linear identifier, else T<n>
   milestone: string | null;       // milestone id
   milestone_name: string | null;
+  repo?: string | null;           // the GitHub repo (owner/name) it changes, when the project spans several
   depends_on: string[];           // labels of the tickets it waits for
   ready: boolean;                 // not finished, and everything it depends on is
   blocked_by: string[];           // labels of the unfinished tickets it depends on
@@ -409,7 +410,7 @@ export interface Decision {
   id: string; label: string | null; question: string; words: string; choice: string | null;
   standing: boolean; scope: "project" | "all"; matched: boolean; granted: boolean; tickets: string[]; at: string;
 }
-export interface QueueItem { project: string; project_name: string; ticket: string; title: string; holder: string | null; pr: string | null; head: string | null; waiting_minutes: number | null; blocks_milestone: boolean; layer1_clean: boolean; verdict: VerdictNow | null }
+export interface QueueItem { project: string; project_name: string; ticket: string; title: string; holder: string | null; repo: string | null; pr: string | null; head: string | null; waiting_minutes: number | null; blocks_milestone: boolean; layer1_clean: boolean; verdict: VerdictNow | null }
 export interface RuleProposal { id: string; repo: string; kind: string; project: string | null; scope: "project" | "all"; text: string; tickets: string[]; state: "open" | "accepted" | "rejected"; created_at: string }
 export type AssumptionState = "open" | "kept" | "overturned";
 export interface Assumption {
@@ -465,13 +466,32 @@ export interface CrewStation {
   children: string[];
 }
 export interface CrewSettings {
-  autonomy: "L3-review" | "L4-ship" | "L5-dark" | null;
+  autonomy: "L3-review" | "L4-ship" | null;
+  releaser: boolean | null;
   release_profile: string | null;
   prod_pattern: string | null;
   challenger: boolean | null;
   builders_max: number | null;
 }
-export interface Handover { repo: string | null; by: string | null; at: string }
+export interface HandoverRepo { path: string | null; name: string | null }
+export interface Handover { repo: string | null; repos: HandoverRepo[]; autonomy: string | null; by: string | null; at: string }
+// A repo a project touches, with the tickets that change it and their open pull requests (TR-463)
+export interface ProjectRepo extends HandoverRepo {
+  tickets: string[];
+  open_prs: { url: string; ticket: string; number: number | null }[];
+}
+// A project handed to the crew, as the orchestrator reads it (TR-462)
+export interface CrewProject {
+  id: string; name: string; repos: ProjectRepo[]; autonomy: string | null;
+  handed_over_at: string | null; handed_over_by: string | null;
+  tickets_done: number; tickets_total: number; stages: Record<string, number>;
+  milestone: { name: string; done: number; total: number } | null;
+}
+export interface StationDetail extends CrewStation {
+  tickets: { project: string; project_name: string; ticket: string; title: string; stage: string | null; repo: string | null; pr: string | null }[];
+  recent: { at: string | null; type: string | null; text: string }[];
+  attach: string;
+}
 export interface LinearLink {
   id: string; name: string; url: string;
   synced_at?: string | null; error?: string | null; issues?: number;
