@@ -2144,3 +2144,29 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 .crew-finished { padding: 8px 16px 12px; border-top: 1px solid var(--line); font-size: 14px; }
 .crew-finished summary { cursor: pointer; color: var(--ink-soft); }
 .main .crew-finished ul { margin: 6px 0 0; padding-left: 18px; }
+/* What Claude Code sessions spend (components/ClaudeUsage.tsx): the plan's limits, the window by
+   project, a station's context window */
+.cc-body { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px; }
+.main .cc-limits, .main .cc-shares { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.cc-limit-head, .cc-share-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 14px; margin-bottom: 4px; }
+.cc-limit-head b { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+.cc-limits small { display: block; margin-top: 3px; font-size: 12px; }
+.cc-share-head .dim { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cc-ctx { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.cc-ctx.is-hot { color: var(--warn); font-weight: 600; }
+.cc-ctx-read { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px 12px; margin-top: 10px; font-size: 13px; }
+.cc-ctx-read button { font-size: 12px; padding: 3px 10px; }
+.main table.cc-cats { margin-top: 8px; border: 0; background: none; font-size: 13px; }
+.cc-cats td { padding: 3px 8px 3px 0; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.cc-cats td.num, .cc-table .num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cc-cats td.cc-cat-bar { width: 30%; min-width: 60px; padding-right: 0; }
+.cc-loaded { margin-top: 8px; font-size: 13px; }
+.cc-loaded summary { cursor: pointer; color: var(--ink-soft); }
+.cc-loaded dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 6px 0 0; }
+.cc-loaded dt { color: var(--ink-soft); }
+.cc-loaded dd { margin: 0; overflow-wrap: anywhere; }
+.cc-sub { font-size: 14px; margin: 18px 0 8px; }
+.cc-table-wrap { overflow-x: auto; }
+.cc-table { font-size: 13px; }
+.cc-table th.num { text-align: right; }
+.cc-rest { font-size: 12px; overflow-wrap: anywhere; }

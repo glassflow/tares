@@ -54,7 +54,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_
 from . import metrics as _metrics
 from . import docs as docs_mod
 from . import factory as factory_mod
-from . import factory_api
+from . import claude_usage, factory_api
 from . import linear as _linear
 from . import skills as skills_mod
 from . import providers as providers_mod
@@ -4781,6 +4781,8 @@ def make_app() -> FastAPI:
         ticket_out=lambda uid, t, **kw: _ticket_out(uid, t, **kw),
         ensure_globals=lambda uid: _ensure_globals(uid),
         tickets_out=lambda uid: _tickets_out(uid)))
+    # what the Claude Code sessions spend: the plan's limits and tokens by project
+    claude_usage.register(app, store)
 
     # ── Linear (TR-408): the cell's connection, and the Linear project a project's tickets live
     # in. Tares only reads from Linear; sessions write with Linear's own tools ───────────────

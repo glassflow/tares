@@ -37,7 +37,9 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
                                             autocompact; after an update, move each station onto it
                                             when it's idle (same conversation); restart a station
                                             between its turns when you allow it something new in
-                                            Tares (same conversation, its fresh settings have it)
+                                            Tares (same conversation, its fresh settings have it);
+                                            between rounds, read the plan's limits and the context
+                                            the Crew page asks for
   tares factory crew halt ["<reason>"]      stop risky actions on every station until resume
   tares factory crew resume                 lift a halt
   tares factory crew down                   stop the watch and every station (Tares keeps the record)
@@ -57,6 +59,10 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
   tares factory restart <role|station> [--fresh]
                                             restart a station with fresh settings, same conversation
                                             (--fresh: a new conversation; its state is on Tares)
+  tares factory context <role|station>      read a station's /context (its window by category) for
+                                            the Crew page; the watch does it when you ask there
+  tares factory plan                        read your plan's limits (/usage) for the Crew page; the
+                                            watch does it every 10 minutes
   tares factory doctor                      check everything the crew needs
   tares factory settings <station> [role]   print the settings a station launches with
 
@@ -588,16 +594,20 @@ write_settings() { # station role parent project repo
   [ -s "$TOKEN_FILE" ] && tok_file=$TOKEN_FILE
 
   mkdir -p "$CREW_HOME/stations"
+  # statusLine: after each reply it sends Tares the session's context window and the plan's limits;
+  # FACTORY_AUTOCOMPACT tells it where the station compacts (the --autocompact it was started with)
   jq -n \
     --arg role "$role" --arg station "$station" --arg parent "$parent" --arg project "$project" \
     --arg pslug "$( [ -n "$project" ] && slugify "$project" || true)" --arg home "$CREW_HOME" --arg repo "$repo" \
     --arg wt "$wt" --arg tares_url "$TARES" --arg tok "$tok_file" --arg mcp_url "$(mcp_url)" \
     --arg env_line "$env_line" --argjson allow "$allow_json" --argjson deny "$deny_json" --argjson perms "$perms_json" \
+    --arg status_line "$(printf 'python3 %q' "$KIT_PLUGIN/scripts/statusline.py")" --arg compact "$(compact_window 2>/dev/null)" \
     '{
       env: ({
         FACTORY_STATION: $station, FACTORY_ROLE: $role, FACTORY_PARENT: $parent,
         FACTORY_HOME: $home, FACTORY_CREW_HOME: $home, FACTORY_WORKTREES: $wt,
-        TARES_FACTORY_URL: $tares_url, TARESD_URL: $tares_url, TARES_FACTORY_MCP_URL: $mcp_url
+        TARES_FACTORY_URL: $tares_url, TARESD_URL: $tares_url, TARES_FACTORY_MCP_URL: $mcp_url,
+        FACTORY_AUTOCOMPACT: $compact
       } + (if $tok != "" then {TARES_FACTORY_TOKEN_FILE: $tok,
              # the same file under a name Claude Code does not hide from the plugin header helper
              TARES_FACTORY_CRED_FILE: $tok} else {} end)
@@ -605,6 +615,7 @@ write_settings() { # station role parent project repo
         + (if $repo != "" then {FACTORY_REPO: $repo} else {} end)),
       crossSessionInbound: "accept",
       enabledPlugins: { "tares@inline": true },
+      statusLine: { type: "command", command: $status_line, padding: 0 },
       worktree: { bgIsolation: "none" },
       permissions: $perms,
       autoMode: { environment: ["$defaults", $env_line], allow: $allow, soft_deny: $deny }
@@ -975,7 +986,7 @@ cmd_down() {
   say "all stations stopped. Tares keeps the projects, tickets and the desk; $ME crew up starts fresh sessions."
 }
 
-cmd_watch() { # every interval: revive stopped stations, restart stuck ones fresh, restart idle ones with new grants, move idle ones onto an updated plugin
+cmd_watch() { # every interval: revive stopped stations, restart stuck ones fresh, restart idle ones with new grants, move idle ones onto an updated plugin; readings between
   require_crew
   local once=0 interval=${FACTORY_WATCH_INTERVAL:-180}
   while [ $# -gt 0 ]; do
@@ -1001,7 +1012,7 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
     if ! active_json >/dev/null; then
       say "$UNREAD; nothing is revived or restarted this round"
       [ $once = 1 ] && return 0
-      sleep "$interval"; continue
+      nap "$interval"; continue
     fi
     for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS" 2>/dev/null); do
       # Never revive or restart what ended with nothing left to do (lesson 7): helpers are short-lived,
@@ -1043,7 +1054,7 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
     # version that can't start a station never takes the crew down one station at a time.
     if [ -n "$candidate" ] && [ $settled = 1 ] && [ $down = 0 ] && ! halted; then upgrade_station "$candidate" "$kit"; fi
     [ $once = 1 ] && return 0
-    sleep "$interval"
+    nap "$interval"
   done
 }
 
@@ -1262,6 +1273,80 @@ cmd_tidy() { # [--force] path...: --force also removes a worktree with uncommitt
       rm -rf -- "$real"
     fi
     say "removed $p"
+  done
+}
+
+# ---------- what the crew spends ----------
+# Each station's status line reports its context window and the plan's limits to Tares as it works.
+# Two readings need Claude Code itself, so they run here on the crew's machine and go to Tares the
+# same way: /context of a station (the window by category) and /usage (every limit of the plan).
+# Neither makes a model call. Hooks and the status line are off for them: a reading is not work.
+
+read_quiet() { # cwd settings-file claude-args... → the stream-json lines Claude Code prints
+  local cwd=$1 settings=$2; shift 2
+  (cd "$cwd" && NO_COLOR=1 "$CLAUDE" -p --no-session-persistence --settings "$settings" \
+    --output-format stream-json --verbose "$@" </dev/null 2>/dev/null) || true
+}
+
+send_meter() { # json line → Tares's claude_code source
+  tares_http POST /ingest/claude_code "$1" >/dev/null
+}
+
+cmd_context() { # station: read its /context and send it to Tares
+  require_crew
+  local s; s=$(station_name "${1:?usage: $ME context <role|station>}")
+  local id sid cwd settings tmp out
+  id=$(stations_get "$s" '.id'); [ -n "$id" ] || die "unknown station $s"
+  sid=$(job_state "$id" | jq -r '.sessionId // empty'); [ -n "$sid" ] || sid=$(stations_get "$s" '.sessionId')
+  [ -n "$sid" ] || die "$s has no conversation to read yet"
+  cwd=$(stations_get "$s" '.cwd'); settings=$(stations_get "$s" '.settings')
+  # the station's own settings and plugin, so the tools and skills counted are the ones it loads
+  tmp=$(mktemp)
+  if [ -f "$settings" ]; then jq '. + {disableAllHooks: true} | del(.statusLine)' "$settings" > "$tmp"
+  else echo '{"disableAllHooks": true}' > "$tmp"; fi
+  local -a flags=(); local f; while IFS= read -r f; do [ -n "$f" ] && flags+=("$f"); done < <(plugin_flags)
+  # a running session is read through a copy (--fork-session), which is never saved
+  out=$(read_quiet "${cwd:-$CREW_HOME}" "$tmp" "${flags[@]}" --resume "$sid" --fork-session "/context" \
+    | jq -cR 'fromjson? | select(.context_usage) | .context_usage' | tail -1) || true
+  rm -f "$tmp"
+  [ -n "$out" ] || die "Claude Code gave no /context reading for $s (session $sid)"
+  send_meter "$(jq -cn --arg s "$sid" --argjson c "$out" \
+    '{type: "session_context", sessionId: $s, timestamp: (now | todate), context_usage: $c}')" \
+    || die "could not send the reading of $s to Tares"
+  jq -r --arg s "$s" '"\($s): \(.total_tokens) of \(.raw_max_tokens) tokens (\(.percentage)%), sent to Tares"' <<<"$out"
+}
+
+cmd_plan() { # read the plan's limits (/usage) and send them to Tares
+  local out
+  out=$(read_quiet "$( [ -d "$CREW_HOME" ] && echo "$CREW_HOME" || pwd)" '{"disableAllHooks": true}' "/usage" \
+    | jq -cR 'fromjson? | select(.usage_report) | .usage_report' | tail -1) || true
+  [ -n "$out" ] || die "Claude Code gave no /usage report (it reads one for a Pro or Max login only)"
+  send_meter "$(jq -cn --argjson u "$out" '{type: "claude_plan", timestamp: (now | todate), usage_report: $u}')" \
+    || die "could not send the plan's limits to Tares"
+  jq -r '.rate_limits.limits[]? | "\(.kind): \(.percent)% used, resets \(.resets_at)"' <<<"$out"
+}
+
+# The watch, between its rounds: answer the console's asks for a station's /context every few
+# seconds, and read the plan's limits every FACTORY_PLAN_EVERY seconds (0: never).
+PLAN_READ_AT=0; PLAN_OK=1
+serve_readings() {
+  local every=${FACTORY_PLAN_EVERY:-600} now; now=$(date +%s)
+  if [ "$every" -gt 0 ] && [ $((now - PLAN_READ_AT)) -ge "$every" ]; then
+    PLAN_READ_AT=$now
+    # said once, not every round: with an API key there is no plan to read
+    if ( cmd_plan >/dev/null 2>&1 ); then PLAN_OK=1
+    elif [ $PLAN_OK = 1 ]; then PLAN_OK=0; say "could not read the plan's limits ($ME plan says why); trying again every ${every}s"; fi
+  fi
+  local s
+  for s in $(tares_http GET /api/crew/context/asks 2>/dev/null | jq -r '.asks[]?.station' 2>/dev/null); do
+    ( cmd_context "$s" >/dev/null ) || say "could not read the context of $s"
+  done
+}
+nap() { # seconds: wait them out, serving readings meanwhile
+  local until=$(( $(date +%s) + $1 ))
+  while [ "$(date +%s)" -lt "$until" ]; do
+    serve_readings
+    sleep "${FACTORY_ASK_POLL:-5}"
   done
 }
 
@@ -1661,6 +1746,8 @@ case "$cmd" in
   projects) cmd_projects ;;
   finish) cmd_finish "$@" ;;
   settings) cmd_settings "$@" ;;
+  context) cmd_context "$@" ;;
+  plan) cmd_plan ;;
   tidy) cmd_tidy "$@" ;;
   _parse-bg-id) parse_bg_id ;;
   _mcp-url) mcp_url ;;

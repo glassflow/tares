@@ -2,8 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
-import { CopyButton, ErrorState, TimeAgo, usePolling } from "../components/bits";
-import type { CrewProject, CrewSettings, CrewStation, DeskAllowed, DeskItem } from "../types";
+import { CopyButton, ErrorState, TimeAgo, fmtCost, usePolling } from "../components/bits";
+import { ContextBadge, PlanPanel, StationUsage } from "../components/ClaudeUsage";
+import type { CrewProject, CrewSettings, CrewStation, DeskAllowed, DeskItem, ProjectUsage } from "../types";
 
 // The crew of a tares-factory (M3, M8): one always-on crew (orchestrator, reviewer, and a releaser
 // when the person asked for one) serves every project handed to it, and builders come and go per
@@ -148,6 +149,7 @@ function MemberRow({ s, all, selected, depth = 0 }: { s: CrewStation; all: CrewS
           <span className="crew-role">{s.role ?? "station"}</span>
         </button>
         <span className="crew-side">
+          <ContextBadge ctx={s.context} />
           <small>{s.last_at ? <TimeAgo ts={s.last_at} /> : "silent"}</small>
           <CrewState s={s} />
         </span>
@@ -157,7 +159,7 @@ function MemberRow({ s, all, selected, depth = 0 }: { s: CrewStation; all: CrewS
   );
 }
 
-function ProjectBlock({ p, builders, all, selected }: { p: CrewProject; builders: CrewStation[]; all: CrewStation[]; selected: string }) {
+function ProjectBlock({ p, builders, all, selected, week, now }: { p: CrewProject; builders: CrewStation[]; all: CrewStation[]; selected: string; week?: ProjectUsage; now?: ProjectUsage }) {
   const left = p.tickets_total - p.tickets_done;
   return (
     <li className="crew-project">
@@ -173,6 +175,11 @@ function ProjectBlock({ p, builders, all, selected }: { p: CrewProject; builders
         <div className="crew-project-repos dim">
           {p.repos.map((r) => r.name ?? r.path).filter(Boolean).join(" · ")}
           {p.autonomy && <> · {p.autonomy}</>}
+        </div>
+      )}
+      {week && (
+        <div className="crew-project-repos dim" title="estimated at API list prices, from the token counts of its sessions' replies">
+          This week about {fmtCost(week.cost_usd)} at API prices{now?.share != null && <> · {Math.round(now.share * 100)}% of this 5-hour window</>}
         </div>
       )}
       {builders.length > 0 ? (
@@ -225,6 +232,8 @@ function BuildersFold({ id, builders, all, selected }: { id: string; builders: C
 
 function MemberDetail({ name }: { name: string }) {
   const { data, error, reload } = usePolling(() => api.station(name), 10000);
+  // after asking for a /context reading, look again sooner than the usual poll
+  const asked = () => { reload(); [3000, 6000, 10000].forEach((ms) => setTimeout(reload, ms)); };
   if (error && !data) return <div className="fo-panel crew-detail"><ErrorState error={error} what={name} onRetry={reload} /></div>;
   if (!data) return <div className="fo-panel crew-detail"><p className="dim" style={{ padding: 16 }}>loading…</p></div>;
   const s = data;
@@ -245,6 +254,7 @@ function MemberDetail({ name }: { name: string }) {
           {s.last_at && <>; last spoke <TimeAgo ts={s.last_at} /></>}.
           {s.project_name && <> Works on <Link to={`/projects/${encodeURIComponent(s.project ?? "")}`}>{s.project_name}</Link>.</>}
         </p>
+        <StationUsage s={s} onAsked={asked} />
         <div>
           <div className="crew-detail-label">Open it in a terminal</div>
           {s.state === "ended"
@@ -317,6 +327,7 @@ export default function Crew() {
   const { data, error, reload } = usePolling(() => api.crew(), 10000);
   const { data: pdata, error: perror } = usePolling(() => api.crewProjects(), 15000);
   const { data: ddata } = usePolling(() => api.desk(), 15000);
+  const { data: udata, error: uerror, reload: ureload } = usePolling(() => api.claudeCodeUsage(7), 30000);
   const [params] = useSearchParams();
   const [paneOpen, setPaneOpen] = useState(() => !readPaneFolded());
   const stations = data?.stations ?? [];
@@ -334,6 +345,8 @@ export default function Crew() {
   const stray = pdata ? builders.filter((b) => !b.project || !projectIds.has(b.project)) : [];
   const selected = member ?? crew.find((s) => s.role === "orchestrator")?.name ?? "";
   const known = stations.some((s) => s.name === selected);
+  const week = new Map((udata?.projects ?? []).filter((x) => x.project).map((x) => [x.project, x]));
+  const now = new Map((udata?.window.projects ?? []).filter((x) => x.project).map((x) => [x.project, x]));
 
   return (
     <div className="crew">
@@ -356,6 +369,7 @@ export default function Crew() {
       ) : (
         <div className="crew-split">
           <div className="crew-col">
+            <PlanPanel data={udata} error={uerror} reload={ureload} />
             <div className="fo-panel">
               <header><h3>The crew</h3>{data.settings.releaser === false && <span className="dim">no releaser: tickets end at merged</span>}</header>
               {crew.length ? (
@@ -377,7 +391,8 @@ export default function Crew() {
                 <ul className="crew-list">
                   {projects.map((p) => (
                     <ProjectBlock key={p.id} p={p} all={stations} selected={selected}
-                      builders={builders.filter((b) => b.project === p.id)} />
+                      builders={builders.filter((b) => b.project === p.id)}
+                      week={week.get(p.id)} now={now.get(p.id)} />
                   ))}
                   {stray.length > 0 && (
                     <li className="crew-project">

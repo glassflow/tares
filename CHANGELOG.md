@@ -21,6 +21,16 @@ the project follows [Semantic Versioning](https://semver.org/).
   watch restarts that station with it in its settings, in the same conversation, once it is
   between turns (never while you have it open with `crew attach`). `desk_add(station=, command=)`,
   `POST /api/desk/{ref}/allow` (the person only) and `via` on decisions.
+- What the crew spends, on the Crew page: how much of your Claude plan is left (the 5-hour and
+  weekly limits and when each resets, on a Pro or Max login) and which projects used the current
+  5-hour window, in a pane below Projects that is folded by default with the most used limit on its
+  line; and for each station how near it is to compacting. A station's detail reads its context
+  window by category, as `/context` shows it, when you ask. Settings, Usage has tokens and an
+  estimated API cost per project for the last week. Stations report through a status line the
+  factory sets; the watch reads `/usage` every 10 minutes and `/context` when asked, without a
+  model call. `tares factory plan` and `tares factory context <station>` read them by hand.
+- Token usage per reply of every Claude Code session the plugin ships, counted once per reply and
+  filled in from the replies already stored.
 
 ### Changed
 - Crew page: each project's builders fold, shut by default, behind a line that counts them and

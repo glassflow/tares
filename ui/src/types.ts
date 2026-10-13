@@ -468,6 +468,47 @@ export interface CrewStation {
   lines: number;
   earlier: { session: string; started_at: string | null; last_at: string | null; lines: number; state: "replaced" }[];
   children: string[];
+  /** the context window from the station's status line, null before it reported */
+  context: StationContext | null;
+  /** what all the station's sessions spent, null before any reply */
+  usage: UsageTotals | null;
+}
+// What Claude Code sessions spend (tares/claude_usage.py)
+export interface StationContext {
+  used: number | null; size: number; pct: number | null;
+  /** where the station compacts when started with --autocompact below its window, and how near it is */
+  compact_at: number | null; compact_pct: number | null;
+  model: string | null; cost_usd: number | null; at: string | null;
+}
+export interface UsageTotals {
+  replies: number; input_tokens: number; output_tokens: number; cache_write_tokens: number;
+  cache_read_tokens: number; cost_usd: number; unpriced_replies: number;
+}
+/** A /context reading of a session: the window by category */
+export interface ContextReading {
+  model: string | null; total_tokens: number | null; max_tokens: number | null; percentage: number | null;
+  categories: { name: string; tokens: number; kind: "used" | "deferred" | "buffer" | "free" | string | null }[];
+  mcp_servers: { name: string; tools: number; tokens: number }[];
+  memory_files: { path: string | null; type: string | null; tokens: number }[];
+  skills: { count: number; tokens: number; largest: { name: string | null; tokens: number }[] };
+  agents: { count: number; tokens: number };
+}
+export interface PlanLimit {
+  kind: string; label: string; percent: number; resets_at: string | null; severity: string | null;
+  active: boolean; at: string | null; from: "usage" | "status line"; reset: boolean;
+}
+export interface ClaudePlan {
+  limits: PlanLimit[];
+  extra_usage: { is_enabled: boolean | null; monthly_limit: number | null; used_credits: number | null; utilization: number | null; currency: string | null } | null;
+  at: string | null;
+}
+export interface ProjectUsage extends UsageTotals {
+  project: string | null; kind: "project" | "crew" | "other"; name: string; sessions: number; share: number | null;
+}
+export interface ClaudeCodeUsage {
+  plan: ClaudePlan | null;
+  window: { since: string; until: string | null; projects: ProjectUsage[] };
+  days: number; projects: ProjectUsage[]; now: string;
 }
 export interface CrewSettings {
   autonomy: "L3-review" | "L4-ship" | null;
@@ -505,6 +546,9 @@ export interface StationDetail extends CrewStation {
   tickets: { project: string; project_name: string; ticket: string; title: string; stage: string | null; repo: string | null; pr: string | null }[];
   recent: { at: string | null; type: string | null; text: string }[];
   attach: string;
+  context_detail: ContextReading | null;
+  context_at: string | null;
+  context_asked_at: string | null;
 }
 export interface LinearLink {
   id: string; name: string; url: string;

@@ -139,6 +139,15 @@ When it is done, the session asks you whether the project is finished and keeps 
 
 - **Crew page:** who is on the crew, what each member is doing, the projects it holds. Click a
   member for its tickets and its last lines.
+- **What it spends:** the Crew page shows how much of your Claude plan is left (the 5-hour and
+  weekly limits, with when each resets) and which projects used the current 5-hour window. Each
+  station shows how near it is to compacting; click it and **Read it** for its context window by
+  category, as `/context` shows it. Settings, Usage has tokens and an estimated API cost per
+  project for the last week. The readings come from the crew's machine: each station's status
+  line after every reply, `/usage` every 10 minutes from the watch (`FACTORY_PLAN_EVERY` seconds
+  changes it, 0 stops it), and `/context` when you ask. None of them makes a model call. You can
+  read them yourself with `tares factory plan` and `tares factory context <station>`. The plan's
+  limits are there on a Pro or Max login only; with an API key there are tokens and cost.
 - **Project page:** the repos, the milestones and tickets with their stage, pull request and
   verdict, the reviews, assumptions and decisions.
 - **Questions for you** reach the orchestrator's session, one at a time, with a recommendation.

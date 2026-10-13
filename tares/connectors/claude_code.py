@@ -4,9 +4,10 @@ plugin and maps them into the data plane.
 Claude Code writes one structured JSONL event per line (user / assistant / tool_use / tool_result /
 summary, each with a timestamp, sessionId, cwd, gitBranch, and — for assistant turns — model + token
 usage). The plugin's hook POSTs new transcript lines to /ingest/claude_code (local *or* remote); each
-line becomes an Envelope keyed by `session`, with repo/branch/model labels and token-usage as
-numeric fields. Sub-agent (sidechain) transcripts land in the SAME source, tagged `sidechain=true`.
-Secrets are redacted before storage (thin PII guard).
+line becomes an Envelope keyed by `session`, with repo/branch/model labels. A model reply's token
+usage is also counted once per reply (session_usage, tares/claude_usage_store.py). Sub-agent
+(sidechain) transcripts land in the SAME source, tagged `sidechain=true`. Secrets are redacted
+before storage (thin PII guard).
 
 Push-only: install the plugin (claude-plugin/) to feed it. Local file tailing was removed in favor of
 the plugin, which covers both local and remote Tares with one path.
@@ -112,7 +113,13 @@ class ClaudeCodeConnector(Connector):
         include_thinking = c.get("include_thinking", False)
         items = payload if isinstance(payload, list) else [payload]
         out = []
+        projects: dict[str, str | None] = {}
         for o in items:
+            if isinstance(o, dict) and o.get("type") in self.METER_TYPES:
+                self._record_meter(o)   # a meter reading, not something the session said
+                continue
+            if isinstance(o, dict):
+                self._record_usage(o, projects)
             if isinstance(o, dict) and o.get("type") == "session_station":
                 self._record_station(o)
             if isinstance(o, dict) and o.get("type") == "session_project":
@@ -164,6 +171,43 @@ class ClaudeCodeConnector(Connector):
         self.store.upsert_project_object(p["id"], "source", f"+source:{self.cfg.name}",
                                          self.cfg.name)
         return True
+
+    # Lines that read a meter rather than say something: the status line's report on the session
+    # (claude-plugin/scripts/statusline.py), a /context reading of it and the plan's limits from
+    # /usage (both from `factory`). Kept on the session and the plan, never on the timeline.
+    METER_TYPES = ("session_status", "session_context", "claude_plan")
+
+    def _record_meter(self, o: dict) -> None:
+        if self.store is None:
+            return
+        from .. import claude_usage as cu
+        sid, at, typ = str(o.get("sessionId") or ""), self._ts(o), o.get("type")
+        if typ == "session_status" and sid and isinstance(o.get("status"), dict):
+            self.store.set_session_status(sid, cu.compact_status(o["status"]), at)
+        elif typ == "session_context" and sid and isinstance(o.get("context_usage"), dict):
+            self.store.set_session_context(sid, cu.compact_context(o["context_usage"]), at)
+        elif typ == "claude_plan" and isinstance(o.get("usage_report"), dict):
+            self.store.set_setting(cu.PLAN_SETTING, json.dumps(
+                {"at": at.isoformat(), "plan": cu.compact_plan(o["usage_report"])}))
+
+    def _record_usage(self, o: dict, projects: dict) -> None:
+        """A model reply's line: its token usage, counted once per reply, for the project the line
+        was stamped with (`projects` caches name lookups for one push)."""
+        msg = o.get("message") if isinstance(o.get("message"), dict) else {}
+        usage, mid, sid = msg.get("usage"), msg.get("id"), o.get("sessionId")
+        if not isinstance(usage, dict) or not mid or not sid or self.store is None:
+            return
+        from ..claude_usage_store import SYNTHETIC
+        if msg.get("model") == SYNTHETIC:   # Claude Code's own notice, not a model reply
+            return
+        ref = str(o.get("tares_project") or "").strip()
+        if ref and ref not in projects:
+            p = self.store.get_project(ref) or self.store.get_project_by_name(ref)
+            projects[ref] = p["id"] if p else None
+        self.store.record_reply_usage(
+            str(sid), str(mid), self._ts(o), msg.get("model"), projects.get(ref) if ref else None,
+            str(o.get("subagent") or o.get("agentId") or "") or None
+            if o.get("isSidechain") or o.get("subagent") else None, usage)
 
     STATES = ("working", "waiting", "ended")
 

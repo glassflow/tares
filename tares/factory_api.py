@@ -11,11 +11,12 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from fastapi import Body, Request
 
+from . import claude_usage
 from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
@@ -348,8 +349,15 @@ def register(app, store, h: SimpleNamespace) -> None:
                         "session": cur["session"], "started_at": cur["started_at"],
                         "last_at": cur["last_at"], "lines": cur["lines"], "earlier": earlier,
                         "projects": sorted({s["project"] for s in ss if s["project"]})})
+        meters = store.session_meters([st["session"] for st in out])
+        spent = store.usage_by_session([s["session"] for s in rows])
         for st in out:
             st["children"] = sorted(x["name"] for x in out if x["parent"] == st["name"])
+            # the context window from the station's status line, and what all its sessions spent
+            st["context"] = claude_usage.context_now(meters.get(st["session"]))
+            mine = [spent[s] for s in [st["session"], *(e["session"] for e in st["earlier"])]
+                    if s in spent]
+            st["usage"] = ({k: sum(x[k] for x in mine) for k in mine[0]} if mine else None)
         if project:
             out = [s for s in out if project in s["projects"]]
         order = {r: i for i, r in enumerate(factory_mod.ROLES)}
@@ -415,10 +423,38 @@ def register(app, store, h: SimpleNamespace) -> None:
         n = min(max(recent, 0), 200)
         lines = store.key_events(h.cc_source(), st["session"], limit=n,
                                  offset=max((st["lines"] or 0) - n, 0)) if n else []
+        m = store.session_meters([st["session"]]).get(st["session"]) or {}
         return {**st, "tickets": held,
+                "context_detail": m.get("context"), "context_at": m.get("context_at"),
+                "context_asked_at": m.get("context_asked_at"),
                 "recent": [{"at": x.get("event_time"), "type": x.get("event_type"),
                             "text": str(x.get("text") or "")[:600]} for x in lines],
                 "attach": factory_mod.attach_command(name)}
+
+    # ── a station's context by category: asked from the console, read on the crew's machine ──
+    ASK_TTL = 15   # minutes an unanswered ask stays open; the watch reads on the crew's machine
+
+    @app.post("/api/crew/{name}/context")
+    async def ask_station_context(name: str):
+        """Ask for a new /context reading of the station's session. The factory watch on the
+        crew's machine reads it (no model call) within a few seconds, if it runs."""
+        st = next((s for s in stations() if s["name"] == name), None)
+        if st is None:
+            h.err(KeyError(f"no station {name!r} has reported to Tares"), 404)
+        at = now_utc()
+        store.ask_session_context(st["session"], at)
+        return {"session": st["session"], "asked_at": at}
+
+    @app.get("/api/crew/context/asks")
+    async def station_context_asks():
+        """The stations someone asked a /context reading of that has not come in yet, for
+        `factory crew watch`."""
+        out = []
+        for x in store.context_asks(now_utc() - timedelta(minutes=ASK_TTL)):
+            st = store.session_station(x)
+            if st:
+                out.append({"station": st["station"], "session": x})
+        return {"asks": out}
 
     # ── the crew on a project, and the hand-over (TR-422, TR-425) ─────────────
     @app.get("/api/projects/{uid}/crew")

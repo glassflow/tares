@@ -28,6 +28,20 @@ case "${1:-}" in
     if [ "${FAKE_CLAUDE_STOP_KEEPS_STATE:-}" = 1 ]; then set_agents --arg id "$2" 'map(if .id == $id then del(.pid, .status) else . end)'
     else set_agents --arg id "$2" 'map(if .id == $id then .state = "stopped" | del(.pid) else . end)'; fi ;;
   rm) set_agents --arg id "$2" 'map(select(.id != $id))' ;;
+  # Print mode reads /context of a session and /usage without a model call; it prints what Claude Code
+  # prints with --output-format stream-json --verbose, and keeps the settings it was given.
+  -p)
+    prev=""; for a in "$@"; do
+      [ "$prev" = --settings ] && { if [ -f "$a" ]; then cat "$a"; else printf '%s' "$a"; fi > "$S/p-settings.json"; }
+      prev=$a
+    done
+    echo '{"type":"system","subtype":"init"}'
+    if printf '%s\n' "$@" | grep -qx /context; then
+      echo '{"type":"assistant","context_usage":{"model":"claude-opus-5-5","total_tokens":95300,"raw_max_tokens":200000,"percentage":48,"categories":[{"name":"System prompt","tokens":3000,"kind":"used"},{"name":"Messages","tokens":57600,"kind":"used"},{"name":"Free space","tokens":106400,"kind":"free"},{"name":"Autocompact buffer","tokens":33000,"kind":"buffer"}],"mcp_tools":[{"name":"mcp__tares__a","server_name":"tares","tokens":120}],"skills":[{"name":"station-builder","source":"plugin","tokens":800}]}}'
+    elif printf '%s\n' "$@" | grep -qx /usage && [ -z "${FAKE_CLAUDE_NO_PLAN:-}" ]; then
+      echo '{"type":"assistant","usage_report":{"rate_limits":{"limits":[{"kind":"session","percent":27,"resets_at":"2099-01-01T17:00:00+00:00","scope":null,"is_active":true},{"kind":"weekly_all","percent":5,"resets_at":"2099-01-05T00:00:00+00:00","scope":null,"is_active":false}],"extra_usage":{"is_enabled":false}}}}'
+    fi
+    echo '{"type":"result","subtype":"success"}' ;;
   --bg)
     if [ "${FAKE_CLAUDE_FAIL_RESUME:-}" = 1 ] && printf '%s\n' "$@" | grep -qx -- --resume; then echo "resume failed (fake)"; exit 1; fi
     sleep "${FAKE_CLAUDE_BG_DELAY:-0}" # Claude Code takes a moment to register a new session
