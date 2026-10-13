@@ -54,11 +54,13 @@ async function waitFor(url, tries = 100) {
 (async () => {
   const tares = fs.existsSync(path.join(REPO, ".venv/bin/tares")) ? path.join(REPO, ".venv/bin/tares") : "tares";
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tares-picker-e2e-"));
-  const daemon = spawn(tares, ["up"], {
-    cwd: REPO, stdio: "ignore",
-    env: { ...process.env, TARES_HOME: home, TARES_PORT: String(PORT), TARES_MCP_PORT: String(PORT + 1),
-           TARES_UI_DIST: path.join(UI_DIR, "dist") },
-  });
+  // a scratch cell: its own data under `home`, and none of the caller's auth, database or catalog settings
+  const env = { ...process.env, TARES_HOME: home, TARES_DB: path.join(home, "tares.duckdb"),
+                TARES_CATALOG: path.join(home, "catalog.yaml"),
+                TARES_PORT: String(PORT), TARES_MCP_PORT: String(PORT + 1),
+                TARES_UI_DIST: path.join(UI_DIR, "dist") };
+  delete env.TARES_AUTH_TOKEN;
+  const daemon = spawn(tares, ["up"], { cwd: REPO, stdio: "ignore", env });
   let browser;
   try {
     ck("daemon up", await waitFor(`${BASE}/health`));
@@ -112,6 +114,27 @@ async function waitFor(url, tries = 100) {
          JSON.stringify(row.parts));
     }
     ck("the long branch is in the list", rows.some((r) => r.text.includes(LONG_BRANCH)));
+
+    // the menu keeps the field's width: inside the dialog, nothing to scroll sideways, and each
+    // label wraps under its id instead of sitting beside it
+    const menu = await page.evaluate(() => {
+      const list = document.querySelector(".combo-list").getBoundingClientRect();
+      const modal = document.querySelector(".modal").getBoundingClientRect();
+      const field = document.querySelector(".modal .combo").getBoundingClientRect();
+      const l = document.querySelector(".combo-list");
+      return {
+        inside: list.left >= modal.left - 0.5 && list.right <= modal.right + 0.5,
+        sameWidth: Math.abs(list.width - field.width) < 1,
+        noSideScroll: l.scrollWidth <= l.clientWidth,
+        stacked: [...document.querySelectorAll(".combo-item")].every((i) => {
+          const [id, label] = [...i.children].map((c) => c.getBoundingClientRect());
+          return label.top >= id.bottom - 0.5;
+        }),
+      };
+    });
+    ck("the menu sits inside the dialog at the field's width", menu.inside && menu.sameWidth, JSON.stringify(menu));
+    ck("the menu has nothing to scroll sideways", menu.noSideScroll, JSON.stringify(menu));
+    ck("each label sits under its id", menu.stacked, JSON.stringify(menu));
   } finally {
     if (browser) await browser.close();
     daemon.kill();
