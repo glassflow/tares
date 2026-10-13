@@ -4560,7 +4560,7 @@ def make_app() -> FastAPI:
     @app.post("/api/projects/{uid}/milestones", status_code=201)
     async def create_project_milestone(uid: str, body: dict = Body(...)):
         """{name, goal?, checks?: [{check, expect}], position?}. A milestone with the same name
-        is changed instead of added twice."""
+        is changed instead of added twice, keeping the goal and checks the body leaves out."""
         _project_or_404(uid)
         try:
             name, goal, checks = factory_mod.milestone_ok(body.get("name"), body.get("goal"),
@@ -4570,7 +4570,7 @@ def make_app() -> FastAPI:
         cur = store.get_milestone(uid, name)
         pos = body.get("position")
         if cur:
-            fields = {"goal": goal, "checks": checks}
+            fields = {k: v for k, v in (("goal", goal), ("checks", checks)) if k in body}
             if pos is not None and cur["owner"] != "linear":
                 fields["position"] = float(pos)
             store.update_milestone(cur["id"], **fields)

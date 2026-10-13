@@ -117,6 +117,17 @@ async def main():
         ck("same name changes the milestone, no second one",
            [x["name"] for x in ms] == ["Ingest", "Report"] and ms[0]["goal"] == "Invoices land as rows"
            and ms[0]["checks"] == [{"check": "make e2e", "expect": "passes"}], ms)
+        await mf.write_milestone("Ingest", checks=[{"check": "make smoke", "expect": "passes"}],
+                                 project=uid)
+        await mf.write_milestone("Report", goal="A monthly chart per customer", project=uid)
+        ms = json.loads(await mf.list_milestones(project=uid))
+        ck("a change by name keeps the goal or checks it was not given (TR-472)",
+           ms[0]["goal"] == "Invoices land as rows"
+           and ms[0]["checks"] == [{"check": "make smoke", "expect": "passes"}]
+           and ms[1]["goal"] == "A monthly chart per customer" and len(ms[1]["checks"]) == 1, ms)
+        bare = json.loads(await mf.write_milestone("Draft", project=uid))
+        ck("a new milestone with only a name has no goal and no checks",
+           bare["name"] == "Draft" and bare["goal"] == "" and bare["checks"] == [], bare)
 
         t1 = json.loads(await m.write_ticket("Parse the email", milestone="Ingest", project=uid))
         t2 = json.loads(await m.write_ticket("Store rows", milestone="Ingest", depends_on=["T1"], project=uid))
