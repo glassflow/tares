@@ -522,6 +522,44 @@ def words_match(words: str, turns: list[dict]) -> dict | None:
     return next((t for t in turns if w in _pieces(t["text"])), None)
 
 
+OPTION_LETTERS = "ABCDEFGH"   # desk options are lettered by position; desk_ok allows 8
+_LETTER = re.compile(r"^\(?([a-h])\)?[.)]?$")
+
+
+def option_letter(words: str) -> int | None:
+    """The option a reply of one letter names (B, b, B), (B), B.): its index, or None when the
+    words are not a single letter (TR-475)."""
+    m = _LETTER.match(_plain(words))
+    return OPTION_LETTERS.lower().index(m.group(1)) if m else None
+
+
+def letter_match(index: int, turns: list[dict]) -> dict | None:
+    """The person turn that is that option's letter and nothing else. A letter inside a longer
+    message never counts: "B but later" and "maybe B" are not B."""
+    return next((t for t in turns if option_letter(t["text"]) == index), None)
+
+
+QUIET_MIN = 10   # a working session that sent nothing for this long shows as quiet
+# a waiting session silent this long is most likely gone: Claude Code retires idle background
+# sessions after about an hour, and one killed, or whose end never reached Tares, never says so
+WAITING_QUIET_MIN = 90
+
+
+def shown_state(state: str | None, last_at, now) -> str | None:
+    """The state to show for a session: "quiet" once a working or waiting one has been silent
+    past its window (TR-473), else the state it reported."""
+    if state in ("working", "waiting") and hasattr(last_at, "timestamp"):
+        quiet = (now - last_at).total_seconds() // 60
+        if quiet >= (QUIET_MIN if state == "working" else WAITING_QUIET_MIN):
+            return "quiet"
+    return state
+
+
+# Tares reads a session a few seconds behind what the person typed, so a reply not found yet is
+# looked for again for this long before the answer is refused (TR-475).
+MATCH_WAIT_SECONDS = 10.0
+
+
 def says_every_project(words: str) -> bool:
     """The person's words say a standing answer holds for every project."""
     return bool(re.search(r"\b(all|every|each) projects?\b|\beverywhere\b", str(words or ""),

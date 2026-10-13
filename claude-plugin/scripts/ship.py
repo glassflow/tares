@@ -22,6 +22,7 @@ session. Configured entirely via plugin userConfig env vars.
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -259,8 +260,29 @@ def _tares_tool(name) -> str:
     return ""
 
 
+# The sentences Tares hands the person to start or pick up a build (the project page, the start
+# doc): pasted into a session, they tie it to the project before it calls a single tool (TR-474).
+_ENTRY = re.compile(r'^\s*(?:Work on|Pick up) Tares project "([^"\n]+)"')
+
+
+def entry_project(obj: dict):
+    """The project a person's "Work on / Pick up Tares project "X"" message names, or None."""
+    if obj.get("type") != "user":
+        return None
+    msg = obj.get("message") if isinstance(obj.get("message"), dict) else {}
+    content = msg.get("content")
+    if isinstance(content, list):
+        content = next((b.get("text") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"), None)
+    m = _ENTRY.match(content) if isinstance(content, str) else None
+    return m.group(1).strip() if m else None
+
+
 def project_call(obj: dict):
-    """The project a Tares tool_use line works in, or None."""
+    """The project a Tares tool_use line works in, or a person's build sentence names, or None."""
+    entry = entry_project(obj)
+    if entry:
+        return entry
     msg = obj.get("message") if isinstance(obj.get("message"), dict) else {}
     content = msg.get("content")
     if not isinstance(content, list):
@@ -556,6 +578,11 @@ def main() -> None:
 
     transcript = hook.get("transcript_path")
     flow = read_flow(data_dir, session_id) if session_id else ""
+    if event == "SessionEnd" and session_id:
+        # the end first: Claude Code gives this hook little time on exit, and shipping the last
+        # transcript lines and the subagents' can take longer. A session that exited must not
+        # stay "waiting" on Tares (TR-473).
+        report_state(cfg, hook, event, flow)
     announce(cfg, hook, flow)   # a session the plugin joined after it started
 
     shipped_ok = True
@@ -595,7 +622,8 @@ def main() -> None:
 
     if session_id and shipped_ok:
         ship_subagents(cfg, hook, flow, read_project(data_dir, session_id))
-        report_state(cfg, hook, event, flow)
+        if event != "SessionEnd":
+            report_state(cfg, hook, event, flow)
 
     if event == "SessionEnd" and session_id and flow:
         # the line the challenger_session_ended trigger watches; the marker goes with the session

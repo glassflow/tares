@@ -4631,11 +4631,14 @@ def make_app() -> FastAPI:
         src = next((n for n, c in runtime.catalog.sources.items()
                     if c.connector == "claude_code"), "claude_code")
         out = store.project_sessions(uid)
+        now = now_utc()
         for s in out:
+            # a session whose end never reached Tares does not wait forever (TR-473)
+            s["state"] = factory_mod.shown_state(s["state"], s["last_at"], now)
             if s["state"] == "waiting":
                 said = store.last_said(src, s["session"]) or ""
                 s["last_said"] = said[:1200]
-        return {"sessions": out, "now": now_utc()}
+        return {"sessions": out, "now": now}
 
     @app.get("/api/projects/{uid}/sessions/{sid}")
     async def get_project_session(uid: str, sid: str, limit: int = 200, offset: int = 0):

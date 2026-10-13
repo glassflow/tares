@@ -305,14 +305,15 @@ async def desk_answer(item: str, words: str, choice: str = "", standing: bool = 
                       overturned: dict | None = None) -> str:
     """Record the person's answer to a desk item (D3). `words` is their reply exactly as they
     typed it in your session, never your summary: Tares checks it against what they typed and
-    says whether it matches. `choice` the option it picks. `standing` only when they said it
+    says whether it matches. A reply of one letter ("B") is passed as is: Tares maps it to that
+    option. `choice` the option it picks. `standing` only when they said it
     holds from now on ("always fine for staging"); with `scope` all it holds for every project.
     A standing answer that matches becomes a grant. For an assumption batch: `kept` the
     assumptions they keep, `overturned` {A3: their words}; open a follow-up ticket for each
     overturned one."""
     body = {"words": words, "choice": choice, "standing": standing, "scope": scope,
             "kept": kept or [], "overturned": overturned or {}}
-    async with _cx(15) as cx:
+    async with _cx(30) as cx:   # Tares looks for a reply it has not read yet for up to 10 s
         r = await cx.post(f"{TARESD}/api/desk/{item}/answer", json=body)
     if r.status_code >= 400:
         return _out(r)
@@ -327,7 +328,8 @@ async def desk_answer(item: str, words: str, choice: str = "", standing: bool = 
                     "as they typed it (a whole message, line or sentence of theirs), or ask "
                     "them again."})
     out = {"item": d["desk_item"]["label"], "recorded": True,
-           "matches_what_they_typed": True, "became_a_grant": d["granted"],
+           "matches_what_they_typed": True, "choice": d["decision"].get("choice"),
+           "became_a_grant": d["granted"],
            "assumptions": d["assumptions"], "follow_up_tickets_needed": d["follow_up"]}
     return json.dumps(out, default=str)
 

@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -41,9 +42,17 @@ def ck(label, cond, detail=""):
 SID = "sess-1234"
 
 
+# the session's times: ten minutes ago onwards, so a waiting session is not yet quiet (TR-473)
+_BASE = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=10)
+
+
+def at(minutes, seconds):
+    return (_BASE + timedelta(minutes=minutes, seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
 def line(i, text=None, tool=None, inp=None):
     o = {"type": "assistant" if tool else "user", "sessionId": SID, "cwd": "/w/invoices",
-         "timestamp": f"2026-10-07T10:00:{i:02d}.000Z", "uuid": f"u{i}"}
+         "timestamp": at(0, i), "uuid": f"u{i}"}
     if tool:
         o["message"] = {"role": "assistant", "content": [
             {"type": "tool_use", "id": f"t{i}", "name": tool, "input": inp or {}}]}
@@ -68,6 +77,25 @@ def plugin():
     ck("another server's create_project is not ours",
        ship.project_call(line(1, tool="mcp__linear__create_project", inp={"name": "X"})) is None)
     ck("a plain line says nothing", ship.project_call(line(1, "hello")) is None)
+    ck("the build sentence names the project (TR-474)", ship.project_call(line(
+        1, 'Work on Tares project "shared-mcp-endpoint": read its starting prompt and begin.'))
+       == "shared-mcp-endpoint")
+    ck("so does the pick-up sentence", ship.project_call(line(
+        1, 'Pick up Tares project "Invoices" where the last session stopped.')) == "Invoices")
+    blocks = line(1)
+    blocks["message"]["content"] = [{"type": "text", "text": 'Work on Tares project "Invoices": go'}]
+    ck("in a message made of text blocks too", ship.project_call(blocks) == "Invoices")
+    ck("not when the sentence is only quoted inside other text", ship.project_call(line(
+        1, 'what does Work on Tares project "Invoices" mean?')) is None)
+    said = line(1, tool="x")
+    said["message"] = {"role": "assistant",
+                       "content": [{"type": "text", "text": 'Work on Tares project "Invoices"'}]}
+    ck("nor when Claude says it", ship.project_call(said) is None)
+    hook0 = {"session_id": SID, "cwd": "/w/invoices"}
+    o, pj, ch = ship.stamp_project([line(1, 'Work on Tares project "Invoices": begin'),
+                                    line(2, "reading the start doc")], "", hook0)
+    ck("a build session is tied to the project from that message",
+       ch and pj == "Invoices" and o[1]["type"] == "session_project", o)
     hook = {"session_id": SID, "cwd": "/w/invoices"}
     objs = [line(1, "let's build an invoice parser"), line(2, "what about emails?"),
             line(3, tool="mcp__tares__create_project", inp={"name": "Invoices"}),
@@ -120,6 +148,36 @@ def plugin():
     finally:
         ship.ship_lines = real
 
+    print("== the plugin: the end is reported first (TR-473) ==")
+    import io
+    posts = []
+
+    def fake_ship(cfg, objs):   # the transcript's post fails; the state line goes through
+        posts.append([o.get("type") for o in objs])
+        return all(o.get("type") == "session_state" for o in objs)
+
+    real = (ship.ship_lines, ship.config, sys.stdin)
+    try:
+        dd = tempfile.mkdtemp()
+        cfg = {"base": "http://x", "headers": {}, "data_dir": dd}
+        open(os.path.join(dd, "ensured-" + __import__("hashlib").sha1(b"http://x").hexdigest()[:12]),
+             "w").write("1")
+        tr = os.path.join(dd, "t.jsonl")
+        open(tr, "w").write(json.dumps(line(1, "bye")) + "\n")
+        ship.ship_lines, ship.config = fake_ship, (lambda: cfg)
+        ship.report_state(cfg, {"session_id": SID, "cwd": "/w"}, "Stop", "")
+        posts.clear()
+        sys.stdin = io.StringIO(json.dumps({"hook_event_name": "SessionEnd", "session_id": SID,
+                                            "cwd": "/w", "reason": "exit",
+                                            "transcript_path": tr}))
+        ship.main()
+        states = [p for p in posts if p == ["session_state"]]
+        ck("SessionEnd sends the end before anything else", posts and posts[0] == ["session_state"],
+           posts)
+        ck("even when the transcript's post fails, and only once", len(states) == 1, posts)
+    finally:
+        ship.ship_lines, ship.config, sys.stdin = real
+
     d = tempfile.mkdtemp()
     ship.write_project(d, SID, "Invoices")
     ck("the marker round-trips", ship.read_project(d, SID) == "Invoices"
@@ -157,13 +215,13 @@ async def tares(shipped):
         ck("the claude_code source is in the project", "claude_code" in store.project_sources(uid))
         print("== Tares: session state ==")
         ck("no state before the plugin reports one", ss[0]["state"] is None, ss[0])
-        said = {"type": "assistant", "sessionId": SID, "timestamp": "2026-10-07T10:01:00.000Z",
+        said = {"type": "assistant", "sessionId": SID, "timestamp": at(1, 0),
                 "message": {"role": "assistant", "content": [
                     {"type": "text", "text": "I've paused: the safety check stopped answering."}]}}
         waiting = {"type": "session_state", "sessionId": SID, "state": "waiting",
                    "reason": "Claude needs your permission to use Bash",
-                   "timestamp": "2026-10-07T10:01:05.000Z"}
-        stale = {**waiting, "state": "working", "reason": "", "timestamp": "2026-10-07T10:00:59.000Z"}
+                   "timestamp": at(1, 5)}
+        stale = {**waiting, "state": "working", "reason": "", "timestamp": at(0, 59)}
         await cx.post("/ingest/claude_code", content="\n".join(json.dumps(o) for o in
                       (said, waiting, stale)) + "\n", headers={"Content-Type": "application/x-ndjson"})
         s = (await cx.get(f"/api/projects/{uid}/sessions")).json()
@@ -174,23 +232,40 @@ async def tares(shipped):
            and s["now"], one)
         ck("an older line does not win", one["state"] == "waiting")
         ended = {"type": "session_state", "sessionId": SID, "state": "ended", "reason": "exit",
-                 "timestamp": "2026-10-07T10:05:00.000Z"}
+                 "timestamp": at(5, 0)}
         await cx.post("/ingest/claude_code", content=json.dumps(ended) + "\n",
                       headers={"Content-Type": "application/x-ndjson"})
         one = (await cx.get(f"/api/projects/{uid}/sessions")).json()["sessions"][0]
         ck("then ended, and no last_said for a session that is not waiting",
            one["state"] == "ended" and "last_said" not in one, one)
         bogus = {"type": "session_state", "sessionId": SID, "state": "asleep",
-                 "timestamp": "2026-10-07T10:06:00.000Z"}
+                 "timestamp": at(6, 0)}
         await cx.post("/ingest/claude_code", content=json.dumps(bogus) + "\n",
                       headers={"Content-Type": "application/x-ndjson"})
         one = (await cx.get(f"/api/projects/{uid}/sessions")).json()["sessions"][0]
         ck("an unknown state is ignored", one["state"] == "ended", one)
+        print("== Tares: a session whose end never arrived does not wait forever (TR-473) ==")
+        now = datetime.now(timezone.utc)
+        iso = lambda d: (now - d).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        for sid, state, ago in (("q-wait-old", "waiting", timedelta(minutes=100)),
+                                ("q-wait-new", "waiting", timedelta(minutes=30)),
+                                ("q-work-old", "working", timedelta(minutes=20))):
+            await cx.post("/ingest/claude_code", content="\n".join(json.dumps(o) for o in (
+                {"type": "session_project", "sessionId": sid, "tares_project": "Invoices",
+                 "timestamp": iso(ago)},
+                {"type": "session_state", "sessionId": sid, "state": state, "reason": "",
+                 "timestamp": iso(ago)})) + "\n", headers={"Content-Type": "application/x-ndjson"})
+        got = {x["session"]: x["state"]
+               for x in (await cx.get(f"/api/projects/{uid}/sessions")).json()["sessions"]}
+        ck("waiting, silent past the 90-minute window: quiet", got.get("q-wait-old") == "quiet", got)
+        ck("waiting for half an hour: still waiting", got.get("q-wait-new") == "waiting", got)
+        ck("working, silent for 20 minutes: quiet", got.get("q-work-old") == "quiet", got)
+        ck("an ended session stays ended", got.get(SID) == "ended", got)
         r = await cx.get(f"/api/projects/{uid}/sessions/other")
         ck("a session that did not work here -> 404", r.status_code == 404, r.text)
         r = await cx.post("/ingest/claude_code", content=json.dumps(
             {"type": "session_project", "sessionId": "s2", "tares_project": "Nope",
-             "timestamp": "2026-10-07T10:01:00.000Z"}) + "\n",
+             "timestamp": at(1, 0)}) + "\n",
             headers={"Content-Type": "application/x-ndjson"})
         ck("an unknown project is ignored, the line still lands", r.status_code == 202
            and store.session_projects("s2") == [], r.text)

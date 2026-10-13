@@ -23,10 +23,6 @@ from .envelope import now_utc
 
 CREW_SETTING = "crew_settings"
 GRANTS_SETTING = "global_grants"   # the id of the cell's "Grants (all projects)" doc
-QUIET_MIN = 10   # a working station that sent nothing for this long shows as quiet
-# a waiting station silent this long is most likely gone: Claude Code retires idle background
-# sessions after about an hour, and a killed one never says so
-WAITING_QUIET_MIN = 90
 
 
 def caller(request: Request) -> dict:
@@ -316,12 +312,8 @@ def register(app, store, h: SimpleNamespace) -> None:
             cur = ss[0]
             quiet = (int((now - cur["last_at"]).total_seconds() // 60)
                      if isinstance(cur["last_at"], datetime) else None)
-            state = cur["state"] or "working"
-            if quiet is not None and (
-                    (state == "working" and quiet >= QUIET_MIN)
-                    or (state == "waiting" and quiet >= WAITING_QUIET_MIN)):
-                state = "quiet"
-            elif state == "replaced":
+            state = factory_mod.shown_state(cur["state"] or "working", cur["last_at"], now)
+            if state == "replaced":
                 state = "ended"
             # the sessions that played the station before the current one: replaced by it
             earlier = [{"session": s["session"], "started_at": s["started_at"],
@@ -949,18 +941,50 @@ def register(app, store, h: SimpleNamespace) -> None:
         if scope == "all" and d["project"] and not factory_mod.says_every_project(words):
             h.err(ValueError("a project's question is answered for that project; it holds for "
                              "every project only when the person says so"))
+        choice = str(body.get("choice") or "").strip()
+        # a reply of one letter picks an option by position; Tares maps it, never the model
+        letter = factory_mod.option_letter(words)
+        if letter is not None:
+            opts = d["options"] or []
+            if letter >= len(opts):
+                h.err(ValueError(
+                    f"{words} is not one of {d['label']}'s options"
+                    + (": " + ", ".join(f"{factory_mod.OPTION_LETTERS[i]}) {o}"
+                                        for i, o in enumerate(opts)) if opts else "; it has none")))
+            picked = opts[letter]
+            if choice and factory_mod._plain(choice) not in (
+                    factory_mod._plain(picked), factory_mod._plain(words)):
+                h.err(ValueError(f"{words} is {factory_mod.OPTION_LETTERS[letter]}) {picked}, "
+                                 f"not {choice!r}"))
+            choice = picked
         from datetime import timedelta
+        import asyncio
         # only what the person typed after the question was asked can answer it
         since = max(d["created_at"], now_utc() - timedelta(hours=factory_mod.MATCH_HOURS))
         labeled = bool(caller(request)["station"])
         sessions = store.role_sessions("orchestrator") if labeled else None
-        turns = store.person_turns(h.cc_source(), sessions, since)
-        hit = factory_mod.words_match(words, turns)
-        # an assumption batch: every listed assumption kept or overturned, with the person's words
         kept = [str(a) for a in body.get("kept") or []]
         over = body.get("overturned") or {}
         if not isinstance(over, dict):
             h.err(ValueError("overturned is {A<n>: the person's words}"))
+
+        def look():
+            turns = store.person_turns(h.cc_source(), sessions, since)
+            hit = (factory_mod.letter_match(letter, turns) if letter is not None
+                   else factory_mod.words_match(words, turns))
+            heard = all(factory_mod.words_match(str(w), turns)
+                        or factory_mod._plain(str(w)) in factory_mod._plain(words)
+                        for w in over.values())
+            return turns, hit, heard
+
+        turns, hit, heard = look()
+        # the session is read a few seconds behind the person: look again before refusing
+        waited = 0.0
+        while (hit is None or not heard) and waited < factory_mod.MATCH_WAIT_SECONDS:
+            await asyncio.sleep(1.0)
+            waited += 1.0
+            turns, hit, heard = look()
+        # an assumption batch: every listed assumption kept or overturned, with the person's words
         plan = []
         for ref_a, st, w in [(a, "kept", None) for a in kept] + [
                 (a, "overturned", str(w)) for a, w in over.items()]:
@@ -997,7 +1021,7 @@ def register(app, store, h: SimpleNamespace) -> None:
             store.decide_assumption(a["id"], st, w, d["label"], now_utc())
             changed.append({"label": a["label"], "state": st, "tickets": a["tickets"]})
         dec = store.add_decision(d["project"], d["id"], d["question"], words,
-                                 str(body.get("choice") or "")[:300], standing, scope,
+                                 choice[:300], standing, scope,
                                  hit is not None, hit["session"] if hit else None, granted,
                                  d["tickets"], now_utc())
         store.close_desk_item(d["id"], "answered", None, now_utc())
