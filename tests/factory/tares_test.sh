@@ -44,6 +44,12 @@ check "no undated or doubly quoted grants" '! jq -e "any(.autoMode.allow[]; cont
 one_home=$FACTORY_CREW_HOME
 
 # A second machine: nothing is asked again and the station settings come out the same.
+nomcp="http://127.0.0.1:$("$PY" -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')/mcp"
+TARES_FACTORY_MCP_URL=$nomcp "$F" crew up --yes >"$T/nomcp.out" 2>&1
+check "no MCP server with auth on: the command carries a token placeholder, never the token" 'grep -q "TARES_AUTH_TOKEN=<your token> tares mcp --transport streamable-http" "$T/nomcp.out" && ! grep -q stub-token "$T/nomcp.out"'
+"$F" doctor >"$T/doctor.out" 2>&1
+check "the MCP probe carries the token (auth on)" 'grep -qx "  ok    MCP endpoint answers at $TARES_FACTORY_MCP_URL" "$T/doctor.out"'
+
 machine two
 "$F" crew up </dev/null >"$T/up2.out" 2>&1
 check "second machine asks nothing" '! grep -q "Choice \[" "$T/up2.out" && grep -q "started crew-reviewer" "$T/up2.out"'

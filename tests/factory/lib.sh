@@ -18,8 +18,28 @@ start_tares() { # dir [token]
   TARES_PIDS="$TARES_PIDS $!"
   export TARESD_URL="http://127.0.0.1:$port"
   if [ -n "$token" ]; then export TARES_AUTH_TOKEN=$token; else unset TARES_AUTH_TOKEN; fi
-  local _; for _ in $(seq 150); do curl -sf "$TARESD_URL/health" >/dev/null 2>&1 && return 0; sleep 0.2; done
-  echo "FAIL Tares did not start on $TARESD_URL"; cat "$dir/taresd.log"; exit 1
+  local _ up=0; for _ in $(seq 150); do curl -sf "$TARESD_URL/health" >/dev/null 2>&1 && { up=1; break; }; sleep 0.2; done
+  [ $up = 1 ] || { echo "FAIL Tares did not start on $TARESD_URL"; cat "$dir/taresd.log"; exit 1; }
+  start_mcp "$dir" "$token"
+}
+
+# The shared MCP endpoint stations reach Tares through, on its own free port: exports TARES_FACTORY_MCP_URL.
+start_mcp() { # dir [token]
+  local dir=$1 token=${2:-} port url _
+  port=$("$PY" -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+  env TARES_MCP_TRANSPORT=streamable-http TARES_MCP_HOST=127.0.0.1 TARES_MCP_PORT="$port" \
+    TARESD_URL="$TARESD_URL" TARES_FACTORY_URL= TARES_AUTH_TOKEN="$token" HOME="$dir" \
+    "$PY" -c "from tares.cli import run_mcp; run_mcp()" >"$dir/mcp.log" 2>&1 &
+  TARES_PIDS="$TARES_PIDS $!"
+  url="http://127.0.0.1:$port/mcp"
+  for _ in $(seq 150); do
+    { [ -n "$token" ] && printf 'Authorization: Bearer %s\n' "$token"; true; } | curl -sf --max-time 2 -X POST -H @- \
+      -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+      --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}' \
+      "$url" 2>/dev/null | grep -q serverInfo && { export TARES_FACTORY_MCP_URL=$url; return 0; }
+    sleep 0.2
+  done
+  echo "FAIL the MCP server did not start on $url"; cat "$dir/mcp.log"; exit 1
 }
 
 # Claude Code's trust of a folder, recorded as the trust prompt records it ($HOME/.claude.json).

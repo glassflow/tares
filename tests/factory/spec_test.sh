@@ -25,6 +25,9 @@ mkrepo "$T/shop"; mkdir -p "$T/shop/src"
 check "without Tares the spec says how to start one" 'grep -q "no Tares answers" "$T/notares.out" && [ ! -f "$FAKE_CLAUDE_STATE/calls.jsonl" ]'
 
 start_tares "$T/tares"
+nomcp="http://127.0.0.1:$("$PY" -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')/mcp"
+(cd "$T/shop/src" && TARES_FACTORY_MCP_URL=$nomcp "$F" spec "an order form" >"$T/nomcp.out" 2>&1)
+check "without an MCP server the spec says how to start one" 'grep -q "no MCP server answers at $nomcp" "$T/nomcp.out" && grep -q "tares mcp --transport streamable-http" "$T/nomcp.out" && [ ! -f "$FAKE_CLAUDE_STATE/calls.jsonl" ]'
 (cd "$T/shop/src" && "$F" spec "an order form for the bakery shop" >"$T/spec.out" 2>&1)
 check "the spec runs in the repo root" '[ "$(last | jq -r .cwd)" = "$T/shop" ]'
 check "the session is named after the idea" '[ "$(last | jq -r ".args[1]")" = an-order-form-for-spec ]'

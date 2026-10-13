@@ -506,13 +506,29 @@ tmp=$(mktemp); jq --arg c "$charts" '. + [{id: "0000beef", name: "argus-build-m2
 FACTORY_CREW_HOME="$M" "$F" roster >/dev/null 2>&1
 check "multi: an unrecorded builder in the second repo is adopted with its project" '[ "$(jq -r ".[\"argus-build-m2-charts\"] | [.project, .repo] | join(\" \")" "$M/stations.json")" = "argus $charts" ]'
 mkdir -p "$T/bin"; printf '%s\n' '#!/usr/bin/env bash' 'case "$1 $2" in' '  "auth status") exit 0 ;;' '  "repo view") case "$PWD" in *charts) echo "o/charts READ" ;; *) echo "o/core WRITE" ;; esac ;;' 'esac' > "$T/bin/gh"; chmod +x "$T/bin/gh"
-printf '%s\n' '#!/bin/sh' 'exit 0' > "$T/bin/tares-mcp"; chmod +x "$T/bin/tares-mcp"
 jq -n --arg c "$core" '{projects: {($c): {hasTrustDialogAccepted: true}}}' > "$HOME/.claude.json"
 PATH="$T/bin:$PATH" FACTORY_CREW_HOME="$M" "$F" doctor >"$T/doctor.out" 2>&1
 check "doctor: Tares answers" 'grep -q "ok    Tares answers at $TARESD_URL" "$T/doctor.out" && grep -q "ok    Tares lets this crew in" "$T/doctor.out"'
 check "multi doctor: trust per repo" 'grep -q "ok .*project argus: $core trusted" "$T/doctor.out" && grep -q "FIX .*project argus: Claude Code has not trusted $charts" "$T/doctor.out"'
 check "multi doctor: GitHub write access per repo" 'grep -q "ok .*$core is o/core on GitHub (WRITE)" "$T/doctor.out" && grep -q "FIX .*gh has READ on o/charts" "$T/doctor.out"'
 check "doctor: no Rius" '! grep -qi rius "$T/doctor.out"'
+check "doctor: the MCP endpoint answers" 'grep -qx "  ok    MCP endpoint answers at $TARES_FACTORY_MCP_URL" "$T/doctor.out"'
+check "doctor: nothing about tares-mcp on PATH" '! grep -q "tares-mcp" "$T/doctor.out"'
+
+# No MCP server at the endpoint: nothing starts, and the person is told what to run.
+nomcp="http://127.0.0.1:$("$PY" -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')/mcp"
+n0=$(launches)
+TARES_FACTORY_MCP_URL=$nomcp FACTORY_CREW_HOME="$M" "$F" crew up --yes >"$T/nomcp.out" 2>&1
+rc=$?
+check "no MCP server: crew up stops" '[ $rc -ne 0 ] && [ "$(launches)" = "$n0" ]'
+check "no MCP server: it names the URL and the command" 'grep -q "no MCP server answers at $nomcp" "$T/nomcp.out" && grep -q "tares mcp --transport streamable-http" "$T/nomcp.out"'
+check "no MCP server: no token, so no token placeholder" '! grep -q "TARES_AUTH_TOKEN=" "$T/nomcp.out"'
+TARES_FACTORY_MCP_URL=$nomcp FACTORY_CREW_HOME="$M" "$F" spawn builder argus m1-more "$core" "T3" >"$T/nomcp-spawn.out" 2>&1
+check "no MCP server: spawn stops too" '[ "$(launches)" = "$n0" ] && grep -q "no MCP server answers at $nomcp" "$T/nomcp-spawn.out"'
+TARES_FACTORY_MCP_URL=$TARESD_URL/mcp FACTORY_CREW_HOME="$M" "$F" crew up --yes >"$T/taresd-mcp.out" 2>&1
+check "taresd itself is not an MCP server" 'grep -q "no MCP server answers at $TARESD_URL/mcp" "$T/taresd-mcp.out" && [ "$(launches)" = "$n0" ]'
+TARES_FACTORY_MCP_URL=$nomcp FACTORY_CREW_HOME="$M" "$F" doctor >"$T/doctor3.out" 2>&1
+check "doctor without an MCP server says how to start one" 'grep -q "FIX   no MCP server answers at $nomcp; start one with tares mcp --transport streamable-http" "$T/doctor3.out"'
 TARESD_URL=http://127.0.0.1:9 FACTORY_CREW_HOME="$M" "$F" doctor >"$T/doctor2.out" 2>&1
 check "doctor without Tares says how to start one" 'grep -q "FIX   no Tares answers at http://127.0.0.1:9: start one with \`tares up\`" "$T/doctor2.out"'
 

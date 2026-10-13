@@ -164,6 +164,27 @@ tares_on() {
 require_tares() {
   tares_on || die "no Tares answers at $TARES. Start one with \`tares up\` in another terminal (or set TARESD_URL to where yours runs), then try again."
 }
+# Stations reach Tares only through the MCP endpoint, so a station started without one has no Tares
+# tools. Only an MCP server's answer to `initialize` counts: taresd's 404 or a web page does not.
+MCP_STATE=""
+mcp_on() {
+  if [ -z "$MCP_STATE" ]; then
+    MCP_STATE=off
+    local tok body
+    tok=$(tares_token)
+    body=$({ [ -n "$tok" ] && printf 'Authorization: Bearer %s\n' "$tok"; true; } | curl -sS -f --max-time 5 -X POST \
+      -H @- -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+      --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"tares-factory","version":"0"}}}' \
+      "$(mcp_url)" 2>/dev/null) && grep -q '"serverInfo"' <<<"$body" && MCP_STATE=on
+  fi
+  [ "$MCP_STATE" = on ]
+}
+require_mcp() {
+  mcp_on && return 0
+  local how="tares mcp --transport streamable-http"
+  [ -n "$(tares_token)" ] && how="TARES_AUTH_TOKEN=<your token> $how"
+  die "no MCP server answers at $(mcp_url). Stations reach Tares through it. Start one in another terminal: $how (or set TARES_FACTORY_MCP_URL to where yours runs)."
+}
 tares_http() { # method path [json body]; the token goes to curl on stdin, never on its command line
   local -a a=(-sS -f --max-time 15 -X "$1" -H 'Accept: application/json' -H @-)
   [ $# -ge 3 ] && a+=(-H 'Content-Type: application/json' --data "$3")
@@ -771,6 +792,7 @@ cmd_crew_up() {
   while [ $# -gt 0 ]; do
     case "$1" in --yes|-y) ASSUME_YES=1; shift ;; --no-watch) watch=0; shift ;; *) roles="$roles $1"; shift ;; esac
   done
+  require_mcp
   local clash; clash=$(installed_tares)
   [ -z "$clash" ] || say "warning: $(clash_text "$clash")"
   ensure_crew_home
@@ -806,6 +828,7 @@ NEXT
 
 cmd_spawn() {
   require_crew
+  require_mcp
   halted && die "the crew is halted ($(cat "$HALT_FILE")); $ME crew resume first"
   local kind=${1:-}; shift || true
   local role station parent project="" repo="" cwd model effort task autonomy=""
@@ -1219,6 +1242,7 @@ cmd_spec() {
       *) idea="${idea:+$idea }$1"; shift ;;
     esac
   done
+  require_mcp
   local clash; clash=$(installed_tares)
   [ -z "$clash" ] || say "warning: $(clash_text "$clash")"
   local here root list n
@@ -1320,7 +1344,7 @@ cmd_doctor() {
   local clash; clash=$(installed_tares)
   if [ -n "$clash" ]; then warn "$(clash_text "$clash")"
   else ok "stations load the plugin at $KIT_PLUGIN"; fi
-  command -v tares-mcp >/dev/null && ok "tares-mcp on PATH" || no "tares-mcp is not on PATH; stations reach Tares through it: install tares (pip install -e . in a checkout) and put its bin folder on PATH"
+  mcp_on && ok "MCP endpoint answers at $(mcp_url)" || no "no MCP server answers at $(mcp_url); start one with tares mcp --transport streamable-http (or set TARES_FACTORY_MCP_URL)"
   if [ -f "$CREW_CFG" ]; then
     local r m
     for r in orchestrator reviewer releaser builder; do
