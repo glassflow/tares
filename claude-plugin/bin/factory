@@ -1060,7 +1060,7 @@ desk_json() { tares_http GET "/api/desk?state=open" 2>/dev/null | jq -c '.desk /
 
 desk_block() { # one desk item (json) → its question, options and recommendation, as the person reads it
   jq -r '"\(.label)\(if .blocking then " (blocks work)" else "" end)\(if .project_name then " · " + .project_name else "" end): \(.question)",
-    (if (.options // []) | length > 0 then (.options | to_entries[] | "  \(["A","B","C","D","E","F"][.key] // (.key + 1 | tostring))) \(.value)") else empty end),
+    (if (.options // []) | length > 0 then (.options | to_entries[] | "  \(["A","B","C","D","E","F","G","H"][.key] // (.key + 1 | tostring))) \(.value)") else empty end),
     "  recommended: \(.recommendation)\(if .why then ", since " + .why else "" end)",
     (if .blocks then "  blocks: \(.blocks)" else empty end),
     (if (.assumptions // []) | length > 0 then "  confirms: \(.assumptions | join(", "))" else empty end)' <<<"$1"

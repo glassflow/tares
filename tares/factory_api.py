@@ -949,18 +949,50 @@ def register(app, store, h: SimpleNamespace) -> None:
         if scope == "all" and d["project"] and not factory_mod.says_every_project(words):
             h.err(ValueError("a project's question is answered for that project; it holds for "
                              "every project only when the person says so"))
+        choice = str(body.get("choice") or "").strip()
+        # a reply of one letter picks an option by position; Tares maps it, never the model
+        letter = factory_mod.option_letter(words)
+        if letter is not None:
+            opts = d["options"] or []
+            if letter >= len(opts):
+                h.err(ValueError(
+                    f"{words} is not one of {d['label']}'s options"
+                    + (": " + ", ".join(f"{factory_mod.OPTION_LETTERS[i]}) {o}"
+                                        for i, o in enumerate(opts)) if opts else "; it has none")))
+            picked = opts[letter]
+            if choice and factory_mod._plain(choice) not in (
+                    factory_mod._plain(picked), factory_mod._plain(words)):
+                h.err(ValueError(f"{words} is {factory_mod.OPTION_LETTERS[letter]}) {picked}, "
+                                 f"not {choice!r}"))
+            choice = picked
         from datetime import timedelta
+        import asyncio
         # only what the person typed after the question was asked can answer it
         since = max(d["created_at"], now_utc() - timedelta(hours=factory_mod.MATCH_HOURS))
         labeled = bool(caller(request)["station"])
         sessions = store.role_sessions("orchestrator") if labeled else None
-        turns = store.person_turns(h.cc_source(), sessions, since)
-        hit = factory_mod.words_match(words, turns)
-        # an assumption batch: every listed assumption kept or overturned, with the person's words
         kept = [str(a) for a in body.get("kept") or []]
         over = body.get("overturned") or {}
         if not isinstance(over, dict):
             h.err(ValueError("overturned is {A<n>: the person's words}"))
+
+        def look():
+            turns = store.person_turns(h.cc_source(), sessions, since)
+            hit = (factory_mod.letter_match(letter, turns) if letter is not None
+                   else factory_mod.words_match(words, turns))
+            heard = all(factory_mod.words_match(str(w), turns)
+                        or factory_mod._plain(str(w)) in factory_mod._plain(words)
+                        for w in over.values())
+            return turns, hit, heard
+
+        turns, hit, heard = look()
+        # the session is read a few seconds behind the person: look again before refusing
+        waited = 0.0
+        while (hit is None or not heard) and waited < factory_mod.MATCH_WAIT_SECONDS:
+            await asyncio.sleep(1.0)
+            waited += 1.0
+            turns, hit, heard = look()
+        # an assumption batch: every listed assumption kept or overturned, with the person's words
         plan = []
         for ref_a, st, w in [(a, "kept", None) for a in kept] + [
                 (a, "overturned", str(w)) for a, w in over.items()]:
@@ -997,7 +1029,7 @@ def register(app, store, h: SimpleNamespace) -> None:
             store.decide_assumption(a["id"], st, w, d["label"], now_utc())
             changed.append({"label": a["label"], "state": st, "tickets": a["tickets"]})
         dec = store.add_decision(d["project"], d["id"], d["question"], words,
-                                 str(body.get("choice") or "")[:300], standing, scope,
+                                 choice[:300], standing, scope,
                                  hit is not None, hit["session"] if hit else None, granted,
                                  d["tickets"], now_utc())
         store.close_desk_item(d["id"], "answered", None, now_utc())

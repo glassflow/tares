@@ -522,6 +522,28 @@ def words_match(words: str, turns: list[dict]) -> dict | None:
     return next((t for t in turns if w in _pieces(t["text"])), None)
 
 
+OPTION_LETTERS = "ABCDEFGH"   # desk options are lettered by position; desk_ok allows 8
+_LETTER = re.compile(r"^\(?([a-h])\)?[.)]?$")
+
+
+def option_letter(words: str) -> int | None:
+    """The option a reply of one letter names (B, b, B), (B), B.): its index, or None when the
+    words are not a single letter (TR-475)."""
+    m = _LETTER.match(_plain(words))
+    return OPTION_LETTERS.lower().index(m.group(1)) if m else None
+
+
+def letter_match(index: int, turns: list[dict]) -> dict | None:
+    """The person turn that is that option's letter and nothing else. A letter inside a longer
+    message never counts: "B but later" and "maybe B" are not B."""
+    return next((t for t in turns if option_letter(t["text"]) == index), None)
+
+
+# Tares reads a session a few seconds behind what the person typed, so a reply not found yet is
+# looked for again for this long before the answer is refused (TR-475).
+MATCH_WAIT_SECONDS = 10.0
+
+
 def says_every_project(words: str) -> bool:
     """The person's words say a standing answer holds for every project."""
     return bool(re.search(r"\b(all|every|each) projects?\b|\beverywhere\b", str(words or ""),

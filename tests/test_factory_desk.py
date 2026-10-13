@@ -58,6 +58,15 @@ def unit():
     ck("nor a word hidden in another", factory.words_match("ok", [{"text": "token"}]) is None)
     ck("a paraphrase is not", factory.words_match("Go with Stripe", turns) is None)
     ck("one character is not an answer", factory.words_match("y", turns) is None)
+    print("== an option's letter (TR-475) ==")
+    ck("B, b, B), (B) and B. name the second option",
+       [factory.option_letter(w) for w in ("B", "b", "B)", "(B)", "B.", " b ")] == [1] * 6)
+    ck("words are not a letter", [factory.option_letter(w) for w in ("ok", "B but later", "")]
+       == [None] * 3)
+    lt = [{"session": "o1", "text": "maybe B"}, {"session": "o1", "text": "B but later"}]
+    ck("a letter inside a longer message is not the letter", factory.letter_match(1, lt) is None)
+    ck("a message that is the letter alone is",
+       factory.letter_match(1, lt + [{"session": "o1", "text": "b)"}]) is not None)
     ck("every project only when they say so", factory.says_every_project("fine for every project")
        and not factory.says_every_project("fine for staging"))
 
@@ -116,6 +125,7 @@ async def main():
         ck("nor answer it", "only the orchestrator" in bad, bad)
 
         print("== answers word for word (TR-450) ==")
+        factory.MATCH_WAIT_SECONDS = 0   # the misses below answer at once; TR-475 sets its own
         def now_plus(seconds):
             t = datetime.now(timezone.utc) + timedelta(seconds=seconds)
             return t.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
@@ -148,6 +158,54 @@ async def main():
         bad = await mf.desk_answer("D3", "Always fine to deploy to staging", standing=True, scope="all")
         ck("a project's question does not become a grant for every project unless they say so",
            "only when the person says so" in bad, bad)
+
+        print("== a letter answers, and a reply not read yet is waited for (TR-475) ==")
+        dl = json.loads(await mf.desk_add("Stop the crew?", "yes", "no project left",
+                                          ["yes", "no"], project="Shop"))["label"]
+        await ingest([{"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": now_plus(1),
+                       "message": {"role": "user", "content": "maybe B"}}])
+        out = json.loads(await mf.desk_answer(dl, "B"))
+        ck("B inside a longer message does not answer", out["recorded"] is False, out)
+        bad = await mf.desk_answer(dl, "C")
+        ck("a letter the item has no option for is refused", "not one of" in bad
+           and "A) yes, B) no" in bad, bad)
+        bad = await mf.desk_answer(dl, "B", choice="yes")
+        ck("a choice that disagrees with the letter is refused", "B) no, not 'yes'" in bad, bad)
+        await ingest([{"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": now_plus(2),
+                       "message": {"role": "user", "content": "B"}}])
+        out = json.loads(await mf.desk_answer(dl, "B", choice="no"))
+        ck("the letter alone answers, recorded as its option", out["recorded"]
+           and out["choice"] == "no", out)
+        async with mk() as cx:
+            decs = (await cx.get(f"/api/projects/{shop}/decisions")).json()
+        decs = decs.get("decisions", decs) if isinstance(decs, dict) else decs
+        dec = next((x for x in decs if x.get("words") == "B"), None)
+        ck("the decision keeps what they typed and the option it means",
+           dec is not None and dec["choice"] == "no", decs)
+        dw = json.loads(await mf.desk_add("Ship on Friday?", "yes", "it is ready",
+                                          project="Shop"))["label"]
+        factory.MATCH_WAIT_SECONDS = 6
+
+        async def typed_late():   # the person's reply reaches Tares 2 s after the call
+            await asyncio.sleep(2)
+            await ingest([{"type": "user", "sessionId": "o1", "cwd": "/w",
+                           "timestamp": now_plus(3),
+                           "message": {"role": "user", "content": "Friday is fine"}}])
+        t0 = asyncio.get_running_loop().time()
+        late, out = await asyncio.gather(typed_late(), mf.desk_answer(dw, "Friday is fine"))
+        out = json.loads(out)
+        took = asyncio.get_running_loop().time() - t0
+        ck("a reply Tares reads only after the call is still recorded on the first call",
+           out["recorded"] and took < 6, (out, took))
+        factory.MATCH_WAIT_SECONDS = 2
+        dm = json.loads(await mf.desk_add("Rename the shop?", "no", "nobody asked",
+                                          project="Shop"))["label"]
+        t0 = asyncio.get_running_loop().time()
+        out = json.loads(await mf.desk_answer(dm, "something nobody typed"))
+        took = asyncio.get_running_loop().time() - t0
+        ck("a miss gives up after the wait", out["recorded"] is False and 1.5 < took < 5,
+           (out, took))
+        factory.MATCH_WAIT_SECONDS = 0
 
         print("== standing answers become grants (TR-451) ==")
         out = json.loads(await mf.desk_answer("D3", "Always fine to deploy to staging", standing=True))
@@ -194,7 +252,7 @@ async def main():
         ck("so does the reviewer's brief", "Use Stripe test mode for now" in br, br[-600:])
         dl = json.loads(await mf.list_decisions(project="Shop"))
         ck("list_decisions, newest first, only what the person typed",
-           [d["label"] for d in dl] == ["D5", "D3", "D1"] and all(d["matched"] for d in dl), dl)
+           [d["label"] for d in dl] == ["D8", "D3", "D5", "D4", "D1"] and all(d["matched"] for d in dl), dl)
 
         print("== withdrawing ==")
         d6 = json.loads(await mf.desk_add("Logo colour?", "blue", "brand", project="Blog"))
@@ -203,7 +261,7 @@ async def main():
            and d6["label"] not in [d["label"] for d in json.loads(await mf.desk_list())], out)
         as_station()
         out = json.loads(await mf.desk_add("A person's own question?", "yes", "testing", project="Blog"))
-        ck("a person's own session may use the desk", out["label"] == "D7", out)
+        ck("a person's own session may use the desk", out["label"] == "D10", out)
 
         print("== finishing a project, on the person's word ==")
         async with mk() as cx:
