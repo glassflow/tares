@@ -556,6 +556,11 @@ def main() -> None:
 
     transcript = hook.get("transcript_path")
     flow = read_flow(data_dir, session_id) if session_id else ""
+    if event == "SessionEnd" and session_id:
+        # the end first: Claude Code gives this hook little time on exit, and shipping the last
+        # transcript lines and the subagents' can take longer. A session that exited must not
+        # stay "waiting" on Tares (TR-473).
+        report_state(cfg, hook, event, flow)
     announce(cfg, hook, flow)   # a session the plugin joined after it started
 
     shipped_ok = True
@@ -595,7 +600,8 @@ def main() -> None:
 
     if session_id and shipped_ok:
         ship_subagents(cfg, hook, flow, read_project(data_dir, session_id))
-        report_state(cfg, hook, event, flow)
+        if event != "SessionEnd":
+            report_state(cfg, hook, event, flow)
 
     if event == "SessionEnd" and session_id and flow:
         # the line the challenger_session_ended trigger watches; the marker goes with the session

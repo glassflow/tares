@@ -23,10 +23,6 @@ from .envelope import now_utc
 
 CREW_SETTING = "crew_settings"
 GRANTS_SETTING = "global_grants"   # the id of the cell's "Grants (all projects)" doc
-QUIET_MIN = 10   # a working station that sent nothing for this long shows as quiet
-# a waiting station silent this long is most likely gone: Claude Code retires idle background
-# sessions after about an hour, and a killed one never says so
-WAITING_QUIET_MIN = 90
 
 
 def caller(request: Request) -> dict:
@@ -316,12 +312,8 @@ def register(app, store, h: SimpleNamespace) -> None:
             cur = ss[0]
             quiet = (int((now - cur["last_at"]).total_seconds() // 60)
                      if isinstance(cur["last_at"], datetime) else None)
-            state = cur["state"] or "working"
-            if quiet is not None and (
-                    (state == "working" and quiet >= QUIET_MIN)
-                    or (state == "waiting" and quiet >= WAITING_QUIET_MIN)):
-                state = "quiet"
-            elif state == "replaced":
+            state = factory_mod.shown_state(cur["state"] or "working", cur["last_at"], now)
+            if state == "replaced":
                 state = "ended"
             # the sessions that played the station before the current one: replaced by it
             earlier = [{"session": s["session"], "started_at": s["started_at"],

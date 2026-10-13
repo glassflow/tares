@@ -539,6 +539,22 @@ def letter_match(index: int, turns: list[dict]) -> dict | None:
     return next((t for t in turns if option_letter(t["text"]) == index), None)
 
 
+QUIET_MIN = 10   # a working session that sent nothing for this long shows as quiet
+# a waiting session silent this long is most likely gone: Claude Code retires idle background
+# sessions after about an hour, and one killed, or whose end never reached Tares, never says so
+WAITING_QUIET_MIN = 90
+
+
+def shown_state(state: str | None, last_at, now) -> str | None:
+    """The state to show for a session: "quiet" once a working or waiting one has been silent
+    past its window (TR-473), else the state it reported."""
+    if state in ("working", "waiting") and hasattr(last_at, "timestamp"):
+        quiet = (now - last_at).total_seconds() // 60
+        if quiet >= (QUIET_MIN if state == "working" else WAITING_QUIET_MIN):
+            return "quiet"
+    return state
+
+
 # Tares reads a session a few seconds behind what the person typed, so a reply not found yet is
 # looked for again for this long before the answer is refused (TR-475).
 MATCH_WAIT_SECONDS = 10.0

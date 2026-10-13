@@ -485,6 +485,7 @@ function StateBadge({ s, now, shown }: { s: ProjectSession; now?: string; shown?
   if (shown === "idle") return <span className="fo-st" title={`waiting at its prompt; nothing is in progress${s.state_reason ? ` (${s.state_reason})` : ""}`}>idle</span>;
   if (s.state === "waiting") return <span className="fo-st fo-st-wait" title={s.state_reason ?? undefined}>waiting</span>;
   if (s.state === "ended") return <span className="fo-st">ended</span>;
+  if (s.state === "quiet") return <span className="fo-st fo-st-quiet" title="nothing heard from it for a long while; it has most likely ended">quiet</span>;
   if (s.state === "replaced") return <span className="fo-st" title={s.state_reason ?? undefined}>replaced</span>;
   if (s.state === "working") {
     return quiet(s, now) >= SILENT_MIN
