@@ -59,6 +59,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build]
 artifacts = ["ui/dist/**"]
 
+[tool.hatch.build.targets.sdist]
+# hatch reads only the root .gitignore, so ui/.gitignore's node_modules would land in the sdist,
+# hard links (esbuild's binary) included, which uv refuses to unpack when it builds the wheel
+exclude = ["**/node_modules"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["tares"]
 
