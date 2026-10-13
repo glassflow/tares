@@ -37,6 +37,17 @@ tares up
 It serves the console at http://127.0.0.1:8787. On another port, set `TARESD_URL` (for example
 `export TARESD_URL=http://127.0.0.1:8797`) in every terminal where you run `tares factory`.
 
+Then, in another terminal, start the MCP endpoint every station shares:
+
+```
+tares mcp --transport streamable-http
+```
+
+It listens at http://127.0.0.1:8788/mcp. With auth on, start it with `TARES_AUTH_TOKEN` set to your
+token. Stations reach Tares only through it, so `crew up`, `spawn` and `spec` stop and say so when
+it does not answer. Elsewhere, set `TARES_FACTORY_MCP_URL` to where yours runs. On Tares Cloud the
+cell serves it at `https://<cell>.tares-glassflow.com/mcp`, and there is nothing to start.
+
 ## 2. Bring up the crew
 
 ```

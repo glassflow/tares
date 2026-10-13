@@ -38,6 +38,10 @@ Then start a session and do some work — new transcript lines flow to Tares on 
 and at session end. Check the console: **Entities** (keyed by `session`), or query the `claude_code`
 source.
 
+To prove the shared MCP endpoint end to end (real Claude Code sessions with this plugin, each under
+its own station identity, against a throwaway Tares; costs a few Haiku calls), run
+`bash scripts/check-shared-mcp.sh` from the repo root.
+
 ## Distribute (marketplace)
 
 Put `marketplace.example.json` at a repo's `.claude-plugin/marketplace.json` (pointing at this plugin
