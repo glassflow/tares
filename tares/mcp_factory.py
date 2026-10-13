@@ -24,10 +24,10 @@ async def write_milestone(name: str, goal: str | None = None, checks: list[dict]
     the project's tickets live in Linear, its milestones come from Linear: add and rename them
     there and write only the goal and checks here."""
     body: dict = {"name": name}
-    if goal is not None or not id:
-        body["goal"] = goal or ""        # a rename keeps the goal and checks it was not given
-    if checks is not None or not id:
-        body["checks"] = checks or []
+    if goal is not None:               # a change keeps the goal and checks it was not given
+        body["goal"] = goal
+    if checks is not None:
+        body["checks"] = checks
     if position is not None:
         body["position"] = position
     async with _cx(15) as cx:
