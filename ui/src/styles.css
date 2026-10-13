@@ -856,6 +856,10 @@ pre.payload {
   font-family: var(--mono); font-size: 12.5px;
 }
 .combo-item:hover, .combo-item.active { background: var(--row-hover); }
+/* `stacked`: the annotation sits under the option and the menu keeps the field's width, so a long
+   one wraps instead of running past the edge of a dialog */
+.combo-stacked .combo-list { width: 100%; max-width: 100%; }
+.combo-stacked .combo-item { display: flex; flex-direction: column; gap: 2px; white-space: normal; overflow-wrap: anywhere; }
 /* the title and subtitle take the free width; the buttons keep theirs on the right, and wrap
    under the text only on a narrow screen (a long subtitle pushed them onto the table below) */
 .pagehead { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px 24px; margin-bottom: 20px; }
@@ -1270,7 +1274,7 @@ pre.payload {
   width: min(460px, 92vw);
   background: var(--panel); border: 1px solid var(--border-strong); border-radius: 0;
   box-shadow: 0 24px 64px var(--sheet-shadow);
-  display: flex; flex-direction: column; overflow: hidden;
+  display: flex; flex-direction: column;
 }
 .modal-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
 
