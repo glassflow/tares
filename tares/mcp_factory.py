@@ -5,9 +5,8 @@ as tares/mcp_server.py, which imports this module at its end.
 from __future__ import annotations
 
 import json
-import os
 
-from .mcp_server import TARESD, _cx, _out, _project_id, mcp, writable
+from .mcp_server import TARESD, _cx, _default_project, _out, _project_id, mcp, writable
 
 
 # ── the plan (TR-411) ─────────────────────────────────────────────────────────
@@ -280,8 +279,8 @@ async def desk_add(question: str, recommendation: str, why: str, options: list[s
             "options": options or [], "context": context, "blocks": blocks,
             "tickets": tickets or [], "blocking": blocking, "asked_by": asked_by,
             "assumptions": assumptions or []}
-    if project or os.getenv("TARES_PROJECT", "").strip():
-        body["project"] = project or os.getenv("TARES_PROJECT", "").strip()
+    if project or _default_project():
+        body["project"] = project or _default_project()
     async with _cx(10) as cx:
         r = await cx.post(f"{TARESD}/api/desk", json=body)
     if r.status_code >= 400:

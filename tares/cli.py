@@ -171,8 +171,9 @@ def _mcp(args: argparse.Namespace):
     os.environ["TARES_MCP_HOST"] = args.host
     os.environ["TARES_MCP_PORT"] = str(args.port)
     if args.taresd:
-        os.environ["TARESD_URL"] = args.taresd
-    target = os.getenv("TARESD_URL", "http://127.0.0.1:8787")
+        # the server prefers TARES_FACTORY_URL, so a stray one in the shell would beat --taresd
+        os.environ["TARESD_URL"] = os.environ["TARES_FACTORY_URL"] = args.taresd
+    target = os.getenv("TARES_FACTORY_URL") or os.getenv("TARESD_URL", "http://127.0.0.1:8787")
     path = "/sse" if args.transport == "sse" else "/mcp"
     print(f"tares-mcp: {args.transport} on http://{args.host}:{args.port}{path}  ->  {target}",
           flush=True)
