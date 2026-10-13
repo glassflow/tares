@@ -9,7 +9,7 @@ T=$(mktemp -d)
 mkdir -p "$T/kit-under-test"; cp -R "$here/../../claude-plugin/." "$T/kit-under-test/"; F="$T/kit-under-test/bin/factory"
 export HOME="$T/home" FACTORY_CREW_HOME="$T/crew" FAKE_CLAUDE_STATE="$T/claude" CLAUDE_BIN="$here/fake-claude" FACTORY_PAUSE=0
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
-unset TARES_URL TARES_AUTH_TOKEN TARES_FACTORY_URL TARES_FACTORY_TOKEN_FILE FACTORY_REPO FACTORY_WORKTREES CLAUDE_JOB_DIR
+unset TARES_URL TARES_AUTH_TOKEN TARES_FACTORY_URL TARES_FACTORY_TOKEN_FILE FACTORY_REPO FACTORY_WORKTREES CLAUDE_JOB_DIR TARES_FACTORY_MCP_URL TARES_FACTORY_CRED_FILE TARES_MCP_HOST TARES_MCP_PORT
 mkdir -p "$HOME"
 chmod +x "$CLAUDE_BIN"
 trap 'stop_tares; rm -rf "$T"' EXIT
@@ -43,7 +43,13 @@ for r in orchestrator reviewer releaser; do
   check "crew-$r env FACTORY_PARENT empty" 'jq -e ".env.FACTORY_PARENT == \"\"" "$FACTORY_CREW_HOME/stations/crew-$r.settings.json" >/dev/null'
   check "crew-$r has no TARES_PROJECT" '[ -z "$(envof crew-$r TARES_PROJECT)" ]'
   check "crew-$r reaches the same Tares" '[ "$(envof crew-$r TARES_FACTORY_URL)" = "$TARESD_URL" ]'
+  check "crew-$r is told the shared MCP endpoint" '[ "$(envof crew-$r TARES_FACTORY_MCP_URL)" = "${TARES_FACTORY_MCP_URL:-http://127.0.0.1:8788/mcp}" ]'
 done
+check "the settings command shows the MCP endpoint too" '[ "$("$F" settings crew-builder-x builder | jq -r .env.TARES_FACTORY_MCP_URL)" = "${TARES_FACTORY_MCP_URL:-http://127.0.0.1:8788/mcp}" ]'
+check "a local Tares: MCP on its own port" '[ "$(env -u TARES_FACTORY_MCP_URL TARESD_URL=http://localhost:8787 "$F" _mcp-url)" = http://127.0.0.1:8788/mcp ]'
+check "a local Tares: TARES_MCP_PORT moves it" '[ "$(env -u TARES_FACTORY_MCP_URL TARESD_URL=http://127.0.0.1:8787 TARES_MCP_PORT=9911 "$F" _mcp-url)" = http://127.0.0.1:9911/mcp ]'
+check "a remote Tares: MCP on its own host" '[ "$(env -u TARES_FACTORY_MCP_URL TARESD_URL=https://cell.example.com/ "$F" _mcp-url)" = https://cell.example.com/mcp ]'
+check "TARES_FACTORY_MCP_URL wins" '[ "$(TARES_FACTORY_MCP_URL=http://mcp.example:1/mcp/ TARESD_URL=https://cell.example.com "$F" _mcp-url)" = http://mcp.example:1/mcp ]'
 check "no Rius, no comms" '! grep -q -i -e rius -e comms "$FACTORY_CREW_HOME/stations/crew-reviewer.settings.json"'
 check "orchestrator started first" '[ "$(jq -r "select(.args[0] == \"--bg\") | .args[2]" "$FAKE_CLAUDE_STATE/calls.jsonl" | head -1)" = crew-orchestrator ]'
 check "stations turn the plugin on, whatever the person's settings say" 'jq -e ".enabledPlugins[\"tares@inline\"] == true" "$FACTORY_CREW_HOME/stations/crew-reviewer.settings.json" >/dev/null'

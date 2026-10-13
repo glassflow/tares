@@ -9,7 +9,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 F="$here/../../claude-plugin/bin/factory"
 T=$(cd "$(mktemp -d)" && pwd -P)
 export FAKE_CLAUDE_STATE="$T/claude" CLAUDE_BIN="$here/fake-claude" FACTORY_PAUSE=0
-unset TARES_URL TARES_FACTORY_URL TARES_FACTORY_TOKEN_FILE FACTORY_REPO FACTORY_WORKTREES CLAUDE_JOB_DIR
+unset TARES_URL TARES_FACTORY_URL TARES_FACTORY_TOKEN_FILE FACTORY_REPO FACTORY_WORKTREES CLAUDE_JOB_DIR TARES_FACTORY_MCP_URL TARES_FACTORY_CRED_FILE TARES_MCP_HOST TARES_MCP_PORT
 chmod +x "$CLAUDE_BIN"
 trap 'stop_tares; rm -rf "$T"' EXIT
 start_tares "$T/tares" stub-token
@@ -35,6 +35,7 @@ check "settings saved on Tares" '[ "$(api GET /api/crew/settings | jq -c "[.auto
 check "grant saved on Tares" 'api GET /api/grants | jq -r .all | grep -q "the reviewer may comment on draft PRs"'
 check "the token is kept in a file only the person reads" '[ "$(cat "$FACTORY_CREW_HOME/.tares-token")" = stub-token ] && [ "$(stat -c %a "$FACTORY_CREW_HOME/.tares-token" 2>/dev/null || stat -f %Lp "$FACTORY_CREW_HOME/.tares-token")" = 600 ]'
 check "stations are told where the token is" '[ "$(envof crew-reviewer TARES_FACTORY_TOKEN_FILE)" = "$FACTORY_CREW_HOME/.tares-token" ]'
+check "the plugin's header helper gets the same token file" '[ -n "$(envof crew-reviewer TARES_FACTORY_CRED_FILE)" ] && [ "$(envof crew-reviewer TARES_FACTORY_CRED_FILE)" = "$(envof crew-reviewer TARES_FACTORY_TOKEN_FILE)" ]'
 check "no token in settings files" '! grep -rq stub-token "$FACTORY_CREW_HOME/stations"'
 check "stations reach the same Tares" '[ "$(envof crew-reviewer TARES_FACTORY_URL)" = "$TARESD_URL" ]'
 today=$(date -u +%Y-%m-%d)

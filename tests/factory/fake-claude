@@ -6,6 +6,7 @@ S=${FAKE_CLAUDE_STATE:?set FAKE_CLAUDE_STATE}
 mkdir -p "$S"
 [ -f "$S/agents.json" ] || echo '[]' > "$S/agents.json"
 { [ $# -gt 0 ] && printf '%s\0' "$@"; } | jq -cRs --arg cwd "$PWD" '{cwd: $cwd, args: (split("\u0000") | .[:-1])}' >> "$S/calls.jsonl"
+env > "$S/last.env"   # the environment of the latest call, for the session's own variables
 
 set_agents() { local tmp; tmp=$(mktemp); jq "$@" "$S/agents.json" > "$tmp" && mv "$tmp" "$S/agents.json"; }
 

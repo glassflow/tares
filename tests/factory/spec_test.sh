@@ -9,7 +9,7 @@ F="$here/../../claude-plugin/bin/factory"
 T=$(cd "$(mktemp -d)" && pwd -P)
 export HOME="$T/home" FACTORY_CREW_HOME="$T/crew" FAKE_CLAUDE_STATE="$T/claude" CLAUDE_BIN="$here/fake-claude" FACTORY_PAUSE=0
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
-unset TARES_URL TARES_FACTORY_URL TARES_FACTORY_TOKEN_FILE FACTORY_REPO
+unset TARES_URL TARES_FACTORY_URL TARES_FACTORY_TOKEN_FILE FACTORY_REPO TARES_FACTORY_MCP_URL TARES_FACTORY_CRED_FILE TARES_MCP_HOST TARES_MCP_PORT
 mkdir -p "$HOME"
 chmod +x "$CLAUDE_BIN"
 trap 'stop_tares; rm -rf "$T"' EXIT
@@ -33,10 +33,14 @@ check "it runs /tares:spec with the idea" '[ "$(last | jq -r ".args[-1]")" = "/t
 check "the spec session turns the plugin on too" 'jq -e ".enabledPlugins[\"tares@inline\"] == true" "$(last | jq -r ".args | index(\"--settings\") as \$i | .[\$i+1]")" >/dev/null'
 check "it is the person's own session, not a background one" '! last | jq -e ".args | index(\"--bg\")" >/dev/null'
 check "it says the plan goes to Tares" 'grep -q "into a project on Tares ($TARESD_URL)" "$T/spec.out"'
+check "the spec session is told the shared MCP endpoint" 'grep -qx "TARES_FACTORY_MCP_URL=${TARES_FACTORY_MCP_URL:-http://127.0.0.1:8788/mcp}" "$FAKE_CLAUDE_STATE/last.env"'
+check "without a token there is no token file to name" '! grep -q "^TARES_FACTORY_CRED_FILE=" "$FAKE_CLAUDE_STATE/last.env"'
 check "nothing is written into the repo" '[ -z "$(git -C "$T/shop" status --porcelain)" ] && [ ! -e "$T/shop/.factory" ]'
 
 (cd "$T/shop" && "$F" spec --project "Bakery orders" >/dev/null 2>&1)
 check "a project name names the session and goes to /tares:spec" '[ "$(last | jq -r ".args[1]")" = bakery-orders-spec ] && [ "$(last | jq -r ".args[-1]")" = "/tares:spec (project name: Bakery orders)" ]'
+(cd "$T/shop" && TARES_AUTH_TOKEN=spec-tok "$F" spec "with a token" >/dev/null 2>&1)
+check "with a token the spec session gets the token file under both names" 'grep -qx "TARES_FACTORY_CRED_FILE=$FACTORY_CREW_HOME/.tares-token" "$FAKE_CLAUDE_STATE/last.env" && grep -qx "TARES_FACTORY_TOKEN_FILE=$FACTORY_CREW_HOME/.tares-token" "$FAKE_CLAUDE_STATE/last.env"'
 
 # A folder that holds the project's repos: the spec runs there and sees them all.
 W="$T/work"; mkrepo "$W/api"; mkrepo "$W/web"; mkdir -p "$W/notes" "$W/zz-not-a-repo"
