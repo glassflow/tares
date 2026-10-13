@@ -9,7 +9,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 F="$here/../../claude-plugin/bin/factory"
 T=$(cd "$(mktemp -d)" && pwd -P)
 export FAKE_CLAUDE_STATE="$T/claude" CLAUDE_BIN="$here/fake-claude" FACTORY_PAUSE=0
-unset TARES_URL TARES_FACTORY_URL TARES_FACTORY_TOKEN_FILE FACTORY_REPO FACTORY_WORKTREES CLAUDE_JOB_DIR
+unset TARES_URL TARES_FACTORY_URL TARES_FACTORY_TOKEN_FILE FACTORY_REPO FACTORY_WORKTREES CLAUDE_JOB_DIR TARES_FACTORY_MCP_URL TARES_FACTORY_CRED_FILE TARES_MCP_HOST TARES_MCP_PORT
 chmod +x "$CLAUDE_BIN"
 trap 'stop_tares; rm -rf "$T"' EXIT
 start_tares "$T/tares" stub-token
@@ -35,6 +35,7 @@ check "settings saved on Tares" '[ "$(api GET /api/crew/settings | jq -c "[.auto
 check "grant saved on Tares" 'api GET /api/grants | jq -r .all | grep -q "the reviewer may comment on draft PRs"'
 check "the token is kept in a file only the person reads" '[ "$(cat "$FACTORY_CREW_HOME/.tares-token")" = stub-token ] && [ "$(stat -c %a "$FACTORY_CREW_HOME/.tares-token" 2>/dev/null || stat -f %Lp "$FACTORY_CREW_HOME/.tares-token")" = 600 ]'
 check "stations are told where the token is" '[ "$(envof crew-reviewer TARES_FACTORY_TOKEN_FILE)" = "$FACTORY_CREW_HOME/.tares-token" ]'
+check "the plugin's header helper gets the same token file" '[ -n "$(envof crew-reviewer TARES_FACTORY_CRED_FILE)" ] && [ "$(envof crew-reviewer TARES_FACTORY_CRED_FILE)" = "$(envof crew-reviewer TARES_FACTORY_TOKEN_FILE)" ]'
 check "no token in settings files" '! grep -rq stub-token "$FACTORY_CREW_HOME/stations"'
 check "stations reach the same Tares" '[ "$(envof crew-reviewer TARES_FACTORY_URL)" = "$TARESD_URL" ]'
 today=$(date -u +%Y-%m-%d)
@@ -43,6 +44,12 @@ check "no undated or doubly quoted grants" '! jq -e "any(.autoMode.allow[]; cont
 one_home=$FACTORY_CREW_HOME
 
 # A second machine: nothing is asked again and the station settings come out the same.
+nomcp="http://127.0.0.1:$("$PY" -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')/mcp"
+TARES_FACTORY_MCP_URL=$nomcp "$F" crew up --yes >"$T/nomcp.out" 2>&1
+check "no MCP server with auth on: the command carries a token placeholder, never the token" 'grep -q "TARES_AUTH_TOKEN=<your token> tares mcp --transport streamable-http" "$T/nomcp.out" && ! grep -q stub-token "$T/nomcp.out"'
+"$F" doctor >"$T/doctor.out" 2>&1
+check "the MCP probe carries the token (auth on)" 'grep -qx "  ok    MCP endpoint answers at $TARES_FACTORY_MCP_URL" "$T/doctor.out"'
+
 machine two
 "$F" crew up </dev/null >"$T/up2.out" 2>&1
 check "second machine asks nothing" '! grep -q "Choice \[" "$T/up2.out" && grep -q "started crew-reviewer" "$T/up2.out"'

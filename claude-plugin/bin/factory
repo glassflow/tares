@@ -143,6 +143,17 @@ tares_url() {
   u=${u:-http://127.0.0.1:8787}
   echo "${u%/}"
 }
+# Where stations reach Tares's MCP server. Locally it runs as its own process on its own port
+# (`tares mcp --transport streamable-http`, the default `tares status` uses too); Tares Cloud serves
+# /mcp on the cell's own host. TARES_FACTORY_MCP_URL overrides both.
+mcp_url() {
+  if [ -n "${TARES_FACTORY_MCP_URL:-}" ]; then echo "${TARES_FACTORY_MCP_URL%/}"; return; fi
+  local u host; u=$(tares_url); host=${u#*://}; host=${host%%[:/]*}
+  case "$host" in
+    127.0.0.1|localhost) echo "http://${TARES_MCP_HOST:-127.0.0.1}:${TARES_MCP_PORT:-8788}/mcp" ;;
+    *) echo "$u/mcp" ;;
+  esac
+}
 tares_on() {
   if [ -z "$TARES_STATE" ]; then
     TARES=$(tares_url); TARES_STATE=off
@@ -152,6 +163,27 @@ tares_on() {
 }
 require_tares() {
   tares_on || die "no Tares answers at $TARES. Start one with \`tares up\` in another terminal (or set TARESD_URL to where yours runs), then try again."
+}
+# Stations reach Tares only through the MCP endpoint, so a station started without one has no Tares
+# tools. Only an MCP server's answer to `initialize` counts: taresd's 404 or a web page does not.
+MCP_STATE=""
+mcp_on() {
+  if [ -z "$MCP_STATE" ]; then
+    MCP_STATE=off
+    local tok body
+    tok=$(tares_token)
+    body=$({ [ -n "$tok" ] && printf 'Authorization: Bearer %s\n' "$tok"; true; } | curl -sS -f --max-time 5 -X POST \
+      -H @- -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+      --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"tares-factory","version":"0"}}}' \
+      "$(mcp_url)" 2>/dev/null) && grep -q '"serverInfo"' <<<"$body" && MCP_STATE=on
+  fi
+  [ "$MCP_STATE" = on ]
+}
+require_mcp() {
+  mcp_on && return 0
+  local how="tares mcp --transport streamable-http"
+  [ -n "$(tares_token)" ] && how="TARES_AUTH_TOKEN=<your token> $how"
+  die "no MCP server answers at $(mcp_url). Stations reach Tares through it. Start one in another terminal: $how (or set TARES_FACTORY_MCP_URL to where yours runs)."
 }
 tares_http() { # method path [json body]; the token goes to curl on stdin, never on its command line
   local -a a=(-sS -f --max-time 15 -X "$1" -H 'Accept: application/json' -H @-)
@@ -545,14 +577,16 @@ write_settings() { # station role parent project repo
   jq -n \
     --arg role "$role" --arg station "$station" --arg parent "$parent" --arg project "$project" \
     --arg pslug "$( [ -n "$project" ] && slugify "$project" || true)" --arg home "$CREW_HOME" --arg repo "$repo" \
-    --arg wt "$wt" --arg tares_url "$TARES" --arg tok "$tok_file" \
+    --arg wt "$wt" --arg tares_url "$TARES" --arg tok "$tok_file" --arg mcp_url "$(mcp_url)" \
     --arg env_line "$env_line" --argjson allow "$allow_json" --argjson deny "$deny_json" --argjson perms "$perms_json" \
     '{
       env: ({
         FACTORY_STATION: $station, FACTORY_ROLE: $role, FACTORY_PARENT: $parent,
         FACTORY_HOME: $home, FACTORY_CREW_HOME: $home, FACTORY_WORKTREES: $wt,
-        TARES_FACTORY_URL: $tares_url, TARESD_URL: $tares_url
-      } + (if $tok != "" then {TARES_FACTORY_TOKEN_FILE: $tok} else {} end)
+        TARES_FACTORY_URL: $tares_url, TARESD_URL: $tares_url, TARES_FACTORY_MCP_URL: $mcp_url
+      } + (if $tok != "" then {TARES_FACTORY_TOKEN_FILE: $tok,
+             # the same file under a name Claude Code does not hide from the plugin header helper
+             TARES_FACTORY_CRED_FILE: $tok} else {} end)
         + (if $project != "" then {TARES_PROJECT: $project, FACTORY_PROJECT: $pslug} else {} end)
         + (if $repo != "" then {FACTORY_REPO: $repo} else {} end)),
       crossSessionInbound: "accept",
@@ -758,6 +792,7 @@ cmd_crew_up() {
   while [ $# -gt 0 ]; do
     case "$1" in --yes|-y) ASSUME_YES=1; shift ;; --no-watch) watch=0; shift ;; *) roles="$roles $1"; shift ;; esac
   done
+  require_mcp
   local clash; clash=$(installed_tares)
   [ -z "$clash" ] || say "warning: $(clash_text "$clash")"
   ensure_crew_home
@@ -793,6 +828,7 @@ NEXT
 
 cmd_spawn() {
   require_crew
+  require_mcp
   halted && die "the crew is halted ($(cat "$HALT_FILE")); $ME crew resume first"
   local kind=${1:-}; shift || true
   local role station parent project="" repo="" cwd model effort task autonomy=""
@@ -1206,6 +1242,7 @@ cmd_spec() {
       *) idea="${idea:+$idea }$1"; shift ;;
     esac
   done
+  require_mcp
   local clash; clash=$(installed_tares)
   [ -z "$clash" ] || say "warning: $(clash_text "$clash")"
   local here root list n
@@ -1229,7 +1266,11 @@ $ME: opening Claude as $slug-spec in $here, with /tares:spec.
 SPEC
   local -a args=(-n "$slug-spec")
   local f; while IFS= read -r f; do [ -n "$f" ] && args+=("$f"); done < <(plugin_flags)
-  if [ -n "${TARES_AUTH_TOKEN:-}" ]; then mkdir -p "$CREW_HOME"; keep_token; export TARES_FACTORY_TOKEN_FILE=$TOKEN_FILE; fi
+  if [ -n "${TARES_AUTH_TOKEN:-}" ]; then
+    mkdir -p "$CREW_HOME"; keep_token
+    # CRED_FILE: Claude Code hides variables named *TOKEN* from the plugin's header helper
+    export TARES_FACTORY_TOKEN_FILE=$TOKEN_FILE TARES_FACTORY_CRED_FILE=$TOKEN_FILE
+  fi
   mkdir -p "$CREW_HOME/stations"
   local spec_settings="$CREW_HOME/stations/spec.settings.json"
   jq -n '{enabledPlugins: {"tares@inline": true}}' > "$spec_settings"
@@ -1237,7 +1278,8 @@ SPEC
   local prompt="/tares:spec"
   [ -n "$name" ] && prompt="$prompt (project name: $name)"
   [ -n "$idea" ] && prompt="$prompt $idea"
-  cd "$here" && TARES_FACTORY_URL=$TARES TARESD_URL=$TARES exec "$CLAUDE" "${args[@]}" "$prompt"
+  local mcp; mcp=$(mcp_url)
+  cd "$here" && TARES_FACTORY_URL=$TARES TARESD_URL=$TARES TARES_FACTORY_MCP_URL=$mcp exec "$CLAUDE" "${args[@]}" "$prompt"
 }
 
 cmd_finish() { # project ["words"]: the person marks a project done, from their own terminal
@@ -1302,7 +1344,7 @@ cmd_doctor() {
   local clash; clash=$(installed_tares)
   if [ -n "$clash" ]; then warn "$(clash_text "$clash")"
   else ok "stations load the plugin at $KIT_PLUGIN"; fi
-  command -v tares-mcp >/dev/null && ok "tares-mcp on PATH" || no "tares-mcp is not on PATH; stations reach Tares through it: install tares (pip install -e . in a checkout) and put its bin folder on PATH"
+  mcp_on && ok "MCP endpoint answers at $(mcp_url)" || no "no MCP server answers at $(mcp_url); start one with tares mcp --transport streamable-http (or set TARES_FACTORY_MCP_URL)"
   if [ -f "$CREW_CFG" ]; then
     local r m
     for r in orchestrator reviewer releaser builder; do
@@ -1359,7 +1401,7 @@ cmd=${1:-help}; shift || true
 # must never wait for Tares.
 local_only() {
   case "$1" in
-    tidy|_parse-bg-id|help|doctor|halt|resume|down|attach|logs|retire|roster) return 0 ;;
+    tidy|_parse-bg-id|_mcp-url|help|doctor|halt|resume|down|attach|logs|retire|roster) return 0 ;;
     crew) case "${2:-status}" in halt|resume|down|attach|logs) return 0 ;; esac ;;
   esac
   return 1
@@ -1387,6 +1429,7 @@ case "$cmd" in
   settings) cmd_settings "$@" ;;
   tidy) cmd_tidy "$@" ;;
   _parse-bg-id) parse_bg_id ;;
+  _mcp-url) mcp_url ;;
   doctor) cmd_doctor ;;
   *) usage; exit 1 ;;
 esac

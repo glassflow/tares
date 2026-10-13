@@ -40,28 +40,75 @@ TARESD = (os.getenv("TARES_FACTORY_URL", "").strip()
 # stdio (a local agent spawned the proxy) there is no inbound token; the env token is used.
 AUTH_TOKEN = _factory_token() or os.getenv("TARES_AUTH_TOKEN", "").strip()
 _CALLER_TOKEN = contextvars.ContextVar("tares_caller_token", default="")
+# Over HTTP one server is shared by many sessions, so who calls comes from each request's
+# headers (set by _CallerHeaders), never from this process's environment.
+_CALLER_STATION = contextvars.ContextVar("tares_caller_station", default="")
+_CALLER_ROLE = contextvars.ContextVar("tares_caller_role", default="")
+_CALLER_PARENT = contextvars.ContextVar("tares_caller_parent", default="")
+_CALLER_PROJECT = contextvars.ContextVar("tares_caller_project", default="")
+# Set by main() for the HTTP transports. Never inferred from the environment at call time: tests
+# import this module in-process and must stay on the stdio path.
+_HTTP = False
+
+_CALLER_VARS = {"token": _CALLER_TOKEN, "station": _CALLER_STATION, "role": _CALLER_ROLE,
+                "parent": _CALLER_PARENT, "project": _CALLER_PROJECT}
+_CALLER_HEADERS = {"station": "x-tares-station", "role": "x-tares-role",
+                   "parent": "x-tares-parent", "project": "x-tares-project"}
+_CALLER_ENV = {"station": "FACTORY_STATION", "role": "FACTORY_ROLE", "parent": "FACTORY_PARENT",
+               "project": "TARES_PROJECT"}
+
+
+def _bearer(headers) -> str:
+    """The token in `Authorization: Bearer <x>`, else `x-tares-token`; "" when there is none."""
+    auth = headers.get("authorization", "")
+    if auth.lower().startswith("bearer"):
+        return auth[6:].strip()
+    return headers.get("x-tares-token", "").strip()
+
+
+def _caller(name: str) -> str:
+    """Who is calling: token, station, role, parent or project. Over HTTP, from the current
+    request's headers (the context variable when there is no request object); over stdio, from
+    the environment of the session that spawned this proxy, as before."""
+    if _HTTP:
+        try:
+            req = mcp.get_context().request_context.request
+        except Exception:
+            req = None
+        if req is not None:
+            if name == "token":
+                return _bearer(req.headers)
+            return req.headers.get(_CALLER_HEADERS[name], "").strip()
+        return _CALLER_VARS[name].get()
+    if name == "token":
+        return AUTH_TOKEN
+    return os.getenv(_CALLER_ENV[name], "").strip()
+
+
+def _default_project() -> str:
+    """The project a call means when it names none: X-Tares-Project over HTTP, TARES_PROJECT
+    (a builder station's) over stdio."""
+    return _caller("project")
 
 
 def _station_headers() -> dict:
-    """Which tares-factory station this proxy runs for (a Claude Code session spawns it, so it
-    sees the station's environment), sent with every call so Tares applies who may write what.
-    Empty for a session that is not a station."""
+    """Which tares-factory station the caller is, sent with every call so Tares applies who may
+    write what. Empty for a session that is not a station."""
     out = {}
-    for env, header in (("FACTORY_STATION", "X-Tares-Station"), ("FACTORY_ROLE", "X-Tares-Role"),
-                        ("FACTORY_PARENT", "X-Tares-Parent")):
-        v = os.getenv(env, "").strip()
+    for name, header in (("station", "X-Tares-Station"), ("role", "X-Tares-Role"),
+                         ("parent", "X-Tares-Parent")):
+        v = _caller(name)
         if v:
             out[header] = v
     return out
 
 
 def _cx(timeout: float = 10):
-    """An httpx client that carries the caller's token to taresd (env token as stdio fallback)
-    and, over stdio, the station it runs for."""
-    tok = _CALLER_TOKEN.get() or AUTH_TOKEN
+    """An httpx client that carries the caller's token and station to taresd. Over HTTP the
+    server's own token is never spent for a caller that sent none."""
+    tok = _caller("token")
     headers = {"Authorization": f"Bearer {tok}"} if tok else {}
-    if not _CALLER_TOKEN.get():
-        headers.update(_station_headers())
+    headers.update(_station_headers())
     return httpx.AsyncClient(timeout=timeout, headers=headers)
 
 # stdio (default) is what a local agent spawns. For remote agents (the demo / a server), run with
@@ -299,8 +346,8 @@ async def source_fields(name: str, limit: int = 500) -> str:
 
 async def _project_id(cx, project: str = "") -> tuple[str | None, str | None]:
     """(project id, None) or (None, the reason to tell the agent). With no `project`, a builder
-    station's TARES_PROJECT names it."""
-    project = (project or "").strip() or os.getenv("TARES_PROJECT", "").strip()
+    station's TARES_PROJECT (X-Tares-Project over HTTP) names it."""
+    project = (project or "").strip() or _default_project()
     r = await cx.get(f"{TARESD}/api/whoami")
     who = r.json() if r.status_code == 200 else {}
     if who.get("project"):
@@ -785,16 +832,28 @@ class _BearerGate:
         self.app = app
 
     async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and not _CALLER_TOKEN.get():
+            await send({"type": "http.response.start", "status": 401,
+                        "headers": [(b"content-type", b"application/json")]})
+            await send({"type": "http.response.body", "body": b'{"detail":"unauthorized"}'})
+            return
+        await self.app(scope, receive, send)
+
+
+class _CallerHeaders:
+    """Pure-ASGI middleware, outermost: reads who is calling (bearer, station, role, parent,
+    project) from each HTTP request's headers into context variables, so many Claude Code
+    sessions can share one server and Tares still knows each one. Runs whether or not the
+    server has a token of its own."""
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers") or []}
-            auth = headers.get("authorization", "")
-            tok = auth[7:].strip() if auth.lower().startswith("bearer ") else headers.get("x-tares-token", "")
-            if not tok:
-                await send({"type": "http.response.start", "status": 401,
-                            "headers": [(b"content-type", b"application/json")]})
-                await send({"type": "http.response.body", "body": b'{"detail":"unauthorized"}'})
-                return
-            _CALLER_TOKEN.set(tok)
+            _CALLER_TOKEN.set(_bearer(headers))
+            for name, header in _CALLER_HEADERS.items():
+                _CALLER_VARS[name].set(headers.get(header, "").strip())
         await self.app(scope, receive, send)
 
 
@@ -802,14 +861,16 @@ from . import mcp_factory  # noqa: E402,F401  (registers the factory's tools on 
 
 
 def main():
+    global _HTTP
     transport = os.getenv("TARES_MCP_TRANSPORT", "stdio")  # stdio | sse | streamable-http
     if transport == "stdio":
         mcp.run(transport="stdio")
         return
-    # HTTP transports: build the ASGI app, gate it with the bearer token, run it under uvicorn.
+    # HTTP transports: identity per request, gated by the bearer token when the server has one,
+    # run under uvicorn.
+    _HTTP = True
     app = mcp.streamable_http_app() if transport == "streamable-http" else mcp.sse_app()
-    if AUTH_TOKEN:
-        app = _BearerGate(app)
+    app = _CallerHeaders(_BearerGate(app) if AUTH_TOKEN else app)
     import uvicorn
     uvicorn.run(app, host=mcp.settings.host, port=mcp.settings.port)
 
