@@ -179,6 +179,10 @@ self-hosted instance looks and behaves as before.
   Workspace, and All workspaces and Account leave the menu. New workspace stays.
 
 ### Fixed
+- The session picker in "Summarize a session now" shows each session's repo, branch and state in
+  full: they sat to the right of the id and were cut off at the edge of the dialog, and the list
+  was cut off under it. The label now sits under the id and wraps, and dialogs no longer clip a
+  menu that opens inside them.
 - Disconnecting the Tares Cloud GitHub App from a workspace now goes through Tares Cloud, which
   stops its deliveries to the workspace. Delete used to remove only the workspace's copy, so
   events kept arriving.
