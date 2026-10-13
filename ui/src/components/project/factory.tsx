@@ -85,13 +85,19 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const doing = live.filter((t) => t.status === "in_progress").length;
   const sessions = ss?.sessions ?? [];
   const firstLinked = [...sessions].sort((a, b) => a.linked_at.localeCompare(b.linked_at))[0]?.session;
-  // the session the build depends on: the most recently active one (sessions come newest first)
-  const active = sessions.find((s) => s.state !== "replaced");
   const building = tickets.some((t) => t.status === "in_progress");
+  const ms = (t?: string | null) => (t ? Date.parse(t) : NaN);
+  // The session working the ticket in progress (TR-474): the crew station holding it, else the
+  // newest build session active since the ticket went in progress. Never the spec session: it
+  // wrote the plan, not the code, so it is never told about a build ticket.
+  const doingTicket = tickets.find((t) => t.status === "in_progress");
+  const active = !doingTicket ? undefined
+    : doingTicket.holder ? sessions.find((s) => s.station === doingTicket.holder && s.state !== "replaced")
+    : sessions.find((s) => s.state !== "replaced" && !s.station && s.session !== firstLinked
+                        && ms(s.last_at) >= ms(doingTicket.updated_at) - HOLD_SLACK_MS);
   const quietMin = active ? quiet(active, ss?.now) : 0;
   // With nothing in progress, a session waiting at its prompt is not a stopped build: it is
   // idle, and the one that finished the last ticket has finished. The stored state stays raw.
-  const ms = (t?: string | null) => (t ? Date.parse(t) : NaN);
   const lastDone = phase === "done"
     ? Math.max(...tickets.filter((t) => t.status === "done").map((t) => ms(t.updated_at))) : NaN;
   const finisher = Number.isNaN(lastDone) ? undefined : sessions
@@ -99,9 +105,11 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
     .sort((a, b) => ms(b.last_at) - ms(a.last_at))[0]?.session;
   const shownState = (s: ProjectSession, _now?: string): Shown =>
     building ? null : s.session === finisher ? "finished" : s.state === "waiting" ? "idle" : null;
-  const attention: "waiting" | "silent" | null = !building || !active ? null
+  // no session on the ticket: the person picks it up (the crew's orchestrator does it for a crew)
+  const attention: AttentionKind | null = !building ? null
+    : !active || active.state === "ended" ? (byCrew ? null : "orphan")
     : active.state === "waiting" ? "waiting"
-    : active.state !== "ended" && quietMin >= SILENT_MIN ? "silent" : null;
+    : active.state === "quiet" || quietMin >= SILENT_MIN ? "silent" : null;
   const prompt = `Work on Tares project "${ctx.s.name}": read its starting prompt and begin.`;
   const where = tk?.linear ? <>in Linear project <a href={tk.linear.url} target="_blank" rel="noreferrer">{tk.linear.name}</a></> : "in Tares";
 
@@ -156,10 +164,10 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
         </div>
       )}
 
-      {attention && active && (
-        <Attention kind={attention} session={active} quietMin={quietMin}
-                   label={active.station ?? (active.session === firstLinked ? "spec session" : "build session")}
-                   ticket={next?.status === "in_progress" ? next.title : undefined}
+      {attention && doingTicket && (
+        <Attention kind={attention} session={attention === "orphan" ? undefined : active}
+                   quietMin={quietMin} label={active?.station ?? "build session"}
+                   ticket={doingTicket.title}
                    pickUp={`Pick up Tares project "${ctx.s.name}" where the last session stopped.`} />
       )}
 
@@ -333,6 +341,11 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
 
 // a session that has sent nothing for this long while a ticket is in progress may be gone
 const SILENT_MIN = 10;
+// a session counts as working a ticket when it was active at most this long before the ticket
+// went in progress (its last line can reach Tares a little before the ticket's update)
+const HOLD_SLACK_MS = 2 * 60_000;
+// waiting / silent: the session on the ticket stopped; orphan: no session is on it (TR-474)
+type AttentionKind = "waiting" | "silent" | "orphan";
 
 // GitHub's own marks (octicons), drawn inline: the logo, a repo, a pull request
 function GitHubMark() {
@@ -495,11 +508,28 @@ function StateBadge({ s, now, shown }: { s: ProjectSession; now?: string; shown?
   return null;
 }
 
-/** A build that has stopped: the session waits for the person, or has gone silent. */
+/** A build that has stopped: the session on the ticket waits for the person or has gone silent,
+ *  or no session is on it at all. */
 function Attention({ kind, session, quietMin, label, ticket, pickUp }: {
-  kind: "waiting" | "silent"; session: ProjectSession; quietMin: number; label: string; ticket?: string;
+  kind: AttentionKind; session?: ProjectSession; quietMin: number; label: string; ticket?: string;
   pickUp: string;
 }) {
+  if (kind === "orphan" || !session) {
+    return (
+      <section className="fo-attn fo-attn-silent" role="status" aria-labelledby="fo-attn-h">
+        <h2 id="fo-attn-h">{ticket ? <>Ticket "{ticket}" is in progress, but no session is on it</> : <>No session is on the build</>}</h2>
+        <p className="help" style={{ margin: 0 }}>
+          No Claude Code session working on this ticket is open. Paste the pick-up prompt into a
+          fresh Claude Code session with the Tares plugin, in the project's repository: it reads
+          where the build stopped and carries on.
+        </p>
+        <div className="fo-cmd">
+          <code>{pickUp}</code>
+          <CopyButton text={pickUp} label="Copy pick-up prompt" />
+        </div>
+      </section>
+    );
+  }
   const said = (session.last_said ?? "").trim();
   return (
     <section className={`fo-attn fo-attn-${kind}`} role="status" aria-labelledby="fo-attn-h">

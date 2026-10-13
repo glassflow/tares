@@ -77,6 +77,25 @@ def plugin():
     ck("another server's create_project is not ours",
        ship.project_call(line(1, tool="mcp__linear__create_project", inp={"name": "X"})) is None)
     ck("a plain line says nothing", ship.project_call(line(1, "hello")) is None)
+    ck("the build sentence names the project (TR-474)", ship.project_call(line(
+        1, 'Work on Tares project "shared-mcp-endpoint": read its starting prompt and begin.'))
+       == "shared-mcp-endpoint")
+    ck("so does the pick-up sentence", ship.project_call(line(
+        1, 'Pick up Tares project "Invoices" where the last session stopped.')) == "Invoices")
+    blocks = line(1)
+    blocks["message"]["content"] = [{"type": "text", "text": 'Work on Tares project "Invoices": go'}]
+    ck("in a message made of text blocks too", ship.project_call(blocks) == "Invoices")
+    ck("not when the sentence is only quoted inside other text", ship.project_call(line(
+        1, 'what does Work on Tares project "Invoices" mean?')) is None)
+    said = line(1, tool="x")
+    said["message"] = {"role": "assistant",
+                       "content": [{"type": "text", "text": 'Work on Tares project "Invoices"'}]}
+    ck("nor when Claude says it", ship.project_call(said) is None)
+    hook0 = {"session_id": SID, "cwd": "/w/invoices"}
+    o, pj, ch = ship.stamp_project([line(1, 'Work on Tares project "Invoices": begin'),
+                                    line(2, "reading the start doc")], "", hook0)
+    ck("a build session is tied to the project from that message",
+       ch and pj == "Invoices" and o[1]["type"] == "session_project", o)
     hook = {"session_id": SID, "cwd": "/w/invoices"}
     objs = [line(1, "let's build an invoice parser"), line(2, "what about emails?"),
             line(3, tool="mcp__tares__create_project", inp={"name": "Invoices"}),
