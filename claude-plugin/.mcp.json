@@ -1,10 +1,15 @@
 {
   "mcpServers": {
     "tares": {
-      "command": "tares-mcp",
-      "env": {
-        "TARESD_URL": "${user_config.tares_url}",
-        "TARES_AUTH_TOKEN": "${user_config.access_token}"
+      "type": "http",
+      "url": "${TARES_FACTORY_MCP_URL:-${user_config.mcp_url}}",
+      "headersHelper": "${CLAUDE_PLUGIN_ROOT}/bin/mcp-headers",
+      "headers": {
+        "Authorization": "Bearer ${user_config.access_token}",
+        "X-Tares-Station": "${FACTORY_STATION:-}",
+        "X-Tares-Role": "${FACTORY_ROLE:-}",
+        "X-Tares-Parent": "${FACTORY_PARENT:-}",
+        "X-Tares-Project": "${TARES_PROJECT:-}"
       }
     }
   }

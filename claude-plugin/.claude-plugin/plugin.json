@@ -1,7 +1,7 @@
 {
   "name": "tares",
   "displayName": "Tares",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Connect Claude Code to Tares: query your data plane over MCP, stream this session into Tares, spec a new project into a Tares project with /tares:spec, and run challenger sessions where Codex challenges the plan and every commit.",
   "author": {
     "name": "GlassFlow",
@@ -21,6 +21,12 @@
       "title": "Tares URL",
       "description": "Base URL of your Tares (default http://127.0.0.1:8787 for a local tares up; your cell URL on Tares Cloud, e.g. https://<cell>.tares-glassflow.com).",
       "default": "http://127.0.0.1:8787"
+    },
+    "mcp_url": {
+      "type": "string",
+      "title": "MCP endpoint",
+      "description": "Where Claude reaches Tares's MCP server. Local: run tares mcp --transport streamable-http next to tares up and keep the default. Tares Cloud: https://<cell>.tares-glassflow.com/mcp.",
+      "default": "http://127.0.0.1:8788/mcp"
     },
     "access_token": {
       "type": "string",

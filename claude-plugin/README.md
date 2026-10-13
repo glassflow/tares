@@ -2,21 +2,27 @@
 
 One install wires Claude Code to Tares in **both directions**:
 
-- **Read-back (MCP):** registers the `tares` MCP server so the agent can query your data plane
-  (the same `tares-mcp` proxy the console hands out).
+- **Read-back (MCP):** connects the session to Tares's MCP endpoint over HTTP (`mcp_url`) so the
+  agent can query your data plane. Every session shares that one endpoint; the plugin starts no
+  MCP process of its own.
 - **Capture (hooks):** ships this session's transcript into Tares's `claude_code` source as it
   progresses — via a small hook (`scripts/ship.py`) that POSTs new transcript lines to
   `{tares_url}/ingest/claude_code`.
 
-Both wires are configured once on install (`tares_url`, optional auth `access_token`, and a
-`stream_sessions` toggle). Challenger sessions (below) add `challenger_mode`, `codex_bin` and
+Both wires are configured once on install (`tares_url`, `mcp_url`, optional auth `access_token`,
+and a `stream_sessions` toggle). Challenger sessions (below) add `challenger_mode`, `codex_bin` and
 `codex_sandbox`.
 
 ## Prerequisites
 
-- `tares-mcp` on PATH (from `pip install tares`) — the MCP read-back proxy.
-- `python3` on PATH — runs the shipper hook.
+- A Tares MCP endpoint at `mcp_url`. Local: run `tares mcp --transport streamable-http` next to
+  `tares up` and keep the default `http://127.0.0.1:8788/mcp`. Tares Cloud: built in, at
+  `https://<cell>.tares-glassflow.com/mcp`; nothing to install.
+- `python3` on PATH: runs the shipper hook.
 - A Tares daemon reachable at `tares_url`.
+
+Tested with Claude Code 2.1.296. The MCP connection relies on its expansion of `${VAR:-}` and
+`${user_config.*}` in HTTP server URLs and headers, and on `headersHelper`.
 
 **No manual source setup.** The shipper creates the `claude_code` push source on Tares itself the
 first time it runs (on `SessionStart`), and re-creates it if it's ever missing. Installing the plugin
