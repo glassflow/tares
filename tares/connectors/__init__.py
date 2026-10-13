@@ -26,6 +26,7 @@ from .postgres import PostgresConnector
 from .prometheus import PrometheusConnector
 from .finding import FindingConnector
 from .http_poll import HttpPollConnector
+from .linear import LinearConnector
 from .reference import ReferenceConnector
 from .vercel import VercelConnector
 from .webhook import WebhookConnector
@@ -47,6 +48,7 @@ REGISTRY = {
     "claude_code": ClaudeCodeConnector,
     "finding": FindingConnector,
     "http_poll": HttpPollConnector,
+    "linear": LinearConnector,
 }
 
 # Connector metadata for the UI. The `fields` of each are GENERATED from the connector's
@@ -123,6 +125,11 @@ SPECS = {
     "finding": {"label": "Agent findings", "mode": "push", "internal": True,
                 "description": "What Tares agents conclude when a trigger fires; one finding per "
                                "run, keyed to the entity, on that entity's timeline."},
+    # provisioned when a project is linked to a Linear project (TR-408); one per cell
+    "linear": {"label": "Linear tickets", "mode": "poll", "internal": True, "poll": "60s",
+               "description": "Keeps the tickets of projects that use Linear in sync; one event "
+                              "per change (added, renamed, status, reordered, left the project), "
+                              "keyed by the Linear identifier."},
 }
 
 

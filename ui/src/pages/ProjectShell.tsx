@@ -14,6 +14,8 @@ import { EventsView, SourceView, SourcesView } from "../components/project/sourc
 import { TriggerView, TriggersView } from "../components/project/triggers";
 import { AgentView, AgentsView, ExternalView } from "../components/project/agents";
 import { SkillView, SkillsView } from "../components/project/skills";
+import { ClaudeSessionView, ClaudeSessionsView, DocView, DocsView, TicketView, TicketsView } from "../components/project/docs";
+import FactoryOverview from "../components/project/factory";
 import { HistoryView, KeysView, McpView, SubscribersView } from "../components/project/settings";
 import type { ProjectSummary, Template, RecipeAction, RecipeActionOption, Source } from "../types";
 
@@ -227,6 +229,13 @@ export default function ProjectShell({ s, id, reload, template }: {
       case "external": return <ExternalView ctx={ctx} id={view.name!} />;
       case "skills": return <SkillsView ctx={ctx} />;
       case "skill": return <SkillView ctx={ctx} name={view.name!} />;
+      case "docs": return <DocsView ctx={ctx} />;
+      case "doc": return <DocView key={view.name} ctx={ctx} name={view.name!} />;
+      case "tickets": return <TicketsView ctx={ctx} />;
+      case "ticket": return <TicketView key={view.name} ctx={ctx} name={view.name!} />;
+      case "claude": return view.name
+        ? <ClaudeSessionView key={view.name} ctx={ctx} name={view.name} />
+        : <ClaudeSessionsView ctx={ctx} />;
       case "sessions":
         return s.sessions ? (
           <SessionsPanel sessions={s.sessions} runs={s.runs} project={id}
@@ -282,7 +291,8 @@ export default function ProjectShell({ s, id, reload, template }: {
           </div>
         </div>
       )}
-      {view.kind === "overview" && (
+      {view.kind === "overview" && s.kind === "software_factory" && <FactoryOverview ctx={ctx} />}
+      {view.kind === "overview" && s.kind !== "software_factory" && (
         <Overview ctx={ctx} actions={<>{pauseButton}{templateActions}</>}
                   onResume={act(() => api.resumeProject(id))} />
       )}

@@ -1,0 +1,662 @@
+"""The software factory on Tares (P-TR-176, M2 onward): the rules the API and the MCP tools
+apply to a factory project's plan, before the store sees anything.
+
+A factory project has milestones (each ships something a person can check: its acceptance
+checks) and tickets that belong to a milestone and may depend on other tickets. A ticket is
+ready when everything it depends on is done; the orchestrator (or a single build session) works
+the ready tickets in plan order.
+
+Tares runs nothing here. It keeps the plan and answers "what is ready", "what is blocked by
+what", so every session reads the same plan.
+"""
+from __future__ import annotations
+
+import os
+import re
+
+from .docs import DocError, title_ok
+
+MAX_GOAL = 500
+MAX_CHECKS = 20
+MAX_CHECK = 500
+MAX_DEPENDS = 30
+
+# a ticket status that counts as finished for the tickets that depend on it
+DONE_STATUSES = ("done", "canceled")
+
+
+def goal_ok(goal) -> str:
+    g = " ".join(str(goal or "").split())
+    if len(g) > MAX_GOAL:
+        raise DocError(f"the goal is {len(g)} characters; keep it to {MAX_GOAL}")
+    return g
+
+
+def checks_ok(checks) -> list[dict]:
+    """[{check, expect}], cleaned. A check is a command or a short manual step; `expect` is what
+    it should show. A plain string is a check with no expectation."""
+    if checks is None:
+        return []
+    if not isinstance(checks, list):
+        raise DocError("checks is a list of {check, expect}")
+    if len(checks) > MAX_CHECKS:
+        raise DocError(f"{len(checks)} checks; keep a milestone to {MAX_CHECKS}")
+    out = []
+    for c in checks:
+        if isinstance(c, str):
+            c = {"check": c}
+        if not isinstance(c, dict):
+            raise DocError("each check is {check, expect}")
+        check = " ".join(str(c.get("check") or "").split())
+        expect = " ".join(str(c.get("expect") or "").split())
+        if not check:
+            raise DocError("a check needs its `check`: the command or the step")
+        if len(check) > MAX_CHECK or len(expect) > MAX_CHECK:
+            raise DocError(f"keep a check and its expectation to {MAX_CHECK} characters each")
+        out.append({"check": check, "expect": expect})
+    return out
+
+
+def milestone_ok(name, goal, checks) -> tuple[str, str, list[dict]]:
+    return title_ok(name), goal_ok(goal), checks_ok(checks)
+
+
+_NUM = re.compile(r"^[Tt]?(\d{1,6})$")
+
+
+def ticket_number(ref: str) -> int | None:
+    """3 for "T3", "t3" or "3"; None for any other ref (an id or a Linear identifier)."""
+    m = _NUM.match(str(ref or "").strip())
+    return int(m.group(1)) if m else None
+
+
+def label(t: dict) -> str:
+    """How a ticket is named to people and sessions: its Linear identifier, else T<n>."""
+    return t.get("identifier") or (f"T{t['number']}" if t.get("number") else t["id"])
+
+
+def depends_ok(depends_on) -> list[str]:
+    """The refs a ticket depends on, as given (resolved by the caller), each once."""
+    if depends_on is None:
+        return []
+    if isinstance(depends_on, str):
+        depends_on = [d for d in re.split(r"[,\s]+", depends_on) if d]
+    if not isinstance(depends_on, list):
+        raise DocError("depends_on is a list of tickets")
+    out: list[str] = []
+    for d in depends_on:
+        d = str(d or "").strip()
+        if d and d not in out:
+            out.append(d)
+    if len(out) > MAX_DEPENDS:
+        raise DocError(f"{len(out)} dependencies; a ticket that needs that many is too big")
+    return out
+
+
+_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_GITHUB_RE = re.compile(r"^(?:https?://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+                        r"([^/\s]+/[^/\s]+?)(?:\.git)?/?$")
+
+
+def repo_ok(repo) -> str | None:
+    """A GitHub repo as `owner/name`, from that, a github.com URL or a git remote; None for empty.
+    DocError for anything else."""
+    r = str(repo or "").strip()
+    if not r:
+        return None
+    m = _GITHUB_RE.match(r)
+    if m:
+        r = m.group(1)
+    if r.endswith(".git"):
+        r = r[:-4]
+    if not _REPO_RE.match(r):
+        raise DocError(f"repo {repo!r} is not a GitHub repo; give it as owner/name")
+    return r
+
+
+def handover_repos(repos) -> list[dict]:
+    """The repos a project is handed over with, each {path, name}: the folder it is checked out
+    in on the crew's machine and its GitHub name (owner/name, may be empty). Takes strings (a
+    path, or owner/name) or {path, name} objects. DocError for a bad one."""
+    if repos is None:
+        return []
+    if isinstance(repos, (str, dict)):
+        repos = [repos]
+    if not isinstance(repos, list):
+        raise DocError("repos is a list of {path, name}")
+    out: list[dict] = []
+    for x in repos:
+        if isinstance(x, str):
+            x = x.strip()
+            x = ({"path": x, "name": None} if x.startswith(("/", "~", "."))
+                 else {"path": None, "name": x})
+        if not isinstance(x, dict):
+            raise DocError("each repo is {path, name}")
+        path = str(x.get("path") or "").strip()
+        if path.startswith("~"):
+            path = os.path.expanduser(path)
+        if path and not path.startswith("/"):
+            raise DocError(f"repo path {path!r} is not absolute; give the full folder the repo "
+                           "is cloned in on the crew's machine")
+        path = os.path.normpath(path)[:500] if path else None
+        name = repo_ok(x.get("name"))
+        if not path and not name:
+            continue
+        same = next((o for o in out if (path and o["path"] == path)
+                     or (name and (o["name"] or "").lower() == name.lower())), None)
+        if same:
+            same["path"] = same["path"] or path
+            same["name"] = same["name"] or name
+        else:
+            out.append({"path": path, "name": name})
+    if len(out) > 20:
+        raise DocError(f"{len(out)} repos; a project handed to the crew takes up to 20")
+    return out
+
+
+def merge_repos(old: list[dict], new: list[dict]) -> list[dict]:
+    """A later hand-over adds its repos to the ones already handed over, never replaces them."""
+    return handover_repos([*(old or []), *(new or [])])
+
+
+def find_loop(deps: dict[str, list[str]], start: str) -> list[str] | None:
+    """A dependency loop through `start` in {ticket id: [ids it depends on]}, as the path that
+    closes it, or None."""
+    path: list[str] = []
+    on_path: set[str] = set()
+    done: set[str] = set()
+
+    def walk(t: str) -> list[str] | None:
+        if t in on_path:
+            return path[path.index(t):] + [t]
+        if t in done:
+            return None
+        on_path.add(t)
+        path.append(t)
+        for d in deps.get(t, []):
+            hit = walk(d)
+            if hit:
+                return hit
+        path.pop()
+        on_path.discard(t)
+        done.add(t)
+        return None
+
+    return walk(start)
+
+
+def finished(t: dict) -> bool:
+    """A ticket nobody works on any more: done or canceled, or (once the factory's stages exist)
+    merged or shipped."""
+    return t.get("status") in DONE_STATUSES or t.get("stage") in ("merged", "shipped")
+
+
+def delivered(t: dict) -> bool:
+    """A ticket whose work exists, so the ones depending on it may start: done, merged or
+    shipped. A canceled one did not deliver, so its dependents stay blocked until someone drops
+    the dependency or the plan changes."""
+    return t.get("status") == "done" or t.get("stage") in ("merged", "shipped")
+
+
+def readiness(tickets: list[dict]) -> dict[str, dict]:
+    """{ticket id: {ready, blocked_by: [labels]}} for every ticket. A ticket is ready when it is
+    not finished and everything it depends on is delivered; a dependency that no longer exists
+    does not block. A canceled dependency shows as "T2 (canceled)"."""
+    by_id = {t["id"]: t for t in tickets}
+    out = {}
+    for t in tickets:
+        waits = [by_id[d] for d in t.get("depends_on") or [] if d in by_id and not delivered(by_id[d])]
+        # ready means "can be started": a ticket already in the work is not
+        out[t["id"]] = {"ready": t.get("status") == "todo" and t.get("stage") in (None, "todo")
+                                 and not waits,
+                        "blocked_by": [label(w) + (" (canceled)" if w.get("status") == "canceled"
+                                                   else "") for w in waits]}
+    return out
+
+
+# ── the ledger (M4): who holds a ticket and where it stands ───────────────────
+
+STAGES = ("todo", "doing", "review", "changes", "merged", "shipped", "blocked")
+# a Tares-owned ticket's status follows its stage; a Linear one keeps Linear's
+STATUS_OF_STAGE = {"todo": "todo", "doing": "in_progress", "review": "in_progress",
+                   "changes": "in_progress", "blocked": "in_progress", "merged": "done",
+                   "shipped": "done"}
+
+
+def stage_ok(stage, reason) -> tuple[str, str]:
+    s = str(stage or "").strip().lower()
+    if s not in STAGES:
+        raise DocError(f"unknown stage {stage!r}; one of: " + ", ".join(STAGES))
+    r = " ".join(str(reason or "").split())[:500]
+    if s == "blocked" and not r:
+        raise DocError("say why it is blocked (reason)")
+    return s, r
+
+
+def may_move(caller: dict, ticket: dict, stage: str) -> str | None:
+    """None when `caller` may move `ticket` to `stage`, else the reason (TR-428): the station
+    holding the ticket (or a helper it started) moves its stage, only the releaser marks it
+    shipped, and an unlabeled session may do anything."""
+    if not caller.get("station"):
+        return None
+    if stage == "shipped":
+        return may(caller, "shipped")
+    holder = ticket.get("holder")
+    if holder and holder in (caller["station"], caller.get("parent")):
+        return None
+    name = label(ticket)
+    if not holder:
+        return (f"{name} has no holder yet: the orchestrator assigns it (assign_ticket) before "
+                "anyone moves it")
+    return f"{name} is held by {holder}; ask the orchestrator to reassign it"
+
+
+# ── the build, recorded (M5) ──────────────────────────────────────────────────
+
+ASSUMPTION_STATES = ("open", "kept", "overturned")
+
+
+def _line(v, what: str, n: int = 1000, required: bool = True) -> str:
+    s = " ".join(str(v or "").split())
+    if required and not s:
+        raise DocError(f"say {what}")
+    if len(s) > n:
+        raise DocError(f"{what} is {len(s)} characters; keep it to {n}")
+    return s
+
+
+def assumption_ok(question, choice, why, affects) -> tuple[str, str, str, str]:
+    return (_line(question, "the question"), _line(choice, "what you chose"),
+            _line(why, "why you chose it"), _line(affects, "who it affects", 300, False))
+
+
+def check_ok(command, result, commit, broke_test) -> tuple[str, str, str, str]:
+    """A check a builder ran: the command, what it showed, the commit it ran on, and for a test
+    it added, the test proven to fail against broken code."""
+    # one line, no backticks: it goes into the working doc inside a code span
+    cmd = " ".join(str(command or "").split()).replace("`", "'")
+    if not cmd:
+        raise DocError("say the command you ran")
+    if len(cmd) > 1000:
+        raise DocError("keep the command to 1000 characters")
+    commit = str(commit or "").strip()[:64]
+    if commit and not re.match(r"^[0-9a-fA-F]{4,64}$", commit):
+        raise DocError("commit is the commit's hash")
+    return cmd, _line(result, "what it showed", 1000), commit, _line(broke_test, "the test", 300, False)
+
+
+def check_line(cmd: str, result: str, commit: str, broke_test: str) -> str:
+    """One check as it reads in the working doc."""
+    at = f"[{commit[:7]}] " if commit else ""
+    broke = f" (broke the code under `{broke_test}`: it failed, then passed again)" if broke_test else ""
+    return f"- {at}`{cmd}` -> {result}{broke}"
+
+
+def add_check_to_doc(body: str, line: str) -> str:
+    """The working doc with `line` appended to the Checks part of its Progress section; both are
+    made when missing. The rest of the doc is left as it is."""
+    lines = body.rstrip("\n").split("\n") if body.strip() else []
+    prog = next((i for i, l in enumerate(lines) if re.match(r"^##\s+Progress\b", l, re.I)), None)
+    if prog is None:
+        return "\n".join(lines + ["", "## Progress", "", "### Checks", "", line]) + "\n"
+    end = next((i for i in range(prog + 1, len(lines)) if re.match(r"^#{1,2}\s", lines[i])), len(lines))
+    chk = next((i for i in range(prog + 1, end) if re.match(r"^###\s+Checks\b", lines[i], re.I)), None)
+    if chk is None:
+        at = end
+        while at > prog + 1 and not lines[at - 1].strip():
+            at -= 1
+        block = ["", "### Checks", "", line] + ([""] if end < len(lines) else [])
+        return "\n".join(lines[:at] + block + lines[end:]) + "\n"
+    stop = next((i for i in range(chk + 1, end) if re.match(r"^#{1,3}\s", lines[i])), end)
+    at = stop
+    while at > chk + 1 and not lines[at - 1].strip():
+        at -= 1
+    return "\n".join(lines[:at] + [line] + lines[at:]) + "\n"
+
+
+# ── review and merge (M6) ─────────────────────────────────────────────────────
+
+VERDICTS = ("pass", "changes", "block")
+SEVERITIES = ("P1", "P2", "P3")
+
+
+def review_ok(verdict, verified, not_verified, findings, head) -> tuple:
+    """(verdict, verified, not_verified, findings, head), cleaned; DocError on a bad value."""
+    v = str(verdict or "").strip().lower()
+    if v not in VERDICTS:
+        raise DocError("verdict is one of: " + ", ".join(VERDICTS))
+    head = str(head or "").strip().lower()
+    if not re.match(r"^[0-9a-f]{7,64}$", head):
+        raise DocError("head is the commit the review was made on (its hash)")
+    ver = str(verified or "").strip()[:4000]
+    if not ver:
+        raise DocError("say what you verified (the commands you ran and what they showed)")
+    out = []
+    for f in findings or []:
+        if not isinstance(f, dict):
+            raise DocError("each finding is {severity, file, line, blocking, text}")
+        sev = str(f.get("severity") or "P2").strip().upper()
+        if sev not in SEVERITIES:
+            raise DocError("a finding's severity is P1, P2 or P3")
+        text = _line(f.get("text"), "what the finding is", 2000)
+        try:
+            ln = int(f.get("line") or 0)
+        except (TypeError, ValueError):
+            ln = 0
+        out.append({"severity": sev, "file": str(f.get("file") or "").strip()[:300], "line": ln,
+                    "blocking": bool(f.get("blocking", sev in ("P1", "P2"))), "text": text})
+    if v == "pass" and any(f["blocking"] for f in out):
+        raise DocError("a pass cannot carry a blocking finding")
+    return v, ver, str(not_verified or "").strip()[:2000], out, head
+
+
+# what a finding is about, to see the same mistake come back (TR-443). A plain word bucket:
+# cheap, stable, and readable by a person deciding whether it is a rule
+FINDING_KINDS = [
+    ("migration", (r"migrations?", r"migrate", r"schema change", r"alter table")),
+    ("missing test", (r"no tests?", r"untested", r"missing tests?", r"not covered by",
+                      r"without a test", r"test passes against")),
+    ("error handling", (r"error handling", r"unhandled", r"swallow(s|ed)?", r"uncaught")),
+    ("config key", (r"config keys?", r"env vars?", r"environment variables?")),
+    ("null or empty", (r"null", r"empty (list|string|value|input)", r"undefined",
+                       r"nonetype")),
+    ("concurrency", (r"race conditions?", r"concurren\w*", r"deadlocks?", r"data race")),
+    ("security", (r"secrets?", r"(sql|command) injection", r"xss", r"csrf",
+                  r"auth(entication|orization|z)?\b(?!or)")),
+    ("docs out of date", (r"readme", r"out of date doc\w*", r"comment says")),
+]
+
+
+def finding_kind(text: str) -> str:
+    """What a finding is about, as a word bucket (word boundaries, no generic words)."""
+    t = (text or "").lower()
+    for kind, pats in FINDING_KINDS:
+        if any(re.search(rf"\b{p}\b", t) for p in pats):
+            return kind
+    words = [w for w in re.findall(r"[a-z]{4,}", t)][:4]
+    return " ".join(words) or "other"
+
+
+RECUR_MIN = 3          # the same kind in this many tickets of a repo is a pattern
+RECUR_DAYS = 30
+
+
+def _norm(s: str) -> str:
+    return " ".join(str(s or "").split()).lower()
+
+
+# a failure in a command's output: a non-zero failure count, a FAILED line, a traceback
+_FAIL_COUNT = re.compile(r"\b([1-9]\d*)\s+(failed|errors?|failures?)\b"
+                         r"|\b(failures|errors|failed)\s*[=:]\s*([1-9]\d*)\b", re.I)
+_FAIL_LINE = re.compile(r"^\s*(FAILED\b|FAIL\b|Traceback \(most recent call last\))", re.M)
+# the counts a claim and an output are compared on
+_COUNT = re.compile(r"\b(\d+)\s+(passed|failed|errors?|skipped|xfailed|xpassed)\b", re.I)
+
+
+def _says_failed(text: str) -> bool:
+    t = str(text or "")
+    return bool(_FAIL_COUNT.search(t) or _FAIL_LINE.search(t))
+
+
+def _same_command(claimed: str, ran: str) -> bool:
+    """The claimed command is what ran: the same command, or the last step of a chain
+    (`cd app && pytest -q` ran `pytest -q`). A short recorded command never stands for a longer
+    claim."""
+    c, r = _norm(claimed), _norm(ran)
+    if len(r) < 3 or not c:
+        return False
+    if c == r:
+        return True
+    last = re.split(r"\s*(?:&&|;|\|\|)\s*", r)[-1].strip()
+    return last == c
+
+
+def match_check(check: dict, commands: list[dict], since=None) -> tuple[str, str | None]:
+    """("matched" | "not_found" | "differs", what the recording shows) for a check a builder
+    claimed (TR-442): the command must be in the recording between `since` (when the ticket
+    went into the work) and the claim, and what it printed must agree with the claimed result
+    (each pass, fail, error and skip count the claim states, and no failure where the claim
+    says it passed). A break check also needs the named test failing, then passing."""
+    when = check.get("at")
+    ran = [c for c in commands if _same_command(check.get("command"), c["command"])
+           and (when is None or c["at"] <= when) and (since is None or c["at"] >= since)]
+    if not ran:
+        return "not_found", None
+    run = ran[-1]
+    out = run["output"] or ""
+    claim = str(check.get("result") or "")
+    counts = [(n, w.lower().rstrip("s")) for n, w in _COUNT.findall(claim) if int(n) > 0]
+    missing = [f"{n} {w}" for n, w in counts
+               if not re.search(rf"\b{n}\s+{w}s?\b", out, re.I)]
+    claims_pass = not _says_failed(claim)
+    if missing or (claims_pass and (run["is_error"] or _says_failed(out))):
+        tail = out.strip().splitlines()[-3:] if out.strip() else ["(no output recorded)"]
+        return "differs", " / ".join(tail)[:400]
+    test = str(check.get("broke_test") or "").strip()
+    if test:
+        about = [c for c in commands if test.lower() in (c["command"] + " " + c["output"]).lower()
+                 and (when is None or c["at"] <= when) and (since is None or c["at"] >= since)]
+        failed_at = next((i for i, c in enumerate(about) if c["is_error"] or _says_failed(c["output"])), None)
+        passed_after = failed_at is not None and any(
+            not (c["is_error"] or _says_failed(c["output"])) for c in about[failed_at + 1:])
+        if not passed_after:
+            return "differs", f"the recording does not show {test} failing and then passing"
+    return "matched", None
+
+
+def challenger_layer(events: list[dict]) -> dict:
+    """The Codex challenger's say on a ticket (TR-440), from its recorded reviews and waivers:
+    rounds, the findings still open (the latest review's), the ones fixed since (in an earlier
+    review, not in the latest), the waivers with their reasons."""
+    commits = [e for e in events if e["type"] == "challenge_commit"]
+    waivers = [f for e in events if e["type"] == "challenge_waived"
+               for f in (e["challenge"].get("findings") or [])]
+    if not commits:
+        return {"rounds": 0, "open": [], "fixed": [], "waived": waivers, "verdict": None,
+                "sha": None, "clean": True}
+    last = commits[-1]["challenge"]
+    verdict = str(last.get("verdict") or "").upper()
+    waived_titles = {w.get("title") for w in waivers}
+    # a waiver recorded after the review it answers takes the finding out of the open ones
+    open_ = ([f for f in (last.get("findings") or [])
+              if not f.get("waived") and f.get("title") not in waived_titles]
+             if verdict == "FAIL" else [])
+    open_titles = {f.get("title") for f in open_}
+    seen: dict[str, dict] = {}
+    for e in commits[:-1]:
+        for f in e["challenge"].get("findings") or []:
+            if not f.get("waived"):
+                seen.setdefault(f.get("title"), f)
+    fixed = [f for t, f in seen.items() if t not in open_titles and t not in waived_titles]
+    blocking = [f for f in open_ if f.get("priority") in ("P1", "P2")]
+    # a run that gave no verdict (error, timeout) is not a clean layer
+    ran = verdict in ("PASS", "FAIL")
+    return {"rounds": len(commits), "open": open_, "fixed": fixed, "waived": waivers,
+            "verdict": "pass" if verdict == "PASS" else "findings" if verdict == "FAIL"
+            else (verdict.lower() or "no verdict"),
+            "sha": last.get("sha"), "clean": ran and not blocking}
+
+
+# ── you in the loop (M7) ──────────────────────────────────────────────────────
+
+DESK_STATES = ("open", "answered", "withdrawn")
+MATCH_HOURS = 48       # an answer is looked for in what the person typed this recently
+
+
+def desk_ok(question, recommendation, why, options, context) -> tuple:
+    q = _line(question, "the question", 1000)
+    rec = _line(recommendation, "your recommendation", 500)
+    w = _line(why, "why you recommend it", 1000)
+    if options is None:
+        options = []
+    if not isinstance(options, list) or len(options) > 8:
+        raise DocError("options is a list of up to 8 choices")
+    opts = [_line(o, "an option", 300) for o in options]
+    return q, rec, w, opts, _line(context, "the context", 1500, False)
+
+
+def _plain(s: str) -> str:
+    t = " ".join(str(s or "").lower().split())
+    t = t.replace("’", "'").replace("“", '"').replace("”", '"')
+    return t.strip(" .!\"'")
+
+
+def _pieces(text: str) -> list[str]:
+    """A turn, each of its lines, and each sentence of each line, in plain form."""
+    out = [_plain(text)]
+    for line in str(text or "").splitlines():
+        if line.strip():
+            out.append(_plain(line))
+            out += [_plain(s) for s in re.split(r"(?<=[.!?;])\s+", line) if s.strip()]
+    return [p for p in out if p]
+
+
+def words_match(words: str, turns: list[dict]) -> dict | None:
+    """The person turn whose whole text, or one whole line or sentence of it, is `words` (case,
+    spacing and quote marks aside), or None. Not a fragment: "ok" is not found in "token", nor
+    "ship it" in "I don't want to ship it". An answer recorded as the person's must be what
+    they typed (TR-450)."""
+    w = _plain(words)
+    if len(w) < 2:
+        return None
+    return next((t for t in turns if w in _pieces(t["text"])), None)
+
+
+OPTION_LETTERS = "ABCDEFGH"   # desk options are lettered by position; desk_ok allows 8
+_LETTER = re.compile(r"^\(?([a-h])\)?[.)]?$")
+
+
+def option_letter(words: str) -> int | None:
+    """The option a reply of one letter names (B, b, B), (B), B.): its index, or None when the
+    words are not a single letter (TR-475)."""
+    m = _LETTER.match(_plain(words))
+    return OPTION_LETTERS.lower().index(m.group(1)) if m else None
+
+
+def letter_match(index: int, turns: list[dict]) -> dict | None:
+    """The person turn that is that option's letter and nothing else. A letter inside a longer
+    message never counts: "B but later" and "maybe B" are not B."""
+    return next((t for t in turns if option_letter(t["text"]) == index), None)
+
+
+QUIET_MIN = 10   # a working session that sent nothing for this long shows as quiet
+# a waiting session silent this long is most likely gone: Claude Code retires idle background
+# sessions after about an hour, and one killed, or whose end never reached Tares, never says so
+WAITING_QUIET_MIN = 90
+
+
+def shown_state(state: str | None, last_at, now) -> str | None:
+    """The state to show for a session: "quiet" once a working or waiting one has been silent
+    past its window (TR-473), else the state it reported."""
+    if state in ("working", "waiting") and hasattr(last_at, "timestamp"):
+        quiet = (now - last_at).total_seconds() // 60
+        if quiet >= (QUIET_MIN if state == "working" else WAITING_QUIET_MIN):
+            return "quiet"
+    return state
+
+
+# Tares reads a session a few seconds behind what the person typed, so a reply not found yet is
+# looked for again for this long before the answer is refused (TR-475).
+MATCH_WAIT_SECONDS = 10.0
+
+
+def says_every_project(words: str) -> bool:
+    """The person's words say a standing answer holds for every project."""
+    return bool(re.search(r"\b(all|every|each) projects?\b|\beverywhere\b", str(words or ""),
+                          re.I))
+
+
+# ── the crew (M3): one always-on crew serves every project ────────────────────
+
+ROLES = ("orchestrator", "reviewer", "releaser", "builder", "helper")
+AUTONOMY = {
+    "L3-review": "you approve each merge",
+    "L4-ship": "a builder merges after the reviewer's pass and green CI",
+}
+MAX_NAME = 120
+
+
+def station_ok(name, role, parent) -> tuple[str, str, str]:
+    """(station, role, parent), cleaned; DocError when the station has no name or an unknown
+    role."""
+    name = str(name or "").strip()[:MAX_NAME]
+    role = str(role or "").strip().lower()
+    parent = str(parent or "").strip()[:MAX_NAME]
+    if not name:
+        raise DocError("a station needs its name")
+    if role and role not in ROLES:
+        raise DocError(f"unknown role {role!r}; one of: " + ", ".join(ROLES))
+    return name, role, parent
+
+
+CREW_DEFAULTS = {"autonomy": None, "releaser": None, "release_profile": None,
+                 "prod_pattern": None, "challenger": None, "builders_max": None}
+
+
+def crew_settings_ok(body: dict, cur: dict) -> dict:
+    """The crew's settings with the fields `body` sets changed; DocError on a bad value."""
+    out = {**CREW_DEFAULTS, **cur}
+    if body.get("autonomy") not in (None, ""):
+        a = str(body["autonomy"]).strip()
+        if a not in AUTONOMY:
+            raise DocError(f"unknown autonomy {a!r}; one of: " + ", ".join(AUTONOMY))
+        out["autonomy"] = a
+    for k in ("release_profile", "prod_pattern"):
+        if body.get(k) is not None:
+            v = " ".join(str(body[k]).split())
+            if len(v) > 300:
+                raise DocError(f"{k} is {len(v)} characters; keep it to 300")
+            out[k] = v or None
+    for k in ("challenger", "releaser"):
+        if body.get(k) is not None:
+            out[k] = bool(body[k])
+    if body.get("builders_max") is not None:
+        try:
+            n = int(body["builders_max"])
+        except (TypeError, ValueError):
+            raise DocError("builders_max is a whole number")
+        if not 1 <= n <= 20:
+            raise DocError("builders_max is between 1 and 20")
+        out["builders_max"] = n
+    return out
+
+
+def grant_line(words, when: str) -> str:
+    """One grant as it is kept: the person's words, quoted, and the day they said them."""
+    w = " ".join(str(words or "").split()).strip().strip('"')
+    if not w:
+        raise DocError("a grant quotes the person's words; there are none")
+    if len(w) > 400:
+        raise DocError(f"the grant is {len(w)} characters; keep it to 400")
+    return f'"{w}" ({when})'
+
+
+# Who may write what (the contract's table). A labeled station is any caller that says which
+# station it is (the MCP proxy forwards FACTORY_STATION and FACTORY_ROLE); an unlabeled one (a
+# person's own session, a single build session, the factory CLI) may do everything, as in M1.
+# Cooperative, not a security boundary.
+ONLY = {
+    "grants": ("orchestrator",),
+    "global_docs": ("orchestrator",),
+    "assign": ("orchestrator",),
+    "desk": ("orchestrator",),
+    "finish": ("orchestrator",),
+    "assumption_state": ("orchestrator",),
+    "review": ("reviewer",),
+    "shipped": ("releaser",),
+}
+WHO = {"grants": "the orchestrator", "global_docs": "the orchestrator",
+       "assign": "the orchestrator", "desk": "the orchestrator", "finish": "the orchestrator",
+       "assumption_state": "the orchestrator", "review": "the reviewer",
+       "shipped": "the releaser"}
+
+
+def may(caller: dict, action: str) -> str | None:
+    """None when `caller` ({station, role, parent}) may do `action`, else the reason to tell it."""
+    if not caller.get("station"):
+        return None
+    allowed = ONLY.get(action)
+    if allowed is None or caller.get("role") in allowed:
+        return None
+    return (f"{caller['station']} is a {caller.get('role') or 'station'}: only {WHO[action]} "
+            f"may do this. Send it to {WHO[action]}.")

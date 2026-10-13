@@ -24,6 +24,8 @@ from .registry import get_template, list_templates as _list_templates
 # delete order: dependents first (an agent references a trigger and may reference an mcp server,
 # a trigger reads sources). A skill (TR-332) is the project's own and depends on nothing.
 _DELETE_ORDER = ("agent", "trigger", "source", "mcp_server", "skill")
+# what a project includes that no template plans (TR-403): a re-plan never touches it
+_NOT_PLANNED = ("doc",)
 _SECTION = {"source": "sources", "trigger": "triggers",
             "agent": "agents", "mcp_server": "mcp_servers"}
 # the kinds that belong to exactly one project (a source is shared)
@@ -179,7 +181,7 @@ class Engine:
         # rows keyed `+kind:name` were added to this project by hand, not planned: a re-plan
         # leaves them alone
         existing = {(o["kind"], o["key"]): o for o in self.store.list_project_objects(uid)
-                    if not o["key"].startswith("+")}
+                    if not o["key"].startswith("+") and o["kind"] not in _NOT_PLANNED}
         current = self._existing_names(uid)
         report = {"created": [], "updated": [], "kept": [], "deleted": []}
         to_apply: list[PlannedObject] = []
@@ -673,9 +675,10 @@ class Engine:
         self._delete_objects(gone, purge_events=False, uid=uid)
 
     def _update_custom(self, uid: str, inst: dict, params: dict, plan: list[PlannedObject]) -> dict:
-        # a skill is used through the project's skills, not its object list (P-TR-216)
+        # a skill is used through the project's skills, a doc through its docs, not its object
+        # list (P-TR-216, TR-403)
         existing = {(o["kind"], o["key"]): o for o in self.store.list_project_objects(uid)
-                    if o["kind"] != "skill"}
+                    if o["kind"] not in ("skill",) + _NOT_PLANNED}
         planned = {(o.kind, o.key) for o in plan}
         added = [o for o in plan if (o.kind, o.key) not in existing]
         removed = [PlannedObject(k, key, {"name": o["name"]})

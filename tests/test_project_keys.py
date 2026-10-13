@@ -193,6 +193,7 @@ async def main():
                   ("GET", "/derive"),   # a GET outside /api is the console's; this one says views are gone
                   # GitHub sends the browser back here: gated by a signed state / proof of ownership
                   ("GET", "/api/integrations/github/apps/callback"),
+                  ("GET", "/api/linear/oauth/callback"),   # gated by its signed state + PKCE
                   ("GET", "/api/integrations/github/apps/installed")}
         # allowed, and narrowed to the key's project by the handler
         scoped = {("GET", "/api/whoami"), ("POST", "/read"), ("GET", "/catalog"),
@@ -229,7 +230,24 @@ async def main():
                   # the goal-first page's reads
                   ("GET", "/api/projects/{uid}/results"),
                   ("GET", "/api/projects/{uid}/results/{run_id}"),
-                  ("GET", "/api/projects/{uid}/outline"), ("GET", "/api/projects/{uid}/health")}
+                  ("GET", "/api/projects/{uid}/outline"), ("GET", "/api/projects/{uid}/health"),
+                  # docs and tickets (TR-403): what a session building the project reads
+                  ("GET", "/api/projects/{uid}/docs"), ("GET", "/api/projects/{uid}/docs/{doc_id}"),
+                  ("GET", "/api/projects/{uid}/tickets"),
+                  ("GET", "/api/projects/{uid}/tickets/{ref}"),
+                  ("GET", "/api/projects/{uid}/sessions"),
+                  ("GET", "/api/projects/{uid}/sessions/{sid}"),
+                  ("GET", "/api/projects/{uid}/pickup"),
+                  # the factory's plan (TR-411)
+                  ("GET", "/api/projects/{uid}/milestones"),
+                  # the crew that works on it (TR-422)
+                  ("GET", "/api/projects/{uid}/crew"),
+                  # the crew's messages about a ticket (TR-429)
+                  ("GET", "/api/projects/{uid}/tickets/{ref}/messages"),
+                  # what builders assumed (TR-433)
+                  ("GET", "/api/projects/{uid}/assumptions"),
+                  # the person's decisions on it (TR-451)
+                  ("GET", "/api/projects/{uid}/decisions")}
         bad, n = [], 0
         for route in app.routes:
             if not isinstance(route, APIRoute) or "{uid}" not in route.path:

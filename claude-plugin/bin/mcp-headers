@@ -1,0 +1,12 @@
+#!/bin/sh
+# The factory keeps the crew's token in a file, never in a station's settings, and Claude Code hides
+# variables named *TOKEN* from this helper, so the file's path comes in TARES_FACTORY_CRED_FILE.
+f=${TARES_FACTORY_CRED_FILE:-}
+if [ -n "$f" ] && [ -r "$f" ]; then
+  tok=$(tr -d '[:space:]' < "$f")
+  if [ -n "$tok" ]; then
+    printf '{"Authorization":"Bearer %s"}\n' "$tok"
+    exit 0
+  fi
+fi
+echo '{}'

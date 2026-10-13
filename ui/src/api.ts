@@ -8,6 +8,8 @@ import type {
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults,
   Skill, SkillSummary,
+  Assumption, CrewMessage, CrewProject, CrewSettings, CrewStation, Decision, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, Handover, LinearLink, LinearStatus, Milestone,
+  ProjectSession, Ticket, TicketStatus,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, ModelProvider, ModelProviders,
 } from "./types";
@@ -531,6 +533,80 @@ export const api = {
   uploadSkill: (id: string, text: string) =>
     request<Skill & { created: boolean }>(`/api/projects/${encodeURIComponent(id)}/skills/upload`,
       { method: "POST", body: text, headers: { "content-type": "text/markdown" } }),
+  // A project's docs and tickets (TR-403), its Claude Code sessions (TR-405), Linear (TR-408)
+  docs: (id: string) => request<DocSummary[]>(`/api/projects/${encodeURIComponent(id)}/docs`),
+  doc: (id: string, docId: string) =>
+    request<Doc>(`/api/projects/${encodeURIComponent(id)}/docs/${encodeURIComponent(docId)}`),
+  createDoc: (id: string, body: { kind: DocKind; title: string; body: string }) =>
+    request<Doc>(`/api/projects/${encodeURIComponent(id)}/docs`,
+      { method: "POST", body: JSON.stringify({ ...body, by: "console" }) }),
+  updateDoc: (id: string, docId: string, body: { kind?: DocKind; title?: string; body?: string }) =>
+    request<Doc>(`/api/projects/${encodeURIComponent(id)}/docs/${encodeURIComponent(docId)}`,
+      { method: "PUT", body: JSON.stringify({ ...body, by: "console" }) }),
+  deleteDoc: (id: string, docId: string) =>
+    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/docs/${encodeURIComponent(docId)}`,
+      { method: "DELETE" }),
+  tickets: (id: string) =>
+    request<{ tickets: Ticket[]; linear: LinearLink | null }>(`/api/projects/${encodeURIComponent(id)}/tickets`),
+  ticket: (id: string, ref: string) =>
+    request<Ticket>(`/api/projects/${encodeURIComponent(id)}/tickets/${encodeURIComponent(ref)}`),
+  createTicket: (id: string, body: { title: string; status?: TicketStatus; working_doc?: string }) =>
+    request<Ticket>(`/api/projects/${encodeURIComponent(id)}/tickets`,
+      { method: "POST", body: JSON.stringify(body) }),
+  updateTicket: (id: string, ref: string, body: { title?: string; status?: TicketStatus; position?: number; working_doc?: string | null }) =>
+    request<Ticket>(`/api/projects/${encodeURIComponent(id)}/tickets/${encodeURIComponent(ref)}`,
+      { method: "PUT", body: JSON.stringify(body) }),
+  deleteTicket: (id: string, ref: string) =>
+    request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/tickets/${encodeURIComponent(ref)}`,
+      { method: "DELETE" }),
+  milestones: (id: string) =>
+    request<{ milestones: Milestone[] }>(`/api/projects/${encodeURIComponent(id)}/milestones`),
+  desk: (project = "") =>
+    request<{ desk: DeskItem[] }>(`/api/desk?state=open${project ? `&project=${encodeURIComponent(project)}` : ""}`),
+  projectDecisions: (id: string) =>
+    request<{ decisions: Decision[] }>(`/api/projects/${encodeURIComponent(id)}/decisions`),
+  reviewQueue: () => request<{ queue: QueueItem[]; now: string }>("/api/review-queue"),
+  ruleProposals: () => request<{ proposals: RuleProposal[] }>("/api/rule-proposals"),
+  decideRule: (pid: string, decision: "accept" | "reject", text?: string) =>
+    request<RuleProposal>(`/api/rule-proposals/${encodeURIComponent(pid)}/${decision}`,
+      { method: "POST", body: JSON.stringify(text ? { text } : {}) }),
+  assumptions: (id: string) =>
+    request<{ assumptions: Assumption[] }>(`/api/projects/${encodeURIComponent(id)}/assumptions`),
+  ticketMessages: (id: string, ref: string) =>
+    request<{ messages: CrewMessage[] }>(
+      `/api/projects/${encodeURIComponent(id)}/tickets/${encodeURIComponent(ref)}/messages`),
+  crew: () => request<{ stations: CrewStation[]; settings: CrewSettings; grants: string; now: string }>("/api/crew"),
+  crewProjects: () => request<{ projects: CrewProject[]; finished?: (Pick<CrewProject, "id" | "name" | "tickets_done" | "tickets_total"> & { finished: ProjectFinished | null })[]; now: string }>("/api/crew/projects"),
+  station: (name: string) => request<StationDetail>(`/api/crew/${encodeURIComponent(name)}?recent=40`),
+  projectRepos: (id: string) =>
+    request<{ repos: ProjectRepo[] }>(`/api/projects/${encodeURIComponent(id)}/repos`),
+  projectCrew: (id: string) =>
+    request<{ stations: CrewStation[]; handover: Handover | null; now: string }>(
+      `/api/projects/${encodeURIComponent(id)}/crew`),
+  projectSessions: (id: string) =>
+    request<{ sessions: ProjectSession[]; now: string }>(`/api/projects/${encodeURIComponent(id)}/sessions`),
+  projectSession: (id: string, sid: string, offset = 0) =>
+    request<{ session: string; lines: { event_type: string; text: string; event_time: string; labels: Record<string, string> }[] }>(
+      `/api/projects/${encodeURIComponent(id)}/sessions/${encodeURIComponent(sid)}?limit=500&offset=${offset}`),
+  linear: () => request<LinearStatus>("/api/linear"),
+  linearConnectKey: (api_key: string) =>
+    request<LinearStatus>("/api/linear", { method: "POST", body: JSON.stringify({ api_key }) }),
+  linearOauthApp: (client_id: string, client_secret?: string) =>
+    request<LinearStatus>("/api/linear/oauth-app",
+      { method: "PUT", body: JSON.stringify(client_secret === undefined ? { client_id } : { client_id, client_secret }) }),
+  linearOauthStart: () => request<{ url: string; redirect_uri: string }>("/api/linear/oauth/start"),
+  linearDisconnect: () => request<LinearStatus>("/api/linear", { method: "DELETE" }),
+  linearProjects: (q = "") =>
+    request<{ projects: { id: string; name: string; url: string }[] }>(`/api/linear/projects?q=${encodeURIComponent(q)}`),
+  linkLinear: (id: string, project: string) =>
+    request<{ tickets: Ticket[]; linear: LinearLink | null }>(`/api/projects/${encodeURIComponent(id)}/linear`,
+      { method: "POST", body: JSON.stringify({ project }) }),
+  syncLinear: (id: string) =>
+    request<{ tickets: Ticket[]; linear: LinearLink | null }>(`/api/projects/${encodeURIComponent(id)}/linear/sync`,
+      { method: "POST" }),
+  unlinkLinear: (id: string) =>
+    request<{ tickets: Ticket[]; linear: null }>(`/api/projects/${encodeURIComponent(id)}/linear`,
+      { method: "DELETE" }),
   // ── Goal-first setup: plan from a goal, adjust in plain words, apply, then connect and try ──
   planSetup: (body: { goal: string; who?: "tares" | "own"; existing_sources?: boolean }) =>
     request<{ plan: Plan }>("/api/setup/plan", { method: "POST", body: JSON.stringify(body) }),

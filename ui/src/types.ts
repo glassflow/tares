@@ -345,6 +345,187 @@ export interface Skill {
   updated_at: string;
 }
 
+// Docs and tickets (TR-403): what a spec session leaves in a project for the session that builds it
+export type DocKind = "start" | "spec" | "plan" | "agents" | "memory" | "grants" | "note" | "working";
+export interface DocSummary {
+  id: string;
+  kind: DocKind;
+  title: string;
+  global?: boolean;     // the AGENTS.md or memory every project shares
+  made_by: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+  size?: number;
+}
+export interface Doc extends DocSummary { body: string; projects: string[] }
+export type TicketStatus = "todo" | "in_progress" | "done" | "canceled";
+export interface Ticket {
+  id: string;
+  owner: "tares" | "linear";
+  identifier: string | null;
+  url: string | null;
+  title: string;
+  status: TicketStatus;
+  position: number;
+  working_doc: string | null;
+  working_doc_title: string | null;
+  working_doc_body?: string | null;
+  updated_at: string;
+  // the factory's plan (TR-411, TR-412)
+  number: number | null;
+  label: string;                  // the Linear identifier, else T<n>
+  milestone: string | null;       // milestone id
+  milestone_name: string | null;
+  repo?: string | null;           // the GitHub repo (owner/name) it changes, when the project spans several
+  depends_on: string[];           // labels of the tickets it waits for
+  ready: boolean;                 // not finished, and everything it depends on is
+  blocked_by: string[];           // labels of the unfinished tickets it depends on
+  // the ledger (TR-427, TR-410): who holds it, where it stands, its PR as GitHub has it
+  holder: string | null;
+  stage: TicketStage | null;
+  stage_reason: string | null;
+  pr: TicketPR | null;
+  pr_note: string | null;         // the stage and GitHub disagree
+  history?: { at: string; field: "holder" | "stage"; value: string | null; reason: string | null; by: string | null; role: string | null }[];
+  // the build, recorded (TR-433, TR-435)
+  assumptions?: { label: string; question: string; choice: string; why: string; state: AssumptionState; words: string | null; made_by: string | null; tickets: string[] }[];
+  checks?: TicketCheck[];
+  // review and merge (TR-440..444)
+  verdict?: VerdictNow | null;
+  reviews?: Review[];
+  challenger?: { rounds: number; open: ChallengeFinding[]; fixed: ChallengeFinding[]; waived: ChallengeFinding[]; verdict: string | null; sha: string | null; clean: boolean };
+}
+export interface VerdictNow { verdict: "pass" | "changes" | "block"; head: string; round: number; at: string; current: boolean; note: string | null }
+export interface ChallengeFinding { priority?: string; title?: string; waived?: boolean; reason?: string }
+export interface ReviewFinding { id: string; label: string; severity: "P1" | "P2" | "P3"; file: string | null; line: number | null; blocking: boolean; text: string; kind: string; state: "open" | "fixed"; fixed_in: string | null }
+export interface Review { id: string; round: number; pr: string | null; head: string; verdict: "pass" | "changes" | "block"; verified: string; not_verified: string | null; by: string | null; at: string; findings: ReviewFinding[]; fixed: string[] }
+export interface DeskItem {
+  id: string; label: string; project: string | null; project_name: string | null; question: string;
+  context: string; options: string[]; recommendation: string; why: string; blocks: string;
+  tickets: string[]; blocking: boolean; asked_by: string | null; assumptions: string[];
+  state: "open" | "answered" | "withdrawn"; reason: string | null; created_at: string; closed_at: string | null;
+}
+export interface Decision {
+  id: string; label: string | null; question: string; words: string; choice: string | null;
+  standing: boolean; scope: "project" | "all"; matched: boolean; granted: boolean; tickets: string[]; at: string;
+}
+export interface QueueItem { project: string; project_name: string; ticket: string; title: string; holder: string | null; repo: string | null; pr: string | null; head: string | null; waiting_minutes: number | null; blocks_milestone: boolean; layer1_clean: boolean; verdict: VerdictNow | null }
+export interface RuleProposal { id: string; repo: string; kind: string; project: string | null; scope: "project" | "all"; text: string; tickets: string[]; state: "open" | "accepted" | "rejected"; created_at: string }
+export type AssumptionState = "open" | "kept" | "overturned";
+export interface Assumption {
+  id: string; label: string; number: number; question: string; choice: string; why: string;
+  affects: string; tickets: string[]; state: AssumptionState; words: string | null;
+  made_by: string | null; made_at: string; decided_at: string | null;
+}
+export interface TicketCheck {
+  id: string; command: string; result: string; commit: string | null; broke_test: string | null;
+  by: string | null; at: string;
+  match?: "matched" | "not_found" | "differs" | null; recorded?: string | null;
+}
+export type TicketStage = "todo" | "doing" | "review" | "changes" | "merged" | "shipped" | "blocked";
+export interface TicketPR {
+  url?: string; repo?: string; number?: number; title?: string; branch?: string; head?: string;
+  state?: "open" | "closed"; merged?: boolean; merge_commit?: string | null;
+  ci?: "success" | "failure" | "pending" | "none"; verdict?: "pass" | "changes" | "pending" | null;
+  verdict_text?: string | null; checked_at?: string | null; error?: string | null;
+}
+export interface CrewMessage { at: string; session: string; from: string; to: string; type: string; first_line: string; text: string }
+export interface MilestoneCheck { check: string; expect: string }
+export interface Milestone {
+  id: string;
+  owner: "tares" | "linear";
+  name: string;
+  goal: string;
+  checks: MilestoneCheck[];
+  position: number;
+  updated_at: string;
+  tickets: number;
+  done: number;
+  ready: string[];
+  finished: boolean;
+}
+// The tares-factory crew (M3): stations are roles with stable names, played by a chain of sessions
+export type CrewState = "working" | "waiting" | "quiet" | "ended";
+export interface CrewStation {
+  name: string;
+  role: string | null;
+  parent: string | null;
+  project: string | null;
+  project_name: string | null;
+  projects: string[];
+  state: CrewState;
+  state_reason: string | null;
+  state_at: string | null;
+  quiet_minutes: number | null;
+  session: string;
+  started_at: string | null;
+  last_at: string | null;
+  lines: number;
+  earlier: { session: string; started_at: string | null; last_at: string | null; lines: number; state: "replaced" }[];
+  children: string[];
+}
+export interface CrewSettings {
+  autonomy: "L3-review" | "L4-ship" | null;
+  releaser: boolean | null;
+  release_profile: string | null;
+  prod_pattern: string | null;
+  challenger: boolean | null;
+  builders_max: number | null;
+}
+export interface HandoverRepo { path: string | null; name: string | null }
+export interface ProjectFinished { at: string; words: string; decision: string | null; by: string | null }
+export interface Handover { repo: string | null; repos: HandoverRepo[]; autonomy: string | null; by: string | null; at: string; finished?: ProjectFinished | null }
+// A repo a project touches, with the tickets that change it and their open pull requests (TR-463)
+export interface RepoPR {
+  url: string; ticket: string; number: number | null; title: string; branch: string | null;
+  head: string | null; ci: "success" | "failure" | "pending" | "none" | null;
+  github_verdict: "pass" | "changes" | "pending" | null; stage: TicketStage | null; holder: string | null;
+  review: { verdict: "pass" | "changes" | "block"; round: number; current: boolean } | null;
+  merged_at: string | null; checked_at: string | null; error: string | null;
+}
+export interface ProjectRepo extends HandoverRepo {
+  tickets: string[];
+  open_prs: RepoPR[];
+  merged_prs: RepoPR[];
+  github_error: string | null;
+}
+// A project handed to the crew, as the orchestrator reads it (TR-462)
+export interface CrewProject {
+  id: string; name: string; repos: ProjectRepo[]; autonomy: string | null;
+  handed_over_at: string | null; handed_over_by: string | null;
+  tickets_done: number; tickets_total: number; stages: Record<string, number>;
+  milestone: { name: string; done: number; total: number } | null;
+}
+export interface StationDetail extends CrewStation {
+  tickets: { project: string; project_name: string; ticket: string; title: string; stage: string | null; repo: string | null; pr: string | null }[];
+  recent: { at: string | null; type: string | null; text: string }[];
+  attach: string;
+}
+export interface LinearLink {
+  id: string; name: string; url: string;
+  synced_at?: string | null; error?: string | null; issues?: number;
+}
+export interface LinearStatus {
+  connected: boolean;
+  kind?: "api_key" | "oauth";
+  account?: { name?: string; email?: string; org?: string };
+  connected_at?: string;
+  oauth_available: boolean;
+  client_id: string;
+  client_id_from_env: boolean;
+}
+export interface ProjectSession {
+  session: string; repo: string | null; linked_at: string;
+  started_at: string | null; last_at: string | null; lines: number;
+  // what it is doing now, from the plugin; null before the plugin reported a state
+  state: "working" | "waiting" | "quiet" | "ended" | "replaced" | null;   // replaced: a fresh session picked up; quiet: silent past its window (TR-473)
+  state_reason: string | null;
+  state_at: string | null;
+  last_said?: string;   // a waiting session: the last thing it wrote
+  station?: string | null;   // the tares-factory station it played, for a crew session
+}
+
 export interface RunResult {
   kind: "pr" | "commit" | "check" | "slack" | "email" | "webhook" | "custom";
   label: string;
@@ -553,13 +734,14 @@ export interface Project {
   template_title: string;
   name: string;
   params: Record<string, unknown>;
-  status: "active" | "paused" | "error" | "draft";   // draft: being planned, nothing exists yet
+  status: "active" | "paused" | "error" | "draft" | "done";   // draft: being planned; done: the person said it is finished
   created_at: string;
   updated_at: string;
   last_error: string | null;
   objects: ProjectObject[];
   default?: boolean;   // the Default project: holds whatever was made outside a project; never deleted
   goal?: string | null; // what the project should achieve, one line (<= 200 chars); null = not set yet
+  kind?: "software_factory" | null;   // its own page and tag; null = an ordinary project
 }
 
 // ── the goal-first project page (contract: goal-first-contract.md, "Backend") ──

@@ -16,6 +16,7 @@ from datetime import datetime
 import duckdb
 
 from .envelope import Envelope, now_utc
+from .factory_store import FACTORY_SCHEMA, FactoryStore
 
 # the URL a Tares agent's subscription had before the wiring moved onto projects (config.agent_url)
 AGENT_PREFIX = "tares://agent/"
@@ -282,6 +283,54 @@ CREATE TABLE IF NOT EXISTS shared_skills (
   created_at  TIMESTAMPTZ,
   updated_at  TIMESTAMPTZ
 );
+-- Docs (TR-403): markdown that belongs to the cell, included by projects through usecase_objects
+-- (kind 'doc', key 'doc:<id>'), like skills. `made_by` is the project that wrote it, `updated_by`
+-- who changed it last (a key's name, "console", a session). Kinds in tares/docs.py.
+CREATE TABLE IF NOT EXISTS docs (
+  id          TEXT PRIMARY KEY,
+  kind        TEXT,
+  title       TEXT,
+  body        TEXT,
+  made_by     TEXT,
+  updated_by  TEXT,
+  created_at  TIMESTAMPTZ,
+  updated_at  TIMESTAMPTZ
+);
+-- Tickets (TR-403): a project's list of work. owner 'linear' is a record of a Linear issue, written
+-- only by the Linear sync (external_id = the issue id, identifier = e.g. ENG-12). owner 'tares'
+-- means the project has no Linear and Tares is the source of truth. `working_doc` is a doc id.
+CREATE TABLE IF NOT EXISTS tickets (
+  id          TEXT PRIMARY KEY,
+  project     TEXT,
+  owner       TEXT,
+  external_id TEXT,
+  identifier  TEXT,
+  url         TEXT,
+  title       TEXT,
+  status      TEXT,
+  position    DOUBLE,
+  working_doc TEXT,
+  created_at  TIMESTAMPTZ,
+  updated_at  TIMESTAMPTZ
+);
+-- Claude Code sessions that worked in a project (TR-405): the plugin tells Tares which project a
+-- session works in with a `session_project` line, and the whole session (its claude_code events,
+-- keyed by session id, the lines from before the project existed included) reads as the project's
+CREATE TABLE IF NOT EXISTS project_sessions (
+  project    TEXT,
+  session    TEXT,
+  repo       TEXT,
+  linked_at  TIMESTAMPTZ,
+  PRIMARY KEY (project, session)
+);
+-- What a Claude Code session is doing now (TR-405 follow-up), from the plugin's session_state
+-- lines: working, waiting (for the person, `reason` says why) or ended. One row per session.
+CREATE TABLE IF NOT EXISTS session_states (
+  session    TEXT PRIMARY KEY,
+  state      TEXT,
+  reason     TEXT,
+  state_at   TIMESTAMPTZ
+);
 CREATE TABLE IF NOT EXISTS skills (
   project     TEXT,
   name        TEXT,
@@ -411,6 +460,27 @@ _MIGRATIONS = [
     # A trigger's own words for what wakes it ("an alert fires in the demo service"), used by
     # every generated sentence instead of the rule's wording. NULL = say it from the rule.
     "ALTER TABLE catalog_triggers ADD COLUMN IF NOT EXISTS description TEXT",
+    # TR-408: the Linear project a project's tickets live in, and how the last sync went
+    # ({id, name, url, synced_at, cursor, error}); NULL = the project does not use Linear
+    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS linear JSON",
+    # What kind of project it is, shown as a tag and choosing its page (NULL = an ordinary
+    # project). 'software_factory': specced in Claude Code, built from docs and tickets.
+    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS kind TEXT",
+    # The factory's plan (TR-411, TR-412): the milestone a ticket belongs to (a milestone id),
+    # the tickets it depends on ([ticket id]), and its number in the project (T1, T2, ...)
+    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS milestone TEXT",
+    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS depends_on JSON",
+    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS number INTEGER",
+    # The ledger (TR-427): the station holding the ticket, where it stands (todo, doing, review,
+    # changes, merged, shipped, blocked, with the reason when blocked), and its pull request as
+    # Tares last read it from GitHub (TR-410): {url, repo, number, head, branch, ci, verdict,
+    # verdict_head, merged, merge_commit, state, checked_at, error}
+    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS holder TEXT",
+    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS stage TEXT",
+    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS stage_reason TEXT",
+    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS pr JSON",
+    # The GitHub repo (owner/name) a ticket changes, when its project spans several (TR-456)
+    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS repo TEXT",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -581,7 +651,7 @@ class StoreUnavailable(RuntimeError):
         self.path = path
 
 
-class Store:
+class Store(FactoryStore):
     def __init__(self, path: str = "tares.duckdb"):
         # All access is from taresd's event loop thread; the lock is belt-and-suspenders since
         # FastAPI may run sync work in a threadpool.
@@ -602,6 +672,8 @@ class Store:
                     self.con.execute(stmt)
             for stmt in _MIGRATIONS:
                 self.con.execute(stmt)
+            for stmt in FACTORY_SCHEMA:
+                self.con.execute(stmt)
             self._rename_query_log_scope()
             self._fold_views()
             self._migrate_claude_code_repo_label()
@@ -609,6 +681,8 @@ class Store:
             self._lineage_upgrade()
             self._wiring_upgrade()
             self._skills_upgrade()
+            self._factory_kind_upgrade()
+            self._factory_upgrade()
             self._init_source_stats()
             self._init_entity_counts()
             # Write the upgrade into the database file now. Left in the WAL, the new columns on
@@ -1012,7 +1086,7 @@ class Store:
             status = {r[0]: r[1] for r in self.con.execute(
                 "SELECT id, status FROM usecases").fetchall()}
         return [p for p in self.projects_using(kind, name)
-                if status.get(p) not in ("paused", "draft", None)]
+                if status.get(p) not in ("paused", "draft", "done", None)]
 
     def projects_using(self, kind: str, name: str) -> list[str]:
         """The projects whose object list has this part (any kind), oldest membership first."""
@@ -2173,21 +2247,40 @@ class Store:
     def _project_row(r) -> dict:
         return {"id": r[0], "template": r[1], "name": r[2], "params": json.loads(r[3] or "{}"),
                 "status": r[4], "created_at": r[5], "updated_at": r[6], "last_error": r[7],
-                "goal": r[8]}
+                "goal": r[8], "kind": r[9]}
 
     def list_projects(self) -> list[dict]:
         with self._lock:
             rows = self.con.execute(
                 "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
-                "goal FROM usecases ORDER BY created_at").fetchall()
+                "goal, kind FROM usecases ORDER BY created_at").fetchall()
         return [self._project_row(r) for r in rows]
 
     def get_project(self, uid: str) -> dict | None:
         with self._lock:
             r = self.con.execute(
                 "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
-                "goal FROM usecases WHERE id = ?", [uid]).fetchone()
+                "goal, kind FROM usecases WHERE id = ?", [uid]).fetchone()
         return self._project_row(r) if r else None
+
+    def set_project_kind(self, uid: str, kind: str | None) -> None:
+        with self._lock:
+            self.con.execute("UPDATE usecases SET kind = ? WHERE id = ?", [kind or None, uid])
+
+    def _factory_kind_upgrade(self) -> None:
+        """Once: a project from before project kinds that holds docs and tickets and no agent was
+        made by a spec session; it is a software factory project. Lock not needed (init)."""
+        if self.con.execute("SELECT value FROM settings WHERE key = 'factory_kind_filled'"
+                            ).fetchone():
+            return
+        self.con.execute(
+            "UPDATE usecases SET kind = 'software_factory' WHERE kind IS NULL AND recipe = 'custom' "
+            "AND id IN (SELECT project FROM tickets) "
+            "AND id IN (SELECT usecase_id FROM usecase_objects WHERE kind = 'doc') "
+            "AND id NOT IN (SELECT usecase_id FROM usecase_objects WHERE kind = 'agent')")
+        self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
+                         "('factory_kind_filled', '1', ?) ON CONFLICT (key) DO NOTHING",
+                         [now_utc()])
 
     def get_project_by_name(self, name: str) -> dict | None:
         return next((u for u in self.list_projects() if u["name"] == name), None)
@@ -2201,6 +2294,14 @@ class Store:
             self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ?", [uid])
             self.con.execute("DELETE FROM project_wiring WHERE project = ?", [uid])
             self._forget_unused_skills()   # a skill another project uses stays
+            self._forget_unused_docs()     # so does a doc
+            self.con.execute("DELETE FROM tickets WHERE project = ?", [uid])
+            self._factory_forget_project(uid)
+            self.con.execute("DELETE FROM project_sessions WHERE project = ?", [uid])
+            # a crew station's session serves every project: its state stays
+            self.con.execute("DELETE FROM session_states WHERE session NOT IN (SELECT session "
+                             "FROM project_sessions) AND session NOT IN (SELECT session FROM "
+                             "session_stations)")
             self.con.execute("DELETE FROM usecase_log WHERE usecase_id = ?", [uid])
             self.con.execute("DELETE FROM usecases WHERE id = ?", [uid])
 
@@ -2332,6 +2433,339 @@ class Store:
         with self._lock:
             self.con.execute("UPDATE usecase_objects SET customized = TRUE WHERE usecase_id = ? "
                              "AND kind = 'skill' AND name = ?", [project, name])
+
+    # ── docs and tickets (TR-403): validated by tares/docs.py before they get here ──
+    _DOC_COLS = "d.id, d.kind, d.title, d.made_by, d.updated_by, d.created_at, d.updated_at"
+
+    @staticmethod
+    def _doc_row(r, body: str | None = None) -> dict:
+        out = {"id": r[0], "kind": r[1], "title": r[2], "made_by": r[3], "updated_by": r[4],
+               "created_at": r[5], "updated_at": r[6]}
+        if body is not None:
+            out["body"] = body
+        return out
+
+    def create_doc(self, project: str | None, kind: str, title: str, body: str,
+                   by: str = "") -> str:
+        """A new doc on the cell, included in `project` (None: on the cell only, for every
+        project to include). Returns its id."""
+        doc_id = "doc_" + uuid.uuid4().hex[:10]
+        ts = now_utc()
+        with self._lock:
+            self.con.execute(
+                "INSERT INTO docs (id, kind, title, body, made_by, updated_by, created_at, "
+                "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [doc_id, kind, title, body, project, by or None, ts, ts])
+            if project:
+                self._use_doc(project, doc_id)
+        return doc_id
+
+    def update_doc(self, doc_id: str, kind: str | None = None, title: str | None = None,
+                   body: str | None = None, by: str = "") -> None:
+        sets, vals = ["updated_at = ?", "updated_by = ?"], [now_utc(), by or None]
+        for col, v in (("kind", kind), ("title", title), ("body", body)):
+            if v is not None:
+                sets.append(f"{col} = ?"); vals.append(v)
+        vals.append(doc_id)
+        with self._lock:
+            self.con.execute(f"UPDATE docs SET {', '.join(sets)} WHERE id = ?", vals)
+
+    def get_doc(self, project: str | None, doc_id: str) -> dict | None:
+        """A doc the project includes (any doc, with None), with its body and the projects that
+        include it."""
+        with self._lock:
+            if project is not None and not self.con.execute(
+                    "SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND kind = 'doc' "
+                    "AND name = ?", [project, doc_id]).fetchone():
+                return None
+            r = self.con.execute(f"SELECT {self._DOC_COLS}, d.body FROM docs d WHERE d.id = ?",
+                                 [doc_id]).fetchone()
+            if not r:
+                return None
+            users = [u[0] for u in self.con.execute(
+                "SELECT usecase_id FROM usecase_objects WHERE kind = 'doc' AND name = ? "
+                "ORDER BY usecase_id", [doc_id]).fetchall()]
+        return {**self._doc_row(r, r[7]), "projects": users}
+
+    def list_docs(self, project: str, kind: str | None = None) -> list[dict]:
+        """The docs a project includes, without bodies: size in bytes instead."""
+        q = (f"SELECT DISTINCT {self._DOC_COLS}, octet_length(encode(d.body)) FROM docs d "
+             "JOIN usecase_objects o ON o.kind = 'doc' AND o.name = d.id WHERE o.usecase_id = ?")
+        vals: list = [project]
+        if kind:
+            q += " AND d.kind = ?"; vals.append(kind)
+        with self._lock:
+            rows = self.con.execute(q, vals).fetchall()
+        return [{**self._doc_row(r), "size": int(r[7] or 0)} for r in rows]
+
+    def list_cell_docs(self) -> list[dict]:
+        """Every doc on the cell (no bodies), with the projects that include it."""
+        with self._lock:
+            rows = self.con.execute(f"SELECT {self._DOC_COLS}, octet_length(encode(d.body)) "
+                                    "FROM docs d ORDER BY d.title").fetchall()
+            users = self.con.execute("SELECT name, usecase_id FROM usecase_objects WHERE "
+                                     "kind = 'doc' GROUP BY name, usecase_id").fetchall()
+        by: dict[str, list] = {}
+        for n, u in users:
+            by.setdefault(n, []).append(u)
+        return [{**self._doc_row(r), "size": int(r[7] or 0), "projects": sorted(by.get(r[0], []))}
+                for r in rows]
+
+    def _use_doc(self, project: str, doc_id: str) -> None:
+        """Lock held."""
+        self.con.execute("INSERT INTO usecase_objects (usecase_id, kind, key, name, customized, "
+                         "created_at) VALUES (?, 'doc', ?, ?, FALSE, ?) ON CONFLICT DO NOTHING",
+                         [project, f"doc:{doc_id}", doc_id, now_utc()])
+
+    def use_doc(self, project: str, doc_id: str) -> bool:
+        """A doc already on the cell, included in one more project. False when there is no such
+        doc."""
+        with self._lock:
+            if not self.con.execute("SELECT 1 FROM docs WHERE id = ?", [doc_id]).fetchone():
+                return False
+            self._use_doc(project, doc_id)
+        return True
+
+    def remove_doc(self, project: str, doc_id: str) -> bool:
+        """The project stops including the doc; the doc is deleted when no project includes it
+        any more and it was made by a project (a doc made on the cell stays). A ticket of this
+        project whose working doc it was loses the link. Returns whether the project had it."""
+        with self._lock:
+            had = self.con.execute("SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND "
+                                   "kind = 'doc' AND name = ?", [project, doc_id]).fetchone()
+            self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = 'doc' "
+                             "AND name = ?", [project, doc_id])
+            self.con.execute("UPDATE tickets SET working_doc = NULL WHERE project = ? AND "
+                             "working_doc = ?", [project, doc_id])
+            self._forget_unused_docs()
+        return had is not None
+
+    def _forget_unused_docs(self) -> None:
+        """Docs a project made that no project includes any more go. Lock held."""
+        self.con.execute("DELETE FROM docs WHERE made_by IS NOT NULL AND id NOT IN (SELECT name "
+                         "FROM usecase_objects WHERE kind = 'doc')")
+
+    _TICKET_COLS = ("id, project, owner, external_id, identifier, url, title, status, position, "
+                    "working_doc, created_at, updated_at, milestone, depends_on, number, holder, "
+                    "stage, stage_reason, pr, repo")
+
+    @staticmethod
+    def _ticket_row(r) -> dict:
+        return {"id": r[0], "project": r[1], "owner": r[2], "external_id": r[3],
+                "identifier": r[4], "url": r[5], "title": r[6], "status": r[7],
+                "position": r[8], "working_doc": r[9], "created_at": r[10], "updated_at": r[11],
+                "milestone": r[12], "depends_on": json.loads(r[13]) if r[13] else [],
+                "number": r[14], "holder": r[15], "stage": r[16], "stage_reason": r[17],
+                "pr": json.loads(r[18]) if r[18] else None, "repo": r[19]}
+
+    def create_ticket(self, project: str, owner: str, title: str, status: str = "todo",
+                      position: float | None = None, external_id: str | None = None,
+                      identifier: str | None = None, url: str | None = None,
+                      working_doc: str | None = None, milestone: str | None = None,
+                      depends_on: list[str] | None = None, repo: str | None = None) -> str:
+        """A ticket at the end of the project's list unless `position` says where. It gets the
+        project's next number (T1, T2, ...)."""
+        tid = "tk_" + uuid.uuid4().hex[:10]
+        ts = now_utc()
+        with self._lock:
+            if position is None:
+                last = self.con.execute("SELECT max(position) FROM tickets WHERE project = ?",
+                                        [project]).fetchone()[0]
+                position = (last or 0) + 1
+            num = self._next_ticket_number(project)
+            self.con.execute(
+                f"INSERT INTO tickets ({self._TICKET_COLS}) VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [tid, project, owner, external_id, identifier, url, title, status,
+                 float(position), working_doc, ts, ts, milestone,
+                 json.dumps(depends_on) if depends_on else None, num, None, None, None, None,
+                 repo])
+        return tid
+
+    def update_ticket(self, tid: str, **fields) -> None:
+        """Set the given columns (title, status, position, working_doc, identifier, url,
+        external_id, milestone, depends_on); None clears working_doc or milestone only when passed
+        explicitly."""
+        allowed = {"title", "status", "position", "working_doc", "identifier", "url",
+                   "external_id", "milestone", "depends_on", "holder", "stage", "stage_reason",
+                   "pr", "repo"}
+        sets, vals = ["updated_at = ?"], [now_utc()]
+        for col, v in fields.items():
+            if col == "depends_on":
+                v = json.dumps(v) if v else None
+            if col == "pr":
+                v = json.dumps(v, default=str) if v else None
+            if col in allowed:
+                sets.append(f"{col} = ?"); vals.append(v)
+        vals.append(tid)
+        with self._lock:
+            self.con.execute(f"UPDATE tickets SET {', '.join(sets)} WHERE id = ?", vals)
+
+    def update_ticket_owner(self, tid: str, owner: str) -> None:
+        """A project stopped using Linear: its tickets become Tares's (TR-408)."""
+        with self._lock:
+            self.con.execute("UPDATE tickets SET owner = ?, updated_at = ? WHERE id = ?",
+                             [owner, now_utc(), tid])
+
+    def list_tickets(self, project: str) -> list[dict]:
+        with self._lock:
+            rows = self.con.execute(f"SELECT {self._TICKET_COLS} FROM tickets WHERE project = ? "
+                                    "ORDER BY position, created_at", [project]).fetchall()
+        return [self._ticket_row(r) for r in rows]
+
+    def get_ticket(self, project: str, ref: str) -> dict | None:
+        """A ticket of the project by its id, Linear identifier (ENG-12, any case), Linear
+        issue id, or number (T3, or 3)."""
+        m = re.match(r"^[Tt]?(\d{1,6})$", (ref or "").strip())
+        num = int(m.group(1)) if m else -1
+        with self._lock:
+            r = self.con.execute(
+                f"SELECT {self._TICKET_COLS} FROM (SELECT *, 0 AS rank FROM tickets WHERE "
+                "project = ? AND (id = ? OR upper(identifier) = upper(?) OR external_id = ?) "
+                "UNION ALL SELECT *, 1 AS rank FROM tickets WHERE project = ? AND number = ?) "
+                "ORDER BY rank LIMIT 1", [project, ref, ref, ref, project, num]
+            ).fetchone()
+        return self._ticket_row(r) if r else None
+
+    def delete_ticket(self, tid: str) -> None:
+        """The ticket goes, and with it the other tickets' dependency on it."""
+        with self._lock:
+            row = self.con.execute("SELECT project FROM tickets WHERE id = ?", [tid]).fetchone()
+            self.con.execute("DELETE FROM tickets WHERE id = ?", [tid])
+            if row:
+                for oid, deps in self.con.execute(
+                        "SELECT id, depends_on FROM tickets WHERE project = ? AND depends_on IS "
+                        "NOT NULL", [row[0]]).fetchall():
+                    ids = json.loads(deps) if deps else []
+                    if tid in ids:
+                        ids = [d for d in ids if d != tid]
+                        self.con.execute("UPDATE tickets SET depends_on = ? WHERE id = ?",
+                                         [json.dumps(ids) if ids else None, oid])
+
+    def link_session(self, project: str, session: str, repo: str | None = None) -> bool:
+        """The Claude Code session works in the project. True when it was not linked before."""
+        with self._lock:
+            had = self.con.execute("SELECT 1 FROM project_sessions WHERE project = ? AND "
+                                   "session = ?", [project, session]).fetchone()
+            if not had:
+                self.con.execute("INSERT INTO project_sessions (project, session, repo, linked_at) "
+                                 "VALUES (?, ?, ?, ?)", [project, session, repo, now_utc()])
+        return not had
+
+    def project_sessions(self, project: str) -> list[dict]:
+        """The sessions that worked in the project, newest activity first, with when they started
+        and last did something, how many lines they have, and their state (working, waiting,
+        ended; None before the plugin reported one) with its reason and time."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT s.session, s.repo, s.linked_at, min(e.event_time), max(e.event_time), "
+                "count(e.key_value), st.state, st.reason, st.state_at, x.station "
+                "FROM project_sessions s "
+                "LEFT JOIN session_stations x ON x.session = s.session "
+                "LEFT JOIN events e ON e.source = 'claude_code' AND e.key_value = s.session "
+                "LEFT JOIN session_states st ON st.session = s.session WHERE s.project = ? "
+                # the crew's own stations serve every project: they show on the Crew page and
+                # never count as the project's build session (a pick-up must not replace them)
+                "AND s.session NOT IN (SELECT session FROM session_stations WHERE role IN "
+                "('orchestrator', 'reviewer', 'releaser', 'comms')) "
+                "GROUP BY s.session, s.repo, s.linked_at, st.state, st.reason, st.state_at, "
+                "x.station "
+                "ORDER BY max(e.event_time) DESC NULLS LAST", [project]).fetchall()
+        return [{"session": r[0], "repo": r[1], "linked_at": r[2], "started_at": r[3],
+                 "last_at": r[4], "lines": int(r[5] or 0), "state": r[6], "state_reason": r[7],
+                 "state_at": r[8], "station": r[9]} for r in rows]
+
+    def set_session_state(self, session: str, state: str, reason: str | None, at,
+                          force: bool = False) -> None:
+        """The session's state now; an older line than the one stored does not win, unless
+        `force` (a take-over is a decision, not a report)."""
+        when = "" if force else " WHERE excluded.state_at >= session_states.state_at"
+        with self._lock:
+            self.con.execute(
+                "INSERT INTO session_states (session, state, reason, state_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT (session) DO UPDATE SET state = excluded.state, "
+                "reason = excluded.reason, state_at = excluded.state_at" + when,
+                [session, state, reason or None, at])
+
+    def said_lately(self, source: str, session: str, n: int = 3) -> list[dict]:
+        """The session's last `n` assistant messages (not tool calls), oldest first."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT text, event_time FROM events WHERE source = ? AND key_value = ? AND "
+                "event_type = 'assistant' ORDER BY event_time DESC LIMIT 60",
+                [source, session]).fetchall()
+        out = []
+        for t, at in rows:
+            t = (t or "").strip()
+            if t and not t.startswith("→"):
+                out.append({"text": t, "at": at})
+            if len(out) >= n:
+                break
+        return list(reversed(out))
+
+    def files_touched(self, source: str, session: str, limit: int = 20) -> list[str]:
+        """The files the session last edited or wrote (its Edit / Write / NotebookEdit calls),
+        most recent first, each once."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT payload FROM events WHERE source = ? AND key_value = ? AND event_type = "
+                "'tool_use' ORDER BY event_time DESC LIMIT 400", [source, session]).fetchall()
+        seen: list[str] = []
+        for (pj,) in rows:
+            try:
+                o = json.loads(pj) if pj else {}
+            except (TypeError, ValueError):
+                continue
+            msg = o.get("message") if isinstance(o.get("message"), dict) else {}
+            for b in msg.get("content") or []:
+                if not isinstance(b, dict) or b.get("type") != "tool_use":
+                    continue
+                if str(b.get("name") or "") not in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+                    continue
+                inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+                path = str(inp.get("file_path") or inp.get("notebook_path") or "")
+                if path and path not in seen:
+                    seen.append(path)
+            if len(seen) >= limit:
+                break
+        return seen
+
+    def last_said(self, source: str, session: str) -> str | None:
+        """The last thing the session's assistant wrote (not a tool call), for a waiting
+        session: what it stopped on."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT text FROM events WHERE source = ? AND key_value = ? AND event_type = "
+                "'assistant' ORDER BY event_time DESC LIMIT 20", [source, session]).fetchall()
+        for (t,) in rows:
+            t = (t or "").strip()
+            if t and not t.startswith("→"):
+                return t
+        return None
+
+    def session_projects(self, session: str) -> list[str]:
+        with self._lock:
+            return [r[0] for r in self.con.execute(
+                "SELECT project FROM project_sessions WHERE session = ?", [session]).fetchall()]
+
+    def get_project_linear(self, uid: str) -> dict | None:
+        """The Linear project a project's tickets live in, with the last sync's state, or None."""
+        with self._lock:
+            r = self.con.execute("SELECT linear FROM usecases WHERE id = ?", [uid]).fetchone()
+        return json.loads(r[0]) if r and r[0] else None
+
+    def set_project_linear(self, uid: str, linear: dict | None) -> None:
+        with self._lock:
+            self.con.execute("UPDATE usecases SET linear = ? WHERE id = ?",
+                             [json.dumps(linear, default=str) if linear is not None else None,
+                              uid])
+
+    def linear_projects(self) -> list[tuple[str, dict]]:
+        """(project id, its Linear link) for every project that uses Linear."""
+        with self._lock:
+            rows = self.con.execute("SELECT id, linear FROM usecases WHERE linear IS NOT NULL"
+                                    ).fetchall()
+        return [(r[0], json.loads(r[1])) for r in rows if r[1]]
 
     def skill_loads(self, agents: list[str], days: int = 7) -> dict[str, list[str]]:
         """{skill: [agents]} for the runs of `agents` in the last `days` that loaded a skill."""
@@ -3004,6 +3438,17 @@ class Store:
              "event_time": r[4], "ingest_time": r[5]}
             for r in rows
         ]
+
+    def key_events(self, source: str, key: str, limit: int = 200,
+                   offset: int = 0) -> list[dict]:
+        """One entity's events on one source, oldest first (a session read top to bottom)."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT event_type, text, event_time, labels FROM events WHERE source = ? AND "
+                "key_value = ? ORDER BY event_time, ingest_time LIMIT ? OFFSET ?",
+                [source, key, int(limit), int(offset)]).fetchall()
+        return [{"event_type": r[0], "text": r[1], "event_time": r[2],
+                 "labels": json.loads(r[3]) if r[3] else {}} for r in rows]
 
     def last_finding(self, source: str, agent: str, key: str) -> str | None:
         """The newest delivered finding this agent wrote for this key, or None. Feeds the next

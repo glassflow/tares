@@ -2,21 +2,27 @@
 
 One install wires Claude Code to Tares in **both directions**:
 
-- **Read-back (MCP):** registers the `tares` MCP server so the agent can query your data plane
-  (the same `tares-mcp` proxy the console hands out).
+- **Read-back (MCP):** connects the session to Tares's MCP endpoint over HTTP (`mcp_url`) so the
+  agent can query your data plane. Every session shares that one endpoint; the plugin starts no
+  MCP process of its own.
 - **Capture (hooks):** ships this session's transcript into Tares's `claude_code` source as it
   progresses — via a small hook (`scripts/ship.py`) that POSTs new transcript lines to
   `{tares_url}/ingest/claude_code`.
 
-Both wires are configured once on install (`tares_url`, optional auth `access_token`, and a
-`stream_sessions` toggle). Challenger sessions (below) add `challenger_mode`, `codex_bin` and
+Both wires are configured once on install (`tares_url`, `mcp_url`, optional auth `access_token`,
+and a `stream_sessions` toggle). Challenger sessions (below) add `challenger_mode`, `codex_bin` and
 `codex_sandbox`.
 
 ## Prerequisites
 
-- `tares-mcp` on PATH (from `pip install tares`) — the MCP read-back proxy.
-- `python3` on PATH — runs the shipper hook.
+- A Tares MCP endpoint at `mcp_url`. Local: run `tares mcp --transport streamable-http` next to
+  `tares up` and keep the default `http://127.0.0.1:8788/mcp`. Tares Cloud: built in, at
+  `https://<cell>.tares-glassflow.com/mcp`; nothing to install.
+- `python3` on PATH: runs the shipper hook.
 - A Tares daemon reachable at `tares_url`.
+
+Tested with Claude Code 2.1.296. The MCP connection relies on its expansion of `${VAR:-}` and
+`${user_config.*}` in HTTP server URLs and headers, and on `headersHelper`.
 
 **No manual source setup.** The shipper creates the `claude_code` push source on Tares itself the
 first time it runs (on `SessionStart`), and re-creates it if it's ever missing. Installing the plugin
@@ -31,6 +37,10 @@ claude --plugin-dir ./claude-plugin
 Then start a session and do some work — new transcript lines flow to Tares on each prompt/tool use
 and at session end. Check the console: **Entities** (keyed by `session`), or query the `claude_code`
 source.
+
+To prove the shared MCP endpoint end to end (real Claude Code sessions with this plugin, each under
+its own station identity, against a throwaway Tares; costs a few Haiku calls), run
+`bash scripts/check-shared-mcp.sh` from the repo root.
 
 ## Distribute (marketplace)
 
@@ -72,6 +82,26 @@ The mechanism follows [andreidavid/codex-review](https://github.com/andreidavid/
 (MIT): post-commit review, priority-tagged findings, the blocking fix loop, plan critique, state in
 `.git/`. This plugin reimplements it in Python, gates it on the session mark, and records the
 exchange in Tares.
+
+## Spec a project
+
+Type `/tares:spec <what you want to build>` (or ask Claude to spec a new project). Claude
+brainstorms it with you first, then writes everything a later session needs to build it into a
+new Tares project:
+
+- the spec, the plan, the AGENTS.md of the build and a starting prompt (docs, kept in Tares)
+- the tickets, in order, each with a working doc (context, steps, files, how to verify)
+
+The tickets live in Tares, or in Linear when you want Linear: Claude creates them there with
+Linear's own MCP tools, links the Linear project, and Tares keeps its ticket list in sync (it
+polls about once a minute). Working docs stay in Tares either way. For Linear, connect it once in
+the Tares console (Settings, Linear) and give this session Linear's MCP server.
+
+The spec session's whole recording lands on the project. A later session told
+`Work on Tares project "<name>"` reads the starting prompt, the tickets and their working docs
+with `list_docs`, `get_doc`, `list_tickets` and `get_ticket`.
+
+Creating projects and writing docs needs an admin key in `access_token` on a secured instance.
 
 ## How capture works
 

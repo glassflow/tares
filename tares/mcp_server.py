@@ -17,19 +17,99 @@ import os
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-TARESD = os.getenv("TARESD_URL", "http://127.0.0.1:8787")
+def _factory_token() -> str:
+    """The token a tares-factory station presents: `tares factory` keeps it in a file only the
+    person can read and names the file in the station's settings (never the token itself)."""
+    path = os.getenv("TARES_FACTORY_TOKEN_FILE", "").strip()
+    if not path:
+        return ""
+    try:
+        with open(os.path.expanduser(path)) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+# A tares-factory station names the Tares its crew uses in TARES_FACTORY_URL. It wins over
+# TARESD_URL, which the plugin's MCP config sets from the plugin option (127.0.0.1:8787 unless the
+# person changed it), so stations reach the same Tares as `tares factory` on any address.
+TARESD = (os.getenv("TARES_FACTORY_URL", "").strip()
+          or os.getenv("TARESD_URL", "http://127.0.0.1:8787")).rstrip("/")
 # Bearer credentials. Over HTTP transports each caller presents its own token (the root auth token
 # or a scoped API key) and we forward it per-request — the daemon enforces scopes per route. Over
 # stdio (a local agent spawned the proxy) there is no inbound token; the env token is used.
-AUTH_TOKEN = os.getenv("TARES_AUTH_TOKEN", "").strip()
+AUTH_TOKEN = _factory_token() or os.getenv("TARES_AUTH_TOKEN", "").strip()
 _CALLER_TOKEN = contextvars.ContextVar("tares_caller_token", default="")
+# Over HTTP one server is shared by many sessions, so who calls comes from each request's
+# headers (set by _CallerHeaders), never from this process's environment.
+_CALLER_STATION = contextvars.ContextVar("tares_caller_station", default="")
+_CALLER_ROLE = contextvars.ContextVar("tares_caller_role", default="")
+_CALLER_PARENT = contextvars.ContextVar("tares_caller_parent", default="")
+_CALLER_PROJECT = contextvars.ContextVar("tares_caller_project", default="")
+# Set by main() for the HTTP transports. Never inferred from the environment at call time: tests
+# import this module in-process and must stay on the stdio path.
+_HTTP = False
+
+_CALLER_VARS = {"token": _CALLER_TOKEN, "station": _CALLER_STATION, "role": _CALLER_ROLE,
+                "parent": _CALLER_PARENT, "project": _CALLER_PROJECT}
+_CALLER_HEADERS = {"station": "x-tares-station", "role": "x-tares-role",
+                   "parent": "x-tares-parent", "project": "x-tares-project"}
+_CALLER_ENV = {"station": "FACTORY_STATION", "role": "FACTORY_ROLE", "parent": "FACTORY_PARENT",
+               "project": "TARES_PROJECT"}
+
+
+def _bearer(headers) -> str:
+    """The token in `Authorization: Bearer <x>`, else `x-tares-token`; "" when there is none."""
+    auth = headers.get("authorization", "")
+    if auth.lower().startswith("bearer"):
+        return auth[6:].strip()
+    return headers.get("x-tares-token", "").strip()
+
+
+def _caller(name: str) -> str:
+    """Who is calling: token, station, role, parent or project. Over HTTP, from the current
+    request's headers (the context variable when there is no request object); over stdio, from
+    the environment of the session that spawned this proxy, as before."""
+    if _HTTP:
+        try:
+            req = mcp.get_context().request_context.request
+        except Exception:
+            req = None
+        if req is not None:
+            if name == "token":
+                return _bearer(req.headers)
+            return req.headers.get(_CALLER_HEADERS[name], "").strip()
+        return _CALLER_VARS[name].get()
+    if name == "token":
+        return AUTH_TOKEN
+    return os.getenv(_CALLER_ENV[name], "").strip()
+
+
+def _default_project() -> str:
+    """The project a call means when it names none: X-Tares-Project over HTTP, TARES_PROJECT
+    (a builder station's) over stdio."""
+    return _caller("project")
+
+
+def _station_headers() -> dict:
+    """Which tares-factory station the caller is, sent with every call so Tares applies who may
+    write what. Empty for a session that is not a station."""
+    out = {}
+    for name, header in (("station", "X-Tares-Station"), ("role", "X-Tares-Role"),
+                         ("parent", "X-Tares-Parent")):
+        v = _caller(name)
+        if v:
+            out[header] = v
+    return out
 
 
 def _cx(timeout: float = 10):
-    """An httpx client that carries the caller's token to taresd (env token as stdio fallback)."""
-    tok = _CALLER_TOKEN.get() or AUTH_TOKEN
-    return httpx.AsyncClient(timeout=timeout,
-                             headers={"Authorization": f"Bearer {tok}"} if tok else {})
+    """An httpx client that carries the caller's token and station to taresd. Over HTTP the
+    server's own token is never spent for a caller that sent none."""
+    tok = _caller("token")
+    headers = {"Authorization": f"Bearer {tok}"} if tok else {}
+    headers.update(_station_headers())
+    return httpx.AsyncClient(timeout=timeout, headers=headers)
 
 # stdio (default) is what a local agent spawns. For remote agents (the demo / a server), run with
 # TARES_MCP_TRANSPORT=streamable-http (or sse) and the server listens on MCP_HOST:MCP_PORT — at
@@ -265,8 +345,9 @@ async def source_fields(name: str, limit: int = 500) -> str:
 # out while there is only one project.
 
 async def _project_id(cx, project: str = "") -> tuple[str | None, str | None]:
-    """(project id, None) or (None, the reason to tell the agent)."""
-    project = (project or "").strip()
+    """(project id, None) or (None, the reason to tell the agent). With no `project`, a builder
+    station's TARES_PROJECT (X-Tares-Project over HTTP) names it."""
+    project = (project or "").strip() or _default_project()
     r = await cx.get(f"{TARESD}/api/whoami")
     who = r.json() if r.status_code == 200 else {}
     if who.get("project"):
@@ -414,6 +495,334 @@ async def project_timeline(limit: int = 20, project: str = "") -> str:
     return r.text
 
 
+# ── a project's docs and tickets (TR-403, TR-404): a spec session writes the spec, the plan, the
+# AGENTS.md, the starting prompt and a working doc per ticket; the session that builds the project
+# reads them back. Tickets live in Linear when the project uses it (Tares keeps a synced list),
+# otherwise in Tares. ─────────────────────────────────────────────────────────────────────────
+
+def _out(r: httpx.Response, keys: tuple[str, ...] | None = None) -> str:
+    if r.status_code >= 400:
+        try:
+            return f"error {r.status_code}: {r.json().get('detail', r.text)}"
+        except ValueError:
+            return f"error {r.status_code}: {r.text}"
+    data = r.json()
+    if keys:
+        data = {k: data.get(k) for k in keys}
+    return json.dumps(data, default=str)
+
+
+@writable()
+async def create_project(name: str, goal: str = "") -> str:
+    """Create an empty Tares project for a piece of work you are about to spec, and tie this
+    session to it. `name` is the project's handle (unique on Tares); `goal` is one line saying
+    what it is for. Then write its docs with write_doc and its tickets (write_ticket, or
+    link_linear_project when the tickets live in Linear). Returns the project's id and name."""
+    body = {"template": "custom", "kind": "software_factory", "name": name.strip(), "objects": [],
+            **({"goal": goal.strip()} if goal.strip() else {})}
+    async with _cx(15) as cx:
+        r = await cx.post(f"{TARESD}/api/projects", json=body)
+    return _out(r, ("id", "name", "goal"))
+
+
+@writable()
+async def write_doc(kind: str, title: str, body: str, id: str = "", project: str = "") -> str:
+    """Write a markdown doc into the project, or replace one when `id` is given. `kind` is one
+    of: `start` (the prompt a session that builds the project starts with: what to read first,
+    which ticket to take, how to work), `spec` (what is built and why), `plan` (milestones and
+    the order of work), `agents` (the AGENTS.md of the build: conventions, commands, how to
+    test), `working` (the working doc of one ticket: context, steps, files likely touched, how to
+    verify; link it with attach_working_doc), `note` (anything else). Working docs and every
+    other doc stay in Tares; they never go to Linear. A rule or fact that holds for every
+    project goes in the shared docs with add_to_global instead. Returns the doc's id."""
+    payload = {"kind": kind, "title": title, "body": body, "by": "claude code session"}
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        if id:
+            r = await cx.put(f"{TARESD}/api/projects/{uid}/docs/{id}", json=payload)
+        else:
+            r = await cx.post(f"{TARESD}/api/projects/{uid}/docs", json=payload)
+    return _out(r, ("id", "kind", "title", "updated_at"))
+
+
+@mcp.tool()
+async def list_docs(kind: str = "", project: str = "") -> str:
+    """The project's docs in reading order (starting prompt, spec, plan, AGENTS.md, memory,
+    notes, working docs): id, kind, title, size, when changed. No bodies: read one with get_doc.
+    `kind` narrows the list. Docs marked `global` (the AGENTS.md and the memory for all
+    projects) belong to every project: read them too, they hold the user's standing rules."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/docs", params={"kind": kind})
+    if r.status_code >= 400:
+        return _out(r)
+    return json.dumps([{k: d.get(k) for k in ("id", "kind", "title", "global", "size",
+                                               "updated_at")}
+                       for d in r.json()], default=str)
+
+
+@mcp.tool()
+async def get_doc(id: str, project: str = "") -> str:
+    """One of the project's docs, with its markdown body."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/docs/{id}")
+    return _out(r, ("id", "kind", "title", "body", "updated_at", "updated_by"))
+
+
+@mcp.tool()
+async def read_global_docs() -> str:
+    """The docs every project shares: the AGENTS.md for all projects (the user's standing rules)
+    and the memory (facts and preferences that hold across projects), as markdown. Read them at
+    the start of any work on a project and follow them; do not ask the user again for what they
+    already say."""
+    async with _cx(10) as cx:
+        r = await cx.get(f"{TARESD}/api/docs/global")
+    if r.status_code >= 400:
+        return _out(r)
+    data = r.json()
+    if not any(data.values()):
+        return "No shared docs yet: they are made with the first project that has docs."
+    return "\n\n".join(d["body"].rstrip() for d in data.values() if d)
+
+
+@writable()
+async def add_to_global(doc: str, line: str) -> str:
+    """Add one line to a doc every project shares: `doc` is `agents` (the AGENTS.md for all
+    projects: a rule every session should follow, e.g. "always build on a branch, never commit
+    to main") or `memory` (a fact or preference that holds across projects, e.g. "the household
+    uses euros"). Ask the user first, and add only what holds beyond this project; a project's
+    own rules go in its own AGENTS.md. A line already there is not added twice."""
+    async with _cx(15) as cx:
+        r = await cx.post(f"{TARESD}/api/docs/global/{doc.strip().lower()}/lines",
+                          json={"text": line, "by": "claude code session"})
+    if r.status_code >= 400:
+        return _out(r)
+    d = r.json()
+    return json.dumps({"doc": d["title"], "id": d["id"], "added": d["added"]})
+
+
+def _handover(b: dict) -> str:
+    """The pick-up brief as markdown a session reads top to bottom."""
+    lines = []
+    t = b.get("ticket")
+    if t:
+        head = "Ticket in progress" if b.get("in_progress") else "Next ticket"
+        ident = f" ({t['identifier']})" if t.get("identifier") else ""
+        lines += [f"## {head}: {t['title']}{ident}", f"id: {t['id']}", ""]
+        if t.get("working_doc_body"):
+            lines += ["### Working doc", t["working_doc_body"].strip(), ""]
+        if t.get("assumptions"):
+            lines += ["### Assumptions made on it"]
+            lines += [f"- {a['label']} ({a['state']}): {a['question']} -> {a['choice']}"
+                      for a in t["assumptions"]]
+            lines.append("")
+        if t.get("checks"):
+            lines += ["### Checks run (newest last)"]
+            lines += [f"- [{(c.get('commit') or '')[:7]}] `{c['command']}` -> {c['result']}"
+                      for c in t["checks"][-8:]]
+            lines.append("")
+    if b.get("memory"):
+        lines += ["## Project memory", b["memory"].strip(), ""]
+    if b.get("decisions"):
+        lines += ["## What the person decided (their words)"]
+        lines += [f"- {d.get('label') or ''} {d['question']}: \"{d['words']}\"".strip()
+                  for d in b["decisions"]]
+        lines.append("")
+    p = b.get("previous_session")
+    if p:
+        lines += ["## The session that was on it",
+                  f"state: {p.get('state') or 'unknown'}"
+                  + (f" ({p['reason']})" if p.get("reason") else "")
+                  + (f", last active {p['quiet_minutes']} min ago" if p.get("quiet_minutes") is not None else "")]
+        if p.get("said_lately"):
+            lines += ["", "### What it said last"]
+            lines += [f"> {m['text'].strip()}".replace("\n", "\n> ") for m in p["said_lately"]]
+        if p.get("files_touched"):
+            lines += ["", "### Files it touched (most recent first)"]
+            lines += [f"- {f}" for f in p["files_touched"]]
+        lines.append("")
+    if b.get("notes"):
+        lines += ["## Builders' notes"]
+        for n in b["notes"]:
+            lines += [f"### {n['title']}", n["body"].strip(), ""]
+    lines += ["## Checklist"] + [f"{i}. {c}" for i, c in enumerate(b.get("checklist") or [], 1)]
+    return "\n".join(lines)
+
+
+@writable()
+async def pick_up(project: str = "", take_over: bool = False) -> str:
+    """Pick the build up where an earlier session stopped. Call it first when you are told to
+    work on a project and a ticket is already in progress (list_tickets says so), or when told
+    to pick up. Returns the hand-over: the ticket with its working doc, what the previous
+    session said last and the files it touched, the builders' notes and a checklist. It takes
+    the build over (the previous session is marked replaced) unless that session may still be
+    open: then it says so and does nothing; ask the person, and call again with take_over=true
+    only if they say so."""
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/pickup")
+        if r.status_code >= 400:
+            return _out(r)
+        brief = r.json()
+        if not brief.get("in_progress"):
+            return ("Nothing to pick up: no ticket is in progress. Start the next ticket the way "
+                    "the starting prompt says.\n\n" + _handover(brief))
+        prev = brief.get("previous_session") or {}
+        if brief.get("may_be_open") and not take_over:
+            return ("STOP: the session that was building may still be open "
+                    f"(state {prev.get('state') or 'active'}, last active "
+                    f"{prev.get('quiet_minutes')} min ago). Two sessions on one branch collide. "
+                    "Ask the person whether to take over; only if they say yes, call pick_up "
+                    "again with take_over=true. Read-only hand-over for context:\n\n"
+                    + _handover(brief))
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/pickup", json={"take_over": True})
+    if r.status_code >= 400:
+        return _out(r)
+    return "You have taken the build over.\n\n" + _handover(r.json())
+
+
+@mcp.tool()
+async def list_tickets(project: str = "") -> str:
+    """The project's tickets in plan order: id, label (the Linear identifier, else T<n>), title,
+    status (todo, in_progress, done, canceled), milestone, depends_on, the GitHub repo it changes
+    (`repo`, owner/name, for a project that spans several), whether it is ready (all
+    it depends on is done) or which tickets block it, the link when it lives in Linear, and the
+    id and title of each one's working doc. Work the ready tickets in this order. Also says
+    which Linear project they live in, if any, and when it was last synced. Read one with
+    get_ticket to get its working doc."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/tickets")
+    if r.status_code >= 400:
+        return _out(r)
+    data = r.json()
+    lin = data.get("linear")
+    out = {
+        "linear": ({k: lin.get(k) for k in ("name", "url", "synced_at", "error")} if lin else None),
+        "tickets": [{k: t.get(k) for k in ("id", "label", "number", "identifier", "title",
+                                            "status", "milestone_name", "depends_on", "ready",
+                                            "blocked_by", "holder", "stage", "stage_reason",
+                                            "repo", "url", "working_doc", "working_doc_title")}
+                    | {"pr": _pr_brief(t.get("pr")), "pr_note": t.get("pr_note")}
+                    for t in data.get("tickets") or []]}
+    if any(t.get("status") == "in_progress" for t in data.get("tickets") or []):
+        out["note"] = ("A ticket is already in progress: unless you are the session working on "
+                       "it, call pick_up before anything else.")
+    return json.dumps(out, default=str)
+
+
+def _pr_brief(pr: dict | None) -> dict | None:
+    if not pr:
+        return None
+    return {k: pr.get(k) for k in ("url", "head", "ci", "verdict", "merged", "state", "error")
+            if pr.get(k) not in (None, "")}
+
+
+@mcp.tool()
+async def get_ticket(ticket: str, project: str = "") -> str:
+    """One ticket, by its Tares id, its number (T3) or its Linear identifier (for example
+    ENG-12), with the body of its working doc, who holds it and where it stands, its pull
+    request as GitHub has it (head, CI, the reviewer's verdict, merged), its history, and the
+    crew's messages about it: everything you need to work on it."""
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/tickets/{ticket}")
+        if r.status_code >= 400:
+            return _out(r)
+        out = r.json()
+        msgs = await cx.get(f"{TARESD}/api/projects/{uid}/tickets/{out['id']}/messages")
+    if msgs.status_code == 200:
+        out["messages"] = [{k: m.get(k) for k in ("at", "from", "to", "type", "first_line")}
+                           for m in msgs.json().get("messages") or []]
+    return json.dumps(out, default=str)
+
+
+@writable()
+async def write_ticket(title: str, status: str = "", position: float | None = None,
+                       milestone: str | None = None, depends_on: list[str] | None = None,
+                       id: str = "", project: str = "", repo: str | None = None) -> str:
+    """Add a ticket to the project's list, or change one when `id` is given (its id or T<n>).
+    Only for a project whose tickets live in Tares: when they live in Linear, create and change
+    them in Linear (milestones and "blocks" relations included) and Tares picks them up on its
+    next sync. `status` is todo, in_progress, done or canceled; `position` orders the list (a
+    new ticket goes to the end); `milestone` is the name of a milestone written with
+    write_milestone ("" takes it out of its milestone); `depends_on` lists the tickets (T<n> or
+    id) that must be done first ([] clears them); `repo` is the GitHub repo the ticket changes
+    (owner/name), for a project that spans several repos ("" clears it; a Linear ticket takes
+    only this). Returns the ticket with its label (T<n>)."""
+    body: dict = {"title": title}
+    if repo is not None:
+        body["repo"] = repo
+    if status:
+        body["status"] = status
+    if position is not None:
+        body["position"] = position
+    if milestone is not None:
+        body["milestone"] = milestone
+    if depends_on is not None:
+        body["depends_on"] = depends_on
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        if id:
+            if not title:
+                body.pop("title")
+            r = await cx.put(f"{TARESD}/api/projects/{uid}/tickets/{id}", json=body)
+        else:
+            r = await cx.post(f"{TARESD}/api/projects/{uid}/tickets", json=body)
+    return _out(r, ("id", "label", "title", "status", "position", "milestone_name",
+                    "depends_on", "repo"))
+
+
+@writable()
+async def attach_working_doc(ticket: str, doc: str, project: str = "") -> str:
+    """Link a working doc (write it first with write_doc, kind `working`) to a ticket, by the
+    ticket's Tares id or Linear identifier. Works for tickets in Linear too: the working doc
+    stays in Tares."""
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.put(f"{TARESD}/api/projects/{uid}/tickets/{ticket}",
+                         json={"working_doc": doc})
+    return _out(r, ("id", "identifier", "title", "working_doc"))
+
+
+@writable()
+async def link_linear_project(linear_project: str, project: str = "") -> str:
+    """Tie the project to the Linear project its tickets live in, by the Linear project's id,
+    URL or name. Tares then keeps its ticket list in sync with Linear (about once a minute) and
+    runs a first sync now. Needs Linear connected on Tares (Settings). Returns the tickets
+    found."""
+    async with _cx(60) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/linear",
+                          json={"project": linear_project})
+    if r.status_code >= 400:
+        return _out(r)
+    data = r.json()
+    return json.dumps({"linear": {k: (data.get("linear") or {}).get(k)
+                                  for k in ("name", "url", "synced_at", "error")},
+                       "tickets": [{k: t.get(k) for k in ("identifier", "title", "status")}
+                                   for t in data.get("tickets") or []]}, default=str)
+
+
 class _BearerGate:
     """Pure-ASGI middleware: every HTTP request to the MCP server must carry *a* bearer token —
     the root auth token or a scoped API key. The token is forwarded to taresd per-request, which
@@ -423,28 +832,45 @@ class _BearerGate:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http":
-            headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers") or []}
-            auth = headers.get("authorization", "")
-            tok = auth[7:].strip() if auth.lower().startswith("bearer ") else headers.get("x-tares-token", "")
-            if not tok:
-                await send({"type": "http.response.start", "status": 401,
-                            "headers": [(b"content-type", b"application/json")]})
-                await send({"type": "http.response.body", "body": b'{"detail":"unauthorized"}'})
-                return
-            _CALLER_TOKEN.set(tok)
+        if scope["type"] == "http" and not _CALLER_TOKEN.get():
+            await send({"type": "http.response.start", "status": 401,
+                        "headers": [(b"content-type", b"application/json")]})
+            await send({"type": "http.response.body", "body": b'{"detail":"unauthorized"}'})
+            return
         await self.app(scope, receive, send)
 
 
+class _CallerHeaders:
+    """Pure-ASGI middleware, outermost: reads who is calling (bearer, station, role, parent,
+    project) from each HTTP request's headers into context variables, so many Claude Code
+    sessions can share one server and Tares still knows each one. Runs whether or not the
+    server has a token of its own."""
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers") or []}
+            _CALLER_TOKEN.set(_bearer(headers))
+            for name, header in _CALLER_HEADERS.items():
+                _CALLER_VARS[name].set(headers.get(header, "").strip())
+        await self.app(scope, receive, send)
+
+
+from . import mcp_factory  # noqa: E402,F401  (registers the factory's tools on `mcp`)
+
+
 def main():
+    global _HTTP
     transport = os.getenv("TARES_MCP_TRANSPORT", "stdio")  # stdio | sse | streamable-http
     if transport == "stdio":
         mcp.run(transport="stdio")
         return
-    # HTTP transports: build the ASGI app, gate it with the bearer token, run it under uvicorn.
+    # HTTP transports: identity per request, gated by the bearer token when the server has one,
+    # run under uvicorn.
+    _HTTP = True
     app = mcp.streamable_http_app() if transport == "streamable-http" else mcp.sse_app()
-    if AUTH_TOKEN:
-        app = _BearerGate(app)
+    app = _CallerHeaders(_BearerGate(app) if AUTH_TOKEN else app)
     import uvicorn
     uvicorn.run(app, host=mcp.settings.host, port=mcp.settings.port)
 
