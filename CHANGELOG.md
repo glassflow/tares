@@ -5,7 +5,41 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.44.0] - 2026-10-13
+
+The software factory: a crew of Claude Code sessions on your machine builds every project you
+hand it, from tickets to pull requests merged on main, and Tares keeps the plan, the ledger, the
+reviews and your decisions. The crew CLI ships inside Tares as `tares factory`. Every session
+now reaches Tares through one shared MCP endpoint instead of starting its own `tares-mcp`.
+1.43.0 stays with the decision-model watcher (released as 1.43.0-rc.1 to rc.3); this release
+does not contain it.
+
 ### Added
+- `/tares:spec` turns an idea into a Tares project: it interviews you one question at a time,
+  has a second model challenge the plan, and writes the spec, plan, milestones with acceptance
+  checks, tickets with their dependencies and repos, working docs and an AGENTS.md. Docs and
+  tickets live on the cell; tickets can live in Linear instead. `tares factory spec` opens it in
+  the repo the project builds on.
+- `tares factory crew up` starts one crew for every project: an orchestrator and a reviewer, a
+  releaser only when asked for. The first run asks its settings in a box like Claude Code's and
+  keeps them on Tares, offers to trust the crew's own folder, and starts a watch that revives
+  stopped stations. The orchestrator starts builders per milestone and repo with
+  `tares factory spawn`. `tares factory doctor` checks what the crew needs.
+- The ledger: tickets carry a holder and a stage, the orchestrator assigns them and each holder
+  moves its own. Pull requests are read from GitHub; a project can span several repos, and a
+  cross-repo dependency holds a builder back.
+- The build, recorded: assumptions, checks matched against what the session actually ran,
+  project memory, subagent transcripts, review rounds with findings and verdicts tied to the
+  commit, a review queue and brief, and recurring findings offered as rules. The Codex
+  challenger can review each builder's commits.
+- The desk: one list of questions for the person across every project, answered in the
+  orchestrator's session. Answers are kept as typed and checked against what the person wrote;
+  a reply of one option's letter ("B") is recorded as that option. A standing answer becomes a
+  grant. When a project's work is done the orchestrator asks, and the person's yes marks it
+  finished (`tares factory finish` does it from the terminal).
+- Console: a Crew page (members, projects, a member's details, notices), and on a factory
+  project page the build's steps, tickets by milestone, a GitHub section with each repo's pull
+  requests, assumptions, decisions and the sessions that worked on it.
 - The project page's results have a Show filter: everything, only findings (leaves out what had
   nothing to report), or one agent's conclusions, so a root-cause agent's notes are not buried
   under a watcher's quiet checks. Remembered per project in the browser.
@@ -13,6 +47,23 @@ the project follows [Semantic Versioning](https://semver.org/).
   stay the whole project's.
 - An agent's budget can be set on the agent form (Advanced): what it may spend in all, with what
   it spent so far. Blank means no budget. Before, the form kept the value but had no field for it.
+
+### Changed
+- The Claude Code plugin (0.4.0) connects to Tares's MCP endpoint over HTTP instead of starting
+  `tares-mcp` in every session. Locally, run `tares mcp --transport streamable-http` next to
+  `tares up` (new plugin option `mcp_url`, default `http://127.0.0.1:8788/mcp`); on Tares Cloud,
+  set `mcp_url` to `https://<cell>.tares-glassflow.com/mcp` and nothing needs installing. The
+  session's station, role and project travel as `X-Tares-*` headers, so many sessions share one
+  server. `tares factory` refuses to start sessions when the endpoint does not answer, and
+  `doctor` reports it. `tares-mcp` over stdio still works for other MCP clients.
+
+### Fixed
+- `write_milestone` keeps the goal or checks an update leaves out.
+- A session that exits shows as ended: the plugin reports the end before shipping the last
+  lines, and a session silent past its window shows quiet instead of waiting forever.
+- A build session started from Tares's own prompt joins its project, and the project page names
+  an in-progress ticket only for the session working on it.
+- The desk waits a few seconds for a reply Tares has not read yet before refusing it.
 
 ## [1.42.0] - 2026-10-06
 
