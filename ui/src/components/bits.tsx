@@ -171,12 +171,13 @@ export function Picker({ value, onChange, options, labels, className, style, dis
 
 /** Input with styled suggestions — replaces native <datalist> (which can't be themed).
  *  Free text stays allowed; suggestions filter as you type. */
-export function Combo({ value, onChange, options, placeholder, style, className, hints, hintClass, matchHints }: {
+export function Combo({ value, onChange, options, placeholder, style, className, hints, hintClass, matchHints, stacked }: {
   value: string; onChange: (v: string) => void; options: string[];
   placeholder?: string; style?: React.CSSProperties; className?: string;
   hints?: Record<string, string>;   // per-option annotation, right-aligned (e.g. coverage, a type tag)
   hintClass?: string;               // className for the annotation (default "dim"; "chip" for a tag)
   matchHints?: boolean;             // typing also finds an option by its annotation (a source by its repo)
+  stacked?: boolean;                // the annotation under the option, wrapped, in a menu as wide as the field
 }) {
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0);
@@ -187,7 +188,7 @@ export function Combo({ value, onChange, options, placeholder, style, className,
   const pick = (o: string) => { onChange(o); setOpen(false); };
 
   return (
-    <div className={"combo" + (className ? ` ${className}` : "")} style={style}>
+    <div className={"combo" + (stacked ? " combo-stacked" : "") + (className ? ` ${className}` : "")} style={style}>
       <input type="text" value={value} placeholder={placeholder} autoComplete="off" data-1p-ignore data-lpignore="true"
              onChange={(e) => { onChange(e.target.value); setOpen(true); setHi(0); }}
              onFocus={() => setOpen(true)}
@@ -203,7 +204,7 @@ export function Combo({ value, onChange, options, placeholder, style, className,
         <div className="combo-list">
           {shown.map((o, i) => (
             <div key={o} className={"combo-item" + (i === hi ? " active" : "")}
-                 style={hints ? { display: "flex", justifyContent: "space-between", gap: 12 } : undefined}
+                 style={hints && !stacked ? { display: "flex", justifyContent: "space-between", gap: 12 } : undefined}
                  onMouseDown={(e) => { e.preventDefault(); pick(o); }}
                  onMouseEnter={() => setHi(i)}>
               <span>{o}</span>

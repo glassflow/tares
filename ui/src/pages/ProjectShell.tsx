@@ -141,7 +141,7 @@ export default function ProjectShell({ s, id, reload, template }: {
         <label className="field" key={k}>
           <span className="lbl">{spec.label ?? k}</span>
           <Combo value={actionArgs[`${a.name}.${k}`] ?? ""} placeholder={spec.label ?? k}
-                 options={suggestions.map((x) => x.session)} style={{ width: "100%" }}
+                 options={suggestions.map((x) => x.session)} style={{ width: "100%" }} stacked={k === "session"}
                  hints={Object.fromEntries(suggestions.map((x) => [x.session,
                    [x.repo, x.branch, x.ended ? "ended" : "live"].filter(Boolean).join(" · ")]))}
                  onChange={(v) => setActionArgs({ ...actionArgs, [`${a.name}.${k}`]: v })} />
