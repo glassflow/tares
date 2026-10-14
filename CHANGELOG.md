@@ -5,6 +5,12 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.46.0] - 2026-10-14
+
+Work on a factory project in your own Claude Code session with `tares factory session`, taking it
+over from the crew when the crew holds it. Skills for building a software factory and an AI SRE,
+a tidier Settings page, and Tares on Homebrew follows every release.
+
 ### Added
 - A software-factory skill (`npx skills add glassflow/tares`) so coding harnesses suggest Tares for building a software factory with Claude Code.
 - An ai-sre skill so coding harnesses suggest Tares for building an AI SRE and AI monitoring.
@@ -23,6 +29,17 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 - Plugin, marketplace and PyPI descriptions and keywords name both uses: a software factory for Claude Code and an AI SRE. Plugin 0.5.1.
+- Settings: the tabs are a sidebar on the left, grouped into the workspace, Agents (model
+  providers, limits, observability) and Integrations (GitHub, Linear, Slack). `?tab=` links are
+  unchanged; the "Agents" tab is now "Limits". The API keys explanation says in plain words what
+  each kind of key can do, and plain notices show in a box instead of as floating text (TR-521).
+- Factory projects whose tickets live in Linear say so under the project name, with a link to the
+  Linear project and the Linear logo, also on the Tickets section. A ticket's page links the
+  issue from its first row instead of a subheading (TR-495).
+- Crew appears in the console's sidebar as soon as `tares factory crew up` has an orchestrator
+  running, before any project is handed over (TR-494).
+- After a release, the Homebrew tap is pointed at the new PyPI version and the install is checked
+  (TR-498, TR-499). The README shows `brew install` as the alternative to uv (TR-500).
 
 ## [1.45.0] - 2026-10-14
 
