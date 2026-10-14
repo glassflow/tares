@@ -19,8 +19,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: The version without the leading v
+        id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Tag must match the version in pyproject.toml
         run: |
@@ -77,3 +83,15 @@ jobs:
           # v1.38.0-rc.1: a pre-release, never shown as the latest release
           prerelease: ${{ contains(github.ref_name, '-') }}
           make_latest: ${{ !contains(github.ref_name, '-') }}
+
+  # Point the Homebrew tap at a final release and check the install. Not for -rc.N tags.
+  # Needs the HOMEBREW_TAP_TOKEN repo secret (see homebrew.yml).
+  homebrew:
+    needs: [build, pypi]
+    if: ${{ !contains(github.ref_name, '-') }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/homebrew.yml
+    with:
+      version: ${{ needs.build.outputs.version }}
+    secrets: inherit
