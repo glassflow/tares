@@ -57,10 +57,11 @@ def test_rewrite_rejects():
             ck(f"rewrite raises on {label}", True)
 
 
+# The tap's Formula/tares.rb as of tares 1.45.0, verbatim.
 REAL = '''class Tares < Formula
   desc "Data plane for always-on AI agents"
   homepage "https://tares-glassflow.com"
-  url "https://files.pythonhosted.org/packages/68/a7/tares-1.45.0.tar.gz"
+  url "https://files.pythonhosted.org/packages/68/a7/d2a5a654d97f978197a0b996f83a360cab72126a345a98a17b8fe57be38f/tares-1.45.0.tar.gz"
   sha256 "70ecf9284c91fa7c9eb8f81f4198301f095af264b15d835c6b0e7e7c5e47a851"
   license "MIT"
 
@@ -71,7 +72,14 @@ REAL = '''class Tares < Formula
   preserve_rpath
 
   def install
-    system libexec/"bin/pip", "install", "--only-binary=:all:", "tares==#{version}"
+    system formula_opt_bin("python@3.14")/"python3.14", "-m", "venv", libexec
+    system libexec/"bin/pip", "install", "--no-cache-dir", "--only-binary=:all:", "tares==#{version}"
+    %w[tares taresd tares-mcp].each { |c| bin.install_symlink libexec/"bin"/c }
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/tares --version")
+    system bin/"tares", "--help"
   end
 end
 '''
@@ -82,8 +90,8 @@ def test_preserve_rpath():
     ck("the tap formula keeps preserve_rpath", "\n  preserve_rpath\n" in new)
     ck("the tap formula keeps the preserve_rpath comment", "Homebrew to rewrite their @rpath dylib IDs" in new)
     old, nw = REAL.splitlines(), new.splitlines()
-    diff = [old[i].split()[0] for i, (a, b) in enumerate(zip(old, nw)) if a != b]
-    ck("only url and sha256 change in the tap formula", len(old) == len(nw) and diff == ["url", "sha256"], diff)
+    diff = [(a.split() or [""])[0] for a, b in zip(old, nw) if a != b]
+    ck("only url and sha256 change in the tap formula", len(old) == len(nw) and diff == ["url", "sha256"], (len(old), len(nw), diff))
 
 
 def test_main(tmp):
