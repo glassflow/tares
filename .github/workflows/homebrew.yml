@@ -1,0 +1,125 @@
+# Point glassflow/homebrew-tap's Formula/tares.rb at a Tares release on PyPI, then check
+# that `brew install glassflow/tap/tares` works on three runners.
+#
+# Called by release.yml after the PyPI publish of a release tag without a `-` (so not -rc.N).
+# Run it by hand with a version too: Actions, "homebrew", Run workflow.
+#
+# Needs the repo secret HOMEBREW_TAP_TOKEN: a fine-grained token with Contents read and write on
+# glassflow/homebrew-tap only. A rerun with the version already in the tap changes nothing.
+name: homebrew
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Tares version on PyPI, e.g. 1.46.0
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Tares version on PyPI, e.g. 1.46.0
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homebrew-tap
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: glassflow/homebrew-tap
+          path: tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Point the formula at this release
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          out="$(python3 scripts/update_homebrew_formula.py "$VERSION" tap/Formula/tares.rb)"
+          echo "$out"
+          if [ "$out" = "changed" ]; then
+            cd tap
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add Formula/tares.rb
+            git commit -m "tares $VERSION"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+  verify:
+    name: verify (${{ matrix.os }})
+    needs: update
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    # macos-15-intel compiles python@3.14 and takes about 27 minutes
+    timeout-minutes: 60
+    env:
+      # The Homebrew API stays on, as for users: forcing it off makes ubuntu fail with
+      # "No available formula python@3.14".
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: Homebrew/actions/setup-homebrew@main
+
+      - name: Tap the update commit
+        run: |
+          brew tap glassflow/tap
+          brew update
+
+      - name: The tap formula is this version
+        run: |
+          stable="$(brew info --json=v2 glassflow/tap/tares | jq -r '.formulae[0].versions.stable')"
+          echo "tap formula: $stable, expected: $VERSION"
+          test "$stable" = "$VERSION"
+
+      # PyPI's index can lag right after a publish, so the install gets a few tries.
+      - name: Install
+        run: |
+          for attempt in 1 2 3; do
+            brew install glassflow/tap/tares && exit 0
+            echo "install attempt $attempt failed" >&2
+            [ "$attempt" = 3 ] || sleep 60
+          done
+          exit 1
+
+      - name: tares --version
+        run: |
+          actual="$("$(brew --prefix)/bin/tares" --version)"
+          echo "actual: $actual"
+          test "$actual" = "tares $VERSION"
+
+      - name: brew test
+        run: brew test glassflow/tap/tares
+
+      - name: taresd answers /health
+        env:
+          TARES_PORT: 8799
+        run: |
+          export TARES_DB="$RUNNER_TEMP/t.duckdb"
+          "$(brew --prefix)/bin/taresd" > "$RUNNER_TEMP/taresd.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 30); do
+            if curl -fsS "http://127.0.0.1:$TARES_PORT/health"; then
+              echo
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "taresd never answered /health" >&2
+          cat "$RUNNER_TEMP/taresd.log" >&2
+          exit 1

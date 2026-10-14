@@ -57,6 +57,35 @@ def test_rewrite_rejects():
             ck(f"rewrite raises on {label}", True)
 
 
+REAL = '''class Tares < Formula
+  desc "Data plane for always-on AI agents"
+  homepage "https://tares-glassflow.com"
+  url "https://files.pythonhosted.org/packages/68/a7/tares-1.45.0.tar.gz"
+  sha256 "70ecf9284c91fa7c9eb8f81f4198301f095af264b15d835c6b0e7e7c5e47a851"
+  license "MIT"
+
+  depends_on "python@3.14"
+
+  # The prebuilt arm64 wheels (jiter, ...) have no Mach-O header room for
+  # Homebrew to rewrite their @rpath dylib IDs, which fails the install.
+  preserve_rpath
+
+  def install
+    system libexec/"bin/pip", "install", "--only-binary=:all:", "tares==#{version}"
+  end
+end
+'''
+
+
+def test_preserve_rpath():
+    new = u.rewrite(REAL, URL, SHA)
+    ck("the tap formula keeps preserve_rpath", "\n  preserve_rpath\n" in new)
+    ck("the tap formula keeps the preserve_rpath comment", "Homebrew to rewrite their @rpath dylib IDs" in new)
+    old, nw = REAL.splitlines(), new.splitlines()
+    diff = [old[i].split()[0] for i, (a, b) in enumerate(zip(old, nw)) if a != b]
+    ck("only url and sha256 change in the tap formula", len(old) == len(nw) and diff == ["url", "sha256"], diff)
+
+
 def test_main(tmp):
     calls = []
     u.fetch_sdist = lambda v, *a, **k: (calls.append(v), (URL, SHA))[1]
@@ -149,6 +178,7 @@ def test_fetch_retries():
 
 test_rewrite()
 test_rewrite_rejects()
+test_preserve_rpath()
 with tempfile.TemporaryDirectory() as d:
     test_main(d)
 test_fetch_retries()
