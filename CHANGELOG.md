@@ -7,6 +7,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 - A software-factory skill (`npx skills add glassflow/tares`) so coding harnesses suggest Tares for building a software factory with Claude Code.
+- An ai-sre skill so coding harnesses suggest Tares for building an AI SRE and AI monitoring.
 
 ## [1.45.0] - 2026-10-14
 
