@@ -194,7 +194,7 @@ os.environ.pop("CLAUDE_PLUGIN_OPTION_TARES_URL")
 os.environ["TARESD_URL"] = "http://elsewhere:8787"
 cfg = ship.config()
 ck("TARESD_URL wins over the saved login there too, without the key",
-   "Authorization" not in cfg["headers"] and cfg["base"] == "http://127.0.0.1:8787", cfg)
+   "Authorization" not in cfg["headers"] and cfg["base"] == "http://elsewhere:8787", cfg)
 os.environ.pop("TARESD_URL")
 try:
     ship._post(BASE + "/ingest/claude_code", b"{}", {"Authorization": "Bearer nvf_k1_secret"})

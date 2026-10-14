@@ -113,16 +113,17 @@ def config() -> dict:
     # A tares-factory station is told its crew's Tares (TARES_FACTORY_URL) and where its token is
     # kept (TARES_FACTORY_TOKEN_FILE); both win over the plugin options, whose URL defaults to
     # 127.0.0.1:8787.
-    base = (os.environ.get("TARES_FACTORY_URL") or _opt("tares_url")
-            or LOCAL).rstrip("/")
+    # Then a tares_url set by hand, then TARESD_URL, then the workspace `tares login` saved (TR-492),
+    # then the local daemon: the same order `tares` itself uses. The saved key only ever goes to
+    # its own workspace, and never when an access_token was set by hand.
+    opt_url = (_opt("tares_url") or "").rstrip("/")
     token = (_file_token() or _opt("access_token") or "").strip()
-    # Outside the factory, with the plugin options left as they came and no TARESD_URL: the
-    # workspace `tares login` saved, with its key (TR-492), the same order `tares` itself uses.
-    # An option set by hand wins, and the key is never sent anywhere but its own workspace.
-    login = _saved_login()
-    if (login and not os.environ.get("TARES_FACTORY_URL") and not os.environ.get("TARESD_URL")
-            and not token and base in (LOCAL, login["cell_url"])):
-        base, token = login["cell_url"], login["key"]
+    login = None if token else _saved_login()     # a token set by hand keeps its own address
+    base = (os.environ.get("TARES_FACTORY_URL") or (opt_url if opt_url != LOCAL else "")
+            or os.environ.get("TARESD_URL") or (login["cell_url"] if login else "")
+            or LOCAL).rstrip("/")
+    if login and not os.environ.get("TARES_FACTORY_URL") and base == login["cell_url"]:
+        token = login["key"]
     headers = {"Content-Type": "application/x-ndjson"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
