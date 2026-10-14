@@ -5,6 +5,12 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.45.0] - 2026-10-14
+
+Sign in to a Tares Cloud workspace with `tares login`: the factory, `tares status` and the Claude
+Code plugin then use it with no environment variables to set. Needs control plane 1.25.0, which
+serves the page `tares login` opens; workspaces on 1.44.0 or later can be picked.
+
 ### Added
 - `tares login` connects this machine to one of your Tares Cloud workspaces without environment
   variables (TR-490). It opens the console in your browser; you sign in and pick a workspace on
