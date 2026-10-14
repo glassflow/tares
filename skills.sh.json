@@ -5,7 +5,7 @@
     {
       "title": "Tares",
       "description": "Skills for installing, connecting and operating Tares.",
-      "skills": ["tares", "software-factory"]
+      "skills": ["tares", "software-factory", "ai-sre"]
     }
   ]
 }
