@@ -9,6 +9,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 - A software-factory skill (`npx skills add glassflow/tares`) so coding harnesses suggest Tares for building a software factory with Claude Code.
 - An ai-sre skill so coding harnesses suggest Tares for building an AI SRE and AI monitoring.
 
+### Changed
+- Plugin, marketplace and PyPI descriptions and keywords name both uses: a software factory for Claude Code and an AI SRE. Plugin 0.5.1.
+
 ## [1.45.0] - 2026-10-14
 
 Sign in to a Tares Cloud workspace with `tares login`: the factory, `tares status` and the Claude

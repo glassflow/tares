@@ -1,8 +1,9 @@
 [project]
 name = "tares"
 version = "1.45.0"
-description = "A self-hostable data plane for AI agents: ingest events, store them losslessly, and serve one correlated read of any entity over MCP."
+description = "Open-source platform for always-on AI agents: a software factory for Claude Code that takes your projects from tickets to merged pull requests, or an AI SRE that watches your systems."
 readme = "README.md"
+keywords = ["tares", "software-factory", "claude-code", "autonomous-agents", "coding-agents", "multi-agent", "agent-orchestration", "ai-sre", "ai-monitoring", "incident-response", "observability", "mcp"]
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "GlassFlow" }]
@@ -11,6 +12,7 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
+    "Topic :: Software Development",
     "Topic :: System :: Monitoring",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
