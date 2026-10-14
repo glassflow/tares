@@ -28,7 +28,8 @@ Claude (step 4); the crew builds.
 
 - Say what is about to run. Installs can take a minute; post a line of progress while one runs.
 - Print each command and its result. If a command fails, change something before retrying.
-- Run `tares factory crew status` first. If it shows the stations up, skip step 3.
+- If `tares` is already installed, run `tares factory crew status` first. If it shows the stations
+  up, skip step 3. "tares: command not found" or "no crew yet" means carry on from step 2.
 - Never paste tokens into a file or the chat. `tares factory` reads the sign-in it needs from the
   machine's own login.
 - The user answers the crew's questions, not you. Do not answer them on their behalf.
@@ -61,7 +62,11 @@ nohup tares mcp --transport streamable-http > ~/.tares-mcp.log 2>&1 &
 sleep 2; lsof -iTCP:8788 -sTCP:LISTEN -n -P
 ```
 
-The console is at http://127.0.0.1:8787 and the endpoint at http://127.0.0.1:8788/mcp. Or ask the
+If the loop prints nothing, or `lsof` shows no listener, the start failed without a message: read
+`~/.tares-up.log` (or `~/.tares-mcp.log`) and check that `tares` is on PATH.
+
+On a local Tares the console is at http://127.0.0.1:8787 and the endpoint at
+http://127.0.0.1:8788/mcp. Or ask the
 user to run `tares up` and `tares mcp --transport streamable-http` in two terminals of their own.
 
 On Tares Cloud, still install, then skip `tares up` and `tares mcp`: run `tares login` once and
@@ -74,8 +79,8 @@ a marketplace copy takes its place, so the stations run without their skills.
 tares factory doctor      # checks everything the crew needs; names a marketplace copy if one is in the way
 ```
 
-If it names one, remove it: `claude plugin uninstall tares@tares` (add `--scope project`, run in
-that project's folder, for a project install).
+If it names one, run the command it prints (usually `claude plugin uninstall tares@tares`, with
+`--scope project` for a project install).
 
 ## 3. Bring up the crew
 
@@ -119,7 +124,8 @@ project's progress.
 
 ## 6. Report
 
-One short block: the Tares version, the console URL, the stations that are up, the project handed
+One short block: the Tares version, the console URL (http://127.0.0.1:8787 locally, the workspace
+address on Tares Cloud), the stations that are up, the project handed
 over (if any). End with exactly one next step:
 
 - no project yet: `tares factory spec "..."` (step 4)
