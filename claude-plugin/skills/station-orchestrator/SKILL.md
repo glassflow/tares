@@ -65,6 +65,27 @@ person agrees. Then:
 The person saying "it's done" or "wrap it up" in your session is the start of this, not a
 substitute for it: ask the desk item, so their words are recorded.
 
+## A project the person takes over
+
+The person may take a project back from the crew to build it in their own session (`tares factory
+session <project>` in their terminal). Tares records it with their words and takes the project off
+`crew_projects` at once; it shows under `releasing`, with the stations that still hold its tickets
+(`holders`). You learn of it from a `[TF:TAKEOVER]` message from their session, or on your tick.
+Release it gracefully; nothing the builders did is thrown away:
+
+1. Assign nothing more in that project and start no builder for it.
+2. Send each of its builders (the `holders`, and any `<project>-build-*` in `factory roster`)
+   `[TF:STOP]` with the project: finish the current step, commit and push what they have to their
+   branch, write their progress in the working doc of each ticket they hold, then reply `DONE`
+   with the branch and pull request of each ticket.
+3. When each has replied (or after 15 minutes without a reply, or when it is gone), `factory
+   retire <station>` it. Leave its branches, pull requests and worktree where they are.
+4. `release_project(project)`. Tares clears the tickets' holders; the person's session owns the
+   project.
+5. Reply to the session named in the `TAKEOVER` (its `session:` line) with `[TF:RELEASED]`, listing
+   each ticket the builders left in progress with its branch and pull request. Write it to your
+   report. Tell the person nothing else about it unless they ask.
+
 ## Answering questions
 
 When a station sends `ASK`:
@@ -105,7 +126,7 @@ On routine work your word is the person's: routing, relays, go-aheads on decisio
 On each scheduled tick, and whenever you wake with nothing queued:
 
 1. `factory roster`. A station that should exist is missing or `gone`: `factory revive <station>` with a prompt that carries any pending hand-off. Don't revive a builder whose tickets are all merged.
-2. `crew_projects`: a project with work left and no active builder is new or stalled: start it (above).
+2. `crew_projects`: a project with work left and no active builder is new or stalled: start it (above). A project under `releasing` was taken over by the person: release it (above), even without a `TAKEOVER` message.
 3. For each project, `list_tickets`: tickets in `doing`, `review` or `changes` with nothing new for 45 minutes: read the holder's report and the ticket's record, then ask it one line; unreachable, revive it. When Tares has no PR link for a ticket in review, check `gh pr list -R <owner>/<repo>` (you run in the crew home, so always name the repo).
 4. A ticket merged that another waits on (`depends_on`, any repo): assign the waiting one, starting its builder if needed. Milestone complete: tell the person, and start the next (with a releaser, `RELEASE` first). The last milestone complete: finish the project (above).
 5. Open desk items: as in "Keep it in view" under "The desk".

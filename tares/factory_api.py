@@ -349,7 +349,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         tickets each repo has. The orchestrator works from this list (TR-462)."""
         names = {p["id"]: p["name"] for p in store.list_projects()}
         out = []
-        for uid in store.handed_over_projects(finished=False):
+        for uid in store.handed_over_projects(finished=False, taken=False):
             if uid not in names:
                 continue
             ho = store.get_handover(uid) or {}
@@ -365,7 +365,15 @@ def register(app, store, h: SimpleNamespace) -> None:
                 done.append({"id": uid, "name": names[uid], **project_progress(uid),
                              "finished": ho.get("finished")})
         done.sort(key=lambda p: str((p["finished"] or {}).get("at") or ""), reverse=True)
-        return {"projects": out, "finished": done, "now": now_utc()}
+        releasing = []
+        for uid in store.handed_over_projects(finished=False, taken=True):
+            ho = store.get_handover(uid) or {}
+            if uid in names and not (ho.get("takeover") or {}).get("released_at"):
+                releasing.append({"id": uid, "name": names[uid], "takeover": ho["takeover"],
+                                  "repos": ho.get("repos") or [],
+                                  "holders": sorted({t["holder"] for t in store.list_tickets(uid)
+                                                     if t["holder"]})})
+        return {"projects": out, "finished": done, "releasing": releasing, "now": now_utc()}
 
     @app.get("/api/crew/{name}")
     async def get_station(name: str, recent: int = 30):
@@ -1066,6 +1074,55 @@ def register(app, store, h: SimpleNamespace) -> None:
         include_shared_grants(uid)   # a crew-built project shows the grants it is built under
         return {"handover": store.get_handover(uid)}
 
+    @app.post("/api/projects/{uid}/takeover")
+    async def take_over(uid: str, request: Request, body: dict = Body(default={})):
+        """{words}: the person takes the project back from the crew to build it in their own
+        session (`tares factory session <project>`, TR-520). Only the person, never a station.
+        The project leaves the crew's work list at once and is listed under `releasing` in
+        /api/crew/projects until the orchestrator has stopped its builders (they push what they
+        have and write their progress first) and calls release. Asking again while it is being
+        released changes nothing."""
+        deny(request, "takeover")
+        p = h.project_or_404(uid)
+        ho = store.get_handover(uid)
+        if not ho:
+            h.err(ValueError(f"{p['name']} is not with the crew; there is nothing to take over"),
+                  409)
+        if ho.get("finished"):
+            h.err(ValueError(f"{p['name']} is finished; hand it to the crew again or work on it "
+                             "in a session without taking it over"), 409)
+        if not ho.get("takeover"):
+            words = " ".join(str(body.get("words") or "").split())[:500] or \
+                "Taken over by the person with tares factory session"
+            by, _ = who(request, body)
+            store.take_over(uid, words, by, now_utc())
+        return {"project": uid, "name": p["name"], "takeover": store.get_handover(uid)["takeover"],
+                "holders": sorted({t["holder"] for t in store.list_tickets(uid) if t["holder"]})}
+
+    @app.post("/api/projects/{uid}/release")
+    async def release_project(uid: str, request: Request):
+        """The orchestrator has stopped the builders of a project the person took over: the
+        person's session owns it now. Clears every ticket's holder (the stages, pull requests and
+        working docs stay as the builders left them). The person's own session may release it too,
+        when no orchestrator runs."""
+        deny(request, "release")
+        p = h.project_or_404(uid)
+        ho = store.get_handover(uid) or {}
+        tk = ho.get("takeover")
+        if not tk:
+            h.err(ValueError(f"{p['name']} was not taken over; there is nothing to release"), 409)
+        if not tk.get("released_at"):
+            by, role = who(request)
+            at = now_utc()
+            for t in store.list_tickets(uid):
+                if t["holder"]:
+                    store.update_ticket(t["id"], holder=None)
+                    store.add_ticket_history(t["id"], uid, "holder", None,
+                                             "released to the person's session", by, role, at)
+            store.release_takeover(uid, at)
+        return {"project": uid, "name": p["name"],
+                "takeover": store.get_handover(uid)["takeover"]}
+
     def project_progress(uid: str) -> dict:
         """Tickets done of all, by stage, and the first milestone with work left."""
         tickets = store.list_tickets(uid)
@@ -1148,9 +1205,9 @@ def register(app, store, h: SimpleNamespace) -> None:
         deny(request, "finish")
         p = h.project_or_404(uid)
         ho = store.get_handover(uid)
-        if not ho:
+        if not ho and caller(request)["station"]:
             h.err(ValueError(f"{p['name']} was never handed to the crew; there is nothing to finish"))
-        if ho.get("finished"):
+        if ho and ho.get("finished"):
             h.err(ValueError(f"{p['name']} was already finished "
                              f"({ho['finished']['decision'] or 'by hand'})"), 409)
         open_ = [factory_mod.label(t) for t in store.list_tickets(uid)
@@ -1159,6 +1216,18 @@ def register(app, store, h: SimpleNamespace) -> None:
         if open_:
             h.err(ValueError(f"{p['name']} still has open tickets: {', '.join(open_)}. Finish or "
                              "cancel them first"), 409)
+        if not ho:
+            # built in the person's own session, never by the crew (tares factory session, TR-520):
+            # their words are what the session typed for them; the project is done
+            if p.get("status") == "done":
+                h.err(ValueError(f"{p['name']} was already finished"), 409)
+            words = " ".join(str(body.get("words") or "").split())[:500] or \
+                "Marked done by the person"
+            by, _ = who(request, body)
+            store.update_project(uid, status="done")
+            return {"project": uid, "name": p["name"],
+                    "finished": {"at": now_utc(), "words": words, "decision": None, "by": by},
+                    "open_projects": len(store.handed_over_projects(finished=False, taken=False))}
         ref = str(body.get("decision") or "").strip()
         by, _ = who(request, body)
         if not ref and not caller(request)["station"]:
@@ -1168,7 +1237,7 @@ def register(app, store, h: SimpleNamespace) -> None:
             store.finish_handover(uid, words, None, by, now_utc())
             store.update_project(uid, status="done")
             return {"project": uid, "name": p["name"], "finished": store.get_handover(uid)["finished"],
-                    "open_projects": len(store.handed_over_projects(finished=False))}
+                    "open_projects": len(store.handed_over_projects(finished=False, taken=False))}
         if not ref:
             h.err(ValueError("name the desk item where the person said the project is done "
                              "(decision=D<n>): ask them on the desk first, then record their answer"))
@@ -1184,7 +1253,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         store.finish_handover(uid, dec["words"], d["label"], by, now_utc())
         store.update_project(uid, status="done")
         return {"project": uid, "name": p["name"], "finished": store.get_handover(uid)["finished"],
-                "open_projects": len(store.handed_over_projects(finished=False))}
+                "open_projects": len(store.handed_over_projects(finished=False, taken=False))}
 
     @app.get("/api/projects/{uid}/repos")
     async def project_repos(uid: str):

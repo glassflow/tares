@@ -110,6 +110,31 @@ model attack the plan. Then it writes the plan into a Tares project:
 
 It ends by asking whether to hand the project to the crew. On yes, the orchestrator picks it up.
 
+## Or build it in one session
+
+Some projects don't need a crew. Work on one in your own Claude Code session, still on Tares
+(the shared AGENTS.md and memory apply, and the session's record lands on the project):
+
+```
+tares factory session <project>        # a planned project
+tares factory session "<idea>"         # plan a small one and build it right there
+tares factory session                  # asks which
+```
+
+It opens Claude with the Tares plugin, bound to the project. A plain `claude` has no Tares tools,
+so start sessions that work on a project this way.
+
+- **A planned project**: the session reads its starting prompt and works the ready tickets,
+  picking up first any ticket an earlier session left in progress.
+- **A project the crew has**: it asks whether to take it over. On yes, Tares keeps your words, the
+  crew stops working on it (its builders push what they have and write their progress), and the
+  session carries on from their branches and pull requests. Answer no to leave it with the crew.
+- **A new idea**: the session asks a few questions, writes a light record (goal, short spec,
+  tickets) into a new project and builds it. If the plan turns out big (several repos, many
+  tickets), it offers the full spec and the hand-over to the crew instead.
+
+When it is done, the session asks you whether the project is finished and keeps your answer.
+
 ## 4. Watch it build, answer its questions
 
 - **Crew page:** who is on the crew, what each member is doing, the projects it holds. Click a

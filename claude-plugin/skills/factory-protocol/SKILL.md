@@ -82,6 +82,9 @@ key: value
 | `RELEASE` | orchestrator ↔ releaser (only when the crew has one) | project, repo, what to ship (refs, tickets), environment, then the result and how it was verified |
 | `RELAY` | orchestrator → station | the person's words verbatim, when they said them, the `D<n>` |
 | `HALT` / `RESUME` | orchestrator → all | reason; on HALT finish the current step safely, start nothing new |
+| `TAKEOVER` | the person's session (`tares factory session`) → orchestrator | project, `session:` its name, the holders. The person took the project back; Tares has the record, the message only wakes the orchestrator |
+| `STOP` | orchestrator → a builder of that project | project; push what you have, write your progress, reply `DONE` with branches and PRs, start nothing new |
+| `RELEASED` | orchestrator → the person's session | project, each ticket left in progress with its branch and PR |
 | `RELOAD` | orchestrator → all | reload `factory-protocol` and your station skill, re-read your state |
 | `FYI` | any → any | status nobody has to act on; keep these rare |
 

@@ -40,6 +40,15 @@ Work the tickets you hold in the order `list_tickets` gives (ready first). Ref =
 
 **When every ticket you hold is merged**, `touch "$FACTORY_HOME/stations/$FACTORY_STATION.done"` and tell the orchestrator. `tares factory crew watch` then leaves you stopped instead of reviving you, and the orchestrator retires you or gives you the next tickets of your repo.
 
+## When the orchestrator says STOP
+
+A `[TF:STOP]` means the person took the project over to finish it in their own session. Finish the
+step you are in (never leave a half-applied change), then for each ticket you hold: commit and push
+what you have to its branch (even unfinished: say so in the commit message), and write in its
+working doc's `## Progress` what is done, what is next and how to run it. Leave the stage, the pull
+request and the worktree as they are. `CronDelete` your tick, reply `DONE` to the orchestrator with
+each ticket's branch and pull request, and start nothing new.
+
 ## Assumptions and learnings
 
 - An unknown you decide yourself: `assume(question, choice, why, tickets=[ref], affects="<who>")`, then tell the orchestrator `A<n>` in one line (protocol rule 5).

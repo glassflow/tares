@@ -192,6 +192,13 @@ FACTORY_SCHEMA = [
     "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS finished_words TEXT",
     "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS finished_decision TEXT",
     "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS finished_by TEXT",
+    # The person took the project back from the crew to build it in their own session (TR-520):
+    # when, their words, who recorded it, and when the orchestrator had released it (its builders
+    # stopped). A later hand-over clears it (the crew has it again).
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS taken_at TIMESTAMPTZ",
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS taken_words TEXT",
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS taken_by TEXT",
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS released_at TIMESTAMPTZ",
 ]
 
 
@@ -825,17 +832,27 @@ class FactoryStore:
                 "repo = excluded.repo, handed_by = excluded.handed_by, "
                 "handed_at = excluded.handed_at, repos = excluded.repos, "
                 "autonomy = excluded.autonomy, finished_at = NULL, finished_words = NULL, "
-                "finished_decision = NULL, finished_by = NULL",
+                "finished_decision = NULL, finished_by = NULL, taken_at = NULL, "
+                "taken_words = NULL, taken_by = NULL, released_at = NULL",
                 [project, first, by or None, at, json.dumps(repos), autonomy or None])
 
-    def handed_over_projects(self, finished: bool | None = None) -> list[str]:
+    def handed_over_projects(self, finished: bool | None = None,
+                             taken: bool | None = None) -> list[str]:
         """The projects handed to the crew; `finished` False: only the open ones, True: only the
-        ones the person said are done."""
+        ones the person said are done. `taken` False: only the ones the crew still has, True: only
+        the ones the person took over (TR-520)."""
         q = "SELECT project FROM handovers"
+        where = []
         if finished is True:
-            q += " WHERE finished_at IS NOT NULL"
+            where.append("finished_at IS NOT NULL")
         elif finished is False:
-            q += " WHERE finished_at IS NULL"
+            where.append("finished_at IS NULL")
+        if taken is True:
+            where.append("taken_at IS NOT NULL")
+        elif taken is False:
+            where.append("taken_at IS NULL")
+        if where:
+            q += " WHERE " + " AND ".join(where)
         with self._lock:
             return [r[0] for r in self.con.execute(q).fetchall()]
 
@@ -846,17 +863,32 @@ class FactoryStore:
                              "finished_decision = ?, finished_by = ? WHERE project = ?",
                              [at, words, decision, by, project])
 
+    def take_over(self, project: str, words: str, by: str | None, at) -> None:
+        """The person takes the project back from the crew (TR-520); released once the
+        orchestrator has stopped its builders."""
+        with self._lock:
+            self.con.execute("UPDATE handovers SET taken_at = ?, taken_words = ?, taken_by = ?, "
+                             "released_at = NULL WHERE project = ?", [at, words, by, project])
+
+    def release_takeover(self, project: str, at) -> None:
+        with self._lock:
+            self.con.execute("UPDATE handovers SET released_at = ? WHERE project = ?",
+                             [at, project])
+
     def get_handover(self, project: str) -> dict | None:
         with self._lock:
             r = self.con.execute("SELECT repo, handed_by, handed_at, repos, autonomy, "
-                                 "finished_at, finished_words, finished_decision, finished_by "
+                                 "finished_at, finished_words, finished_decision, finished_by, "
+                                 "taken_at, taken_words, taken_by, released_at "
                                  "FROM handovers WHERE project = ?", [project]).fetchone()
         if not r:
             return None
         repos = json.loads(r[3]) if r[3] else ([{"path": r[0], "name": None}] if r[0] else [])
         return {"repo": r[0], "repos": repos, "autonomy": r[4], "by": r[1], "at": r[2],
                 "finished": ({"at": r[5], "words": r[6], "decision": r[7], "by": r[8]}
-                             if r[5] else None)}
+                             if r[5] else None),
+                "takeover": ({"at": r[9], "words": r[10], "by": r[11], "released_at": r[12]}
+                             if r[9] else None)}
 
     def delete_milestone(self, mid: str) -> None:
         """The milestone goes; its tickets stay, without a milestone."""

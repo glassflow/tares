@@ -42,6 +42,12 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
   tares factory spec ["<idea>"]             plan a project with Claude and /tares:spec, in the repo it
                                             builds on or a folder of its repos; it ends with the
                                             hand-over to the crew
+  tares factory session [<project> | [--new] "<idea>"]
+                                            work on a project in your own Claude session, bound to
+                                            it on Tares: a planned one (take it over from the crew
+                                            if it has it), or a new idea planned lightly and built
+                                            right there (--new: even when it is one word); no
+                                            argument asks which
   tares factory projects                    every project handed to the crew: progress, the milestone
                                             it is on, its builders and repos
   tares factory finish <project> ["words"]  mark a project done yourself (the orchestrator otherwise
@@ -1270,7 +1276,17 @@ $ME: opening Claude as $slug-spec in $here, with /tares:spec.
          It interviews you, one question at a time, and writes the spec, milestones and tickets
          into a project on Tares ($TARES). It ends by asking whether to hand the project to the crew.
 SPEC
-  local -a args=(-n "$slug-spec")
+  local prompt="/tares:spec"
+  [ -n "$name" ] && prompt="$prompt (project name: $name)"
+  [ -n "$idea" ] && prompt="$prompt $idea"
+  person_claude "$here" "$slug-spec" spec "$prompt"
+}
+
+# The person's own Claude Code session, in the foreground, with this plugin turned on (its own
+# --settings, as for stations), told the crew's Tares and MCP endpoint, and the token as a file.
+person_claude() { # cwd session-name settings-name prompt [VAR=value...]
+  local cwd=$1 sname=$2 sfile=$3 prompt=$4; shift 4
+  local -a args=(-n "$sname")
   local f; while IFS= read -r f; do [ -n "$f" ] && args+=("$f"); done < <(plugin_flags)
   if [ -n "${TARES_AUTH_TOKEN:-}" ]; then
     mkdir -p "$CREW_HOME"; keep_token
@@ -1278,14 +1294,143 @@ SPEC
     export TARES_FACTORY_TOKEN_FILE=$TOKEN_FILE TARES_FACTORY_CRED_FILE=$TOKEN_FILE
   fi
   mkdir -p "$CREW_HOME/stations"
-  local spec_settings="$CREW_HOME/stations/spec.settings.json"
-  jq -n '{enabledPlugins: {"tares@inline": true}}' > "$spec_settings"
-  args+=(--settings "$spec_settings")
-  local prompt="/tares:spec"
-  [ -n "$name" ] && prompt="$prompt (project name: $name)"
-  [ -n "$idea" ] && prompt="$prompt $idea"
+  local settings="$CREW_HOME/stations/$sfile.settings.json"
+  jq -n '{enabledPlugins: {"tares@inline": true}}' > "$settings"
+  args+=(--settings "$settings")
   local mcp; mcp=$(mcp_url)
-  cd "$here" && TARES_FACTORY_URL=$TARES TARESD_URL=$TARES TARES_FACTORY_MCP_URL=$mcp exec "$CLAUDE" "${args[@]}" "$prompt"
+  cd "$cwd" && exec env TARES_FACTORY_URL="$TARES" TARESD_URL="$TARES" TARES_FACTORY_MCP_URL="$mcp" "$@" \
+    "$CLAUDE" "${args[@]}" "$prompt"
+}
+
+# ---------- a project in one session (TR-520) ----------
+# `session <project>` works on a planned project in the person's own session, bound to it; when the
+# crew holds it, the person may take it back (the orchestrator stops its builders gracefully).
+# `session "<idea>"` plans it lightly and builds it in the same session. No argument: ask which.
+
+factory_projects() { # → [{id, name, status}] of every software factory project on Tares
+  tares_http GET /api/projects 2>/dev/null | jq -c '[(.projects // [])[] | select(.kind == "software_factory")
+    | {id, name, status: (.status // "active")}]' 2>/dev/null || echo '[]'
+}
+releasing_projects() { tares_http GET /api/crew/projects 2>/dev/null | jq -c '.releasing // []' 2>/dev/null || echo '[]'; }
+match_project() { # name-or-id, json list → the matching row, or nothing
+  jq -c --arg p "$1" --arg s "$(slugify "$1")" '[.[] | select(.name == $p or .id == $p
+    or ((.name | ascii_downcase | gsub("[^a-z0-9]+"; "-") | gsub("^-|-$"; "")) == $s))][0] // empty' <<<"$2"
+}
+
+session_dir() { # project id → the folder its session opens in: the repo you are in when it is one of
+  # the project's, else its first repo that is on this machine, else here
+  local here root repos p
+  here=$(pwd -P); root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  repos=$(tares_http GET "/api/projects/$1/crew" 2>/dev/null | jq -r '.handover.repos // [] | .[].path // empty' 2>/dev/null || true)
+  if [ -n "$root" ] && grep -qxF "$root" <<<"$repos"; then echo "$root"; return; fi
+  while IFS= read -r p; do [ -n "$p" ] && [ -d "$p" ] && { echo "$p"; return; }; done <<<"$repos"
+  echo "${root:-$here}"
+}
+
+session_project() { # project row (json)
+  local row=$1 id name slug taken="" crew rel words out code tok
+  id=$(jq -r .id <<<"$row"); name=$(jq -r .name <<<"$row")
+  crew=$(project_row "$name")
+  rel=$(match_project "$name" "$(releasing_projects)")
+  if [ -n "$crew" ]; then
+    echo "$name is with the crew: $(jq -r '"\(.tickets_done) of \(.tickets_total) tickets done"
+      + (if .milestone then ", on \(.milestone.name)" else "" end)' <<<"$crew")." >&2
+    local take; take=$(choose "Take it over? The crew stops working on it: its builders push what they have and write their progress, then this session carries on from there." 2 \
+      "yes|yes, take it over and build it in this session" "no|no, leave it with the crew")
+    if [ "$take" != yes ]; then
+      echo "Left with the crew. Talk to it with: $ME crew attach orchestrator" >&2
+      return 0
+    fi
+    words=""
+    if [ "$ASSUME_YES" != 1 ]; then
+      printf '\nIn a few words, why (kept on Tares with the takeover; Enter to skip)\n> ' >&2
+      IFS= read -r words || words=""
+    fi
+    tok=$(tares_token)
+    out=$({ [ -n "$tok" ] && printf 'Authorization: Bearer %s\n' "$tok"; true; } | curl -sS --max-time 15 -H @- \
+      -H 'Content-Type: application/json' -X POST --data "$(jq -cn --arg w "$words" '{words: $w}')" \
+      -w '\n%{http_code}' "$TARES/api/projects/$id/takeover" 2>&1) || die "could not reach Tares at $TARES"
+    code=$(tail -1 <<<"$out"); out=$(sed '$d' <<<"$out")
+    [ "$code" = 200 ] || die "Tares did not record the takeover of $name: $(jq -r '.detail // .' <<<"$out" 2>/dev/null || echo "$out")"
+    taken=1
+    echo "Taken over. The orchestrator stops the builders of $name; the session waits for it, then carries on." >&2
+  elif [ -n "$rel" ]; then
+    taken=1
+    echo "$name was taken over from the crew; the session checks its builders have stopped, then carries on." >&2
+  fi
+  slug=$(slugify "$name" | cut -c1-40 | sed 's/-$//')
+  local prompt="/tares:session $name"
+  [ -n "$taken" ] && prompt="$prompt (taken over from the crew)"
+  person_claude "$(session_dir "$id")" "$slug-session" session "$prompt" \
+    TARES_PROJECT="$name" TARES_SESSION_TAKEOVER="${taken:-}" TARES_SESSION_NAME="$slug-session"
+}
+
+session_idea() { # idea
+  local idea=$1 slug here root
+  here=$(pwd -P); root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  slug=$(slugify "$(tr -s '[:space:]' ' ' <<<"$idea" | sed 's/^ //' | cut -d' ' -f1-4)" | cut -c1-40 | sed 's/-$//')
+  cat >&2 <<SESSION
+$ME: opening Claude as ${slug:-new}-session in ${root:-$here}.
+         It plans "$idea" lightly into a new project on Tares ($TARES) and builds it in the same
+         session; if it turns out big, it offers the full spec and the hand-over to the crew.
+SESSION
+  person_claude "${root:-$here}" "${slug:-new}-session" session "/tares:session new: $idea" \
+    TARES_SESSION_NAME="${slug:-new}-session"
+}
+
+cmd_session() {
+  [ -z "${FACTORY_STATION:-}" ] || die "only the person runs this, in their own terminal"
+  local target="" new=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --new) new=1; shift ;;
+      --) shift; target="${target:+$target }$*"; break ;;
+      -*) die "unknown option $1" ;;
+      *) target="${target:+$target }$1"; shift ;;
+    esac
+  done
+  require_mcp
+  local clash; clash=$(installed_tares)
+  [ -z "$clash" ] || say "warning: $(clash_text "$clash")"
+  # a project the crew holds must never look free: stop when Tares can't say which it holds
+  crew_projects_or_die
+  local all row
+  all=$(tares_http GET /api/projects 2>&1) || die "Tares at $TARES did not list its projects ($(tail -1 <<<"$all"))"
+  all=$(factory_projects)
+  if [ $new = 1 ]; then
+    [ -n "$target" ] || die "usage: $ME session --new \"<what you want to build>\""
+    session_idea "$target"; return
+  fi
+  if [ -n "$target" ]; then
+    row=$(match_project "$target" "$all")
+    if [ -n "$row" ]; then session_project "$row"; return; fi
+    if [[ "$target" != *" "* ]]; then
+      local yn; yn=$(choose "No project named $target on Tares. Plan and build \"$target\" as a new project?" 2 \
+        "yes|yes, a new project" "no|no, I meant an existing one")
+      [ "$yn" = yes ] || die "the open projects: $(jq -r '[.[] | select(.status != "done") | .name] | join(", ")' <<<"$all")"
+    fi
+    session_idea "$target"; return
+  fi
+  # no argument: the open projects, or something new
+  local open crew rel; open=$(jq -c '[.[] | select(.status != "done")]' <<<"$all")
+  crew=$(crew_projects); rel=$(releasing_projects)
+  local -a opts=(); local p n=0
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    local nm mark=""; nm=$(jq -r .name <<<"$p")
+    [ -n "$(match_project "$nm" "$crew")" ] && mark=" (with the crew)"
+    [ -n "$(match_project "$nm" "$rel")" ] && mark=" (taken over, being released)"
+    opts+=("$(jq -r .id <<<"$p")|$nm$mark"); n=$((n + 1))
+  done < <(jq -c '.[]' <<<"$open")
+  opts+=("+new|something new")
+  local pick; pick=$(choose "Which project?" 1 "${opts[@]}")
+  if [ "$pick" = "+new" ]; then
+    local idea=""
+    [ "$ASSUME_YES" = 1 ] && die "say what to build: $ME session \"<idea>\""
+    while [ -z "$idea" ]; do printf '\nWhat do you want to build?\n> ' >&2; IFS= read -r idea || die "nothing to build"; done
+    session_idea "$idea"; return
+  fi
+  session_project "$(match_project "$pick" "$all")"
 }
 
 cmd_finish() { # project ["words"]: the person marks a project done, from their own terminal
@@ -1431,6 +1576,7 @@ case "$cmd" in
   restart) cmd_restart "$@" ;;
   retire) cmd_retire "$@" ;;
   spec) cmd_spec "$@" ;;
+  session) cmd_session "$@" ;;
   projects) cmd_projects ;;
   finish) cmd_finish "$@" ;;
   settings) cmd_settings "$@" ;;
