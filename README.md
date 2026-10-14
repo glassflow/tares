@@ -19,6 +19,7 @@ Tares is MIT licensed, runs on your own machine or server, and starts with two c
 
 - **An AI SRE.** An alert fires; the agent reads the service's whole timeline (logs, metrics, deploys, alerts) and writes the diagnosis onto it before anyone opens a dashboard. → [Build an AI SRE](https://docs.glassflow.ai/tares/guides/ai-sre)
 - **Shared code context.** Commits land; when a change matters to the team, the agent opens a pull request against the shared context repository. → [Projects](https://docs.glassflow.ai/tares/projects)
+- **A software factory.** A crew of Claude Code sessions takes a project from a plan to pull requests merged on main; Tares keeps the plan, the tickets, the reviews and your decisions. → [Software factory](https://docs.glassflow.ai/tares/software-factory/get-started)
 - **Anything with a failure mode.** Failed jobs, sandbox runs, voice calls: each gets a timeline, a trigger on failure, and a finding that says what broke.
 - **A better read path for the agents you have.** Claude Code, Cursor or your own loop asks one question and gets the correlated history of an entity instead of ten tool calls.
 
@@ -132,11 +133,27 @@ claude mcp add --transport http tares http://localhost:8788/mcp --header "Author
 
 The key reads that project only and records findings in it. The agent loads the project's skills (`list_skills`, `get_skill`), reads its sources (`read`, `stats`), sees what is known (`list_findings`, `project_timeline`), records what it concludes (`record_finding`), and calls `join_project(url)` to be woken by every trigger of the project on its own webhook. Its findings show on the project's Activity tab, marked as recorded from outside Tares. On an instance without auth there are no keys; the tools take `project` by name instead.
 
+## Build software with a crew
+
+Tares is also the backbone of a **software factory**: one crew of Claude Code sessions on your machine (an orchestrator, a reviewer, and a builder per milestone and repo) takes every project you hand it from a plan to pull requests merged on main. Builders merge once the reviewer passes them and CI is green. Tares keeps the plan, the tickets, every review and your answers, so the crew carries on after a restart and pulls you in only for decisions that are yours.
+
+```bash
+# next to tares up: the MCP endpoint every crew session shares
+tares mcp --transport streamable-http
+
+tares factory crew up                         # start the crew; the first run asks how far it may go
+tares factory spec "what you want to build"   # in the repo: plan the project, then hand it to the crew
+tares factory crew attach orchestrator        # answer the crew's questions
+```
+
+It needs Claude Code (signed in, on a plan with background sessions) and `gh` with write access to the repos; `tares factory doctor` checks the rest. Follow the crew and each project on the **Crew** page of the console. On Tares Cloud, set `TARESD_URL` and an admin `TARES_AUTH_TOKEN` instead of running `tares up`. → [Software factory](https://docs.glassflow.ai/tares/software-factory/get-started), [A project, end to end](https://docs.glassflow.ai/tares/software-factory/a-project-end-to-end)
+
 ## What you get
 
 - **Connectors** for the systems you already run: Prometheus (metrics and alerts), Alertmanager, Docker logs, GitHub, Postgres, Vercel, OpenTelemetry (OTLP), any JSON API by polling, a generic webhook, reference documents, agent memory, and Claude Code sessions. Add sources at runtime from the console; a **Discover** step proposes the config for you where it can. → [Connectors](https://docs.glassflow.ai/tares/connectors)
 - **Correlated reads**: `read(selector, window)` returns any entity's timeline across *all* sources with no setup, or only a project's sources; agents `subscribe` to be pushed the timeline when a trigger fires. → [Reads, projects, and triggers](https://docs.glassflow.ai/tares/concepts)
 - **Tares agents**: attach a prompt to a trigger and Tares runs it in-process when the trigger fires. It reads the correlated timeline and writes a **finding** back onto the entity's timeline. Read-only: it concludes, it doesn't act. → [Tares agents](https://docs.glassflow.ai/tares/tares-agents)
+- **Software factory**: `tares factory` runs a crew of Claude Code sessions that plans, builds, reviews and merges your projects, with the plan, tickets, reviews and decisions kept on Tares. → [Software factory](https://docs.glassflow.ai/tares/software-factory/get-started)
 - **Slack**: subscribe a channel to any trigger and every firing is posted there, retried, logged, and visible in the console like any other subscriber. Ask back from the channel with `/tares ask <question>`. → [Slack setup](https://docs.glassflow.ai/tares)
 - **Console**: Sources (health + setup), **Explore** (pick an entity, read its timeline), **Projects** (each with its triggers, agents, skills and one activity timeline), **Agents**, and **Ask**, an in-console assistant over your data, summonable with ⌘K.
 - **MCP tools**: `read`, `stats`, `subscribe`, `catalog_list` / `catalog_describe`, `remember` (write observations back), the project tools (`list_projects`, `join_project`, `list_skills`, `get_skill`, `list_findings`, `record_finding`, `project_timeline`), and source-setup tools. → [MCP tools reference](https://docs.glassflow.ai/tares/agents)
