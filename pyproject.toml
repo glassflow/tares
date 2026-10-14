@@ -37,7 +37,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://tares-glassflow.com"
+Homepage = "https://www.glassflow.ai/tares"
 Documentation = "https://docs.glassflow.ai/tares"
 Repository = "https://github.com/glassflow/tares"
 
