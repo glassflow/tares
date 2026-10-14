@@ -21,16 +21,17 @@ import WorkspaceSettings from "./WorkspaceSettings";
 //   · Workspace  (Tares Cloud only) team, plan, storage, credit and delete, held by the control
 //                  plane (TR-375); shown first, and the default tab, when /health has workspace_api_url
 type SettingsTab = "workspace" | "usage" | "access" | "anthropic" | "agents" | "github" | "linear" | "slack" | "observability";
-const TABS: { key: SettingsTab; label: string }[] = [
+// The tabs as a second sidebar (TR-521): the workspace itself on top, then one group per concern.
+const TABS: { key: SettingsTab; label: string; group?: string }[] = [
   { key: "workspace", label: "Workspace" },
   { key: "usage", label: "Usage" },
   { key: "access", label: "Access and API keys" },
-  { key: "anthropic", label: "Model providers" },
-  { key: "agents", label: "Agents" },
-  { key: "github", label: "GitHub" },
-  { key: "linear", label: "Linear" },
-  { key: "slack", label: "Slack" },
-  { key: "observability", label: "Observability" },
+  { key: "anthropic", label: "Model providers", group: "Agents" },
+  { key: "agents", label: "Limits", group: "Agents" },
+  { key: "observability", label: "Observability", group: "Agents" },
+  { key: "github", label: "GitHub", group: "Integrations" },
+  { key: "linear", label: "Linear", group: "Integrations" },
+  { key: "slack", label: "Slack", group: "Integrations" },
 ];
 
 // Coming back from a Tares Cloud connect page (contract §3): `cloud` says what happened and
@@ -95,18 +96,40 @@ export default function Security() {
   // spend and storage) in its place.
   const tabs = TABS.filter((t) => t.key === "workspace" ? !!workspaceApiUrl
     : t.key === "usage" ? !workspaceApiUrl : true);
+  const groups = [...new Set(tabs.map((t) => t.group))];
+  const link = (t: (typeof TABS)[number]) => (
+    <button key={t.key} type="button" aria-current={tab === t.key ? "page" : undefined}
+            className={`pnav-link${t.group ? " pnav-item pnav-plain" : ""}${tab === t.key ? " active" : ""}`}
+            onClick={() => pick(t.key)}>
+      <span className="pnav-label">{t.label}</span>
+    </button>
+  );
   return (
     <>
       <h1>Settings</h1>
-      <p className="subtitle">
-        {workspaceApiUrl ? "Your team, plan, storage and model spend, API keys, model providers, agent limits, GitHub and Slack, and agent tracing."
-          : "Model spend and storage, who can get in, API keys, model providers, agent limits, GitHub, Linear and Slack credentials, and agent tracing."}
-      </p>
-      <div className="tabs">
-        {tab !== undefined && tabs.map((t) => (
-          <button key={t.key} className={tab === t.key ? "active" : ""} onClick={() => pick(t.key)}>{t.label}</button>
-        ))}
-      </div>
+      <p className="subtitle">What applies to the whole workspace, not to one project.</p>
+      <div className="project-body settings-body">
+      <nav className="pnav" aria-label="Settings">
+        {tab !== undefined && groups.map((g) => g
+          ? <div className="pnav-group" key={g}>
+              <div className="pnav-head"><span className="pnav-title pnav-static">{g}</span></div>
+              {tabs.filter((t) => t.group === g).map(link)}
+            </div>
+          : <Fragment key="top">{tabs.filter((t) => !t.group).map(link)}</Fragment>)}
+      </nav>
+      {tab !== undefined && (
+        <label className="pnav-select">
+          <span className="lbl">show</span>
+          <select value={tab} onChange={(e) => pick(e.target.value as SettingsTab)}>
+            {groups.map((g) => g
+              ? <optgroup key={g} label={g}>
+                  {tabs.filter((t) => t.group === g).map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+                </optgroup>
+              : tabs.filter((t) => !t.group).map((t) => <option key={t.key} value={t.key}>{t.label}</option>))}
+          </select>
+        </label>
+      )}
+      <div className="pview">
       {cloudBack && (backTab ? tab === backTab : picked === undefined) && (
         <div className={"alert" + (cloudBack.kind ? ` ${cloudBack.kind}` : "")}
              role={cloudBack.kind === "error" ? "alert" : "status"}>
@@ -129,6 +152,8 @@ export default function Security() {
       {tab === "slack" && (slackConnectUrl ? <SlackCloudPanel cloud={cloud} connectUrl={slackConnectUrl} />
         : <><SlackTokenPanel /><SlackSigningSecretPanel /></>)}
       {tab === "observability" && <TracingPanel />}
+      </div>
+      </div>
     </>
   );
 }
