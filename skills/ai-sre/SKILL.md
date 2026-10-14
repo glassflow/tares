@@ -131,21 +131,25 @@ seconds, then Tares polls the alerts); `latency` alerts on a 2 minute rate and c
 
 ## 6. Read the finding
 
-Give the agent about a minute to run, then read the timeline back. The finding is the newest
-event on it, so read the end of the output. With the MCP client connected, call `list_findings(entity="api-server")`
-(newest first); without one, use the HTTP read and show the user what it returns:
+Give the agent about a minute to run, then read the finding. With the MCP client connected, call
+`list_findings(entity="api-server")` (newest first). Without one, read the `findings` source
+over HTTP and show the user what it returns:
 
 ```bash
 sleep 60
-curl -sf -X POST http://127.0.0.1:8787/read -H 'Content-Type: application/json' \
-  -d '{"selector": {"service": "api-server"}, "window": "15m"}' | tail -c 2500
+curl -s -X POST http://127.0.0.1:8787/read -H 'Content-Type: application/json' \
+  -d '{"selector": {"service": "api-server"}, "window": "15m", "sources": ["findings"]}'
 ```
+
+Until the first finding exists this answers 404 `unknown sources ['findings']`, which means no
+finding yet: wait and ask again.
 
 If nothing appears after two minutes, open http://127.0.0.1:8787/triggers/incident. It opens the
 project's setup: **Activity** shows the firing and the run it woke, and the agent's **Runs** show
 why a run failed (a missing model key is the usual reason). Fix it, then inject `clear`, wait for
-the alert to resolve, and inject `error_spike` again at least 5 minutes after the first firing:
-while the alert is still firing it adds no new event, and the trigger has a 5 minute cooldown.
+the alert to resolve, and inject `error_spike` again at least 5 minutes after the last firing (**Activity** lists
+them): while the alert is still firing it adds no new event, and the trigger has a 5 minute
+cooldown.
 
 Then ask the connected client the question from step 4 again. It now reads the evidence and the
 finding, so it starts from the previous conclusion instead of from scratch. Roll back with
