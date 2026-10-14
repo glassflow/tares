@@ -184,8 +184,21 @@ export default function App() {
   const here = useLocation().pathname;
   const onStart = here === "/start";
   const showStart = onStart || (own !== undefined && own.length === 0);
-  // the crew of a tares-factory: in the sidebar once there is a software factory project
-  const showCrew = here === "/crew" || (projects ?? []).some((p) => p.kind === "software_factory");
+  // the crew of a tares-factory: in the sidebar once there is a software factory project, or as
+  // soon as `tares crew up` has an orchestrator reporting (TR-494), before any project is handed over
+  const hasFactory = (projects ?? []).some((p) => p.kind === "software_factory");
+  const [crewUp, setCrewUp] = useState(false);
+  useEffect(() => {
+    if (hasFactory || crewUp) return;
+    let live = true;
+    const check = () => api.crew()
+      .then((c) => { if (live && c.stations.some((s) => s.role === "orchestrator")) setCrewUp(true); })
+      .catch(() => {});
+    check();
+    const id = setInterval(check, 30000);
+    return () => { live = false; clearInterval(id); };
+  }, [hasFactory, crewUp]);
+  const showCrew = here === "/crew" || hasFactory || crewUp;
   const shown = (to: string) => (to !== "/start" || showStart) && (to !== "/crew" || showCrew);
   useEffect(() => {
     api.capabilities().then((c) => setVersion(c.version ?? null)).catch(() => {});
