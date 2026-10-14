@@ -1190,11 +1190,16 @@ function ApiKeysPanel() {
         <h2 style={{ margin: 0 }}>API keys</h2>
         <button className="primary" onClick={() => setCreating(true)}>Create key</button>
       </div>
-      <p className="help" style={{ marginTop: 0 }}>
-        Scoped, revocable credentials; hand each producer and agent its own key instead of a
-        shared token. <strong>read</strong>: agents over MCP · <strong>ingest</strong>: producers ·{" "}
-        <strong>read + ingest</strong>: the Claude Code plugin · <strong>admin</strong>: full control.
+      <p className="help" style={{ marginTop: 0, marginBottom: 6 }}>
+        Give each agent, script or service its own key, so you can revoke one without touching the others.
+        What a key can do:
       </p>
+      <ul className="help" style={{ marginTop: 0, paddingLeft: 18 }}>
+        <li><strong>read</strong>: look things up, for an agent connecting over MCP</li>
+        <li><strong>ingest</strong>: send events in, for a script or service that pushes logs or webhooks</li>
+        <li><strong>read + ingest</strong>: both, for the Claude Code plugin</li>
+        <li><strong>admin</strong>: everything, settings included</li>
+      </ul>
       {!enforced && keys && (
         <div className="alert">
           No <code>TARES_AUTH_TOKEN</code> is set, so this instance is open and keys are not
@@ -1244,7 +1249,7 @@ function ApiKeysPanel() {
         )}
         </>
       ) : (
-        <p className="help">no keys yet; <strong>Create key</strong> to issue one for a producer or agent.</p>
+        <p className="help">No keys yet. <strong>Create key</strong> to make one for an agent, script or service.</p>
       )}
 
       {creating && (
@@ -1311,7 +1316,7 @@ function KeyModal({ onClose, onCreated }: {
             <span className="lbl">name</span>
             <input type="text" placeholder="e.g. otel-prod, my-agent" value={name} autoFocus
                    onChange={(e) => setName(e.target.value)} />
-            <span className="help">who holds it; one key per producer or agent</span>
+            <span className="help">who uses it: one key per agent, script or service</span>
           </label>
           <div className="field">
             <span className="lbl">scopes</span>
