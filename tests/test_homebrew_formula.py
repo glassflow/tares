@@ -83,8 +83,13 @@ def test_main(tmp):
     bad = os.path.join(tmp, "bad.rb")
     with open(bad, "w") as f:
         f.write("class Tares < Formula\nend\n")
+    before = len(calls)
     rc, out, err = run_main(["1.2.3", bad])
+    after_bad = len(calls)
     ck("main exits 1 with a message when the formula has no url", rc == 1 and err.startswith("error:"), (rc, err))
+    ck("a formula of the wrong shape fails before any PyPI call", after_bad == before, calls)
+    rc, out, err = run_main(["1.2.3\n", path])
+    ck("main rejects a version with a trailing newline", rc == 1 and "release version" in err, (rc, err))
     rc, out, err = run_main(["1.2.3", os.path.join(tmp, "missing.rb")])
     ck("main exits 1 when the file is missing", rc == 1 and err.startswith("error:"), (rc, err))
 
@@ -101,8 +106,10 @@ def test_fetch_retries():
         def __exit__(s, *a): return False
         def read(s, *a): return s.body
     good = b'{"urls": [{"packagetype": "bdist_wheel", "url": "w", "digests": {"sha256": "w"}}, {"packagetype": "sdist", "url": "https://x/tares-1.2.3.tar.gz", "digests": {"sha256": "abc"}}]}'
+    headers = []
     def fake(req, timeout=None):
         n["i"] += 1
+        headers.append(req.get_header("Cache-control"))
         if n["i"] == 1:
             raise urllib.error.HTTPError(req.full_url, 404, "nf", {}, None)
         if n["i"] == 2:
@@ -115,7 +122,21 @@ def test_fetch_retries():
         got = u.fetch_sdist("1.2.3", attempts=5, wait=7)
     ck("fetch_sdist retries a 404, a network error and a missing sdist", got == ("https://x/tares-1.2.3.tar.gz", "abc"), got)
     ck("fetch_sdist waits between attempts", slept == [7, 7, 7], slept)
+    ck("fetch_sdist asks PyPI for a fresh answer", set(headers) == {"no-cache"}, headers)
 
+    slept.clear()
+    import http.client
+    seq = iter([http.client.IncompleteRead(b""), Resp(b'{"urls": [{"packagetype": "sdist", "url": "u", "digests": {}}]}'), Resp(good)])
+    def fake2(req, timeout=None):
+        r = next(seq)
+        if isinstance(r, Exception): raise r
+        return r
+    u.urllib.request.urlopen = fake2
+    with contextlib.redirect_stderr(io.StringIO()):
+        got = u.fetch_sdist("1.2.3", attempts=5, wait=1)
+    ck("fetch_sdist retries a cut-off response and an sdist without sha256", got == ("https://x/tares-1.2.3.tar.gz", "abc") and slept == [1, 1], (got, slept))
+
+    slept.clear()
     u.urllib.request.urlopen = lambda req, timeout=None: (_ for _ in ()).throw(urllib.error.HTTPError(req.full_url, 404, "nf", {}, None))
     try:
         with contextlib.redirect_stderr(io.StringIO()):
@@ -123,6 +144,7 @@ def test_fetch_retries():
         ck("fetch_sdist raises after the last attempt", False, "no error")
     except RuntimeError as e:
         ck("fetch_sdist raises after the last attempt", "404" in str(e), str(e))
+    ck("fetch_sdist does not sleep after the last attempt", slept == [1], slept)
 
 
 test_rewrite()

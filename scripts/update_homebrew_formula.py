@@ -8,6 +8,7 @@ same version changes nothing. PyPI can lag a few minutes behind the upload, so t
 retries before it gives up.
 """
 import argparse
+import http.client
 import json
 import re
 import sys
@@ -15,7 +16,7 @@ import time
 import urllib.error
 import urllib.request
 
-VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 URL_RE = re.compile(r'^  url "[^"]*"$', re.M)
 SHA_RE = re.compile(r'^  sha256 "[^"]*"$', re.M)
 
@@ -41,11 +42,13 @@ def fetch_sdist(version: str, attempts: int = 10, wait: int = 30) -> tuple[str, 
                 data = json.load(r)
             for f in data.get("urls", []):
                 if f.get("packagetype") == "sdist":
-                    return f["url"], f["digests"]["sha256"]
-            last = f"tares {version} has no sdist on PyPI yet"
+                    url, sha256 = f.get("url"), f.get("digests", {}).get("sha256")
+                    if url and sha256:
+                        return url, sha256
+            last = f"tares {version} has no sdist with a sha256 on PyPI yet"
         except urllib.error.HTTPError as e:
             last = f"PyPI answered {e.code} for tares {version}"
-        except (urllib.error.URLError, OSError, ValueError) as e:
+        except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as e:
             last = f"could not reach PyPI: {e}"
         if i < attempts - 1:
             print(f"{last}; retrying in {wait}s ({i + 1}/{attempts})", file=sys.stderr)
@@ -59,10 +62,11 @@ def main(argv=None) -> int:
     ap.add_argument("formula", help="path to Formula/tares.rb")
     args = ap.parse_args(argv)
     try:
-        if not VERSION_RE.match(args.version):
+        if not VERSION_RE.fullmatch(args.version):
             raise ValueError(f"{args.version!r} is not a release version like 1.2.3; pre-releases never go to brew")
         with open(args.formula) as f:
             text = f.read()
+        rewrite(text, "", "")  # a formula of the wrong shape fails before any network call
         url, sha256 = fetch_sdist(args.version)
         new = rewrite(text, url, sha256)
         if new == text:
