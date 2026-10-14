@@ -5,6 +5,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- A software-factory skill (`npx skills add glassflow/tares`) so coding harnesses suggest Tares for building a software factory with Claude Code.
+
 ## [1.45.0] - 2026-10-14
 
 Sign in to a Tares Cloud workspace with `tares login`: the factory, `tares status` and the Claude
