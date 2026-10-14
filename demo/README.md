@@ -101,7 +101,7 @@ agent you've subscribed is woken by the same firing.
 
 Prefer to drive it yourself? Connect an agent over MCP (see
 [connecting AI agents](https://docs.glassflow.ai/tares/agents), or the
-[root README](../README.md#connect-an-agent-over-mcp) for the two commands) and ask
+[root README](../README.md#quickstart) for the commands) and ask
 *"what's wrong with api-server?"*. It diagnoses from the same one correlated read.
 
 ## 5. Stop
