@@ -758,7 +758,7 @@ button:focus-visible, .btn:focus-visible, .navlink:focus-visible, .navbtn:focus-
 .card .v { font-family: var(--pixel); font-variant-ligatures: none; font-variant-numeric: tabular-nums; font-size: 22px; margin-top: 4px; }
 .card .v small { font-size: 11px; font-family: var(--mono); color: var(--ink-faint); }
 
-.alert { padding: 10px 14px; border-radius: 0; margin-bottom: 14px; font-size: 13px; }
+.alert { padding: 10px 14px; border-radius: 0; margin-bottom: 14px; font-size: 13px; background: var(--th-bg); color: var(--ink-soft); border: 1px solid var(--line); }
 .alert.error { background: var(--err-soft); color: var(--err); border: 1px solid var(--danger-border); }
 .alert.ok { background: var(--ok-soft); color: var(--ok); border: 1px solid var(--ok-border); }
 .alert.info { background: var(--th-bg); color: var(--ink-soft); border: 1px solid var(--line); }
@@ -1566,6 +1566,11 @@ pre.payload {
 .pnav-dot.paused { background: var(--warn); }
 .pnav-hint { flex: 0 0 auto; font-family: var(--font-sans); font-size: 11px; font-weight: 400; color: var(--ink-faint); }
 .pnav-select { display: none; }
+/* Settings (TR-521): the same second sidebar, its entries are buttons */
+.settings-body { margin-top: 14px; grid-template-columns: 200px minmax(0, 1fr); }
+.settings-body .pview > .panel:first-child, .settings-body .pview > .alert:first-child { margin-top: 0; }
+.pnav button.pnav-link { background: none; border: 0; text-align: left; font: inherit; font-size: 13.5px; font-weight: 500; cursor: pointer; width: 100%; }
+.pnav button.pnav-link.active { font-weight: 600; }
 /* All resources (pages/Resources.tsx) */
 .res-filters { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 12px; }
 .res-filters input[type="search"] { flex: 1 1 260px; max-width: 420px; }
