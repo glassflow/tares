@@ -6,7 +6,7 @@ import { api } from "../../api";
 import ConfirmDialog from "../ConfirmDialog";
 import { Combo, ErrorState, Picker, TimeAgo, formatBytes, usePolling } from "../bits";
 import { Facts, NotHere, VLink, ViewHead, type Ctx } from "./common";
-import { prBrief } from "./factory";
+import { LinearMark, prBrief } from "./factory";
 import type { Doc, DocKind, Ticket, TicketStatus } from "../../types";
 
 // What a spec session leaves in a project for the session that builds it (TR-403, TR-407): the
@@ -522,8 +522,9 @@ export function TicketView({ ctx, name }: { ctx: Ctx; name: string }) {
       </ViewHead>
       <Facts rows={[
         ["ticket", linear
-          ? <>{data.url ? <a href={data.url} target="_blank" rel="noreferrer">{data.label} in Linear ↗</a> : <>{data.label} in Linear</>}
-              <span className="dim"> · change its title and status there</span></>
+          ? <span className="fo-linear"><LinearMark />
+              {data.url ? <a href={data.url} target="_blank" rel="noreferrer">{data.label} in Linear ↗</a> : <>{data.label} in Linear</>}
+              <span className="dim">· change its title and status there</span></span>
           : data.label],
         ["status", <StatusBadge s={data.status} />],
         ["milestone", data.milestone_name ?? <span className="dim">none</span>],
