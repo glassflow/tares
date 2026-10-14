@@ -16,7 +16,8 @@ Docs: https://docs.glassflow.ai/tares/software-factory/get-started
   session the user talks to.
 - **reviewer**: reviews every pull request to a fixed bar and posts the verdict.
 - **builders**: one per milestone and repo of a project, started by the orchestrator. They merge
-  their own pull requests once the reviewer passes them and CI is green.
+  their own pull requests once the reviewer passes them and CI is green (the default; the user can
+  have every merge wait for their yes).
 - **releaser**: only if the user asks for one. Without it, tickets end at merged on main.
 
 Tares keeps the plan, the tickets, the reviews, the assumptions and the user's decisions, so a
@@ -27,8 +28,7 @@ Claude (step 4); the crew builds.
 
 - Say what is about to run. Installs can take a minute; post a line of progress while one runs.
 - Print each command and its result. If a command fails, change something before retrying.
-- Do not start a second crew: run `tares factory crew status` first. A crew that is already up
-  needs steps 4 and 5 only.
+- Run `tares factory crew status` first. If it shows the stations up, skip step 3.
 - Never paste tokens into a file or the chat. `tares factory` reads the sign-in it needs from the
   machine's own login.
 - The user answers the crew's questions, not you. Do not answer them on their behalf.
@@ -48,18 +48,24 @@ uv --version || pipx --version
 
 ```bash
 uv tool install tares     # or: pipx install tares
-tares up                  # daemon and console on http://127.0.0.1:8787
 ```
 
-In a second terminal, start the MCP endpoint every crew session shares (it listens on
-http://127.0.0.1:8788/mcp):
+On your own machine, start the daemon and the MCP endpoint every crew session shares, both
+detached so they outlive this conversation. If port 8787 or 8788 already has a running Tares, use
+it and skip that line:
 
 ```bash
-tares mcp --transport streamable-http
+nohup tares up > ~/.tares-up.log 2>&1 &
+for i in $(seq 1 30); do curl -sf http://127.0.0.1:8787/health && break; sleep 1; done
+nohup tares mcp --transport streamable-http > ~/.tares-mcp.log 2>&1 &
+sleep 2; lsof -iTCP:8788 -sTCP:LISTEN -n -P
 ```
 
-On Tares Cloud there is nothing to start: run `tares login` once, pick the workspace in the
-browser, and skip the two commands above.
+The console is at http://127.0.0.1:8787 and the endpoint at http://127.0.0.1:8788/mcp. Or ask the
+user to run `tares up` and `tares mcp --transport streamable-http` in two terminals of their own.
+
+On Tares Cloud, still install, then skip `tares up` and `tares mcp`: run `tares login` once and
+pick the workspace in the browser. The workspace serves the console and the MCP endpoint.
 
 Do not install the Tares plugin from a marketplace for the crew. The crew loads its own copy, and
 a marketplace copy takes its place, so the stations run without their skills.
@@ -67,6 +73,9 @@ a marketplace copy takes its place, so the stations run without their skills.
 ```bash
 tares factory doctor      # checks everything the crew needs; names a marketplace copy if one is in the way
 ```
+
+If it names one, remove it: `claude plugin uninstall tares@tares` (add `--scope project`, run in
+that project's folder, for a project install).
 
 ## 3. Bring up the crew
 
@@ -81,8 +90,8 @@ whether a second model checks every commit, and how many builders work at once. 
 user's answers; recommend the preselected ones and let the user choose. In a script, `--yes` takes
 the recommended answers.
 
-`tares factory crew status` lists the stations. The Crew page at http://127.0.0.1:8787/crew shows
-the same. A background watch brings back any station that stops.
+`tares factory crew status` lists the stations. The Crew page in the console (http://127.0.0.1:8787/crew
+on a local Tares) shows the same. A background watch brings back any station that stops.
 
 ## 4. Plan a project
 
