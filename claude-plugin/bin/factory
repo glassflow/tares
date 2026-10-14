@@ -162,7 +162,7 @@ tares_on() {
   [ "$TARES_STATE" = on ]
 }
 require_tares() {
-  tares_on || die "no Tares answers at $TARES. Start one with \`tares up\` in another terminal (or set TARESD_URL to where yours runs), then try again."
+  tares_on || die "no Tares answers at $TARES. Start one with \`tares up\` in another terminal, connect to your Tares Cloud workspace with \`tares login\` (or set TARESD_URL to where yours runs), then try again."
 }
 # Stations reach Tares only through the MCP endpoint, so a station started without one has no Tares
 # tools. Only an MCP server's answer to `initialize` counts: taresd's 404 or a web page does not.
@@ -216,7 +216,7 @@ crew_projects() {
 # Dies when Tares could not give the list, so a refusal is never read as "no such project".
 crew_projects_or_die() {
   crew_projects >/dev/null
-  [ -z "$CREW_PROJECTS_ERR" ] || die "Tares at $TARES did not give the crew's projects ($CREW_PROJECTS_ERR)$( [ -z "$(tares_token)" ] && echo "; if it has auth on, set TARES_AUTH_TOKEN")"
+  [ -z "$CREW_PROJECTS_ERR" ] || die "Tares at $TARES did not give the crew's projects ($CREW_PROJECTS_ERR)$( [ -z "$(tares_token)" ] && echo "; if it has auth on, run tares login or set TARES_AUTH_TOKEN")"
 }
 project_row() { crew_projects | jq -c --arg p "$1" --arg s "$(slugify "$1")" \
   '[.[] | select(.name == $p or .id == $p or ((.name | ascii_downcase | gsub("[^a-z0-9]+"; "-") | gsub("^-|-$"; "")) == $s))][0] // empty'; }
@@ -230,7 +230,7 @@ settings_defaults() {
           prod_pattern: "(^|[-_.])(prod|production)([-_.]|$)", challenger: false, builders_max: 2}'
 }
 settings_raw() {
-  local s; s=$(tares_http GET /api/crew/settings) || die "could not read the crew settings from Tares at $TARES$( [ -z "$(tares_token)" ] && echo "; if it has auth on, set TARES_AUTH_TOKEN")"
+  local s; s=$(tares_http GET /api/crew/settings) || die "could not read the crew settings from Tares at $TARES$( [ -z "$(tares_token)" ] && echo "; if it has auth on, run tares login or set TARES_AUTH_TOKEN")"
   jq -c '.settings // .' <<<"$s"
 }
 # Missing settings to ask: the release ones only matter with a releaser.
@@ -1079,6 +1079,12 @@ cmd_status() {
   adopt_unrecorded
   [ -f "$STATIONS" ] || { say "no stations yet; run $ME crew up"; return; }
   local agents; agents=$(active_json) || die "$UNREAD"
+  # Stations keep the Tares they were started with. After `tares login` to another workspace,
+  # say so instead of letting the person think the crew moved.
+  local ran; ran=$(jq -r '.env.TARES_FACTORY_URL // empty' \
+    "$CREW_HOME/stations/$(station_name orchestrator).settings.json" 2>/dev/null || true)
+  [ -n "$ran" ] && [ "${ran%/}" != "$(tares_url)" ] && \
+    say "the crew still runs against $ran, not $(tares_url): $ME crew down, then $ME crew up, to move it"
   printf '%-30s %-12s %-14s %-8s %-8s %s\n' STATION ROLE MODEL STATE TEMPO "DOING / NEEDS"
   local s old=0 kit; kit=$(kit_version)
   for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS"); do
@@ -1324,12 +1330,13 @@ cmd_doctor() {
   echo "$ME doctor"
   ok "claude: $CLAUDE ($("$CLAUDE" --version 2>/dev/null | head -1))"
   ok "crew home: $CREW_HOME"
+  local src=${TARES_FACTORY_SOURCE:-environment}
   if tares_on; then
-    ok "Tares answers at $TARES"
+    ok "Tares answers at $TARES (from the $src)"
     if tares_http GET /api/crew/settings >/dev/null 2>&1; then ok "Tares lets this crew in"
-    else no "Tares at $TARES refuses the crew: set TARES_AUTH_TOKEN to an admin key or the root token"; fi
+    else no "Tares at $TARES refuses the crew: run \`tares login\` again, or set TARES_AUTH_TOKEN to an admin key or the root token"; fi
   else
-    no "no Tares answers at $TARES: start one with \`tares up\`, or set TARESD_URL to where yours runs"
+    no "no Tares answers at $TARES (from the $src): start one with \`tares up\`, connect to your Tares Cloud workspace with \`tares login\`, or set TARESD_URL to where yours runs"
   fi
   local list; if list=$(active_json); then
     if jq -e 'all(.[]; .kind == "interactive" or (has("id") and has("name") and has("cwd") and has("state")))' <<<"$list" >/dev/null; then

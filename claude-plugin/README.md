@@ -18,6 +18,14 @@ and a `stream_sessions` toggle). Challenger sessions (below) add `challenger_mod
 - A Tares MCP endpoint at `mcp_url`. Local: run `tares mcp --transport streamable-http` next to
   `tares up` and keep the default `http://127.0.0.1:8788/mcp`. Tares Cloud: built in, at
   `https://<cell>.tares-glassflow.com/mcp`; nothing to install.
+
+**On Tares Cloud, sign in once with `tares login`.** It opens your browser, you pick one of your
+workspaces, and this machine gets its own key on it. Sessions then ship to that workspace with that
+key, and the MCP connection presents it, with no `tares_url` or `access_token` to set. The one
+setting left is `mcp_url`: `tares login` prints the workspace's address to paste there (`/plugin`,
+tares, Configure). The key is only ever sent to that workspace: session shipping uses it while
+`tares_url` and `access_token` are left as they came, and the MCP connection presents it only when
+`mcp_url` is that workspace's `/mcp`. `tares logout` removes the key.
 - `python3` on PATH: runs the shipper hook.
 - A Tares daemon reachable at `tares_url`.
 

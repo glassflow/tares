@@ -28,7 +28,22 @@ it, it takes the place of this one and the stations run without their skills. `t
 names it; if stations report missing skills, remove it, for example `claude plugin uninstall
 tares@tares` (add `--scope project`, run in that project's folder, for a project install).
 
-## 1. Start Tares
+## 1. Start Tares, or sign in to Tares Cloud
+
+On Tares Cloud there is nothing to start. Sign in once:
+
+```
+tares login
+```
+
+Your browser opens, you sign in, and you pick the workspace the crew works in (Tares 1.44.0 or
+later). This machine gets its own key on it. Every `tares factory` command and every station then
+use that workspace and its MCP endpoint, with no environment variables to set; `tares factory
+doctor` says it found them through the saved login. `tares login` again switches workspaces (bring
+the crew down and up to move it), and `tares logout` removes the key. `TARESD_URL` and
+`TARES_AUTH_TOKEN`, when set, win over the saved login. Skip to step 2.
+
+To run Tares on your own machine instead:
 
 ```
 tares up

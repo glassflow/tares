@@ -52,6 +52,22 @@ def _opt(name: str, default: str = "") -> str:
             or default)
 
 
+LOCAL = "http://127.0.0.1:8787"
+
+
+def _saved_login():
+    """`tares login`'s saved workspace: {cell_url, key}, or None."""
+    home = os.environ.get("TARES_HOME") or os.path.expanduser("~/.tares")
+    try:
+        with open(os.path.join(home, "login.json")) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not data.get("cell_url") or not data.get("key"):
+        return None
+    return {"cell_url": str(data["cell_url"]).rstrip("/"), "key": str(data["key"])}
+
+
 def _file_token() -> str:
     path = (os.environ.get("TARES_FACTORY_TOKEN_FILE") or "").strip()
     if not path:
@@ -88,8 +104,14 @@ def config() -> dict:
     # kept (TARES_FACTORY_TOKEN_FILE); both win over the plugin options, whose URL defaults to
     # 127.0.0.1:8787.
     base = (os.environ.get("TARES_FACTORY_URL") or _opt("tares_url")
-            or "http://127.0.0.1:8787").rstrip("/")
+            or LOCAL).rstrip("/")
     token = (_file_token() or _opt("access_token") or "").strip()
+    # Outside the factory, with the plugin options left as they came: the workspace `tares login`
+    # saved, with its key (TR-492). An option set by hand wins.
+    login = _saved_login()
+    if (login and not os.environ.get("TARES_FACTORY_URL") and not token
+            and base in (LOCAL, login["cell_url"])):
+        base, token = login["cell_url"], login["key"]
     headers = {"Content-Type": "application/x-ndjson"}
     if token:
         headers["Authorization"] = f"Bearer {token}"

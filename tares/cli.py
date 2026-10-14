@@ -150,16 +150,24 @@ def _status(args: argparse.Namespace):
     """Readiness checklist against a running daemon. Read-only."""
     import json
     from .status import collect, render
+    from .login import resolve, saved
     home = Path(args.data_dir).expanduser()
-    base = args.taresd or f"http://127.0.0.1:{os.getenv('TARES_PORT', '8787')}"
-    token = os.getenv("TARES_AUTH_TOKEN", "").strip() or None
-    if not token and (home / "root_token").exists():
+    # a flag, then TARESD_URL, then `tares login`'s saved workspace, then the local daemon
+    base, token, source = resolve(args.taresd)
+    token = token or None
+    if not token and source == "local default" and (home / "root_token").exists():
         token = (home / "root_token").read_text().strip() or None
-    mcp = f"http://{os.getenv('TARES_MCP_HOST', '127.0.0.1')}:{os.getenv('TARES_MCP_PORT', '8788')}/mcp"
-    st = collect(base, token, mcp_url=mcp, data_dir=str(home))
-    if args.json:
-        print(json.dumps(st, indent=2, default=str))
+    if source == "saved login":
+        mcp = f"{base}/mcp"
     else:
+        mcp = f"http://{os.getenv('TARES_MCP_HOST', '127.0.0.1')}:{os.getenv('TARES_MCP_PORT', '8788')}/mcp"
+    # a workspace's data is on the workspace, not in this machine's data dir
+    st = collect(base, token, mcp_url=mcp, data_dir=None if source == "saved login" else str(home))
+    if args.json:
+        print(json.dumps({**st, "source": source}, indent=2, default=str))
+    else:
+        if source == "saved login":
+            print(f"Signed in to {(saved() or {}).get('cell') or base} (tares login)")
         print(render(st))
     raise SystemExit(0 if st["daemon"]["running"] else 1)
 
@@ -180,6 +188,17 @@ def _mcp(args: argparse.Namespace):
     run_mcp()
 
 
+def _login(args: argparse.Namespace):
+    """Connect this machine to a Tares Cloud workspace through the browser (TR-490)."""
+    from .login import login
+    raise SystemExit(login(args.cloud, open_browser=not args.no_browser))
+
+
+def _logout(args: argparse.Namespace):
+    from .login import logout
+    raise SystemExit(logout())
+
+
 def plugin_dir() -> Path:
     """The Claude Code plugin for Tares: inside the installed package, or claude-plugin/ in a
     checkout (an editable install)."""
@@ -193,12 +212,19 @@ def plugin_dir() -> Path:
 
 def _factory(argv: list[str]):
     """`tares factory ...`: the tares-factory crew, run by the factory CLI the plugin ships. It
-    finds this Tares through TARESD_URL (default the local daemon) and the token in
-    TARES_AUTH_TOKEN; stations get the same address."""
+    finds this Tares through TARESD_URL and the token in TARES_AUTH_TOKEN, else the workspace
+    `tares login` saved, else the local daemon; stations get the same address."""
+    from .login import resolve
     script = plugin_dir() / "bin" / "factory"
     env = dict(os.environ)
-    env.setdefault("TARESD_URL", f"http://127.0.0.1:{os.getenv('TARES_PORT', '8787')}")
+    # The environment first, then `tares login`'s saved workspace (with its key), then the local
+    # daemon. TARES_FACTORY_SOURCE tells `doctor` which one it got.
+    url, token, source = resolve()
+    env["TARESD_URL"] = env.get("TARESD_URL") or url
     env["TARES_FACTORY_URL"] = env.get("TARES_FACTORY_URL") or env["TARESD_URL"]
+    if token and not env.get("TARES_AUTH_TOKEN"):
+        env["TARES_AUTH_TOKEN"] = token
+    env["TARES_FACTORY_SOURCE"] = source
     # tares-mcp sits next to this python; stations need it on their PATH to reach Tares.
     bindir = str(Path(sys.argv[0]).resolve().parent)
     if (Path(bindir) / "tares-mcp").exists() and bindir not in env.get("PATH", "").split(os.pathsep):
@@ -259,6 +285,15 @@ def main():
 
     sub.add_parser("factory", help="the tares-factory crew of Claude Code sessions: "
                                    "`tares factory help` lists its commands")
+
+    li = sub.add_parser("login", help="connect this machine to one of your Tares Cloud workspaces "
+                                      "(opens your browser)")
+    li.add_argument("--cloud", default="", help="the Tares Cloud console to sign in at (default "
+                                                "$TARES_CLOUD_URL or https://console.tares-glassflow.com)")
+    li.add_argument("--no-browser", action="store_true", help="only print the address to open")
+    li.set_defaults(func=_login)
+    lo = sub.add_parser("logout", help="remove this machine's key from its workspace and forget the login")
+    lo.set_defaults(func=_logout)
 
     st = sub.add_parser("status", help="readiness checklist for a running instance, and the next step")
     st.add_argument("--taresd", default=os.getenv("TARESD_URL", ""),
