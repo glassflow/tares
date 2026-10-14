@@ -5,6 +5,29 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.45.0] - 2026-10-14
+
+Sign in to a Tares Cloud workspace with `tares login`: the factory, `tares status` and the Claude
+Code plugin then use it with no environment variables to set. Needs control plane 1.25.0, which
+serves the page `tares login` opens; workspaces on 1.44.0 or later can be picked.
+
+### Added
+- `tares login` connects this machine to one of your Tares Cloud workspaces without environment
+  variables (TR-490). It opens the console in your browser; you sign in and pick a workspace on
+  Tares 1.44.0 or later, and this machine gets its own admin key on it, handed back to the CLI
+  over localhost with a one-time code. The workspace and key are saved in `~/.tares/login.json`,
+  readable only by you. Logging in again replaces the key. `--cloud` points at another console.
+  `tares logout` removes the key from the workspace and deletes the file.
+- `tares status` and `tares factory` use the saved login when no flag or `TARESD_URL` says
+  otherwise (TR-491). The order everywhere: a flag, then `TARESD_URL` / `TARES_AUTH_TOKEN`, then the
+  saved login, then the local daemon. `tares factory doctor` says which one it used, its messages
+  suggest `tares login`, and `crew status` says when the crew still runs against the workspace it
+  was started with.
+- Claude Code plugin 0.5.0 (TR-492): outside the factory, session shipping uses the saved
+  workspace and key while `tares_url` and `access_token` are left as they came, and the MCP
+  connection presents the key when `mcp_url` is that workspace's `/mcp`. `tares login` prints the
+  `mcp_url` to set.
+
 ## [1.44.0] - 2026-10-13
 
 The software factory: a crew of Claude Code sessions on your machine builds every project you

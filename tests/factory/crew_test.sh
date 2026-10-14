@@ -530,7 +530,7 @@ check "taresd itself is not an MCP server" 'grep -q "no MCP server answers at $T
 TARES_FACTORY_MCP_URL=$nomcp FACTORY_CREW_HOME="$M" "$F" doctor >"$T/doctor3.out" 2>&1
 check "doctor without an MCP server says how to start one" 'grep -q "FIX   no MCP server answers at $nomcp; start one with tares mcp --transport streamable-http" "$T/doctor3.out"'
 TARESD_URL=http://127.0.0.1:9 FACTORY_CREW_HOME="$M" "$F" doctor >"$T/doctor2.out" 2>&1
-check "doctor without Tares says how to start one" 'grep -q "FIX   no Tares answers at http://127.0.0.1:9: start one with \`tares up\`" "$T/doctor2.out"'
+check "doctor without Tares says how to start one" 'grep -q "FIX   no Tares answers at http://127.0.0.1:9 (from the environment): start one with \`tares up\`, connect to your Tares Cloud workspace with \`tares login\`" "$T/doctor2.out"'
 
 [ $fail = 0 ] && echo "crew: all cases pass"
 exit $fail

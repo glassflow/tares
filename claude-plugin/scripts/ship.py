@@ -52,6 +52,22 @@ def _opt(name: str, default: str = "") -> str:
             or default)
 
 
+LOCAL = "http://127.0.0.1:8787"
+
+
+def _saved_login():
+    """`tares login`'s saved workspace: {cell_url, key}, or None."""
+    home = os.environ.get("TARES_HOME") or os.path.expanduser("~/.tares")
+    try:
+        with open(os.path.join(home, "login.json")) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not data.get("cell_url") or not data.get("key"):
+        return None
+    return {"cell_url": str(data["cell_url"]).rstrip("/"), "key": str(data["key"])}
+
+
 def _file_token() -> str:
     path = (os.environ.get("TARES_FACTORY_TOKEN_FILE") or "").strip()
     if not path:
@@ -63,14 +79,24 @@ def _file_token() -> str:
         return ""
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """urllib re-sends the Authorization header on a redirect, to any host. Tares never redirects
+    these calls, so a redirect is refused (it surfaces as an HTTPError) rather than followed."""
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_opener = urllib.request.build_opener(_NoRedirect)
+
+
 def _post(url: str, data: bytes, headers: dict, timeout: float = 5):
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    return urllib.request.urlopen(req, timeout=timeout)
+    return _opener.open(req, timeout=timeout)
 
 
 def _get(url: str, headers: dict, timeout: float = 3):
     req = urllib.request.Request(url, headers=headers, method="GET")
-    return urllib.request.urlopen(req, timeout=timeout)
+    return _opener.open(req, timeout=timeout)
 
 
 def _auth_only(headers: dict) -> dict:
@@ -87,9 +113,17 @@ def config() -> dict:
     # A tares-factory station is told its crew's Tares (TARES_FACTORY_URL) and where its token is
     # kept (TARES_FACTORY_TOKEN_FILE); both win over the plugin options, whose URL defaults to
     # 127.0.0.1:8787.
-    base = (os.environ.get("TARES_FACTORY_URL") or _opt("tares_url")
-            or "http://127.0.0.1:8787").rstrip("/")
+    # Then a tares_url set by hand, then TARESD_URL, then the workspace `tares login` saved (TR-492),
+    # then the local daemon: the same order `tares` itself uses. The saved key only ever goes to
+    # its own workspace, and never when an access_token was set by hand.
+    opt_url = (_opt("tares_url") or "").rstrip("/")
     token = (_file_token() or _opt("access_token") or "").strip()
+    login = None if token else _saved_login()     # a token set by hand keeps its own address
+    base = (os.environ.get("TARES_FACTORY_URL") or (opt_url if opt_url != LOCAL else "")
+            or os.environ.get("TARESD_URL") or (login["cell_url"] if login else "")
+            or LOCAL).rstrip("/")
+    if login and not os.environ.get("TARES_FACTORY_URL") and base == login["cell_url"]:
+        token = login["key"]
     headers = {"Content-Type": "application/x-ndjson"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
