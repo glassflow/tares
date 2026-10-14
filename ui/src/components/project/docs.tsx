@@ -6,7 +6,7 @@ import { api } from "../../api";
 import ConfirmDialog from "../ConfirmDialog";
 import { Combo, ErrorState, Picker, TimeAgo, formatBytes, usePolling } from "../bits";
 import { Facts, NotHere, VLink, ViewHead, type Ctx } from "./common";
-import { prBrief } from "./factory";
+import { LinearMark, prBrief } from "./factory";
 import type { Doc, DocKind, Ticket, TicketStatus } from "../../types";
 
 // What a spec session leaves in a project for the session that builds it (TR-403, TR-407): the
@@ -514,17 +514,18 @@ export function TicketView({ ctx, name }: { ctx: Ctx; name: string }) {
   };
   return (
     <>
-      <ViewHead title={data.title}
-                sub={linear ? <>Lives in Linear as{" "}
-                  {data.url ? <a href={data.url} target="_blank" rel="noreferrer">{data.identifier}</a> : data.identifier}:
-                  change its title and status there.</> : undefined}>
+      <ViewHead title={data.title}>
         {!editingDoc && <>
           <button className="primary" onClick={editDoc}>{data.working_doc ? "Edit working doc" : "Write working doc"}</button>
           {!linear && <button className="danger" onClick={() => setConfirmDel(true)}>Delete</button>}
         </>}
       </ViewHead>
       <Facts rows={[
-        ["ticket", data.label],
+        ["ticket", linear
+          ? <span className="fo-linear"><LinearMark />
+              {data.url ? <a href={data.url} target="_blank" rel="noreferrer">{data.label} in Linear ↗</a> : <>{data.label} in Linear</>}
+              <span className="dim">· change its title and status there</span></span>
+          : data.label],
         ["status", <StatusBadge s={data.status} />],
         ["milestone", data.milestone_name ?? <span className="dim">none</span>],
         ["depends on", data.depends_on.length ? data.depends_on.join(", ") : <span className="dim">nothing</span>],

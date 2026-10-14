@@ -1906,6 +1906,8 @@ pre.payload {
    tickets and sessions folded ── */
 .fo-name { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .fo-tag { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink); background: var(--accent-soft); border: 1px solid var(--accent); padding: 3px 8px; }
+.fo-linear { font-size: 14px; color: var(--ink); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.fo-linear a { display: inline-flex; }.fo-linear a { font-weight: 600; }
 .fo-label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
 .fo-link { color: var(--accent-deep); font-size: 13px; }
 .fo-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); background: var(--panel); }
@@ -2058,7 +2060,7 @@ pre.payload {
 .fo-repo-on { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; padding: 8px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
 .fo-link-btn { background: none; border: 0; padding: 0; color: var(--accent-deep); cursor: pointer; font: inherit; text-decoration: underline; }
 /* The GitHub section of a factory project (TR-463): each repo, its pull requests branching under it */
-.fo-fold-h .fo-gh-logo { vertical-align: -2px; margin-right: 6px; }
+.fo-fold-h { display: inline-flex; align-items: center; gap: 6px; }
 .main .fo-gh { list-style: none; margin: 0; padding: 4px 0; }
 .fo-gh-repo { padding: 10px 16px; }
 .fo-gh-repo + .fo-gh-repo { border-top: 1px solid var(--line); }
