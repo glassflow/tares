@@ -133,6 +133,8 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
           {byCrew
             ? <Link to="/crew" className="btn primary" title="The crew builds this project">The crew</Link>
             : <CopyButton text={prompt} label="Copy build prompt" primary />}
+          {tk?.linear && <a href={tk.linear.url} target="_blank" rel="noreferrer" className="btn"
+                            title={`The tickets live in Linear project ${tk.linear.name}`}>Tickets in Linear ↗</a>}
           <VLink v={{ kind: "activity" }} className="btn"
                  title="Every doc, ticket, session, source and setting of this project">Setup</VLink>
         </div>
