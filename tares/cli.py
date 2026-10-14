@@ -155,7 +155,7 @@ def _status(args: argparse.Namespace):
     # a flag, then TARESD_URL, then `tares login`'s saved workspace, then the local daemon
     base, token, source = resolve(args.taresd)
     token = token or None
-    if not token and source == "local default" and (home / "root_token").exists():
+    if not token and source != "saved login" and (home / "root_token").exists():
         token = (home / "root_token").read_text().strip() or None
     if source == "saved login":
         mcp = f"{base}/mcp"
@@ -223,7 +223,14 @@ def _factory(argv: list[str]):
     env["TARESD_URL"] = env.get("TARESD_URL") or url
     env["TARES_FACTORY_URL"] = env.get("TARES_FACTORY_URL") or env["TARESD_URL"]
     if token and not env.get("TARES_AUTH_TOKEN"):
-        env["TARES_AUTH_TOKEN"] = token
+        # The saved key goes only to its own workspace: not to an MCP endpoint set elsewhere.
+        mcp = (env.get("TARES_FACTORY_MCP_URL") or "").rstrip("/")
+        if source == "saved login" and mcp and mcp != f"{url}/mcp":
+            print(f"tares factory: TARES_FACTORY_MCP_URL ({mcp}) is not the workspace you are "
+                  f"signed in to ({url}); the saved key is not used. Unset it, or set "
+                  "TARES_AUTH_TOKEN.", file=sys.stderr)
+        else:
+            env["TARES_AUTH_TOKEN"] = token
     env["TARES_FACTORY_SOURCE"] = source
     # tares-mcp sits next to this python; stations need it on their PATH to reach Tares.
     bindir = str(Path(sys.argv[0]).resolve().parent)

@@ -33,7 +33,14 @@ def ck(label, cond, detail=""):
 
 
 # ── a fake control plane that is also the workspace ────────────────────────────────────────────
-WORLD = {"version": "1.44.0", "logout_status": 200, "logouts": [], "deletes": [], "n": 0}
+WORLD = {"version": "1.44.0", "health_status": 200, "logout_status": 200, "logouts": [],
+         "deletes": [], "n": 0, "challenge": "", "redirected_auth": []}
+
+
+def _s256(verifier: str) -> str:
+    import base64
+    import hashlib
+    return base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
 
 
 class Fake(BaseHTTPRequestHandler):
@@ -47,12 +54,23 @@ class Fake(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         if self.path == "/health":
-            return self._json(200, {"status": "ok", "version": WORLD["version"]})
+            return self._json(WORLD["health_status"], {"status": "ok", "version": WORLD["version"]})
+        if self.path == "/elsewhere":
+            WORLD["redirected_auth"].append(self.headers.get("Authorization"))
+            return self._json(200, {})
         self._json(404, {})
 
     def do_POST(self):  # noqa: N802
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        if self.path == "/ingest/claude_code":
+            self.send_response(302)
+            self.send_header("Location", f"{BASE}/elsewhere")
+            self.end_headers()
+            return
         if self.path == "/exchange":
+            # PKCE: the verifier the CLI sends must hash to the challenge the page carried
+            if _s256(body.get("code_verifier", "")) != WORLD["challenge"]:
+                return self._json(400, {"detail": "the code_verifier does not match"})
             WORLD["n"] += 1
             kid = f"k{WORLD['n']}"
             return self._json(200, {"token": f"nvf_{kid}_secret", "key_id": kid, "cell": "factory",
@@ -81,6 +99,7 @@ def browser(state_override=None):
     def open_(url):
         q = {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
         assert urlparse(url).path == "/connect/cli"
+        WORLD["challenge"] = q.get("challenge", "")     # what the control plane would keep
         state = state_override or q["state"]
 
         def go():
@@ -136,6 +155,22 @@ ck("set variables win over the saved login",
    and got.get("TARES_FACTORY_SOURCE") == "environment", got.get("TARES_FACTORY_SOURCE"))
 os.environ.pop("TARES_AUTH_TOKEN")
 os.environ.pop("TARESD_URL")
+os.environ["TARES_FACTORY_MCP_URL"] = "https://someone-else.example.com/mcp"
+got.clear()
+try:
+    C._factory(["doctor"])
+except SystemExit:
+    pass
+ck("an MCP endpoint set elsewhere never gets the saved key", "TARES_AUTH_TOKEN" not in got,
+   got.get("TARES_AUTH_TOKEN"))
+os.environ["TARES_FACTORY_MCP_URL"] = BASE + "/mcp"
+got.clear()
+try:
+    C._factory(["doctor"])
+except SystemExit:
+    pass
+ck("the workspace's own MCP endpoint does", got.get("TARES_AUTH_TOKEN") == "nvf_k1_secret")
+os.environ.pop("TARES_FACTORY_MCP_URL")
 
 print("the plugin's session shipper uses the saved login when its options are untouched")
 spec = importlib.util.spec_from_file_location(
@@ -156,6 +191,18 @@ cfg = ship.config()
 ck("a tares_url set by hand gets no saved key", cfg["base"] == "https://other.example.com"
    and "Authorization" not in cfg["headers"], cfg)
 os.environ.pop("CLAUDE_PLUGIN_OPTION_TARES_URL")
+os.environ["TARESD_URL"] = "http://elsewhere:8787"
+cfg = ship.config()
+ck("TARESD_URL wins over the saved login there too, without the key",
+   "Authorization" not in cfg["headers"] and cfg["base"] == "http://127.0.0.1:8787", cfg)
+os.environ.pop("TARESD_URL")
+try:
+    ship._post(BASE + "/ingest/claude_code", b"{}", {"Authorization": "Bearer nvf_k1_secret"})
+    redirected = "followed"
+except Exception as e:  # noqa: BLE001
+    redirected = type(e).__name__
+ck("the shipper refuses a redirect instead of carrying the key along",
+   redirected == "HTTPError" and WORLD["redirected_auth"] == [], (redirected, WORLD["redirected_auth"]))
 
 print("logging in again replaces the key and revokes the old one")
 browser()
@@ -167,6 +214,24 @@ ck("the old key was revoked through the control plane",
 print("a callback with the wrong state is refused, and nothing changes")
 browser(state_override="x" * 32)
 rc = L.login(BASE, wait=2)
+ck("login fails", rc == 1)
+ck("the saved login is untouched", L.saved()["key_id"] == "k2")
+
+print("a workspace whose /health fails is refused, whatever version it names")
+WORLD["health_status"] = 503
+browser()
+rc = L.login(BASE, wait=10)
+ck("login fails", rc == 1)
+ck("the saved login is untouched", L.saved()["key_id"] == "k2")
+WORLD["health_status"] = 200
+
+print("a code without the right verifier is refused (PKCE)")
+browser()
+orig_http = L._http
+L._http = lambda m, u, body=None, **kw: orig_http(
+    m, u, ({**body, "code_verifier": "stolen"} if u.endswith("/exchange") else body), **kw)
+rc = L.login(BASE, wait=10)
+L._http = orig_http
 ck("login fails", rc == 1)
 ck("the saved login is untouched", L.saved()["key_id"] == "k2")
 

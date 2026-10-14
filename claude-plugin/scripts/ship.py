@@ -79,14 +79,24 @@ def _file_token() -> str:
         return ""
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """urllib re-sends the Authorization header on a redirect, to any host. Tares never redirects
+    these calls, so a redirect is refused (it surfaces as an HTTPError) rather than followed."""
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_opener = urllib.request.build_opener(_NoRedirect)
+
+
 def _post(url: str, data: bytes, headers: dict, timeout: float = 5):
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    return urllib.request.urlopen(req, timeout=timeout)
+    return _opener.open(req, timeout=timeout)
 
 
 def _get(url: str, headers: dict, timeout: float = 3):
     req = urllib.request.Request(url, headers=headers, method="GET")
-    return urllib.request.urlopen(req, timeout=timeout)
+    return _opener.open(req, timeout=timeout)
 
 
 def _auth_only(headers: dict) -> dict:
@@ -106,11 +116,12 @@ def config() -> dict:
     base = (os.environ.get("TARES_FACTORY_URL") or _opt("tares_url")
             or LOCAL).rstrip("/")
     token = (_file_token() or _opt("access_token") or "").strip()
-    # Outside the factory, with the plugin options left as they came: the workspace `tares login`
-    # saved, with its key (TR-492). An option set by hand wins.
+    # Outside the factory, with the plugin options left as they came and no TARESD_URL: the
+    # workspace `tares login` saved, with its key (TR-492), the same order `tares` itself uses.
+    # An option set by hand wins, and the key is never sent anywhere but its own workspace.
     login = _saved_login()
-    if (login and not os.environ.get("TARES_FACTORY_URL") and not token
-            and base in (LOCAL, login["cell_url"])):
+    if (login and not os.environ.get("TARES_FACTORY_URL") and not os.environ.get("TARESD_URL")
+            and not token and base in (LOCAL, login["cell_url"])):
         base, token = login["cell_url"], login["key"]
     headers = {"Content-Type": "application/x-ndjson"}
     if token:

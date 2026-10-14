@@ -11,6 +11,8 @@ TARES_FACTORY_URL and TARES_AUTH_TOKEN, then this saved login, then the local de
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import html
 import json
 import os
@@ -174,6 +176,10 @@ def login(cloud: str = "", open_browser: bool = True, wait: int = WAIT_SECONDS) 
     cloud = (cloud or os.getenv("TARES_CLOUD_URL") or DEFAULT_CLOUD).rstrip("/")
     machine = _machine()
     state = secrets.token_urlsafe(24)
+    # PKCE (RFC 7636): the page only ever sees the challenge; /exchange wants the verifier, which
+    # never leaves this process. A code that reaches some other listener on this machine is useless.
+    verifier = secrets.token_urlsafe(48)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
 
     class Handler(_Callback):
         pass
@@ -182,7 +188,8 @@ def login(cloud: str = "", open_browser: bool = True, wait: int = WAIT_SECONDS) 
     port = server.server_address[1]
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
-    url = f"{cloud}/connect/cli?" + urlencode({"port": port, "state": state, "machine": machine})
+    url = f"{cloud}/connect/cli?" + urlencode({"port": port, "state": state, "machine": machine,
+                                               "challenge": challenge})
     print("tares login: pick the workspace this machine works with, in your browser:")
     print(f"  {url}", flush=True)
     if open_browser:
@@ -196,7 +203,8 @@ def login(cloud: str = "", open_browser: bool = True, wait: int = WAIT_SECONDS) 
         return 1
 
     try:
-        code, out = _http("POST", f"{cloud}/exchange", {"code": Handler.result["code"]})
+        code, out = _http("POST", f"{cloud}/exchange", {"code": Handler.result["code"],
+                                                         "code_verifier": verifier})
     except httpx.HTTPError as e:
         print(f"tares login: could not reach {cloud} to finish signing in ({e}).")
         return 1
@@ -211,8 +219,8 @@ def login(cloud: str = "", open_browser: bool = True, wait: int = WAIT_SECONDS) 
     # The control plane checked the version when it offered the workspace; check what the
     # workspace itself says now, before saving a key for it.
     try:
-        _, health = _http("GET", f"{data['cell_url']}/health", timeout=10)
-        version = str(health.get("version") or "")
+        status, health = _http("GET", f"{data['cell_url']}/health", timeout=10)
+        version = str(health.get("version") or "") if status == 200 else ""
     except httpx.HTTPError:
         version = ""
     if (_version(version) or (0, 0, 0)) < MIN_VERSION:
