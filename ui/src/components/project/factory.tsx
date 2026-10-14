@@ -127,14 +127,14 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
       <div className="gf-head">
         <div className="gf-head-text">
           <h1 className="gf-name fo-name">{ctx.s.name}<span className="fo-tag">Software factory</span></h1>
+          {tk?.linear && <div className="fo-linear">Tickets live in Linear project{" "}
+            <a href={tk.linear.url} target="_blank" rel="noreferrer">{tk.linear.name} ↗</a></div>}
           <Goal ctx={ctx} />
         </div>
         <div className="gf-head-actions">
           {byCrew
             ? <Link to="/crew" className="btn primary" title="The crew builds this project">The crew</Link>
             : <CopyButton text={prompt} label="Copy build prompt" primary />}
-          {tk?.linear && <a href={tk.linear.url} target="_blank" rel="noreferrer" className="btn"
-                            title={`The tickets live in Linear project ${tk.linear.name}`}>Tickets in Linear ↗</a>}
           <VLink v={{ kind: "activity" }} className="btn"
                  title="Every doc, ticket, session, source and setting of this project">Setup</VLink>
         </div>
