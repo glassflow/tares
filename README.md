@@ -44,7 +44,7 @@ One crew of Claude Code sessions on your machine builds every project you hand i
 ## Quickstart
 
 ```bash
-uv tool install tares                    # or: pipx install tares
+uv tool install tares                    # or: brew install glassflow/tap/tares
 tares up                                 # daemon + console on http://127.0.0.1:8787
 tares mcp --transport streamable-http    # in a second terminal: the MCP endpoint, :8788/mcp
 ```
