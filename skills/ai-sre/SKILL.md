@@ -39,10 +39,11 @@ docker info >/dev/null 2>&1 && echo docker-ok   # runs the demo system being mon
 uv --version || pipx --version                  # installs Tares
 test -n "$ANTHROPIC_API_KEY" && echo key-set    # the built-in agent needs a model key
 lsof -iTCP:8787 -sTCP:LISTEN -n -P              # a listener means a Tares is already running
+test -d ~/tares-sre && echo "exists: use a new --data-dir in step 3"   # the catalog seeds only an empty one
 ```
 
 Stop with a one-line fix for anything missing. The key can also be saved later in the console
-under Settings, Anthropic.
+under Settings, Model providers.
 
 ## 2. Start the system to monitor
 
@@ -108,8 +109,8 @@ sleep 2; lsof -iTCP:8788 -sTCP:LISTEN -n -P
   https://docs.glassflow.ai/tares/agents
 
 If the client needs a restart before it sees the server, say so. Then ask it: "Use tares: what
-happened to api-server in the last 15 minutes?" The client calls `read` with
-`{"service": "api-server"}`. Right now the answer is healthy traffic.
+happened to api-server in the last 15 minutes?" The client calls
+`read(selector={"service": "api-server"})`. Right now the answer is healthy traffic.
 
 ## 5. Cause an incident
 
@@ -118,9 +119,9 @@ curl -s -XPOST localhost:8080/demo/inject -H 'content-type: application/json' \
   -d '{"scenario": "error_spike"}'
 ```
 
-The other scenarios are `latency` and `dependency_outage`; `clear` rolls back. Within about 30
-seconds (Prometheus's rules wait 15 seconds, then Tares polls the alerts) the chain runs on its
-own:
+The other scenarios are `latency` and `dependency_outage`; `clear` rolls back. For
+`error_spike` the chain runs on its own within about a minute (Prometheus's rule waits 15
+seconds, then Tares polls the alerts); `latency` alerts on a 2 minute rate and can take a few:
 
 1. The 5xx rate climbs and `HighErrorRate` fires; the alert lands on the `api-server` timeline
    next to the error logs and the metric that tripped it.
@@ -130,24 +131,26 @@ own:
 
 ## 6. Read the finding
 
-Give the agent about a minute to run, then read the timeline back. The finding sits on it next
-to the evidence. With the MCP client connected, call `list_findings(entity="api-server")`
+Give the agent about a minute to run, then read the timeline back. The finding is the newest
+event on it, so read the end of the output. With the MCP client connected, call `list_findings(entity="api-server")`
 (newest first); without one, use the HTTP read and show the user what it returns:
 
 ```bash
 sleep 60
 curl -sf -X POST http://127.0.0.1:8787/read -H 'Content-Type: application/json' \
-  -d '{"selector": {"service": "api-server"}, "window": "15m"}' | head -c 1500
+  -d '{"selector": {"service": "api-server"}, "window": "15m"}' | tail -c 2500
 ```
 
-If nothing appears after two minutes, open http://127.0.0.1:8787, then **Setup**, **Advanced
-setup**: **Activity** shows the firing and the run it woke, and the agent's **Runs & findings**
-show why a run failed (a missing model key is the usual reason). Fix it, then cause the incident
-again.
+If nothing appears after two minutes, open http://127.0.0.1:8787/triggers/incident. It opens the
+project's setup: **Activity** shows the firing and the run it woke, and the agent's **Runs** show
+why a run failed (a missing model key is the usual reason). Fix it, then inject `clear`, wait for
+the alert to resolve, and inject `error_spike` again at least 5 minutes after the first firing:
+while the alert is still firing it adds no new event, and the trigger has a 5 minute cooldown.
 
 Then ask the connected client the question from step 4 again. It now reads the evidence and the
 finding, so it starts from the previous conclusion instead of from scratch. Roll back with
-`{"scenario": "clear"}`.
+`{"scenario": "clear"}`; the alert resolving is an alert event too, so once the cooldown has
+passed it wakes the agent once more.
 
 ## 7. Point it at the user's real systems
 
@@ -196,5 +199,3 @@ pkill -f "tares up"; pkill -f "tares mcp"
 ```
 
 The demo objects live in `~/tares-sre`; delete it for a clean slate.
-
-More: https://docs.glassflow.ai/tares/guides/ai-sre-comparison compares this with other AI SREs.
