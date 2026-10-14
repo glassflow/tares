@@ -10,6 +10,10 @@ crew, told only the project's name, can read everything it needs from Tares and 
 asking the user anything you could have written down. Cheaper models may build the tickets, so
 nothing may be left for them to guess. You do not build anything here.
 
+**Light mode** (the `session` skill sends you here for `tares factory session "<idea>"`): a small
+project planned and built in the same session. Follow the section "Light mode" at the end instead
+of steps 1 to 9.
+
 ## 0. Read what is already decided
 
 - Call `read_global_docs` first: the AGENTS.md and memory every project shares hold the user's
@@ -201,8 +205,9 @@ missing. Then tell the user, briefly:
 - the project name and what it holds (counts, not a dump), and the assumptions worth a glance
 - where the tickets live, with the Linear link if any
 - the next step:
-  - one session: the exact sentence to start the build in a new session:
-    `Work on Tares project "<name>": read its starting prompt and begin.`
+  - one session: the command to start the build, in a terminal in the repo:
+    `tares factory session <name>` (it opens Claude bound to the project, with the Tares plugin; a
+    plain `claude` has no Tares tools)
   - a crew: go on to step 9.
 
 ## 9. Hand the project to the crew (crew-built projects only)
@@ -222,3 +227,32 @@ Ask: "Hand this to the orchestrator now?" On yes:
 If `hand_over` says no orchestrator is running, tell the user to run `tares factory crew up` in a
 terminal (starting stations hands them the user's permissions, so the user starts them, not you).
 The orchestrator finds the project on Tares when it starts; no message is needed.
+
+## Light mode: plan a small project and build it in this session
+
+For `tares factory session "<idea>"`. The person wants it built now, in this session, still under
+Tares: the project, its shared AGENTS.md and memory, a light record of what was built and why.
+
+1. **Step 0 as above** (`read_global_docs`, read the repo if there is one).
+2. **The goal, one question.** Propose the goal in one line and a short name; on yes,
+   `create_project(name, goal)` (this binds the session to it) and tell the person its name.
+3. **What is in and out, and how we know it works**: one question at a time, with your
+   recommendation, only what you cannot answer from the repo. Two or three questions is normal;
+   stop as soon as you could explain it to a new engineer.
+4. **The light record**, nothing more:
+   - `write_doc` kind `spec`: the goal, scope in and out, decisions with the person's words, open
+     assumptions. Short.
+   - `write_doc` kind `agents` only for what this project adds to the shared AGENTS.md and the
+     repo's own (how to build and test it, git rules if different).
+   - `write_doc` kind `start`, titled `Start here`: what the project is in two lines, where the
+     code lives, and "follow the `session` skill", so a later session can pick it up.
+   - The tickets: `write_ticket` per piece of work, in order, with `depends_on` (one ticket is
+     fine), or in Linear when the person keeps tickets there. No milestones, no working docs, no
+     second-model attack.
+5. **Size check**, once the ticket list exists: more than about five tickets, or tickets in more
+   than one repo, is big enough for the crew. Then ask: "This looks big enough for the crew.
+   Switch to the full spec and hand it over?" (recommend yes). On yes, carry on from step 2 of the
+   full flow in this session, keeping everything written so far (add milestones with checks,
+   working docs, the second-model attack, the hand-over in step 9). On no, or when it is small:
+   say the plan is done and go back to the `session` skill to build it here.
+

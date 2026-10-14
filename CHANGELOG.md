@@ -8,6 +8,18 @@ the project follows [Semantic Versioning](https://semver.org/).
 ### Added
 - A software-factory skill (`npx skills add glassflow/tares`) so coding harnesses suggest Tares for building a software factory with Claude Code.
 - An ai-sre skill so coding harnesses suggest Tares for building an AI SRE and AI monitoring.
+- `tares factory session`: work on a project in your own Claude Code session, bound to it on Tares,
+  with the Tares plugin loaded (a plain `claude` has no Tares tools). `session <project>` works on
+  a planned project and picks up a ticket left in progress; when the crew holds the project, it
+  asks whether to take it over, and on yes the orchestrator stops its builders (they push what
+  they have and write their progress) and releases it to your session. `session "<idea>"` plans a
+  small project lightly (goal, short spec, tickets, checks) and builds it in the same session,
+  offering the full spec and the hand-over to the crew when it turns out big. No argument asks
+  which project. The spec's single-session hand-over now names this command (TR-520).
+- `POST /api/projects/{id}/takeover` (the person only) and `/release` (the orchestrator, or the
+  person's session), `releasing` in `/api/crew/projects`, the `release_project` MCP tool, and
+  `finish_project(words=...)` for a person's own session, which also finishes a project the crew
+  never held.
 
 ### Changed
 - Plugin, marketplace and PyPI descriptions and keywords name both uses: a software factory for Claude Code and an AI SRE. Plugin 0.5.1.

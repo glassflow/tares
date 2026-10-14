@@ -641,12 +641,16 @@ ONLY = {
     "assign": ("orchestrator",),
     "desk": ("orchestrator",),
     "finish": ("orchestrator",),
+    "release": ("orchestrator",),
+    "takeover": (),
     "assumption_state": ("orchestrator",),
     "review": ("reviewer",),
     "shipped": ("releaser",),
 }
 WHO = {"grants": "the orchestrator", "global_docs": "the orchestrator",
        "assign": "the orchestrator", "desk": "the orchestrator", "finish": "the orchestrator",
+       "release": "the orchestrator",
+       "takeover": "the person, in their own terminal (tares factory session <project>)",
        "assumption_state": "the orchestrator", "review": "the reviewer",
        "shipped": "the releaser"}
 

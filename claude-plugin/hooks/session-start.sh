@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
-# Reminds a tares-factory crew station who it is on start, resume and after compaction.
-# Silent in sessions that are not factory stations.
+# Reminds a tares-factory crew station who it is on start, resume and after compaction, and a
+# person's own session bound to a project (`tares factory session`, TARES_PROJECT set) which project
+# it works on. Silent in every other session.
 set -euo pipefail
-[ -n "${FACTORY_ROLE:-}" ] || exit 0
 
 source_kind=$(jq -r '.source // "startup"' 2>/dev/null || echo startup)
+
+if [ -z "${FACTORY_ROLE:-}" ]; then
+  [ -n "${TARES_PROJECT:-}" ] || exit 0
+  context="This session works on the Tares project \`${TARES_PROJECT}\` by itself (tares factory session), on ${TARES_FACTORY_URL:-the Tares} through the Tares MCP tools. Follow the \`session\` skill."
+  if [ "$source_kind" = "startup" ]; then
+    [ -n "${TARES_SESSION_TAKEOVER:-}" ] && context="$context The person took this project over from the crew: do the skill's \"Taking over\" steps first."
+  else
+    context="$context This session was resumed or compacted: load the \`session\` skill again, re-read the project's tickets and the working doc of the one in progress, then carry on where you left off (a takeover you already asked for is not asked again)."
+  fi
+  jq -n --arg c "$context" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}'
+  exit 0
+fi
 
 skill=$FACTORY_ROLE
 if [ "$skill" = helper ]; then

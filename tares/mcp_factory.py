@@ -502,7 +502,10 @@ async def crew_projects() -> str:
     machine, GitHub `name`) and the tickets and open PRs of each, the autonomy it was handed
     over at when stricter than the crew's, tickets done of all, and the milestone it is on. The
     orchestrator works from this list: a project here with no builder is one to start. Projects
-    the person said are done are not in it (`finished` lists them apart)."""
+    the person said are done are not in it (`finished` lists them apart). `releasing` lists the
+    projects the person took back from the crew (`tares factory session <project>`) that still
+    wait for the orchestrator to stop their builders (`holders`) and call release_project; they
+    are no longer the crew's to work on."""
     async with _cx(15) as cx:
         r = await cx.get(f"{TARESD}/api/crew/projects")
     if r.status_code >= 400:
@@ -514,17 +517,38 @@ async def crew_projects() -> str:
 
 
 @writable()
-async def finish_project(project: str, decision: str) -> str:
+async def release_project(project: str) -> str:
+    """The person took this project back from the crew (it is under `releasing` in
+    crew_projects): call this once every builder that held its tickets has stopped, pushed what it
+    had and written its progress, and has been retired. Tares clears the tickets' holders (stages,
+    pull requests and working docs stay) and the person's session owns the project from then on.
+    Then reply to the session that asked with `[TF:RELEASED]`. Only the orchestrator, or the
+    person's own session when no orchestrator runs."""
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/release")
+    return _out(r)
+
+
+@writable()
+async def finish_project(project: str, decision: str = "", words: str = "") -> str:
     """Mark a project done, once the person said so. Ask them first on the desk ("Is <project>
     done? Tickets all merged, milestones checked."), record their answer with desk_answer, then
     call this with that item (`decision`, D<n>). Tares keeps their words, sets the project done
     and takes it off the crew's work list; a later hand-over opens it again. Refused while a
     ticket is open. Only the orchestrator may. Returns how many projects the crew still holds:
     with none left, ask the person on the desk whether to stop the crew (`tares factory crew down`
-    in their terminal)."""
+    in their terminal).
+
+    A person's own session (`tares factory session`, not a crew station) passes `words` instead:
+    what the person typed when they said it is done, copied exactly. That also finishes a project
+    the crew never held."""
+    body = {"decision": decision} if decision else {"words": words}
     async with _cx(15) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
             return why
-        r = await cx.post(f"{TARESD}/api/projects/{uid}/finish", json={"decision": decision})
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/finish", json=body)
     return _out(r)
