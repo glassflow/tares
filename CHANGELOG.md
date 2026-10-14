@@ -10,7 +10,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 - An ai-sre skill so coding harnesses suggest Tares for building an AI SRE and AI monitoring.
 
 ### Changed
-- Plugin, marketplace and PyPI descriptions and keywords name both uses: a software factory for Claude Code and an AI SRE.
+- Plugin, marketplace and PyPI descriptions and keywords name both uses: a software factory for Claude Code and an AI SRE. Plugin 0.5.1.
 
 ## [1.45.0] - 2026-10-14
 
