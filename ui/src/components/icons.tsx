@@ -136,6 +136,44 @@ export const ChevronRight = (p: P) => (
   </S>
 );
 
+export const ChevronLeft = (p: P) => (
+  <S {...p}>
+    <path d="m15 18-6-6 6-6" />
+  </S>
+);
+
+// Start: a flag at the starting line, where a first project begins.
+export const Flag = (p: P) => (
+  <S {...p}>
+    <path d="M4 22V4a1 1 0 0 1 1-1h12l-2.5 4.5L17 12H5" />
+  </S>
+);
+
+// Connect: a plug, an outside agent wired in over MCP.
+export const Plug = (p: P) => (
+  <S {...p}>
+    <path d="M9 2v6M15 2v6" />
+    <path d="M6 8h12v4a6 6 0 0 1-12 0z" />
+    <path d="M12 18v4" />
+  </S>
+);
+
+// Reads: an eye, what agents looked at.
+export const Eye = (p: P) => (
+  <S {...p}>
+    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+    <circle cx="12" cy="12" r="3" />
+  </S>
+);
+
+// A link that leaves the console: a box with an arrow out of its corner.
+export const ExternalLink = (p: P) => (
+  <S {...p}>
+    <path d="M14 3h7v7M21 3l-9 9" />
+    <path d="M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5" />
+  </S>
+);
+
 // GitHub mark — a filled logo, so it doesn't use the stroke-based <S> wrapper.
 export const GitHub = (p: P) => (
   <svg viewBox="0 0 24 24" fill="currentColor" className="ico" aria-hidden {...p}>
