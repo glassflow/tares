@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api";
-import { ErrorState, TimeAgo, fmtCost, fmtTokens, usePolling } from "./bits";
+import { ErrorState, TimeAgo, agoText, fmtCost, fmtTokens, usePolling } from "./bits";
 import type { ClaudeCodeUsage, ClaudePlan, ContextReading, ProjectUsage, StationContext, StationDetail, UsageTotals } from "../types";
 
 // What the Claude Code sessions reporting here spend (tares/claude_usage.py). The crew's machine
@@ -245,56 +245,85 @@ function Breakdown({ r, size }: { r: ContextReading; size: number }) {
   );
 }
 
-/** A station's context window and what it spent, on its detail. */
+/** A /context reading this recent is shown as it is; an older one is read again when its fold opens. */
+const FRESH_MS = 10 * 60000;
+
+/** A station's context window, on its detail: one line and a bar, the details in their title. */
 export function StationUsage({ s, onAsked }: { s: StationDetail; onAsked: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
   const ctx = s.context;
-  const r = s.context_detail;
-  const asked = s.context_asked_at ? new Date(s.context_asked_at).getTime() : 0;
-  const waiting = asked > 0 && (!s.context_at || new Date(s.context_at).getTime() < asked)
-    && Date.now() - asked < 15 * 60000;
-  const ask = async () => {
-    setBusy(true); setErr(null);
-    try { await api.askStationContext(s.name); onAsked(); }
-    catch (e) { setErr(String((e as Error)?.message ?? e)); }
-    finally { setBusy(false); }
-  };
-  const size = r?.max_tokens ?? ctx?.size ?? 0;
+  const tip = ctx ? `${contextTitle(ctx)}${ctx.at ? `; reported ${agoText(ctx.at)}` : ""}` : undefined;
   return (
     <div>
       <div className="crew-detail-label">Context window</div>
       {ctx ? (
         <>
-          <p style={{ margin: "0 0 4px" }}>
+          <p style={{ margin: "0 0 4px" }} title={tip}>
             {ctx.compact_at != null
-              ? <><b>{fmtTokens(ctx.used)}</b> tokens, {ctx.compact_pct}% of the way to compacting at {fmtTokens(ctx.compact_at)} <span className="dim">(window {fmtTokens(ctx.size)}, {ctx.pct}% full)</span></>
-              : <><b>{fmtTokens(ctx.used)}</b> of {fmtTokens(ctx.size)} tokens ({ctx.pct}%)</>}
+              ? <><b>{fmtTokens(ctx.used)}</b> of {fmtTokens(ctx.compact_at)} before compacting ({ctx.compact_pct}%)</>
+              : <><b>{fmtTokens(ctx.used)}</b> of {fmtTokens(ctx.size)} ({ctx.pct}%)</>}
             {ctx.model && <> · {ctx.model}</>}
-            <span className="dim"> · reported <TimeAgo ts={ctx.at} /></span>
           </p>
-          <Meter pct={ctx.compact_pct ?? ctx.pct} title={contextTitle(ctx)} />
+          <Meter pct={ctx.compact_pct ?? ctx.pct} title={tip} />
         </>
       ) : (
         <p className="dim" style={{ margin: 0 }}>No report yet. A station reports after each reply once it runs on this version of the plugin; the watch moves idle stations onto it.</p>
       )}
-      <div className="cc-ctx-read">
-        {r ? <span className="dim">By category, read <TimeAgo ts={s.context_at} /> with <span className="mono">/context</span>:</span>
-          : <span className="dim">The window by category comes from <span className="mono">/context</span>, read on the crew's machine without a model call.</span>}
-        <button type="button" disabled={busy || waiting} onClick={ask}>{waiting ? "Reading…" : r ? "Read again" : "Read it"}</button>
-      </div>
-      {waiting && (
-        <p className="help" style={{ margin: "4px 0 0", fontSize: 13 }}>
-          Asked <TimeAgo ts={s.context_asked_at} />. The factory watch reads it within seconds; if the watch is not running, run <span className="mono">tares factory context {s.name}</span>.
-        </p>
-      )}
-      {err && <p className="fo-warn" style={{ margin: "4px 0 0" }}>{err}</p>}
-      {r && size > 0 && <Breakdown r={r} size={size} />}
-      {s.usage && (
-        <p className="dim" style={{ margin: "8px 0 0", fontSize: 13 }}>
-          Its sessions so far: {tokensLine(s.usage)} · about {fmtCost(s.usage.cost_usd)} at API prices.
-        </p>
-      )}
+      <ContextFold s={s} onAsked={onAsked} />
     </div>
+  );
+}
+
+/** The window by category from /context, behind a fold that starts shut. Opening it asks for a
+ *  reading when there is none or the last one is old; folding it again asks nothing. */
+function ContextFold({ s, onAsked }: { s: StationDetail; onAsked: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  // when this page asked (the daemon's clock, as context_asked_at), so the fold says reading until
+  // the next poll carries the ask
+  const [askedHere, setAskedHere] = useState(0);
+  const r = s.context_detail;
+  const readAt = s.context_at ? new Date(s.context_at).getTime() : 0;
+  const asked = Math.max(s.context_asked_at ? new Date(s.context_asked_at).getTime() : 0, askedHere);
+  const waiting = asked > readAt && Date.now() - asked < 15 * 60000;
+  const fresh = !!r && Date.now() - readAt < FRESH_MS;
+  const ask = async () => {
+    setBusy(true); setErr(null);
+    try { const a = await api.askStationContext(s.name); setAskedHere(new Date(a.asked_at).getTime()); onAsked(); }
+    catch (e) { setErr(String((e as Error)?.message ?? e)); }
+    finally { setBusy(false); }
+  };
+  const toggle = (e: React.SyntheticEvent<HTMLDetailsElement>) => {
+    // only its own: the What is loaded fold inside toggles too
+    if (e.target !== e.currentTarget) return;
+    const next = e.currentTarget.open;
+    setOpen(next);
+    if (next && !fresh && !waiting && !busy) void ask();
+  };
+  const size = r?.max_tokens ?? s.context?.size ?? 0;
+  const reading = busy || waiting;
+  return (
+    <details className="crew-subfold" open={open} onToggle={toggle}>
+      <summary>
+        <span className="crew-subfold-h">By category</span>
+        {(reading || (r && s.context_at)) && (
+          <span className="dim">
+            {r && s.context_at && <>read <TimeAgo ts={s.context_at} /></>}
+            {r && s.context_at && reading && " · "}
+            {reading && <span title="/context, read on the crew's machine without a model call">reading…</span>}
+          </span>
+        )}
+      </summary>
+      <div className="crew-subfold-body">
+        {waiting && Date.now() - asked > 30000 && (
+          <p className="help" style={{ margin: 0, fontSize: 13 }}>
+            Still waiting. If the crew watch is not running: <span className="mono">tares factory context {s.name}</span>.
+          </p>
+        )}
+        {err && <p className="fo-warn" style={{ margin: 0 }}>{err}</p>}
+        {r && size > 0 ? <Breakdown r={r} size={size} />
+          : !reading && !err && <p className="dim" style={{ margin: 0 }}>No reading yet.</p>}
+      </div>
+    </details>
   );
 }

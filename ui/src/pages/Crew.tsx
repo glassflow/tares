@@ -164,7 +164,10 @@ function MemberRow({ s, all, selected, depth = 0 }: { s: CrewStation; all: CrewS
 const pctOf = (x: number) => (x > 0 && x < 0.005 ? "under 1%" : `${Math.round(x * 100)}%`);
 
 function ProjectBlock({ p, builders, all, selected, week, now }: { p: CrewProject; builders: CrewStation[]; all: CrewStation[]; selected: string; week?: ProjectUsage; now?: ProjectUsage }) {
-  const left = p.tickets_total - p.tickets_done;
+  // the ring's counts when the row has them (canceled tickets kept out), so the text matches it
+  const done = p.progress ? p.progress.done : p.tickets_done;
+  const total = p.progress ? p.progress.total : p.tickets_total;
+  const left = total - done;
   const shares = [
     now?.share != null ? `${pctOf(now.share)} of this 5-hour window` : "",
     week?.share != null ? `${pctOf(week.share)} of this week` : "",
@@ -175,9 +178,9 @@ function ProjectBlock({ p, builders, all, selected, week, now }: { p: CrewProjec
         <Link to={`/projects/${encodeURIComponent(p.id)}`} className="crew-project-name">{p.name}</Link>
         <span className="crew-project-progress dim">
           {p.progress && <ProgressRing progress={p.progress} size={14} />}
-          {p.tickets_total === 0 ? "no tickets yet"
-            : left === 0 ? `all ${p.tickets_total} tickets merged`
-            : <>{p.tickets_done} of {p.tickets_total} merged{p.milestone && <> · on {p.milestone.name} ({p.milestone.done}/{p.milestone.total})</>}</>}
+          {total === 0 ? (p.progress?.canceled ? "no open tickets" : "no tickets yet")
+            : left === 0 ? `all ${total} tickets merged`
+            : <>{done} of {total} merged{p.milestone && <> · on {p.milestone.name} ({p.milestone.done}/{p.milestone.total})</>}</>}
         </span>
       </div>
       {p.repos.length > 0 && (
@@ -239,8 +242,25 @@ function BuildersFold({ id, builders, all, selected }: { id: string; builders: C
 
 // ── one member's details ────────────────────────────────────────────────────
 
-function MemberDetail({ name }: { name: string }) {
+/** How many of a member's last lines show before "Show N more". */
+const RECENT_SHOWN = 8;
+
+/** Whether a station is one of the crew's own or a helper under one: they serve every project and
+ *  hold no tickets. Goes by its root up the parent chain, so a builder whose project id starts with
+ *  crew- stays a builder. */
+function onCrewSide(name: string, all: CrewStation[]): boolean {
+  let s = all.find((x) => x.name === name);
+  for (let i = 0; s && s.role === "helper" && s.parent && i < 10; i++) {
+    const up = all.find((x) => x.name === s!.parent);
+    if (!up) return CREW_ROLES.some((r) => s!.parent === `crew-${r}` || s!.parent!.startsWith(`crew-${r}-`));
+    s = up;
+  }
+  return !!s && CREW_ROLES.includes(s.role ?? "");
+}
+
+function MemberDetail({ name, crewSide }: { name: string; crewSide: boolean }) {
   const { data, error, reload } = usePolling(() => api.station(name), 10000);
+  const [allLines, setAllLines] = useState(false);
   // after asking for a /context reading, look again sooner than the usual poll
   const asked = () => { reload(); [3000, 6000, 10000].forEach((ms) => setTimeout(reload, ms)); };
   if (error && !data) return <div className="fo-panel crew-detail"><ErrorState error={error} what={name} onRetry={reload} /></div>;
@@ -249,6 +269,7 @@ function MemberDetail({ name }: { name: string }) {
   // newest first, without the bookkeeping rows a transcript carries (titles, names, empty system lines)
   const lines = s.recent.filter((l) => ["user", "assistant", "tool_use", "tool_result", "session_state"].includes(l.type ?? "")
     && l.text.trim() && l.text.trim() !== l.type).reverse();
+  const shown = allLines ? lines : lines.slice(0, RECENT_SHOWN);
   return (
     <div className="fo-panel crew-detail">
       <header>
@@ -261,7 +282,7 @@ function MemberDetail({ name }: { name: string }) {
           {s.state === "working" ? "Working" : s.state === "waiting" ? "Waiting" : s.state === "quiet" ? `No word for ${s.quiet_minutes} min` : "Ended"}
           {s.state_reason && <>: {s.state_reason.replace(/[.!]+$/, "")}</>}
           {s.last_at && <>; last spoke <TimeAgo ts={s.last_at} /></>}.
-          {s.project_name && <> Works on <Link to={`/projects/${encodeURIComponent(s.project ?? "")}`}>{s.project_name}</Link>.</>}
+          {!crewSide && s.project_name && <> Works on <Link to={`/projects/${encodeURIComponent(s.project ?? "")}`}>{s.project_name}</Link>.</>}
         </p>
         <StationUsage s={s} onAsked={asked} />
         <div>
@@ -270,7 +291,7 @@ function MemberDetail({ name }: { name: string }) {
             ? <p className="dim" style={{ margin: 0 }}>It has ended, so there is no session to open.</p>
             : <div className="fo-cmd"><code>{s.attach}</code><CopyButton text={s.attach} label="Copy" /></div>}
         </div>
-        <div>
+        {!crewSide && <div>
           <div className="crew-detail-label">Tickets it holds</div>
           {s.tickets.length ? (
             <ul className="crew-detail-tickets">
@@ -283,16 +304,21 @@ function MemberDetail({ name }: { name: string }) {
                 </li>
               ))}
             </ul>
-          ) : <p className="dim" style={{ margin: 0 }}>{s.role === "builder" ? "None right now." : "Crew stations don't hold tickets; they serve every project."}</p>}
-        </div>
+          ) : <p className="dim" style={{ margin: 0 }}>None right now.</p>}
+        </div>}
         <div>
           <div className="crew-detail-label">Its last lines, newest first</div>
           {lines.length ? (
-            <ol className="crew-recent">
-              {lines.map((l, i) => (
-                <li key={i}><span className="dim">{l.type === "session_state" ? "state" : l.type?.replace("_", " ")}</span> {l.text.replace(/^\[tool_result\]\s*/, "")}</li>
-              ))}
-            </ol>
+            <>
+              <ol className="crew-recent">
+                {shown.map((l, i) => (
+                  <li key={i}><span className="dim">{l.type === "session_state" ? "state" : l.type?.replace("_", " ")}</span> {l.text.replace(/^\[tool_result\]\s*/, "")}</li>
+                ))}
+              </ol>
+              {lines.length > shown.length && (
+                <button type="button" className="fo-link-btn crew-more" onClick={() => setAllLines(true)}>Show {lines.length - shown.length} more</button>
+              )}
+            </>
           ) : <p className="dim" style={{ margin: 0 }}>Nothing recorded yet.</p>}
         </div>
         {s.earlier.length > 0 && (
@@ -427,7 +453,7 @@ export default function Crew() {
             <PlanPanel data={udata} error={uerror} reload={ureload} />
           </div>
           <div className="crew-col">
-            {known ? <MemberDetail key={selected} name={selected} />
+            {known ? <MemberDetail key={selected} name={selected} crewSide={onCrewSide(selected, stations)} />
               : <div className="fo-panel crew-detail"><p className="dim" style={{ padding: 16, margin: 0 }}>Pick a member to see what it is doing.</p></div>}
           </div>
         </div>

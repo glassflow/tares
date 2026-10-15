@@ -1989,7 +1989,7 @@ pre.payload {
 .fo-foot { padding: 10px 16px; }
 @media (max-width: 900px) { .fo-cols { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 640px) { .fo-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } .fo-steps li:nth-child(2) { border-right: 0; } .fo-steps li:nth-child(-n+2) { border-bottom: 1px solid var(--line); } }
-@media (prefers-reduced-motion: reduce) { .fo-fold-h::before, .crew-builders-count::before { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .fo-fold-h::before, .crew-builders-count::before, .crew-subfold-h::before, .cc-loaded > summary::before { transition: none; } }
 .main .fo-steps, .main .fo-docs, .main .fo-tickets { margin: 0; padding: 0; list-style: none; }
 /* a build that stopped: the session waits for the person, or has gone quiet */
 .fo-attn { border: 1px solid var(--warn); background: var(--warn-soft); padding: 14px 18px; display: flex; flex-direction: column; gap: 8px; }
@@ -2104,6 +2104,7 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 .crew-detail-tickets li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 4px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
 .main .crew-recent { list-style: none; margin: 0; padding: 8px 10px; max-height: 360px; overflow-y: auto; background: var(--bg); border: 1px solid var(--line); font-family: var(--mono); font-size: 12px; }
 .crew-recent li { padding: 2px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.crew-more { margin-top: 6px; font-size: 13px; }
 .crew-fold > summary { cursor: pointer; padding: 12px 16px; font-weight: 600; font-size: 14px; }
 .crew-fold[open] > summary { border-bottom: 1px solid var(--line); }
 @media (max-width: 900px) { .crew-split { grid-template-columns: minmax(0, 1fr); } }
@@ -2156,14 +2157,25 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 .cc-share-head .dim { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cc-ctx { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 .cc-ctx.is-hot { color: var(--warn); font-weight: 600; }
-.cc-ctx-read { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px 12px; margin-top: 10px; font-size: 13px; }
-.cc-ctx-read button { font-size: 12px; padding: 3px 10px; }
-.main table.cc-cats { margin-top: 8px; border: 0; background: none; font-size: 13px; }
+/* a fold inside a member's detail: the window by category */
+.crew-subfold { margin-top: 10px; font-size: 13px; }
+.crew-subfold > summary { list-style: none; cursor: pointer; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; color: var(--ink-soft); }
+.crew-subfold > summary::-webkit-details-marker { display: none; }
+.crew-subfold > summary:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
+.crew-subfold-h { color: var(--ink); }
+.crew-subfold-h::before { content: "›"; display: inline-block; width: 14px; text-align: center; color: var(--ink-soft); transition: transform 0.15s; }
+.crew-subfold[open] > summary .crew-subfold-h::before { transform: rotate(90deg); }
+.crew-subfold-body { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 0 14px; }
+.main table.cc-cats { margin-top: 2px; border: 0; background: none; font-size: 13px; }
 .cc-cats td { padding: 3px 8px 3px 0; border-bottom: 1px solid var(--line); vertical-align: middle; }
 .cc-cats td.num, .cc-table .num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cc-cats td.cc-cat-bar { width: 30%; min-width: 60px; padding-right: 0; }
 .cc-loaded { margin-top: 8px; font-size: 13px; }
-.cc-loaded summary { cursor: pointer; color: var(--ink-soft); }
+.cc-loaded > summary { list-style: none; cursor: pointer; color: var(--ink-soft); }
+.cc-loaded > summary::-webkit-details-marker { display: none; }
+.cc-loaded > summary:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
+.cc-loaded > summary::before { content: "›"; display: inline-block; width: 14px; text-align: center; transition: transform 0.15s; }
+.cc-loaded[open] > summary::before { transform: rotate(90deg); }
 .cc-loaded dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 6px 0 0; }
 .cc-loaded dt { color: var(--ink-soft); }
 .cc-loaded dd { margin: 0; overflow-wrap: anywhere; }

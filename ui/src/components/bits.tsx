@@ -6,15 +6,18 @@ export function StatusBadge({ status }: { status: string | undefined }) {
   return <span className={`badge ${s}`}>{s}</span>;
 }
 
+/** "22s ago", "5m ago", "3h ago", "2d ago": what TimeAgo shows, as text for a title. */
+export function agoText(ts: string): string {
+  const secs = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
+  if (secs < 60) return `${Math.round(secs)}s ago`;
+  if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
+  return `${Math.round(secs / 86400)}d ago`;
+}
+
 export function TimeAgo({ ts }: { ts: string | null | undefined }) {
   if (!ts) return <span className="dim">—</span>;
-  const secs = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
-  let label: string;
-  if (secs < 60) label = `${Math.round(secs)}s ago`;
-  else if (secs < 3600) label = `${Math.round(secs / 60)}m ago`;
-  else if (secs < 86400) label = `${Math.round(secs / 3600)}h ago`;
-  else label = `${Math.round(secs / 86400)}d ago`;
-  return <span title={new Date(ts).toLocaleString()}>{label}</span>;
+  return <span title={new Date(ts).toLocaleString()}>{agoText(ts)}</span>;
 }
 
 /** Fetch on mount and refetch on an interval; pause when the tab is hidden. */
