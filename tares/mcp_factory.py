@@ -261,24 +261,29 @@ async def recurring_findings(repo: str) -> str:
 def _desk_line(d: dict) -> dict:
     return {k: d.get(k) for k in ("label", "project_name", "question", "options", "recommendation",
                                   "why", "context", "blocks", "tickets", "blocking", "asked_by",
-                                  "assumptions", "state", "created_at")}
+                                  "assumptions", "station", "command", "state", "created_at")}
 
 
 @writable()
 async def desk_add(question: str, recommendation: str, why: str, options: list[str] | None = None,
                    context: str = "", blocks: str = "", tickets: list[str] | None = None,
                    blocking: bool = False, asked_by: str = "", assumptions: list[str] | None = None,
-                   project: str = "") -> str:
+                   project: str = "", station: str = "", command: str = "") -> str:
     """Put a question for the person on the desk (one desk for every project; numbered D1,
     D2...): the question, your recommendation and why, the options, two lines of context, what
     it blocks (tickets, stations), whether it blocks, and who asked. For the batch of
     assumptions to confirm once per milestone, pass their numbers in `assumptions`. Then ask the
     person in your session, one item at a time, blockers first. Only the orchestrator writes
-    the desk."""
+    the desk.
+
+    A permission a station was refused: `station` its name and `command` the exact command it
+    was refused, verbatim as it reported it; `recommendation` the grant in plain words (which
+    station may run what, where). The person can allow it with one click in the Tares console;
+    the crew's watch then restarts that station with the grant in its settings."""
     body = {"question": question, "recommendation": recommendation, "why": why,
             "options": options or [], "context": context, "blocks": blocks,
             "tickets": tickets or [], "blocking": blocking, "asked_by": asked_by,
-            "assumptions": assumptions or []}
+            "assumptions": assumptions or [], "station": station, "command": command}
     if project or _default_project():
         body["project"] = project or _default_project()
     async with _cx(10) as cx:
@@ -346,8 +351,9 @@ async def desk_withdraw(item: str, reason: str) -> str:
 @mcp.tool()
 async def list_decisions(project: str = "") -> str:
     """What the person decided on the project, newest first: the question, their words, the
-    choice, whether it stands from now on and whether it matched what they typed. Follow them;
-    relay them to stations by quoting the words."""
+    choice, whether it stands from now on and whether it matched what they typed (`via`
+    "console": a permission they allowed in the console; the watch restarts that station with
+    it). Follow them; relay them to stations by quoting the words."""
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -356,7 +362,7 @@ async def list_decisions(project: str = "") -> str:
     if r.status_code >= 400:
         return _out(r)
     return json.dumps([{k: d.get(k) for k in ("label", "question", "words", "choice", "standing",
-                                              "matched", "tickets", "at")}
+                                              "matched", "via", "tickets", "at")}
                        for d in r.json().get("decisions") or []], default=str)
 
 

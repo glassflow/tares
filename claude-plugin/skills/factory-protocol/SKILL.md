@@ -54,7 +54,7 @@ These come from a month of running this setup by hand. Each one exists because i
 10. **Results live on Tares or on disk; messages are notifications.** Write every result to the Tares record your role keeps and to `$FACTORY_HOME/reports/<your station>.md` before you send the message about it. A message to a stopped station is lost; a record is not.
 11. **Stay in scope.** Act only on the projects handed to the crew (`crew_projects`), their repos, PRs and stations. Other sessions on the machine are not yours to touch.
 12. **No secrets in prompts, messages, reports or commit messages.** Credentials come from the tool's own login (`gh auth`, the connectors) or the keychain.
-13. **If a permission check denies an action**, don't retry it another way and don't hand it to a peer. Write the exact command to your report and tell the orchestrator, which puts it on the desk.
+13. **If a permission check denies an action**, don't retry it another way and don't hand it to a peer. Write the exact command to your report, verbatim, and tell the orchestrator your station name and that command, word for word; it puts them on the desk. The person can allow it in the Tares console. Then the factory restarts you, in the same conversation, with the grant in your settings, and tells you so: run the command again if it is still needed.
 
 ## Messages
 

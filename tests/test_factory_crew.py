@@ -187,6 +187,15 @@ async def main():
                [s["name"] for s in pc["stations"]] == ["shop-build-m1"], pc)
             r = await cx.get("/api/crew/nobody")
             ck("an unknown station is 404", r.status_code == 404)
+            att = {n: (await cx.get(f"/api/crew/{n}")).json().get("attach")
+                   for n in ("crew-orchestrator", "shop-build-m1")}
+            ck("a station's attach command: a crew station by its role, a builder by its name",
+               att == {"crew-orchestrator": "tares factory crew attach orchestrator",
+                       "shop-build-m1": "tares factory crew attach shop-build-m1"}, att)
+        from tares.factory import attach_command
+        ck("a helper of a crew station keeps its full name",
+           attach_command("crew-reviewer-lint") == "tares factory crew attach crew-reviewer-lint",
+           attach_command("crew-reviewer-lint"))
 
         print("== crew settings and grants ==")
         s = json.loads(await mf.get_crew_settings())

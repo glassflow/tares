@@ -16,6 +16,7 @@ from datetime import datetime
 import duckdb
 
 from .envelope import Envelope, now_utc
+from .claude_usage_store import CLAUDE_USAGE_SCHEMA, ClaudeUsageStore
 from .factory_store import FACTORY_SCHEMA, FactoryStore
 
 # the URL a Tares agent's subscription had before the wiring moved onto projects (config.agent_url)
@@ -651,7 +652,7 @@ class StoreUnavailable(RuntimeError):
         self.path = path
 
 
-class Store(FactoryStore):
+class Store(FactoryStore, ClaudeUsageStore):
     def __init__(self, path: str = "tares.duckdb"):
         # All access is from taresd's event loop thread; the lock is belt-and-suspenders since
         # FastAPI may run sync work in a threadpool.
@@ -672,7 +673,7 @@ class Store(FactoryStore):
                     self.con.execute(stmt)
             for stmt in _MIGRATIONS:
                 self.con.execute(stmt)
-            for stmt in FACTORY_SCHEMA:
+            for stmt in FACTORY_SCHEMA + CLAUDE_USAGE_SCHEMA:
                 self.con.execute(stmt)
             self._rename_query_log_scope()
             self._fold_views()
@@ -683,6 +684,7 @@ class Store(FactoryStore):
             self._skills_upgrade()
             self._factory_kind_upgrade()
             self._factory_upgrade()
+            self._claude_usage_fill()
             self._init_source_stats()
             self._init_entity_counts()
             # Write the upgrade into the database file now. Left in the WAL, the new columns on
@@ -2297,6 +2299,7 @@ class Store(FactoryStore):
             self._forget_unused_docs()     # so does a doc
             self.con.execute("DELETE FROM tickets WHERE project = ?", [uid])
             self._factory_forget_project(uid)
+            self._usage_forget_project(uid)
             self.con.execute("DELETE FROM project_sessions WHERE project = ?", [uid])
             # a crew station's session serves every project: its state stays
             self.con.execute("DELETE FROM session_states WHERE session NOT IN (SELECT session "

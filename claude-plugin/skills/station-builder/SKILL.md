@@ -59,7 +59,7 @@ each ticket's branch and pull request, and start nothing new.
 
 - Missing information the plan should have had: `ASK` the orchestrator with your recommendation. If it's not blocking, assume and continue.
 - A test or build you can't make pass after two honest attempts: write what you tried to your report, `set_stage(ticket, "blocked", reason=...)`, `ASK` with `blocking: yes`.
-- A permission denial: don't work around it. Put the exact command in your report and tell the orchestrator.
+- A permission denial: don't work around it. Put the exact command, verbatim, in your report and tell the orchestrator your station name and that command, word for word (protocol rule 13). If the person allows it, the factory restarts you with the grant and says so; then run the command again if it is still needed.
 
 ## Don'ts
 

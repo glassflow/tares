@@ -72,6 +72,24 @@ def rules():
        len(factory_mod.handover_repos([{"name": "G/Api"}, {"path": "/w/api", "name": "g/api"}])) == 1)
 
 
+def progress_rules():
+    print("== the progress ring's buckets ==")
+    t = lambda i, status="todo", stage=None, deps=(), owner="tares": {
+        "id": i, "number": int(i[1:]), "status": status, "stage": stage, "depends_on": list(deps),
+        "owner": owner}
+    got = factory_mod.progress([
+        t("t1", "in_progress", "merged", owner="linear"),   # merged, Linear not moved yet
+        t("t2", "in_progress", "blocked", owner="linear"),  # a station's blocked beats in progress
+        t("t3", "todo", "doing", owner="linear"),           # a station works it, Linear not moved
+        t("t4", "todo", None, ["t5"]),                      # waits on a canceled one: blocked
+        t("t5", "canceled"),
+        t("t6", "todo", None, ["t1"]),                      # its dependency merged: to do
+    ])
+    ck("stage beats a Linear status; a canceled dependency still blocks",
+       got == {"done": 1, "doing": 1, "blocked": 2, "todo": 1, "canceled": 1, "total": 5}, got)
+    ck("no tickets, all zero", factory_mod.progress([])["total"] == 0)
+
+
 def station_url():
     print("== a station reaches the crew's Tares, whatever the plugin option says ==")
     tok = os.path.join(_TMP, "token")
@@ -257,8 +275,49 @@ async def main():
         ck("the command that opens it", d.get("attach") == "tares factory crew attach shop-build-m1-web",
            d.get("attach"))
 
+        print("== the projects list carries a factory project's progress ==")
+        await m.write_ticket("Refunds", project=shop)                        # T4, canceled
+        await m.write_ticket("Payment keys", project=shop)                   # T5, a station's blocked
+        await m.write_ticket("Checkout", depends_on=["T5"], project=shop)    # T6, waits on T5
+        st = app.state.store
+        lin = st.create_ticket(shop, "linear", "Invoices", status="in_progress", identifier="ENG-9")
+        st.update_ticket(lin, stage="merged")   # the crew merged it; Linear still says started
+        async with mk() as cx:
+            await cx.put(f"/api/projects/{shop}/tickets/T4", json={"status": "canceled"})
+            await cx.post(f"/api/projects/{shop}/tickets/T5/stage", json={"stage": "doing"})
+            r = await cx.post(f"/api/projects/{shop}/tickets/T5/stage",
+                              json={"stage": "blocked", "reason": "no payment keys yet"})
+            ck("a station can say a ticket is blocked", r.status_code == 200, r.text)
+            ps = {p["name"]: p for p in (await cx.get("/api/projects")).json()["projects"]}
+            crew = {p["name"]: p for p in (await cx.get("/api/crew/projects")).json()["projects"]}
+        ck("merged and the Linear one merged are done, review is doing, a station's blocked and a "
+           "ticket waiting on it are blocked, canceled stays out of the total",
+           ps["Shop"].get("progress") == {"done": 2, "doing": 1, "blocked": 2, "todo": 1,
+                                          "canceled": 1, "total": 6}, ps["Shop"].get("progress"))
+        ck("a factory project with no tickets has an empty count",
+           ps["Notes"].get("progress") == {"done": 0, "doing": 0, "blocked": 0, "todo": 0,
+                                           "canceled": 0, "total": 0}, ps["Notes"].get("progress"))
+        ck("an ordinary project carries none", "progress" not in ps["Empty"], ps["Empty"])
+        row = crew["Shop"]
+        ck("the crew's list keeps its fields",
+           set(row) == {"id", "name", "tickets_done", "tickets_total", "stages", "milestone",
+                        "progress", "repos", "autonomy", "handed_over_at", "handed_over_by"},
+           sorted(row))
+        ck("and the ring's count, the same as the projects list's",
+           row["progress"] == ps["Shop"]["progress"] == {"done": 2, "doing": 1, "blocked": 2,
+                                                         "todo": 1, "canceled": 1, "total": 6},
+           row.get("progress"))
+        ck("a project with no tickets has an empty one",
+           crew["Notes"].get("progress") == {"done": 0, "doing": 0, "blocked": 0, "todo": 0,
+                                             "canceled": 0, "total": 0}, crew["Notes"].get("progress"))
+        ck("and its counts: canceled counts as done there, in a total of every ticket",
+           (row["tickets_done"], row["tickets_total"]) == (3, 7)
+           and row["stages"] == {"merged": 2, "review": 1, "todo": 2, "done": 1, "blocked": 1}
+           and row["milestone"] == {"name": "API", "done": 1, "total": 2}, row)
+
 
 rules()
+progress_rules()
 station_url()
 asyncio.run(main())
 print(f"\n{P} passed, {F} failed")

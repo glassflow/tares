@@ -5,6 +5,52 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- The Projects list and a software-factory project's page show a small ring of the project's tickets:
+  done, in progress, blocked and to do, with the counts in its tooltip, so a stuck project shows at
+  a glance. The project page's counts and ticket bar use the same buckets and name blocked tickets.
+  `GET /api/projects` carries `progress` for every factory project.
+- A crew station's attach command (`tares factory crew attach <name>`) has a Copy button wherever
+  the console shows the station: a session's page, the project's Crew rows, the stopped-build
+  banner, Next up and the Crew page, so you can open a stuck or waiting builder in one paste. A
+  station that has ended offers none.
+- A permission a crew station was refused comes to the desk with the station and the exact
+  command, and you allow it with one click on the project page or the Crew page: you check the
+  sentence that becomes the grant, choose this project or every project, and click **Allow for
+  <station>**. Tares keeps it as a grant and as your decision made in the console, and the crew's
+  watch restarts that station with it in its settings, in the same conversation, once it is
+  between turns (never while you have it open with `crew attach`). `desk_add(station=, command=)`,
+  `POST /api/desk/{ref}/allow` (the person only) and `via` on decisions.
+- What the crew spends, on the Crew page: how much of your Claude plan is left (the 5-hour and
+  weekly limits and when each resets, on a Pro or Max login) and which projects used the current
+  5-hour window, in a pane below Projects that is folded by default with the most used limit on its
+  line; and for each station how near it is to compacting. A station's detail reads its context
+  window by category, as `/context` shows it, when you ask. Settings, Usage has tokens and an
+  estimated API cost per project for the last week. Stations report through a status line the
+  factory sets; the watch reads `/usage` every 10 minutes and `/context` when asked, without a
+  model call. `tares factory plan` and `tares factory context <station>` read them by hand.
+- Token usage per reply of every Claude Code session the plugin ships, counted once per reply and
+  filled in from the replies already stored.
+- The console's left sidebar folds to a rail of icons and back with its Collapse row; the choice
+  is remembered in this browser. Start, Connect and Reads have icons of their own, Settings is a
+  gear and the Workspace link an outside-link icon, so no two look alike when only icons show.
+
+### Changed
+- Crew page: each project's builders fold, shut by default, behind a line that counts them and
+  names any waiting or quiet one, so the Waiting for review list stays in view. The fold opens for
+  the member you pick or link to, and the whole Projects pane folds to its header. Both are
+  remembered in this browser.
+- Crew page: each project shows its progress ring beside the merged count, which now leaves canceled
+  tickets out as the ring does, and its usage line gives only its share of the 5-hour window and of
+  the week, with no API prices. A station's detail says less: one context line and its bar, the
+  window by category in a fold that reads it when opened, the newest 8 lines with the rest a click
+  away, and no project or ticket section for the crew's own stations. `/api/crew/projects` rows
+  carry `progress`.
+
+### Fixed
+- The attach command for a helper of a crew station (`crew-reviewer-lint`) names the helper, not
+  a station that doesn't exist.
+
 ## [1.46.0] - 2026-10-14
 
 Work on a factory project in your own Claude Code session with `tares factory session`, taking it

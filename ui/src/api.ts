@@ -8,7 +8,7 @@ import type {
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults,
   Skill, SkillSummary,
-  Assumption, CrewMessage, CrewProject, CrewSettings, CrewStation, Decision, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, Handover, LinearLink, LinearStatus, Milestone,
+  Assumption, ClaudeCodeUsage, CrewMessage, CrewProject, CrewSettings, CrewStation, Decision, DeskAllowed, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, Handover, LinearLink, LinearStatus, Milestone,
   ProjectSession, Ticket, TicketStatus,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, ModelProvider, ModelProviders,
@@ -563,6 +563,9 @@ export const api = {
     request<{ milestones: Milestone[] }>(`/api/projects/${encodeURIComponent(id)}/milestones`),
   desk: (project = "") =>
     request<{ desk: DeskItem[] }>(`/api/desk?state=open${project ? `&project=${encodeURIComponent(project)}` : ""}`),
+  allowDesk: (ref: string, words: string, scope: "project" | "all") =>
+    request<DeskAllowed>(`/api/desk/${encodeURIComponent(ref)}/allow`,
+      { method: "POST", body: JSON.stringify({ words, scope }) }),
   projectDecisions: (id: string) =>
     request<{ decisions: Decision[] }>(`/api/projects/${encodeURIComponent(id)}/decisions`),
   reviewQueue: () => request<{ queue: QueueItem[]; now: string }>("/api/review-queue"),
@@ -576,8 +579,11 @@ export const api = {
     request<{ messages: CrewMessage[] }>(
       `/api/projects/${encodeURIComponent(id)}/tickets/${encodeURIComponent(ref)}/messages`),
   crew: () => request<{ stations: CrewStation[]; settings: CrewSettings; grants: string; now: string }>("/api/crew"),
-  crewProjects: () => request<{ projects: CrewProject[]; finished?: (Pick<CrewProject, "id" | "name" | "tickets_done" | "tickets_total"> & { finished: ProjectFinished | null })[]; now: string }>("/api/crew/projects"),
+  crewProjects: () => request<{ projects: CrewProject[]; finished?: (Pick<CrewProject, "id" | "name" | "tickets_done" | "tickets_total" | "progress"> & { finished: ProjectFinished | null })[]; now: string }>("/api/crew/projects"),
   station: (name: string) => request<StationDetail>(`/api/crew/${encodeURIComponent(name)}?recent=40`),
+  askStationContext: (name: string) =>
+    request<{ session: string; asked_at: string }>(`/api/crew/${encodeURIComponent(name)}/context`, { method: "POST" }),
+  claudeCodeUsage: (days = 7) => request<ClaudeCodeUsage>(`/api/claude-code/usage?days=${days}`),
   projectRepos: (id: string) =>
     request<{ repos: ProjectRepo[] }>(`/api/projects/${encodeURIComponent(id)}/repos`),
   projectCrew: (id: string) =>

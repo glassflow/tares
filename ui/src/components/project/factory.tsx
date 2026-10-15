@@ -2,8 +2,9 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../../api";
-import { CrewState, Desk } from "../../pages/Crew";
-import { TimeAgo, usePolling } from "../bits";
+import { CrewState, Desk, attachCmd } from "../../pages/Crew";
+import { CopyButton, TimeAgo, usePolling } from "../bits";
+import { ProgressRing, ticketBucket, ticketProgress } from "../ProgressRing";
 import { VLink, type Ctx } from "./common";
 import { Goal } from "./overview";
 import type { DocSummary, Milestone, ProjectRepo, ProjectSession, RepoPR, Ticket } from "../../types";
@@ -37,17 +38,12 @@ function gist(body: string | null | undefined): string {
   return text.length > 280 ? `${text.slice(0, 277).replace(/\s+\S*$/, "")}…` : text;
 }
 
-function CopyButton({ text, label, primary }: { text: string; label: string; primary?: boolean }) {
-  const [done, setDone] = useState(false);
-  const copy = async () => {
-    try { await navigator.clipboard.writeText(text); setDone(true); setTimeout(() => setDone(false), 1800); }
-    catch { /* the sentence stays selectable next to the button */ }
-  };
-  return <button type="button" className={primary ? "primary" : undefined} onClick={copy}>{done ? "Copied" : label}</button>;
-}
-
 const STATUS_TEXT: Record<Ticket["status"], string> = {
   todo: "to do", in_progress: "in progress", done: "done", canceled: "canceled",
+};
+// a ticket's cell in the progress bar, by its bucket in the ring
+const BAR_CLASS: Record<ReturnType<typeof ticketBucket>, string> = {
+  done: "done", doing: "run", blocked: "blocked", todo: "", canceled: "",
 };
 
 export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
@@ -57,7 +53,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const { data: msd } = usePolling(() => api.milestones(ctx.id), 15000);
   const { data: crew } = usePolling(() => api.projectCrew(ctx.id), 15000);
   const { data: asm } = usePolling(() => api.assumptions(ctx.id), 30000);
-  const { data: decisions } = usePolling(() => api.projectDecisions(ctx.id), 30000);
+  const { data: decisions, reload: reloadDecisions } = usePolling(() => api.projectDecisions(ctx.id), 30000);
   const { data: rp } = usePolling(() => api.projectRepos(ctx.id), 30000);
   // the repos the project touches (TR-463); picking one narrows the ticket list to its tickets
   const repos = rp?.repos ?? [];
@@ -80,9 +76,10 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const questions = (docs ?? []).filter((d) => d.kind === "note" && !d.global);
   const start = own.find((d) => d.kind === "start");
   const phase: Phase = crew?.handover?.finished ? "done" : phaseOf(!!start, tickets);
-  const live = tickets.filter((t) => t.status !== "canceled");
-  const done = live.filter((t) => t.status === "done").length;
-  const doing = live.filter((t) => t.status === "in_progress").length;
+  // counted like the ring in the header, so the ring and the counts below it agree
+  const prog = ticketProgress(tickets);
+  const live = tickets.filter((t) => ticketBucket(t) !== "canceled");
+  const { done, doing } = prog;
   const sessions = ss?.sessions ?? [];
   const firstLinked = [...sessions].sort((a, b) => a.linked_at.localeCompare(b.linked_at))[0]?.session;
   const building = tickets.some((t) => t.status === "in_progress");
@@ -126,7 +123,9 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
     <div className="gf fo">
       <div className="gf-head">
         <div className="gf-head-text">
-          <h1 className="gf-name fo-name">{ctx.s.name}<span className="fo-tag">Software factory</span></h1>
+          <h1 className="gf-name fo-name">{ctx.s.name}
+            <span className="fo-name-tag"><span className="fo-tag">Software factory</span>
+              {tk ? <ProgressRing progress={prog} size={16} /> : <span className="fo-ring-slot" />}</span></h1>
           {tk?.linear && <div className="fo-linear"><LinearMark />Tickets live in Linear project{" "}
             <a href={tk.linear.url} target="_blank" rel="noreferrer">{tk.linear.name} ↗</a></div>}
           <Goal ctx={ctx} />
@@ -155,20 +154,21 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
           <div className="fo-progress-row">
             <span><b>{done} of {live.length} tickets done</b> · tickets live {where}</span>
             <span className="fo-counts">
-              <span><b>{live.length - done - doing}</b> to do</span>
+              <span><b>{prog.todo}</b> to do</span>
               <span><b>{doing}</b> in progress</span>
+              {prog.blocked > 0 && <span><b>{prog.blocked}</b> blocked</span>}
               <span><b>{done}</b> done</span>
             </span>
           </div>
           <div className="fo-bar" aria-hidden="true">
-            {live.map((t) => <i key={t.id} className={t.status === "done" ? "done" : t.status === "in_progress" ? "run" : ""} />)}
+            {live.map((t) => <i key={t.id} className={BAR_CLASS[ticketBucket(t)]} />)}
           </div>
         </div>
       )}
 
       {attention && doingTicket && (
         <Attention kind={attention} session={attention === "orphan" ? undefined : active}
-                   quietMin={quietMin} label={active?.station ?? "build session"}
+                   quietMin={quietMin} station={active?.station}
                    ticket={doingTicket.title}
                    pickUp={`Pick up Tares project "${ctx.s.name}" where the last session stopped.`} />
       )}
@@ -184,7 +184,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
       ) : next ? (
         <NextUp key={next.id} ctx={ctx} next={next} of={tickets.indexOf(next) + 1} total={tickets.length}
                 prompt={prompt} waiting={attention !== null && next.status === "in_progress"}
-                byCrew={byCrew} />
+                byCrew={byCrew} holderEnded={crew?.stations.find((s) => s.name === next.holder)?.state === "ended"} />
       ) : tk && (
         <section className="fo-next fo-next-empty">
           {!tickets.length
@@ -255,7 +255,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
         </Fold>
       )}
 
-      <Desk project={ctx.id} />
+      <Desk project={ctx.id} onChange={reloadDecisions} />
 
       {(decisions?.decisions.length ?? 0) > 0 && (
         <Fold id="decisions" title="Decisions"
@@ -264,10 +264,11 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
             {decisions!.decisions.map((d) => (
               <li key={d.id} style={{ display: "block" }}>
                 {d.label && <b>{d.label} </b>}{d.question}
-                <div>"{d.words}"{d.choice && <span className="dim"> · {d.choice}</span>}</div>
+                <div>"{d.words}"{d.choice && d.via !== "console" && <span className="dim"> · {d.choice}</span>}</div>
                 <small style={{ display: "block" }}>
                   <TimeAgo ts={d.at} />
-                  {d.matched ? " · matches what you typed" : <span className="fo-warn"> · not found in the session</span>}
+                  {d.via === "console" ? " · allowed in the console"
+                    : d.matched ? " · matches what you typed" : <span className="fo-warn"> · not found in the session</span>}
                   {d.standing && (d.granted ? " · kept as a grant" : " · standing")}
                 </small>
               </li>
@@ -304,13 +305,19 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
           {crew.stations.length ? (
             <ul className="fo-docs">
               {crew.stations.map((s) => (
-                <li key={s.name}>
+                <li key={s.name} className="fo-crew-row">
                   <span className="fo-sess">
                     <VLink v={{ kind: "claude", name: s.session }}>{s.name}</VLink>
                     <small> {s.role}</small>
                     <CrewState s={s} />
                   </span>
-                  <small>{s.last_at ? <TimeAgo ts={s.last_at} /> : null}</small>
+                  <span className="fo-row-end">
+                    <small>{s.last_at ? <TimeAgo ts={s.last_at} /> : null}</small>
+                    {s.state !== "ended" && (
+                      <CopyButton text={attachCmd(s.name)} label="Copy attach" className="fo-copy-sm"
+                                  title={`Copy ${attachCmd(s.name)}: it opens ${s.name}'s session in a terminal`} />
+                    )}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -519,10 +526,12 @@ function StateBadge({ s, now, shown }: { s: ProjectSession; now?: string; shown?
 }
 
 /** A build that has stopped: the session on the ticket waits for the person or has gone silent,
- *  or no session is on it at all. */
-function Attention({ kind, session, quietMin, label, ticket, pickUp }: {
-  kind: AttentionKind; session?: ProjectSession; quietMin: number; label: string; ticket?: string;
-  pickUp: string;
+ *  or no session is on it at all. A crew station is opened where it runs, with its attach command
+ *  (a builder waiting for a permission is answered there); any other session is picked up in a
+ *  fresh one. */
+function Attention({ kind, session, quietMin, station, ticket, pickUp }: {
+  kind: AttentionKind; session?: ProjectSession; quietMin: number; station?: string | null;
+  ticket?: string; pickUp: string;
 }) {
   if (kind === "orphan" || !session) {
     return (
@@ -541,19 +550,21 @@ function Attention({ kind, session, quietMin, label, ticket, pickUp }: {
     );
   }
   const said = (session.last_said ?? "").trim();
+  const attach = station ? attachCmd(station) : null;
   return (
     <section className={`fo-attn fo-attn-${kind}`} role="status" aria-labelledby="fo-attn-h">
       <h2 id="fo-attn-h">
         {kind === "waiting"
-          ? <>The {label} is waiting for you{session.state_at && <> since <TimeAgo ts={session.state_at} /></>}</>
-          : <>No word from the {label} for {quietMin} min</>}
+          ? <>{station ?? "The build session"} is waiting for you{session.state_at && <>; it stopped <TimeAgo ts={session.state_at} /></>}</>
+          : <>No word from {station ?? "the build session"} for {quietMin} min</>}
       </h2>
       {kind === "waiting" ? (
         <>
           {said && <p className="fo-said">{said.length > 600 ? `${said.slice(0, 597)}…` : said}</p>}
           <p className="help" style={{ margin: 0 }}>
             {ticket && <>Ticket "{ticket}" is in progress. </>}
-            Answer it in that Claude Code session, or say "continue" there.
+            {attach ? <>Open its session in a terminal and answer it there, or say "continue".</>
+              : <>Answer it in that Claude Code session, or say "continue" there.</>}
             {session.state_reason && session.state_reason !== "the turn ended; the session waits for input" && <> Claude Code said: {session.state_reason}.</>}
           </p>
         </>
@@ -561,25 +572,39 @@ function Attention({ kind, session, quietMin, label, ticket, pickUp }: {
         <p className="help" style={{ margin: 0 }}>
           {ticket ? <>Ticket "{ticket}" is in progress, but </> : null}the session has sent nothing
           since <TimeAgo ts={session.last_at} />. It may have crashed, its terminal was closed, or the
-          laptop went to sleep. Check its terminal.
+          laptop went to sleep. {attach ? "Open it in a terminal to see where it stands." : "Check its terminal."}
         </p>
       )}
-      <div className="fo-cmd">
-        <code>{pickUp}</code>
-        <CopyButton text={pickUp} label="Copy pick-up prompt" />
-      </div>
-      <span className="help">
-        Or carry on in a fresh Claude Code session with the Tares plugin: it reads where the build
-        stopped and takes it over. <VLink v={{ kind: "claude", name: session.session }} className="fo-link">Open the session</VLink>
-      </span>
+      {attach ? (
+        <>
+          <div className="fo-cmd">
+            <code>{attach}</code>
+            <CopyButton text={attach} label="Copy attach command" />
+          </div>
+          <span className="help">
+            Run it on the crew's machine. <VLink v={{ kind: "claude", name: session.session }} className="fo-link">Read the session here</VLink>
+          </span>
+        </>
+      ) : (
+        <>
+          <div className="fo-cmd">
+            <code>{pickUp}</code>
+            <CopyButton text={pickUp} label="Copy pick-up prompt" />
+          </div>
+          <span className="help">
+            Or carry on in a fresh Claude Code session with the Tares plugin: it reads where the build
+            stopped and takes it over. <VLink v={{ kind: "claude", name: session.session }} className="fo-link">Open the session</VLink>
+          </span>
+        </>
+      )}
     </section>
   );
 }
 
 /** The ticket a build session takes next, with what it is about and the sentence to start one. */
-function NextUp({ ctx, next, of, total, prompt, waiting, byCrew }: {
+function NextUp({ ctx, next, of, total, prompt, waiting, byCrew, holderEnded }: {
   ctx: Ctx; next: Ticket; of: number; total: number; prompt: string; waiting?: boolean;
-  byCrew?: boolean;
+  byCrew?: boolean; holderEnded?: boolean;
 }) {
   const { data: full } = usePolling(() => api.ticket(ctx.id, next.id), 30000);
   const text = gist(full?.working_doc_body);
@@ -594,10 +619,31 @@ function NextUp({ ctx, next, of, total, prompt, waiting, byCrew }: {
       <VLink v={{ kind: "ticket", name: next.id }} className="fo-link">
         {next.working_doc ? "Open the working doc" : "Write its working doc"}</VLink>
       {byCrew ? (
-        <span className="help">
-          The crew builds this project{next.holder ? <>: <span className="mono">{next.holder}</span> holds this ticket</> : ""}.
-          To steer it, talk to the orchestrator: <span className="mono">tares factory crew attach orchestrator</span>.
-        </span>
+        <>
+          {next.holder && holderEnded && (
+            <span className="help">
+              The crew builds this project: <span className="mono">{next.holder}</span> holds this ticket, but its session has ended.
+            </span>
+          )}
+          {next.holder && !holderEnded && (
+            <>
+              <span className="help">
+                The crew builds this project: <span className="mono">{next.holder}</span> holds this ticket. To see it work or answer it, open its session:
+              </span>
+              <div className="fo-cmd">
+                <code>{attachCmd(next.holder)}</code>
+                <CopyButton text={attachCmd(next.holder)} label="Copy" />
+              </div>
+            </>
+          )}
+          <span className="help">
+            {next.holder ? "To steer the crew" : "The crew builds this project. To steer it"}, talk to the orchestrator:
+          </span>
+          <div className="fo-cmd">
+            <code>{attachCmd("crew-orchestrator")}</code>
+            <CopyButton text={attachCmd("crew-orchestrator")} label="Copy" />
+          </div>
+        </>
       ) : (
         <>
           <div className="fo-cmd">

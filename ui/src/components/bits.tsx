@@ -6,15 +6,18 @@ export function StatusBadge({ status }: { status: string | undefined }) {
   return <span className={`badge ${s}`}>{s}</span>;
 }
 
+/** "22s ago", "5m ago", "3h ago", "2d ago": what TimeAgo shows, as text for a title. */
+export function agoText(ts: string): string {
+  const secs = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
+  if (secs < 60) return `${Math.round(secs)}s ago`;
+  if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
+  return `${Math.round(secs / 86400)}d ago`;
+}
+
 export function TimeAgo({ ts }: { ts: string | null | undefined }) {
   if (!ts) return <span className="dim">—</span>;
-  const secs = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
-  let label: string;
-  if (secs < 60) label = `${Math.round(secs)}s ago`;
-  else if (secs < 3600) label = `${Math.round(secs / 60)}m ago`;
-  else if (secs < 86400) label = `${Math.round(secs / 3600)}h ago`;
-  else label = `${Math.round(secs / 86400)}d ago`;
-  return <span title={new Date(ts).toLocaleString()}>{label}</span>;
+  return <span title={new Date(ts).toLocaleString()}>{agoText(ts)}</span>;
 }
 
 /** Fetch on mount and refetch on an interval; pause when the tab is hidden. */
@@ -70,6 +73,32 @@ export function ErrorState({ error, what, onRetry }: {
 /** "There is genuinely nothing here" — only ever rendered when the load SUCCEEDED. */
 export function EmptyState({ children }: { children: React.ReactNode }) {
   return <div className="empty">{children}</div>;
+}
+
+/** A button that copies `text` and says "Copied" for a moment. `what` names the text for a
+ *  screen reader ("Copy the address", then "Copied the address"). Keep the text itself on screen
+ *  next to it: when the clipboard is refused, the person selects it by hand. Both words sit in
+ *  the button, one hidden, so it is as wide as the longer one and the box beside it never moves. */
+export function CopyButton({ text, label = "Copy", what, primary, title, className }: {
+  text: string; label?: string; what?: string; primary?: boolean; title?: string; className?: string;
+}) {
+  const [done, setDone] = useState(false);
+  const timer = useRef<number>();
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text); } catch { return; /* the text stays selectable next to the button */ }
+    setDone(true);
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setDone(false), 1800);
+  };
+  const cls = ["copy-btn", primary ? "primary" : "", className ?? ""].filter(Boolean).join(" ");
+  return (
+    <button type="button" className={cls} title={title} onClick={copy}
+            aria-label={what ? `${done ? "Copied" : "Copy"} ${what}` : undefined}>
+      <span className={done ? "copy-off" : undefined}>{label}</span>
+      <span className={done ? undefined : "copy-off"}>Copied</span>
+    </button>
+  );
 }
 
 /** Bytes as a human size, binary units ("2.4 GiB"). Null/undefined is *unknown*, not zero — the

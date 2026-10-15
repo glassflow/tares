@@ -89,8 +89,8 @@ same questions come as numbered prompts. The Crew page
 (http://127.0.0.1:8787/crew) lists the crew as it starts.
 
 `crew up` also starts the watch in the background, which brings back any station that stops (Claude
-Code stops idle sessions after about an hour); its log is `~/factory/watch.log`, and `crew down`
-stops it. `tares factory doctor` checks everything the crew needs.
+Code stops idle sessions after about an hour) and gives a station a permission you allowed in
+Tares; its log is `~/factory/watch.log`, and `crew down` stops it. `tares factory doctor` checks everything the crew needs.
 
 ## 3. Plan a project
 
@@ -139,6 +139,15 @@ When it is done, the session asks you whether the project is finished and keeps 
 
 - **Crew page:** who is on the crew, what each member is doing, the projects it holds. Click a
   member for its tickets and its last lines.
+- **What it spends:** the Crew page shows how much of your Claude plan is left (the 5-hour and
+  weekly limits, with when each resets) and which projects used the current 5-hour window. Each
+  station shows how near it is to compacting; click it and **Read it** for its context window by
+  category, as `/context` shows it. Settings, Usage has tokens and an estimated API cost per
+  project for the last week. The readings come from the crew's machine: each station's status
+  line after every reply, `/usage` every 10 minutes from the watch (`FACTORY_PLAN_EVERY` seconds
+  changes it, 0 stops it), and `/context` when you ask. None of them makes a model call. You can
+  read them yourself with `tares factory plan` and `tares factory context <station>`. The plan's
+  limits are there on a Pro or Max login only; with an API key there are tokens and cost.
 - **Project page:** the repos, the milestones and tickets with their stage, pull request and
   verdict, the reviews, assumptions and decisions.
 - **Questions for you** reach the orchestrator's session, one at a time, with a recommendation.
@@ -150,6 +159,13 @@ When it is done, the session asks you whether the project is finished and keeps 
 
   Your answer is kept on Tares in your own words. Say it holds from now on, and it becomes a
   standing grant.
+- **A permission a station was refused** comes to the desk with the station and the exact
+  command. Allow it on the project page or the Crew page: check the sentence that becomes the
+  grant, choose this project or every project (a crew station such as the reviewer works for
+  every project, so its grant is for every project), and click **Allow for <station>**. The
+  crew's watch restarts that station with the permission once it is between turns, in the same
+  conversation, and it runs the command again. No terminal needed. A station you have open with
+  `crew attach` waits until you leave it.
 
 ## When a project is done
 

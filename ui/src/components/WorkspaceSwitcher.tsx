@@ -102,7 +102,10 @@ export default function WorkspaceSwitcher({ cloud }: { cloud: Cloud }) {
            if (open && to && !wrap.current?.contains(to)) setOpen(false);
          }}>
       <button ref={btn} type="button" className="ws-switch" aria-haspopup="true" aria-expanded={open}
-              aria-controls={open ? "ws-pop" : undefined} title="Switch workspace" onClick={toggle}>
+              aria-controls={open ? "ws-pop" : undefined} title={`In ${slug}. Switch workspace`} onClick={toggle}>
+        {/* the collapsed sidebar shows only the workspace's first letter; the name stays for screen readers
+            and is in the tooltip */}
+        <span className="ws-initial" aria-hidden="true">{slug.charAt(0).toUpperCase()}</span>
         <span className="ws-name">{slug}</span>
         <ChevronRight className="ico ws-chev" />
       </button>

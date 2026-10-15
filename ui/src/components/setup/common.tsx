@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ApiError } from "../../api";
+import { CopyButton } from "../bits";
 
-// Pieces the goal-first setup steps share: the stepper, copy buttons, switches, number steppers
+// Pieces the goal-first setup steps share: the stepper, copy lines, switches, number steppers
 // and the SKILL.md reader for skills added before the project exists.
 
 export type FlowStep = "goal" | "plan" | "connect" | "try";
@@ -28,24 +29,6 @@ export function Stepper({ at }: { at: FlowStep }) {
         );
       })}
     </ol>
-  );
-}
-
-/** Copies `text`; says so for a moment, out loud too. */
-export function CopyButton({ text, what, className }: { text: string; what: string; className?: string }) {
-  const [done, setDone] = useState(false);
-  const timer = useRef<number>();
-  useEffect(() => () => window.clearTimeout(timer.current), []);
-  return (
-    <button type="button" className={className} aria-label={done ? `Copied ${what}` : `Copy ${what}`}
-            onClick={() => {
-              navigator.clipboard?.writeText(text);
-              setDone(true);
-              window.clearTimeout(timer.current);
-              timer.current = window.setTimeout(() => setDone(false), 1500);
-            }}>
-      {done ? "Copied" : "Copy"}
-    </button>
   );
 }
 

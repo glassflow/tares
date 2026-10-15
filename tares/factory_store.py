@@ -175,6 +175,13 @@ FACTORY_SCHEMA = [
       tickets     JSON,
       decided_at  TIMESTAMPTZ
     )""",
+    # A permission a station was refused: the station and the exact command it ran. An item with a
+    # command is a permission request the person can allow from the console.
+    "ALTER TABLE desk_items ADD COLUMN IF NOT EXISTS station TEXT",
+    "ALTER TABLE desk_items ADD COLUMN IF NOT EXISTS command TEXT",
+    # Where the decision was made: "console" for a permission allowed there (the click is the
+    # consent, there are no typed words to match); NULL for words matched in a session.
+    "ALTER TABLE decisions ADD COLUMN IF NOT EXISTS via TEXT",
     # A factory project handed to the crew at the end of its spec (TR-425): when, from where.
     """CREATE TABLE IF NOT EXISTS handovers (
       project     TEXT PRIMARY KEY,
@@ -719,7 +726,8 @@ class FactoryStore:
 
     # ── the desk (TR-449..452) ────────────────────────────────────────────────
     _DK_COLS = ("id, number, project, question, context, options, recommendation, why, blocks, "
-                "tickets, blocking, asked_by, assumptions, state, reason, created_at, closed_at")
+                "tickets, blocking, asked_by, assumptions, state, reason, created_at, closed_at, station, "
+                "command")
 
     @staticmethod
     def _dk_row(r) -> dict:
@@ -728,20 +736,23 @@ class FactoryStore:
                 "recommendation": r[6], "why": r[7], "blocks": r[8] or "",
                 "tickets": json.loads(r[9]) if r[9] else [], "blocking": bool(r[10]),
                 "asked_by": r[11], "assumptions": json.loads(r[12]) if r[12] else [],
-                "state": r[13], "reason": r[14], "created_at": r[15], "closed_at": r[16]}
+                "state": r[13], "reason": r[14], "created_at": r[15], "closed_at": r[16],
+                "station": r[17], "command": r[18]}
 
     def add_desk_item(self, project: str | None, question: str, context: str, options: list[str],
                       recommendation: str, why: str, blocks: str, tickets: list[str],
-                      blocking: bool, asked_by: str, assumptions: list[str], at) -> dict:
+                      blocking: bool, asked_by: str, assumptions: list[str], at,
+                      station: str | None = None, command: str | None = None) -> dict:
         did = "dk_" + uuid.uuid4().hex[:10]
         with self._lock:
             n = (self.con.execute("SELECT max(number) FROM desk_items").fetchone()[0] or 0) + 1
             self.con.execute(
                 f"INSERT INTO desk_items ({self._DK_COLS}) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, NULL)",
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, NULL, ?, ?)",
                 [did, n, project, question, context or None, json.dumps(options or []),
                  recommendation, why, blocks or None, json.dumps(tickets or []), blocking,
-                 asked_by or None, json.dumps(assumptions or []), at])
+                 asked_by or None, json.dumps(assumptions or []), at, station or None,
+                 command or None])
         return self.get_desk_item(did)
 
     def get_desk_item(self, ref: str) -> dict | None:
@@ -768,22 +779,22 @@ class FactoryStore:
 
     def add_decision(self, project: str | None, desk_item: str, question: str, words: str,
                      choice: str, standing: bool, scope: str, matched: bool, session: str | None,
-                     granted: bool, tickets: list[str], at) -> dict:
+                     granted: bool, tickets: list[str], at, via: str | None = None) -> dict:
         did = "dc_" + uuid.uuid4().hex[:10]
         with self._lock:
             self.con.execute(
                 "INSERT INTO decisions (id, project, desk_item, question, words, choice, standing, "
-                "scope, matched, session, granted, tickets, decided_at) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "scope, matched, session, granted, tickets, decided_at, via) VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [did, project, desk_item, question, words, choice or None, standing, scope,
-                 matched, session, granted, json.dumps(tickets or []), at])
+                 matched, session, granted, json.dumps(tickets or []), at, via])
         return next(d for d in self.list_decisions(project, all_=True) if d["id"] == did)
 
     def list_decisions(self, project: str | None, all_: bool = False) -> list[dict]:
         """A project's decisions, newest first; with `all_`, the cell-wide ones (asked with no
         project) too. `project` None: every decision on the cell."""
         q = ("SELECT d.id, d.project, d.desk_item, d.question, d.words, d.choice, d.standing, "
-             "d.scope, d.matched, d.session, d.granted, d.tickets, d.decided_at, k.number FROM "
+             "d.scope, d.matched, d.session, d.granted, d.tickets, d.decided_at, k.number, d.via FROM "
              "decisions d LEFT JOIN desk_items k ON k.id = d.desk_item")
         vals: list = []
         if project and not all_:
@@ -796,7 +807,7 @@ class FactoryStore:
                  "choice": r[5], "standing": bool(r[6]), "scope": r[7], "matched": bool(r[8]),
                  "session": r[9], "granted": bool(r[10]),
                  "tickets": json.loads(r[11]) if r[11] else [], "at": r[12],
-                 "label": f"D{r[13]}" if r[13] else None} for r in rows]
+                 "label": f"D{r[13]}" if r[13] else None, "via": r[14]} for r in rows]
 
     def person_turns(self, source: str, sessions: list[str] | None, since) -> list[dict]:
         """What a person typed (user turns that are not tool results, not a subagent's) in

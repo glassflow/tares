@@ -21,8 +21,9 @@ MODEL_PRICING = [
     ("claude-sonnet-", 3.0, 15.0),
     ("claude-haiku-", 1.0, 5.0),
 ]
-# Cache write bills at 1.25x the input rate, cache read at 0.10x.
+# Cache write bills at 1.25x the input rate (2x for a write kept an hour), cache read at 0.10x.
 CACHE_WRITE_MULT = 1.25
+CACHE_WRITE_1H_MULT = 2.0
 CACHE_READ_MULT = 0.10
 
 # OpenAI: (prefix, USD per Mtok input, USD per Mtok output, cached-input multiplier).
@@ -61,15 +62,20 @@ def openai_price_for(model: str) -> tuple[float, float, float] | None:
 
 def cost_usd(model: str, input_tokens: int, output_tokens: int,
              cache_creation_input_tokens: int = 0,
-             cache_read_input_tokens: int = 0) -> float | None:
-    """USD cost of summed Anthropic-format usage, or None when the model is unpriced."""
+             cache_read_input_tokens: int = 0,
+             cache_creation_1h_input_tokens: int = 0) -> float | None:
+    """USD cost of summed Anthropic-format usage, or None when the model is unpriced.
+    `cache_creation_1h_input_tokens` is the part of the cache writes kept for an hour (Claude
+    Code's default on a subscription), which bills at the higher rate."""
     p = price_for(model)
     if p is None:
         return None
     p_in, p_out = p
+    hour = min(max(int(cache_creation_1h_input_tokens or 0), 0), int(cache_creation_input_tokens or 0))
     return (input_tokens * p_in
             + output_tokens * p_out
-            + cache_creation_input_tokens * p_in * CACHE_WRITE_MULT
+            + (cache_creation_input_tokens - hour) * p_in * CACHE_WRITE_MULT
+            + hour * p_in * CACHE_WRITE_1H_MULT
             + cache_read_input_tokens * p_in * CACHE_READ_MULT) / 1e6
 
 

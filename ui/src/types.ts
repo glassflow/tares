@@ -405,10 +405,14 @@ export interface DeskItem {
   context: string; options: string[]; recommendation: string; why: string; blocks: string;
   tickets: string[]; blocking: boolean; asked_by: string | null; assumptions: string[];
   state: "open" | "answered" | "withdrawn"; reason: string | null; created_at: string; closed_at: string | null;
+  // a permission request: the station that was refused and the exact command
+  station: string | null; command: string | null;
 }
+export interface DeskAllowed { desk_item: DeskItem; decision: Decision; station: string; line: string; added: boolean; scope: "project" | "all" }
 export interface Decision {
   id: string; label: string | null; question: string; words: string; choice: string | null;
   standing: boolean; scope: "project" | "all"; matched: boolean; granted: boolean; tickets: string[]; at: string;
+  via: "console" | null;   // "console": a permission allowed there, with no typed words to match
 }
 export interface QueueItem { project: string; project_name: string; ticket: string; title: string; holder: string | null; repo: string | null; pr: string | null; head: string | null; waiting_minutes: number | null; blocks_milestone: boolean; layer1_clean: boolean; verdict: VerdictNow | null }
 export interface RuleProposal { id: string; repo: string; kind: string; project: string | null; scope: "project" | "all"; text: string; tickets: string[]; state: "open" | "accepted" | "rejected"; created_at: string }
@@ -464,6 +468,47 @@ export interface CrewStation {
   lines: number;
   earlier: { session: string; started_at: string | null; last_at: string | null; lines: number; state: "replaced" }[];
   children: string[];
+  /** the context window from the station's status line, null before it reported */
+  context: StationContext | null;
+  /** what all the station's sessions spent, null before any reply */
+  usage: UsageTotals | null;
+}
+// What Claude Code sessions spend (tares/claude_usage.py)
+export interface StationContext {
+  used: number | null; size: number; pct: number | null;
+  /** where the station compacts when started with --autocompact below its window, and how near it is */
+  compact_at: number | null; compact_pct: number | null;
+  model: string | null; cost_usd: number | null; at: string | null;
+}
+export interface UsageTotals {
+  replies: number; input_tokens: number; output_tokens: number; cache_write_tokens: number;
+  cache_read_tokens: number; cost_usd: number; unpriced_replies: number;
+}
+/** A /context reading of a session: the window by category */
+export interface ContextReading {
+  model: string | null; total_tokens: number | null; max_tokens: number | null; percentage: number | null;
+  categories: { name: string; tokens: number; kind: "used" | "deferred" | "buffer" | "free" | string | null }[];
+  mcp_servers: { name: string; tools: number; tokens: number }[];
+  memory_files: { path: string | null; type: string | null; tokens: number }[];
+  skills: { count: number; tokens: number; largest: { name: string | null; tokens: number }[] };
+  agents: { count: number; tokens: number };
+}
+export interface PlanLimit {
+  kind: string; label: string; percent: number; resets_at: string | null; severity: string | null;
+  active: boolean; at: string | null; from: "usage" | "status line"; reset: boolean;
+}
+export interface ClaudePlan {
+  limits: PlanLimit[];
+  extra_usage: { is_enabled: boolean | null; monthly_limit: number | null; used_credits: number | null; utilization: number | null; currency: string | null } | null;
+  at: string | null;
+}
+export interface ProjectUsage extends UsageTotals {
+  project: string | null; kind: "project" | "crew" | "other"; name: string; sessions: number; share: number | null;
+}
+export interface ClaudeCodeUsage {
+  plan: ClaudePlan | null;
+  window: { since: string; until: string | null; projects: ProjectUsage[] };
+  days: number; projects: ProjectUsage[]; now: string;
 }
 export interface CrewSettings {
   autonomy: "L3-review" | "L4-ship" | null;
@@ -496,11 +541,15 @@ export interface CrewProject {
   handed_over_at: string | null; handed_over_by: string | null;
   tickets_done: number; tickets_total: number; stages: Record<string, number>;
   milestone: { name: string; done: number; total: number } | null;
+  progress?: TicketProgress;           // the tickets as the ring counts them (canceled kept out)
 }
 export interface StationDetail extends CrewStation {
   tickets: { project: string; project_name: string; ticket: string; title: string; stage: string | null; repo: string | null; pr: string | null }[];
   recent: { at: string | null; type: string | null; text: string }[];
   attach: string;
+  context_detail: ContextReading | null;
+  context_at: string | null;
+  context_asked_at: string | null;
 }
 export interface LinearLink {
   id: string; name: string; url: string;
@@ -742,7 +791,11 @@ export interface Project {
   default?: boolean;   // the Default project: holds whatever was made outside a project; never deleted
   goal?: string | null; // what the project should achieve, one line (<= 200 chars); null = not set yet
   kind?: "software_factory" | null;   // its own page and tag; null = an ordinary project
+  progress?: TicketProgress;           // a software factory project's tickets (GET /api/projects only)
 }
+// a software factory project's tickets as its progress ring shows them (tares/factory.py
+// `progress`): total is done + doing + blocked + todo; canceled ones stay out of it
+export interface TicketProgress { done: number; doing: number; blocked: number; todo: number; canceled: number; total: number }
 
 // ── the goal-first project page (contract: goal-first-contract.md, "Backend") ──
 

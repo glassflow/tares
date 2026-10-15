@@ -11,11 +11,12 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from fastapi import Body, Request
 
+from . import claude_usage
 from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
@@ -172,6 +173,28 @@ def pr_note(t: dict) -> str | None:
     return None
 
 
+def project_progress(store, uid: str) -> dict:
+    """Tickets done of all, by stage, and the first milestone with work left: what the crew's
+    project list shows (canceled tickets count as done here), and `progress`, the same tickets
+    as the console's ring counts them (canceled kept out, tares/factory.py `progress`)."""
+    tickets = store.list_tickets(uid)
+    done = [t for t in tickets if (t["stage"] in ("merged", "shipped")
+                                   or t["status"] in factory_mod.DONE_STATUSES)]
+    stages: dict[str, int] = {}
+    for t in tickets:
+        k = t["stage"] or ("done" if t in done else "todo")
+        stages[k] = stages.get(k, 0) + 1
+    current = None
+    for m in store.list_milestones(uid):
+        mine = [t for t in tickets if t["milestone"] == m["id"]]
+        if any(t not in done for t in mine):
+            current = {"name": m["name"], "done": sum(t in done for t in mine),
+                       "total": len(mine)}
+            break
+    return {"tickets_done": len(done), "tickets_total": len(tickets), "stages": stages,
+            "milestone": current, "progress": factory_mod.progress(tickets)}
+
+
 def register(app, store, h: SimpleNamespace) -> None:
     """`h` carries the daemon's helpers: err(exc, code), project_or_404(uid), by(request, body),
     cc_source(), global_ids(create)."""
@@ -326,8 +349,15 @@ def register(app, store, h: SimpleNamespace) -> None:
                         "session": cur["session"], "started_at": cur["started_at"],
                         "last_at": cur["last_at"], "lines": cur["lines"], "earlier": earlier,
                         "projects": sorted({s["project"] for s in ss if s["project"]})})
+        meters = store.session_meters([st["session"] for st in out])
+        spent = store.usage_by_session([s["session"] for s in rows])
         for st in out:
             st["children"] = sorted(x["name"] for x in out if x["parent"] == st["name"])
+            # the context window from the station's status line, and what all its sessions spent
+            st["context"] = claude_usage.context_now(meters.get(st["session"]))
+            mine = [spent[s] for s in [st["session"], *(e["session"] for e in st["earlier"])]
+                    if s in spent]
+            st["usage"] = ({k: sum(x[k] for x in mine) for k in mine[0]} if mine else None)
         if project:
             out = [s for s in out if project in s["projects"]]
         order = {r: i for i, r in enumerate(factory_mod.ROLES)}
@@ -353,7 +383,7 @@ def register(app, store, h: SimpleNamespace) -> None:
             if uid not in names:
                 continue
             ho = store.get_handover(uid) or {}
-            out.append({"id": uid, "name": names[uid], **project_progress(uid),
+            out.append({"id": uid, "name": names[uid], **project_progress(store, uid),
                         "repos": repo_rows(uid, ho.get("repos") or []),
                         "autonomy": ho.get("autonomy"), "handed_over_at": ho.get("at"),
                         "handed_over_by": ho.get("by")})
@@ -362,7 +392,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         for uid in store.handed_over_projects(finished=True):
             if uid in names:
                 ho = store.get_handover(uid) or {}
-                done.append({"id": uid, "name": names[uid], **project_progress(uid),
+                done.append({"id": uid, "name": names[uid], **project_progress(store, uid),
                              "finished": ho.get("finished")})
         done.sort(key=lambda p: str((p["finished"] or {}).get("at") or ""), reverse=True)
         releasing = []
@@ -393,11 +423,38 @@ def register(app, store, h: SimpleNamespace) -> None:
         n = min(max(recent, 0), 200)
         lines = store.key_events(h.cc_source(), st["session"], limit=n,
                                  offset=max((st["lines"] or 0) - n, 0)) if n else []
-        role_name = name[len("crew-"):] if name.startswith("crew-") else name
+        m = store.session_meters([st["session"]]).get(st["session"]) or {}
         return {**st, "tickets": held,
+                "context_detail": m.get("context"), "context_at": m.get("context_at"),
+                "context_asked_at": m.get("context_asked_at"),
                 "recent": [{"at": x.get("event_time"), "type": x.get("event_type"),
                             "text": str(x.get("text") or "")[:600]} for x in lines],
-                "attach": f"tares factory crew attach {role_name}"}
+                "attach": factory_mod.attach_command(name)}
+
+    # ── a station's context by category: asked from the console, read on the crew's machine ──
+    ASK_TTL = 15   # minutes an unanswered ask stays open; the watch reads on the crew's machine
+
+    @app.post("/api/crew/{name}/context")
+    async def ask_station_context(name: str):
+        """Ask for a new /context reading of the station's session. The factory watch on the
+        crew's machine reads it (no model call) within a few seconds, if it runs."""
+        st = next((s for s in stations() if s["name"] == name), None)
+        if st is None:
+            h.err(KeyError(f"no station {name!r} has reported to Tares"), 404)
+        at = now_utc()
+        store.ask_session_context(st["session"], at)
+        return {"session": st["session"], "asked_at": at}
+
+    @app.get("/api/crew/context/asks")
+    async def station_context_asks():
+        """The stations someone asked a /context reading of that has not come in yet, for
+        `factory crew watch`."""
+        out = []
+        for x in store.context_asks(now_utc() - timedelta(minutes=ASK_TTL)):
+            st = store.session_station(x)
+            if st:
+                out.append({"station": st["station"], "session": x})
+        return {"asks": out}
 
     # ── the crew on a project, and the hand-over (TR-422, TR-425) ─────────────
     @app.get("/api/projects/{uid}/crew")
@@ -872,13 +929,16 @@ def register(app, store, h: SimpleNamespace) -> None:
     @app.post("/api/desk", status_code=201)
     async def desk_add(request: Request, body: dict = Body(...)):
         """{question, recommendation, why, options?, context?, blocks?, tickets?, blocking?,
-        assumptions?, project?}: a question for the person, numbered D1, D2... for the whole
-        cell. Only the orchestrator (or a person's own session) writes the desk."""
+        assumptions?, project?, station?, command?}: a question for the person, numbered D1,
+        D2... for the whole cell. With `command` (and the `station` that was refused it) it is a
+        permission request, which the person can allow from the console. Only the orchestrator
+        (or a person's own session) writes the desk."""
         deny(request, "desk")
         try:
-            q, rec, why, opts, ctx = factory_mod.desk_ok(
+            q, rec, why, opts, ctx, station, command = factory_mod.desk_ok(
                 body.get("question"), body.get("recommendation"), body.get("why"),
-                body.get("options"), body.get("context"))
+                body.get("options"), body.get("context"), body.get("station"),
+                body.get("command"))
         except docs_mod.DocError as e:
             h.err(e)
         uid = None
@@ -898,7 +958,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         d = store.add_desk_item(uid, q, ctx, opts, rec, why,
                                 " ".join(str(body.get("blocks") or "").split())[:300], tickets,
                                 bool(body.get("blocking")), str(body.get("asked_by") or by)[:120],
-                                asm, now_utc())
+                                asm, now_utc(), station, command)
         return desk_out(d)
 
     @app.get("/api/desk")
@@ -1041,6 +1101,50 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "matched": True, "recorded": True, "granted": granted, "assumptions": changed,
                 "follow_up": follow, "unheard": []}
 
+    @app.post("/api/desk/{ref}/allow")
+    async def desk_allow(ref: str, request: Request, body: dict = Body(...)):
+        """{words, scope: project|all}: the person allows a permission request (a desk item with
+        a command) from the console. `words` is the grant as they let it stand (the console
+        offers a sentence naming the station and the command; they may edit it). It is kept as a
+        grant, for the item's project or for every project, and recorded as their decision made
+        in the console; the item is answered. The crew's watch restarts the station with it. A
+        person decides: refused from any crew station."""
+        if caller(request)["station"]:
+            h.err(PermissionError("a permission is the person's to allow: they allow it in the "
+                                  "console"), 403)
+        d = desk_or_404(ref)
+        if d["state"] != "open":
+            h.err(ValueError(f"{d['label']} is already {d['state']}"), 409)
+        if not d.get("command"):
+            h.err(ValueError(f"{d['label']} is a question, not a permission request: answer it "
+                             "in the orchestrator's session"), 409)
+        scope = str(body.get("scope") or "").strip().lower()
+        if scope not in ("project", "all"):
+            h.err(ValueError("scope is project or all"))
+        if scope == "project" and not d["project"]:
+            h.err(ValueError(f"{d['label']} has no project: allow it for every project"))
+        # A crew station (crew-reviewer, crew-releaser and their helpers) serves every project and
+        # starts with only the grants for every project: one kept for a project never reaches it.
+        if scope == "project" and str(d["station"] or "").startswith("crew-"):
+            h.err(ValueError(f"{d['station']} works for every project, so a grant for one project "
+                             "never reaches it: allow it for every project"))
+        if scope == "project" and store.get_project(d["project"]) is None:
+            h.err(ValueError("the project this was asked for is gone; allow it for every "
+                             "project"), 409)
+        words = " ".join(str(body.get("words") or "").split()).strip().strip('"')
+        try:
+            line = factory_mod.grant_line(words, now_utc().date().isoformat())
+        except docs_mod.DocError as e:
+            h.err(e)
+        added = append_grant(d["project"] if scope == "project" else None, line,
+                             "the person, in the console")
+        dec = store.add_decision(d["project"], d["id"], d["question"], words, "allowed", True,
+                                 scope, False, None, True, d["tickets"], now_utc(),
+                                 via="console")
+        store.close_desk_item(d["id"], "answered", None, now_utc())
+        return {"desk_item": desk_out(desk_or_404(d["id"])), "decision": dec,
+                "station": d["station"], "line": line, "added": added, "scope": scope}
+
     @app.get("/api/projects/{uid}/decisions")
     async def project_decisions(uid: str):
         """The person's answers on this project, newest first."""
@@ -1122,25 +1226,6 @@ def register(app, store, h: SimpleNamespace) -> None:
             store.release_takeover(uid, at)
         return {"project": uid, "name": p["name"],
                 "takeover": store.get_handover(uid)["takeover"]}
-
-    def project_progress(uid: str) -> dict:
-        """Tickets done of all, by stage, and the first milestone with work left."""
-        tickets = store.list_tickets(uid)
-        done = [t for t in tickets if (t["stage"] in ("merged", "shipped")
-                                       or t["status"] in factory_mod.DONE_STATUSES)]
-        stages: dict[str, int] = {}
-        for t in tickets:
-            k = t["stage"] or ("done" if t in done else "todo")
-            stages[k] = stages.get(k, 0) + 1
-        current = None
-        for m in store.list_milestones(uid):
-            mine = [t for t in tickets if t["milestone"] == m["id"]]
-            if any(t not in done for t in mine):
-                current = {"name": m["name"], "done": sum(t in done for t in mine),
-                           "total": len(mine)}
-                break
-        return {"tickets_done": len(done), "tickets_total": len(tickets), "stages": stages,
-                "milestone": current}
 
     def pr_row(t: dict) -> dict:
         """A ticket's pull request as the GitHub section shows it: what GitHub said when Tares last

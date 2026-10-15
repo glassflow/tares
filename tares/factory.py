@@ -214,6 +214,26 @@ def readiness(tickets: list[dict]) -> dict[str, dict]:
     return out
 
 
+def progress(tickets: list[dict]) -> dict:
+    """{done, doing, blocked, todo, canceled, total}: a project's tickets as its progress ring
+    shows them. Done goes by the stage as much as the status: a Linear ticket keeps Linear's
+    status, which can still say in progress after the crew merged it. Blocked is a station's
+    "blocked", or a ticket to do that waits on one not delivered. Canceled ones stay out of the
+    total. The project page counts its ring the same way (ui/src/components/ProgressRing.tsx)."""
+    waits = readiness(tickets)
+    n = {"done": 0, "doing": 0, "blocked": 0, "todo": 0, "canceled": 0}
+    for t in tickets:
+        stage, status = t.get("stage"), t.get("status")
+        k = ("done" if stage in ("merged", "shipped") or status == "done"
+             else "canceled" if status == "canceled"
+             else "blocked" if stage == "blocked"
+             else "doing" if stage in ("doing", "review", "changes") or status == "in_progress"
+             else "blocked" if waits[t["id"]]["blocked_by"]
+             else "todo")
+        n[k] += 1
+    return {**n, "total": n["done"] + n["doing"] + n["blocked"] + n["todo"]}
+
+
 # ── the ledger (M4): who holds a ticket and where it stands ───────────────────
 
 STAGES = ("todo", "doing", "review", "changes", "merged", "shipped", "blocked")
@@ -483,7 +503,13 @@ DESK_STATES = ("open", "answered", "withdrawn")
 MATCH_HOURS = 48       # an answer is looked for in what the person typed this recently
 
 
-def desk_ok(question, recommendation, why, options, context) -> tuple:
+MAX_COMMAND = 2000     # a refused command, kept as the station ran it
+
+
+def desk_ok(question, recommendation, why, options, context, station=None,
+            command=None) -> tuple:
+    """The desk item's fields, cleaned. A permission request also names the station that was
+    refused and the exact command: kept verbatim (only trimmed), since the person allows that."""
     q = _line(question, "the question", 1000)
     rec = _line(recommendation, "your recommendation", 500)
     w = _line(why, "why you recommend it", 1000)
@@ -492,7 +518,13 @@ def desk_ok(question, recommendation, why, options, context) -> tuple:
     if not isinstance(options, list) or len(options) > 8:
         raise DocError("options is a list of up to 8 choices")
     opts = [_line(o, "an option", 300) for o in options]
-    return q, rec, w, opts, _line(context, "the context", 1500, False)
+    st = _line(station, "the station", MAX_NAME, False)
+    cmd = str(command or "").strip()
+    if len(cmd) > MAX_COMMAND:
+        raise DocError(f"the command is {len(cmd)} characters; keep it to {MAX_COMMAND}")
+    if cmd and not st:
+        raise DocError("a permission request names the station that was refused")
+    return q, rec, w, opts, _line(context, "the context", 1500, False), st, cmd
 
 
 def _plain(s: str) -> str:
@@ -569,6 +601,8 @@ def says_every_project(words: str) -> bool:
 # ── the crew (M3): one always-on crew serves every project ────────────────────
 
 ROLES = ("orchestrator", "reviewer", "releaser", "builder", "helper")
+# the always-on stations, named crew-<role>; builders and helpers come and go
+CREW_ROLES = ("orchestrator", "reviewer", "releaser")
 AUTONOMY = {
     "L3-review": "you approve each merge",
     "L4-ship": "a builder merges after the reviewer's pass and green CI",
@@ -587,6 +621,14 @@ def station_ok(name, role, parent) -> tuple[str, str, str]:
     if role and role not in ROLES:
         raise DocError(f"unknown role {role!r}; one of: " + ", ".join(ROLES))
     return name, role, parent
+
+
+def attach_command(station: str) -> str:
+    """The command that opens a station's session in a terminal. The crew's own stations go by
+    their role (`crew-reviewer` is `reviewer`); any other, a helper of one among them
+    (`crew-reviewer-lint`), by its full name, as `factory crew attach` takes them."""
+    role = station[len("crew-"):] if station.startswith("crew-") else ""
+    return f"tares factory crew attach {role if role in CREW_ROLES else station}"
 
 
 CREW_DEFAULTS = {"autonomy": None, "releaser": None, "release_profile": None,

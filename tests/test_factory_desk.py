@@ -5,7 +5,9 @@ orchestrator. The person answers in the orchestrator's session; the answer is ke
 and matched against what they typed there (a paraphrase is "not found"). A standing answer that
 matches becomes a grant; one that does not, never. A batch of assumptions is kept or overturned in
 one answer, an overturned one naming the tickets it touched. Decisions reach the ticket, the
-pick-up and the reviewer's brief.
+pick-up and the reviewer's brief. A permission a station was refused is a desk item with the
+station and the exact command; only the person, in the console, allows it: the grant is kept for
+the project or every project, recorded as a decision made in the console, and the item answered.
 
 Run: .venv/bin/python tests/test_factory_desk.py
 """
@@ -316,6 +318,93 @@ async def main():
         ck("the person's own session finishes it in their words", r.status_code == 200
            and r.json()["finished"]["words"] == "shipped, closing it"
            and r.json()["finished"]["decision"] is None, r.text)
+
+        print("== a permission a station was refused, allowed in the console ==")
+        as_station("crew-orchestrator", "orchestrator")
+        cmd = "gh pr merge 12 --squash  --repo acme/shop"
+        pq = json.loads(await mf.desk_add(
+            "shop-build-m1 was refused a command. Allow it?",
+            "shop-build-m1 may run `gh pr merge 12 --squash` in Shop",
+            "it merges its own pull request once the review passed", blocking=True,
+            project="Shop", station="shop-build-m1", command=f"  {cmd}\n"))
+        ck("a permission request keeps the station and the command as it was refused",
+           pq["station"] == "shop-build-m1" and pq["command"] == cmd, pq)
+        async with mk() as cx:
+            row = next(d for d in (await cx.get(f"/api/desk?project={shop}")).json()["desk"]
+                       if d["label"] == pq["label"])
+        ck("and the desk serves them", row["station"] == "shop-build-m1"
+           and row["command"] == cmd and row["project_name"] == "Shop", row)
+        bad = await mf.desk_add("x?", "y", "z", project="Shop", command="ls")
+        ck("a command needs the station that was refused it", "names the station" in bad, bad)
+        bad = await mf.desk_add("x?", "y", "z", project="Shop", station="s", command="x" * 2001)
+        ck("a command is kept to 2000 characters", "keep it to 2000" in bad, bad)
+        bad = await mf.desk_add("x?", "y", "z", project="Shop", station="s" * 121, command="ls")
+        ck("a station name to 120", "keep it to 120" in bad, bad)
+        plain = json.loads(await mf.desk_add("Dark mode?", "later", "not in the plan",
+                                             project="Shop"))
+        ck("a question is not a permission request", plain["command"] is None, plain)
+        crewq = json.loads(await mf.desk_add(
+            "crew-reviewer was refused a command. Allow it?",
+            "crew-reviewer may run `gh api repos/acme/shop/statuses/abc` in every project",
+            "it sets the review status", station="crew-reviewer",
+            command="gh api repos/acme/shop/statuses/abc -f state=success"))
+
+        async def allow(label, body):
+            async with mk() as cx:
+                return await cx.post(f"/api/desk/{label}/allow", json=body)
+        words = "shop-build-m1 may run `gh pr merge 12 --squash` in Shop"
+        r = await allow(pq["label"], {"words": words, "scope": "project"})
+        ck("the orchestrator cannot allow it", r.status_code == 403 and "console" in r.text, r.text)
+        as_station("shop-build-m1", "builder", "crew-orchestrator")
+        r = await allow(pq["label"], {"words": words, "scope": "project"})
+        ck("nor the station that wants it", r.status_code == 403, r.text)
+        as_station()
+        r = await allow(plain["label"], {"words": "fine", "scope": "project"})
+        ck("an item with no command is answered in the session, not allowed",
+           r.status_code == 409 and "not a permission request" in r.text, r.text)
+        r = await allow(pq["label"], {"words": "  ", "scope": "project"})
+        ck("allowing needs the words of the grant", r.status_code == 400, r.text)
+        r = await allow(pq["label"], {"words": "x" * 401, "scope": "project"})
+        ck("kept to 400 characters, as every grant", r.status_code == 400
+           and "keep it to 400" in r.text, r.text)
+        r = await allow(pq["label"], {"words": words, "scope": "everywhere"})
+        ck("scope is project or all", r.status_code == 400, r.text)
+        r = await allow(crewq["label"], {"words": "x", "scope": "project"})
+        ck("an item with no project is allowed only for every project", r.status_code == 400
+           and "every project" in r.text, r.text)
+        as_station("crew-orchestrator", "orchestrator")
+        crewp = json.loads(await mf.desk_add(
+            "crew-reviewer was refused a command. Allow it?", "crew-reviewer may comment on PR 12",
+            "it reviews Shop's pull request", project="Shop", station="crew-reviewer",
+            command="gh pr comment 12 --body ok"))
+        as_station()
+        r = await allow(crewp["label"], {"words": "crew-reviewer may comment", "scope": "project"})
+        ck("a crew station's grant is for every project, even asked on one (it starts with only "
+           "those)", r.status_code == 400 and "never reaches it" in r.text, r.text)
+        r = await allow(pq["label"], {"words": words, "scope": "project"})
+        out = r.json()
+        ck("the console allows it for the station, with the grant line", r.status_code == 200
+           and out["station"] == "shop-build-m1" and out["added"]
+           and out["line"].startswith(f'"{words}" (20'), r.text)
+        async with mk() as cx:
+            g = (await cx.get("/api/grants", params={"project": shop})).json()
+        ck("into the project's grants", f'"{words}" (20' in g["project"], g)
+        ck("not the grants for every project", words not in g["all"], g)
+        ck("the item is answered", out["desk_item"]["state"] == "answered"
+           and pq["label"] not in [d["label"] for d in json.loads(await mf.desk_list())], out)
+        dec = out["decision"]
+        ck("recorded as the person's decision, made in the console", dec["via"] == "console"
+           and dec["words"] == words and dec["standing"] and dec["granted"]
+           and not dec["matched"] and dec["scope"] == "project" and dec["label"] == pq["label"], dec)
+        dl = json.loads(await mf.list_decisions(project="Shop"))
+        ck("list_decisions says so", dl[0]["label"] == pq["label"] and dl[0]["via"] == "console", dl[0])
+        r = await allow(pq["label"], {"words": words, "scope": "project"})
+        ck("allowing twice is refused", r.status_code == 409 and "already answered" in r.text, r.text)
+        cw = "crew-reviewer may set the review status on this crew's pull requests"
+        r = await allow(crewq["label"], {"words": f'"{cw}"', "scope": "all"})
+        ck("a crew-wide station's grant goes to every project", r.status_code == 200
+           and f'"{cw}" (20' in await mf.read_grants()
+           and r.json()["decision"]["scope"] == "all", r.text)
 
 
 unit()

@@ -148,6 +148,7 @@
   --border-strong: var(--kit-border);
   --wash: color-mix(in srgb, var(--kit-foreground) 6%, transparent);
   --wash-2: color-mix(in srgb, var(--kit-foreground) 10%, transparent);
+  --track: color-mix(in srgb, var(--ink-faint) 40%, transparent);   /* the unfilled part of a ring or meter: reads on any surface, quieter than its fills */
   --code-bg: var(--kit-surface-secondary);
   --slate: var(--blue-500); /* structural tags (push mode, kind) */
   --slate-soft: color-mix(in srgb, var(--blue-500) 10%, var(--kit-surface));
@@ -202,6 +203,7 @@
   --border-strong: var(--kit-dark-separator);
   --wash: color-mix(in srgb, var(--kit-snow) 7%, transparent);
   --wash-2: color-mix(in srgb, var(--kit-snow) 11%, transparent);
+  --track: color-mix(in srgb, var(--ink-faint) 55%, transparent);
   --code-bg: var(--kit-dark-background);
   --slate: var(--blue-300);
   --slate-soft: color-mix(in srgb, var(--blue-300) 14%, var(--kit-dark-background));
@@ -397,6 +399,51 @@ button.ws-switch[aria-expanded="true"] .ws-chev { transform: rotate(-90deg); }
 .sidebar .foot a:hover { color: var(--ink); }
 .sidebar .foot .ico { width: 15px; height: 15px; }
 
+/* Folding the sidebar: the last row above the footer, and the 56px rail it leaves. A folded row
+   is its icon alone, centred; its name stays in the DOM at no width for screen readers and is
+   the row's tooltip. */
+.ws-initial { display: none; }
+button.side-toggle { color: var(--ink-faint); }
+button.side-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.sidebar.collapsed { width: 56px; padding-left: 8px; padding-right: 8px; overflow-x: hidden; }
+.sidebar.collapsed .brand { justify-content: center; margin-left: 0; margin-right: 0; }
+.sidebar.collapsed .brand-word { display: none; }
+.sidebar.collapsed .nav-section { display: none; }
+/* the section headings are gone: a hairline keeps the groups apart */
+.sidebar.collapsed .nav-group + .nav-group { border-top: 1px solid var(--line); padding-top: 6px; margin-top: 2px; }
+.sidebar.collapsed .sep { margin-left: 0; margin-right: 0; }
+.sidebar.collapsed .navlink,
+.sidebar.collapsed .navbtn { position: relative; justify-content: center; padding-left: 0; padding-right: 0; }
+/* without the bold name, the current page needs more than its tint to outweigh a hovered row */
+.sidebar.collapsed .navlink.active { box-shadow: inset 2px 0 0 var(--accent); }
+.sidebar.collapsed .navlink.active:hover { background: var(--accent-soft); color: var(--accent-deep); }
+/* the name keeps its line in the row, at no width, so a row is as tall folded as open and the
+   rows at the bottom (the fold button among them) stay where they were */
+.sidebar.collapsed .navlink,
+.sidebar.collapsed .navbtn,
+.sidebar.collapsed .foot { gap: 0; }
+.sidebar.collapsed .nav-label,
+.sidebar.collapsed .foot > span { width: 0; overflow: hidden; white-space: nowrap; flex: none; }
+.sidebar.collapsed .ws-name {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; flex: none;
+}
+.sidebar.collapsed .nav-kbd,
+.sidebar.collapsed .nav-lock,
+.sidebar.collapsed .who { display: none; }
+/* a badge becomes a dot on the icon; its word stays for screen readers and in the tooltip */
+.sidebar.collapsed .nav-badge {
+  position: absolute; top: 4px; left: calc(50% + 5px);
+  width: 6px; height: 6px; padding: 0; overflow: hidden; font-size: 0; color: transparent;
+  background: var(--slate);
+}
+.sidebar.collapsed a.navlink[href^="http"] .nav-badge { display: none; }   /* the ↗ on Workspace: its icon and tooltip say it leaves */
+.sidebar.collapsed button.ws-switch { justify-content: center; padding-left: 0; padding-right: 0; }
+.sidebar.collapsed .ws-chev { display: none; }
+.sidebar.collapsed .ws-initial { display: inline; font-weight: 600; }
+.sidebar.collapsed .foot { justify-content: center; padding-left: 0; padding-right: 0; }
+
 .content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .main { flex: 1; padding: 24px 36px 64px; max-width: 1600px; }
 
@@ -545,6 +592,11 @@ button, .btn {
 button:hover, .btn:hover { border-color: var(--accent); color: var(--accent-deep); }
 button.primary, .btn.primary { background: var(--btn-primary-bg); border-color: var(--btn-primary-bg); color: var(--btn-primary-ink); font-weight: 600; }
 button.primary:hover, .btn.primary:hover { background: var(--btn-primary-bg-hover); border-color: var(--btn-primary-bg-hover); color: var(--btn-primary-ink); }
+/* CopyButton: its label and "Copied" share one grid cell, the idle one hidden, so the button
+   keeps its width when it says "Copied" */
+button.copy-btn { display: inline-grid; place-items: center; }
+button.copy-btn > span { grid-area: 1 / 1; }
+button.copy-btn > .copy-off { visibility: hidden; }
 button.danger, .btn.danger { color: var(--err); border-color: var(--danger-border); }
 button.danger:hover, .btn.danger:hover { background: var(--err-soft); color: var(--err); }
 button:disabled { opacity: 0.45; cursor: default; }
@@ -1911,6 +1963,20 @@ pre.payload {
    tickets and sessions folded ── */
 .fo-name { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .fo-tag { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink); background: var(--accent-soft); border: 1px solid var(--accent); padding: 3px 8px; }
+/* the tag and its ring stay together; the ring's slot is held while tickets load, so it never moves the page */
+.fo-name-tag { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 10px; white-space: nowrap; }
+/* the tickets' progress ring (ProgressRing.tsx): done, in progress, blocked, to do clockwise from
+   the top; the one round mark here, kept small and thin. On the Projects list with "3/8" beside
+   it; on the project page alone next to the tag. */
+.fo-ring { flex: none; display: inline-block; vertical-align: middle; }
+.fo-ring-slot { flex: none; width: 16px; height: 16px; }   /* the page's ring before the tickets load */
+.fo-ring-done { stroke: var(--ok); }
+.fo-ring-doing { stroke: var(--accent); }
+.fo-ring-blocked { stroke: var(--err); }
+.fo-ring-todo { stroke: var(--track); }
+.fo-ring-count { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; vertical-align: middle; font-family: var(--mono); font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.fo-ring-cell { white-space: nowrap; }
+@media (max-width: 900px) { .fo-ring-cell { white-space: normal; } }   /* a narrow list lets the ring go under the badge */
 .fo-linear { font-size: 14px; color: var(--ink); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .fo-linear a { display: inline-flex; }.fo-linear a { font-weight: 600; }
 .fo-label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
@@ -1926,12 +1992,13 @@ pre.payload {
 .fo-steps li.is-now b i { background: var(--accent); border-color: var(--accent-deep); }
 .fo-progress { display: flex; flex-direction: column; gap: 8px; }
 .fo-progress-row { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 14px; }
-.fo-counts { display: flex; gap: 16px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.fo-counts { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--ink-soft); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .fo-counts b { color: var(--ink); }
 .fo-bar { display: flex; gap: 3px; }
 .fo-bar i { flex: 1; height: 10px; background: var(--bg); border: 1px solid var(--line); }
 .fo-bar i.done { background: var(--ok); border-color: var(--ok); }
 .fo-bar i.run { background: var(--accent); border-color: var(--accent); }
+.fo-bar i.blocked { background: var(--err); border-color: var(--err); }
 .fo-next { border: 2px solid var(--accent); background: var(--panel); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
 .fo-next h2 { margin: 0; font-size: 20px; }
 .fo-next-empty { border-width: 1px; border-color: var(--line); }
@@ -1967,7 +2034,7 @@ pre.payload {
 .fo-foot { padding: 10px 16px; }
 @media (max-width: 900px) { .fo-cols { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 640px) { .fo-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } .fo-steps li:nth-child(2) { border-right: 0; } .fo-steps li:nth-child(-n+2) { border-bottom: 1px solid var(--line); } }
-@media (prefers-reduced-motion: reduce) { .fo-fold-h::before { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .fo-fold-h::before, .crew-builders-count::before, .crew-subfold-h::before, .cc-loaded > summary::before { transition: none; } }
 .main .fo-steps, .main .fo-docs, .main .fo-tickets { margin: 0; padding: 0; list-style: none; }
 /* a build that stopped: the session waits for the person, or has gone quiet */
 .fo-attn { border: 1px solid var(--warn); background: var(--warn-soft); padding: 14px 18px; display: flex; flex-direction: column; gap: 8px; }
@@ -1975,6 +2042,13 @@ pre.payload {
 .fo-attn h2 { margin: 0; font-size: 17px; }
 .fo-said { margin: 0; white-space: pre-wrap; font-size: 14px; border-left: 3px solid var(--warn); padding-left: 12px; max-width: 90ch; max-height: 220px; overflow: auto; }
 .fo-sess { display: inline-flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+/* a crew station's row: when it last spoke, and its attach command to copy; in a narrow column
+   they drop below the name */
+.fo-docs li.fo-crew-row { flex-wrap: wrap; row-gap: 4px; }
+.fo-row-end { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px 10px; margin-left: auto; }
+button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
+/* the session view of a crew station: the command that opens it in a terminal */
+.fo-attach { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
 .fo-st-wait { color: var(--accent-deep); border-color: var(--accent-deep); background: var(--accent-soft); }
 .fo-st-quiet { color: var(--err); border-color: var(--err); }
 /* a fold's pin: a pinned section is open on every visit and does not fold */
@@ -2028,6 +2102,13 @@ pre.payload {
 .tk-msgs pre { white-space: pre-wrap; font-size: 12px; margin: 6px 0 0; }
 .main .crew-desk { list-style: none; margin: 4px 0 8px; padding: 0; }
 .crew-desk li { padding: 6px 0; border-top: 1px solid var(--line); }
+/* a permission a station was refused, allowed from the desk with one click */
+.crew-perm { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 4px; max-width: 80ch; }
+.crew-perm .crew-detail-label { margin: 0; }
+.crew-perm-cmd { margin: 0; font-family: var(--mono); font-size: 13px; background: var(--bg); border: 1px solid var(--line); padding: 8px 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }
+.crew-perm-cmd code { font: inherit; background: none; padding: 0; }
+.crew-perm .su-who-mini { margin: 2px 0; }
+.crew-perm-done { margin: 6px 0 2px; font-size: 14px; }
 /* Crew page (TR-466): members and projects always in view, a member's details beside them */
 .crew-notices { display: flex; flex-direction: column; gap: 10px; }
 .crew-notice-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
@@ -2044,15 +2125,31 @@ pre.payload {
 .crew-project:last-child { border-bottom: 0; }
 .crew-project-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; padding: 0 16px; }
 .crew-project-name { font-weight: 600; }
+.crew-project-progress { display: inline-flex; align-items: center; gap: 6px; align-self: center; }
 .crew-project-repos { padding: 2px 16px 0; font-size: 12px; overflow-wrap: anywhere; }
 .crew-project-none { margin: 0; padding: 6px 16px 10px 36px; font-size: 13px; }
 .crew-project .crew-list { margin-top: 6px; border-top: 1px solid var(--line); }
+/* a project's builders fold, shut by default; its line counts them and shows any that wait or went quiet */
+/* the arrow hangs in the left gutter, with the count, so a wrapped row lines up with the text */
+.crew-builders > summary { list-style: none; cursor: pointer; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 6px 16px 10px 30px; font-size: 13px; color: var(--ink-soft); }
+.crew-builders > summary::-webkit-details-marker { display: none; }
+.crew-builders-count { margin-left: -14px; padding-left: 14px; text-indent: -14px; }
+/* the same arrow as the pane's fold: a "›" that turns down when open */
+.crew-builders-count::before { content: "›"; display: inline-block; width: 14px; text-indent: 0; text-align: center; transition: transform 0.15s; }
+.crew-builders[open] > summary > .crew-builders-count::before { transform: rotate(90deg); }
+.crew-builders > summary:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: -2px; }
+.crew-builders[open] > summary { padding-bottom: 6px; }
+.crew-builders > .crew-list { margin-top: 0; }
+/* a waiting or quiet chip and the names it counts wrap as one */
+.crew-builders-flag { min-width: 0; }
+.crew-builders-who { font-size: 12px; overflow-wrap: break-word; }
 .crew-detail-body { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px; }
 .crew-detail-label { font-size: 12px; color: var(--ink-soft); margin-bottom: 4px; }
 .main .crew-detail-tickets { list-style: none; margin: 0; padding: 0; }
 .crew-detail-tickets li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 4px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
 .main .crew-recent { list-style: none; margin: 0; padding: 8px 10px; max-height: 360px; overflow-y: auto; background: var(--bg); border: 1px solid var(--line); font-family: var(--mono); font-size: 12px; }
 .crew-recent li { padding: 2px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.crew-more { margin-top: 6px; font-size: 13px; }
 .crew-fold > summary { cursor: pointer; padding: 12px 16px; font-weight: 600; font-size: 14px; }
 .crew-fold[open] > summary { border-bottom: 1px solid var(--line); }
 @media (max-width: 900px) { .crew-split { grid-template-columns: minmax(0, 1fr); } }
@@ -2094,3 +2191,41 @@ pre.payload {
 .crew-finished { padding: 8px 16px 12px; border-top: 1px solid var(--line); font-size: 14px; }
 .crew-finished summary { cursor: pointer; color: var(--ink-soft); }
 .main .crew-finished ul { margin: 6px 0 0; padding-left: 18px; }
+/* What Claude Code sessions spend (components/ClaudeUsage.tsx): the plan's limits, the window by
+   project, a station's context window */
+.cc-body { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px; }
+.cc-plan > summary .cc-hot { color: var(--warn); font-weight: 600; }
+.main .cc-limits, .main .cc-shares { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.cc-limit-head, .cc-share-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 14px; margin-bottom: 4px; }
+.cc-limit-head b { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+.cc-limits small { display: block; margin-top: 3px; font-size: 12px; }
+.cc-share-head .dim { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cc-ctx { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.cc-ctx.is-hot { color: var(--warn); font-weight: 600; }
+/* a fold inside a member's detail: the window by category */
+.crew-subfold { margin-top: 10px; font-size: 13px; }
+.crew-subfold > summary { list-style: none; cursor: pointer; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; color: var(--ink-soft); }
+.crew-subfold > summary::-webkit-details-marker { display: none; }
+.crew-subfold > summary:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
+.crew-subfold-h { color: var(--ink); }
+.crew-subfold-h::before { content: "›"; display: inline-block; width: 14px; text-align: center; color: var(--ink-soft); transition: transform 0.15s; }
+.crew-subfold[open] > summary .crew-subfold-h::before { transform: rotate(90deg); }
+.crew-subfold-body { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 0 14px; }
+.main table.cc-cats { margin-top: 2px; border: 0; background: none; font-size: 13px; }
+.cc-cats td { padding: 3px 8px 3px 0; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.cc-cats td.num, .cc-table .num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cc-cats td.cc-cat-bar { width: 30%; min-width: 60px; padding-right: 0; }
+.cc-loaded { margin-top: 8px; font-size: 13px; }
+.cc-loaded > summary { list-style: none; cursor: pointer; color: var(--ink-soft); }
+.cc-loaded > summary::-webkit-details-marker { display: none; }
+.cc-loaded > summary:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
+.cc-loaded > summary::before { content: "›"; display: inline-block; width: 14px; text-align: center; transition: transform 0.15s; }
+.cc-loaded[open] > summary::before { transform: rotate(90deg); }
+.cc-loaded dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 6px 0 0; }
+.cc-loaded dt { color: var(--ink-soft); }
+.cc-loaded dd { margin: 0; overflow-wrap: anywhere; }
+.cc-sub { font-size: 14px; margin: 18px 0 8px; }
+.cc-table-wrap { overflow-x: auto; }
+.cc-table { font-size: 13px; }
+.cc-table th.num { text-align: right; }
+.cc-rest { font-size: 12px; overflow-wrap: anywhere; }

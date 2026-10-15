@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 
 import { api } from "../api";
 import { ErrorState, TimeAgo, projectGoal, usePolling } from "../components/bits";
+import { ProgressRing } from "../components/ProgressRing";
 import { ReadyReminder } from "../components/readiness";
 import { DeleteDraft } from "../components/setup/deleteDraft";
 import type { Project } from "../types";
@@ -75,8 +76,14 @@ export default function Projects() {
                     {u.kind === "software_factory" && <span className="fo-tag" style={{ marginLeft: 8 }}>Software factory</span>}
                   </td>
                   <td className="help"><span className="proj-goal">{projectGoal(u)}</span></td>
-                  <td>
+                  <td className={u.progress ? "fo-ring-cell" : undefined}>
                     <span className={`badge ${statusClass(u.status)}`}>{u.status}</span>
+                    {u.progress && (
+                      <span className="fo-ring-count">
+                        <ProgressRing progress={u.progress} />
+                        {u.progress.total > 0 && <span aria-hidden="true">{u.progress.done}/{u.progress.total}</span>}
+                      </span>
+                    )}
                     {missing > 0 && <span className="help" style={{ marginLeft: 6 }}>{missing} missing</span>}
                   </td>
                   <td className="help">
