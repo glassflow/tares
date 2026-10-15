@@ -37,6 +37,12 @@ the project follows [Semantic Versioning](https://semver.org/).
   names any waiting or quiet one, so the Waiting for review list stays in view. The fold opens for
   the member you pick or link to, and the whole Projects pane folds to its header. Both are
   remembered in this browser.
+- Crew page: each project shows its progress ring beside the merged count, which now leaves canceled
+  tickets out as the ring does, and its usage line gives only its share of the 5-hour window and of
+  the week, with no API prices. A station's detail says less: one context line and its bar, the
+  window by category in a fold that reads it when opened, the newest 8 lines with the rest a click
+  away, and no project or ticket section for the crew's own stations. `/api/crew/projects` rows
+  carry `progress`.
 
 ### Fixed
 - The attach command for a helper of a crew station (`crew-reviewer-lint`) names the helper, not
