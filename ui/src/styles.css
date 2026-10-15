@@ -148,6 +148,7 @@
   --border-strong: var(--kit-border);
   --wash: color-mix(in srgb, var(--kit-foreground) 6%, transparent);
   --wash-2: color-mix(in srgb, var(--kit-foreground) 10%, transparent);
+  --track: color-mix(in srgb, var(--ink-faint) 40%, transparent);   /* the unfilled part of a ring or meter: reads on any surface, quieter than its fills */
   --code-bg: var(--kit-surface-secondary);
   --slate: var(--blue-500); /* structural tags (push mode, kind) */
   --slate-soft: color-mix(in srgb, var(--blue-500) 10%, var(--kit-surface));
@@ -202,6 +203,7 @@
   --border-strong: var(--kit-dark-separator);
   --wash: color-mix(in srgb, var(--kit-snow) 7%, transparent);
   --wash-2: color-mix(in srgb, var(--kit-snow) 11%, transparent);
+  --track: color-mix(in srgb, var(--ink-faint) 55%, transparent);
   --code-bg: var(--kit-dark-background);
   --slate: var(--blue-300);
   --slate-soft: color-mix(in srgb, var(--blue-300) 14%, var(--kit-dark-background));
@@ -1921,7 +1923,7 @@ pre.payload {
 .fo-ring-done { stroke: var(--ok); }
 .fo-ring-doing { stroke: var(--accent); }
 .fo-ring-blocked { stroke: var(--err); }
-.fo-ring-todo { stroke: var(--line); }
+.fo-ring-todo { stroke: var(--track); }
 .fo-ring-count { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; vertical-align: middle; font-family: var(--mono); font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 .fo-ring-cell { white-space: nowrap; }
 @media (max-width: 900px) { .fo-ring-cell { white-space: normal; } }   /* a narrow list lets the ring go under the badge */
