@@ -31,6 +31,9 @@ the project follows [Semantic Versioning](https://semver.org/).
   model call. `tares factory plan` and `tares factory context <station>` read them by hand.
 - Token usage per reply of every Claude Code session the plugin ships, counted once per reply and
   filled in from the replies already stored.
+- The console's left sidebar folds to a rail of icons and back with its Collapse row; the choice
+  is remembered in this browser. Start, Connect and Reads have icons of their own, Settings is a
+  gear and the Workspace link an outside-link icon, so no two look alike when only icons show.
 
 ### Changed
 - Crew page: each project's builders fold, shut by default, behind a line that counts them and
