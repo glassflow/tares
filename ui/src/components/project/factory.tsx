@@ -168,7 +168,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
 
       {attention && doingTicket && (
         <Attention kind={attention} session={attention === "orphan" ? undefined : active}
-                   quietMin={quietMin} label={active?.station ?? "build session"} station={active?.station}
+                   quietMin={quietMin} station={active?.station}
                    ticket={doingTicket.title}
                    pickUp={`Pick up Tares project "${ctx.s.name}" where the last session stopped.`} />
       )}
@@ -528,8 +528,8 @@ function StateBadge({ s, now, shown }: { s: ProjectSession; now?: string; shown?
  *  or no session is on it at all. A crew station is opened where it runs, with its attach command
  *  (a builder waiting for a permission is answered there); any other session is picked up in a
  *  fresh one. */
-function Attention({ kind, session, quietMin, label, station, ticket, pickUp }: {
-  kind: AttentionKind; session?: ProjectSession; quietMin: number; label: string; station?: string | null;
+function Attention({ kind, session, quietMin, station, ticket, pickUp }: {
+  kind: AttentionKind; session?: ProjectSession; quietMin: number; station?: string | null;
   ticket?: string; pickUp: string;
 }) {
   if (kind === "orphan" || !session) {
@@ -554,8 +554,8 @@ function Attention({ kind, session, quietMin, label, station, ticket, pickUp }: 
     <section className={`fo-attn fo-attn-${kind}`} role="status" aria-labelledby="fo-attn-h">
       <h2 id="fo-attn-h">
         {kind === "waiting"
-          ? <>The {label} is waiting for you{session.state_at && <> since <TimeAgo ts={session.state_at} /></>}</>
-          : <>No word from the {label} for {quietMin} min</>}
+          ? <>{station ?? "The build session"} is waiting for you{session.state_at && <>; it stopped <TimeAgo ts={session.state_at} /></>}</>
+          : <>No word from {station ?? "the build session"} for {quietMin} min</>}
       </h2>
       {kind === "waiting" ? (
         <>

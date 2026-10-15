@@ -74,7 +74,8 @@ export function EmptyState({ children }: { children: React.ReactNode }) {
 
 /** A button that copies `text` and says "Copied" for a moment. `what` names the text for a
  *  screen reader ("Copy the address", then "Copied the address"). Keep the text itself on screen
- *  next to it: when the clipboard is refused, the person selects it by hand. */
+ *  next to it: when the clipboard is refused, the person selects it by hand. Both words sit in
+ *  the button, one hidden, so it is as wide as the longer one and the box beside it never moves. */
 export function CopyButton({ text, label = "Copy", what, primary, title, className }: {
   text: string; label?: string; what?: string; primary?: boolean; title?: string; className?: string;
 }) {
@@ -87,11 +88,12 @@ export function CopyButton({ text, label = "Copy", what, primary, title, classNa
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => setDone(false), 1800);
   };
-  const cls = [primary ? "primary" : "", className ?? ""].filter(Boolean).join(" ");
+  const cls = ["copy-btn", primary ? "primary" : "", className ?? ""].filter(Boolean).join(" ");
   return (
-    <button type="button" className={cls || undefined} title={title} onClick={copy}
+    <button type="button" className={cls} title={title} onClick={copy}
             aria-label={what ? `${done ? "Copied" : "Copy"} ${what}` : undefined}>
-      {done ? "Copied" : label}
+      <span className={done ? "copy-off" : undefined}>{label}</span>
+      <span className={done ? undefined : "copy-off"}>Copied</span>
     </button>
   );
 }
