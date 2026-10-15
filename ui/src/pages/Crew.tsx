@@ -369,7 +369,6 @@ export default function Crew() {
       ) : (
         <div className="crew-split">
           <div className="crew-col">
-            <PlanPanel data={udata} error={uerror} reload={ureload} />
             <div className="fo-panel">
               <header><h3>The crew</h3>{data.settings.releaser === false && <span className="dim">no releaser: tickets end at merged</span>}</header>
               {crew.length ? (
@@ -416,6 +415,7 @@ export default function Crew() {
                 </details>
               )}
             </details>
+            <PlanPanel data={udata} error={uerror} reload={ureload} />
           </div>
           <div className="crew-col">
             {known ? <MemberDetail key={selected} name={selected} />

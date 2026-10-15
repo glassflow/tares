@@ -2147,6 +2147,7 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 /* What Claude Code sessions spend (components/ClaudeUsage.tsx): the plan's limits, the window by
    project, a station's context window */
 .cc-body { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px; }
+.cc-plan > summary .cc-hot { color: var(--warn); font-weight: 600; }
 .main .cc-limits, .main .cc-shares { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .cc-limit-head, .cc-share-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 14px; margin-bottom: 4px; }
 .cc-limit-head b { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }

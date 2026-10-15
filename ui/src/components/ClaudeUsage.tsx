@@ -105,12 +105,30 @@ function WindowShares({ rows }: { rows: ProjectUsage[] }) {
 
 const PLAN_EMPTY = <>No reading yet. Each station reports the plan's 5-hour and weekly limits after its first reply (on a Pro or Max login), and the factory watch reads <span className="mono">/usage</span> every 10 minutes. Read it now with <span className="mono">tares factory plan</span>.</>;
 
-/** The Crew page's view of the plan: how much of each limit is left, and who used this window. */
+/** The Crew page's view of the plan: how much of each limit is left, and who used this window.
+ *  Folded by default, with the most used limit on its summary line; open or shut is remembered
+ *  in this browser. */
 export function PlanPanel({ data, error, reload }: { data: ClaudeCodeUsage | undefined; error?: string; reload: () => void }) {
+  const [open, setOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem(PLAN_OPEN_KEY) === "1"; } catch { return false; }
+  });
+  const toggle = (e: React.SyntheticEvent<HTMLDetailsElement>) => {
+    if (e.target !== e.currentTarget) return;
+    const next = e.currentTarget.open;
+    setOpen(next);
+    try { localStorage.setItem(PLAN_OPEN_KEY, next ? "1" : "0"); } catch { /* private window: for this visit only */ }
+  };
+  const top = [...(data?.plan?.limits ?? [])].filter((l) => !l.reset).sort((a, b) => b.percent - a.percent)[0];
+  const topPct = top ? Math.round(top.percent) : null;
   return (
-    <div className="fo-panel">
-      <header><h3>Your Claude plan</h3>{data?.plan?.at && <span className="dim" title="from /usage, or a station's status line when that is newer">read <TimeAgo ts={data.plan.at} /></span>}</header>
+    <details className="fo-panel fo-fold cc-plan" open={open} onToggle={toggle}>
+      <summary>
+        <span className="fo-fold-h">Your Claude plan</span>
+        {top && <span className={topPct != null && topPct >= HOT ? "cc-hot" : "dim"}
+                      title={`the most used limit: ${top.label}, ${topPct}% used`}>{top.label} {topPct}%</span>}
+      </summary>
       <div className="cc-body">
+        {data?.plan?.at && <p className="dim" style={{ margin: 0, fontSize: 13 }} title="from /usage, or a station's status line when that is newer">Read <TimeAgo ts={data.plan.at} />.</p>}
         {error && !data ? <ErrorState error={error} what="the plan's limits" onRetry={reload} />
           : !data ? <p className="dim" style={{ margin: 0 }}>loading…</p>
           : data.plan ? <PlanLimits plan={data.plan} />
@@ -122,9 +140,11 @@ export function PlanPanel({ data, error, reload }: { data: ClaudeCodeUsage | und
           </div>
         )}
       </div>
-    </div>
+    </details>
   );
 }
+
+const PLAN_OPEN_KEY = "tares.crew.plan.open";
 
 /** Settings, Usage: the plan, and what each project spent over the last week. */
 export function ClaudeCodeUsagePanel() {
