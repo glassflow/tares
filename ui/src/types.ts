@@ -742,7 +742,11 @@ export interface Project {
   default?: boolean;   // the Default project: holds whatever was made outside a project; never deleted
   goal?: string | null; // what the project should achieve, one line (<= 200 chars); null = not set yet
   kind?: "software_factory" | null;   // its own page and tag; null = an ordinary project
+  progress?: TicketProgress;           // a software factory project's tickets (GET /api/projects only)
 }
+// a software factory project's tickets as its progress ring shows them (tares/factory.py
+// `progress`): total is done + doing + blocked + todo; canceled ones stay out of it
+export interface TicketProgress { done: number; doing: number; blocked: number; todo: number; canceled: number; total: number }
 
 // ── the goal-first project page (contract: goal-first-contract.md, "Backend") ──
 

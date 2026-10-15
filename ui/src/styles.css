@@ -1911,6 +1911,20 @@ pre.payload {
    tickets and sessions folded ── */
 .fo-name { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .fo-tag { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink); background: var(--accent-soft); border: 1px solid var(--accent); padding: 3px 8px; }
+/* the tag and its ring stay together; the ring's slot is held while tickets load, so it never moves the page */
+.fo-name-tag { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 10px; white-space: nowrap; }
+/* the tickets' progress ring (ProgressRing.tsx): done, in progress, blocked, to do clockwise from
+   the top; the one round mark here, kept small and thin. On the Projects list with "3/8" beside
+   it; on the project page alone next to the tag. */
+.fo-ring { flex: none; display: inline-block; vertical-align: middle; }
+.fo-ring-slot { flex: none; width: 16px; height: 16px; }   /* the page's ring before the tickets load */
+.fo-ring-done { stroke: var(--ok); }
+.fo-ring-doing { stroke: var(--accent); }
+.fo-ring-blocked { stroke: var(--err); }
+.fo-ring-todo { stroke: var(--line); }
+.fo-ring-count { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; vertical-align: middle; font-family: var(--mono); font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.fo-ring-cell { white-space: nowrap; }
+@media (max-width: 900px) { .fo-ring-cell { white-space: normal; } }   /* a narrow list lets the ring go under the badge */
 .fo-linear { font-size: 14px; color: var(--ink); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .fo-linear a { display: inline-flex; }.fo-linear a { font-weight: 600; }
 .fo-label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
@@ -1926,12 +1940,13 @@ pre.payload {
 .fo-steps li.is-now b i { background: var(--accent); border-color: var(--accent-deep); }
 .fo-progress { display: flex; flex-direction: column; gap: 8px; }
 .fo-progress-row { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 14px; }
-.fo-counts { display: flex; gap: 16px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.fo-counts { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--ink-soft); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .fo-counts b { color: var(--ink); }
 .fo-bar { display: flex; gap: 3px; }
 .fo-bar i { flex: 1; height: 10px; background: var(--bg); border: 1px solid var(--line); }
 .fo-bar i.done { background: var(--ok); border-color: var(--ok); }
 .fo-bar i.run { background: var(--accent); border-color: var(--accent); }
+.fo-bar i.blocked { background: var(--err); border-color: var(--err); }
 .fo-next { border: 2px solid var(--accent); background: var(--panel); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
 .fo-next h2 { margin: 0; font-size: 20px; }
 .fo-next-empty { border-width: 1px; border-color: var(--line); }

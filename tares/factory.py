@@ -214,6 +214,26 @@ def readiness(tickets: list[dict]) -> dict[str, dict]:
     return out
 
 
+def progress(tickets: list[dict]) -> dict:
+    """{done, doing, blocked, todo, canceled, total}: a project's tickets as its progress ring
+    shows them. Done goes by the stage as much as the status: a Linear ticket keeps Linear's
+    status, which can still say in progress after the crew merged it. Blocked is a station's
+    "blocked", or a ticket to do that waits on one not delivered. Canceled ones stay out of the
+    total. The project page counts its ring the same way (ui/src/components/ProgressRing.tsx)."""
+    waits = readiness(tickets)
+    n = {"done": 0, "doing": 0, "blocked": 0, "todo": 0, "canceled": 0}
+    for t in tickets:
+        stage, status = t.get("stage"), t.get("status")
+        k = ("done" if stage in ("merged", "shipped") or status == "done"
+             else "canceled" if status == "canceled"
+             else "blocked" if stage == "blocked"
+             else "doing" if stage in ("doing", "review", "changes") or status == "in_progress"
+             else "blocked" if waits[t["id"]]["blocked_by"]
+             else "todo")
+        n[k] += 1
+    return {**n, "total": n["done"] + n["doing"] + n["blocked"] + n["todo"]}
+
+
 # ── the ledger (M4): who holds a ticket and where it stands ───────────────────
 
 STAGES = ("todo", "doing", "review", "changes", "merged", "shipped", "blocked")

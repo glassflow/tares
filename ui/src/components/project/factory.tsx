@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { api } from "../../api";
 import { CrewState, Desk } from "../../pages/Crew";
 import { TimeAgo, usePolling } from "../bits";
+import { ProgressRing, ticketBucket, ticketProgress } from "../ProgressRing";
 import { VLink, type Ctx } from "./common";
 import { Goal } from "./overview";
 import type { DocSummary, Milestone, ProjectRepo, ProjectSession, RepoPR, Ticket } from "../../types";
@@ -49,6 +50,10 @@ function CopyButton({ text, label, primary }: { text: string; label: string; pri
 const STATUS_TEXT: Record<Ticket["status"], string> = {
   todo: "to do", in_progress: "in progress", done: "done", canceled: "canceled",
 };
+// a ticket's cell in the progress bar, by its bucket in the ring
+const BAR_CLASS: Record<ReturnType<typeof ticketBucket>, string> = {
+  done: "done", doing: "run", blocked: "blocked", todo: "", canceled: "",
+};
 
 export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const { data: docs } = usePolling(() => api.docs(ctx.id), 15000);
@@ -80,9 +85,10 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const questions = (docs ?? []).filter((d) => d.kind === "note" && !d.global);
   const start = own.find((d) => d.kind === "start");
   const phase: Phase = crew?.handover?.finished ? "done" : phaseOf(!!start, tickets);
-  const live = tickets.filter((t) => t.status !== "canceled");
-  const done = live.filter((t) => t.status === "done").length;
-  const doing = live.filter((t) => t.status === "in_progress").length;
+  // counted like the ring in the header, so the ring and the counts below it agree
+  const prog = ticketProgress(tickets);
+  const live = tickets.filter((t) => ticketBucket(t) !== "canceled");
+  const { done, doing } = prog;
   const sessions = ss?.sessions ?? [];
   const firstLinked = [...sessions].sort((a, b) => a.linked_at.localeCompare(b.linked_at))[0]?.session;
   const building = tickets.some((t) => t.status === "in_progress");
@@ -126,7 +132,9 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
     <div className="gf fo">
       <div className="gf-head">
         <div className="gf-head-text">
-          <h1 className="gf-name fo-name">{ctx.s.name}<span className="fo-tag">Software factory</span></h1>
+          <h1 className="gf-name fo-name">{ctx.s.name}
+            <span className="fo-name-tag"><span className="fo-tag">Software factory</span>
+              {tk ? <ProgressRing progress={prog} size={16} /> : <span className="fo-ring-slot" />}</span></h1>
           {tk?.linear && <div className="fo-linear"><LinearMark />Tickets live in Linear project{" "}
             <a href={tk.linear.url} target="_blank" rel="noreferrer">{tk.linear.name} ↗</a></div>}
           <Goal ctx={ctx} />
@@ -155,13 +163,14 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
           <div className="fo-progress-row">
             <span><b>{done} of {live.length} tickets done</b> · tickets live {where}</span>
             <span className="fo-counts">
-              <span><b>{live.length - done - doing}</b> to do</span>
+              <span><b>{prog.todo}</b> to do</span>
               <span><b>{doing}</b> in progress</span>
+              {prog.blocked > 0 && <span><b>{prog.blocked}</b> blocked</span>}
               <span><b>{done}</b> done</span>
             </span>
           </div>
           <div className="fo-bar" aria-hidden="true">
-            {live.map((t) => <i key={t.id} className={t.status === "done" ? "done" : t.status === "in_progress" ? "run" : ""} />)}
+            {live.map((t) => <i key={t.id} className={BAR_CLASS[ticketBucket(t)]} />)}
           </div>
         </div>
       )}

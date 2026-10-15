@@ -172,6 +172,28 @@ def pr_note(t: dict) -> str | None:
     return None
 
 
+def project_progress(store, uid: str) -> dict:
+    """Tickets done of all, by stage, and the first milestone with work left: what the crew's
+    project list shows (canceled tickets count as done here; the console's ring keeps them out,
+    tares/factory.py `progress`)."""
+    tickets = store.list_tickets(uid)
+    done = [t for t in tickets if (t["stage"] in ("merged", "shipped")
+                                   or t["status"] in factory_mod.DONE_STATUSES)]
+    stages: dict[str, int] = {}
+    for t in tickets:
+        k = t["stage"] or ("done" if t in done else "todo")
+        stages[k] = stages.get(k, 0) + 1
+    current = None
+    for m in store.list_milestones(uid):
+        mine = [t for t in tickets if t["milestone"] == m["id"]]
+        if any(t not in done for t in mine):
+            current = {"name": m["name"], "done": sum(t in done for t in mine),
+                       "total": len(mine)}
+            break
+    return {"tickets_done": len(done), "tickets_total": len(tickets), "stages": stages,
+            "milestone": current}
+
+
 def register(app, store, h: SimpleNamespace) -> None:
     """`h` carries the daemon's helpers: err(exc, code), project_or_404(uid), by(request, body),
     cc_source(), global_ids(create)."""
@@ -353,7 +375,7 @@ def register(app, store, h: SimpleNamespace) -> None:
             if uid not in names:
                 continue
             ho = store.get_handover(uid) or {}
-            out.append({"id": uid, "name": names[uid], **project_progress(uid),
+            out.append({"id": uid, "name": names[uid], **project_progress(store, uid),
                         "repos": repo_rows(uid, ho.get("repos") or []),
                         "autonomy": ho.get("autonomy"), "handed_over_at": ho.get("at"),
                         "handed_over_by": ho.get("by")})
@@ -362,7 +384,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         for uid in store.handed_over_projects(finished=True):
             if uid in names:
                 ho = store.get_handover(uid) or {}
-                done.append({"id": uid, "name": names[uid], **project_progress(uid),
+                done.append({"id": uid, "name": names[uid], **project_progress(store, uid),
                              "finished": ho.get("finished")})
         done.sort(key=lambda p: str((p["finished"] or {}).get("at") or ""), reverse=True)
         releasing = []
@@ -1122,25 +1144,6 @@ def register(app, store, h: SimpleNamespace) -> None:
             store.release_takeover(uid, at)
         return {"project": uid, "name": p["name"],
                 "takeover": store.get_handover(uid)["takeover"]}
-
-    def project_progress(uid: str) -> dict:
-        """Tickets done of all, by stage, and the first milestone with work left."""
-        tickets = store.list_tickets(uid)
-        done = [t for t in tickets if (t["stage"] in ("merged", "shipped")
-                                       or t["status"] in factory_mod.DONE_STATUSES)]
-        stages: dict[str, int] = {}
-        for t in tickets:
-            k = t["stage"] or ("done" if t in done else "todo")
-            stages[k] = stages.get(k, 0) + 1
-        current = None
-        for m in store.list_milestones(uid):
-            mine = [t for t in tickets if t["milestone"] == m["id"]]
-            if any(t not in done for t in mine):
-                current = {"name": m["name"], "done": sum(t in done for t in mine),
-                           "total": len(mine)}
-                break
-        return {"tickets_done": len(done), "tickets_total": len(tickets), "stages": stages,
-                "milestone": current}
 
     def pr_row(t: dict) -> dict:
         """A ticket's pull request as the GitHub section shows it: what GitHub said when Tares last

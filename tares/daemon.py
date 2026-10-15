@@ -3299,7 +3299,10 @@ def make_app() -> FastAPI:
         pk = _pk(request)
         if pk:
             return {"projects": [_project_card(pk)]}
-        return {"projects": projects.list()}
+        # a software factory project carries its tickets' progress, for the list's ring
+        return {"projects": [
+            {**p, "progress": factory_mod.progress(store.list_tickets(p["id"]))}
+            if p.get("kind") == "software_factory" else p for p in projects.list()]}
 
     @app.post("/api/projects", status_code=201)
     async def create_project(body: ProjectIn):
