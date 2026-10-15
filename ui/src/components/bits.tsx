@@ -72,6 +72,30 @@ export function EmptyState({ children }: { children: React.ReactNode }) {
   return <div className="empty">{children}</div>;
 }
 
+/** A button that copies `text` and says "Copied" for a moment. `what` names the text for a
+ *  screen reader ("Copy the address", then "Copied the address"). Keep the text itself on screen
+ *  next to it: when the clipboard is refused, the person selects it by hand. */
+export function CopyButton({ text, label = "Copy", what, primary, title, className }: {
+  text: string; label?: string; what?: string; primary?: boolean; title?: string; className?: string;
+}) {
+  const [done, setDone] = useState(false);
+  const timer = useRef<number>();
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text); } catch { return; /* the text stays selectable next to the button */ }
+    setDone(true);
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setDone(false), 1800);
+  };
+  const cls = [primary ? "primary" : "", className ?? ""].filter(Boolean).join(" ");
+  return (
+    <button type="button" className={cls || undefined} title={title} onClick={copy}
+            aria-label={what ? `${done ? "Copied" : "Copy"} ${what}` : undefined}>
+      {done ? "Copied" : label}
+    </button>
+  );
+}
+
 /** Bytes as a human size, binary units ("2.4 GiB"). Null/undefined is *unknown*, not zero — the
  *  metering API returns null for numbers it genuinely cannot know (no configured limit, a stat()
  *  that failed), and rendering those as "0 B" would be a lie. */

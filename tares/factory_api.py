@@ -415,11 +415,10 @@ def register(app, store, h: SimpleNamespace) -> None:
         n = min(max(recent, 0), 200)
         lines = store.key_events(h.cc_source(), st["session"], limit=n,
                                  offset=max((st["lines"] or 0) - n, 0)) if n else []
-        role_name = name[len("crew-"):] if name.startswith("crew-") else name
         return {**st, "tickets": held,
                 "recent": [{"at": x.get("event_time"), "type": x.get("event_type"),
                             "text": str(x.get("text") or "")[:600]} for x in lines],
-                "attach": f"tares factory crew attach {role_name}"}
+                "attach": factory_mod.attach_command(name)}
 
     # ── the crew on a project, and the hand-over (TR-422, TR-425) ─────────────
     @app.get("/api/projects/{uid}/crew")

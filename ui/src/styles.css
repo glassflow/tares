@@ -1992,6 +1992,13 @@ pre.payload {
 .fo-attn h2 { margin: 0; font-size: 17px; }
 .fo-said { margin: 0; white-space: pre-wrap; font-size: 14px; border-left: 3px solid var(--warn); padding-left: 12px; max-width: 90ch; max-height: 220px; overflow: auto; }
 .fo-sess { display: inline-flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+/* a crew station's row: when it last spoke, and its attach command to copy; in a narrow column
+   they drop below the name. The button keeps its width when it says "Copied". */
+.fo-docs li.fo-crew-row { flex-wrap: wrap; row-gap: 4px; }
+.fo-row-end { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px 10px; margin-left: auto; }
+button.fo-copy-sm { padding: 2px 8px; font-size: 12px; min-width: 7.5em; }
+/* the session view of a crew station: the command that opens it in a terminal */
+.fo-attach { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
 .fo-st-wait { color: var(--accent-deep); border-color: var(--accent-deep); background: var(--accent-soft); }
 .fo-st-quiet { color: var(--err); border-color: var(--err); }
 /* a fold's pin: a pinned section is open on every visit and does not fold */

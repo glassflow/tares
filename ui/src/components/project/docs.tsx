@@ -3,8 +3,9 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { api } from "../../api";
+import { attachCmd } from "../../pages/Crew";
 import ConfirmDialog from "../ConfirmDialog";
-import { Combo, ErrorState, Picker, TimeAgo, formatBytes, usePolling } from "../bits";
+import { Combo, CopyButton, ErrorState, Picker, TimeAgo, formatBytes, usePolling } from "../bits";
 import { Facts, NotHere, VLink, ViewHead, type Ctx } from "./common";
 import { LinearMark, prBrief } from "./factory";
 import type { Doc, DocKind, Ticket, TicketStatus } from "../../types";
@@ -618,9 +619,15 @@ export function ClaudeSessionsView({ ctx }: { ctx: Ctx }) {
 /** One session, top to bottom. */
 export function ClaudeSessionView({ ctx, name }: { ctx: Ctx; name: string }) {
   const { data, error, reload } = usePolling(() => api.projectSession(ctx.id, name), 15000);
-  if (error && !data) return /404/.test(String(error))
-    ? <NotHere what="session" name={name} back={{ kind: "claude" }} />
-    : <ErrorState error={error} what="this session" onRetry={reload} />;
+  // a crew station's session Tares keeps no transcript of here still gets its attach command
+  if (error && !data) return (
+    <>
+      <StationAttach ctx={ctx} session={name} />
+      {/404/.test(String(error))
+        ? <NotHere what="session" name={name} back={{ kind: "claude" }} />
+        : <ErrorState error={error} what="this session" onRetry={reload} />}
+    </>
+  );
   if (!data) return <div className="dim">loading…</div>;
   // Claude Code's own bookkeeping lines carry no text worth reading here
   const all = data.lines.filter((l) => l.text && l.text.trim() !== (l.labels.type ?? l.event_type));
@@ -634,6 +641,7 @@ export function ClaudeSessionView({ ctx, name }: { ctx: Ctx; name: string }) {
   return (
     <>
       <ViewHead title="Claude Code session" sub={<span className="mono">{name}</span>} />
+      <StationAttach ctx={ctx} session={name} />
       <div className="panel" style={{ padding: 0 }}>
         {lines.map((l, i) => <SessionLine key={i} l={l} first={!i} />)}
         {!lines.length && <div className="empty">No lines recorded.</div>}
@@ -660,6 +668,41 @@ export function ClaudeSessionView({ ctx, name }: { ctx: Ctx; name: string }) {
         </div>
       )}
     </>
+  );
+}
+
+/** The crew station a session plays, with the command that opens the station in a terminal: the
+ *  way in when a builder waits for a permission. An earlier session the station replaced points
+ *  at the station's current one, which is what the command opens. A station whose session has
+ *  ended (retired, or stopped and not started again) has nothing to open, so no command. Nothing
+ *  for a session no station plays. */
+function StationAttach({ ctx, session }: { ctx: Ctx; session: string }) {
+  // the project's crew names the crew's own stations too; its sessions list names builders only
+  const { data: crew } = usePolling(() => api.projectCrew(ctx.id), 30000);
+  const { data: ss } = usePolling(() => api.projectSessions(ctx.id), 30000);
+  const st = crew?.stations.find((s) => s.session === session || s.earlier.some((e) => e.session === session));
+  const row = ss?.sessions.find((x) => x.session === session);
+  const name = st?.name ?? row?.station;
+  if (!name) return null;
+  const earlier = st ? st.session !== session : row?.state === "replaced";
+  if (st ? st.state === "ended" : row?.state === "ended") return (
+    <div className="fo-attach">
+      <span className="help">This session played <span className="mono">{name}</span>, which has ended, so there is no session to open in a terminal.</span>
+    </div>
+  );
+  const cmd = attachCmd(name);
+  return (
+    <div className="fo-attach">
+      <span className="help">
+        {earlier
+          ? <>This session was replaced: <span className="mono">{name}</span> runs in a newer one now. Open that one in a terminal:</>
+          : <>Open <span className="mono">{name}</span> in a terminal:</>}
+      </span>
+      <div className="fo-cmd">
+        <code>{cmd}</code>
+        <CopyButton text={cmd} label="Copy" />
+      </div>
+    </div>
   );
 }
 

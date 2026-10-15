@@ -589,6 +589,8 @@ def says_every_project(words: str) -> bool:
 # ── the crew (M3): one always-on crew serves every project ────────────────────
 
 ROLES = ("orchestrator", "reviewer", "releaser", "builder", "helper")
+# the always-on stations, named crew-<role>; builders and helpers come and go
+CREW_ROLES = ("orchestrator", "reviewer", "releaser")
 AUTONOMY = {
     "L3-review": "you approve each merge",
     "L4-ship": "a builder merges after the reviewer's pass and green CI",
@@ -607,6 +609,14 @@ def station_ok(name, role, parent) -> tuple[str, str, str]:
     if role and role not in ROLES:
         raise DocError(f"unknown role {role!r}; one of: " + ", ".join(ROLES))
     return name, role, parent
+
+
+def attach_command(station: str) -> str:
+    """The command that opens a station's session in a terminal. The crew's own stations go by
+    their role (`crew-reviewer` is `reviewer`); any other, a helper of one among them
+    (`crew-reviewer-lint`), by its full name, as `factory crew attach` takes them."""
+    role = station[len("crew-"):] if station.startswith("crew-") else ""
+    return f"tares factory crew attach {role if role in CREW_ROLES else station}"
 
 
 CREW_DEFAULTS = {"autonomy": None, "releaser": None, "release_profile": None,

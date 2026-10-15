@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
-import { ErrorState, TimeAgo, usePolling } from "../components/bits";
+import { CopyButton, ErrorState, TimeAgo, usePolling } from "../components/bits";
 import type { CrewProject, CrewSettings, CrewStation, DeskItem } from "../types";
 
 // The crew of a tares-factory (M3, M8): one always-on crew (orchestrator, reviewer, and a releaser
@@ -42,8 +42,12 @@ function sentence(s: string): string {
   return /[.!?]$/.test(c) ? c : `${c}.`;
 }
 
-function attachCmd(name: string): string {
-  return `tares factory crew attach ${name.startsWith("crew-") ? name.slice(5) : name}`;
+/** The command that opens a station's session in a terminal. The crew's own stations go by their
+ *  role (crew-reviewer is reviewer); any other, a helper of one among them too, by its full name.
+ *  The same rule as the daemon's attach_command. */
+export function attachCmd(name: string): string {
+  const role = name.startsWith("crew-") ? name.slice(5) : "";
+  return `tares factory crew attach ${CREW_ROLES.includes(role) ? role : name}`;
 }
 
 // ── dismissed notices: per viewer, in this browser; a notice comes back when what it says changes ──
@@ -260,7 +264,9 @@ function MemberDetail({ name }: { name: string }) {
         </p>
         <div>
           <div className="crew-detail-label">Open it in a terminal</div>
-          <div className="fo-cmd"><code>{s.attach}</code></div>
+          {s.state === "ended"
+            ? <p className="dim" style={{ margin: 0 }}>It has ended, so there is no session to open.</p>
+            : <div className="fo-cmd"><code>{s.attach}</code><CopyButton text={s.attach} label="Copy" /></div>}
         </div>
         <div>
           <div className="crew-detail-label">Tickets it holds</div>
