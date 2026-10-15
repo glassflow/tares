@@ -14,6 +14,13 @@ the project follows [Semantic Versioning](https://semver.org/).
   the console shows the station: a session's page, the project's Crew rows, the stopped-build
   banner, Next up and the Crew page, so you can open a stuck or waiting builder in one paste. A
   station that has ended offers none.
+- A permission a crew station was refused comes to the desk with the station and the exact
+  command, and you allow it with one click on the project page or the Crew page: you check the
+  sentence that becomes the grant, choose this project or every project, and click **Allow for
+  <station>**. Tares keeps it as a grant and as your decision made in the console, and the crew's
+  watch restarts that station with it in its settings, in the same conversation, once it is
+  between turns (never while you have it open with `crew attach`). `desk_add(station=, command=)`,
+  `POST /api/desk/{ref}/allow` (the person only) and `via` on decisions.
 
 ### Changed
 - Crew page: each project's builders fold, shut by default, behind a line that counts them and
