@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
@@ -119,6 +119,34 @@ function Notices({ stations, desk }: { stations: CrewStation[]; desk: DeskItem[]
   );
 }
 
+// ── folds: per viewer, in this browser; a project's builders start shut, the Projects pane open ──
+const OPEN_KEY = "tares.crew.open";
+const PANE_KEY = "tares.crew.projects.folded";
+function readOpen(): Record<string, boolean> {
+  try { return JSON.parse(localStorage.getItem(OPEN_KEY) || "{}") || {}; } catch { return {}; }
+}
+/** Keeps only the folds the person opened: a project they closed is back to the default. */
+function rememberOpen(id: string, open: boolean) {
+  try {
+    const next = { ...readOpen() };
+    if (open) next[id] = true; else delete next[id];
+    localStorage.setItem(OPEN_KEY, JSON.stringify(next));
+  } catch { /* private window: for this visit only */ }
+}
+function readPaneFolded(): boolean {
+  try { return localStorage.getItem(PANE_KEY) === "1"; } catch { return false; }
+}
+function rememberPaneFolded(folded: boolean) {
+  try { localStorage.setItem(PANE_KEY, folded ? "1" : "0"); } catch { /* private window: for this visit only */ }
+}
+/** Whether the fold a clicked summary belongs to is open, before the click toggles it. */
+const wasOpen = (e: React.MouseEvent<HTMLElement>) => !!(e.currentTarget.parentElement as HTMLDetailsElement | null)?.open;
+
+/** A station and the helpers under it at any depth, the rows MemberRow draws for it. */
+function withHelpers(s: CrewStation, all: CrewStation[]): CrewStation[] {
+  return [s, ...all.filter((x) => x.parent === s.name && x.role === "helper").flatMap((k) => withHelpers(k, all))];
+}
+
 // ── the member list ─────────────────────────────────────────────────────────
 
 function MemberRow({ s, all, selected, depth = 0 }: { s: CrewStation; all: CrewStation[]; selected: string; depth?: number }) {
@@ -161,13 +189,48 @@ function ProjectBlock({ p, builders, all, selected }: { p: CrewProject; builders
         </div>
       )}
       {builders.length > 0 ? (
-        <ul className="crew-list">
-          {builders.map((b) => <MemberRow key={b.name} s={b} all={all} selected={selected} depth={1} />)}
-        </ul>
+        <BuildersFold id={p.id} builders={builders} all={all} selected={selected} />
       ) : (
         left > 0 && <p className="crew-project-none dim">No builder yet: the orchestrator starts one on its next round.</p>
       )}
     </li>
+  );
+}
+
+/** A project's builders behind a fold that starts shut. Its line counts them, with the helpers
+ *  under them, and names any that wait or went quiet, so a shut fold hides nothing that needs you.
+ *  It opens by itself when the member picked is in it, so a click or a ?member= link never lands
+ *  on a hidden row; opening or closing it by hand is remembered. */
+function BuildersFold({ id, builders, all, selected }: { id: string; builders: CrewStation[]; all: CrewStation[]; selected: string }) {
+  const members = builders.flatMap((b) => withHelpers(b, all));
+  const holds = members.some((m) => m.name === selected);
+  const [open, setOpen] = useState(() => holds || !!readOpen()[id]);
+  useEffect(() => { if (holds) setOpen(true); }, [holds]);
+  const helpers = members.length - builders.length;
+  const waiting = members.filter((m) => m.state === "waiting");
+  const quiet = members.filter((m) => m.state === "quiet");
+  const names = (xs: CrewStation[]) => xs.map((x) => x.name).join(", ");
+  return (
+    <details className="crew-builders" open={open}
+      onToggle={(e) => {
+        // only its own: a fold inside one of its rows toggling is not this one
+        if (e.target === e.currentTarget) setOpen(e.currentTarget.open);
+      }}>
+      <summary onClick={(e) => rememberOpen(id, !wasOpen(e))}>
+        <span className="crew-builders-count">{builders.length} {builders.length === 1 ? "builder" : "builders"}{helpers > 0 && <> · {helpers} {helpers === 1 ? "helper" : "helpers"}</>}</span>
+        {waiting.length > 0 && <span className="crew-builders-flag">
+          <span className="fo-st fo-st-wait" title={names(waiting)}>{waiting.length} waiting</span>
+          {!open && <>{" "}<span className="crew-builders-who">{names(waiting)}</span></>}
+        </span>}
+        {quiet.length > 0 && <span className="crew-builders-flag">
+          <span className="fo-st fo-st-quiet" title={names(quiet)}>{quiet.length} quiet</span>
+          {!open && <>{" "}<span className="crew-builders-who">{names(quiet)}</span></>}
+        </span>}
+      </summary>
+      <ul className="crew-list">
+        {builders.map((b) => <MemberRow key={b.name} s={b} all={all} selected={selected} depth={1} />)}
+      </ul>
+    </details>
   );
 }
 
@@ -266,16 +329,21 @@ export default function Crew() {
   const { data: pdata, error: perror } = usePolling(() => api.crewProjects(), 15000);
   const { data: ddata } = usePolling(() => api.desk(), 15000);
   const [params] = useSearchParams();
-  if (error && !data) return <ErrorState error={error} what="the crew" onRetry={reload} />;
+  const [paneOpen, setPaneOpen] = useState(() => !readPaneFolded());
   const stations = data?.stations ?? [];
+  const builders = stations.filter((s) => s.role === "builder");
+  // a ?member= link to a builder, or a helper under one, opens the Projects pane for this visit
+  const member = params.get("member");
+  const inProjects = !!member && builders.flatMap((b) => withHelpers(b, stations)).some((m) => m.name === member);
+  useEffect(() => { if (inProjects) setPaneOpen(true); }, [inProjects]);
+  if (error && !data) return <ErrorState error={error} what="the crew" onRetry={reload} />;
   const projects = pdata?.projects ?? [];
   const finished = pdata?.finished ?? [];
   const desk = ddata?.desk ?? [];
   const crew = stations.filter((s) => CREW_ROLES.includes(s.role ?? ""));
   const projectIds = new Set(projects.map((p) => p.id));
-  const builders = stations.filter((s) => s.role === "builder");
   const stray = pdata ? builders.filter((b) => !b.project || !projectIds.has(b.project)) : [];
-  const selected = params.get("member") ?? crew.find((s) => s.role === "orchestrator")?.name ?? "";
+  const selected = member ?? crew.find((s) => s.role === "orchestrator")?.name ?? "";
   const known = stations.some((s) => s.name === selected);
 
   return (
@@ -307,8 +375,15 @@ export default function Crew() {
                 </ul>
               ) : <p className="dim" style={{ padding: "10px 16px", margin: 0 }}>No crew station has reported yet: <span className="mono">tares factory crew up</span>.</p>}
             </div>
-            <div className="fo-panel">
-              <header><h3>Projects</h3><span className="dim">{pdata ? `${projects.length} open${finished.length ? ` · ${finished.length} finished` : ""}` : ""}</span></header>
+            <details className="fo-panel fo-fold" open={paneOpen}
+              onToggle={(e) => {
+                // only its own: the project folds and the finished list inside toggle too
+                if (e.target === e.currentTarget) setPaneOpen(e.currentTarget.open);
+              }}>
+              <summary onClick={(e) => rememberPaneFolded(wasOpen(e))}>
+                <span className="fo-fold-h">Projects</span>
+                <span className="dim">{pdata ? `${projects.length} open${finished.length ? ` · ${finished.length} finished` : ""}` : ""}</span>
+              </summary>
               {perror && !pdata ? <div style={{ padding: "10px 16px" }}><ErrorState error={perror} what="the crew's projects" /></div> : projects.length ? (
                 <ul className="crew-list">
                   {projects.map((p) => (
@@ -318,7 +393,7 @@ export default function Crew() {
                   {stray.length > 0 && (
                     <li className="crew-project">
                       <div className="crew-project-head"><span className="crew-project-name">Other builders</span></div>
-                      <ul className="crew-list">{stray.map((b) => <MemberRow key={b.name} s={b} all={stations} selected={selected} depth={1} />)}</ul>
+                      <BuildersFold id=":other" builders={stray} all={stations} selected={selected} />
                     </li>
                   )}
                 </ul>
@@ -336,7 +411,7 @@ export default function Crew() {
                   </ul>
                 </details>
               )}
-            </div>
+            </details>
           </div>
           <div className="crew-col">
             {known ? <MemberDetail key={selected} name={selected} />

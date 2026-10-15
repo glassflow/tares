@@ -2064,6 +2064,19 @@ pre.payload {
 .crew-project-repos { padding: 2px 16px 0; font-size: 12px; overflow-wrap: anywhere; }
 .crew-project-none { margin: 0; padding: 6px 16px 10px 36px; font-size: 13px; }
 .crew-project .crew-list { margin-top: 6px; border-top: 1px solid var(--line); }
+/* a project's builders fold, shut by default; its line counts them and shows any that wait or went quiet */
+/* the arrow hangs in the left gutter, with the count, so a wrapped row lines up with the text */
+.crew-builders > summary { list-style: none; cursor: pointer; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 6px 16px 10px 30px; font-size: 13px; color: var(--ink-soft); }
+.crew-builders > summary::-webkit-details-marker { display: none; }
+.crew-builders-count { margin-left: -14px; padding-left: 14px; text-indent: -14px; }
+.crew-builders-count::before { content: "▸"; display: inline-block; width: 14px; text-indent: 0; }
+.crew-builders[open] > summary > .crew-builders-count::before { content: "▾"; }
+.crew-builders > summary:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: -2px; }
+.crew-builders[open] > summary { padding-bottom: 6px; }
+.crew-builders > .crew-list { margin-top: 0; }
+/* a waiting or quiet chip and the names it counts wrap as one */
+.crew-builders-flag { min-width: 0; }
+.crew-builders-who { font-size: 12px; overflow-wrap: break-word; }
 .crew-detail-body { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px; }
 .crew-detail-label { font-size: 12px; color: var(--ink-soft); margin-bottom: 4px; }
 .main .crew-detail-tickets { list-style: none; margin: 0; padding: 0; }
