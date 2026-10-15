@@ -10,12 +10,20 @@ the project follows [Semantic Versioning](https://semver.org/).
   done, in progress, blocked and to do, with the counts in its tooltip, so a stuck project shows at
   a glance. The project page's counts and ticket bar use the same buckets and name blocked tickets.
   `GET /api/projects` carries `progress` for every factory project.
+- A crew station's attach command (`tares factory crew attach <name>`) has a Copy button wherever
+  the console shows the station: a session's page, the project's Crew rows, the stopped-build
+  banner, Next up and the Crew page, so you can open a stuck or waiting builder in one paste. A
+  station that has ended offers none.
 
 ### Changed
 - Crew page: each project's builders fold, shut by default, behind a line that counts them and
   names any waiting or quiet one, so the Waiting for review list stays in view. The fold opens for
   the member you pick or link to, and the whole Projects pane folds to its header. Both are
   remembered in this browser.
+
+### Fixed
+- The attach command for a helper of a crew station (`crew-reviewer-lint`) names the helper, not
+  a station that doesn't exist.
 
 ## [1.46.0] - 2026-10-14
 
