@@ -11,6 +11,12 @@ the project follows [Semantic Versioning](https://semver.org/).
   a glance. The project page's counts and ticket bar use the same buckets and name blocked tickets.
   `GET /api/projects` carries `progress` for every factory project.
 
+### Changed
+- Crew page: each project's builders fold, shut by default, behind a line that counts them and
+  names any waiting or quiet one, so the Waiting for review list stays in view. The fold opens for
+  the member you pick or link to, and the whole Projects pane folds to its header. Both are
+  remembered in this browser.
+
 ## [1.46.0] - 2026-10-14
 
 Work on a factory project in your own Claude Code session with `tares factory session`, taking it
