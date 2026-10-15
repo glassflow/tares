@@ -455,7 +455,9 @@ function DeskList({ items, allowed, onAllowed }: ReturnType<typeof useDesk>) {
       <ul className="crew-desk">
         {items.map((d) => (
           <li key={d.id}>
-            <b>{d.label}</b>{d.blocking && <span className="fo-st fo-st-quiet" style={{ marginLeft: 6 }}>blocks work</span>}
+            <b>{d.label}</b>
+            {allowed[d.id] ? <span className="fo-st fo-st-done" style={{ marginLeft: 6 }}>allowed</span>
+              : d.blocking && <span className="fo-st fo-st-quiet" style={{ marginLeft: 6 }}>blocks work</span>}
             {d.project_name && <span className="dim"> · {d.project_name}</span>}
             <div>{d.question}</div>
             <div className="dim" style={{ fontSize: 13 }}>
@@ -508,7 +510,7 @@ function PermissionRequest({ d, onAllowed }: { d: DeskItem; onAllowed: (a: DeskA
   const [edited, setEdited] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  // the box shows the whole grant: it is what you consent to
+  // the box shows the whole grant, one line or many: it is what you consent to
   const box = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
     const ta = box.current; if (!ta) return;
@@ -529,7 +531,7 @@ function PermissionRequest({ d, onAllowed }: { d: DeskItem; onAllowed: (a: DeskA
       <div className="crew-detail-label">{station} was refused this command</div>
       <pre className="crew-perm-cmd"><code>{d.command}</code></pre>
       <label htmlFor={wid} className="crew-detail-label">The grant, kept in your words</label>
-      <textarea id={wid} ref={box} rows={2} value={words} disabled={busy}
+      <textarea id={wid} ref={box} rows={1} value={words} disabled={busy}
                 onChange={(e) => { setWords(e.target.value); setEdited(true); }} />
       {length > GRANT_MAX && <p className="fo-warn" style={{ margin: 0 }}>The grant is {length} characters; keep it to {GRANT_MAX}.</p>}
       {either ? (
