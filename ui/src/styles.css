@@ -2080,6 +2080,7 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 .crew-project:last-child { border-bottom: 0; }
 .crew-project-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; padding: 0 16px; }
 .crew-project-name { font-weight: 600; }
+.crew-project-progress { display: inline-flex; align-items: center; gap: 6px; align-self: center; }
 .crew-project-repos { padding: 2px 16px 0; font-size: 12px; overflow-wrap: anywhere; }
 .crew-project-none { margin: 0; padding: 6px 16px 10px 36px; font-size: 13px; }
 .crew-project .crew-list { margin-top: 6px; border-top: 1px solid var(--line); }

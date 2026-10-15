@@ -2,8 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
-import { CopyButton, ErrorState, TimeAgo, fmtCost, usePolling } from "../components/bits";
+import { CopyButton, ErrorState, TimeAgo, usePolling } from "../components/bits";
 import { ContextBadge, PlanPanel, StationUsage } from "../components/ClaudeUsage";
+import { ProgressRing } from "../components/ProgressRing";
 import type { CrewProject, CrewSettings, CrewStation, DeskAllowed, DeskItem, ProjectUsage } from "../types";
 
 // The crew of a tares-factory (M3, M8): one always-on crew (orchestrator, reviewer, and a releaser
@@ -159,13 +160,21 @@ function MemberRow({ s, all, selected, depth = 0 }: { s: CrewStation; all: CrewS
   );
 }
 
+/** A share as a whole percent; one too small to round up still says it is there. */
+const pctOf = (x: number) => (x > 0 && x < 0.005 ? "under 1%" : `${Math.round(x * 100)}%`);
+
 function ProjectBlock({ p, builders, all, selected, week, now }: { p: CrewProject; builders: CrewStation[]; all: CrewStation[]; selected: string; week?: ProjectUsage; now?: ProjectUsage }) {
   const left = p.tickets_total - p.tickets_done;
+  const shares = [
+    now?.share != null ? `${pctOf(now.share)} of this 5-hour window` : "",
+    week?.share != null ? `${pctOf(week.share)} of this week` : "",
+  ].filter(Boolean);
   return (
     <li className="crew-project">
       <div className="crew-project-head">
         <Link to={`/projects/${encodeURIComponent(p.id)}`} className="crew-project-name">{p.name}</Link>
-        <span className="dim">
+        <span className="crew-project-progress dim">
+          {p.progress && <ProgressRing progress={p.progress} size={14} />}
           {p.tickets_total === 0 ? "no tickets yet"
             : left === 0 ? `all ${p.tickets_total} tickets merged`
             : <>{p.tickets_done} of {p.tickets_total} merged{p.milestone && <> · on {p.milestone.name} ({p.milestone.done}/{p.milestone.total})</>}</>}
@@ -177,9 +186,9 @@ function ProjectBlock({ p, builders, all, selected, week, now }: { p: CrewProjec
           {p.autonomy && <> · {p.autonomy}</>}
         </div>
       )}
-      {week && (
-        <div className="crew-project-repos dim" title="estimated at API list prices, from the token counts of its sessions' replies">
-          This week about {fmtCost(week.cost_usd)} at API prices{now?.share != null && <> · {Math.round(now.share * 100)}% of this 5-hour window</>}
+      {shares.length > 0 && (
+        <div className="crew-project-repos dim" title="its share of what every Claude Code session reporting here used, in the current 5-hour window and over the last 7 days">
+          {shares.join(" · ")}
         </div>
       )}
       {builders.length > 0 ? (

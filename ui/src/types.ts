@@ -541,6 +541,7 @@ export interface CrewProject {
   handed_over_at: string | null; handed_over_by: string | null;
   tickets_done: number; tickets_total: number; stages: Record<string, number>;
   milestone: { name: string; done: number; total: number } | null;
+  progress?: TicketProgress;           // the tickets as the ring counts them (canceled kept out)
 }
 export interface StationDetail extends CrewStation {
   tickets: { project: string; project_name: string; ticket: string; title: string; stage: string | null; repo: string | null; pr: string | null }[];

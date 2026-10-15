@@ -301,7 +301,15 @@ async def main():
         row = crew["Shop"]
         ck("the crew's list keeps its fields",
            set(row) == {"id", "name", "tickets_done", "tickets_total", "stages", "milestone",
-                        "repos", "autonomy", "handed_over_at", "handed_over_by"}, sorted(row))
+                        "progress", "repos", "autonomy", "handed_over_at", "handed_over_by"},
+           sorted(row))
+        ck("and the ring's count, the same as the projects list's",
+           row["progress"] == ps["Shop"]["progress"] == {"done": 2, "doing": 1, "blocked": 2,
+                                                         "todo": 1, "canceled": 1, "total": 6},
+           row.get("progress"))
+        ck("a project with no tickets has an empty one",
+           crew["Notes"].get("progress") == {"done": 0, "doing": 0, "blocked": 0, "todo": 0,
+                                             "canceled": 0, "total": 0}, crew["Notes"].get("progress"))
         ck("and its counts: canceled counts as done there, in a total of every ticket",
            (row["tickets_done"], row["tickets_total"]) == (3, 7)
            and row["stages"] == {"merged": 2, "review": 1, "todo": 2, "done": 1, "blocked": 1}

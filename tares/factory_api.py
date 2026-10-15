@@ -175,8 +175,8 @@ def pr_note(t: dict) -> str | None:
 
 def project_progress(store, uid: str) -> dict:
     """Tickets done of all, by stage, and the first milestone with work left: what the crew's
-    project list shows (canceled tickets count as done here; the console's ring keeps them out,
-    tares/factory.py `progress`)."""
+    project list shows (canceled tickets count as done here), and `progress`, the same tickets
+    as the console's ring counts them (canceled kept out, tares/factory.py `progress`)."""
     tickets = store.list_tickets(uid)
     done = [t for t in tickets if (t["stage"] in ("merged", "shipped")
                                    or t["status"] in factory_mod.DONE_STATUSES)]
@@ -192,7 +192,7 @@ def project_progress(store, uid: str) -> dict:
                        "total": len(mine)}
             break
     return {"tickets_done": len(done), "tickets_total": len(tickets), "stages": stages,
-            "milestone": current}
+            "milestone": current, "progress": factory_mod.progress(tickets)}
 
 
 def register(app, store, h: SimpleNamespace) -> None:
