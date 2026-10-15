@@ -503,7 +503,13 @@ DESK_STATES = ("open", "answered", "withdrawn")
 MATCH_HOURS = 48       # an answer is looked for in what the person typed this recently
 
 
-def desk_ok(question, recommendation, why, options, context) -> tuple:
+MAX_COMMAND = 2000     # a refused command, kept as the station ran it
+
+
+def desk_ok(question, recommendation, why, options, context, station=None,
+            command=None) -> tuple:
+    """The desk item's fields, cleaned. A permission request also names the station that was
+    refused and the exact command: kept verbatim (only trimmed), since the person allows that."""
     q = _line(question, "the question", 1000)
     rec = _line(recommendation, "your recommendation", 500)
     w = _line(why, "why you recommend it", 1000)
@@ -512,7 +518,13 @@ def desk_ok(question, recommendation, why, options, context) -> tuple:
     if not isinstance(options, list) or len(options) > 8:
         raise DocError("options is a list of up to 8 choices")
     opts = [_line(o, "an option", 300) for o in options]
-    return q, rec, w, opts, _line(context, "the context", 1500, False)
+    st = _line(station, "the station", MAX_NAME, False)
+    cmd = str(command or "").strip()
+    if len(cmd) > MAX_COMMAND:
+        raise DocError(f"the command is {len(cmd)} characters; keep it to {MAX_COMMAND}")
+    if cmd and not st:
+        raise DocError("a permission request names the station that was refused")
+    return q, rec, w, opts, _line(context, "the context", 1500, False), st, cmd
 
 
 def _plain(s: str) -> str:

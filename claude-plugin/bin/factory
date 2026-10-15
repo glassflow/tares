@@ -35,7 +35,9 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
                                             that stopped, under the same name; start
                                             fresh any that Claude Code stopped for thrashing on
                                             autocompact; after an update, move each station onto it
-                                            when it's idle (same conversation)
+                                            when it's idle (same conversation); restart a station
+                                            between its turns when you allow it something new in
+                                            Tares (same conversation, its fresh settings have it)
   tares factory crew halt ["<reason>"]      stop risky actions on every station until resume
   tares factory crew resume                 lift a halt
   tares factory crew down                   stop the watch and every station (Tares keeps the record)
@@ -351,16 +353,22 @@ ensure_settings() {
   ask_grants
 }
 
-grants_md() { # [project] → markdown of grants for all projects, then the project's
+grants_read() { # [project] → markdown of grants for all projects, then the project's; fails when Tares can't give them
   local q=""; [ -n "${1:-}" ] && q="?project=$(uri "$1")"
   local g
-  # A project Tares doesn't know answers 404; the grants for all projects still apply.
-  g=$(tares_http GET "/api/grants$q" 2>/dev/null) || { [ -n "$q" ] && g=$(tares_http GET /api/grants 2>/dev/null); } \
-    || { say "could not read grants from Tares"; return 0; }
-  jq -r '.all // ""' <<<"$g"
-  [ -n "${1:-}" ] && jq -r '.project // ""' <<<"$g" | sed 's/^/@project /'
+  # A project Tares doesn't know answers 404; the grants for all projects still apply. Any other
+  # failure is no answer at all, never "no grants".
+  if ! g=$(tares_http GET "/api/grants$q" 2>&1); then
+    [ -n "$q" ] && grep -q 'error: 404' <<<"$g" && g=$(tares_http GET /api/grants 2>/dev/null) || return 1
+  fi
+  jq -r '.all // ""' <<<"$g" || return 1
+  if [ -n "${1:-}" ]; then jq -r '.project // ""' <<<"$g" | sed 's/^/@project /'; fi
+}
+grants_md() { # [project] → the same, or nothing (said) when Tares can't give them
+  grants_read "${1:-}" || say "could not read grants from Tares"
   return 0
 }
+grants_sum() { cksum | cut -d' ' -f1; } # grants text on stdin → its fingerprint
 # One allow rule per grant line. Tares keeps each as `- "<words>" (YYYY-MM-DD)`; `- YYYY-MM-DD: words`
 # and undated list items are read too. Quotes the words and date.
 GRANT_QUOTED='^"(.*)"[[:space:]]*\(([0-9]{4}-[0-9]{2}-[0-9]{2})\)[[:space:]]*$'
@@ -681,6 +689,10 @@ quiet() { # station → 0 when it is quiet
 launch() { # station role parent project repo cwd model effort prompt [resume-session-id]
   local station=$1 role=$2 parent=$3 project=$4 repo=$5 cwd=$6 model=$7 effort=$8 prompt=$9 resume=${10:-}
   check_model "$model" "$station"
+  # The grants it starts with, read before its settings are written: one that lands in between costs
+  # an extra restart from the watch, never a missed grant. Unreadable: no fingerprint, nothing to compare.
+  local grants="" gsum=""
+  grants=$(grants_read "$project") && gsum=$(printf '%s\n' "$grants" | grants_sum) || gsum=""
   local settings; settings=$(write_settings "$station" "$role" "$parent" "$project" "$repo")
   local skill=$role; [ "$role" = helper ] && skill=$(parent_role "$parent")
   local identity="You are a tares-factory station: role $role, session name $station"
@@ -713,9 +725,11 @@ launch() { # station role parent project repo cwd model effort prompt [resume-se
   done
   stations_put "$station" "$(jq -n --arg role "$role" --arg parent "$parent" --arg project "$project" --arg repo "$repo" \
     --arg cwd "$cwd" --arg id "$id" --arg session "$session" --arg model "$model" --arg effort "$effort" --arg settings "$settings" \
-    --arg kit "$(kit_version)" \
+    --arg kit "$(kit_version)" --arg grants "$gsum" \
     '{role: $role, parent: $parent, project: $project, repo: $repo, cwd: $cwd, id: $id, sessionId: $session,
-      model: $model, effort: $effort, settings: $settings, kit: $kit, status: "active", startedAt: (now | todate)}')"
+      model: $model, effort: $effort, settings: $settings, kit: $kit, grants: $grants, grants_tried: null,
+      status: "active", startedAt: (now | todate)}')"
+  [ -z "$gsum" ] || printf '%s\n' "$grants" > "$CREW_HOME/stations/$station.grants"
   event started "$station" "$id"
   echo "  ✓ started $station ($model, $effort)" >&2
 }
@@ -961,14 +975,14 @@ cmd_down() {
   say "all stations stopped. Tares keeps the projects, tickets and the desk; $ME crew up starts fresh sessions."
 }
 
-cmd_watch() { # every interval: revive stopped stations, restart stuck ones fresh, move idle ones onto an updated plugin
+cmd_watch() { # every interval: revive stopped stations, restart stuck ones fresh, restart idle ones with new grants, move idle ones onto an updated plugin
   require_crew
   local once=0 interval=${FACTORY_WATCH_INTERVAL:-180}
   while [ $# -gt 0 ]; do
     case "$1" in --once) once=1; shift ;; --interval) interval=$2; shift 2 ;; *) die "unknown option $1" ;; esac
   done
   local kit_start seen said_dirty=0; kit_start=$(kit_version); seen=$kit_start
-  [ $once = 1 ] || say "watching the crew every ${interval}s; Ctrl-C to stop"
+  [ $once = 1 ] || say "watching the crew every ${interval}s (it revives stations that stop, and gives one a permission you allowed in Tares); Ctrl-C to stop"
   while :; do
     local s kit settled=0 down=0 candidate=""; kit=$(kit_version)
     # An update counts once it has held for a whole round in a clean checkout: a pull or an edit in
@@ -983,6 +997,7 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
       say "the plugin was updated; the watch restarts on the new version"
       exec "$src" crew watch --interval "$interval"
     fi
+    TARES_STATE=""; tares_on || true   # this round's Tares; one that doesn't answer changes no grants
     if ! active_json >/dev/null; then
       say "$UNREAD; nothing is revived or restarted this round"
       [ $once = 1 ] && return 0
@@ -991,8 +1006,9 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
     for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS" 2>/dev/null); do
       # Never revive or restart what ended with nothing left to do (lesson 7): helpers are short-lived,
       # and a builder whose tickets are all merged leaves stations/<name>.done for the orchestrator to retire.
+      # A live helper between turns still gets a permission the person allowed for it.
       case "$(stations_get "$s" '.role')" in
-        helper) continue ;;
+        helper) if ! halted && between_turns "$s" && regrant_due "$s"; then regrant_station "$s"; fi; continue ;;
         builder) [ -f "$CREW_HOME/stations/$s.done" ] && continue ;;
       esac
       local up; up=$(is_alive "$s" && echo yes || echo no) || { say "skipping $s this round"; down=1; continue; }
@@ -1005,6 +1021,8 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
           local rc=$?
           set -e
           [ $rc = 0 ] || say "could not restart $s; will try again next round"
+        elif ! halted && between_turns "$s" && regrant_due "$s"; then
+          regrant_station "$s"
         elif [ -z "$candidate" ] && movable "$s" "$kit"; then
           candidate=$s
         fi
@@ -1027,6 +1045,63 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
     [ $once = 1 ] && return 0
     sleep "$interval"
   done
+}
+
+# A permission the person allows in the console is a grant on Tares, and a station has its grants only in
+# the settings it was started with. A station whose grants changed since is restarted with fresh
+# settings, in the same conversation, once it is between turns: done, or blocked (it may be waiting on
+# that very permission), with nothing running in the background. Once per change. A Tares that can't
+# be read is never a change, and a station started before grants were tracked gets them with the next
+# plugin update. A station someone has open in a terminal (crew attach) waits until they leave it: a
+# restart would end the conversation they are in, and answering the desk there changes grants itself.
+grants_now() { # station → the fingerprint of its grants on Tares now; fails when Tares can't give them
+  local g; g=$(grants_read "$(stations_get "$1" '.project')") || return 1
+  printf '%s\n' "$g" | grants_sum
+}
+regranted() { # station → 0 when its grants on Tares differ from those it started with, not yet acted on
+  local was now; was=$(stations_get "$1" '.grants'); [ -n "$was" ] || return 1
+  now=$(grants_now "$1") || return 1
+  [ "$now" != "$was" ] && [ "$now" != "$(stations_get "$1" '.grants_tried')" ]
+}
+between_turns() { FACTORY_QUIET_WAIT=0 quiet "$1"; } # station → 0 when done or blocked, nothing in flight
+attached() { # station → 0 while someone has its session open in a terminal (claude attach <id>)
+  local id; id=$(stations_get "$1" '.id'); [ -n "$id" ] && pgrep -f "attach $id( |\$)" >/dev/null 2>&1
+}
+regrant_due() { # station → 0 when the watch is to restart it with new grants, once it is between turns
+  [ -n "$(stations_get "$1" '.sessionId')" ] && [ ! -f "$CREW_HOME/stations/$1.done" ] && ! attached "$1" && regranted "$1"
+}
+
+regrant_station() { # station: restart it with its new grants, in the same conversation, saying which
+  local s=$1 rc
+  set +e
+  ( set -e; TARES_STATE=""; SETTINGS=""; CREW_PROJECTS=""
+    tares_on || exit 3   # without Tares there are no grants to restart it with
+    crew_settings >/dev/null
+    between_turns "$s" || exit 4   # it started something since the first check
+    local project now sum human added rules prompt kept="$CREW_HOME/stations/$s.grants"
+    project=$(stations_get "$s" '.project')
+    now=$(grants_read "$project") || exit 3
+    sum=$(printf '%s\n' "$now" | grants_sum)
+    human=$(ccfg '.human.name // "the user"'); [ -n "$human" ] || human="the user"
+    added=$now; [ -f "$kept" ] && added=$(grep -Fxv -f "$kept" <<<"$now" || true)
+    rules=$(grant_rules "$project" "$human" <<<"$added" | sed 's/^/- /')
+    stations_put "$s" "$(jq -n --arg t "$sum" '{grants_tried: $t}')"
+    if [ -n "$rules" ]; then
+      prompt="$human allowed new permissions in Tares, so the factory restarted you in this same conversation with fresh settings. These are in your settings now:
+$rules
+If something you tried was refused for want of one of these and is still needed, run it again now. Then re-read your report, re-arm your schedule if you have one, and carry on where you were."
+    else
+      prompt="$human changed what the crew is allowed in Tares, so the factory restarted you in this same conversation with fresh settings that have the change (read_grants shows them). Re-read your report, re-arm your schedule if you have one, then carry on where you were."
+    fi
+    say "$s has new permissions from Tares; restarting it with them now that it's between turns, in the same conversation"
+    cmd_restart "$s" "$prompt"
+    event regranted "$s" "$sum" )
+  rc=$?
+  set -e
+  case $rc in
+    0|3|4) ;;
+    *) say "could not restart $s with its new permissions; it gets them when it next starts ($ME restart $s)" ;;
+  esac
 }
 
 movable() { # station kit → 0 when it runs another version, has a conversation to resume, and is quiet
@@ -1069,7 +1144,9 @@ desk_block() { # one desk item (json) → its question, options and recommendati
     (if (.options // []) | length > 0 then (.options | to_entries[] | "  \(["A","B","C","D","E","F","G","H"][.key] // (.key + 1 | tostring))) \(.value)") else empty end),
     "  recommended: \(.recommendation)\(if .why then ", since " + .why else "" end)",
     (if .blocks then "  blocks: \(.blocks)" else empty end),
-    (if (.assumptions // []) | length > 0 then "  confirms: \(.assumptions | join(", "))" else empty end)' <<<"$1"
+    (if (.assumptions // []) | length > 0 then "  confirms: \(.assumptions | join(", "))" else empty end),
+    (if .command then "  \(.station // "a station") was refused: \(.command | gsub("\n"; " "))",
+      "  allow it in Tares, on the project page or the Crew page: the watch restarts \(.station // "the station") with it" else empty end)' <<<"$1"
 }
 
 cmd_desk() { # the questions waiting for the person, in full
@@ -1105,13 +1182,17 @@ cmd_status() {
     detail=$(jq -r '.detail // ""' <<<"$job"); needs=$(jq -r '.needs // ""' <<<"$job")
     [ -n "$needs" ] && detail="NEEDS: $needs"
     stuck_on_context "$s" && detail="STUCK on autocompact: $ME crew watch starts it fresh"
+    if [ -n "$st" ] && [ -n "$(stations_get "$s" '.sessionId')" ] && [ ! -f "$CREW_HOME/stations/$s.done" ] && regranted "$s"; then
+      if attached "$s"; then detail="NEW PERMISSIONS: restarted with them once you leave its session"
+      else detail="NEW PERMISSIONS: the watch restarts it with them between turns"; fi
+    fi
     printf '%-30s %-12s %-14s %-8s %-8s %s\n' "$s" "$role" "$model/$effort" "${st:-gone}" "$tempo" "${detail:0:70}"
   done
   active_json | jq -r "$GONE"' map(select(((.name // "") | test("^crew-|-build-")) and (gone | not))) | group_by(.name)[] | select(length > 1)
     | "TWO SESSIONS named \(.[0].name): \(map(.id) | join(", ")); stop the one stations.json does not list (factory roster)"' || true
   [ $old = 0 ] || echo "plugin: $old station(s) run an older version; $ME crew watch moves each onto this one when it's idle"
   halted && echo "HALTED: $(jq -r .reason "$HALT_FILE" 2>/dev/null)"
-  local wp; if wp=$(watch_pid); then echo "watch: running (pid $wp), it revives any station that stops; log in $WATCH_LOG"
+  local wp; if wp=$(watch_pid); then echo "watch: running (pid $wp), it revives any station that stops and gives one a permission you allowed in Tares; log in $WATCH_LOG"
   else echo "watch: not running; $ME crew up starts it (or run $ME crew watch yourself)"; fi
   local items n; items=$(desk_json); n=$(jq length <<<"$items")
   if [ "$n" -gt 0 ]; then

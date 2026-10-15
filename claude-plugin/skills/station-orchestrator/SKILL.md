@@ -96,7 +96,7 @@ When a station sends `ASK`:
 
 ## The desk
 
-The person answers only here, in your session (`tares factory crew attach orchestrator`). The Crew page on Tares shows the desk read-only.
+The person answers only here, in your session (`tares factory crew attach orchestrator`). The Crew page and the project page on Tares show the desk; the one thing the person can do there is allow a permission request (below).
 
 - **Record** each question with `desk_add(question, recommendation, why, options, context, blocks, tickets, blocking, asked_by, assumptions, project)`.
 - **Ask one at a time, blockers first** (`desk_list` returns them in that order). Once you've asked an item, keep asking it until it's answered or the person says to skip it; a blocker that comes in meanwhile is next, and you say so in one line. Ask in this shape, the first time and every time you mention the item again:
@@ -116,10 +116,11 @@ The person answers only here, in your session (`tares factory crew attach orches
 - **Notify** blocking items with `PushNotification` (the item's question, as plain text), so the person comes to your session.
 - **Assumptions, once per milestone**: `list_assumptions(state="open")`, then one desk item listing them with your recommendation to keep each, `assumptions=[...]`. The answer must settle every assumption on the item exactly once: each in `kept=[...]` or in `overturned={"A<n>": "<the person's words about it>"}`, the words theirs (a phrase from their answer is fine). If their answer leaves one out, ask about it before recording. `decide_assumption` exists for a single one outside a batch; normally the batch does it. For each overturned one, write a follow-up ticket (`write_ticket(title, milestone=..., repo=...)`, or in Linear for a Linear-owned project) and tell the builder.
 - **L3-review merges**: a builder's `ASK` for a merge goes on the desk as blocking. Relay the person's yes with `RELAY`, quoting it; nothing else lets a builder merge at L3.
+- **A permission a station was refused** (protocol rule 13) goes on the desk as a permission request: `desk_add(question, recommendation, why, station="<the station>", command="<the exact command, verbatim as it reported it>", blocking=..., project=...)`, with `recommendation` the grant in plain words, naming the station, the command and where (for example: shop-build-m1 may run `gh pr merge 12 --squash` in acme/shop). Leave out `project` for a crew-wide station (reviewer, releaser). The person allows it with one click in the Tares console, on the project page or the Crew page. Tares keeps it as a grant in their words and answers the item, and the crew's watch restarts that station with the grant in its settings once it is between turns, telling it to run the command again. Relay nothing for the permission itself: a message can't grant it, only the station's settings can. Show it like any item, but end its block with where to allow it (the Crew page or the project page in Tares) instead of "Reply with a letter"; a yes typed here doesn't allow it, so point them there. Once Tares shows it answered, take it as done.
 
 ## Speaking for the person
 
-On routine work your word is the person's: routing, relays, go-aheads on decisions already made (`list_decisions`) or granted (`read_grants`), next steps. You may not invent a new grant. A new permission needs the person's own words in this session, recorded with `desk_answer`, which you quote verbatim in a `RELAY`. A standing grant they state outright can also be saved with `add_grant(words, scope, project)`, their words as typed.
+On routine work your word is the person's: routing, relays, go-aheads on decisions already made (`list_decisions`) or granted (`read_grants`), next steps. You may not invent a new grant. A new permission needs the person's own words in this session, recorded with `desk_answer`, which you quote verbatim in a `RELAY`, or their click on a permission request in the Tares console (above), which reaches the station without you. A standing grant they state outright can also be saved with `add_grant(words, scope, project)`, their words as typed.
 
 ## Tick
 

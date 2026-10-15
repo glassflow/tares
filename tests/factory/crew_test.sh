@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Checks one crew for all projects, on a real Tares: crew up from a home folder (settings asked once and
 # kept on Tares, the releaser only when asked for), builders in the repos of a project handed over on
-# Tares, revive under the same name, halt and resume, the desk read from Tares, down. Uses a fake claude.
+# Tares, revive under the same name, halt and resume, the desk read from Tares, a permission allowed in
+# Tares reaching its station through the watch, down. Uses a fake claude.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/lib.sh"
@@ -415,6 +416,69 @@ for _ in 1 2 3; do FAKE_CLAUDE_FAIL_RESUME=1 "$F" crew watch --once >/dev/null 2
 check "a failing kit takes down one station at most" '[ "$(jq "[.[] | select((.name == \"crew-reviewer\" or .name == \"crew-releaser\") and .state != \"stopped\")] | length" "$FAKE_CLAUDE_STATE/agents.json")" -ge 1 ]'
 "$F" crew watch --once >/dev/null 2>&1
 check "it comes back once the kit works" '"$F" roster 2>/dev/null | grep -q "^crew-reviewer" && "$F" roster 2>/dev/null | grep -q "^crew-releaser"'
+
+# A permission the person allows in the console is a grant on Tares. The watch restarts each live station
+# whose grants changed, once it is between turns, in the same conversation: its fresh settings have the
+# grant and its prompt quotes it. Once per change; a busy station waits, and a Tares whose grants can't
+# be read changes nothing.
+idle() { agent "$1" '.state = "working" | .status = "idle"'; job "$1" 'del(.inFlight)'; }
+for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$FACTORY_CREW_HOME/stations.json"); do agent "$s" '.state = "working" | .status = "busy"'; done
+check "stations record the grants they started with" '[ -n "$(st shop-build-m1 .grants)" ] && grep -q "staging database" "$FACTORY_CREW_HOME/stations/shop-build-m1.grants"'
+SHOP=$(api GET /api/crew/projects | jq -r '.projects[] | select(.name == "shop") | .id')
+grant="shop-build-m1 may run gh pr merge 12 --squash in shop"
+dk=$(api POST /api/desk "$(jq -cn --arg p "$SHOP" --arg g "$grant" '{question: "shop-build-m1 was refused a command. Allow it?", recommendation: $g, why: "it merges its own pull request", project: $p, station: "shop-build-m1", command: "gh pr merge 12 --squash"}')" | jq -r .label)
+"$F" crew desk >"$T/desk-perm.out" 2>&1
+check "crew desk shows the refused command and where to allow it" 'grep -q "shop-build-m1 was refused: gh pr merge 12 --squash" "$T/desk-perm.out" && grep -q "allow it in Tares" "$T/desk-perm.out"'
+api POST "/api/desk/$dk/allow" "$(jq -cn --arg g "$grant" '{words: $g, scope: "project"}')" >/dev/null
+m1=$(st shop-build-m1 .id); m2=$(st shop-build-m2 .id); m1s=$(st shop-build-m1 .sessionId); r=$(st crew-reviewer .id); before=$(launches)
+"$F" crew watch --once >/dev/null 2>&1
+check "a busy station waits for its new grant" '[ "$(st shop-build-m1 .id)" = "$m1" ] && [ "$(launches)" = "$before" ]'
+check "status says it has new permissions waiting" '"$F" crew status 2>/dev/null | grep "^shop-build-m1 " | grep -q "NEW PERMISSIONS: the watch restarts it"'
+idle shop-build-m1; idle crew-reviewer
+"$F" crew watch --once >"$T/regrant.out" 2>&1
+check "between turns it is restarted with the grant" 'moved shop-build-m1 "$m1" && grep -q "shop-build-m1 has new permissions from Tares" "$T/regrant.out" && grep -q "\"event\":\"regranted\"" "$FACTORY_CREW_HOME/events.jsonl"'
+check "in the same conversation" 'last shop-build-m1 | jq -e --arg s "$m1s" "index(\"--resume\") as \$i | \$i != null and .[\$i+1] == \$s" >/dev/null'
+check "its fresh settings have the grant" 'allow_has shop-build-m1 "for project shop, in their own words: \"$grant\". Acting"'
+check "its prompt quotes the new grant and says to run the refused command again" 'last shop-build-m1 | jq -r ".[-1]" | grep -q "allowed new permissions in Tares" && last shop-build-m1 | jq -r ".[-1]" | grep -qF "\"$grant\"" && last shop-build-m1 | jq -r ".[-1]" | grep -q "run it again now"'
+check "and only the new one" '! last shop-build-m1 | jq -r ".[-1]" | grep -q "staging database"'
+check "a busy builder of the same project still waits" '[ "$(st shop-build-m2 .id)" = "$m2" ]'
+check "a station whose grants did not change is left alone" '[ "$(st crew-reviewer .id)" = "$r" ] && [ $(( $(launches) - before )) = 1 ]'
+idle shop-build-m1; m1=$(st shop-build-m1 .id)
+"$F" crew watch --once >/dev/null 2>&1
+check "once per change" '[ "$(st shop-build-m1 .id)" = "$m1" ]'
+# A live helper gets a permission allowed for it too. A station someone has open in a terminal waits until
+# they leave it: a restart would end the conversation they are in.
+"$F" spawn helper shop-build-m1 e2e "run the e2e tests" >/dev/null 2>&1
+idle shop-build-m1-e2e; idle shop-build-m2; hp=$(st shop-build-m1-e2e .id); m2=$(st shop-build-m2 .id)
+api POST /api/grants "$(jq -cn --arg p "$SHOP" '{words: "shop-build-m1-e2e may run npm run e2e in shop", scope: "project", project: $p}')" >/dev/null
+bash -c "exec -a 'claude attach $m2' sleep 60" & apid=$!
+"$F" crew watch --once >/dev/null 2>&1
+check "a live helper is restarted with its grant" 'moved shop-build-m1-e2e "$hp" && allow_has shop-build-m1-e2e "shop-build-m1-e2e may run npm run e2e"'
+check "a station open in a terminal waits" '[ "$(st shop-build-m2 .id)" = "$m2" ]'
+check "status says it waits for you to leave it" '"$F" crew status 2>/dev/null | grep "^shop-build-m2 " | grep -q "once you leave its session"'
+kill "$apid" 2>/dev/null; wait "$apid" 2>/dev/null
+"$F" crew watch --once >/dev/null 2>&1
+check "and gets it once they leave" 'moved shop-build-m2 "$m2" && allow_has shop-build-m2 "shop-build-m1-e2e may run npm run e2e"'
+"$F" retire shop-build-m1-e2e >/dev/null 2>&1
+# A grant for every project; a Tares that answers its health check but can't give the grants.
+api POST /api/grants '{"words": "the reviewer may label pull requests", "scope": "all"}' >/dev/null
+fake="$T/fake-tares"; mkdir -p "$fake"; echo ok > "$fake/health"
+fport=$("$PY" -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+"$PY" -m http.server "$fport" --bind 127.0.0.1 --directory "$fake" >/dev/null 2>&1 & fpid=$!
+for _ in $(seq 50); do curl -sf "http://127.0.0.1:$fport/health" >/dev/null 2>&1 && break; sleep 0.1; done
+before=$(launches)
+TARESD_URL="http://127.0.0.1:$fport" "$F" crew watch --once >"$T/unread-grants.out" 2>&1
+kill "$fpid" 2>/dev/null; wait "$fpid" 2>/dev/null
+check "grants that can't be read restart nothing" '[ "$(launches)" = "$before" ] && ! grep -q "new permissions" "$T/unread-grants.out"'
+"$F" crew halt "testing" >/dev/null 2>&1
+"$F" crew watch --once >/dev/null 2>&1
+check "nothing restarts while halted" '[ "$(launches)" = "$before" ]'
+"$F" crew resume >/dev/null 2>&1
+# Blocked on a person, for minutes only: restarted at once, since it may wait on this very permission.
+agent crew-reviewer '.state = "working" | .status = "waiting"'; job crew-reviewer '.state = "working" | .updatedAt = (now | todate)'
+"$F" crew watch --once >/dev/null 2>&1
+check "a station blocked on a person gets the grant at once" 'moved crew-reviewer "$r" && allow_has crew-reviewer "for all projects, in their own words: \"the reviewer may label pull requests\""'
+check "busy crew stations still wait" '[ "$(st crew-orchestrator .grants)" != "$(st crew-reviewer .grants)" ]'
 
 "$F" crew down >/dev/null 2>&1
 check "down retires all" '[ "$(jq "[.[] | select(.status == \"active\")] | length" "$FACTORY_CREW_HOME/stations.json")" = 0 ]'

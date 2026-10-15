@@ -893,13 +893,16 @@ def register(app, store, h: SimpleNamespace) -> None:
     @app.post("/api/desk", status_code=201)
     async def desk_add(request: Request, body: dict = Body(...)):
         """{question, recommendation, why, options?, context?, blocks?, tickets?, blocking?,
-        assumptions?, project?}: a question for the person, numbered D1, D2... for the whole
-        cell. Only the orchestrator (or a person's own session) writes the desk."""
+        assumptions?, project?, station?, command?}: a question for the person, numbered D1,
+        D2... for the whole cell. With `command` (and the `station` that was refused it) it is a
+        permission request, which the person can allow from the console. Only the orchestrator
+        (or a person's own session) writes the desk."""
         deny(request, "desk")
         try:
-            q, rec, why, opts, ctx = factory_mod.desk_ok(
+            q, rec, why, opts, ctx, station, command = factory_mod.desk_ok(
                 body.get("question"), body.get("recommendation"), body.get("why"),
-                body.get("options"), body.get("context"))
+                body.get("options"), body.get("context"), body.get("station"),
+                body.get("command"))
         except docs_mod.DocError as e:
             h.err(e)
         uid = None
@@ -919,7 +922,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         d = store.add_desk_item(uid, q, ctx, opts, rec, why,
                                 " ".join(str(body.get("blocks") or "").split())[:300], tickets,
                                 bool(body.get("blocking")), str(body.get("asked_by") or by)[:120],
-                                asm, now_utc())
+                                asm, now_utc(), station, command)
         return desk_out(d)
 
     @app.get("/api/desk")
@@ -1061,6 +1064,50 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {"desk_item": desk_out(desk_or_404(d["id"])), "decision": dec,
                 "matched": True, "recorded": True, "granted": granted, "assumptions": changed,
                 "follow_up": follow, "unheard": []}
+
+    @app.post("/api/desk/{ref}/allow")
+    async def desk_allow(ref: str, request: Request, body: dict = Body(...)):
+        """{words, scope: project|all}: the person allows a permission request (a desk item with
+        a command) from the console. `words` is the grant as they let it stand (the console
+        offers a sentence naming the station and the command; they may edit it). It is kept as a
+        grant, for the item's project or for every project, and recorded as their decision made
+        in the console; the item is answered. The crew's watch restarts the station with it. A
+        person decides: refused from any crew station."""
+        if caller(request)["station"]:
+            h.err(PermissionError("a permission is the person's to allow: they allow it in the "
+                                  "console"), 403)
+        d = desk_or_404(ref)
+        if d["state"] != "open":
+            h.err(ValueError(f"{d['label']} is already {d['state']}"), 409)
+        if not d.get("command"):
+            h.err(ValueError(f"{d['label']} is a question, not a permission request: answer it "
+                             "in the orchestrator's session"), 409)
+        scope = str(body.get("scope") or "").strip().lower()
+        if scope not in ("project", "all"):
+            h.err(ValueError("scope is project or all"))
+        if scope == "project" and not d["project"]:
+            h.err(ValueError(f"{d['label']} has no project: allow it for every project"))
+        # A crew station (crew-reviewer, crew-releaser and their helpers) serves every project and
+        # starts with only the grants for every project: one kept for a project never reaches it.
+        if scope == "project" and str(d["station"] or "").startswith("crew-"):
+            h.err(ValueError(f"{d['station']} works for every project, so a grant for one project "
+                             "never reaches it: allow it for every project"))
+        if scope == "project" and store.get_project(d["project"]) is None:
+            h.err(ValueError("the project this was asked for is gone; allow it for every "
+                             "project"), 409)
+        words = " ".join(str(body.get("words") or "").split()).strip().strip('"')
+        try:
+            line = factory_mod.grant_line(words, now_utc().date().isoformat())
+        except docs_mod.DocError as e:
+            h.err(e)
+        added = append_grant(d["project"] if scope == "project" else None, line,
+                             "the person, in the console")
+        dec = store.add_decision(d["project"], d["id"], d["question"], words, "allowed", True,
+                                 scope, False, None, True, d["tickets"], now_utc(),
+                                 via="console")
+        store.close_desk_item(d["id"], "answered", None, now_utc())
+        return {"desk_item": desk_out(desk_or_404(d["id"])), "decision": dec,
+                "station": d["station"], "line": line, "added": added, "scope": scope}
 
     @app.get("/api/projects/{uid}/decisions")
     async def project_decisions(uid: str):

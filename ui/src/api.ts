@@ -8,7 +8,7 @@ import type {
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults,
   Skill, SkillSummary,
-  Assumption, CrewMessage, CrewProject, CrewSettings, CrewStation, Decision, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, Handover, LinearLink, LinearStatus, Milestone,
+  Assumption, CrewMessage, CrewProject, CrewSettings, CrewStation, Decision, DeskAllowed, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, Handover, LinearLink, LinearStatus, Milestone,
   ProjectSession, Ticket, TicketStatus,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, ModelProvider, ModelProviders,
@@ -563,6 +563,9 @@ export const api = {
     request<{ milestones: Milestone[] }>(`/api/projects/${encodeURIComponent(id)}/milestones`),
   desk: (project = "") =>
     request<{ desk: DeskItem[] }>(`/api/desk?state=open${project ? `&project=${encodeURIComponent(project)}` : ""}`),
+  allowDesk: (ref: string, words: string, scope: "project" | "all") =>
+    request<DeskAllowed>(`/api/desk/${encodeURIComponent(ref)}/allow`,
+      { method: "POST", body: JSON.stringify({ words, scope }) }),
   projectDecisions: (id: string) =>
     request<{ decisions: Decision[] }>(`/api/projects/${encodeURIComponent(id)}/decisions`),
   reviewQueue: () => request<{ queue: QueueItem[]; now: string }>("/api/review-queue"),

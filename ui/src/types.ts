@@ -405,10 +405,14 @@ export interface DeskItem {
   context: string; options: string[]; recommendation: string; why: string; blocks: string;
   tickets: string[]; blocking: boolean; asked_by: string | null; assumptions: string[];
   state: "open" | "answered" | "withdrawn"; reason: string | null; created_at: string; closed_at: string | null;
+  // a permission request: the station that was refused and the exact command
+  station: string | null; command: string | null;
 }
+export interface DeskAllowed { desk_item: DeskItem; decision: Decision; station: string; line: string; added: boolean; scope: "project" | "all" }
 export interface Decision {
   id: string; label: string | null; question: string; words: string; choice: string | null;
   standing: boolean; scope: "project" | "all"; matched: boolean; granted: boolean; tickets: string[]; at: string;
+  via: "console" | null;   // "console": a permission allowed there, with no typed words to match
 }
 export interface QueueItem { project: string; project_name: string; ticket: string; title: string; holder: string | null; repo: string | null; pr: string | null; head: string | null; waiting_minutes: number | null; blocks_milestone: boolean; layer1_clean: boolean; verdict: VerdictNow | null }
 export interface RuleProposal { id: string; repo: string; kind: string; project: string | null; scope: "project" | "all"; text: string; tickets: string[]; state: "open" | "accepted" | "rejected"; created_at: string }

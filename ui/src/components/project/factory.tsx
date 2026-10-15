@@ -53,7 +53,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const { data: msd } = usePolling(() => api.milestones(ctx.id), 15000);
   const { data: crew } = usePolling(() => api.projectCrew(ctx.id), 15000);
   const { data: asm } = usePolling(() => api.assumptions(ctx.id), 30000);
-  const { data: decisions } = usePolling(() => api.projectDecisions(ctx.id), 30000);
+  const { data: decisions, reload: reloadDecisions } = usePolling(() => api.projectDecisions(ctx.id), 30000);
   const { data: rp } = usePolling(() => api.projectRepos(ctx.id), 30000);
   // the repos the project touches (TR-463); picking one narrows the ticket list to its tickets
   const repos = rp?.repos ?? [];
@@ -255,7 +255,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
         </Fold>
       )}
 
-      <Desk project={ctx.id} />
+      <Desk project={ctx.id} onChange={reloadDecisions} />
 
       {(decisions?.decisions.length ?? 0) > 0 && (
         <Fold id="decisions" title="Decisions"
@@ -264,10 +264,11 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
             {decisions!.decisions.map((d) => (
               <li key={d.id} style={{ display: "block" }}>
                 {d.label && <b>{d.label} </b>}{d.question}
-                <div>"{d.words}"{d.choice && <span className="dim"> · {d.choice}</span>}</div>
+                <div>"{d.words}"{d.choice && d.via !== "console" && <span className="dim"> · {d.choice}</span>}</div>
                 <small style={{ display: "block" }}>
                   <TimeAgo ts={d.at} />
-                  {d.matched ? " · matches what you typed" : <span className="fo-warn"> · not found in the session</span>}
+                  {d.via === "console" ? " · allowed in the console"
+                    : d.matched ? " · matches what you typed" : <span className="fo-warn"> · not found in the session</span>}
                   {d.standing && (d.granted ? " · kept as a grant" : " · standing")}
                 </small>
               </li>

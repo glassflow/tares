@@ -2057,6 +2057,13 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 .tk-msgs pre { white-space: pre-wrap; font-size: 12px; margin: 6px 0 0; }
 .main .crew-desk { list-style: none; margin: 4px 0 8px; padding: 0; }
 .crew-desk li { padding: 6px 0; border-top: 1px solid var(--line); }
+/* a permission a station was refused, allowed from the desk with one click */
+.crew-perm { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 4px; max-width: 80ch; }
+.crew-perm .crew-detail-label { margin: 0; }
+.crew-perm-cmd { margin: 0; font-family: var(--mono); font-size: 13px; background: var(--bg); border: 1px solid var(--line); padding: 8px 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }
+.crew-perm-cmd code { font: inherit; background: none; padding: 0; }
+.crew-perm .su-who-mini { margin: 2px 0; }
+.crew-perm-done { margin: 6px 0 2px; font-size: 14px; }
 /* Crew page (TR-466): members and projects always in view, a member's details beside them */
 .crew-notices { display: flex; flex-direction: column; gap: 10px; }
 .crew-notice-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }

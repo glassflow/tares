@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
 import { CopyButton, ErrorState, TimeAgo, usePolling } from "../components/bits";
-import type { CrewProject, CrewSettings, CrewStation, DeskItem } from "../types";
+import type { CrewProject, CrewSettings, CrewStation, DeskAllowed, DeskItem } from "../types";
 
 // The crew of a tares-factory (M3, M8): one always-on crew (orchestrator, reviewer, and a releaser
 // when the person asked for one) serves every project handed to it, and builders come and go per
@@ -69,30 +69,13 @@ interface Notice { id: string; sig: string; tone: "waiting" | "silent"; title: R
 
 function Notices({ stations, desk }: { stations: CrewStation[]; desk: DeskItem[] }) {
   const { shown, dismiss } = useDismissed();
+  const d = useDesk(desk);
   const notices: Notice[] = [];
-  if (desk.length) {
+  if (d.items.length) {
     notices.push({
-      id: "desk", sig: desk.map((d) => d.label).sort().join(","), tone: "waiting",
-      title: <>{desk.length} {desk.length === 1 ? "question" : "questions"} waiting for you</>,
-      body: (
-        <>
-          <ul className="crew-desk">
-            {desk.map((d) => (
-              <li key={d.id}>
-                <b>{d.label}</b>{d.blocking && <span className="fo-st fo-st-quiet" style={{ marginLeft: 6 }}>blocks work</span>}
-                {d.project_name && <span className="dim"> · {d.project_name}</span>}
-                <div>{d.question}</div>
-                <div className="dim" style={{ fontSize: 13 }}>
-                  Recommended: {d.recommendation.replace(/[.!]+$/, "")}. {sentence(d.why)}
-                  {d.blocks && <> Blocks: {d.blocks.replace(/[.!]+$/, "")}.</>}
-                  {d.assumptions.length > 0 && <> Confirms {d.assumptions.join(", ")}.</>}
-                </div>
-              </li>
-            ))}
-          </ul>
-          <p className="help" style={{ margin: 0 }}>Answer in the orchestrator's session: <span className="mono">tares factory crew attach orchestrator</span>.</p>
-        </>
-      ),
+      id: "desk", sig: desk.map((x) => x.label).sort().join(","), tone: "waiting",
+      title: <DeskTitle open={desk.filter((x) => !d.allowed[x.id]).length} />,
+      body: <DeskList {...d} />,
     });
   }
   // The orchestrator rests between turns all the time; what it needs from you comes as the desk above.
@@ -434,15 +417,41 @@ export default function Crew() {
   );
 }
 
-/** The questions waiting for you (TR-453), for a project's page. Read-only: you answer in the
- *  orchestrator's session. */
-export function Desk({ project }: { project?: string }) {
+/** The questions waiting for you (TR-453), for a project's page. You answer them in the
+ *  orchestrator's session; a permission a station was refused you can allow here. `onChange` runs
+ *  after one is allowed (the page's decisions gain it). */
+export function Desk({ project, onChange }: { project?: string; onChange?: () => void }) {
   const { data } = usePolling(() => api.desk(project ?? ""), 15000);
-  const items = data?.desk ?? [];
-  if (!items.length) return null;
+  const open = data?.desk ?? [];
+  const d = useDesk(open, onChange);
+  if (!d.items.length) return null;
   return (
     <section className="fo-attn fo-attn-waiting" role="status" aria-labelledby="desk-h">
-      <h2 id="desk-h">{items.length} {items.length === 1 ? "question" : "questions"} waiting for you</h2>
+      <h2 id="desk-h"><DeskTitle open={open.filter((x) => !d.allowed[x.id]).length} /></h2>
+      <DeskList {...d} />
+    </section>
+  );
+}
+
+// ── the desk, shared by the Crew page's notice and a project's page ──────────
+
+function DeskTitle({ open }: { open: number }) {
+  return open ? <>{open} {open === 1 ? "question" : "questions"} waiting for you</> : <>Nothing else waiting for you</>;
+}
+
+/** The open items, plus the permission requests allowed here since the page opened: an allowed one
+ *  stays in its place, saying what happens next, after the desk itself no longer lists it. */
+function useDesk(open: DeskItem[], onChange?: () => void) {
+  const [allowed, setAllowed] = useState<Record<string, DeskAllowed>>({});
+  const items = [...open.filter((x) => !allowed[x.id]), ...Object.values(allowed).map((a) => a.desk_item)]
+    .sort((a, b) => Number(b.blocking) - Number(a.blocking) || a.created_at.localeCompare(b.created_at));
+  const onAllowed = (a: DeskAllowed) => { setAllowed((m) => ({ ...m, [a.desk_item.id]: a })); onChange?.(); };
+  return { items, allowed, onAllowed };
+}
+
+function DeskList({ items, allowed, onAllowed }: ReturnType<typeof useDesk>) {
+  return (
+    <>
       <ul className="crew-desk">
         {items.map((d) => (
           <li key={d.id}>
@@ -454,11 +463,100 @@ export function Desk({ project }: { project?: string }) {
               {d.blocks && <> Blocks: {d.blocks.replace(/[.!]+$/, "")}.</>}
               {d.assumptions.length > 0 && <> Confirms {d.assumptions.join(", ")}.</>}
             </div>
+            {d.command && (allowed[d.id] ? <AllowedNote a={allowed[d.id]} />
+              : <PermissionRequest d={d} onAllowed={onAllowed} />)}
           </li>
         ))}
       </ul>
-      <p className="help" style={{ margin: 0 }}>Answer in the orchestrator's session: <span className="mono">tares factory crew attach orchestrator</span>.</p>
-    </section>
+      {items.some((d) => !d.command) && (
+        <p className="help" style={{ margin: 0 }}>Answer questions in the orchestrator's session: <span className="mono">tares factory crew attach orchestrator</span>.</p>
+      )}
+    </>
+  );
+}
+
+/** Tares keeps a grant to this many characters (factory.grant_line). */
+const GRANT_MAX = 400;
+
+/** The grant as the console offers it: the station, the command and where. A command split over
+ *  lines reads as one (its continuation backslashes dropped); one too long for a grant is cut at a
+ *  word, so the grant covers the command as it starts. */
+function grantSentence(d: DeskItem, scope: "project" | "all"): string {
+  const cmd = (d.command ?? "").split("\n").map((l) => l.trim().replace(/\s*\\$/, "")).filter(Boolean).join(" ");
+  const say = (c: string) => `${d.station} may run \`${c}\` ${scope === "project" && d.project_name ? `in ${d.project_name}` : "in every project"}`;
+  const room = GRANT_MAX - say("").length;
+  if (cmd.length <= room) return say(cmd);
+  const cut = cmd.slice(0, Math.max(room - 4, 0));
+  return say(`${cut.slice(0, Math.max(cut.lastIndexOf(" "), 1))} ...`);
+}
+
+/** A permission a station was refused: the command, the grant in words you may edit, where it
+ *  holds, and one click. The click is your consent; Tares keeps the grant in these words. */
+function PermissionRequest({ d, onAllowed }: { d: DeskItem; onAllowed: (a: DeskAllowed) => void }) {
+  const station = d.station ?? "the station";
+  // A builder's grant may hold in its project only. A crew station (and its helpers) serves every
+  // project and starts with only the grants for every project, as does an item with no project.
+  const either = !!d.project && !station.startsWith("crew-");
+  const [scope, setScope] = useState<"project" | "all">(either ? "project" : "all");
+  const [words, setWords] = useState(() => grantSentence(d, scope));
+  const [edited, setEdited] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  // the box shows the whole grant: it is what you consent to
+  const box = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const ta = box.current; if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = ta.scrollHeight + ta.offsetHeight - ta.clientHeight + "px";
+  }, [words]);
+  const length = words.split(/\s+/).join(" ").trim().length;
+  const pick = (s: "project" | "all") => { setScope(s); if (!edited) setWords(grantSentence(d, s)); };
+  const allow = async () => {
+    setBusy(true); setErr(null);
+    try { onAllowed(await api.allowDesk(d.label, words, scope)); }
+    catch (e) { setErr(String((e as Error)?.message ?? e)); }
+    finally { setBusy(false); }
+  };
+  const wid = `perm-words-${d.id}`;
+  return (
+    <div className="crew-perm">
+      <div className="crew-detail-label">{station} was refused this command</div>
+      <pre className="crew-perm-cmd"><code>{d.command}</code></pre>
+      <label htmlFor={wid} className="crew-detail-label">The grant, kept in your words</label>
+      <textarea id={wid} ref={box} rows={2} value={words} disabled={busy}
+                onChange={(e) => { setWords(e.target.value); setEdited(true); }} />
+      {length > GRANT_MAX && <p className="fo-warn" style={{ margin: 0 }}>The grant is {length} characters; keep it to {GRANT_MAX}.</p>}
+      {either ? (
+        <fieldset className="su-who-mini" disabled={busy}>
+          <label className={scope === "project" ? "on" : ""}>
+            <input type="radio" name={`perm-scope-${d.id}`} checked={scope === "project"} onChange={() => pick("project")} />
+            Only {d.project_name ?? "this project"}
+          </label>
+          <label className={scope === "all" ? "on" : ""}>
+            <input type="radio" name={`perm-scope-${d.id}`} checked={scope === "all"} onChange={() => pick("all")} />
+            Every project
+          </label>
+        </fieldset>
+      ) : (
+        <p className="help" style={{ margin: 0 }}>
+          Kept for every project{d.project ? `: ${station} works for all of them` : ""}.
+        </p>
+      )}
+      {err && <p className="fo-warn" style={{ margin: 0 }}>{err}</p>}
+      <div>
+        <button type="button" className="primary" disabled={busy || !length || length > GRANT_MAX} onClick={allow}>Allow for {station}</button>
+      </div>
+    </div>
+  );
+}
+
+function AllowedNote({ a }: { a: DeskAllowed }) {
+  if (!a.added) return <p className="crew-perm-done">That grant was already kept, so nothing changed.</p>;
+  return (
+    <p className="crew-perm-done">
+      Allowed{a.scope === "all" ? " for every project" : ""}. The crew watch restarts <span className="mono">{a.station}</span> with
+      the permission once it is between turns.
+    </p>
   );
 }
 
