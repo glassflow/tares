@@ -469,7 +469,13 @@ function DeskList({ items, allowed, onAllowed }: ReturnType<typeof useDesk>) {
         ))}
       </ul>
       {items.some((d) => !d.command) && (
-        <p className="help" style={{ margin: 0 }}>Answer questions in the orchestrator's session: <span className="mono">tares factory crew attach orchestrator</span>.</p>
+        <>
+          <p className="help" style={{ margin: 0 }}>Answer questions in the orchestrator's session:</p>
+          <div className="fo-cmd">
+            <code>{attachCmd("crew-orchestrator")}</code>
+            <CopyButton text={attachCmd("crew-orchestrator")} label="Copy" what="the orchestrator's attach command" />
+          </div>
+        </>
       )}
     </>
   );
