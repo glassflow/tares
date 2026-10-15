@@ -5,6 +5,12 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- The Projects list and a software-factory project's page show a small ring of the project's tickets:
+  done, in progress, blocked and to do, with the counts in its tooltip, so a stuck project shows at
+  a glance. The project page's counts and ticket bar use the same buckets and name blocked tickets.
+  `GET /api/projects` carries `progress` for every factory project.
+
 ## [1.46.0] - 2026-10-14
 
 Work on a factory project in your own Claude Code session with `tares factory session`, taking it
