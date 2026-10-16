@@ -185,6 +185,7 @@ export const api = {
     workspace_url?: string;   // cloud only: the control-plane workspace this cell belongs to
     github_connect_url?: string;   // cloud only: "Connect GitHub" (the GlassFlow-owned App)
     slack_connect_url?: string;    // cloud only: "Connect Slack" (the control plane's Slack install)
+    linear_connect_url?: string;   // cloud only: "Connect Linear" (the GlassFlow Linear app)
     workspaces_url?: string;       // cloud only: the signed-in person's workspaces, for the switcher
     workspace_api_url?: string;    // cloud only: this workspace in the control plane (Settings > Workspace)
     logout_url?: string;           // cloud only: Sign out ends the Tares Cloud session there
@@ -597,10 +598,6 @@ export const api = {
   linear: () => request<LinearStatus>("/api/linear"),
   linearConnectKey: (api_key: string) =>
     request<LinearStatus>("/api/linear", { method: "POST", body: JSON.stringify({ api_key }) }),
-  linearOauthApp: (client_id: string, client_secret?: string) =>
-    request<LinearStatus>("/api/linear/oauth-app",
-      { method: "PUT", body: JSON.stringify(client_secret === undefined ? { client_id } : { client_id, client_secret }) }),
-  linearOauthStart: () => request<{ url: string; redirect_uri: string }>("/api/linear/oauth/start"),
   linearDisconnect: () => request<LinearStatus>("/api/linear", { method: "DELETE" }),
   linearProjects: (q = "") =>
     request<{ projects: { id: string; name: string; url: string }[] }>(`/api/linear/projects?q=${encodeURIComponent(q)}`),

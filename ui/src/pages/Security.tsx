@@ -9,6 +9,7 @@ import { type Cloud, cloudLink, useCloud } from "../cloud";
 import type { ApiKey, GithubAppTest, GithubCredential, ModelProvider, ModelProviders } from "../types";
 import { UsagePanels } from "../components/UsagePanels";
 import LinearSettings from "../components/LinearSettings";
+import OwnerOnly from "../components/OwnerOnly";
 import WorkspaceSettings from "./WorkspaceSettings";
 
 // Four distinct credential concepts, one box each:
@@ -47,6 +48,10 @@ export const CLOUD_BACK: Record<string, { tab?: SettingsTab; text: string; kind:
     text: "Slack is connected. Triggers and agents can post to its channels, and your team can ask Tares with /tares ask." },
   "slack-disconnected": { tab: "slack", kind: "",
     text: "Slack is disconnected. Nothing is posted to it any more." },
+  "linear-connected": { tab: "linear", kind: "ok",
+    text: "Linear is connected. Projects can keep their tickets in a Linear project." },
+  "linear-disconnected": { tab: "linear", kind: "",
+    text: "Linear is disconnected. Projects linked to it keep their tickets and stop syncing." },
   error: { kind: "error", text: "That did not work. Nothing was changed." },
   cancelled: { kind: "", text: "Cancelled. Nothing was changed." },
 };
@@ -146,7 +151,7 @@ export default function Security() {
       {tab === "anthropic" && <ProvidersPanel />}
       {tab === "agents" && <AgentLimitsPanel />}
       {tab === "github" && <GithubPanel cloud={cloud} />}
-      {tab === "linear" && <LinearSettings />}
+      {tab === "linear" && <LinearSettings cloud={cloud} />}
       {/* Until /health answers (it can be slow on a busy instance) the self-host panels show, so
           a self-hosted Slack tab never waits on it; a cloud cell swaps to its panel once it does. */}
       {tab === "slack" && (slackConnectUrl ? <SlackCloudPanel cloud={cloud} connectUrl={slackConnectUrl} />
@@ -155,18 +160,6 @@ export default function Security() {
       </div>
       </div>
     </>
-  );
-}
-
-/** Who may connect, when this person may not (TR-367): the control plane lets only the
- *  workspace's owner connect and disconnect GitHub and Slack. */
-function OwnerOnly({ cloud, what }: { cloud: Cloud; what: string }) {
-  const email = cloud.current?.owner_email;
-  return (
-    <p className="help">
-      {email ? <>Only the workspace owner, <strong>{email}</strong>, can connect {what}.</>
-        : <>Only the workspace owner can connect {what}.</>}
-    </p>
   );
 }
 

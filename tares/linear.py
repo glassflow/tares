@@ -5,39 +5,35 @@ with Linear's own tools; Tares keeps a record of each (tickets table, owner 'lin
 changes by polling, since a local cell has no public address for Linear's webhooks. Each change
 is also an event on the `linear` source, so it shows on the timeline and triggers can react.
 
-The connection is either a personal API key or OAuth (authorization code with PKCE). Linear's
-OAuth needs an OAuth application registered in Linear (its client id, from TARES_LINEAR_CLIENT_ID
-or saved in Settings); with PKCE the client secret is optional. Access tokens last 24 hours and
-are refreshed with the refresh token before they expire.
+The connection is one of two kinds:
+
+* a personal API key, pasted in Settings (every install);
+* on Tares Cloud, a token from the GlassFlow Linear app (TR-535..537). The control plane runs the
+  sign-in, holds the app's secret, renews the token before its 24 hours run out and hands each
+  new one to the cell (`set_cloud_connection`). The cell never renews it itself.
+
+A connection from the cell's own Linear sign-in (kind 'oauth', before TR-538) is no longer used:
+it shows as needing to be connected again.
 
 Everything here is read-only towards Linear.
 """
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
-import os
-import secrets
 import time
 from datetime import datetime, timezone
-from urllib.parse import urlencode
 
 import httpx
 
 from .envelope import Envelope, now_utc
 
 API_URL = "https://api.linear.app/graphql"
-TOKEN_URL = "https://api.linear.app/oauth/token"
-REVOKE_URL = "https://api.linear.app/oauth/revoke"
-AUTHORIZE_URL = "https://linear.app/oauth/authorize"
-SCOPES = "read"
 
 CONNECTION_SETTING = "linear_connection"
-APP_SETTING = "linear_oauth_app"
 SOURCE_NAME = "linear"
-REFRESH_MARGIN = 300          # refresh an access token this many seconds before it expires
 MAX_ISSUES = 1000             # per project per sync; a factory project is far smaller
+
+RECONNECT = "connect Linear again in Settings"
 
 # tests swap in an httpx.MockTransport with recorded responses
 _transport: httpx.AsyncBaseTransport | None = None
@@ -62,35 +58,43 @@ def _save_connection(store, conn: dict | None) -> None:
     store.set_setting(CONNECTION_SETTING, json.dumps(conn) if conn else None)
 
 
+def _usable(conn: dict | None) -> bool:
+    return bool(conn and conn.get("token") and conn.get("kind") in ("api_key", "cloud"))
+
+
 def public_connection(store) -> dict:
-    """What the console may see: never a token."""
+    """What the console may see: never a token. A connection that cannot be used any more (the
+    cell's own sign-in from before TR-538, or a Tares Cloud one Linear refused to renew) is not
+    connected, and says why."""
     conn = get_connection(store)
-    app = oauth_app(store)
-    out = {"connected": bool(conn), "oauth_available": bool(app.get("client_id")),
-           "client_id": app.get("client_id") or "",
-           "client_id_from_env": bool(os.getenv("TARES_LINEAR_CLIENT_ID", "").strip())}
+    out = {"connected": _usable(conn)}
     if conn:
         out.update({"kind": conn.get("kind"), "account": conn.get("account") or {},
                     "connected_at": conn.get("connected_at"), "error": conn.get("error")})
+        if conn.get("kind") == "oauth":
+            out["error"] = ("Linear sign-in from this workspace is no longer supported; "
+                            "connect again with a personal API key")
     return out
 
 
-def oauth_app(store) -> dict:
-    """{client_id, client_secret}: the env wins over what Settings saved."""
-    env_id = os.getenv("TARES_LINEAR_CLIENT_ID", "").strip()
-    if env_id:
-        return {"client_id": env_id,
-                "client_secret": os.getenv("TARES_LINEAR_CLIENT_SECRET", "").strip()}
-    raw = store.get_setting(APP_SETTING)
-    return json.loads(raw) if raw else {}
-
-
-def save_oauth_app(store, client_id: str, client_secret: str | None) -> None:
-    cur = oauth_app(store) if not os.getenv("TARES_LINEAR_CLIENT_ID") else {}
-    secret = cur.get("client_secret", "") if client_secret is None else client_secret
-    store.set_setting(APP_SETTING, json.dumps({"client_id": client_id.strip(),
-                                               "client_secret": (secret or "").strip()})
-                      if client_id.strip() else None)
+def set_cloud_connection(store, body: dict) -> dict:
+    """What the control plane hands over (TR-537): {token, expires_at, account} after a sign-in
+    or a renewal, or {error, account} when Linear refused to renew it (TR-536). connected_at is
+    kept across renewals."""
+    prev = get_connection(store) or {}
+    account = body.get("account") if isinstance(body.get("account"), dict) else {}
+    keep = prev.get("connected_at") if prev.get("kind") == "cloud" else None
+    if body.get("error"):
+        conn = {"kind": "cloud", "token": None, "account": account or prev.get("account") or {},
+                "error": str(body["error"])[:300], "connected_at": keep}
+    else:
+        token = str(body.get("token") or "").strip()
+        if not token:
+            raise LinearError("token is required (use DELETE to clear the connection)")
+        conn = {"kind": "cloud", "token": token, "expires_at": int(body.get("expires_at") or 0),
+                "account": account, "connected_at": keep or now_utc().isoformat()}
+    _save_connection(store, conn)
+    return conn
 
 
 def disconnect(store) -> dict | None:
@@ -99,54 +103,22 @@ def disconnect(store) -> dict | None:
     return conn
 
 
-async def revoke(conn: dict) -> None:
-    """Best effort: an OAuth token is revoked at Linear; an API key is the user's to delete."""
-    if conn.get("kind") != "oauth" or not conn.get("token"):
-        return
-    try:
-        async with _client(10) as cx:
-            await cx.post(REVOKE_URL, data={"token": conn["token"]},
-                          headers={"Authorization": f"Bearer {conn['token']}"})
-    except httpx.HTTPError:
-        pass
-
-
 def _auth_header(conn: dict) -> str:
     # Linear takes a personal API key as is, an OAuth token as a bearer token
     return conn["token"] if conn.get("kind") == "api_key" else f"Bearer {conn['token']}"
 
 
-async def _refresh(store, conn: dict) -> dict:
-    app = oauth_app(store)
-    if not conn.get("refresh_token") or not app.get("client_id"):
-        raise LinearError("the Linear sign-in expired; connect Linear again in Settings")
-    data = {"grant_type": "refresh_token", "refresh_token": conn["refresh_token"],
-            "client_id": app["client_id"]}
-    if app.get("client_secret"):
-        data["client_secret"] = app["client_secret"]
-    async with _client(15) as cx:
-        r = await cx.post(TOKEN_URL, data=data)
-    if r.status_code >= 400:
-        raise LinearError("Linear refused to renew the sign-in; connect Linear again in "
-                          f"Settings ({r.status_code})")
-    tok = r.json()
-    conn = {**conn, "token": tok["access_token"],
-            "refresh_token": tok.get("refresh_token") or conn["refresh_token"],
-            "expires_at": int(time.time()) + int(tok.get("expires_in") or 86400)}
-    _save_connection(store, conn)
-    return conn
-
-
 async def query(store, gql: str, variables: dict | None = None, conn: dict | None = None) -> dict:
     """Run a GraphQL query with the cell's connection (or `conn`, to test one before saving).
-    Refreshes an OAuth token that is about to expire. Raises LinearError."""
-    saved = conn is None
+    Raises LinearError."""
     conn = conn or get_connection(store)
     if not conn:
         raise LinearError("Linear is not connected; connect it in Settings")
-    if (saved and conn.get("kind") == "oauth"
-            and int(conn.get("expires_at") or 0) - REFRESH_MARGIN < time.time()):
-        conn = await _refresh(store, conn)
+    if not _usable(conn):
+        raise LinearError(conn.get("error") or f"the Linear connection stopped working; {RECONNECT}")
+    if conn.get("kind") == "cloud" and int(conn.get("expires_at") or 0) < time.time():
+        # Tares Cloud renews it hours ahead; an expired one means the renewal did not reach us
+        raise LinearError(f"the Linear sign-in expired and was not renewed; {RECONNECT}")
     try:
         async with _client() as cx:
             r = await cx.post(API_URL, json={"query": gql, "variables": variables or {}},
@@ -185,62 +157,6 @@ async def connect_api_key(store, key: str) -> dict:
         raise LinearError("paste a Linear API key (Linear: Settings, Security and access, "
                           "Personal API keys)")
     conn = {"kind": "api_key", "token": key}
-    conn["account"] = await _account(store, conn)
-    conn["connected_at"] = now_utc().isoformat()
-    _save_connection(store, conn)
-    return conn
-
-
-# ── OAuth with PKCE: start returns the Linear page to send the browser to; the verifier stays
-# in this process (never in the URL), keyed by a nonce inside the signed state ──
-
-_pending: dict[str, tuple[str, str, float]] = {}   # nonce -> (verifier, redirect_uri, created)
-
-
-def oauth_start(store, redirect_uri: str, sign_state) -> str:
-    app = oauth_app(store)
-    if not app.get("client_id"):
-        raise LinearError("Linear sign-in needs a Linear OAuth application: create one in Linear "
-                          "(Settings, API, OAuth applications) with the callback URL shown here, "
-                          "and save its client id; or paste a personal API key instead")
-    now = time.time()
-    for n, (_, _, t) in list(_pending.items()):
-        if now - t > 900:
-            _pending.pop(n, None)
-    nonce = secrets.token_urlsafe(12)
-    verifier = secrets.token_urlsafe(48)
-    _pending[nonce] = (verifier, redirect_uri, now)
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()
-                                         ).rstrip(b"=").decode()
-    state = sign_state(store, {"op": "linear", "nonce": nonce})
-    return AUTHORIZE_URL + "?" + urlencode({
-        "client_id": app["client_id"], "redirect_uri": redirect_uri, "response_type": "code",
-        "scope": SCOPES, "state": state, "prompt": "consent", "code_challenge": challenge,
-        "code_challenge_method": "S256"})
-
-
-async def oauth_finish(store, code: str, state: str, verify_state) -> dict:
-    data = verify_state(store, state)        # ValueError when forged or expired
-    if data.get("op") != "linear" or not code:
-        raise LinearError("this link is not a Linear sign-in callback")
-    pend = _pending.pop(data.get("nonce") or "", None)
-    if pend is None:
-        raise LinearError("this sign-in was started before Tares restarted, or already used; "
-                          "start again from Settings")
-    verifier, redirect_uri, _ = pend
-    app = oauth_app(store)
-    form = {"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri,
-            "client_id": app.get("client_id", ""), "code_verifier": verifier}
-    if app.get("client_secret"):
-        form["client_secret"] = app["client_secret"]
-    async with _client(15) as cx:
-        r = await cx.post(TOKEN_URL, data=form)
-    if r.status_code >= 400:
-        raise LinearError(f"Linear refused the sign-in ({r.status_code}): {r.text[:200]}")
-    tok = r.json()
-    conn = {"kind": "oauth", "token": tok["access_token"],
-            "refresh_token": tok.get("refresh_token"),
-            "expires_at": int(time.time()) + int(tok.get("expires_in") or 86400)}
     conn["account"] = await _account(store, conn)
     conn["connected_at"] = now_utc().isoformat()
     _save_connection(store, conn)
@@ -488,5 +404,5 @@ def iso(dt) -> str:
 
 
 __all__ = ["LinearError", "get_connection", "public_connection", "connect_api_key",
-           "oauth_start", "oauth_finish", "find_project", "list_projects", "sync_project",
+           "set_cloud_connection", "find_project", "list_projects", "sync_project",
            "ensure_source", "status_of", "timezone"]

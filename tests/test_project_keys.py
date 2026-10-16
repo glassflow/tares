@@ -193,7 +193,6 @@ async def main():
                   ("GET", "/derive"),   # a GET outside /api is the console's; this one says views are gone
                   # GitHub sends the browser back here: gated by a signed state / proof of ownership
                   ("GET", "/api/integrations/github/apps/callback"),
-                  ("GET", "/api/linear/oauth/callback"),   # gated by its signed state + PKCE
                   ("GET", "/api/integrations/github/apps/installed")}
         # allowed, and narrowed to the key's project by the handler
         scoped = {("GET", "/api/whoami"), ("POST", "/read"), ("GET", "/catalog"),
