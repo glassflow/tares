@@ -1,9 +1,9 @@
 """Linear (TR-408): the cell's connection and the sync that keeps a project's tickets current.
 
-Runs against a fake Linear (httpx.MockTransport answering like Linear's GraphQL and OAuth
-endpoints), never the live API. Covers connecting with an API key (refused key, account shown,
-token never returned), sign-in with OAuth and PKCE (no client id, the authorize URL, the callback,
-a forged state, the refresh before expiry), linking a project by URL (tickets, events on the
+Runs against a fake Linear (httpx.MockTransport answering like Linear's GraphQL endpoint), never
+the live API. Covers connecting with an API key (refused key, account shown, token never
+returned), the Tares Cloud connection the control plane hands over (set, renewed, refused,
+expired, cleared; TR-537) and an old connection from the cell's own sign-in (TR-538), linking a project by URL (tickets, events on the
 `linear` source, the source in the project), changes made in Linear (status, rename, new issue,
 reorder, an issue leaving the project) picked up by the connector's poll, a revoked credential
 leaving the tickets as they were, and unlinking.
@@ -16,7 +16,6 @@ import os
 import sys
 import tempfile
 import time
-from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -25,7 +24,6 @@ os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-linear"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
-os.environ.pop("TARES_LINEAR_CLIENT_ID", None)
 
 import httpx
 
@@ -46,7 +44,7 @@ def ck(label, cond, detail=""):
 # ── the fake Linear ──────────────────────────────────────────────────────────
 GOOD_KEY = "lin_api_good"
 STATE = {
-    "valid_tokens": {GOOD_KEY, "Bearer oauth-access-1", "Bearer oauth-access-2"},
+    "valid_tokens": {GOOD_KEY, "Bearer cloud-access-1", "Bearer cloud-access-2"},
     "issues": [
         {"id": "i1", "identifier": "FAC-1", "title": "Parse invoices", "url": "https://linear.app/acme/issue/FAC-1",
          "sortOrder": 1.0, "updatedAt": "2026-10-07T10:00:00Z", "state": {"name": "Todo", "type": "unstarted"}},
@@ -55,7 +53,6 @@ STATE = {
         {"id": "i3", "identifier": "FAC-3", "title": "Email invoices", "url": "https://linear.app/acme/issue/FAC-3",
          "sortOrder": 3.0, "updatedAt": "2026-10-07T10:00:00Z", "state": {"name": "Todo", "type": "unstarted"}},
     ],
-    "token_requests": [],
 }
 PROJECT = {"id": "lp-uuid-1", "name": "Invoicing", "url": "https://linear.app/acme/project/invoicing-ab12cd34ef56",
            "slugId": "ab12cd34ef56"}
@@ -63,17 +60,6 @@ PROJECT = {"id": "lp-uuid-1", "name": "Invoicing", "url": "https://linear.app/ac
 
 def handler(request: httpx.Request) -> httpx.Response:
     url = str(request.url)
-    if url == linear.TOKEN_URL:
-        form = parse_qs(request.content.decode())
-        STATE["token_requests"].append({k: v[0] for k, v in form.items()})
-        if form.get("grant_type") == ["authorization_code"]:
-            return httpx.Response(200, json={"access_token": "oauth-access-1", "expires_in": 86399,
-                                             "refresh_token": "oauth-refresh-1", "scope": "read"})
-        return httpx.Response(200, json={"access_token": "oauth-access-2", "expires_in": 86399,
-                                         "refresh_token": "oauth-refresh-2"})
-    if url == linear.REVOKE_URL:
-        STATE["revoked"] = parse_qs(request.content.decode()).get("token", [""])[0]
-        return httpx.Response(200, json={})
     if url != linear.API_URL:
         return httpx.Response(404)
     if request.headers.get("authorization") not in STATE["valid_tokens"]:
@@ -106,7 +92,6 @@ linear._transport = httpx.MockTransport(handler)
 
 async def main():
     from tares.daemon import make_app
-    from tares import github_app as gh
     app = make_app()
     store = app.state.store
     async with app.router.lifespan_context(app):
@@ -117,8 +102,7 @@ async def main():
 
         print("== connecting ==")
         r = await cx.get("/api/linear")
-        ck("not connected, no sign-in app", r.json()["connected"] is False
-           and r.json()["oauth_available"] is False, r.text)
+        ck("not connected", r.json()["connected"] is False, r.text)
         r = await cx.get("/api/linear", headers=reader)
         ck("a read key cannot see the connection -> 403", r.status_code == 403, r.text)
         r = await cx.post("/api/linear", json={"api_key": "lin_api_bad"})
@@ -133,43 +117,60 @@ async def main():
         r = await cx.get("/api/linear/projects", params={"q": "invo"})
         ck("project picker", [p["name"] for p in r.json()["projects"]] == ["Invoicing"], r.text)
 
-        print("== OAuth with PKCE ==")
-        r = await cx.get("/api/linear/oauth/start")
-        ck("no client id -> 400 that says what to do", r.status_code == 400
-           and "OAuth application" in r.json()["detail"], r.text)
-        r = await cx.put("/api/linear/oauth-app", json={"client_id": "cid-123"})
-        ck("save the client id", r.json()["oauth_available"] and r.json()["client_id"] == "cid-123",
+        print("== Tares Cloud: the control plane hands the connection over ==")
+        saved_key = linear.get_connection(store)
+        acct = {"name": "Ada", "email": "ada@acme.dev", "org": "Acme", "url_key": "acme"}
+        r = await cx.put("/api/settings/linear-connection", headers=reader,
+                         json={"token": "cloud-access-1", "expires_at": int(time.time()) + 86000})
+        ck("a read key cannot hand one over -> 403", r.status_code == 403, r.text)
+        r = await cx.put("/api/settings/linear-connection", json={"account": acct})
+        ck("no token and no error -> 400", r.status_code == 400, r.text)
+        r = await cx.put("/api/settings/linear-connection",
+                         json={"token": "cloud-access-1", "expires_at": int(time.time()) + 86000,
+                               "account": acct})
+        ck("connected as cloud, as whom, token not shown", r.status_code == 200
+           and r.json()["connected"] and r.json()["kind"] == "cloud"
+           and r.json()["account"]["org"] == "Acme" and "cloud-access-1" not in r.text, r.text)
+        since = r.json()["connected_at"]
+        data = await linear.query(store, "query { viewer { id name email organization { name urlKey } } }")
+        ck("queries go out with it as a bearer token", data["viewer"]["name"] == "Ada")
+        r = await cx.put("/api/settings/linear-connection",
+                         json={"token": "cloud-access-2", "expires_at": int(time.time()) + 86000,
+                               "account": acct})
+        ck("a renewal replaces the token and keeps 'since'", r.json()["connected_at"] == since
+           and linear.get_connection(store)["token"] == "cloud-access-2", r.text)
+        linear._save_connection(store, {**linear.get_connection(store),
+                                        "expires_at": int(time.time()) - 5})
+        try:
+            await linear.query(store, "query { viewer { id } }")
+            ck("an expired cloud token is not used", False)
+        except linear.LinearError as e:
+            ck("an expired cloud token is not used, and says what to do",
+               "connect Linear again" in str(e), str(e))
+        r = await cx.put("/api/settings/linear-connection",
+                         json={"error": "Linear refused to renew the sign-in", "account": acct})
+        ck("a refused renewal: not connected, says why", r.json()["connected"] is False
+           and "refused" in r.json()["error"] and linear.get_connection(store)["token"] is None,
            r.text)
+        r = await cx.delete("/api/settings/linear-connection")
+        ck("cleared", r.json()["connected"] is False and linear.get_connection(store) is None,
+           r.text)
+
+        print("== an old connection from the cell's own sign-in (TR-538) ==")
+        linear._save_connection(store, {"kind": "oauth", "token": "old", "refresh_token": "r",
+                                        "expires_at": int(time.time()) + 3600, "account": acct})
+        r = await cx.get("/api/linear")
+        ck("not connected, asks for an API key", r.json()["connected"] is False
+           and "API key" in r.json()["error"], r.text)
+        try:
+            await linear.query(store, "query { viewer { id } }")
+            ck("and it is never used", False)
+        except linear.LinearError:
+            ck("and it is never used", True)
         r = await cx.get("/api/linear/oauth/start")
-        u = urlsplit(r.json()["url"])
-        qs = {k: v[0] for k, v in parse_qs(u.query).items()}
-        ck("authorize URL with PKCE and the callback", u.netloc == "linear.app"
-           and qs["client_id"] == "cid-123" and qs["code_challenge_method"] == "S256"
-           and qs["redirect_uri"] == "http://t/api/linear/oauth/callback"
-           and r.json()["redirect_uri"] == qs["redirect_uri"], r.text)
-        ck("the verifier is not in the URL", "code_verifier" not in r.json()["url"])
-        noauth = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t")
-        r = await noauth.get("/api/linear/oauth/callback", params={"code": "c", "state": "forged.x"})
-        ck("a forged state -> back to Settings with an error, nothing saved",
-           r.status_code == 303 and "error=" in r.headers["location"]
-           and linear.get_connection(store)["kind"] == "api_key", r.headers.get("location"))
-        r = await noauth.get("/api/linear/oauth/callback", params={"code": "c1", "state": qs["state"]})
-        ck("the callback needs no Tares key and connects", r.status_code == 303
-           and "event=connected" in r.headers["location"]
-           and linear.get_connection(store)["kind"] == "oauth", r.headers.get("location"))
-        tr = STATE["token_requests"][-1]
-        ck("the code exchange sent the verifier, no secret", tr.get("code_verifier")
-           and "client_secret" not in tr and tr["client_id"] == "cid-123", tr)
-        r = await noauth.get("/api/linear/oauth/callback", params={"code": "c1", "state": qs["state"]})
-        ck("a used state is refused", "error=" in r.headers["location"], r.headers["location"])
-        conn = linear.get_connection(store)
-        linear._save_connection(store, {**conn, "expires_at": int(time.time()) + 60})
-        await linear.query(store, "query { viewer { id name email organization { name urlKey } } }")
-        ck("an access token about to expire is refreshed first",
-           STATE["token_requests"][-1]["grant_type"] == "refresh_token"
-           and linear.get_connection(store)["token"] == "oauth-access-2"
-           and linear.get_connection(store)["refresh_token"] == "oauth-refresh-2")
-        await noauth.aclose()
+        ck("the cell's own sign-in is gone", r.status_code in (404, 405)
+           or "text/html" in r.headers.get("content-type", ""), r.status_code)
+        linear._save_connection(store, saved_key)
 
         print("== linking a project ==")
         uid = (await cx.post("/api/projects", json={"template": "custom", "name": "Invoices",
@@ -260,8 +261,6 @@ async def main():
         r = await cx.delete("/api/linear")
         ck("disconnect", r.json()["connected"] is False and linear.get_connection(store) is None,
            r.text)
-        ck("an OAuth token is revoked on disconnect", STATE.get("revoked") == "oauth-access-2",
-           STATE.get("revoked"))
         await cx.aclose()
 
 

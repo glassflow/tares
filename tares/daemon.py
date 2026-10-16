@@ -100,6 +100,10 @@ GITHUB_CONNECT_URL = os.getenv("TARES_GITHUB_CONNECT_URL", "").strip()
 # Cloud only: where "Connect Slack" sends the browser (the control plane's Slack install for this
 # workspace, TR-364). Set, Settings > Slack offers Connect and Disconnect instead of the paste forms.
 SLACK_CONNECT_URL = os.getenv("TARES_SLACK_CONNECT_URL", "").strip()
+# Cloud only: where "Connect Linear" sends the browser (the control plane's sign-in with the
+# GlassFlow Linear app, TR-537). Set, Settings > Linear offers Connect and Disconnect; the control
+# plane hands the token to this cell and renews it.
+LINEAR_CONNECT_URL = os.getenv("TARES_LINEAR_CONNECT_URL", "").strip()
 # Cloud only: the control plane's list of the signed-in person's workspaces (TR-370). Set, the
 # console's top left becomes a workspace switcher; the console fetches it with the person's
 # control-plane session cookie, the cell never calls it.
@@ -167,7 +171,6 @@ SLACK_CHANNELS_FAIL_TTL = 5.0     # ... and a failed one at least (longer on a 4
 # (TR-348: it accepts a GitHub App's installation tokens, writes then show as the App)
 GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/"
 
-LINEAR_CALLBACK = "/api/linear/oauth/callback"   # Linear sends the browser back here (TR-408)
 GITHUB_APP_CALLBACKS = ("/api/integrations/github/apps/callback",
                         "/api/integrations/github/apps/installed")
 
@@ -191,8 +194,6 @@ def _public(method: str, path: str) -> bool:
         return True
     if method == "GET" and path in GITHUB_APP_CALLBACKS:
         return True      # gated by the signed state, see GITHUB_APP_CALLBACKS
-    if method == "GET" and path == LINEAR_CALLBACK:
-        return True      # gated by the signed state and the PKCE verifier only this process holds
     return method in ("GET", "HEAD") and not (
         path.startswith("/api/") or path.startswith("/catalog") or path == "/query")
 
@@ -891,6 +892,8 @@ def make_app() -> FastAPI:
             body["github_connect_url"] = GITHUB_CONNECT_URL
         if SLACK_CONNECT_URL:
             body["slack_connect_url"] = SLACK_CONNECT_URL
+        if LINEAR_CONNECT_URL:
+            body["linear_connect_url"] = LINEAR_CONNECT_URL
         if WORKSPACES_URL:
             body["workspaces_url"] = WORKSPACES_URL
         if WORKSPACE_API_URL:
@@ -4791,8 +4794,7 @@ def make_app() -> FastAPI:
 
     @app.get("/api/linear")
     async def linear_status():
-        """Whether Linear is connected (never the token), as whom, and whether sign-in with
-        Linear is set up (an OAuth application's client id)."""
+        """Whether Linear is connected (never the token), and as whom."""
         return _linear.public_connection(store)
 
     @app.post("/api/linear")
@@ -4804,50 +4806,30 @@ def make_app() -> FastAPI:
             _linear_err(e)
         return _linear.public_connection(store)
 
-    @app.put("/api/linear/oauth-app")
-    async def linear_oauth_app(body: dict = Body(...)):
-        """{client_id, client_secret?}: the Linear OAuth application sign-in uses. A secret left
-        out keeps the saved one; with PKCE it is optional."""
-        secret = body.get("client_secret")
-        _linear.save_oauth_app(store, str(body.get("client_id") or ""),
-                               None if secret is None else str(secret))
+    @app.put("/api/settings/linear-connection")
+    async def linear_cloud_set(body: dict = Body(...)):
+        """Tares Cloud only, from the control plane (TR-537): {token, expires_at, account} after a
+        sign-in with the GlassFlow Linear app or a renewal, or {error, account} when Linear refused
+        to renew it. No restart; the next sync uses it."""
+        try:
+            _linear.set_cloud_connection(store, body)
+        except _linear.LinearError as e:
+            _err(e)
         return _linear.public_connection(store)
 
-    def _linear_redirect(request: Request) -> str:
-        from .setup_flow import public_base
-        return public_base(str(request.base_url)).rstrip("/") + LINEAR_CALLBACK
-
-    @app.get("/api/linear/oauth/start")
-    async def linear_oauth_start(request: Request):
-        """The Linear page to send the browser to, and the callback URL the OAuth application
-        must list."""
-        redirect = _linear_redirect(request)
-        try:
-            url = _linear.oauth_start(store, redirect, _gh_app.sign_state)
-        except _linear.LinearError as e:
-            _linear_err(e)
-        return {"url": url, "redirect_uri": redirect}
-
-    @app.get(LINEAR_CALLBACK)
-    async def linear_oauth_callback(code: str = "", state: str = "", error: str = ""):
-        from urllib.parse import urlencode
-        params = {"tab": "linear"}
-        try:
-            if error:
-                raise _linear.LinearError(f"Linear sign-in was not completed: {error}")
-            await _linear.oauth_finish(store, code, state, _gh_app.verify_state)
-            params["event"] = "connected"
-        except (ValueError, _linear.LinearError) as e:
-            params["error"] = str(e)
-        return RedirectResponse(f"/settings?{urlencode(params)}", status_code=303)
+    @app.delete("/api/settings/linear-connection")
+    async def linear_cloud_clear():
+        """Tares Cloud only: the control plane disconnected this workspace (and revoked the token
+        at Linear)."""
+        _linear.disconnect(store)
+        return _linear.public_connection(store)
 
     @app.delete("/api/linear")
     async def linear_disconnect():
-        """Forget the connection (an OAuth token is revoked at Linear). Linked projects keep
-        their tickets and stop syncing until Linear is connected again."""
-        conn = _linear.disconnect(store)
-        if conn:
-            await _linear.revoke(conn)
+        """Forget the connection. Linked projects keep their tickets and stop syncing until
+        Linear is connected again. On Tares Cloud the console disconnects through the control
+        plane instead, which also revokes the token at Linear."""
+        _linear.disconnect(store)
         return _linear.public_connection(store)
 
     @app.get("/api/linear/projects")

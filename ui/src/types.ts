@@ -557,12 +557,12 @@ export interface LinearLink {
 }
 export interface LinearStatus {
   connected: boolean;
-  kind?: "api_key" | "oauth";
+  // cloud: the GlassFlow Linear app, through the control plane; oauth: the cell's own sign-in
+  // from before TR-538, no longer used
+  kind?: "api_key" | "cloud" | "oauth";
   account?: { name?: string; email?: string; org?: string };
-  connected_at?: string;
-  oauth_available: boolean;
-  client_id: string;
-  client_id_from_env: boolean;
+  connected_at?: string | null;
+  error?: string | null;   // why a connection that is there cannot be used
 }
 export interface ProjectSession {
   session: string; repo: string | null; linked_at: string;

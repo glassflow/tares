@@ -34,8 +34,15 @@ the project follows [Semantic Versioning](https://semver.org/).
 - The console's left sidebar folds to a rail of icons and back with its Collapse row; the choice
   is remembered in this browser. Start, Connect and Reads have icons of their own, Settings is a
   gear and the Workspace link an outside-link icon, so no two look alike when only icons show.
+- On Tares Cloud, Settings > Linear has **Connect Linear**: you approve the GlassFlow Linear app in
+  Linear and come back connected, with no OAuth application of your own to set up. The control
+  plane hands the token to the workspace and renews it; Disconnect goes through it and revokes the
+  token. `TARES_LINEAR_CONNECT_URL`, `PUT`/`DELETE /api/settings/linear-connection` (admin).
 
 ### Changed
+- Linear on a self-hosted install connects with a personal API key only. Sign-in with your own
+  Linear OAuth application is gone (`/api/linear/oauth-app`, `/api/linear/oauth/start`, the
+  callback, `TARES_LINEAR_CLIENT_ID`); a workspace connected that way asks to connect again.
 - Crew page: each project's builders fold, shut by default, behind a line that counts them and
   names any waiting or quiet one, so the Waiting for review list stays in view. The fold opens for
   the member you pick or link to, and the whole Projects pane folds to its header. Both are
