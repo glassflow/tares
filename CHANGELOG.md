@@ -5,6 +5,13 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.47.0] - 2026-10-16
+
+Connect Linear on Tares Cloud with one click, and a self-hosted install connects Linear with a
+personal API key. The crew's progress at a glance (progress rings, a fold for each project's
+builders), allowing a refused permission from the console, what the crew spends, and a sidebar
+that folds to icons.
+
 ### Added
 - The Projects list and a software-factory project's page show a small ring of the project's tickets:
   done, in progress, blocked and to do, with the counts in its tooltip, so a stuck project shows at
