@@ -262,6 +262,50 @@ async def main():
            {s["name"]: s["state"] for s in crew["stations"]}.get("crew-reviewer") == "working", crew["stations"])
 
 
+        print("== ending a station ==")
+        nd = {"Content-Type": "application/x-ndjson"}
+        lines = [st_line("e-old", "end-build-m1", "builder", ago=300), say("e-old", "end-build-m1", "first", 299),
+                 st_line("e1", "end-build-m1", "builder", ago=61), say("e1", "end-build-m1", "working", 60),
+                 state("e1", "working", 60)]
+        async with mk() as cx:
+            await cx.post("/ingest/claude_code", content="\n".join(json.dumps(x) for x in lines) + "\n", headers=nd)
+            before = (await cx.get("/api/crew/end-build-m1")).json()
+        ck("a working station silent for 60 min shows quiet", before["state"] == "quiet", before["state"])
+        as_station("b1", "builder")
+        async with mk() as cx:
+            r = await cx.post("/api/crew/end-build-m1/end", json={"reason": "retired"})
+        ck("a builder may not end a station", r.status_code == 403, r.text)
+        as_station("crew-orchestrator", "orchestrator")
+        async with mk() as cx:
+            r = await cx.post("/api/crew/end-build-m1/end", json={"reason": "  retired  "})
+        ck("the orchestrator may", r.status_code == 200, r.text)
+        as_station("", "")
+        row = r.json()
+        ck("ended with the reason", (row["state"], row["state_reason"]) == ("ended", "retired"), row)
+        ck("the earlier session is kept", [e["session"] for e in row["earlier"]] == ["e-old"], row["earlier"])
+        async with mk() as cx:
+            crew = (await cx.get("/api/crew")).json()
+            listed = next(x for x in crew["stations"] if x["name"] == "end-build-m1")
+            ck("/api/crew shows it ended", (listed["state"], listed["state_reason"]) == ("ended", "retired"), listed)
+            r = await cx.post("/api/crew/end-build-m1/end", json={"reason": "again"})
+            ck("ending an ended station keeps its reason",
+               r.status_code == 200 and r.json()["state_reason"] == "retired", r.text)
+            r = await cx.post("/api/crew/nobody/end")
+            ck("an unknown station is 404", r.status_code == 404, r.text)
+            r = await cx.post("/api/crew/end-build-m1/end")
+            ck("no body is fine", r.status_code == 200, r.text)
+            await cx.post("/ingest/claude_code", content=json.dumps(state("e1", "working", 5)) + "\n", headers=nd)
+            st = (await cx.get("/api/crew/end-build-m1")).json()
+            ck("a working line from before the end does not turn it back", st["state"] == "ended", st["state"])
+            await cx.post("/ingest/claude_code", content=json.dumps(state("e1", "working", -1)) + "\n", headers=nd)
+            st = (await cx.get("/api/crew/end-build-m1")).json()
+            ck("a live session reporting after the end turns it back", st["state"] == "working", st["state"])
+
+            lines = [st_line("n1", "noreason-build", "builder", ago=2), state("n1", "working", 2)]
+            await cx.post("/ingest/claude_code", content="\n".join(json.dumps(x) for x in lines) + "\n", headers=nd)
+            r = await cx.post("/api/crew/noreason-build/end", json={})
+            ck("with no reason it says marked ended", r.json()["state_reason"] == "marked ended", r.text)
+
 plugin()
 asyncio.run(main())
 print(f"\n{P} passed, {F} failed")

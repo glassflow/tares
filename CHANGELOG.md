@@ -5,6 +5,8 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Tares can mark a crew station ended (`POST /api/crew/<station>/end`), so a station whose session is gone stops showing as Quiet.
+
 ## [1.48.0] - 2026-10-19
 
 The factory crew follows your `tares login`: a new login reaches every station, a logout stops the
