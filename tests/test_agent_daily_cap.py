@@ -9,6 +9,9 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import clean_env
+
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -113,7 +116,7 @@ async def api():
     print("== the settings API on a running daemon ==")
     tmp = tempfile.mkdtemp()
     port = "8846"
-    env = {**os.environ, "TARES_DB": os.path.join(tmp, "t.duckdb"), "TARES_PORT": port,
+    env = {**clean_env(), "TARES_DB": os.path.join(tmp, "t.duckdb"), "TARES_PORT": port,
            "TARES_MCP_PORT": "8847", "TARES_OTLP_GRPC_PORT": "off", "TARES_AGENT_DAILY_CAP": "80"}
     proc = subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

@@ -6,6 +6,9 @@ stays fast as the event count grows (no table scan).
 import asyncio, os, subprocess, sys, time
 import httpx
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import clean_env
+
 from tares.daemon import _parse_size
 
 P = F = 0
@@ -47,7 +50,7 @@ def H(tok):
 
 
 def _boot(**extra):
-    env = {k: v for k, v in os.environ.items()
+    env = {k: v for k, v in clean_env().items()
            if k not in ("TARES_AUTH_TOKEN", "TARES_MAX_DB_SIZE")}
     env |= {"TARES_DB": DB, "TARES_CATALOG": SEED, "TARES_PORT": PORT,
             "TARES_OTLP_GRPC_PORT": "off", **extra}

@@ -5,6 +5,10 @@ server's token spent for it. stdio keeps reading the station from the environmen
 """
 import asyncio, os, signal, socket, subprocess, sys, tempfile
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import clean_env, scrub_os_environ
+scrub_os_environ()
+
 import httpx
 
 P = F = 0
@@ -75,7 +79,7 @@ def unit_checks():
 
 async def main():
     tmp = tempfile.mkdtemp(prefix="mcp_station_headers_")
-    base = {k: v for k, v in os.environ.items() if k not in _STRIP}
+    base = {k: v for k, v in clean_env().items() if k not in _STRIP}
     base.update(TARES_OTLP_GRPC_PORT="off", HOME=tmp)
     dport, aport, bport = free_port(), free_port(), free_port()
     daemon_url = f"http://127.0.0.1:{dport}"

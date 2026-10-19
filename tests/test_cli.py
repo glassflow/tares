@@ -2,6 +2,10 @@
 import os, sys, types
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import scrub_os_environ
+scrub_os_environ()
+
 import tares.cli as cli
 
 P = F = 0
