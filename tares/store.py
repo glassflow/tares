@@ -464,6 +464,9 @@ _MIGRATIONS = [
     # TR-408: the Linear project a project's tickets live in, and how the last sync went
     # ({id, name, url, synced_at, cursor, error}); NULL = the project does not use Linear
     "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS linear JSON",
+    # The GitHub repo and issue label a project's tickets live in, and how the last sync went
+    # ({repo, issue_label, url, credential, synced_at, error, issues, backoff_until}); NULL = no
+    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS github_issues JSON",
     # What kind of project it is, shown as a tag and choosing its page (NULL = an ordinary
     # project). 'software_factory': specced in Claude Code, built from docs and tickets.
     "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS kind TEXT",
@@ -2605,7 +2608,7 @@ class Store(FactoryStore, ClaudeUsageStore):
             self.con.execute(f"UPDATE tickets SET {', '.join(sets)} WHERE id = ?", vals)
 
     def update_ticket_owner(self, tid: str, owner: str) -> None:
-        """A project stopped using Linear: its tickets become Tares's (TR-408)."""
+        """A project stopped using Linear or GitHub: its tickets become Tares's (TR-408)."""
         with self._lock:
             self.con.execute("UPDATE tickets SET owner = ?, updated_at = ? WHERE id = ?",
                              [owner, now_utc(), tid])
@@ -2777,6 +2780,34 @@ class Store(FactoryStore, ClaudeUsageStore):
             rows = self.con.execute("SELECT id, linear FROM usecases WHERE linear IS NOT NULL"
                                     ).fetchall()
         return [(r[0], json.loads(r[1])) for r in rows if r[1]]
+
+    def get_project_github(self, uid: str) -> dict | None:
+        """The GitHub repo and issue label a project's tickets live in, with the last sync's
+        state, or None."""
+        with self._lock:
+            r = self.con.execute("SELECT github_issues FROM usecases WHERE id = ?",
+                                 [uid]).fetchone()
+        return json.loads(r[0]) if r and r[0] else None
+
+    def set_project_github(self, uid: str, link: dict | None) -> None:
+        with self._lock:
+            self.con.execute("UPDATE usecases SET github_issues = ? WHERE id = ?",
+                             [json.dumps(link, default=str) if link is not None else None, uid])
+
+    def github_projects(self) -> list[tuple[str, dict]]:
+        """(project id, its GitHub link) for every project whose tickets live in GitHub Issues."""
+        with self._lock:
+            rows = self.con.execute("SELECT id, github_issues FROM usecases "
+                                    "WHERE github_issues IS NOT NULL").fetchall()
+        return [(r[0], json.loads(r[1])) for r in rows if r[1]]
+
+    def project_ticket_home(self, uid: str) -> str | None:
+        """'linear' or 'github' when the project's tickets live there, None when they are Tares's."""
+        if self.get_project_linear(uid):
+            return "linear"
+        if self.get_project_github(uid):
+            return "github"
+        return None
 
     def skill_loads(self, agents: list[str], days: int = 7) -> dict[str, list[str]]:
         """{skill: [agents]} for the runs of `agents` in the last `days` that loaded a skill."""
