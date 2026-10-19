@@ -74,7 +74,8 @@ words, and the project left the crew's work list. Its builders may still be runn
    its pull request, with its progress in the working doc.
 3. **Then the ready tickets, in order**, one milestone at a time when there are milestones. For
    each: `get_ticket` (it carries the working doc, if any), mark it started (Linear status for a
-   Linear ticket, else `write_ticket(id, status="in_progress")`), build it, verify it, mark it done.
+   Linear ticket, the `in progress` label via `gh issue edit` for a GitHub ticket and close it with
+   `gh issue close --reason completed` when done, else `write_ticket(id, status="in_progress")`), build it, verify it, mark it done.
 4. **Keep the record as you go:**
    - after each step that works, the working doc's `## Progress` when the ticket has one;
    - every check you run with `add_check` (the command, what it showed, the commit; for a test you
