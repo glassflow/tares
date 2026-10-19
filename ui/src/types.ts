@@ -362,7 +362,7 @@ export interface Doc extends DocSummary { body: string; projects: string[] }
 export type TicketStatus = "todo" | "in_progress" | "done" | "canceled";
 export interface Ticket {
   id: string;
-  owner: "tares" | "linear";
+  owner: "tares" | "linear" | "github";
   identifier: string | null;
   url: string | null;
   title: string;
@@ -374,7 +374,7 @@ export interface Ticket {
   updated_at: string;
   // the factory's plan (TR-411, TR-412)
   number: number | null;
-  label: string;                  // the Linear identifier, else T<n>
+  label: string;                  // the Linear identifier, GH-<n>, else T<n>
   milestone: string | null;       // milestone id
   milestone_name: string | null;
   repo?: string | null;           // the GitHub repo (owner/name) it changes, when the project spans several
@@ -438,7 +438,7 @@ export interface CrewMessage { at: string; session: string; from: string; to: st
 export interface MilestoneCheck { check: string; expect: string }
 export interface Milestone {
   id: string;
-  owner: "tares" | "linear";
+  owner: "tares" | "linear" | "github";
   name: string;
   goal: string;
   checks: MilestoneCheck[];
@@ -554,6 +554,10 @@ export interface StationDetail extends CrewStation {
 export interface LinearLink {
   id: string; name: string; url: string;
   synced_at?: string | null; error?: string | null; issues?: number;
+}
+export interface GitHubLink {
+  repo: string; issue_label: string; url: string;
+  synced_at?: string; error?: string | null; issues?: number;
 }
 export interface LinearStatus {
   connected: boolean;

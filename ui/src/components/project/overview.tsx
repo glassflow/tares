@@ -387,7 +387,8 @@ function BuildRow({ ctx }: { ctx: Ctx }) {
       <span>
         {nDocs} {nDocs === 1 ? "doc" : "docs"}
         {tickets.length > 0 && <>, {tickets.length} {tickets.length === 1 ? "ticket" : "tickets"} ({done} done)</>}
-        {t?.linear && <> in Linear project {t.linear.name}</>}.
+        {t?.linear && <> in Linear project {t.linear.name}</>}
+        {t?.github && <> in GitHub {t.github.repo}</>}.
         {start ? " A session can start building from the starting prompt." : " No starting prompt yet."}
       </span>
       <span className="btnrow" style={{ margin: 0 }}>
