@@ -109,7 +109,8 @@ or only in Tares?"
 - **GitHub Issues:** one repo holds the issues, marked by an issue label. You need `gh` logged in
   with `repo` scope, and a GitHub credential on Tares (Settings, GitHub) that can read that repo's
   issues. Ask which repo, recommending the repo that holds the plan. GitHub owns these tickets:
-  Tares only reads them, so change them with `gh`, never with `write_ticket`.
+  Tares refuses to change a ticket's title, status, order, milestone or dependencies, so change
+  those with `gh`. `set_stage`, `add_check`, the working doc and `repo` still work in Tares.
 - **Tares only:** nothing else to set up.
 
 ## 6. Write the project into Tares
@@ -147,8 +148,10 @@ Write for a reader who was not here: no "as discussed", no references to this co
         `gh api graphql -f query='mutation($i:ID!,$b:ID!){addBlockedBy(input:{issueId:$i,blockingIssueId:$b}){clientMutationId}}' -f i=<blocked issue id> -f b=<blocking issue id>`
      5. `link_github_issues(repo=R, issue_label=L)`, then `write_milestone` again for each milestone
         to add its checks (GitHub has no place for them). Check the ticket list Tares returns
-        matches what you created (identifiers `GH-<n>`). If Tares answers 429 with a `Retry-After`,
-        GitHub's rate limit is reached: wait that many seconds and check again.
+        matches what you created (identifiers `GH-<n>`). If `link_github_issues` answers
+        `error 429: GitHub rate limit reached`, nothing is linked: wait about 5 minutes and call it
+        again. If the answer shows `github.error` naming the rate limit, the link is saved: wait
+        about 5 minutes and check `list_tickets`.
      6. For a project that spans several repos, then
         `write_ticket(id=<GH-n>, repo="owner/name", title="")` for each ticket.
    - **Tares only:** `write_ticket` once per ticket with `milestone`, `depends_on` (the
@@ -267,8 +270,9 @@ Tares: the project, its shared AGENTS.md and memory, a light record of what was 
    - `write_doc` kind `start`, titled `Start here`: what the project is in two lines, where the
      code lives, and "follow the `session` skill", so a later session can pick it up.
    - The tickets: `write_ticket` per piece of work, in order, with `depends_on` (one ticket is
-     fine), or in Linear or GitHub Issues when the person keeps tickets there. No milestones, no working docs, no
-     second-model attack.
+     fine). When the person keeps tickets in Linear or GitHub Issues, create them there as in
+     step 6 of the full spec (one issue per ticket with `gh issue create`, then
+     `link_github_issues`). No milestones, no working docs, no second-model attack.
 5. **Size check**, once the ticket list exists: more than about five tickets, or tickets in more
    than one repo, is big enough for the crew. Then ask: "This looks big enough for the crew.
    Switch to the full spec and hand it over?" (recommend yes). On yes, carry on from step 2 of the

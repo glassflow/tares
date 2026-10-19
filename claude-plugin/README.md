@@ -107,7 +107,7 @@ the Tares console (Settings, Linear) and give this session Linear's MCP server.
 
 Or in GitHub Issues: Claude creates them with `gh` in one repo under an issue label, links them
 with `link_github_issues`, and Tares keeps the list in sync with the GitHub credentials stored on
-it. Tares only reads GitHub tickets; change them with `gh`.
+it. Tares refuses to change a GitHub ticket's title, status, order, milestone or dependencies; change those with `gh`.
 
 The spec session's whole recording lands on the project. A later session told
 `Work on Tares project "<name>"` reads the starting prompt, the tickets and their working docs
