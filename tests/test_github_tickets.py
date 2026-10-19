@@ -1005,6 +1005,20 @@ async def api():
         link = store.get_project_github(own)
         link.pop("backoff_until", None)
         store.set_project_github(own, link)
+        print("== (G) sync now while the project is backing off ==")
+        store.set_project_github(own, {**link, "error": "GitHub rate limit reached",
+                                       "backoff_until": (now_utc() + timedelta(seconds=120)).isoformat()})
+        STATE["calls"].clear()
+        r = await cx.post(f"/api/projects/{own}/github/sync")
+        ck("(G) sync now during the backoff -> 429 with Retry-After, GitHub not asked",
+           r.status_code == 429 and r.json()["detail"] == "GitHub rate limit reached"
+           and 100 <= int(r.headers.get("retry-after", 0)) <= 125 and STATE["calls"] == [], (r.text, r.headers))
+        ck("(G) the backoff and the tickets are left as they were",
+           store.get_project_github(own)["backoff_until"] and store.list_tickets(own) == before)
+        store.set_project_github(own, {**link, "backoff_until": (now_utc() - timedelta(seconds=1)).isoformat()})
+        r = await cx.post(f"/api/projects/{own}/github/sync")
+        ck("(G) once the time has passed sync now works again", r.status_code == 200, r.text)
+        link = store.get_project_github(own)
         STATE["http_raw"] = (502, {})
         r = await cx.post(f"/api/projects/{own}/github/sync")
         STATE["http_raw"] = None
