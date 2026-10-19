@@ -5,8 +5,20 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Fixed
+## [1.48.0] - 2026-10-19
 
+The factory crew follows your `tares login`: a new login reaches every station, a logout stops the
+crew, and an old key can no longer break it. `crew status` reads cleanly once the crew is stopped.
+
+### Fixed
+- Crew stations no longer get 401s after a new `tares login` because an old key stuck around
+  (TR-560). The crew follows the saved login: `tares login` gives the crew's key file the new key
+  and `tares logout` empties it, so the crew stops with you. `tares factory` no longer passes the
+  key to any process it starts, where Claude Code's background service could keep a revoked one
+  for every station. Stations and the watch read only the crew's key file, a station never writes
+  it, and a key Tares refuses never replaces a working one.
+- `tares factory doctor` shows which key the stations use and which one this terminal uses, by key
+  id, and flags a `TARES_AUTH_TOKEN` that overrides the saved login. `tares status` says so too.
 - `tares factory crew status` no longer shows a question left over from a finished project once the crew is stopped, and says "no stations running" instead of printing an empty station table. Finishing a project withdraws its open desk questions, and `crew down` withdraws any left on finished projects (TR-559).
 
 ## [1.47.0] - 2026-10-16

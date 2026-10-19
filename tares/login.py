@@ -165,6 +165,32 @@ def _revoke(data: dict) -> tuple[bool, str]:
     return False, ""
 
 
+def crew_key_file() -> Path:
+    """The tares factory crew's key file: its stations read only this, never login.json."""
+    home_ = os.getenv("FACTORY_CREW_HOME") or str(Path.home() / "factory")
+    return Path(home_).expanduser() / ".tares-token"
+
+
+def _crew_follows(new_key: str, old_key: str = "") -> bool:
+    """The crew follows the person's login (TR-560): a login gives a crew on this machine the new
+    key, a logout takes away the key it ends. Nothing happens without a crew, and a logout leaves
+    a file holding some other key alone (a crew on a Tares of your own). True when it wrote."""
+    path = crew_key_file()
+    if not path.parent.is_dir():
+        return False
+    if not new_key:
+        try:
+            if path.read_text().strip() != old_key:
+                return False
+        except OSError:
+            return False
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(new_key + "\n" if new_key else "")
+    os.chmod(path, 0o600)
+    return True
+
+
 def mcp_setting(cell_url: str) -> str:
     return (f"For ordinary Claude Code sessions, set the Tares plugin's MCP endpoint to "
             f"{cell_url.rstrip('/')}/mcp (run /plugin in Claude Code, pick tares, Configure). "
@@ -231,6 +257,7 @@ def login(cloud: str = "", open_browser: bool = True, wait: int = WAIT_SECONDS) 
 
     old = saved()
     _save(data)
+    _crew_follows(data["key"])
     if old and old.get("key_id") != data["key_id"]:
         ok, _how = _revoke(old)
         if not ok:
@@ -251,11 +278,15 @@ def logout() -> int:
         return 0
     ok, _how = _revoke(data)
     login_file().unlink(missing_ok=True)
+    crew = _crew_follows("", data["key"])
     if ok:
         print(f"tares logout: this machine's key on {data.get('cell')} is removed, "
               f"and the saved login is deleted.")
-        return 0
-    print(f"tares logout: the saved login is deleted, but the key is still on {data.get('cell')}: "
-          f"remove it under Security > API keys on {data.get('cell_url')} "
-          f"(named cli: {data.get('machine')}).")
-    return 1
+    else:
+        print(f"tares logout: the saved login is deleted, but the key is still on {data.get('cell')}: "
+              f"remove it under Security > API keys on {data.get('cell_url')} "
+              f"(named cli: {data.get('machine')}).")
+    if crew:
+        print("  The factory crew on this machine stops reaching Tares until you sign in again "
+              "with tares login.")
+    return 0 if ok else 1

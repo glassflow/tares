@@ -17,6 +17,8 @@ from urllib.parse import parse_qs, urlparse
 
 HOME = tempfile.mkdtemp()
 os.environ["TARES_HOME"] = HOME
+# a crew home that does not exist, so no login here touches the real ~/factory
+os.environ["FACTORY_CREW_HOME"] = os.path.join(HOME, "no-crew")
 for k in ("TARESD_URL", "TARES_FACTORY_URL", "TARES_AUTH_TOKEN", "TARES_CLOUD_URL"):
     os.environ.pop(k, None)
 
@@ -143,6 +145,7 @@ ck("TARESD_URL and TARES_FACTORY_URL are the workspace",
    got.get("TARESD_URL") == BASE and got.get("TARES_FACTORY_URL") == BASE, got.get("TARESD_URL"))
 ck("the key is the token", got.get("TARES_AUTH_TOKEN") == "nvf_k1_secret")
 ck("doctor is told where it came from", got.get("TARES_FACTORY_SOURCE") == "saved login")
+ck("and where the key came from", got.get("TARES_FACTORY_KEY_SOURCE") == "saved login")
 os.environ["TARES_AUTH_TOKEN"] = "mine"
 os.environ["TARESD_URL"] = "http://elsewhere:8787"
 got.clear()
@@ -153,6 +156,16 @@ except SystemExit:
 ck("set variables win over the saved login",
    got.get("TARESD_URL") == "http://elsewhere:8787" and got.get("TARES_AUTH_TOKEN") == "mine"
    and got.get("TARES_FACTORY_SOURCE") == "environment", got.get("TARES_FACTORY_SOURCE"))
+os.environ.pop("TARESD_URL")
+got.clear()
+try:
+    C._factory(["doctor"])
+except SystemExit:
+    pass
+ck("a set TARES_AUTH_TOKEN beside the saved workspace is named as the key's source (TR-560)",
+   got.get("TARES_FACTORY_SOURCE") == "saved login" and got.get("TARES_AUTH_TOKEN") == "mine"
+   and got.get("TARES_FACTORY_KEY_SOURCE") == "environment", got.get("TARES_FACTORY_KEY_SOURCE"))
+os.environ["TARESD_URL"] = "http://elsewhere:8787"
 os.environ.pop("TARES_AUTH_TOKEN")
 os.environ.pop("TARESD_URL")
 os.environ["TARES_FACTORY_MCP_URL"] = "https://someone-else.example.com/mcp"
@@ -253,6 +266,32 @@ ck("the workspace deleted the key itself", ("/api/keys/k2", "Bearer nvf_k2_secre
    WORLD["deletes"])
 ck("the file is gone", not L.login_file().exists())
 ck("a second logout says so and succeeds", L.logout() == 0)
+
+print("the factory crew follows the login (TR-560)")
+WORLD["logout_status"] = 200
+crew = Path(tempfile.mkdtemp()) / "factory"
+os.environ["FACTORY_CREW_HOME"] = str(crew)
+browser()
+ck("no crew: login succeeds and makes none", L.login(BASE, wait=10) == 0 and not crew.exists())
+crew.mkdir()
+(crew / ".tares-token").write_text("nvf_stale_revoked\n")
+browser()
+rc = L.login(BASE, wait=10)
+key = L.saved()["key"]
+ck("login gives the crew the new key", rc == 0 and (crew / ".tares-token").read_text().strip() == key,
+   (crew / ".tares-token").read_text())
+mode = stat.S_IMODE(os.stat(crew / ".tares-token").st_mode)
+ck("the crew file is 600", mode == 0o600, oct(mode))
+rc = L.logout()
+ck("logout empties the crew file", rc == 0 and (crew / ".tares-token").read_text().strip() == "",
+   (crew / ".tares-token").read_text())
+browser()
+L.login(BASE, wait=10)
+(crew / ".tares-token").write_text("my-own-tares-root\n")
+L.logout()
+ck("logout leaves a key it did not end alone",
+   (crew / ".tares-token").read_text().strip() == "my-own-tares-root")
+os.environ["FACTORY_CREW_HOME"] = os.path.join(HOME, "no-crew")
 
 srv.shutdown()
 print(f"\n{P} passed, {F} failed")
