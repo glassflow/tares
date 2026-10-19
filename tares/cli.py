@@ -168,6 +168,9 @@ def _status(args: argparse.Namespace):
     else:
         if source == "saved login":
             print(f"Signed in to {(saved() or {}).get('cell') or base} (tares login)")
+            if token and token != (saved() or {}).get("key"):
+                print("  with the key in TARES_AUTH_TOKEN, not the saved login's; unset it to use "
+                      "the saved one")
         print(render(st))
     raise SystemExit(0 if st["daemon"]["running"] else 1)
 
@@ -222,6 +225,9 @@ def _factory(argv: list[str]):
     url, token, source = resolve()
     env["TARESD_URL"] = env.get("TARESD_URL") or url
     env["TARES_FACTORY_URL"] = env.get("TARES_FACTORY_URL") or env["TARESD_URL"]
+    # Where the key came from, for `doctor`: a TARES_AUTH_TOKEN already set overrides the saved
+    # login's key, which is worth saying when the two differ (TR-560).
+    env["TARES_FACTORY_KEY_SOURCE"] = "environment" if env.get("TARES_AUTH_TOKEN") else source
     if token and not env.get("TARES_AUTH_TOKEN"):
         # The saved key goes only to its own workspace: not to an MCP endpoint set elsewhere.
         mcp = (env.get("TARES_FACTORY_MCP_URL") or "").rstrip("/")

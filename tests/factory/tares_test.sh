@@ -80,6 +80,29 @@ env -i "${orch_env[@]}" "$F" spawn builder "Links App" m4 "$repo" "work T4" >"$T
 check "unreadable crew settings stop a spawn plainly" 'grep -q "could not read the crew settings" "$T/notoken.out" && ! grep -q "integer expression" "$T/notoken.out" && [ ! -f "$FACTORY_CREW_HOME/stations/links-app-build-m4.settings.json" ]'
 mv "$T/token.bak" "$FACTORY_CREW_HOME/.tares-token"
 
+# TR-560: the key reaches no process the script starts; a station ignores a stale inherited key and
+# never writes the crew file; a key Tares refuses never replaces the crew's.
+"$F" spawn builder "Links App" m5 "$repo" "work T5" >/dev/null 2>&1
+check "claude is started without the person's key" '[ -s "$FAKE_CLAUDE_STATE/last.env" ] && ! grep -q "^TARES_AUTH_TOKEN=" "$FAKE_CLAUDE_STATE/last.env"'
+check "station settings blank an inherited key" '[ "$(jq -c ".env.TARES_AUTH_TOKEN" "$FACTORY_CREW_HOME/stations/links-app-build-m5.settings.json")" = "\"\"" ]'
+"$F" retire links-app-build-m5 >/dev/null 2>&1
+env -i "${orch_env[@]}" TARES_AUTH_TOKEN=nvf_dead0000_revoked "$F" spawn builder "Links App" m6 "$repo" "work T6" >"$T/stale.out" 2>&1
+check "a station with a stale inherited key reaches Tares through the crew file" 'grep -q "started links-app-build-m6" "$T/stale.out"'
+check "and leaves the crew file as it was" '[ "$(cat "$FACTORY_CREW_HOME/.tares-token")" = stub-token ]'
+check "the station passes the stale key to nobody" '! grep -q "nvf_dead0000_revoked" "$FAKE_CLAUDE_STATE/last.env"'
+"$F" retire links-app-build-m6 >/dev/null 2>&1
+TARES_AUTH_TOKEN=nvf_dead0000_revoked "$F" doctor >"$T/refused.out" 2>&1
+check "a key Tares refuses never replaces the crew's" '[ "$(cat "$FACTORY_CREW_HOME/.tares-token")" = stub-token ] && grep -q "refuses key dead0000 from the environment; the crew keeps the key it has" "$T/refused.out"'
+check "doctor names the stations' key and finds it good" 'grep -q "ok    stations use a token with no key id from $FACTORY_CREW_HOME/.tares-token, and Tares accepts it" "$T/refused.out"'
+check "no key value in doctor's output" '! grep -q "nvf_dead0000_revoked\|stub-token" "$T/refused.out"'
+check "the watch, started without a key, reads the crew file" 'env -u TARES_AUTH_TOKEN "$F" projects 2>&1 | grep -q "^Links App"'
+mv "$FACTORY_CREW_HOME/.tares-token" "$T/token.bak"; : > "$FACTORY_CREW_HOME/.tares-token"
+env -i "${orch_env[@]}" "$F" spawn builder "Links App" m7 "$repo" "work T7" >"$T/signedout.out" 2>&1
+check "a station whose person signed out says so" 'grep -q "the person signed out of Tares: they run tares login" "$T/signedout.out"'
+env -u TARES_AUTH_TOKEN "$F" doctor >"$T/nokey.out" 2>&1
+check "doctor flags a crew without a key" 'grep -q "FIX   the stations have no key in $FACTORY_CREW_HOME/.tares-token: run tares login" "$T/nokey.out"'
+mv "$T/token.bak" "$FACTORY_CREW_HOME/.tares-token"
+
 # Progress comes from Tares: status and projects read the project's tickets.
 api POST "/api/projects/$P/milestones" '{"name": "Links", "goal": "short links"}' >/dev/null
 api POST "/api/projects/$P/tickets" '{"title": "Store", "milestone": "Links"}' >/dev/null

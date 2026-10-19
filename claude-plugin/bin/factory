@@ -80,7 +80,8 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
                                             with uncommitted or unpushed work
   factory retire <station>
 
-Tares is at $TARESD_URL (default http://127.0.0.1:8787); with auth on, TARES_AUTH_TOKEN.
+Tares is the workspace `tares login` signed in to, else $TARESD_URL (default http://127.0.0.1:8787).
+The crew's key is the saved login's; for a Tares of your own with auth on, TARES_AUTH_TOKEN.
 The crew home is ~/factory (FACTORY_CREW_HOME overrides).
 EOF
 }
@@ -114,6 +115,13 @@ HALT_FILE="$CREW_HOME/HALT"
 EVENTS="$CREW_HOME/events.jsonl"
 TOKEN_FILE="$CREW_HOME/.tares-token"
 
+# `tares factory` hands this script the person's key in TARES_AUTH_TOKEN. It stays a variable of
+# this script: no process the script starts inherits it. Claude Code's background service can pick
+# it up from one of them and pass it to every station long after the key was revoked (TR-560).
+# Stations and the watch read the crew file instead, and a station ignores an inherited key.
+[ -z "${FACTORY_STATION:-}" ] || unset TARES_AUTH_TOKEN
+export -n TARES_AUTH_TOKEN TARES_FACTORY_SOURCE TARES_FACTORY_KEY_SOURCE 2>/dev/null || true
+
 ccfg() { jq -r "$1" "$CREW_CFG" 2>/dev/null || true; }
 slugify() { tr '[:upper:]' '[:lower:]' <<<"$1" | tr -c 'a-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//'; echo; }
 event() { [ -d "$CREW_HOME" ] && jq -cn --arg e "$1" --arg s "${2:-}" --arg d "${3:-}" \
@@ -146,10 +154,24 @@ require_crew() { [ -f "$CREW_CFG" ] || die "no crew yet in $CREW_HOME; run: $ME 
 # the same address, and the token as a file only the person can read, never in their settings.
 
 TARES=""; TARES_STATE=""
-tares_token() {
-  if [ -n "${TARES_AUTH_TOKEN:-}" ]; then echo "$TARES_AUTH_TOKEN"; return; fi
-  [ -n "${TARES_FACTORY_TOKEN_FILE:-}" ] && [ -r "$TARES_FACTORY_TOKEN_FILE" ] && tr -d '[:space:]' < "$TARES_FACTORY_TOKEN_FILE"
+# A session the factory started (a station, or the person's spec or build session) reads only the
+# crew file; the person's own terminal uses the key `tares factory` gave it; the watch, started
+# without one, reads the crew file on every call, so a new login reaches it without a restart.
+in_crew_session() { [ -n "${FACTORY_STATION:-}${TARES_FACTORY_TOKEN_FILE:-}" ]; }
+crew_key() {
+  local f=${TARES_FACTORY_TOKEN_FILE:-$TOKEN_FILE}
+  [ -r "$f" ] && tr -d '[:space:]' < "$f"
   return 0
+}
+tares_token() {
+  if ! in_crew_session && [ -n "${TARES_AUTH_TOKEN:-}" ]; then echo "$TARES_AUTH_TOKEN"; return; fi
+  crew_key
+}
+# What to add to "Tares refused" when no key was sent.
+no_key_hint() {
+  [ -z "$(tares_token)" ] || return 0
+  if in_crew_session; then echo "; the crew has no key because the person signed out of Tares: they run tares login, and the crew picks it up"
+  else echo "; if it has auth on, run tares login (or set TARES_AUTH_TOKEN for a Tares of your own)"; fi
 }
 tares_url() {
   local u=${TARES_FACTORY_URL:-${TARESD_URL:-${TARES_URL:-}}}
@@ -207,10 +229,30 @@ tares_http() { # method path [json body]; the token goes to curl on stdin, never
 }
 uri() { jq -rn --arg p "$1" '$p | @uri'; }
 
-# The person's token, kept for the stations in a file only they can read (TARES_FACTORY_TOKEN_FILE).
+# Does this Tares let a key in? (no key: does it let anyone in)
+key_ok() {
+  { [ -n "$1" ] && printf 'Authorization: Bearer %s\n' "$1"; true; } |
+    curl -sf --max-time 10 -o /dev/null -H @- "$TARES/api/crew/settings" 2>/dev/null
+}
+# A key's id (nvf_<id>_<secret>), safe to print; never the key.
+key_name() {
+  case "$1" in
+    "") echo "no key" ;;
+    nvf_*_*) local r=${1#nvf_}; echo "key ${r%%_*}" ;;
+    *) echo "a token with no key id" ;;
+  esac
+}
+# The person's key, copied for the stations into a file only they can read (TARES_FACTORY_TOKEN_FILE).
+# `tares login` and `tares logout` keep it; the person's own commands refresh it. Never a session
+# the factory started, and only with a key this Tares accepts, so a stale key can't replace a good one.
 keep_token() {
-  [ -n "${TARES_AUTH_TOKEN:-}" ] && [ -d "$CREW_HOME" ] || return 0
+  ! in_crew_session && [ -n "${TARES_AUTH_TOKEN:-}" ] && [ -d "$CREW_HOME" ] || return 0
   [ "$(cat "$TOKEN_FILE" 2>/dev/null)" = "$TARES_AUTH_TOKEN" ] && return 0
+  tares_on || return 0
+  if ! key_ok "$TARES_AUTH_TOKEN"; then
+    say "warning: Tares at $TARES refuses $(key_name "$TARES_AUTH_TOKEN") from the ${TARES_FACTORY_KEY_SOURCE:-environment}; the crew keeps the key it has"
+    return 0
+  fi
   (umask 077; printf '%s\n' "$TARES_AUTH_TOKEN" > "$TOKEN_FILE"); chmod 600 "$TOKEN_FILE"
 }
 
@@ -230,7 +272,7 @@ crew_projects() {
 # Dies when Tares could not give the list, so a refusal is never read as "no such project".
 crew_projects_or_die() {
   crew_projects >/dev/null
-  [ -z "$CREW_PROJECTS_ERR" ] || die "Tares at $TARES did not give the crew's projects ($CREW_PROJECTS_ERR)$( [ -z "$(tares_token)" ] && echo "; if it has auth on, run tares login or set TARES_AUTH_TOKEN")"
+  [ -z "$CREW_PROJECTS_ERR" ] || die "Tares at $TARES did not give the crew's projects ($CREW_PROJECTS_ERR)$(no_key_hint)"
 }
 project_row() { crew_projects | jq -c --arg p "$1" --arg s "$(slugify "$1")" \
   '[.[] | select(.name == $p or .id == $p or ((.name | ascii_downcase | gsub("[^a-z0-9]+"; "-") | gsub("^-|-$"; "")) == $s))][0] // empty'; }
@@ -244,7 +286,7 @@ settings_defaults() {
           prod_pattern: "(^|[-_.])(prod|production)([-_.]|$)", challenger: false, builders_max: 2}'
 }
 settings_raw() {
-  local s; s=$(tares_http GET /api/crew/settings) || die "could not read the crew settings from Tares at $TARES$( [ -z "$(tares_token)" ] && echo "; if it has auth on, run tares login or set TARES_AUTH_TOKEN")"
+  local s; s=$(tares_http GET /api/crew/settings) || die "could not read the crew settings from Tares at $TARES$(no_key_hint)"
   jq -c '.settings // .' <<<"$s"
 }
 # Missing settings to ask: the release ones only matter with a releaser.
@@ -607,7 +649,9 @@ write_settings() { # station role parent project repo
         FACTORY_STATION: $station, FACTORY_ROLE: $role, FACTORY_PARENT: $parent,
         FACTORY_HOME: $home, FACTORY_CREW_HOME: $home, FACTORY_WORKTREES: $wt,
         TARES_FACTORY_URL: $tares_url, TARESD_URL: $tares_url, TARES_FACTORY_MCP_URL: $mcp_url,
-        FACTORY_AUTOCOMPACT: $compact
+        FACTORY_AUTOCOMPACT: $compact,
+        # blank over any key Claude Code itself inherited: stations use the crew file (TR-560)
+        TARES_AUTH_TOKEN: ""
       } + (if $tok != "" then {TARES_FACTORY_TOKEN_FILE: $tok,
              # the same file under a name Claude Code does not hide from the plugin header helper
              TARES_FACTORY_CRED_FILE: $tok} else {} end)
@@ -1643,6 +1687,28 @@ cmd_projects() { # every project handed to the crew: progress, milestone, builde
   done < <(jq -c '.[]' <<<"$rows")
 }
 
+# Which key each place holds, by id, so a stale one shows (TR-560): this terminal's key against the
+# saved login, then the crew file the stations read.
+doctor_keys() {
+  local login="${TARES_HOME:-$HOME/.tares}/login.json" saved="" mine=${TARES_AUTH_TOKEN:-} file=${TARES_FACTORY_TOKEN_FILE:-$TOKEN_FILE} theirs
+  [ "$(jq -r '.cell_url // "" | rtrimstr("/")' "$login" 2>/dev/null)" = "$TARES" ] && saved=$(jq -r '.key // empty' "$login" 2>/dev/null)
+  if [ -n "$mine" ]; then
+    if [ "${TARES_FACTORY_KEY_SOURCE:-}" = environment ] && [ -n "$saved" ] && [ "$mine" != "$saved" ]; then
+      no "TARES_AUTH_TOKEN in this terminal ($(key_name "$mine")) overrides your saved login ($(key_name "$saved")): unset TARES_AUTH_TOKEN, then run this again"
+    else ok "this terminal uses $(key_name "$mine"), from the ${TARES_FACTORY_KEY_SOURCE:-environment}"; fi
+  fi
+  [ -d "$CREW_HOME" ] || return 0
+  theirs=$(crew_key)
+  if [ -z "$theirs" ]; then
+    key_ok "" || no "the stations have no key in $file: run tares login (for a Tares of your own, run $ME doctor with TARES_AUTH_TOKEN set)"
+  elif key_ok "$theirs"; then
+    ok "stations use $(key_name "$theirs") from $file, and Tares accepts it"
+    [ -z "$saved" ] || [ "$theirs" = "$saved" ] || warn "the stations' key is not your saved login's ($(key_name "$saved"))"
+  else
+    no "stations use $(key_name "$theirs") from $file, and Tares refuses it: run tares login"
+  fi
+}
+
 cmd_doctor() {
   local bad=0
   ok() { printf '  ok    %s\n' "$*"; }
@@ -1655,7 +1721,9 @@ cmd_doctor() {
   if tares_on; then
     ok "Tares answers at $TARES (from the $src)"
     if tares_http GET /api/crew/settings >/dev/null 2>&1; then ok "Tares lets this crew in"
-    else no "Tares at $TARES refuses the crew: run \`tares login\` again, or set TARES_AUTH_TOKEN to an admin key or the root token"; fi
+    elif [ "$src" = "saved login" ]; then no "Tares at $TARES refuses the crew: run \`tares login\` again"
+    else no "Tares at $TARES refuses the crew: run \`tares login\` again, or set TARES_AUTH_TOKEN to an admin key or the root token of your own Tares"; fi
+    doctor_keys
   else
     no "no Tares answers at $TARES (from the $src): start one with \`tares up\`, connect to your Tares Cloud workspace with \`tares login\`, or set TARESD_URL to where yours runs"
   fi
