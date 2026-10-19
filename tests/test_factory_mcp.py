@@ -198,6 +198,10 @@ async def main():
            and r["github"]["issue_label"] == "tares:issues"
            and r["github"]["url"] == "https://github.com/acme/app"
            and r["github"]["synced_at"] and r["github"]["error"] is None, r)
+        ck("and nothing else of the daemon's answer leaks through",
+           set(r) == {"github", "tickets"}
+           and set(r["github"]) == {"repo", "issue_label", "url", "synced_at", "error"}
+           and all(set(t) == {"identifier", "title", "status"} for t in r["tickets"]), r)
         no = await m.write_ticket("", status="done", id="GH-1", project="Issues")
         ck("status change refused on a GitHub ticket", no.startswith("error 409"), no)
         w = json.loads(await m.write_doc("working", "Working: GH-1", "steps", project=pid))
@@ -209,6 +213,8 @@ async def main():
            and tl["github"]["repo"] == "acme/app" and tl["github"]["issue_label"] == "tares:issues"
            and tl["tickets"][0]["label"] == "GH-1"
            and tl["tickets"][0]["url"] == "https://github.com/acme/app/issues/1", tl)
+        ck("and the link there has only the keys the tool promises",
+           set(tl["github"]) == {"repo", "issue_label", "url", "synced_at", "error"}, tl["github"])
         g = json.loads(await m.get_ticket("GH-1", project="Issues"))
         ck("get_ticket takes the GitHub identifier", g["working_doc_body"] == "steps", g)
         tl = json.loads(await m.list_tickets(project="Invoices"))

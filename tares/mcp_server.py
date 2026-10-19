@@ -833,7 +833,7 @@ async def link_linear_project(linear_project: str, project: str = "") -> str:
 async def link_github_issues(repo: str, issue_label: str = "", project: str = "") -> str:
     """Tie the project to the GitHub repo (owner/name or URL) whose issues carrying `issue_label`
     are its tickets (default `tares:<project name>`). Tares then keeps its ticket list in sync
-    (about once a minute): GitHub milestones become the project's milestones, "blocked by"
+    (about once a minute): the GitHub milestones its issues sit in become the project's milestones, "blocked by"
     becomes depends_on, and status follows the issues. Uses the GitHub credentials stored on
     Tares (Settings, GitHub); one of them must read the repo's issues. Create and change the
     issues with `gh`. Returns the tickets found."""
