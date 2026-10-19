@@ -14,6 +14,9 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import clean_env, scrub_os_environ
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHIP = os.path.join(ROOT, "claude-plugin", "scripts", "ship.py")
 CHAL = os.path.join(ROOT, "claude-plugin", "scripts", "challenger.py")
@@ -92,6 +95,7 @@ def run(script, hook, env, args=()):
 
 
 def main():
+    scrub_os_environ()
     srv = HTTPServer(("127.0.0.1", 0), FakeTares)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_port}"
@@ -113,10 +117,9 @@ def main():
     transcript = os.path.join(tmp, "session.jsonl")
     open(transcript, "w").close()
 
-    env = {**os.environ, "CLAUDE_PLUGIN_OPTION_TARES_URL": base, "CLAUDE_PLUGIN_DATA": data_dir,
-           "CLAUDE_PLUGIN_OPTION_CODEX_BIN": codex, "FAKE_CODEX_MODE": mode_file,
-           "FAKE_CODEX_LOG": log_file, "TARES_CHALLENGER_MAX_LOOPS": "3"}
-    env.pop("CLAUDE_PLUGIN_OPTION_CHALLENGER_MODE", None)
+    env = clean_env(CLAUDE_PLUGIN_OPTION_TARES_URL=base, CLAUDE_PLUGIN_DATA=data_dir,
+                    CLAUDE_PLUGIN_OPTION_CODEX_BIN=codex, FAKE_CODEX_MODE=mode_file,
+                    FAKE_CODEX_LOG=log_file, TARES_CHALLENGER_MAX_LOOPS="3")
     sid = "sess-abc"
     hook = {"session_id": sid, "transcript_path": transcript, "cwd": repo}
 
