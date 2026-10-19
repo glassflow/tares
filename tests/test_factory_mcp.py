@@ -3,8 +3,8 @@ its docs and tickets, and what the session that builds it calls to read them bac
 
 Drives the tool functions in-process against the daemon (the MCP proxy's HTTP client is pointed
 at the ASGI app). Both paths: a project whose tickets live in Tares, and one linked to Linear
-(a fake Linear answers, see test_linear.py), where ticket writes are refused but working docs
-attach.
+(a fake Linear answers, see test_linear.py) or to GitHub Issues (a fake GitHub GraphQL answers, see
+test_github_tickets.py), where ticket writes are refused but working docs attach.
 
 Run: .venv/bin/python tests/test_factory_mcp.py
 """
@@ -25,7 +25,7 @@ os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 import httpx
 
 import tares.mcp_server as m
-from tares import linear
+from tares import github_tickets, linear
 
 P = F = 0
 
@@ -56,6 +56,25 @@ def fake_linear(request: httpx.Request) -> httpx.Response:
 
 
 linear._transport = httpx.MockTransport(fake_linear)
+
+
+def fake_github(request: httpx.Request) -> httpx.Response:
+    v = json.loads(request.content)["variables"]
+    if request.headers.get("authorization") != "Bearer tok-a":
+        return httpx.Response(401, json={"message": "Bad credentials"})
+    nodes = [{"id": f"I_{n}", "number": n, "title": title, "url": f"https://github.com/acme/app/issues/{n}",
+              "state": "OPEN", "stateReason": None, "labels": {"nodes": [{"name": v["label"]}]},
+              "milestone": None, "blockedBy": {"nodes": []}}
+             for n, title in ((1, "Parse"), (2, "Store"))]
+    return httpx.Response(200, json={"data": {
+        "rateLimit": {"remaining": 4999, "resetAt": "2026-10-19T16:00:00Z"},
+        "repository": {"nameWithOwner": "acme/app", "url": "https://github.com/acme/app",
+                       "milestones": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+                       "issues": {"nodes": nodes, "pageInfo": {"hasNextPage": False,
+                                                               "endCursor": None}}}}})
+
+
+github_tickets._transport = httpx.MockTransport(fake_github)
 
 
 async def main():
@@ -163,6 +182,37 @@ async def main():
         tl = json.loads(await m.list_tickets(project="Billing"))
         ck("list_tickets says where they live", tl["linear"]["name"] == "Billing"
            and tl["tickets"][0]["url"] == "https://l/FAC-1", tl)
+
+        print("== tickets in GitHub ==")
+        pid = json.loads(await m.create_project("Issues"))["id"]
+        r = await m.link_github_issues("acme/app", "tares:issues", project="Issues")
+        ck("link before a GitHub credential is stored says how", r.startswith("error 400")
+           and "credential" in r.lower(), r)
+        app.state.store.upsert_github_credential("cred-a", "tok-a")
+        r = json.loads(await m.link_github_issues("https://github.com/acme/app.git", "tares:issues",
+                                                  project="Issues"))
+        ck("link_github_issues -> the tickets found", [t["identifier"] for t in r["tickets"]]
+           == ["GH-1", "GH-2"] and r["tickets"][0]["title"] == "Parse"
+           and r["tickets"][0]["status"] == "todo", r)
+        ck("and the link: repo, issue label, url, synced", r["github"]["repo"] == "acme/app"
+           and r["github"]["issue_label"] == "tares:issues"
+           and r["github"]["url"] == "https://github.com/acme/app"
+           and r["github"]["synced_at"] and r["github"]["error"] is None, r)
+        no = await m.write_ticket("", status="done", id="GH-1", project="Issues")
+        ck("status change refused on a GitHub ticket", no.startswith("error 409"), no)
+        w = json.loads(await m.write_doc("working", "Working: GH-1", "steps", project=pid))
+        a = json.loads(await m.attach_working_doc("GH-1", w["id"], project="Issues"))
+        ck("a working doc attaches to a GitHub ticket by identifier", a["identifier"] == "GH-1"
+           and a["working_doc"] == w["id"], a)
+        tl = json.loads(await m.list_tickets(project="Issues"))
+        ck("list_tickets says they live in GitHub, not Linear", tl["linear"] is None
+           and tl["github"]["repo"] == "acme/app" and tl["github"]["issue_label"] == "tares:issues"
+           and tl["tickets"][0]["label"] == "GH-1"
+           and tl["tickets"][0]["url"] == "https://github.com/acme/app/issues/1", tl)
+        g = json.loads(await m.get_ticket("GH-1", project="Issues"))
+        ck("get_ticket takes the GitHub identifier", g["working_doc_body"] == "steps", g)
+        tl = json.loads(await m.list_tickets(project="Invoices"))
+        ck("a project with Tares tickets has no github link", tl["github"] is None, tl)
 
 
 if __name__ == "__main__":
