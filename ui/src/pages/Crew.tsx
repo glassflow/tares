@@ -4,6 +4,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { CopyButton, ErrorState, TimeAgo, usePolling } from "../components/bits";
 import { ContextBadge, PlanPanel, StationUsage } from "../components/ClaudeUsage";
+import ConfirmDialog from "../components/ConfirmDialog";
 import { ProgressRing } from "../components/ProgressRing";
 import type { CrewProject, CrewSettings, CrewStation, DeskAllowed, DeskItem, ProjectUsage } from "../types";
 
@@ -240,6 +241,38 @@ function BuildersFold({ id, builders, all, selected }: { id: string; builders: C
   );
 }
 
+/** A Quiet station whose session is gone (killed, or never sent its end) stays Quiet for good:
+ *  the person ends its row here. Tares keeps its history; a live session's next line undoes it. */
+function MarkEnded({ name, onEnded }: { name: string; onEnded: () => void }) {
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const end = async () => {
+    setAsking(false); setBusy(true); setErr(null);
+    try { await api.endStation(name); onEnded(); }
+    catch (e) { setErr(String((e as Error).message ?? e)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div>
+      <button type="button" disabled={busy} onClick={() => setAsking(true)}>{busy ? "Ending…" : "Mark ended"}</button>
+      <p className="help" style={{ margin: "6px 0 0" }}>
+        Use this when the session is gone. Tares keeps its history, and the row comes back if the session speaks again.
+      </p>
+      {err && <p className="fo-warn" style={{ margin: "6px 0 0" }}>{err}</p>}
+      {asking && (
+        <ConfirmDialog
+          title={`End ${name}?`}
+          message={`Its row shows Ended from now on. If ${name} is still running, its next line turns it back.`}
+          confirmLabel={`End ${name}`}
+          onCancel={() => setAsking(false)}
+          onConfirm={end}
+        />
+      )}
+    </div>
+  );
+}
+
 // ── one member's details ────────────────────────────────────────────────────
 
 /** How many of a member's last lines show before "Show N more". */
@@ -258,7 +291,7 @@ function onCrewSide(name: string, all: CrewStation[]): boolean {
   return !!s && CREW_ROLES.includes(s.role ?? "");
 }
 
-function MemberDetail({ name, crewSide }: { name: string; crewSide: boolean }) {
+function MemberDetail({ name, crewSide, onChanged }: { name: string; crewSide: boolean; onChanged: () => void }) {
   const { data, error, reload } = usePolling(() => api.station(name), 10000);
   const [allLines, setAllLines] = useState(false);
   // after asking for a /context reading, look again sooner than the usual poll
@@ -284,6 +317,7 @@ function MemberDetail({ name, crewSide }: { name: string; crewSide: boolean }) {
           {s.last_at && <>; last spoke <TimeAgo ts={s.last_at} /></>}.
           {!crewSide && s.project_name && <> Works on <Link to={`/projects/${encodeURIComponent(s.project ?? "")}`}>{s.project_name}</Link>.</>}
         </p>
+        {s.state === "quiet" && <MarkEnded name={s.name} onEnded={() => { reload(); onChanged(); }} />}
         <StationUsage s={s} onAsked={asked} />
         <div>
           <div className="crew-detail-label">Open it in a terminal</div>
@@ -453,7 +487,7 @@ export default function Crew() {
             <PlanPanel data={udata} error={uerror} reload={ureload} />
           </div>
           <div className="crew-col">
-            {known ? <MemberDetail key={selected} name={selected} crewSide={onCrewSide(selected, stations)} />
+            {known ? <MemberDetail key={selected} name={selected} crewSide={onCrewSide(selected, stations)} onChanged={reload} />
               : <div className="fo-panel crew-detail"><p className="dim" style={{ padding: 16, margin: 0 }}>Pick a member to see what it is doing.</p></div>}
           </div>
         </div>

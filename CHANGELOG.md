@@ -6,6 +6,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 - Tares can mark a crew station ended (`POST /api/crew/<station>/end`), so a station whose session is gone stops showing as Quiet.
+- Crew page: Mark ended on a Quiet station clears a session that is gone.
 
 ## [1.48.0] - 2026-10-19
 
