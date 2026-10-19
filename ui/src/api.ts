@@ -582,6 +582,9 @@ export const api = {
   crew: () => request<{ stations: CrewStation[]; settings: CrewSettings; grants: string; now: string }>("/api/crew"),
   crewProjects: () => request<{ projects: CrewProject[]; finished?: (Pick<CrewProject, "id" | "name" | "tickets_done" | "tickets_total" | "progress"> & { finished: ProjectFinished | null })[]; now: string }>("/api/crew/projects"),
   station: (name: string) => request<StationDetail>(`/api/crew/${encodeURIComponent(name)}?recent=40`),
+  endStation: (name: string, reason?: string) =>
+    request<CrewStation>(`/api/crew/${encodeURIComponent(name)}/end`,
+      { method: "POST", body: JSON.stringify(reason ? { reason } : {}) }),
   askStationContext: (name: string) =>
     request<{ session: string; asked_at: string }>(`/api/crew/${encodeURIComponent(name)}/context`, { method: "POST" }),
   claudeCodeUsage: (days = 7) => request<ClaudeCodeUsage>(`/api/claude-code/usage?days=${days}`),
