@@ -2190,7 +2190,7 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 .fo-done h2 { margin: 0; }
 .crew-finished { padding: 8px 16px 12px; border-top: 1px solid var(--line); font-size: 14px; }
 .crew-finished summary { cursor: pointer; color: var(--ink-soft); }
-.main .crew-finished ul { margin: 6px 0 0; padding-left: 18px; }
+.main .crew-finished > ul { margin: 6px 0 0; padding-left: 18px; }
 /* What Claude Code sessions spend (components/ClaudeUsage.tsx): the plan's limits, the window by
    project, a station's context window */
 .cc-body { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px; }
