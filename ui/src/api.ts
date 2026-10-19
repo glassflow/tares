@@ -8,7 +8,7 @@ import type {
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults,
   Skill, SkillSummary,
-  Assumption, ClaudeCodeUsage, CrewMessage, CrewProject, CrewSettings, CrewStation, Decision, DeskAllowed, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, Handover, LinearLink, LinearStatus, Milestone,
+  Assumption, ClaudeCodeUsage, CrewMessage, CrewProject, CrewSettings, CrewStation, Decision, DeskAllowed, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, LinearLink, LinearStatus, Milestone,
   ProjectSession, Ticket, TicketStatus,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, ModelProvider, ModelProviders,
@@ -137,10 +137,14 @@ export const cloudApi = {
 };
 
 /** A failed call: the daemon's plain message, plus the HTTP status for the few places that act on
- *  it (setup planning says "add a model provider" on a 409). */
+ *  it (setup planning says "add a model provider" on a 409). `retryAfter` is the seconds a 429
+ *  asks to wait (GitHub rate limiting), when it says. */
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) { super(message); this.status = status; }
+  retryAfter?: number;
+  constructor(message: string, status: number, retryAfter?: number) {
+    super(message); this.status = status; this.retryAfter = retryAfter;
+  }
 }
 
 function unauthorized() {
@@ -169,7 +173,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* non-JSON error body */
     }
-    throw new ApiError(detail, res.status);
+    const wait = Number(res.headers.get("Retry-After"));
+    throw new ApiError(detail, res.status, wait > 0 ? wait : undefined);
   }
   return res.json() as Promise<T>;
 }
@@ -548,7 +553,7 @@ export const api = {
     request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/docs/${encodeURIComponent(docId)}`,
       { method: "DELETE" }),
   tickets: (id: string) =>
-    request<{ tickets: Ticket[]; linear: LinearLink | null }>(`/api/projects/${encodeURIComponent(id)}/tickets`),
+    request<{ tickets: Ticket[]; linear: LinearLink | null; github: GitHubLink | null }>(`/api/projects/${encodeURIComponent(id)}/tickets`),
   ticket: (id: string, ref: string) =>
     request<Ticket>(`/api/projects/${encodeURIComponent(id)}/tickets/${encodeURIComponent(ref)}`),
   createTicket: (id: string, body: { title: string; status?: TicketStatus; working_doc?: string }) =>
@@ -612,6 +617,15 @@ export const api = {
       { method: "POST" }),
   unlinkLinear: (id: string) =>
     request<{ tickets: Ticket[]; linear: null }>(`/api/projects/${encodeURIComponent(id)}/linear`,
+      { method: "DELETE" }),
+  linkGitHub: (id: string, repo: string, issue_label: string) =>
+    request<{ tickets: Ticket[]; github: GitHubLink | null }>(`/api/projects/${encodeURIComponent(id)}/github`,
+      { method: "POST", body: JSON.stringify({ repo, issue_label }) }),
+  syncGitHub: (id: string) =>
+    request<{ tickets: Ticket[]; github: GitHubLink | null }>(`/api/projects/${encodeURIComponent(id)}/github/sync`,
+      { method: "POST" }),
+  unlinkGitHub: (id: string) =>
+    request<{ tickets: Ticket[]; github: null }>(`/api/projects/${encodeURIComponent(id)}/github`,
       { method: "DELETE" }),
   // ── Goal-first setup: plan from a goal, adjust in plain words, apply, then connect and try ──
   planSetup: (body: { goal: string; who?: "tares" | "own"; existing_sources?: boolean }) =>

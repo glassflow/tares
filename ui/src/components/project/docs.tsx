@@ -1,14 +1,14 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { api } from "../../api";
+import { ApiError, api } from "../../api";
 import { attachCmd } from "../../pages/Crew";
 import ConfirmDialog from "../ConfirmDialog";
 import { Combo, CopyButton, ErrorState, Picker, TimeAgo, formatBytes, usePolling } from "../bits";
 import { Facts, NotHere, VLink, ViewHead, type Ctx } from "./common";
-import { LinearMark, prBrief } from "./factory";
-import type { Doc, DocKind, Ticket, TicketStatus } from "../../types";
+import { GitHubMark, LinearMark, prBrief } from "./factory";
+import type { Doc, DocKind, GitHubLink, Ticket, TicketStatus } from "../../types";
 
 // What a spec session leaves in a project for the session that builds it (TR-403, TR-407): the
 // docs (starting prompt, spec, plan, AGENTS.md, notes), the tickets in order with a working doc
@@ -237,9 +237,9 @@ export function DocView({ ctx, name }: { ctx: Ctx; name: string }) {
 }
 
 /** Where the tickets live: link a Linear project, or see the link and its last sync. */
-function LinearPanel({ ctx, linked, hasOwn, onChanged }: {
+function LinearPanel({ ctx, linked, hasOwn, otherLinked, onChanged }: {
   ctx: Ctx; linked: { name: string; url: string; synced_at?: string | null; error?: string | null } | null;
-  hasOwn: boolean; onChanged: () => void;
+  hasOwn: boolean; otherLinked: boolean; onChanged: () => void;
 }) {
   const { data: conn } = usePolling(() => api.linear(), 60000);
   const [picking, setPicking] = useState(false);
@@ -280,7 +280,7 @@ function LinearPanel({ ctx, linked, hasOwn, onChanged }: {
       </div>
     );
   }
-  if (hasOwn || !conn) return null;
+  if (hasOwn || otherLinked || !conn) return null;
   return (
     <div className="panel" style={{ marginBottom: 14 }}>
       {err && <div className="alert error">{err}</div>}
@@ -310,6 +310,115 @@ function LinearPanel({ ctx, linked, hasOwn, onChanged }: {
   );
 }
 
+/** Where the tickets live: link a GitHub repo and issue label, or see the link and its last sync. */
+function GitHubPanel({ ctx, linked, hasOwn, otherLinked, onChanged }: {
+  ctx: Ctx; linked: GitHubLink | null; hasOwn: boolean; otherLinked: boolean; onChanged: () => void;
+}) {
+  const { data: creds } = usePolling(() => api.githubCredentials(), 60000);
+  const [picking, setPicking] = useState(false);
+  const [repo, setRepo] = useState("");
+  const [label, setLabel] = useState("");
+  const [repos, setRepos] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>();
+  // GitHub rate limiting (a 429): when to try again, and the clock the countdown reads
+  const [until, setUntil] = useState(0);
+  const [now, setNow] = useState(Date.now());
+  const left = Math.max(0, Math.ceil((until - now) / 1000));
+  useEffect(() => {
+    if (until <= Date.now()) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [until]);
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true); setErr(undefined);
+    try { await fn(); onChanged(); return true; }
+    catch (e) {
+      if (e instanceof ApiError && e.status === 429) { setNow(Date.now()); setUntil(Date.now() + (e.retryAfter ?? 60) * 1000); }
+      else setErr(String((e as Error).message ?? e));
+      return false;
+    } finally { setBusy(false); }
+  };
+  // The repos each stored credential can see. Failing to list is not fatal: typing owner/name works.
+  const seq = useRef(0);
+  const search = async (query: string) => {
+    const mine = ++seq.current;
+    const lists = await Promise.allSettled((creds?.credentials ?? []).map((c) => api.githubCredentialRepos(c.name, query)));
+    if (mine !== seq.current) return;
+    setRepos([...new Set(lists.flatMap((l) => l.status === "fulfilled" ? l.value.repos.map((r) => r.full_name) : []))]);
+  };
+  useEffect(() => {
+    if (!picking || repo.trim().length < 2 || repos.includes(repo.trim())) return;
+    const t = setTimeout(() => search(repo.trim()), 400);
+    return () => clearTimeout(t);
+  }, [repo]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const limit = left > 0 && <div className="alert warn">GitHub is rate limiting; try again in {left} s.</div>;
+  if (linked) {
+    return (
+      <div className="panel" style={{ marginBottom: 14 }}>
+        {err && <div className="alert error">{err}</div>}
+        {limit}
+        {linked.error && <div className="alert warn">The last sync with GitHub failed: {linked.error}</div>}
+        <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+          <span>
+            Tickets live in GitHub: <a href={linked.url} target="_blank" rel="noreferrer">{linked.repo}</a>
+            {" "}· issue label <span className="mono">{linked.issue_label}</span>.{" "}
+            <span className="help">
+              Tares keeps this list in sync about once a minute
+              {linked.synced_at && <>; last synced <TimeAgo ts={linked.synced_at} /></>}.
+            </span>
+          </span>
+          <span className="btnrow">
+            <button type="button" disabled={busy || left > 0} onClick={() => run(() => api.syncGitHub(ctx.id))}>
+              {busy ? "syncing…" : left > 0 ? `Sync now (${left} s)` : "Sync now"}</button>
+            <button type="button" disabled={busy} title="the tickets stay, as Tares tickets"
+                    onClick={() => run(() => api.unlinkGitHub(ctx.id))}>Stop using GitHub</button>
+          </span>
+        </div>
+      </div>
+    );
+  }
+  if (hasOwn || otherLinked || !creds) return null;
+  return (
+    <div className="panel" style={{ marginBottom: 14 }}>
+      {err && <div className="alert error">{err}</div>}
+      {limit}
+      {!creds.credentials.length ? (
+        <p className="help" style={{ margin: 0 }}>
+          The tickets can live in GitHub Issues instead. <a href="/settings?tab=github">Add a GitHub credential in Settings first</a>.
+        </p>
+      ) : !picking ? (
+        <div className="row" style={{ justifyContent: "space-between", gap: 8 }}>
+          <span className="help">Keep the tickets in GitHub Issues instead, and Tares keeps this list in sync.</span>
+          <button type="button" onClick={() => {
+            setPicking(true); setRepo(""); setLabel(`tares:${ctx.s.name}`.slice(0, 50)); search("");
+          }}>Use GitHub Issues</button>
+        </div>
+      ) : (
+        <div style={{ maxWidth: 420 }}>
+          <div className="field" style={{ marginTop: 0 }}>
+            <span className="lbl">GitHub repo</span>
+            <Combo value={repo} placeholder="owner/name, or search your repos…" options={repos} onChange={setRepo} />
+            <span className="help">its issues become this project's tickets</span>
+          </div>
+          <label className="field" style={{ margin: 0 }}>
+            <span className="lbl">issue label</span>
+            <input type="text" value={label} maxLength={50} onChange={(e) => setLabel(e.target.value)} />
+            <span className="help">only the issues with this label are this project's tickets</span>
+          </label>
+          <div className="btnrow" style={{ marginTop: 10, alignItems: "center" }}>
+            <button type="button" className="primary" disabled={busy || left > 0 || !repo.trim() || !label.trim()}
+                    onClick={() => run(() => api.linkGitHub(ctx.id, repo.trim(), label.trim())).then((ok) => ok && setPicking(false))}>
+              {busy ? "linking…" : "Link"}</button>
+            <button type="button" disabled={busy} onClick={() => setPicking(false)}>Cancel</button>
+            {busy && <span className="help">reading its issues…</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The project's tickets in order, each with its working doc. */
 export function TicketsView({ ctx }: { ctx: Ctx }) {
   const { data, error, reload } = usePolling(() => api.tickets(ctx.id), 15000);
@@ -318,6 +427,7 @@ export function TicketsView({ ctx }: { ctx: Ctx }) {
   if (error && !data) return <ErrorState error={error} what="the tickets" onRetry={reload} />;
   const tickets = data?.tickets ?? [];
   const linked = data?.linear ?? null;
+  const github = data?.github ?? null;
   const add = async () => {
     try { await api.createTicket(ctx.id, { title: title.trim() }); setTitle(""); setAdding(false); reload(); }
     catch (e) { ctx.fail(e); }
@@ -329,9 +439,12 @@ export function TicketsView({ ctx }: { ctx: Ctx }) {
     <>
       <ViewHead title="Tickets"
                 sub="The work, in order. Each ticket has a working doc a session can do it from.">
-        {!linked && <button type="button" className="primary" onClick={() => setAdding(!adding)}>New ticket</button>}
+        {!linked && !github && <button type="button" className="primary" onClick={() => setAdding(!adding)}>New ticket</button>}
       </ViewHead>
-      {data && <LinearPanel ctx={ctx} linked={linked} hasOwn={tickets.some((t) => t.owner === "tares")} onChanged={reload} />}
+      {data && <LinearPanel ctx={ctx} linked={linked} hasOwn={tickets.some((t) => t.owner === "tares")}
+                            otherLinked={!!github} onChanged={reload} />}
+      {data && <GitHubPanel ctx={ctx} linked={github} hasOwn={tickets.some((t) => t.owner === "tares")}
+                            otherLinked={!!linked} onChanged={reload} />}
       {adding && (
         <div className="panel" style={{ marginBottom: 12 }}>
           <label className="field" style={{ maxWidth: 520, margin: 0 }}>
@@ -373,7 +486,7 @@ export function TicketsView({ ctx }: { ctx: Ctx }) {
       ) : !adding && (
         <div className="empty">
           No tickets yet. A spec session (<span className="mono">/tares:spec</span> in Claude Code)
-          writes them{linked ? " in Linear" : ""}{linked ? "" : ", or add one with New ticket"}.
+          writes them{linked ? " in Linear" : github ? " in GitHub" : ", or add one with New ticket"}.
         </div>
       )}
     </>
@@ -509,6 +622,7 @@ export function TicketView({ ctx, name }: { ctx: Ctx; name: string }) {
     : <ErrorState error={error} what="this ticket" onRetry={reload} />;
   if (!data) return <div className="dim">loading…</div>;
   const linear = data.owner === "linear";
+  const github = data.owner === "github";
   const editDoc = async () => {
     try { setDoc(data.working_doc ? await api.doc(ctx.id, data.working_doc) : undefined); setEditingDoc(true); }
     catch (e) { ctx.fail(e); }
@@ -518,13 +632,17 @@ export function TicketView({ ctx, name }: { ctx: Ctx; name: string }) {
       <ViewHead title={data.title}>
         {!editingDoc && <>
           <button className="primary" onClick={editDoc}>{data.working_doc ? "Edit working doc" : "Write working doc"}</button>
-          {!linear && <button className="danger" onClick={() => setConfirmDel(true)}>Delete</button>}
+          {!linear && !github && <button className="danger" onClick={() => setConfirmDel(true)}>Delete</button>}
         </>}
       </ViewHead>
       <Facts rows={[
         ["ticket", linear
           ? <span className="fo-linear"><LinearMark />
               {data.url ? <a href={data.url} target="_blank" rel="noreferrer">{data.label} in Linear ↗</a> : <>{data.label} in Linear</>}
+              <span className="dim">· change its title and status there</span></span>
+          : github
+          ? <span className="fo-linear"><GitHubMark />
+              {data.url ? <a href={data.url} target="_blank" rel="noreferrer">{data.label} in GitHub ↗</a> : <>{data.label} in GitHub</>}
               <span className="dim">· change its title and status there</span></span>
           : data.label],
         ["status", <StatusBadge s={data.status} />],
