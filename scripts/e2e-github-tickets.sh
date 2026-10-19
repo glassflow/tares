@@ -89,7 +89,6 @@ gh api "repos/$E2E_REPO/milestones" -f title="$MB" >/dev/null
 mkissue() {   # TITLE [gh issue create flags...]: prints the new issue's number
   local title="$1" url; shift
   url=$(gh issue create -R "$E2E_REPO" --title "$title" --body "tares e2e run $RUN, closed when the run ends" "$@")
-  ISSUES="$ISSUES ${url##*/}"
   echo "${url##*/}"
 }
 N1=$(mkissue "e2e $RUN one" --label "$LBL" --milestone "$MA")
@@ -97,6 +96,7 @@ N2=$(mkissue "e2e $RUN two" --label "$LBL" --milestone "$MA")
 N3=$(mkissue "e2e $RUN three" --label "$LBL" --milestone "$MB")
 N4=$(mkissue "e2e $RUN four" --label "$LBL" --milestone "$MB")
 NX=$(mkissue "e2e $RUN unlabeled")
+ISSUES="$N1 $N2 $N3 $N4 $NX"   # set here: mkissue runs in a subshell
 ID2=$(gh issue view "$N2" -R "$E2E_REPO" --json id -q .id)
 ID3=$(gh issue view "$N3" -R "$E2E_REPO" --json id -q .id)
 gh api graphql -f query='mutation($i:ID!,$b:ID!){addBlockedBy(input:{issueId:$i,blockingIssueId:$b}){issue{number}}}' \
