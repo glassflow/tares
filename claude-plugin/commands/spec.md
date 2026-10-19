@@ -1,5 +1,5 @@
 ---
-description: Spec a new project with Claude, one question at a time, and keep everything the build needs (spec, plan, milestones with acceptance checks, AGENTS.md, starting prompt, tickets with dependencies and working docs) in a Tares project, for one build session or a tares-factory crew. Tickets can live in Linear.
+description: Spec a new project with Claude, one question at a time, and keep everything the build needs (spec, plan, milestones with acceptance checks, AGENTS.md, starting prompt, tickets with dependencies and working docs) in a Tares project, for one build session or a tares-factory crew. Tickets can live in Linear or GitHub Issues.
 argument-hint: "[what you want to build]"
 ---
 

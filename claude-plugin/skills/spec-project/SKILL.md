@@ -1,6 +1,6 @@
 ---
 name: spec-project
-description: Use when the user wants to spec, plan or brainstorm a new project, feature or piece of work so that another session or a tares-factory crew can build it later (any wording, or /tares:spec). Interviews one question at a time with a recommended answer, removes unknowns with research and throwaway prototypes, has a second model attack the plan, then writes everything the build needs into a Tares project (spec, plan, milestones with acceptance checks, AGENTS.md, starting prompt, tickets with dependencies and a working doc each), with the tickets in Linear when the user wants Linear.
+description: Use when the user wants to spec, plan or brainstorm a new project, feature or piece of work so that another session or a tares-factory crew can build it later (any wording, or /tares:spec). Interviews one question at a time with a recommended answer, removes unknowns with research and throwaway prototypes, has a second model attack the plan, then writes everything the build needs into a Tares project (spec, plan, milestones with acceptance checks, AGENTS.md, starting prompt, tickets with dependencies and a working doc each), with the tickets in Linear or GitHub Issues when the user wants them there.
 ---
 
 # Spec a project into Tares
@@ -100,12 +100,17 @@ Fix what holds up. **Show the user a short list of what changed and why**, then 
 
 ## 5. Where the tickets live
 
-Ask (one question, with your recommendation): "Should the tickets live in Linear, or only in
-Tares?"
+Ask (one question, with your recommendation): "Should the tickets live in Linear, GitHub Issues,
+or only in Tares?"
 
 - **Linear:** you need Linear's own MCP tools in this session (a `linear` server or the user's
   Linear connector). If they are missing, say so and offer Tares instead. Tares also needs Linear
   connected (Tares console, Settings, Linear) to keep its list in sync.
+- **GitHub Issues:** one repo holds the issues, marked by an issue label. You need `gh` logged in
+  with `repo` scope, and a GitHub credential on Tares (Settings, GitHub) that can read that repo's
+  issues. Ask which repo, recommending the repo that holds the plan. GitHub owns these tickets:
+  Tares refuses to change a ticket's title, status, order, milestone or dependencies, so change
+  those with `gh`. `set_stage`, `add_check`, the working doc and `repo` still work in Tares.
 - **Tares only:** nothing else to set up.
 
 ## 6. Write the project into Tares
@@ -132,11 +137,28 @@ Write for a reader who was not here: no "as discussed", no references to this co
      `write_milestone` again for each milestone to add its checks (Linear has no place for them).
      Check the ticket list Tares returns matches what you created. For a project that spans
      several repos, then `write_ticket(id=<label>, repo="owner/name", title="")` for each ticket.
+   - **GitHub Issues:** `R` is the repo (`owner/name`) and `L` is the label `tares:<project>`, cut
+     to 50 characters. In order:
+     1. `gh label create "L" --repo R --force` and `gh label create "in progress" --repo R --force`
+     2. one GitHub milestone per Tares milestone, in plan order:
+        `gh api repos/R/milestones -f title="<milestone name>" -f description="<goal>"`
+     3. one issue per ticket, in plan order (the issue number is the order):
+        `gh issue create --repo R --title "<title>" --body "<two or three lines>" --label "L" --milestone "<milestone name>"`
+     4. each dependency: get both node ids with `gh issue view <n> --repo R --json id -q .id`, then
+        `gh api graphql -f query='mutation($i:ID!,$b:ID!){addBlockedBy(input:{issueId:$i,blockingIssueId:$b}){clientMutationId}}' -f i=<blocked issue id> -f b=<blocking issue id>`
+     5. `link_github_issues(repo=R, issue_label=L)`, then `write_milestone` again for each milestone
+        to add its checks (GitHub has no place for them). Check the ticket list Tares returns
+        matches what you created (identifiers `GH-<n>`). If `link_github_issues` answers
+        `error 429: GitHub rate limit reached`, nothing is linked: wait about 5 minutes and call it
+        again. If the answer shows `github.error` naming the rate limit, the link is saved: wait
+        about 5 minutes and check `list_tickets`.
+     6. For a project that spans several repos, then
+        `write_ticket(id=<GH-n>, repo="owner/name", title="")` for each ticket.
    - **Tares only:** `write_ticket` once per ticket with `milestone`, `depends_on` (the
      tickets' labels, `T1`, `T2`, ...) and, for a project that spans several repos, `repo` (the
      GitHub `owner/name` it changes). Titles say what the ticket does, without a number.
 7. A working doc per ticket: `write_doc` kind `working`, titled `Working: <ticket title>`, then
-   `attach_working_doc`. Working docs never go to Linear. Use exactly these sections:
+   `attach_working_doc`. Working docs never go to Linear or GitHub. Use exactly these sections:
 
    ```markdown
    ## Goal
@@ -176,7 +198,8 @@ depends on how the project is built (step 1's last question).
   is not there yet
 - how to work: one milestone at a time; within it, the ready tickets from `list_tickets` in
   order; each read with `get_ticket` (it carries the working doc); progress marked (in Linear for
-  Linear tickets, `write_ticket` otherwise); when a milestone's tickets are done, run its checks
+  Linear tickets, with `gh issue edit` and `gh issue close` for GitHub tickets, `write_ticket`
+  otherwise); when a milestone's tickets are done, run its checks
 - if a ticket is already in progress when the session starts, an earlier session stopped on it:
   `pick_up` first and finish that ticket instead of starting it over
 - to keep the working doc's `## Progress` current after each step that works
@@ -203,7 +226,7 @@ milestone and a working doc with all sections, and only the first tickets are re
 missing. Then tell the user, briefly:
 
 - the project name and what it holds (counts, not a dump), and the assumptions worth a glance
-- where the tickets live, with the Linear link if any
+- where the tickets live, with the Linear or GitHub link if any
 - the next step:
   - one session: the command to start the build, in a terminal in the repo:
     `tares factory session <name>` (it opens Claude bound to the project, with the Tares plugin; a
@@ -247,8 +270,9 @@ Tares: the project, its shared AGENTS.md and memory, a light record of what was 
    - `write_doc` kind `start`, titled `Start here`: what the project is in two lines, where the
      code lives, and "follow the `session` skill", so a later session can pick it up.
    - The tickets: `write_ticket` per piece of work, in order, with `depends_on` (one ticket is
-     fine), or in Linear when the person keeps tickets there. No milestones, no working docs, no
-     second-model attack.
+     fine). When the person keeps tickets in Linear or GitHub Issues, create them there as in
+     step 6 of the full spec (one issue per ticket with `gh issue create`, then
+     `link_github_issues`). No milestones, no working docs, no second-model attack.
 5. **Size check**, once the ticket list exists: more than about five tickets, or tickets in more
    than one repo, is big enough for the crew. Then ask: "This looks big enough for the crew.
    Switch to the full spec and hand it over?" (recommend yes). On yes, carry on from step 2 of the

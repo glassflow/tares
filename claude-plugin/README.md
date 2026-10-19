@@ -105,6 +105,10 @@ Linear's own MCP tools, links the Linear project, and Tares keeps its ticket lis
 polls about once a minute). Working docs stay in Tares either way. For Linear, connect it once in
 the Tares console (Settings, Linear) and give this session Linear's MCP server.
 
+Or in GitHub Issues: Claude creates them with `gh` in one repo under an issue label, links them
+with `link_github_issues`, and Tares keeps the list in sync with the GitHub credentials stored on
+it. Tares refuses to change a GitHub ticket's title, status, order, milestone or dependencies; change those with `gh`.
+
 The spec session's whole recording lands on the project. A later session told
 `Work on Tares project "<name>"` reads the starting prompt, the tickets and their working docs
 with `list_docs`, `get_doc`, `list_tickets` and `get_ticket`.

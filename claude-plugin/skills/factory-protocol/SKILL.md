@@ -22,7 +22,7 @@ Run `factory roster` (or `list_crew` on Tares) to see every station's name, role
 
 **GitHub from the crew home.** Crew stations run in `$FACTORY_HOME`, not in a repo, so `gh` can't infer the repo there: pass `-R <owner>/<repo>` (from the PR URL, or a repo's `name` in `crew_projects`) and spell out `repos/<owner>/<repo>/...` in `gh api` paths. Never leave `{owner}/{repo}` placeholders for `gh` to fill outside a repo.
 
-**Tares tools** show up as `mcp__plugin_tares_tares__<name>` or `mcp__tares__<name>`. Each takes `project=""`; ticket refs are the Linear identifier (`ENG-12`), `T<n>`, or the Tares id. Tares refuses writes your role may not make and names who may; don't work around a refusal. If the Tares tools are missing or every call fails, write that to your report, tell the orchestrator (the orchestrator tells the person in its session), and wait: there is no other place the plan lives.
+**Tares tools** show up as `mcp__plugin_tares_tares__<name>` or `mcp__tares__<name>`. Each takes `project=""`; ticket refs are the Linear identifier (`ENG-12`), the GitHub identifier (`GH-12`), `T<n>`, or the Tares id. Tares refuses writes your role may not make and names who may; don't work around a refusal. If the Tares tools are missing or every call fails, write that to your report, tell the orchestrator (the orchestrator tells the person in its session), and wait: there is no other place the plan lives.
 
 ## The human rules
 

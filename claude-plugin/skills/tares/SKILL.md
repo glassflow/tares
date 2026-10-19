@@ -25,7 +25,7 @@ session streaming is enabled, so prior sessions are queryable as a source.
 ## Projects with docs and tickets
 
 A project can hold docs (spec, plan, AGENTS.md, a starting prompt, notes, working docs),
-milestones with acceptance checks, and a ticket list (in Tares, or synced from Linear) where each
+milestones with acceptance checks, and a ticket list (in Tares, or synced from Linear or GitHub Issues) where each
 ticket has a milestone and the tickets it depends on. To spec a new project, use the
 `spec-project` skill. When told to work on a Tares project, start with its `start` doc
 (`list_docs`, `get_doc`), then work one milestone at a time (`list_milestones`): the ready tickets
