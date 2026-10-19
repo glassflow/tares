@@ -5,6 +5,8 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Crew page: a finished project lists its builders under it, instead of under Other builders.
+
 ## [1.48.0] - 2026-10-19
 
 The factory crew follows your `tares login`: a new login reaches every station, a logout stops the

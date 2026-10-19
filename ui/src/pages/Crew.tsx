@@ -240,6 +240,36 @@ function BuildersFold({ id, builders, all, selected }: { id: string; builders: C
   );
 }
 
+type CrewFinished = NonNullable<Awaited<ReturnType<typeof api.crewProjects>>["finished"]>[number];
+
+/** The finished projects, shut by default, each with its builders behind a fold like an open
+ *  project's. Opens by itself when the member picked is one of those builders or their helpers. */
+function FinishedList({ finished, builders, all, selected }: { finished: CrewFinished[]; builders: CrewStation[]; all: CrewStation[]; selected: string }) {
+  const ids = new Set(finished.map((p) => p.id));
+  const holds = builders.filter((b) => b.project && ids.has(b.project))
+    .flatMap((b) => withHelpers(b, all)).some((m) => m.name === selected);
+  const [open, setOpen] = useState(holds);
+  useEffect(() => { if (holds) setOpen(true); }, [holds]);
+  return (
+    <details className="crew-finished" open={open}
+      onToggle={(e) => { if (e.target === e.currentTarget) setOpen(e.currentTarget.open); }}>
+      <summary>{finished.length} finished</summary>
+      <ul>
+        {finished.map((p) => {
+          const mine = builders.filter((b) => b.project === p.id);
+          return (
+            <li key={p.id}>
+              <Link to={`/projects/${encodeURIComponent(p.id)}`}>{p.name}</Link>
+              <span className="dim"> · {p.tickets_done} tickets{p.finished && <> · done <TimeAgo ts={p.finished.at} /></>}</span>
+              {mine.length > 0 && <BuildersFold id={p.id} builders={mine} all={all} selected={selected} />}
+            </li>
+          );
+        })}
+      </ul>
+    </details>
+  );
+}
+
 // ── one member's details ────────────────────────────────────────────────────
 
 /** How many of a member's last lines show before "Show N more". */
@@ -377,7 +407,9 @@ export default function Crew() {
   const desk = ddata?.desk ?? [];
   const crew = stations.filter((s) => CREW_ROLES.includes(s.role ?? ""));
   const projectIds = new Set(projects.map((p) => p.id));
-  const stray = pdata ? builders.filter((b) => !b.project || !projectIds.has(b.project)) : [];
+  const finishedIds = new Set(finished.map((p) => p.id));
+  // a finished project keeps its builders under it; Other builders is for no project or an unknown one
+  const stray = pdata ? builders.filter((b) => !b.project || (!projectIds.has(b.project) && !finishedIds.has(b.project))) : [];
   const selected = member ?? crew.find((s) => s.role === "orchestrator")?.name ?? "";
   const known = stations.some((s) => s.name === selected);
   const week = new Map((udata?.projects ?? []).filter((x) => x.project).map((x) => [x.project, x]));
@@ -437,17 +469,7 @@ export default function Crew() {
                 </ul>
               ) : <p className="dim" style={{ padding: "10px 16px", margin: 0 }}>{finished.length ? "None open." : <>None yet. Plan one with <span className="mono">tares factory spec</span> in its repo; the spec ends with the hand-over.</>}</p>}
               {finished.length > 0 && (
-                <details className="crew-finished">
-                  <summary>{finished.length} finished</summary>
-                  <ul>
-                    {finished.map((p) => (
-                      <li key={p.id}>
-                        <Link to={`/projects/${encodeURIComponent(p.id)}`}>{p.name}</Link>
-                        <span className="dim"> · {p.tickets_done} tickets{p.finished && <> · done <TimeAgo ts={p.finished.at} /></>}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </details>
+                <FinishedList finished={finished} builders={builders} all={stations} selected={selected} />
               )}
             </details>
             <PlanPanel data={udata} error={uerror} reload={ureload} />
