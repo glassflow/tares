@@ -4992,8 +4992,14 @@ def make_app() -> FastAPI:
     async def sync_github_issues(uid: str):
         """Sync the project's tickets with GitHub now."""
         _project_or_404(uid)
-        if not store.get_project_github(uid):
+        link = store.get_project_github(uid)
+        if not link:
             _err(ValueError("this project does not use GitHub Issues"), 409)
+        if _gh_tickets._backing_off(link):
+            # a sync now would be skipped, so say so instead of answering 200 with old tickets
+            wait = (datetime.fromisoformat(link["backoff_until"]) - now_utc()).total_seconds()
+            raise HTTPException(status_code=429, detail="GitHub rate limit reached",
+                                headers={"Retry-After": str(max(1, int(wait) + 1))})
         try:
             await _github_sync_now(uid)
         except _gh_tickets.GitHubTicketsError as e:
