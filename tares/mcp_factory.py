@@ -20,8 +20,8 @@ async def write_milestone(name: str, goal: str | None = None, checks: list[dict]
     "expect": "<what it should show>"}], that the releaser runs when the milestone ships.
     `position` orders them (a new one goes last). To rename one, pass its current name or id as
     `id` and the new `name`. Give tickets a milestone with write_ticket(milestone=<name>). When
-    the project's tickets live in Linear, its milestones come from Linear: add and rename them
-    there and write only the goal and checks here."""
+    the project's tickets live in Linear or GitHub, its milestones come from there (for GitHub,
+    the milestones its issues sit in): add and rename them there and write only the goal and checks here."""
     body: dict = {"name": name}
     if goal is not None:               # a change keeps the goal and checks it was not given
         body["goal"] = goal
@@ -66,9 +66,9 @@ async def list_milestones(project: str = "") -> str:
 
 @writable()
 async def assign_ticket(ticket: str, holder: str, project: str = "") -> str:
-    """Give a ticket (T3, its id, or its Linear identifier) to the station that works it, by the
-    station's name (for example shop-build-m1). Only the orchestrator, or the person's own
-    session, assigns. A ticket with no stage yet starts at todo."""
+    """Give a ticket (T3, its id, or its Linear or GitHub identifier such as GH-12) to the
+    station that works it, by the station's name (for example shop-build-m1). Only the
+    orchestrator, or the person's own session, assigns. A ticket with no stage yet starts at todo."""
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -84,9 +84,9 @@ async def set_stage(ticket: str, stage: str, reason: str = "", pr: str = "",
     """Move a ticket you hold: `stage` is doing (you started), review (its PR is up: pass `pr`,
     the pull request's URL), changes (the reviewer asked for changes), merged, or blocked (say
     why in `reason`). Only the releaser marks a ticket shipped. A ticket held by another station
-    is refused; ask the orchestrator. For a ticket that lives in Linear, also move it in Linear
-    with Linear's own tools. Name your branch factory/<ticket> (factory/T3) so Tares finds the
-    pull request on its own too."""
+    is refused; ask the orchestrator. For a ticket that lives in Linear or GitHub, also move it
+    there (Linear's own tools, `gh` for GitHub). Name your branch factory/<ticket> (factory/T3)
+    so Tares finds the pull request on its own too."""
     body = {"stage": stage, "reason": reason}
     if pr:
         body["pr"] = pr
