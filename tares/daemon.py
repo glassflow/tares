@@ -4973,7 +4973,7 @@ def make_app() -> FastAPI:
             info, _milestones, _issues = await _gh_tickets.fetch(
                 store, {**(cur or {}), "repo": repo, "issue_label": issue_label})
         except _gh_tickets.GitHubTicketsError as e:
-            _err(e, 400)
+            _err(e, 429 if e.rate_limited else 400)
         cur = refusals()   # no await between this check and the save
         store.set_project_github(uid, {**(cur or {}), "repo": repo, "issue_label": issue_label,
                                        "url": f"https://github.com/{repo}",

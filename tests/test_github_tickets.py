@@ -996,6 +996,15 @@ async def api():
             link = store.get_project_github(own)
             link.pop("backoff_until")
             store.set_project_github(own, link)
+        for how in ("gql_rate_limit", "http_rate_limit"):
+            STATE[how] = True
+            r = await cx.post(f"/api/projects/{own}/github", json={"repo": "acme/app", "issue_label": "tares:own"})
+            STATE[how] = False
+            ck(f"(G) linking with {how} -> 429, not 400", r.status_code == 429
+               and r.json()["detail"] == "GitHub rate limit reached", r.text)
+        link = store.get_project_github(own)
+        link.pop("backoff_until", None)
+        store.set_project_github(own, link)
         STATE["http_raw"] = (502, {})
         r = await cx.post(f"/api/projects/{own}/github/sync")
         STATE["http_raw"] = None
