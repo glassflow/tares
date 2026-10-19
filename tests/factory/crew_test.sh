@@ -512,6 +512,7 @@ E="$T/ended"; trust "$E"; FACTORY_CREW_HOME="$E" "$F" crew up --yes >/dev/null 2
 api POST /api/desk "$(jq -cn --arg p "$FP" '{question: "No project is left. Stop the crew?", recommendation: "yes", why: "nothing to build", project: $p, blocking: true}')" >/dev/null
 FACTORY_CREW_HOME="$E" "$F" crew desk >"$T/ended-desk.out" 2>&1
 check "a running crew sees a finished project's question" 'grep -q "finishing: No project is left" "$T/ended-desk.out"'
+check "a question with nothing in blocks prints no empty blocks line" '! grep -qx "  blocks: *" "$T/ended-desk.out"'
 FACTORY_CREW_HOME="$E" "$F" crew down >/dev/null 2>&1
 check "crew down withdraws it" 'api GET "/api/desk?state=withdrawn" | jq -e "any(.desk[]; .question == \"No project is left. Stop the crew?\")" >/dev/null'
 api POST /api/desk "$(jq -cn --arg p "$FP" '{question: "Stop the crew now?", recommendation: "yes", why: "late", project: $p, blocking: true}')" >/dev/null
