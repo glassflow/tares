@@ -63,7 +63,7 @@ def append_line(body: str, text) -> tuple[str, bool]:
     return f"{body}{sep}{entry}\n", True
 
 TICKET_STATUSES = ("todo", "in_progress", "done", "canceled")
-TICKET_OWNERS = ("tares", "linear")
+TICKET_OWNERS = ("tares", "linear", "github")
 
 MAX_DOC_BYTES = 256 * 1024
 MAX_TITLE = 200
