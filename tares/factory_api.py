@@ -58,11 +58,12 @@ async def refresh_prs(store, uid: str) -> None:
 
 
 def merged_fields(t: dict, pr: dict) -> dict:
-    """What a merge seen on GitHub changes on the ticket (nothing when it already says so)."""
+    """What a merge seen on GitHub changes on the ticket (nothing when it already says so). A
+    Linear or GitHub ticket keeps its own status; only a Tares one is set done."""
     if not pr.get("merged") or t["stage"] in ("merged", "shipped"):
         return {}
     out = {"stage": "merged"}
-    if t["owner"] != "linear":
+    if t["owner"] == "tares":
         out["status"] = "done"
     return out
 
@@ -514,8 +515,8 @@ def register(app, store, h: SimpleNamespace) -> None:
         """{stage, reason?, pr?}: move the ticket. Only the station holding it (or a helper it
         started) moves it; only the releaser marks it shipped; a person's own session may do
         anything. `pr` (a PR URL or owner/repo#12) links the ticket to its pull request, read
-        from GitHub from then on. A Tares ticket's status follows its stage; a Linear ticket's
-        status stays Linear's."""
+        from GitHub from then on. A Tares ticket's status follows its stage; a Linear or GitHub
+        ticket's status stays its home's."""
         h.project_or_404(uid)
         t = ticket_or_404(uid, ref)
         try:
@@ -526,7 +527,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         if why:
             h.err(PermissionError(why), 403)
         fields: dict = {"stage": stage, "stage_reason": reason or None}
-        if t["owner"] != "linear":
+        if t["owner"] == "tares":
             fields["status"] = factory_mod.STATUS_OF_STAGE[stage]
         pr_ref = str(body.get("pr") or "").strip()
         if pr_ref:

@@ -10,7 +10,9 @@ open, a failed second page), the rate limit backoff, trying the stored credentia
 remembering the one that works, the default issue label and the events on `github_issues`. Also
 the limits (1000 issues, 100 milestones), answers GitHub sends half empty, an unlink while a fetch
 is in flight, the connector's registration, and (TR-569) linking, syncing and unlinking a project
-through the API and the connector's poll.
+through the API and the connector's poll. And (TR-570) every rule that keeps a Linear ticket or
+milestone in Linear holds for GitHub ones, a stage or a merge never sets a GitHub ticket's status,
+the link checks its refusals again after GitHub answers, and a rate limit answers 429.
 
 Run: .venv/bin/python tests/test_github_tickets.py
 """
@@ -852,6 +854,164 @@ async def api():
         ck("(E) sync now is refused after the unlink", r.status_code == 409, r.text)
         n = len(await conn.poll())
         ck("(E) and the poll no longer touches the project", store.list_tickets(uid)[0]["owner"] == "tares" and n == 0)
+
+        print("== (F) a GitHub ticket and milestone are GitHub's (TR-570) ==")
+        STATE["issues"] += [issue(31, "Own one", labels=("tares:own",), milestone="M_alpha"),
+                            issue(32, "Own two", labels=("tares:own",), milestone="M_alpha", blocked_by=["I_31"])]
+        own = await new_project("own")
+        r = await cx.post(f"/api/projects/{own}/github", json={"repo": "acme/app", "issue_label": "tares:own"})
+        ck("(F) a project to test on, linked to GitHub", r.status_code == 200
+           and [t["identifier"] for t in r.json()["tickets"]] == ["GH-31", "GH-32"], r.text)
+        before = {t["identifier"]: t for t in store.list_tickets(own)}
+        for field, value in [("title", "Renamed"), ("status", "done"), ("position", 5),
+                             ("milestone", None), ("depends_on", [])]:
+            r = await cx.put(f"/api/projects/{own}/tickets/GH-31", json={field: value})
+            ck(f"(F) PUT {field} on a GitHub ticket -> 409 'lives in GitHub'", r.status_code == 409
+               and r.json()["detail"] == f"GH-31 lives in GitHub: change its {field} there", r.text)
+        r = await cx.put(f"/api/projects/{own}/tickets/GH-31", json={"title": "x", "status": "done", "position": 1})
+        ck("(F) several fields at once are named together", r.status_code == 409
+           and r.json()["detail"] == "GH-31 lives in GitHub: change its position, status, title there", r.text)
+        ck("(F) none of them changed the ticket",
+           {t["identifier"]: t for t in store.list_tickets(own)} == before)
+        r = await cx.post(f"/api/projects/{own}/docs", json={"kind": "working", "title": "W31", "body": "plan"})
+        doc = r.json()["id"]
+        r = await cx.put(f"/api/projects/{own}/tickets/GH-31", json={"working_doc": doc, "repo": "acme/app"})
+        ck("(F) a GitHub ticket still takes a working doc and a repo", r.status_code == 200
+           and r.json()["working_doc_body"] == "plan" and r.json()["repo"] == "acme/app"
+           and r.json()["title"] == "Own one" and r.json()["owner"] == "github", r.text)
+        r = await cx.delete(f"/api/projects/{own}/tickets/GH-31")
+        ck("(F) DELETE a GitHub ticket -> 409", r.status_code == 409
+           and r.json()["detail"] == "GH-31 lives in GitHub: remove it there"
+           and store.get_ticket(own, "GH-31") is not None, r.text)
+        r = await cx.post(f"/api/projects/{own}/tickets", json={"title": "Mine"})
+        ck("(F) POST a ticket in a GitHub project -> 409", r.status_code == 409
+           and r.json()["detail"] == "this project's tickets live in GitHub; add the ticket there and it "
+           "shows up here on the next sync" and len(store.list_tickets(own)) == 2, r.text)
+
+        ms = {m["name"]: m for m in store.list_milestones(own)}
+        ck("(F) the GitHub milestone is there to test on", ms.get("Alpha", {}).get("owner") == "github", ms)
+        alpha = ms["Alpha"]
+        r = await cx.post(f"/api/projects/{own}/milestones", json={"name": "Brand new"})
+        ck("(F) a new milestone name in a GitHub project -> 409", r.status_code == 409
+           and r.json()["detail"] == "this project's milestones live in GitHub: add it there, then write "
+           "its checks here" and "Brand new" not in {m["name"] for m in store.list_milestones(own)}, r.text)
+        r = await cx.put(f"/api/projects/{own}/milestones/{alpha['id']}", json={"name": "Alpha 2"})
+        ck("(F) renaming a GitHub milestone -> 409", r.status_code == 409
+           and r.json()["detail"] == "Alpha lives in GitHub: rename or reorder it there", r.text)
+        r = await cx.put(f"/api/projects/{own}/milestones/{alpha['id']}", json={"position": 9})
+        ck("(F) reordering a GitHub milestone -> 409", r.status_code == 409
+           and r.json()["detail"] == "Alpha lives in GitHub: rename or reorder it there", r.text)
+        r = await cx.put(f"/api/projects/{own}/milestones/{alpha['id']}",
+                         json={"goal": "Ship it", "checks": [{"check": "run it", "expect": "it runs"}]})
+        ck("(F) a GitHub milestone still takes a goal and checks", r.status_code == 200
+           and r.json()["goal"] == "Ship it" and r.json()["checks"]
+           and r.json()["name"] == "Alpha" and r.json()["position"] == alpha["position"], r.text)
+        r = await cx.post(f"/api/projects/{own}/milestones",
+                          json={"name": "Alpha", "goal": "Ship it again", "position": 9})
+        ck("(F) writing checks under the existing name works, its position stays GitHub's", r.status_code == 201
+           and r.json()["goal"] == "Ship it again" and r.json()["position"] == alpha["position"], r.text)
+        r = await cx.delete(f"/api/projects/{own}/milestones/{alpha['id']}")
+        ck("(F) DELETE a GitHub milestone -> 409", r.status_code == 409
+           and r.json()["detail"] == "Alpha lives in GitHub: remove it there"
+           and store.get_milestone(own, alpha["id"]) is not None, r.text)
+
+        print("== (F) the stage never sets a GitHub ticket's status ==")
+        from tares import factory_api
+        status31 = store.get_ticket(own, "GH-31")["status"]
+        r = await cx.post(f"/api/projects/{own}/tickets/GH-31/stage", json={"stage": "doing"})
+        ck("(F) set_stage doing changes the stage, not the status", r.status_code == 200
+           and r.json()["stage"] == "doing" and r.json()["status"] == status31, r.text)
+        r = await cx.post(f"/api/projects/{own}/tickets/GH-31/stage", json={"stage": "merged"})
+        ck("(F) set_stage merged changes the stage, not the status", r.status_code == 200
+           and r.json()["stage"] == "merged" and r.json()["status"] == status31 != "done", r.text)
+        plain = await new_project("plain")
+        await cx.post(f"/api/projects/{plain}/tickets", json={"title": "Plain"})
+        r = await cx.post(f"/api/projects/{plain}/tickets/T1/stage", json={"stage": "merged"})
+        ck("(F) a Tares ticket's status still follows its stage", r.status_code == 200
+           and r.json()["stage"] == "merged" and r.json()["status"] == "done", r.text)
+        merged_pr = {"merged": True, "repo": "acme/app", "number": 5}
+        ck("(F) merged_fields: a GitHub ticket is marked merged, its status left alone",
+           factory_api.merged_fields({"owner": "github", "stage": "doing"}, merged_pr) == {"stage": "merged"})
+        ck("(F) merged_fields: a Linear ticket the same",
+           factory_api.merged_fields({"owner": "linear", "stage": "doing"}, merged_pr) == {"stage": "merged"})
+        ck("(F) merged_fields: a Tares ticket is set done",
+           factory_api.merged_fields({"owner": "tares", "stage": "doing"}, merged_pr)
+           == {"stage": "merged", "status": "done"})
+
+        async def fake_read_pr(_store, repo, number, prev=None):
+            return {**(prev or {}), "repo": repo, "number": number, "merged": True, "state": "closed",
+                    "url": f"https://github.com/{repo}/pull/{number}", "checked_at": now_utc().isoformat()}
+
+        real_read_pr, factory_api.factory_github.read_pr = factory_api.factory_github.read_pr, fake_read_pr
+        try:
+            status32 = store.get_ticket(own, "GH-32")["status"]
+            r = await cx.post(f"/api/projects/{own}/tickets/GH-32/stage", json={"stage": "review", "pr": "acme/app#5"})
+        finally:
+            factory_api.factory_github.read_pr = real_read_pr
+        ck("(F) a PR GitHub shows merged makes a GitHub ticket merged, not done", r.status_code == 200
+           and r.json()["stage"] == "merged" and r.json()["status"] == status32 != "done", r.text)
+
+        print("== (G) the link checks again after GitHub answers (TR-570) ==")
+        holder = await new_project("holder")
+        ran_all: list = []
+        for what, hook, text in [
+                ("another project took the same repo and issue label",
+                 lambda: store.set_project_github(holder, {"repo": "acme/app", "issue_label": lab}),
+                 "already the ticket home of project holder"),
+                ("Linear was linked to the project",
+                 lambda: store.set_project_linear(racer, {"id": "lp9", "name": "Invoicing"}),
+                 "live in Linear; stop using Linear first"),
+                ("the project got a ticket of its own",
+                 lambda: store.create_ticket(racer, "tares", "Mine"),
+                 "already has its own tickets in Tares"),
+                ("the project was linked to another repo",
+                 lambda: store.set_project_github(racer, {"repo": "acme/lib", "issue_label": lab}),
+                 "is linked to acme/lib with issue label")]:
+            lab = f"tares:race{len(ran_all)}"
+            racer = await new_project(f"racer {len(ran_all)}")
+            ran_all.append(1)
+            ran = []
+            STATE["during_fetch"] = lambda hook=hook: (ran.append(1), hook())
+            r = await cx.post(f"/api/projects/{racer}/github", json={"repo": "acme/app", "issue_label": lab})
+            STATE["during_fetch"] = None
+            link = store.get_project_github(racer)
+            ck(f"(G) {what} while GitHub answered -> 409, nothing saved", ran and r.status_code == 409
+               and text in r.json()["detail"] and (link is None or link["repo"] == "acme/lib")
+               and not [t for t in store.list_tickets(racer) if t["owner"] == "github"], (ran, r.text))
+            if what.startswith("another"):
+                ck("(G) and the project that held it still does", store.get_project_github(holder) is not None)
+
+        print("== (G) a rate limit is not GitHub being down ==")
+        before = store.list_tickets(own)
+        for how in ("gql_rate_limit", "http_rate_limit"):
+            STATE[how] = True
+            r = await cx.post(f"/api/projects/{own}/github/sync")
+            STATE[how] = False
+            ck(f"(G) sync now with {how} -> 429, not 502", r.status_code == 429
+               and r.json()["detail"] == "GitHub rate limit reached", r.text)
+            ck("(G) the tickets stay as they were, the link says why and holds off",
+               store.list_tickets(own) == before
+               and store.get_project_github(own)["error"] == "GitHub rate limit reached"
+               and store.get_project_github(own)["backoff_until"])
+            link = store.get_project_github(own)
+            link.pop("backoff_until")
+            store.set_project_github(own, link)
+        for how in ("gql_rate_limit", "http_rate_limit"):
+            STATE[how] = True
+            r = await cx.post(f"/api/projects/{own}/github", json={"repo": "acme/app", "issue_label": "tares:own"})
+            STATE[how] = False
+            ck(f"(G) linking with {how} -> 429, not 400", r.status_code == 429
+               and r.json()["detail"] == "GitHub rate limit reached", r.text)
+        link = store.get_project_github(own)
+        link.pop("backoff_until", None)
+        store.set_project_github(own, link)
+        STATE["http_raw"] = (502, {})
+        r = await cx.post(f"/api/projects/{own}/github/sync")
+        STATE["http_raw"] = None
+        ck("(G) GitHub answering 502 is still 502", r.status_code == 502, r.text)
+        r = await cx.post(f"/api/projects/{own}/github/sync")
+        ck("(G) and the next sync clears it", r.status_code == 200 and r.json()["github"]["error"] is None, r.text)
+
         await cx.aclose()
 
 
