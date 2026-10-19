@@ -140,7 +140,13 @@ check "projects lists each handed-over project with its builders and repos" 'gre
 check "helper name" '[ "$(st $b-rebase .role)" = helper ]'
 check "helper parent" '[ "$(envof $b-rebase FACTORY_PARENT)" = $b ]'
 check "helper project" '[ "$(envof $b-rebase TARES_PROJECT)" = "Links App" ]'
-"$F" retire "$b-rebase" >/dev/null 2>&1
+# Retire tells Tares the station ended (TR-565): give it a session on Tares first, as the plugin would.
+api POST /api/sources '{"name":"claude_code","connector":"claude_code","poll":"10s","config":{"push":true}}' >/dev/null
+jq -cn --arg n "$b-rebase" --arg at "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
+  '{type: "session_station", sessionId: "s-rebase", cwd: "/w/crew", timestamp: $at, station: $n, role: "helper", factory_station: $n}' |
+  curl -sS -X POST -H 'Content-Type: application/x-ndjson' --data-binary @- "$TARESD_URL/ingest/claude_code" >/dev/null
+"$F" retire "$b-rebase" >"$T/retire.out" 2>&1
+check "retire marks the station ended on Tares" '[ "$(api GET "/api/crew/$b-rebase" | jq -r ".state + \"/\" + .state_reason")" = ended/retired ] && ! grep -q "could not tell Tares" "$T/retire.out"'
 before=$(launches)
 "$F" revive "$b-rebase" >"$T/retired.out" 2>&1
 check "a retired station is not revived" '[ "$(launches)" = "$before" ] && grep -q "was retired" "$T/retired.out" && [ ! -e "$FACTORY_CREW_HOME/stations/$b-rebase.lock" ]'
@@ -480,7 +486,8 @@ agent crew-reviewer '.state = "working" | .status = "waiting"'; job crew-reviewe
 check "a station blocked on a person gets the grant at once" 'moved crew-reviewer "$r" && allow_has crew-reviewer "for all projects, in their own words: \"the reviewer may label pull requests\""'
 check "busy crew stations still wait" '[ "$(st crew-orchestrator .grants)" != "$(st crew-reviewer .grants)" ]'
 
-"$F" crew down >/dev/null 2>&1
+"$F" crew down >"$T/down.out" 2>&1
+check "stations that never reported to Tares retire without a warning" '! grep -q "could not tell Tares" "$T/down.out"'
 check "down retires all" '[ "$(jq "[.[] | select(.status == \"active\")] | length" "$FACTORY_CREW_HOME/stations.json")" = 0 ]'
 
 # A crew.json written by hand gets the template's defaults under it. Without a releaser (the default),
