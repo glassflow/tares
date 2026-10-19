@@ -1,5 +1,5 @@
-"""GitHub Issues as a project's tickets (TR-568): the link on a project and the sync that keeps its
-tickets current.
+"""GitHub Issues as a project's tickets (TR-568, TR-569): the link on a project, the sync that keeps
+its tickets current, and the routes and connector that drive it.
 
 Runs against a fake GitHub (httpx.MockTransport answering like its GraphQL endpoint), never the
 live API. Covers the first sync (tickets GH-n in issue order), the status rules (closed reasons,
@@ -7,7 +7,10 @@ the "in progress" issue label, reopened), GitHub milestones used by an issue (cr
 ordered, unused ones left out), blocked-by as dependencies, an issue losing the issue label, the
 sync changing nothing when the fetch is incomplete (repository gone, no issues while tickets are
 open, a failed second page), the rate limit backoff, trying the stored credentials in turn and
-remembering the one that works, the default issue label and the events on `github_issues`.
+remembering the one that works, the default issue label and the events on `github_issues`. Also
+the limits (1000 issues, 100 milestones), answers GitHub sends half empty, an unlink while a fetch
+is in flight, the connector's registration, and (TR-569) linking, syncing and unlinking a project
+through the API and the connector's poll.
 
 Run: .venv/bin/python tests/test_github_tickets.py
 """
@@ -19,6 +22,12 @@ import tempfile
 from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+_TMP = tempfile.mkdtemp(prefix="tares-gh-api-")
+os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
+os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
+os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-github"
+os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
 import httpx
 
@@ -60,6 +69,11 @@ def reset():
         "null_page_2": False,               # repository: null on any page after the first
         "http_rate_limit": False,           # HTTP 403 with x-ratelimit-remaining: 0
         "gql_rate_limit": False,            # a RATE_LIMITED GraphQL error
+        "http_raw": None,                   # (status, headers) answered instead of any data
+        "transport_error": False,           # the connection fails
+        "fail_label": None,                 # HTTP 502 for this issue label only
+        "during_fetch": None,               # called once, inside the first request
+        "mangle": None,                     # fn(data, after) that damages a good answer
         "milestones": [
             {"id": "M_alpha", "number": 2, "title": "Alpha", "description": "First  slice\nof work"},
             {"id": "M_beta", "number": 1, "title": "Beta", "description": "Second slice"},
@@ -81,9 +95,19 @@ def handler(request: httpx.Request) -> httpx.Response:
     token = request.headers.get("authorization", "").removeprefix("Bearer ")
     v = json.loads(request.content)["variables"]
     STATE["calls"].append((token, v.get("after")))
+    if STATE["transport_error"]:
+        raise httpx.ConnectError("connection refused", request=request)
+    hook, STATE["during_fetch"] = STATE["during_fetch"], None
+    if hook:
+        hook()
     mode = STATE["tokens"].get(token)
     if mode is None or mode == "unauthorized":
         return httpx.Response(401, json={"message": "Bad credentials"})
+    if STATE["http_raw"]:
+        status, headers = STATE["http_raw"]
+        return httpx.Response(status, headers=headers, text="no")
+    if v["label"] == STATE["fail_label"]:
+        return httpx.Response(502, text="bad gateway")
     if STATE["http_rate_limit"]:
         return httpx.Response(403, headers={"x-ratelimit-remaining": "0"}, json={"message": "limit"})
     if STATE["gql_rate_limit"]:
@@ -110,13 +134,17 @@ def handler(request: httpx.Request) -> httpx.Response:
               "labels": {"nodes": [{"name": l} for l in i["labels"]]},
               "milestone": {"id": i["milestone"]} if i["milestone"] else None,
               "blockedBy": {"nodes": [{"id": b} for b in i["blockedBy"]]}} for i in page]
-    return httpx.Response(200, json={"data": {
+    ms = STATE["milestones"]
+    data = {
         "rateLimit": {"remaining": 4999, "resetAt": "2026-10-19T16:00:00Z"},
         "repository": {
             "nameWithOwner": "acme/app", "url": "https://github.com/acme/app",
-            "milestones": {"nodes": STATE["milestones"], "pageInfo": {"hasNextPage": False}},
+            "milestones": {"nodes": ms[:100], "pageInfo": {"hasNextPage": len(ms) > 100}},
             "issues": {"nodes": nodes, "pageInfo": {"hasNextPage": more,
-                                                    "endCursor": str(start + size) if more else None}}}}})
+                                                    "endCursor": str(start + size) if more else None}}}}
+    if STATE["mangle"]:
+        STATE["mangle"](data, v.get("after"))
+    return httpx.Response(200, json={"data": data})
 
 
 gt._transport = httpx.MockTransport(handler)
@@ -139,6 +167,234 @@ async def sync(store, uid):
         return await gt.sync_project(store, uid), None
     except gt.GitHubTicketsError as e:
         return None, e
+
+
+def fresh(name="Edge", label=LABEL):
+    """A new store with one linked project, for the checks that need a known starting point."""
+    store = Store(os.path.join(tempfile.mkdtemp(prefix="tares-gh-edge-"), "t.duckdb"))
+    store.upsert_github_credential("cred-a", "tok-a")
+    uid = "uc_edge"
+    store.create_project(uid, "custom", name, {"objects": []})
+    store.set_project_github(uid, {"repo": "acme/app", "issue_label": label,
+                                   "url": "https://github.com/acme/app"})
+    return store, uid
+
+
+async def fresh_synced(**kw):
+    reset()
+    store, uid = fresh(**kw)
+    envs, err = await sync(store, uid)
+    assert err is None and len(store.list_tickets(uid)) == 4, err
+    return store, uid
+
+
+async def edges():
+    print("== (m) the limits ==")
+    reset()
+    store, uid = fresh()
+    STATE["issues"] += [issue(n, f"Bulk {n}") for n in range(100, 996 + 100)]
+    envs, err = await sync(store, uid)
+    ck("(m) exactly 1000 issues are fine", err is None and len(store.list_tickets(uid)) == 1000
+       and store.get_project_github(uid)["issues"] == 1000, err)
+    STATE["issues"].append(issue(5000, "One too many"))
+    before = snapshot(store, uid)
+    envs, err = await sync(store, uid)
+    ck("(m) 1001 issues raise", isinstance(err, gt.GitHubTicketsError) and "more than 1000" in str(err), err)
+    ck("(m) and change nothing", snapshot(store, uid) == before)
+    ck("(m) the error is on the link", "more than 1000" in (store.get_project_github(uid)["error"] or ""))
+    reset()
+    store, uid = await fresh_synced()
+    before = snapshot(store, uid)
+    STATE["milestones"] = [{"id": f"M_{n}", "number": n, "title": f"Mile {n}", "description": ""}
+                           for n in range(1, 102)]
+    envs, err = await sync(store, uid)
+    ck("(m) more than 100 milestones raise", isinstance(err, gt.GitHubTicketsError)
+       and "more than 100 milestones" in str(err), err)
+    ck("(m) and change nothing", snapshot(store, uid) == before)
+    STATE["milestones"] = STATE["milestones"][:100]
+    envs, err = await sync(store, uid)
+    ck("(m) exactly 100 milestones are fine", err is None, err)
+
+    print("== (n) the zero-issue guard ==")
+    store, uid = await fresh_synced()
+    ck("(n) only todo tickets are open", {t["status"] for t in store.list_tickets(uid)} == {"todo"})
+    for i in STATE["issues"]:
+        i["labels"] = ["bug"]
+    before = snapshot(store, uid)
+    envs, err = await sync(store, uid)
+    ck("(n) todo tickets and no issues raise", isinstance(err, gt.GitHubTicketsError)
+       and "renamed" in str(err), err)
+    ck("(n) and change nothing", snapshot(store, uid) == before)
+    store, uid = await fresh_synced()
+    for n in (1, 2, 3):
+        gh(n).update(state="CLOSED", stateReason="COMPLETED")
+    gh(4)["labels"] = [LABEL, "in progress"]
+    await sync(store, uid)
+    for i in STATE["issues"]:
+        i["labels"] = ["bug"]
+    envs, err = await sync(store, uid)
+    ck("(n) an in_progress ticket counts as open too", isinstance(err, gt.GitHubTicketsError)
+       and "renamed" in str(err), err)
+    reset()
+    gh(1).update(state="CLOSED", stateReason="COMPLETED")
+    store, uid = fresh()
+    STATE["issues"] = [gh(1)]
+    await sync(store, uid)
+    for i in STATE["issues"]:
+        i["labels"] = ["bug"]
+    envs, err = await sync(store, uid)
+    ck("(n) with nothing open, no issues is no reason to refuse", err is None, err)
+
+    print("== (o) milestone mirrors ==")
+    store, uid = await fresh_synced()
+    ms = {m["name"]: m for m in store.list_milestones(uid)}
+    gh(1)["milestone"] = None
+    gh(2)["milestone"] = None
+    envs, err = await sync(store, uid)
+    ms2 = {m["name"]: m for m in store.list_milestones(uid)}
+    ck("(o) a mirror stays while its GitHub milestone exists, used or not",
+       err is None and "Alpha" in ms2 and ms2["Alpha"]["id"] == ms["Alpha"]["id"], ms2)
+    ck("(o) and the tickets that left it have none", byid(store, uid)["GH-1"]["milestone"] is None)
+    STATE["milestones"][1]["title"] = "Beta, renamed"
+    envs, err = await sync(store, uid)
+    ms3 = {m["id"]: m for m in store.list_milestones(uid)}
+    ck("(o) a rename in GitHub is followed", ms3[ms["Beta"]["id"]]["name"] == "Beta, renamed", ms3)
+    STATE["milestones"] = [m for m in STATE["milestones"] if m["id"] != "M_alpha"]
+    envs, err = await sync(store, uid)
+    ms4 = {m["id"] for m in store.list_milestones(uid)}
+    ck("(o) a mirror whose GitHub milestone is gone from the repo is deleted",
+       err is None and ms["Alpha"]["id"] not in ms4 and ms["Beta"]["id"] in ms4, ms4)
+
+    print("== (p) a blocker that lost the issue label ==")
+    store, uid = await fresh_synced()
+    t = byid(store, uid)
+    ck("(p) GH-2 starts blocked by GH-1", t["GH-2"]["depends_on"] == [t["GH-1"]["id"]])
+    gh(1)["labels"] = ["bug"]
+    envs, err = await sync(store, uid)
+    t = byid(store, uid)
+    ck("(p) GH-1 is canceled and still there", err is None and t["GH-1"]["status"] == "canceled")
+    ck("(p) and no longer a dependency, though GitHub still lists it as a blocker",
+       t["GH-2"]["depends_on"] == [] and t["GH-3"]["depends_on"] == [], (t["GH-2"], t["GH-3"]))
+
+    print("== (q) GitHub's refusals and a dead connection ==")
+    store, uid = await fresh_synced()
+    before = snapshot(store, uid)
+    for label, raw, limited, text in [
+            ("HTTP 429", (429, {}), True, "rate limit"),
+            ("403 with only retry-after", (403, {"retry-after": "60"}), True, "rate limit"),
+            ("403 with remaining 0", (403, {"x-ratelimit-remaining": "0"}), True, "rate limit"),
+            ("a plain 403", (403, {}), False, "answered 403")]:
+        STATE["http_raw"] = raw
+        envs, err = await sync(store, uid)
+        lk = store.get_project_github(uid)
+        ck(f"(q) {label}: raises" + (", rate limited, backs off" if limited else ", not a rate limit"),
+           isinstance(err, gt.GitHubTicketsError) and err.rate_limited is limited and text in str(err)
+           and bool(lk["backoff_until"]) is limited and text in lk["error"], (err, lk))
+        store.set_project_github(uid, {**lk, "backoff_until": None})
+    ck("(q) and nothing changed", snapshot(store, uid) == before)
+    STATE["http_raw"] = None
+    STATE["transport_error"] = True
+    envs, err = await sync(store, uid)
+    ck("(q) a dead connection is GitHubTicketsError: cannot reach GitHub",
+       isinstance(err, gt.GitHubTicketsError) and str(err).startswith("cannot reach GitHub")
+       and not err.rate_limited, err)
+    ck("(q) recorded on the link, nothing changed", "cannot reach GitHub" in
+       (store.get_project_github(uid)["error"] or "") and snapshot(store, uid) == before)
+    STATE["transport_error"] = False
+
+    print("== (s) an answer with parts missing ==")
+    store, uid = await fresh_synced()
+    STATE["page_size"] = 2
+    gh(1)["title"] = "Parse invoices, renamed"
+    before = snapshot(store, uid)
+
+    def repo_of(d):
+        return d["repository"]
+
+    def drop(path_fn, key, value="gone"):
+        def go(d, after):
+            node = path_fn(d)
+            if value == "gone":
+                node.pop(key, None)
+            else:
+                node[key] = value
+        return go
+
+    def on(page, fn):
+        """Damage page 1 (page == 1) or any later page (page == 2) only."""
+        return lambda d, after: fn(d, after) if (after is None) == (page == 1) else None
+
+    variants = [
+        ("page 1: issues null", on(1, drop(repo_of, "issues", None)), "issues"),
+        ("page 1: issues missing", on(1, drop(repo_of, "issues")), "issues"),
+        ("page 1: issues.pageInfo missing", on(1, drop(lambda d: d["repository"]["issues"], "pageInfo")), "pageInfo"),
+        ("page 1: issues.nodes null", on(1, drop(lambda d: d["repository"]["issues"], "nodes", None)), "nodes"),
+        ("page 1: milestones null", on(1, drop(repo_of, "milestones", None)), "milestones"),
+        ("page 1: milestones missing", on(1, drop(repo_of, "milestones")), "milestones"),
+        ("page 1: milestones.pageInfo missing", on(1, drop(lambda d: d["repository"]["milestones"], "pageInfo")), "pageInfo"),
+        ("page 1: milestones.nodes null", on(1, drop(lambda d: d["repository"]["milestones"], "nodes", None)), "nodes"),
+        ("page 1: endCursor missing", on(1, drop(lambda d: d["repository"]["issues"]["pageInfo"], "endCursor")), "endCursor"),
+        ("page 2: issues null", on(2, drop(repo_of, "issues", None)), "issues"),
+        ("page 2: issues missing", on(2, drop(repo_of, "issues")), "issues"),
+        ("page 2: issues.pageInfo missing", on(2, drop(lambda d: d["repository"]["issues"], "pageInfo")), "pageInfo"),
+        ("page 2: issues.nodes null", on(2, drop(lambda d: d["repository"]["issues"], "nodes", None)), "nodes"),
+    ]
+    for label, fn, field in variants:
+        STATE["mangle"] = fn
+        envs, err = await sync(store, uid)
+        ck(f"(s) {label}: raises and says what was missing", isinstance(err, gt.GitHubTicketsError)
+           and f"GitHub sent an answer without {field}" in str(err), err)
+        ck(f"(s) {label}: nothing changed, error on the link", snapshot(store, uid) == before
+           and "without" in (store.get_project_github(uid)["error"] or ""))
+    STATE["mangle"] = None
+    envs, err = await sync(store, uid)
+    ck("(s) the same sync with a whole answer works", err is None
+       and byid(store, uid)["GH-1"]["title"] == "Parse invoices, renamed", err)
+    STATE["page_size"] = 100
+
+    print("== (u) unlinked while GitHub was answering ==")
+    reset()
+    store, uid = fresh()
+
+    def unlink():
+        store.set_project_github(uid, None)
+    STATE["during_fetch"] = unlink
+    envs, err = await sync(store, uid)
+    ck("(u) a first sync writes nothing", err is None and envs == [] and store.list_tickets(uid) == []
+       and store.list_milestones(uid) == [] and store.get_project_github(uid) is None, (err, envs))
+    store.set_project_github(uid, {"repo": "acme/app", "issue_label": LABEL})
+    envs, err = await sync(store, uid)
+    assert len(store.list_tickets(uid)) == 4
+
+    def unlink_like_the_route():
+        store.set_project_github(uid, None)
+        for t in store.list_tickets(uid):
+            store.update_ticket_owner(t["id"], "tares")
+        for m in store.list_milestones(uid):
+            store.update_milestone(m["id"], owner="tares", external_id=None)
+    gh(1)["title"] = "Renamed while unlinking"
+    STATE["during_fetch"] = unlink_like_the_route
+    envs, err = await sync(store, uid)
+    after = store.list_tickets(uid)
+    ck("(u) an unlink in the middle: no events, no duplicates, the link stays None",
+       err is None and envs == [] and len(after) == 4 and {t["owner"] for t in after} == {"tares"}
+       and store.get_project_github(uid) is None, (err, envs, after))
+    ck("(u) and the ticket it would have renamed is as it was", byid(store, uid)["GH-1"]["title"] == "Parse invoices")
+    store.set_project_github(uid, {"repo": "acme/app", "issue_label": LABEL})
+    STATE["http_raw"] = (502, {})
+    STATE["during_fetch"] = unlink
+    envs, err = await sync(store, uid)
+    ck("(u) a failed fetch does not bring the link back either",
+       isinstance(err, gt.GitHubTicketsError) and store.get_project_github(uid) is None, err)
+    STATE["http_raw"] = None
+    store.set_project_github(uid, {"repo": "acme/app", "issue_label": LABEL})
+
+    def relink_elsewhere():
+        store.set_project_github(uid, {"repo": "acme/other", "issue_label": LABEL})
+    STATE["during_fetch"] = relink_elsewhere
+    envs, err = await sync(store, uid)
+    ck("(u) a link changed to another repo in the middle is not written to either",
+       envs == [] and store.get_project_github(uid) == {"repo": "acme/other", "issue_label": LABEL})
 
 
 async def main():
@@ -186,6 +442,45 @@ async def main():
     ck("(l) the source is made once", gt.ensure_source(store) is True and gt.ensure_source(store) is False
        and any(s["name"] == "github_issues" for s in store.list_catalog_sources()))
     ck("a second sync with nothing new emits nothing", await gt.sync_project(store, uid) == [])
+
+    print("== (r) the connector is registered ==")
+    from tares.config import CatalogError, catalog_from_db, validate_source_dict
+    from tares.connectors import REGISTRY, SPECS
+    from tares.connectors.github_issues import GitHubIssuesConnector
+    row = next(x for x in store.list_catalog_sources() if x["name"] == "github_issues")
+    ck("(r) the stored source names the connector github_issues, polling every 60s",
+       row["connector"] == "github_issues" and row["poll"] == "60s" and row["type"] == "event_stream", row)
+    ck("(r) the registry key equals that name", REGISTRY.get("github_issues") is GitHubIssuesConnector)
+    try:
+        validate_source_dict(row)
+        valid = True
+    except CatalogError as e:
+        valid = str(e)
+    ck("(r) the stored row passes the validation the catalog uses", valid is True, valid)
+    try:
+        validate_source_dict({**row, "connector": "github_issue"})
+        ck("(r) and an unknown connector name still fails it", False)
+    except CatalogError:
+        ck("(r) and an unknown connector name still fails it", True)
+    ck("(r) internal, polled, labeled for the picker", SPECS["github_issues"]["internal"] is True
+       and SPECS["github_issues"]["mode"] == "poll" and SPECS["github_issues"]["poll"] == "60s"
+       and SPECS["github_issues"]["label"] == "GitHub issues (tickets)", SPECS.get("github_issues"))
+    labels = {x["name"]: x for x in row["config"]["labels"]}
+    ck("(r) labels ticket (the key), project and repo, read from the event payload",
+       set(labels) == {"ticket", "project", "repo"} and labels["ticket"].get("primary")
+       and labels["repo"]["field"] == "repo", labels)
+    cat = catalog_from_db(store)
+    ck("(r) the catalog builds it as a github_issues source", cat.sources["github_issues"].connector
+       == "github_issues" and isinstance(REGISTRY[cat.sources["github_issues"].connector](
+           cat.sources["github_issues"], store), GitHubIssuesConnector))
+    cur = store.get_project_github(uid)
+    store.create_project("uc_plain", "custom", "Plain", {"objects": []})
+    ck("(r) github_projects lists the linked project, not one without a link",
+       store.github_projects() == [(uid, cur)])
+    store.set_project_github(uid, None)
+    ck("(r) and an unlinked project drops out", store.github_projects() == [])
+    store.set_project_github(uid, cur)
+    ck("(r) linking again lists it", [u for u, _l in store.github_projects()] == [uid])
 
     print("== (c) milestones ==")
     ms = store.list_milestones(uid)
@@ -325,14 +620,19 @@ async def main():
     print("== (j) credentials tried in turn ==")
     store.upsert_github_credential("cred-b", "tok-b")
     store.upsert_github_credential("cred-ghe", "tok-ghe", api_url="https://ghe.example.com/api/v3")
-    STATE["tokens"] = {"tok-a": "not_found", "tok-b": "ok", "tok-ghe": "ok"}
+    # an Enterprise credential sorts first by name and is the one the link remembers, and GitHub
+    # would answer it well: only the api_url filter keeps it from being called
+    store.upsert_github_credential("aaa-ghe", "tok-aaa", api_url="https://ghe.example.com/api/v3")
+    store.set_project_github(uid, {**store.get_project_github(uid), "credential": "cred-ghe"})
+    STATE["tokens"] = {"tok-a": "not_found", "tok-b": "ok", "tok-ghe": "ok", "tok-aaa": "ok"}
     STATE["calls"].clear()
     envs, err = await sync(store, uid)
     order = [tok for tok, _after in STATE["calls"]]
     ck("(j) the second credential is used when the first gets NOT_FOUND", err is None
        and order[:2] == ["tok-a", "tok-b"], (err, order))
     ck("(j) and is remembered on the link", store.get_project_github(uid)["credential"] == "cred-b")
-    ck("(j) an Enterprise credential is never tried", "tok-ghe" not in order, order)
+    ck("(j) an Enterprise credential is never tried, remembered or not",
+       "tok-ghe" not in order and "tok-aaa" not in order and order, order)
     STATE["calls"].clear()
     envs, err = await sync(store, uid)
     ck("(j) next time the remembered credential goes first and alone", err is None
@@ -354,8 +654,213 @@ async def main():
     ck("(k) cut to 50 characters", len(gt.default_issue_label("x" * 80)) == 50
        and gt.default_issue_label("x" * 80) == ("tares:" + "x" * 80)[:50])
 
+    await edges()
+
+
+async def api():
+    from tares.config import SourceCfg
+    from tares.connectors.github_issues import GitHubIssuesConnector
+    from tares.daemon import make_app
+    reset()
+    app = make_app()
+    store = app.state.store
+    store.upsert_github_credential("cred-a", "tok-a")
+    async with app.router.lifespan_context(app):
+        cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
+                               headers={"Authorization": f"Bearer {TOKEN}"})
+
+        async def new_project(name):
+            r = await cx.post("/api/projects", json={"template": "custom", "name": name, "objects": []})
+            return r.json()["id"]
+
+        print("== (A) linking a project ==")
+        uid = await new_project("p")
+        r = await cx.post("/api/projects/nope/github", json={"repo": "acme/app"})
+        ck("(A) an unknown project -> 404", r.status_code == 404, r.text)
+        for body, text in [({}, "owner/name"), ({"repo": "acme"}, "owner/name"),
+                           ({"repo": "acme/app", "issue_label": "   "}, "1 to 50"),
+                           ({"repo": "acme/app", "issue_label": "x" * 51}, "1 to 50")]:
+            r = await cx.post(f"/api/projects/{uid}/github", json=body)
+            ck(f"(A) {body} -> 400", r.status_code == 400 and text in r.json()["detail"], r.text)
+        ck("(A) none of them linked it", store.get_project_github(uid) is None)
+        r = await cx.post(f"/api/projects/{uid}/github", json={"repo": "https://github.com/acme/app.git"})
+        tickets = r.json()["tickets"]
+        ck("(A) link by pasted URL, issue label defaulting to tares:<name>: GH-1..GH-4 in order",
+           r.status_code == 200 and [t["identifier"] for t in tickets] == ["GH-1", "GH-2", "GH-3", "GH-4"]
+           and all(t["owner"] == "github" for t in tickets), r.text)
+        lk = r.json()["github"]
+        ck("(A) the link records repo, issue label, url, credential and the sync",
+           lk["repo"] == "acme/app" and lk["issue_label"] == "tares:p" and lk["url"] == "https://github.com/acme/app"
+           and lk["credential"] == "cred-a" and lk["synced_at"] and lk["error"] is None and lk["issues"] == 4, lk)
+        ck("(A) the github_issues source exists and is in the project",
+           "github_issues" in app.state.runtime.catalog.sources and "github_issues" in store.project_sources(uid))
+        n = store.con.execute("SELECT count(*) FROM events WHERE source = 'github_issues' AND "
+                              "event_type = 'ticket_created'").fetchone()[0]
+        ck("(A) one event per ticket found", n == 4, n)
+        await asyncio.sleep(0.3)             # the source's own first poll, then the checks drive the polls
+        app.state.runtime._stop("github_issues")
+        r = await cx.get(f"/api/projects/{uid}/tickets")
+        ck("(A) GET tickets shows the github link, and no linear one", r.json()["github"]["repo"] == "acme/app"
+           and r.json()["github"]["issue_label"] == "tares:p" and r.json()["linear"] is None
+           and len(r.json()["tickets"]) == 4, r.text)
+        r = await cx.post(f"/api/projects/{uid}/github", json={"repo": "acme/app", "issue_label": "tares:p"})
+        ck("(A) linking the same repo and issue label again is fine", r.status_code == 200
+           and len(r.json()["tickets"]) == 4, r.text)
+        r = await cx.post(f"/api/projects/{uid}/github", json={"repo": "acme/app", "issue_label": "other"})
+        ck("(A) another issue label on a linked project -> 409, unlink first", r.status_code == 409
+           and "unlink it first" in r.json()["detail"], r.text)
+        r = await cx.post(f"/api/projects/{uid}/github", json={"repo": "acme/lib"})
+        ck("(A) another repo on a linked project -> 409", r.status_code == 409, r.text)
+
+        print("== (B) refusals ==")
+        other = await new_project("other")
+        r = await cx.post(f"/api/projects/{other}/github", json={"repo": "acme/app", "issue_label": "TARES:P"})
+        ck("(B) the same repo + issue label in another project (any case) -> 409 naming the owner",
+           r.status_code == 409 and "acme/app with issue label TARES:P is already the ticket home of project p"
+           in r.json()["detail"], r.text)
+        ck("(B) and nothing was linked", store.get_project_github(other) is None)
+        lin = await new_project("lin")
+        store.set_project_linear(lin, {"id": "lp1", "name": "Invoicing"})
+        r = await cx.post(f"/api/projects/{lin}/github", json={"repo": "acme/app", "issue_label": "tares:lin"})
+        ck("(B) a project using Linear cannot link GitHub -> 409", r.status_code == 409
+           and "live in Linear; stop using Linear first" in r.json()["detail"], r.text)
+        r = await cx.post(f"/api/projects/{uid}/linear", json={"project": "anything"})
+        ck("(B) a project using GitHub cannot link Linear -> 409", r.status_code == 409
+           and "live in GitHub; stop using GitHub first" in r.json()["detail"], r.text)
+        ck("(B) and the Linear link was not made", store.get_project_linear(uid) is None)
+        mine = await new_project("mine")
+        await cx.post(f"/api/projects/{mine}/tickets", json={"title": "mine"})
+        r = await cx.post(f"/api/projects/{mine}/github", json={"repo": "acme/app", "issue_label": "tares:mine"})
+        ck("(B) a project with its own tickets cannot link -> 409", r.status_code == 409
+           and "already has its own tickets" in r.json()["detail"], r.text)
+        bad = await new_project("bad")
+        STATE["repo_null"] = True
+        r = await cx.post(f"/api/projects/{bad}/github", json={"repo": "acme/app", "issue_label": "tares:bad"})
+        ck("(B) a repo no credential can read -> 400 with the reason", r.status_code == 400
+           and "no stored GitHub credential can read acme/app" in r.json()["detail"], r.text)
+        ck("(B) no link saved, no tickets", store.get_project_github(bad) is None and store.list_tickets(bad) == [])
+        STATE["repo_null"] = False
+        STATE["tokens"] = {"tok-a": "forbidden"}
+        r = await cx.post(f"/api/projects/{bad}/github", json={"repo": "acme/app", "issue_label": "tares:bad"})
+        ck("(B) a credential without Issues: read -> 400 that says so", r.status_code == 400
+           and "Issues: read" in r.json()["detail"] and store.get_project_github(bad) is None, r.text)
+        STATE["tokens"] = {"tok-a": "ok"}
+        STATE["transport_error"] = True
+        r = await cx.post(f"/api/projects/{bad}/github", json={"repo": "acme/app", "issue_label": "tares:bad"})
+        ck("(B) GitHub unreachable while linking -> 400, nothing saved", r.status_code == 400
+           and store.get_project_github(bad) is None, r.text)
+        STATE["transport_error"] = False
+        flaky = await new_project("flaky")
+        STATE["during_fetch"] = lambda: STATE.update(transport_error=True)   # GitHub drops after the check
+        r = await cx.post(f"/api/projects/{flaky}/github", json={"repo": "acme/app", "issue_label": "tares:flaky"})
+        STATE["transport_error"] = False
+        lk = store.get_project_github(flaky) or {}
+        ck("(B) the first sync failing does not undo the link: it keeps the credential that passed the check",
+           r.status_code == 200 and lk.get("credential") == "cred-a" and "reach" in (lk.get("error") or ""), r.text)
+        await cx.delete(f"/api/projects/{flaky}/github")
+
+        print("== (C) sync now ==")
+        r = await cx.post(f"/api/projects/{bad}/github/sync")
+        ck("(C) a project that is not linked -> 409", r.status_code == 409, r.text)
+        r = await cx.post("/api/projects/nope/github/sync")
+        ck("(C) an unknown project -> 404", r.status_code == 404, r.text)
+        gh(1).update(state="CLOSED", stateReason="COMPLETED")
+        gh(2)["title"] = "Store invoices, renamed"
+        r = await cx.post(f"/api/projects/{uid}/github/sync")
+        t = {x["identifier"]: x for x in r.json()["tickets"]}
+        ck("(C) sync now brings the changes, with the link", r.status_code == 200 and t["GH-1"]["status"] == "done"
+           and t["GH-2"]["title"] == "Store invoices, renamed" and r.json()["github"]["error"] is None, r.text)
+        STATE["http_raw"] = (502, {})
+        r = await cx.post(f"/api/projects/{uid}/github/sync")
+        ck("(C) GitHub answering 502 -> 502", r.status_code == 502 and "answered 502" in r.json()["detail"], r.text)
+        STATE["http_raw"] = None
+        STATE["transport_error"] = True
+        r = await cx.post(f"/api/projects/{uid}/github/sync")
+        ck("(C) GitHub unreachable -> 502", r.status_code == 502 and "cannot reach" in r.json()["detail"], r.text)
+        STATE["transport_error"] = False
+        STATE["tokens"] = {"tok-a": "unauthorized"}
+        before = store.list_tickets(uid)
+        r = await cx.post(f"/api/projects/{uid}/github/sync")
+        ck("(C) a refused credential -> 400, tickets as they were, error on the link", r.status_code == 400
+           and "Settings > GitHub" in r.json()["detail"] and store.list_tickets(uid) == before
+           and "Settings > GitHub" in store.get_project_github(uid)["error"], r.text)
+        STATE["tokens"] = {"tok-a": "ok"}
+        r = await cx.post(f"/api/projects/{uid}/github/sync")
+        ck("(C) and the next sync clears it", r.status_code == 200 and r.json()["github"]["error"] is None, r.text)
+
+        print("== (D) the connector's poll ==")
+        STATE["issues"] += [issue(21, "Second project one", labels=("tares:q",)),
+                            issue(22, "Second project two", labels=("tares:q",))]
+        second = await new_project("second")
+        r = await cx.post(f"/api/projects/{second}/github", json={"repo": "acme/app", "issue_label": "tares:q"})
+        ck("(D) a second project links with its own issue label", r.status_code == 200
+           and [t["identifier"] for t in r.json()["tickets"]] == ["GH-21", "GH-22"], r.text)
+        conn = GitHubIssuesConnector(SourceCfg(name="github_issues", type="event_stream",
+                                               connector="github_issues", poll_seconds=60, config={}), store)
+        ck("(D) a poll with nothing new emits nothing", await conn.poll() == [])
+        gh(3).update(state="CLOSED", stateReason="NOT_PLANNED")
+        gh(22)["labels"] = ["in progress", "tares:q"]
+        gh(4)["title"] = "Retry failed emails, renamed"
+        envs = await conn.poll()
+        ck("(D) it syncs every linked project and returns the events",
+           sorted((e.labels["project"], e.event_type) for e in envs) ==
+           [("p", "ticket_renamed"), ("p", "ticket_status"), ("second", "ticket_status")], 
+           [(e.labels["project"], e.event_type) for e in envs])
+        ck("(D) keyed by identifier, on github_issues", all(e.source == "github_issues"
+           and e.key_value.startswith("GH-") for e in envs))
+        store.append(envs)
+        t = {x["identifier"]: x for x in store.list_tickets(second)}
+        ck("(D) the tickets moved", t["GH-22"]["status"] == "in_progress")
+        gh(21)["title"] = "Second project one, renamed"
+        STATE["fail_label"] = LABEL
+        envs = await conn.poll()
+        ck("(D) one project failing does not stop the other", [e.event_type for e in envs] == ["ticket_renamed"]
+           and "answered 502" in (store.get_project_github(uid)["error"] or ""), envs)
+        STATE["fail_label"] = None
+        STATE["http_raw"] = (502, {})
+        try:
+            await conn.poll()
+            ck("(D) when nothing synced the poll raises, so the source's health shows it", False)
+        except gt.GitHubTicketsError:
+            ck("(D) when nothing synced the poll raises, so the source's health shows it", True)
+        STATE["http_raw"] = None
+        await conn.poll()
+
+        print("== (E) unlinking ==")
+        r = await cx.post(f"/api/projects/{uid}/docs", json={"kind": "working", "title": "W", "body": "steps"})
+        r = await cx.put(f"/api/projects/{uid}/tickets/GH-4", json={"working_doc": r.json()["id"]})
+        ck("(E) a GitHub ticket can get a working doc", r.json()["working_doc_body"] == "steps", r.text)
+        ms_before = store.list_milestones(uid)
+        ck("(E) the project has GitHub-owned milestones to start with", ms_before and
+           all(m["owner"] == "github" and m["external_id"] for m in ms_before), ms_before)
+        r = await cx.delete(f"/api/projects/{uid}/github")
+        ck("(E) unlink: the link is gone, tickets stay and are Tares's", r.status_code == 200
+           and r.json()["github"] is None and len(r.json()["tickets"]) == 4
+           and all(x["owner"] == "tares" for x in r.json()["tickets"]), r.text)
+        ck("(E) the working doc is still there", next(x for x in r.json()["tickets"]
+           if x["identifier"] == "GH-4")["working_doc"], r.text)
+        ms_after = store.list_milestones(uid)
+        ck("(E) milestones are Tares's, without the GitHub id", len(ms_after) == len(ms_before)
+           and all(m["owner"] == "tares" and m["external_id"] is None for m in ms_after), ms_after)
+        ck("(E) the store has no link", store.get_project_github(uid) is None
+           and [u for u, _l in store.github_projects()] == [second])
+        r = await cx.get(f"/api/projects/{uid}/tickets")
+        ck("(E) GET tickets shows github: null", r.json()["github"] is None, r.text)
+        r = await cx.put(f"/api/projects/{uid}/tickets/GH-1", json={"status": "todo"})
+        ck("(E) and the tickets can be edited in Tares", r.status_code == 200 and r.json()["status"] == "todo", r.text)
+        r = await cx.post(f"/api/projects/{uid}/github/sync")
+        ck("(E) sync now is refused after the unlink", r.status_code == 409, r.text)
+        n = len(await conn.poll())
+        ck("(E) and the poll no longer touches the project", store.list_tickets(uid)[0]["owner"] == "tares" and n == 0)
+        await cx.aclose()
+
+
+async def run():
+    await main()
+    await api()
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(run())
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
