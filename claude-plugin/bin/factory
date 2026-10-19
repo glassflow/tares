@@ -983,6 +983,10 @@ cmd_down() {
   [ -f "$STATIONS" ] || { say "no stations recorded"; return; }
   local s
   for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS"); do cmd_retire "$s"; done
+  # with no crew left to relay them, a finished project's questions (like "stop the crew?") are moot
+  local id; for id in $(desk_json | jq -r '.[] | select(.project_finished) | .id'); do
+    tares_http POST "/api/desk/$id/withdraw" '{"reason":"the crew stopped and the project is finished"}' >/dev/null 2>&1 || true
+  done
   say "all stations stopped. Tares keeps the projects, tickets and the desk; $ME crew up starts fresh sessions."
 }
 
@@ -1179,8 +1183,11 @@ cmd_status() {
     "$CREW_HOME/stations/$(station_name orchestrator).settings.json" 2>/dev/null || true)
   [ -n "$ran" ] && [ "${ran%/}" != "$(tares_url)" ] && \
     say "the crew still runs against $ran, not $(tares_url): $ME crew down, then $ME crew up, to move it"
-  printf '%-30s %-12s %-14s %-8s %-8s %s\n' STATION ROLE MODEL STATE TEMPO "DOING / NEEDS"
-  local s old=0 kit; kit=$(kit_version)
+  local s old=0 kit running; kit=$(kit_version)
+  running=$(jq '[.[] | select(.status == "active")] | length' "$STATIONS")
+  if [ "$running" -gt 0 ]; then
+    printf '%-30s %-12s %-14s %-8s %-8s %s\n' STATION ROLE MODEL STATE TEMPO "DOING / NEEDS"
+  else echo "no stations running; $ME crew up starts them"; fi
   for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS"); do
     case "$(stations_get "$s" '.role')" in helper) ;; *)
       [ "$(stations_get "$s" '.kit')" = "$kit" ] || [ -f "$CREW_HOME/stations/$s.done" ] || old=$((old + 1)) ;;
@@ -1205,7 +1212,10 @@ cmd_status() {
   halted && echo "HALTED: $(jq -r .reason "$HALT_FILE" 2>/dev/null)"
   local wp; if wp=$(watch_pid); then echo "watch: running (pid $wp), it revives any station that stops and gives one a permission you allowed in Tares; log in $WATCH_LOG"
   else echo "watch: not running; $ME crew up starts it (or run $ME crew watch yourself)"; fi
-  local items n; items=$(desk_json); n=$(jq length <<<"$items")
+  local items n; items=$(desk_json)
+  # a finished project's questions only matter to a crew that is still running (TR-559)
+  [ "$running" -gt 0 ] || items=$(jq -c 'map(select(.project_finished | not))' <<<"$items")
+  n=$(jq length <<<"$items")
   if [ "$n" -gt 0 ]; then
     echo "desk: $n waiting for you; the next one ($ME crew desk shows all; answer in the orchestrator's session):"
     desk_block "$(jq -c '.[0]' <<<"$items")" | sed 's/^/  /'

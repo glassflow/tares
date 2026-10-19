@@ -277,6 +277,7 @@ async def main():
             await cx.post(f"/api/projects/{blog}/tickets/T1/stage", json={"stage": "doing"})
             await cx.post(f"/api/projects/{blog}/tickets/T1/stage", json={"stage": "merged"})
         as_station("crew-orchestrator", "orchestrator")
+        moot = json.loads(await mf.desk_add("Blog banner colour?", "red", "brand", project="Blog"))
         d8 = json.loads(await mf.desk_add("Is Blog done?", "yes, it's done", "every ticket merged",
                                           ["yes, it's done", "no, there is more"], project="Blog"))
         bad = await mf.finish_project("Blog", d8["label"])
@@ -294,6 +295,12 @@ async def main():
         ck("finished in the person's words, with the desk item", out["finished"]["words"]
            == "yes, the blog is done" and out["finished"]["decision"] == d8["label"], out)
         ck("it says how many projects the crew still holds", out["open_projects"] == 1, out)
+        async with mk() as cx:
+            left = {d["label"]: d for d in
+                    (await cx.get("/api/desk", params={"state": "withdrawn"})).json()["desk"]}
+        ck("its open questions are withdrawn with it", moot["label"] in left
+           and left[moot["label"]]["reason"] == "the project is finished"
+           and left[moot["label"]]["project_finished"], left.get(moot["label"]))
         async with mk() as cx:
             ps = (await cx.get("/api/crew/projects")).json()
             plist = (await cx.get("/api/projects")).json()

@@ -506,6 +506,20 @@ check "a station can't run finish" 'grep -q "only the person runs this" "$T/fin2
 check "the person finishes it" 'grep -q "✓ finishing is done" "$T/fin3.out" && [ "$(api GET /api/crew/projects | jq -r "[.finished[].name] | index(\"finishing\") != null")" = true ]'
 check "and it is off the crew's list" '! "$F" projects 2>/dev/null | grep -q "^finishing "'
 
+# A finished project's questions (TR-559): a running crew still sees them, crew down withdraws them,
+# and a stopped crew's status leaves them out and shows no empty station table.
+E="$T/ended"; trust "$E"; FACTORY_CREW_HOME="$E" "$F" crew up --yes >/dev/null 2>&1
+api POST /api/desk "$(jq -cn --arg p "$FP" '{question: "No project is left. Stop the crew?", recommendation: "yes", why: "nothing to build", project: $p, blocking: true}')" >/dev/null
+FACTORY_CREW_HOME="$E" "$F" crew desk >"$T/ended-desk.out" 2>&1
+check "a running crew sees a finished project's question" 'grep -q "finishing: No project is left" "$T/ended-desk.out"'
+FACTORY_CREW_HOME="$E" "$F" crew down >/dev/null 2>&1
+check "crew down withdraws it" 'api GET "/api/desk?state=withdrawn" | jq -e "any(.desk[]; .question == \"No project is left. Stop the crew?\")" >/dev/null'
+api POST /api/desk "$(jq -cn --arg p "$FP" '{question: "Stop the crew now?", recommendation: "yes", why: "late", project: $p, blocking: true}')" >/dev/null
+FACTORY_CREW_HOME="$E" "$F" crew status >"$T/ended.out" 2>&1
+open_n=$(api GET /api/desk | jq '.desk | length')
+check "a stopped crew's status leaves it out" 'grep -q "^desk: $((open_n - 1)) waiting" "$T/ended.out" && ! grep -q "Stop the crew now" "$T/ended.out"'
+check "and says no stations run instead of an empty table" 'grep -q "^no stations running; tares factory crew up starts them" "$T/ended.out" && ! grep -q "^STATION " "$T/ended.out"'
+
 # crew up starts the watch in the background, once; status says so; crew down stops it first.
 WH="$T/watched"; trust "$WH"
 FACTORY_NO_WATCH= FACTORY_WATCH_INTERVAL=1 FACTORY_CREW_HOME="$WH" "$F" crew up --yes >"$T/w1.out" 2>&1

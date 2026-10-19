@@ -5,6 +5,10 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `tares factory crew status` no longer shows a question left over from a finished project once the crew is stopped, and says "no stations running" instead of printing an empty station table. Finishing a project withdraws its open desk questions, and `crew down` withdraws any left on finished projects (TR-559).
+
 ## [1.47.0] - 2026-10-16
 
 Connect Linear on Tares Cloud with one click, and a self-hosted install connects Linear with a
