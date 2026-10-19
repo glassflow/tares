@@ -20,6 +20,10 @@ import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import clean_env, scrub_os_environ
+scrub_os_environ()
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
@@ -122,7 +126,7 @@ def unit():
        and layer["waived"][0]["reason"] == "internal only" and layer["clean"] and layer["rounds"] == 2, layer)
 
     print("== a waiver in a crew needs its reason ==")
-    env = {**os.environ, "FACTORY_STATION": "shop-build-m1", "CLAUDE_PLUGIN_DATA": os.path.join(_TMP, "pd")}
+    env = {**clean_env(), "FACTORY_STATION": "shop-build-m1", "CLAUDE_PLUGIN_DATA": os.path.join(_TMP, "pd")}
     r = subprocess.run([sys.executable, os.path.join(ROOT, "claude-plugin", "scripts", "challenger.py"),
                         "waive", "1"], capture_output=True, text=True, env=env, cwd=_TMP)
     ck("refused without a reason", r.returncode == 1 and "needs its reason" in r.stdout, r.stdout + r.stderr)

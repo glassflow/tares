@@ -5,6 +5,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PY="$ROOT/.venv/bin/python"; [ -x "$PY" ] || PY=python3
 # crew up starts the watch in the background; tests leave it off unless they test it
 export FACTORY_NO_WATCH=1
+# A test run inside a crew station must not reach the station's Tares: drop the station's
+# settings it inherits. start_tares sets TARESD_URL and TARES_AUTH_TOKEN for the test itself.
+unset FACTORY_STATION FACTORY_ROLE FACTORY_PARENT TARES_FACTORY_URL TARES_FACTORY_TOKEN_FILE TARES_FACTORY_MCP_URL TARES_FACTORY_CRED_FILE TARES_PROJECT TARES_URL
 TARES_PIDS=""
 stop_tares() { local p; for p in $TARES_PIDS; do kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; done; TARES_PIDS=""; }
 

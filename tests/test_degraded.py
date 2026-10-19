@@ -9,6 +9,9 @@ bug: /health must actually touch the store, so a wedged db can't read as healthy
 import asyncio, os, subprocess, sys
 import httpx
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import clean_env
+
 P = F = 0
 def ck(l, c, d=""):
     global P, F; P += 1 if c else 0; F += 0 if c else 1
@@ -22,7 +25,7 @@ PORT, PORT2 = "8811", "8812"
 
 
 def _boot(db, port, **extra):
-    env = {k: v for k, v in os.environ.items()
+    env = {k: v for k, v in clean_env().items()
            if k not in ("TARES_AUTH_TOKEN", "TARES_MAX_DB_SIZE")}
     env |= {"TARES_DB": db, "TARES_CATALOG": SEED, "TARES_PORT": port,
             "TARES_OTLP_GRPC_PORT": "off", **extra}

@@ -15,6 +15,10 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import clean_env, scrub_os_environ
+scrub_os_environ()
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "claude-plugin", "scripts"))
@@ -95,7 +99,7 @@ def station_url():
     tok = os.path.join(_TMP, "token")
     with open(tok, "w") as f:
         f.write("station-token\n")
-    env = {**os.environ, "TARESD_URL": "http://127.0.0.1:8787", "TARES_AUTH_TOKEN": "",
+    env = {**clean_env(), "TARESD_URL": "http://127.0.0.1:8787", "TARES_AUTH_TOKEN": "",
            "TARES_FACTORY_URL": "http://127.0.0.1:8797/", "TARES_FACTORY_TOKEN_FILE": tok}
     out = subprocess.run([sys.executable, "-c", "import tares.mcp_server as m; "
                           "print(m.TARESD); print(m.AUTH_TOKEN)"],

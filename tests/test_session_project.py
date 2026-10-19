@@ -15,6 +15,10 @@ import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import scrub_os_environ
+scrub_os_environ()
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "claude-plugin", "scripts"))
