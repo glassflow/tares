@@ -117,6 +117,15 @@ async def _candidates(store, link: dict, repo: str) -> list[tuple[str, str]]:
     return out
 
 
+def _need(obj, field: str):
+    """`obj[field]`, or GitHubTicketsError when GitHub's answer lacks it (null or missing), so a
+    malformed answer is never read as an empty list."""
+    value = obj.get(field) if isinstance(obj, dict) else None
+    if value is None:
+        raise GitHubTicketsError(f"GitHub sent an answer without {field}")
+    return value
+
+
 async def fetch(store, link: dict) -> tuple[dict, list[dict], list[dict]]:
     """(repository info, GitHub milestones, issues carrying the link's issue label). The info
     names the `credential` that worked. All or nothing: any failure raises GitHubTicketsError
@@ -151,24 +160,25 @@ async def fetch(store, link: dict) -> tuple[dict, list[dict], list[dict]]:
         raise (forbidden or limited or GitHubTicketsError(
             f"no stored GitHub credential can read {repo}; add one in Settings > GitHub"))
     repository = first = data["repository"]
-    milestones = first["milestones"]
-    if milestones["pageInfo"]["hasNextPage"]:
+    milestones = _need(first, "milestones")
+    if _need(milestones, "pageInfo").get("hasNextPage"):
         raise GitHubTicketsError(f"{repo} has more than 100 milestones")
     issues: list[dict] = []
     while True:
-        page = repository["issues"]
-        issues.extend(page.get("nodes") or [])
+        page = _need(repository, "issues")
+        issues.extend(_need(page, "nodes"))
         if len(issues) > MAX_ISSUES:
             raise GitHubTicketsError(f"more than {MAX_ISSUES} issues carry {label}")
-        if not page["pageInfo"]["hasNextPage"]:
+        info_page = _need(page, "pageInfo")
+        if not info_page.get("hasNextPage"):
             break
-        data = await _post(token, {**base, "after": page["pageInfo"]["endCursor"]})
+        data = await _post(token, {**base, "after": _need(info_page, "endCursor")})
         repository = data.get("repository")
         if not repository:
             raise GitHubTicketsError(f"GitHub stopped returning {repo} part way through")
     info = {"nameWithOwner": first.get("nameWithOwner") or repo, "url": first.get("url"),
             "credential": cred}
-    return info, list(milestones.get("nodes") or []), issues
+    return info, list(_need(milestones, "nodes")), issues
 
 
 # ── the sync ─────────────────────────────────────────────────────────────────
@@ -215,11 +225,16 @@ async def sync_project(store, uid: str) -> list[Envelope]:
     try:
         info, milestones, issues = await fetch(store, link)
     except GitHubTicketsError as e:
-        saved = {**link, "error": str(e)}
-        if e.rate_limited:
-            saved["backoff_until"] = (now_utc() + timedelta(seconds=RATE_BACKOFF)).isoformat()
-        store.set_project_github(uid, saved)
+        now = store.get_project_github(uid)
+        if now and (now["repo"], now["issue_label"]) == (repo, label):
+            saved = {**now, "error": str(e)}
+            if e.rate_limited:
+                saved["backoff_until"] = (now_utc() + timedelta(seconds=RATE_BACKOFF)).isoformat()
+            store.set_project_github(uid, saved)
         raise
+    link = store.get_project_github(uid)
+    if not link or (link["repo"], link["issue_label"]) != (repo, label):
+        return []   # unlinked (or linked elsewhere) while GitHub was answering: write nothing
     have = {t["external_id"]: t for t in store.list_tickets(uid) if t["owner"] == "github"}
     if not issues and any(t["status"] in ("todo", "in_progress") for t in have.values()):
         # most likely the issue label was renamed or deleted; cancel nothing on a guess

@@ -42,6 +42,7 @@ from .config import (SLACK_URL_PREFIX, CatalogError, agent_url, catalog_from_db,
                      _source_from_dict)
 from .connectors import (SPECS, normalize_config, redact_config, restore_secrets,
                          source_type_for)
+from .connectors.github import _normalize_repo as _gh_normalize_repo
 from .dispatch import Dispatcher
 from .envelope import now_utc
 from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_conclude,
@@ -56,6 +57,7 @@ from . import docs as docs_mod
 from . import factory as factory_mod
 from . import claude_usage, factory_api
 from . import linear as _linear
+from . import github_tickets as _gh_tickets
 from . import skills as skills_mod
 from . import providers as providers_mod
 from .runtime import Runtime
@@ -4453,10 +4455,12 @@ def make_app() -> FastAPI:
     async def list_project_tickets(uid: str):
         """The project's tickets in order, each with the title of its working doc, and the
         Linear project they live in when the project uses Linear (`linear`, with the last
-        sync's time and error)."""
+        sync's time and error), or the GitHub repo and issue label when it uses GitHub Issues
+        (`github`, the same)."""
         _project_or_404(uid)
         await factory_api.refresh_prs(store, uid)
-        return {"tickets": _tickets_out(uid), "linear": store.get_project_linear(uid)}
+        return {"tickets": _tickets_out(uid), "linear": store.get_project_linear(uid),
+                "github": store.get_project_github(uid)}
 
     @app.post("/api/projects/{uid}/tickets", status_code=201)
     async def create_project_ticket(uid: str, body: dict = Body(...)):
@@ -4851,6 +4855,9 @@ def make_app() -> FastAPI:
         first sync; from then on the `linear` source keeps them in sync. A project that already
         has Tares tickets cannot be linked (they would be two lists)."""
         _project_or_404(uid)
+        if store.get_project_github(uid):
+            _err(ValueError("this project's tickets live in GitHub; stop using GitHub first"),
+                 409)
         if any(t["owner"] == "tares" for t in store.list_tickets(uid)):
             _err(ValueError("this project already has its own tickets in Tares; a project's "
                             "tickets live in one place"), 409)
@@ -4901,6 +4908,92 @@ def make_app() -> FastAPI:
                 store.update_milestone(m["id"], owner="tares", external_id=None)
         return {"tickets": _tickets_out(uid),
                 "linear": None}
+
+    # ── GitHub Issues (TR-569): the repo + issue label a project's tickets live in. Tares only
+    # reads from GitHub; sessions write with the `gh` CLI ────────────────────────────────────
+    def _gh_err(e: Exception):
+        _err(e, 502 if "reach" in str(e) or "answered" in str(e) else 400)
+
+    async def _github_sync_now(uid: str) -> None:
+        envelopes = await _gh_tickets.sync_project(store, uid)
+        if envelopes:
+            store.append(envelopes)
+
+    @app.post("/api/projects/{uid}/github")
+    async def link_github_issues(uid: str, body: dict = Body(...)):
+        """{repo, issue_label?}: the GitHub repo and the issue label whose issues are this
+        project's tickets (default `tares:<project name>`). Reads the repo once to check access,
+        then runs a first sync; from then on the `github_issues` source keeps them in sync. A
+        project that uses Linear or has Tares tickets cannot be linked (two lists), and a repo
+        and issue label belong to one project."""
+        project = _project_or_404(uid)
+        try:
+            repo = _gh_normalize_repo(body.get("repo"))
+        except ValueError as e:
+            _err(e, 400)
+        issue_label = str(body.get("issue_label")
+                          or _gh_tickets.default_issue_label(project["name"])).strip()
+        if not issue_label or len(issue_label) > 50:
+            _err(ValueError("the issue label must be 1 to 50 characters"), 400)
+        if store.get_project_linear(uid):
+            _err(ValueError("this project's tickets live in Linear; stop using Linear first"),
+                 409)
+        if any(t["owner"] == "tares" for t in store.list_tickets(uid)):
+            _err(ValueError("this project already has its own tickets in Tares; a project's "
+                            "tickets live in one place"), 409)
+        cur = store.get_project_github(uid)
+        if cur and (cur.get("repo"), cur.get("issue_label")) != (repo, issue_label):
+            _err(ValueError(f"this project is linked to {cur.get('repo')} with issue label "
+                            f"{cur.get('issue_label')}; unlink it first"), 409)
+        for other, link in store.github_projects():
+            if other != uid and (str(link.get("repo")).lower(), str(link.get("issue_label")).lower()
+                                 ) == (repo.lower(), issue_label.lower()):
+                owner = store.get_project(other)
+                _err(ValueError(f"{repo} with issue label {issue_label} is already the ticket "
+                                f"home of project {owner['name'] if owner else other}"), 409)
+        try:
+            info, _milestones, _issues = await _gh_tickets.fetch(
+                store, {**(cur or {}), "repo": repo, "issue_label": issue_label})
+        except _gh_tickets.GitHubTicketsError as e:
+            _err(e, 400)
+        store.set_project_github(uid, {**(cur or {}), "repo": repo, "issue_label": issue_label,
+                                       "url": f"https://github.com/{repo}",
+                                       "credential": info["credential"]})
+        if _gh_tickets.ensure_source(store):
+            runtime.reload_catalog()
+        store.upsert_project_object(uid, "source", f"+source:{_gh_tickets.SOURCE_NAME}",
+                                    _gh_tickets.SOURCE_NAME)
+        try:
+            await _github_sync_now(uid)
+        except _gh_tickets.GitHubTicketsError:
+            pass   # recorded on the link; the answer shows it
+        return {"tickets": _tickets_out(uid), "github": store.get_project_github(uid)}
+
+    @app.post("/api/projects/{uid}/github/sync")
+    async def sync_github_issues(uid: str):
+        """Sync the project's tickets with GitHub now."""
+        _project_or_404(uid)
+        if not store.get_project_github(uid):
+            _err(ValueError("this project does not use GitHub Issues"), 409)
+        try:
+            await _github_sync_now(uid)
+        except _gh_tickets.GitHubTicketsError as e:
+            _gh_err(e)
+        return {"tickets": _tickets_out(uid), "github": store.get_project_github(uid)}
+
+    @app.delete("/api/projects/{uid}/github")
+    async def unlink_github_issues(uid: str):
+        """The project stops using GitHub Issues. Its tickets stay, now owned by Tares, with their
+        working docs."""
+        _project_or_404(uid)
+        store.set_project_github(uid, None)
+        for t in store.list_tickets(uid):
+            if t["owner"] == "github":
+                store.update_ticket_owner(t["id"], "tares")
+        for m in store.list_milestones(uid):
+            if m["owner"] == "github":
+                store.update_milestone(m["id"], owner="tares", external_id=None)
+        return {"tickets": _tickets_out(uid), "github": None}
 
     # ── joining a project (TR-335, TR-336): its keys, an external agent's subscription to it,
     # the findings recorded in it, and stats over its sources ────────────────────────────────
