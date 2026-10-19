@@ -688,13 +688,14 @@ ONLY = {
     "assumption_state": ("orchestrator",),
     "review": ("reviewer",),
     "shipped": ("releaser",),
+    "end_station": ("orchestrator",),
 }
 WHO = {"grants": "the orchestrator", "global_docs": "the orchestrator",
        "assign": "the orchestrator", "desk": "the orchestrator", "finish": "the orchestrator",
        "release": "the orchestrator",
        "takeover": "the person, in their own terminal (tares factory session <project>)",
        "assumption_state": "the orchestrator", "review": "the reviewer",
-       "shipped": "the releaser"}
+       "shipped": "the releaser", "end_station": "the orchestrator, or the person"}
 
 
 def may(caller: dict, action: str) -> str | None:
