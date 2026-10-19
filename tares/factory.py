@@ -216,10 +216,11 @@ def readiness(tickets: list[dict]) -> dict[str, dict]:
 
 def progress(tickets: list[dict]) -> dict:
     """{done, doing, blocked, todo, canceled, total}: a project's tickets as its progress ring
-    shows them. Done goes by the stage as much as the status: a Linear ticket keeps Linear's
-    status, which can still say in progress after the crew merged it. Blocked is a station's
-    "blocked", or a ticket to do that waits on one not delivered. Canceled ones stay out of the
-    total. The project page counts its ring the same way (ui/src/components/ProgressRing.tsx)."""
+    shows them. Done goes by the stage as much as the status: a Linear or GitHub ticket keeps
+    its home's status, which can still say in progress after the crew merged it. Blocked is a
+    station's "blocked", or a ticket to do that waits on one not delivered. Canceled ones stay
+    out of the total. The project page counts its ring the same way
+    (ui/src/components/ProgressRing.tsx)."""
     waits = readiness(tickets)
     n = {"done": 0, "doing": 0, "blocked": 0, "todo": 0, "canceled": 0}
     for t in tickets:
@@ -237,7 +238,7 @@ def progress(tickets: list[dict]) -> dict:
 # ── the ledger (M4): who holds a ticket and where it stands ───────────────────
 
 STAGES = ("todo", "doing", "review", "changes", "merged", "shipped", "blocked")
-# a Tares-owned ticket's status follows its stage; a Linear one keeps Linear's
+# a Tares-owned ticket's status follows its stage; a Linear or GitHub one keeps its home's
 STATUS_OF_STAGE = {"todo": "todo", "doing": "in_progress", "review": "in_progress",
                    "changes": "in_progress", "blocked": "in_progress", "merged": "done",
                    "shipped": "done"}

@@ -4438,6 +4438,9 @@ def make_app() -> FastAPI:
         except docs_mod.DocError as e:
             _err(e)
 
+    # where a ticket or milestone not owned by Tares lives; its owner is the key
+    _HOME_NAME = {"linear": "Linear", "github": "GitHub"}
+
     def _ticket_or_404(uid: str, ref: str) -> dict:
         t = store.get_ticket(uid, ref)
         if t is None:
@@ -4466,11 +4469,12 @@ def make_app() -> FastAPI:
     async def create_project_ticket(uid: str, body: dict = Body(...)):
         """{title, status?, position?, working_doc?, milestone?, depends_on?, repo?}: a ticket
         Tares owns. `repo` is the GitHub repo (owner/name) it changes, for a project that spans
-        several. Refused when the project's tickets live in Linear."""
+        several. Refused when the project's tickets live in Linear or GitHub."""
         _project_or_404(uid)
-        if store.get_project_linear(uid):
-            _err(ValueError("this project's tickets live in Linear; add the ticket there and "
-                            "it shows up here on the next sync"), 409)
+        home = store.project_ticket_home(uid)
+        if home:
+            _err(ValueError(f"this project's tickets live in {_HOME_NAME[home]}; add the ticket "
+                            "there and it shows up here on the next sync"), 409)
         try:
             title = docs_mod.title_ok(body.get("title"))
             status = docs_mod.status_ok(body.get("status"))
@@ -4496,9 +4500,9 @@ def make_app() -> FastAPI:
 
     @app.put("/api/projects/{uid}/tickets/{ref}")
     async def update_project_ticket(uid: str, ref: str, body: dict = Body(...)):
-        """Change a ticket. A Linear ticket only takes `working_doc` and `repo` (its title,
-        status, order, milestone and blocking relations change in Linear); a Tares ticket also
-        takes title, status, position, milestone and depends_on."""
+        """Change a ticket. A Linear or GitHub ticket only takes `working_doc` and `repo` (its
+        title, status, order, milestone and blocking relations change where it lives); a Tares
+        ticket also takes title, status, position, milestone and depends_on."""
         _project_or_404(uid)
         t = _ticket_or_404(uid, ref)
         fields: dict = {}
@@ -4507,9 +4511,9 @@ def make_app() -> FastAPI:
         if "repo" in body:
             fields["repo"] = _repo_ok(body.get("repo"))
         own = {"title", "status", "position", "milestone", "depends_on"} & set(body)
-        if own and t["owner"] == "linear":
-            _err(ValueError(f"{t['identifier'] or t['id']} lives in Linear: change its "
-                            + ", ".join(sorted(own)) + " there"), 409)
+        if own and t["owner"] != "tares":
+            _err(ValueError(f"{t['identifier'] or t['id']} lives in {_HOME_NAME[t['owner']]}: "
+                            "change its " + ", ".join(sorted(own)) + " there"), 409)
         try:
             if "title" in body:
                 fields["title"] = docs_mod.title_ok(body["title"])
@@ -4529,17 +4533,18 @@ def make_app() -> FastAPI:
 
     @app.delete("/api/projects/{uid}/tickets/{ref}")
     async def delete_project_ticket(uid: str, ref: str):
-        """Delete a Tares ticket (its working doc stays). A Linear ticket is removed in Linear."""
+        """Delete a Tares ticket (its working doc stays). A Linear or GitHub ticket is removed
+        where it lives."""
         _project_or_404(uid)
         t = _ticket_or_404(uid, ref)
-        if t["owner"] == "linear":
-            _err(ValueError(f"{t['identifier'] or t['id']} lives in Linear: remove it there"),
-                 409)
+        if t["owner"] != "tares":
+            _err(ValueError(f"{t['identifier'] or t['id']} lives in {_HOME_NAME[t['owner']]}: "
+                            "remove it there"), 409)
         store.delete_ticket(t["id"])
         return {"ok": True, "deleted": t["id"]}
 
     # ── milestones (TR-411): each ships something a person can check, its acceptance checks.
-    # A Linear-linked project's milestones come from Linear; their checks stay Tares's ──────
+    # A Linear or GitHub project's milestones come from there; their checks stay Tares's ──────
     def _milestones_out(uid: str) -> list[dict]:
         tickets = _tickets_out(uid)
         out = []
@@ -4581,26 +4586,28 @@ def make_app() -> FastAPI:
         pos = body.get("position")
         if cur:
             fields = {k: v for k, v in (("goal", goal), ("checks", checks)) if k in body}
-            if pos is not None and cur["owner"] != "linear":
+            if pos is not None and cur["owner"] == "tares":
                 fields["position"] = float(pos)
             store.update_milestone(cur["id"], **fields)
             mid = cur["id"]
         else:
-            if store.get_project_linear(uid):
-                _err(ValueError("this project's milestones live in Linear: add it there, then "
-                                "write its checks here"), 409)
+            home = store.project_ticket_home(uid)
+            if home:
+                _err(ValueError(f"this project's milestones live in {_HOME_NAME[home]}: add it "
+                                "there, then write its checks here"), 409)
             mid = store.create_milestone(uid, name, goal, checks,
                                          float(pos) if pos is not None else None)
         return next(m for m in _milestones_out(uid) if m["id"] == mid)
 
     @app.put("/api/projects/{uid}/milestones/{ref}")
     async def update_project_milestone(uid: str, ref: str, body: dict = Body(...)):
-        """Change a milestone's name, goal, checks or position. A Linear milestone only takes
-        goal and checks (its name and order change in Linear)."""
+        """Change a milestone's name, goal, checks or position. A Linear or GitHub milestone only
+        takes goal and checks (its name and order change where it lives)."""
         _project_or_404(uid)
         m = _milestone_or_404(uid, ref)
-        if m["owner"] == "linear" and ({"name", "position"} & set(body)):
-            _err(ValueError(f"{m['name']} lives in Linear: rename or reorder it there"), 409)
+        if m["owner"] != "tares" and ({"name", "position"} & set(body)):
+            _err(ValueError(f"{m['name']} lives in {_HOME_NAME[m['owner']]}: rename or reorder "
+                            "it there"), 409)
         fields: dict = {}
         try:
             if "name" in body:
@@ -4626,8 +4633,9 @@ def make_app() -> FastAPI:
         """Delete a Tares milestone; its tickets stay, without a milestone."""
         _project_or_404(uid)
         m = _milestone_or_404(uid, ref)
-        if m["owner"] == "linear":
-            _err(ValueError(f"{m['name']} lives in Linear: remove it there"), 409)
+        if m["owner"] != "tares":
+            _err(ValueError(f"{m['name']} lives in {_HOME_NAME[m['owner']]}: remove it there"),
+                 409)
         store.delete_milestone(m["id"])
         return {"ok": True, "deleted": m["id"]}
 
@@ -4912,6 +4920,8 @@ def make_app() -> FastAPI:
     # ── GitHub Issues (TR-569): the repo + issue label a project's tickets live in. Tares only
     # reads from GitHub; sessions write with the `gh` CLI ────────────────────────────────────
     def _gh_err(e: Exception):
+        if getattr(e, "rate_limited", False):
+            _err(e, 429)
         _err(e, 502 if "reach" in str(e) or "answered" in str(e) else 400)
 
     async def _github_sync_now(uid: str) -> None:
@@ -4935,27 +4945,36 @@ def make_app() -> FastAPI:
                           or _gh_tickets.default_issue_label(project["name"])).strip()
         if not issue_label or len(issue_label) > 50:
             _err(ValueError("the issue label must be 1 to 50 characters"), 400)
-        if store.get_project_linear(uid):
-            _err(ValueError("this project's tickets live in Linear; stop using Linear first"),
-                 409)
-        if any(t["owner"] == "tares" for t in store.list_tickets(uid)):
-            _err(ValueError("this project already has its own tickets in Tares; a project's "
-                            "tickets live in one place"), 409)
-        cur = store.get_project_github(uid)
-        if cur and (cur.get("repo"), cur.get("issue_label")) != (repo, issue_label):
-            _err(ValueError(f"this project is linked to {cur.get('repo')} with issue label "
-                            f"{cur.get('issue_label')}; unlink it first"), 409)
-        for other, link in store.github_projects():
-            if other != uid and (str(link.get("repo")).lower(), str(link.get("issue_label")).lower()
-                                 ) == (repo.lower(), issue_label.lower()):
-                owner = store.get_project(other)
-                _err(ValueError(f"{repo} with issue label {issue_label} is already the ticket "
-                                f"home of project {owner['name'] if owner else other}"), 409)
+        def refusals() -> dict | None:
+            """The 409s; the project's link as it stands. Run again after the fetch, since
+            another request may have linked something while GitHub was answering."""
+            if store.get_project_linear(uid):
+                _err(ValueError("this project's tickets live in Linear; stop using Linear first"),
+                     409)
+            if any(t["owner"] == "tares" for t in store.list_tickets(uid)):
+                _err(ValueError("this project already has its own tickets in Tares; a project's "
+                                "tickets live in one place"), 409)
+            cur = store.get_project_github(uid)
+            if cur and (cur.get("repo"), cur.get("issue_label")) != (repo, issue_label):
+                _err(ValueError(f"this project is linked to {cur.get('repo')} with issue label "
+                                f"{cur.get('issue_label')}; unlink it first"), 409)
+            for other, link in store.github_projects():
+                if other != uid and (str(link.get("repo")).lower(),
+                                     str(link.get("issue_label")).lower()
+                                     ) == (repo.lower(), issue_label.lower()):
+                    owner = store.get_project(other)
+                    _err(ValueError(f"{repo} with issue label {issue_label} is already the "
+                                    f"ticket home of project {owner['name'] if owner else other}"),
+                         409)
+            return cur
+
+        cur = refusals()
         try:
             info, _milestones, _issues = await _gh_tickets.fetch(
                 store, {**(cur or {}), "repo": repo, "issue_label": issue_label})
         except _gh_tickets.GitHubTicketsError as e:
             _err(e, 400)
+        cur = refusals()   # no await between this check and the save
         store.set_project_github(uid, {**(cur or {}), "repo": repo, "issue_label": issue_label,
                                        "url": f"https://github.com/{repo}",
                                        "credential": info["credential"]})
