@@ -1018,7 +1018,23 @@ cmd_retire() { # station
   "$CLAUDE" rm "$id" >/dev/null 2>&1 || true
   stations_put "$station" '{"status": "retired"}'
   event retired "$station" "$id"
+  tell_tares_ended "$station"
   say "retired $station"
+}
+# Tares learns a station ended only from its session's last line, which a stopped or killed session
+# never sends: say it here, or its row stays Working or Quiet. Never fails the retire; a station that
+# never reported to Tares (404) is fine.
+tell_tares_ended() { # station
+  [ -n "$TARES" ] || TARES=$(tares_url)
+  local tok code
+  tok=$(tares_token)
+  code=$({ [ -n "$tok" ] && printf 'Authorization: Bearer %s\n' "$tok"; true; } | curl -sS -o /dev/null \
+    -w '%{http_code}' --max-time 3 -X POST -H @- -H 'Content-Type: application/json' \
+    --data '{"reason":"retired"}' "$TARES/api/crew/$(uri "$1")/end" 2>/dev/null) || true
+  case "$code" in
+    200|404) ;;
+    *) say "could not tell Tares at $TARES that $1 ended; mark it ended on the Crew page" ;;
+  esac
 }
 
 cmd_down() {
