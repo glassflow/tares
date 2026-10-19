@@ -8,6 +8,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 - Crew page: a finished project lists its builders under it, instead of under Other builders.
 - Tares can mark a crew station ended (`POST /api/crew/<station>/end`), so a station whose session is gone stops showing as Quiet.
 - `factory retire` marks the station ended on Tares, so a retired builder no longer shows as Quiet.
+- Crew page: Mark ended on a Quiet station clears a session that is gone.
 
 ## [1.48.0] - 2026-10-19
 
