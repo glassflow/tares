@@ -2690,6 +2690,14 @@ class Store(FactoryStore, ClaudeUsageStore):
                 "reason = excluded.reason, state_at = excluded.state_at" + when,
                 [session, state, reason or None, at])
 
+    def session_state(self, session: str) -> dict | None:
+        """The session's stored state {state, reason, state_at}, as reported (not as shown), or
+        None when it never reported one."""
+        with self._lock:
+            row = self.con.execute("SELECT state, reason, state_at FROM session_states "
+                                   "WHERE session = ?", [session]).fetchone()
+        return {"state": row[0], "reason": row[1], "state_at": row[2]} if row else None
+
     def said_lately(self, source: str, session: str, n: int = 3) -> list[dict]:
         """The session's last `n` assistant messages (not tool calls), oldest first."""
         with self._lock:

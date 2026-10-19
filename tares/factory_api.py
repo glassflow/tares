@@ -431,6 +431,21 @@ def register(app, store, h: SimpleNamespace) -> None:
                             "text": str(x.get("text") or "")[:600]} for x in lines],
                 "attach": factory_mod.attach_command(name)}
 
+    @app.post("/api/crew/{name}/end")
+    async def end_station(name: str, request: Request, body: dict | None = Body(None)):
+        """{reason?}: mark the station's current session ended, for a station that was retired or
+        whose session is gone, so it stops showing as working or quiet. Its earlier sessions and
+        lines are kept. The orchestrator or the person (unlabeled, such as `factory retire`) may.
+        A session that is still alive turns the row back with its next line."""
+        deny(request, "end_station")
+        st = next((s for s in stations() if s["name"] == name), None)
+        if st is None:
+            h.err(KeyError(f"no station {name!r} has reported to Tares"), 404)
+        reason = " ".join(str((body or {}).get("reason") or "").split())[:100] or "marked ended"
+        if (store.session_state(st["session"]) or {}).get("state") != "ended":
+            store.set_session_state(st["session"], "ended", reason, now_utc(), force=True)
+        return next(s for s in stations() if s["name"] == name)
+
     # ── a station's context by category: asked from the console, read on the crew's machine ──
     ASK_TTL = 15   # minutes an unanswered ask stays open; the watch reads on the crew's machine
 
