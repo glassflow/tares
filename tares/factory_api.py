@@ -924,7 +924,13 @@ def register(app, store, h: SimpleNamespace) -> None:
     # ── the desk: questions for the person, and their answers (TR-449..452) ────
     def desk_out(d: dict) -> dict:
         p = store.get_project(d["project"]) if d["project"] else None
-        return {**d, "project_name": p["name"] if p else None}
+        return {**d, "project_name": p["name"] if p else None,
+                "project_finished": bool(p and p.get("status") == "done")}
+
+    def close_project_desk(uid: str) -> None:
+        """A finished project's open questions have nothing left to decide (TR-559)."""
+        for d in store.list_desk("open", uid):
+            store.close_desk_item(d["id"], "withdrawn", "the project is finished", now_utc())
 
     @app.post("/api/desk", status_code=201)
     async def desk_add(request: Request, body: dict = Body(...)):
@@ -1310,6 +1316,7 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "Marked done by the person"
             by, _ = who(request, body)
             store.update_project(uid, status="done")
+            close_project_desk(uid)
             return {"project": uid, "name": p["name"],
                     "finished": {"at": now_utc(), "words": words, "decision": None, "by": by},
                     "open_projects": len(store.handed_over_projects(finished=False, taken=False))}
@@ -1321,6 +1328,7 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "Marked done by the person with tares factory finish"
             store.finish_handover(uid, words, None, by, now_utc())
             store.update_project(uid, status="done")
+            close_project_desk(uid)
             return {"project": uid, "name": p["name"], "finished": store.get_handover(uid)["finished"],
                     "open_projects": len(store.handed_over_projects(finished=False, taken=False))}
         if not ref:
@@ -1337,6 +1345,7 @@ def register(app, store, h: SimpleNamespace) -> None:
                              "with desk_answer first"), 409)
         store.finish_handover(uid, dec["words"], d["label"], by, now_utc())
         store.update_project(uid, status="done")
+        close_project_desk(uid)
         return {"project": uid, "name": p["name"], "finished": store.get_handover(uid)["finished"],
                 "open_projects": len(store.handed_over_projects(finished=False, taken=False))}
 
