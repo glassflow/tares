@@ -6,6 +6,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 - Tares can mark a crew station ended (`POST /api/crew/<station>/end`), so a station whose session is gone stops showing as Quiet.
+- `factory retire` marks the station ended on Tares, so a retired builder no longer shows as Quiet.
 
 ## [1.48.0] - 2026-10-19
 
