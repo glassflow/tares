@@ -6,7 +6,7 @@ import { ApiError, api } from "../../api";
 import { attachCmd } from "../../pages/Crew";
 import ConfirmDialog from "../ConfirmDialog";
 import { Combo, CopyButton, ErrorState, Picker, TimeAgo, formatBytes, usePolling } from "../bits";
-import { Facts, NotHere, VLink, ViewHead, type Ctx } from "./common";
+import { FACTORY_POLL_MS, Facts, NotHere, VLink, ViewHead, type Ctx } from "./common";
 import { GitHubMark, LinearMark, prBrief } from "./factory";
 import type { Doc, DocKind, GitHubLink, Ticket, TicketStatus } from "../../types";
 
@@ -117,7 +117,7 @@ export function DocEditor({ project, initial, fixedKind, onSaved, onCancel }: {
 
 /** The project's docs in reading order, working docs listed with their tickets instead. */
 export function DocsView({ ctx }: { ctx: Ctx }) {
-  const { data, error, reload } = usePolling(() => api.docs(ctx.id), 15000);
+  const { data, error, reload } = usePolling(() => api.docs(ctx.id), FACTORY_POLL_MS);
   const adding = ctx.params.get("add") === "1";
   const setAdding = (open: boolean) => ctx.go({ kind: "docs" }, open ? { add: "1" } : undefined, true);
   if (error && !data) return <ErrorState error={error} what="the docs" onRetry={reload} />;
@@ -187,7 +187,7 @@ export function DocsView({ ctx }: { ctx: Ctx }) {
 
 /** One doc: read it, edit it, take it out of the project. */
 export function DocView({ ctx, name }: { ctx: Ctx; name: string }) {
-  const { data, error, reload } = usePolling(() => api.doc(ctx.id, name), 30000);
+  const { data, error, reload } = usePolling(() => api.doc(ctx.id, name), FACTORY_POLL_MS);
   const [editing, setEditing] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
   if (error && !data) return /404/.test(String(error))
@@ -421,7 +421,7 @@ function GitHubPanel({ ctx, linked, hasOwn, otherLinked, onChanged }: {
 
 /** The project's tickets in order, each with its working doc. */
 export function TicketsView({ ctx }: { ctx: Ctx }) {
-  const { data, error, reload } = usePolling(() => api.tickets(ctx.id), 15000);
+  const { data, error, reload } = usePolling(() => api.tickets(ctx.id), FACTORY_POLL_MS);
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   if (error && !data) return <ErrorState error={error} what="the tickets" onRetry={reload} />;
@@ -496,7 +496,7 @@ export function TicketsView({ ctx }: { ctx: Ctx }) {
 /** Who moved the ticket and when, and the crew's messages about it (TR-427, TR-429): folded,
  *  shown only once there is something in them. */
 function TicketCrew({ ctx, ticket }: { ctx: Ctx; ticket: Ticket }) {
-  const { data } = usePolling(() => api.ticketMessages(ctx.id, ticket.id), 30000);
+  const { data } = usePolling(() => api.ticketMessages(ctx.id, ticket.id), FACTORY_POLL_MS);
   const history = ticket.history ?? [];
   const msgs = data?.messages ?? [];
   const assumptions = ticket.assumptions ?? [];
@@ -613,7 +613,7 @@ function TicketCrew({ ctx, ticket }: { ctx: Ctx; ticket: Ticket }) {
 
 /** One ticket and its working doc. */
 export function TicketView({ ctx, name }: { ctx: Ctx; name: string }) {
-  const { data, error, reload } = usePolling(() => api.ticket(ctx.id, name), 15000);
+  const { data, error, reload } = usePolling(() => api.ticket(ctx.id, name), FACTORY_POLL_MS);
   const [editingDoc, setEditingDoc] = useState(false);
   const [doc, setDoc] = useState<Doc>();
   const [confirmDel, setConfirmDel] = useState(false);
@@ -703,7 +703,7 @@ export function TicketView({ ctx, name }: { ctx: Ctx; name: string }) {
 
 /** The Claude Code sessions that worked in this project, the spec session among them. */
 export function ClaudeSessionsView({ ctx }: { ctx: Ctx }) {
-  const { data, error, reload } = usePolling(() => api.projectSessions(ctx.id), 15000);
+  const { data, error, reload } = usePolling(() => api.projectSessions(ctx.id), FACTORY_POLL_MS);
   if (error && !data) return <ErrorState error={error} what="the sessions" onRetry={reload} />;
   const rows = data?.sessions ?? [];
   return (
@@ -736,7 +736,7 @@ export function ClaudeSessionsView({ ctx }: { ctx: Ctx }) {
 
 /** One session, top to bottom. */
 export function ClaudeSessionView({ ctx, name }: { ctx: Ctx; name: string }) {
-  const { data, error, reload } = usePolling(() => api.projectSession(ctx.id, name), 15000);
+  const { data, error, reload } = usePolling(() => api.projectSession(ctx.id, name), FACTORY_POLL_MS);
   // a crew station's session Tares keeps no transcript of here still gets its attach command
   if (error && !data) return (
     <>
@@ -796,8 +796,8 @@ export function ClaudeSessionView({ ctx, name }: { ctx: Ctx; name: string }) {
  *  for a session no station plays. */
 function StationAttach({ ctx, session }: { ctx: Ctx; session: string }) {
   // the project's crew names the crew's own stations too; its sessions list names builders only
-  const { data: crew } = usePolling(() => api.projectCrew(ctx.id), 30000);
-  const { data: ss } = usePolling(() => api.projectSessions(ctx.id), 30000);
+  const { data: crew } = usePolling(() => api.projectCrew(ctx.id), FACTORY_POLL_MS);
+  const { data: ss } = usePolling(() => api.projectSessions(ctx.id), FACTORY_POLL_MS);
   const st = crew?.stations.find((s) => s.session === session || s.earlier.some((e) => e.session === session));
   const row = ss?.sessions.find((x) => x.session === session);
   const name = st?.name ?? row?.station;
