@@ -257,6 +257,18 @@ def _problem(error: str) -> str:
 # ── model discovery (TR-303) ─────────────────────────────────────────────────
 MAX_MODELS = 500
 
+# OpenAI's /models lists every model the key may use, including ones an agent cannot run on:
+# legacy completions (babbage-002, davinci-002), embeddings, audio, images, moderation. Sorted,
+# babbage-002 came first and became the default for an agent that names no model.
+_OPENAI_NOT_CHAT_PREFIXES = ("babbage", "davinci", "text-embedding", "tts-", "whisper", "dall-e",
+                             "gpt-image", "omni-moderation", "text-moderation", "sora")
+_OPENAI_NOT_CHAT_PARTS = ("-transcribe", "-tts", "-realtime", "-audio")
+
+
+def _openai_chat_model(mid: str) -> bool:
+    return not (mid.startswith(_OPENAI_NOT_CHAT_PREFIXES)
+                or any(part in mid for part in _OPENAI_NOT_CHAT_PARTS))
+
 
 async def discover_models(entry: dict, timeout: float = 8.0) -> list[str]:
     """What an OpenAI-format endpoint serves: `GET <base>/models`, the ids of `data`. LiteLLM
@@ -287,6 +299,8 @@ async def discover_models(entry: dict, timeout: float = 8.0) -> list[str]:
         mid = row.get("id") if isinstance(row, dict) else row
         if isinstance(mid, str) and mid and mid not in ids:
             ids.append(mid)
+    if entry["kind"] == "openai":
+        ids = [mid for mid in ids if _openai_chat_model(mid)]
     return sorted(ids)[:MAX_MODELS]
 
 
@@ -462,8 +476,9 @@ def entry(store, provider_id: str) -> dict | None:
 
 def default_model_for(store, provider_id: str | None) -> str:
     """The model an agent runs on when it names none: TARES_AGENT_MODEL on Anthropic (and on the
-    cell default, when the variable is set on purpose), else the first model the provider lists.
-    Empty when a router lists nothing yet: the agent must then name one."""
+    cell default, when the variable is set on purpose); on OpenAI the first of OPENAI_MODELS the
+    key can use; else the first model the provider lists. Empty when a router lists nothing yet:
+    the agent must then name one."""
     from .builtin_agents import MODEL
     pid = provider_id or default_id(store)
     e = entry(store, pid) if pid else None
@@ -472,6 +487,10 @@ def default_model_for(store, provider_id: str | None) -> str:
     if os.getenv("TARES_AGENT_MODEL", "").strip() and pid == default_id(store):
         return MODEL
     models = models_for(e)
+    if e["kind"] == "openai":
+        preferred = next((m for m in OPENAI_MODELS if m in models), None)
+        if preferred:
+            return preferred
     return models[0] if models else ""
 
 
