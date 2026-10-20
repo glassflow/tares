@@ -1043,9 +1043,13 @@ cmd_down() {
   [ -f "$STATIONS" ] || { say "no stations recorded"; return; }
   local s
   for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS"); do cmd_retire "$s"; done
-  # with no crew left to relay them, a finished project's questions (like "stop the crew?") are moot
+  # with no crew left to relay them, a finished project's questions are moot, and so is "stop the
+  # crew?", asked with or without a project: it names this command (TR-599)
   local id; for id in $(desk_json | jq -r '.[] | select(.project_finished) | .id'); do
     tares_http POST "/api/desk/$id/withdraw" '{"reason":"the crew stopped and the project is finished"}' >/dev/null 2>&1 || true
+  done
+  for id in $(desk_json | jq -r '.[] | select((.question // "") | (contains("crew down") or test("stop the crew"; "i"))) | .id'); do
+    tares_http POST "/api/desk/$id/withdraw" '{"reason":"the person stopped the crew"}' >/dev/null 2>&1 || true
   done
   say "all stations stopped. Tares keeps the projects, tickets and the desk; $ME crew up starts fresh sessions."
 }

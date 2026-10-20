@@ -58,9 +58,10 @@ person agrees. Then:
 3. Retire the project's builders still recorded (`factory retire <station>`), and check it left
    no worktrees (`factory tidy` any that remain).
 4. If `finish_project` says the crew holds no other project, ask on the desk whether to stop the
-   crew: "No project is left. Stop the crew? Run `tares factory crew down` in your terminal." Recommend
-   yes: idle stations still wake on their schedules. You can't stop the crew yourself; the person
-   runs it.
+   crew, with `project` set to the project you just finished and these words: "No project is left.
+   Stop the crew? Run `tares factory crew down` in your terminal." Recommend yes: idle stations
+   still wake on their schedules. You can't stop the crew yourself; the person runs it, and
+   `crew down` withdraws this question.
 
 The person saying "it's done" or "wrap it up" in your session is the start of this, not a
 substitute for it: ask the desk item, so their words are recorded.
