@@ -96,6 +96,10 @@ export type Roster = Awaited<ReturnType<Api["agents"]>>;
 export type Mcp = Awaited<ReturnType<Api["mcpServers"]>>;
 export type SlackChannels = Awaited<ReturnType<Api["slackChannels"]>>["channels"];
 
+// How often a software factory project's pages read again: its sessions move tickets, write
+// docs and open PRs while the page is open, so a page someone watches keeps up within seconds.
+export const FACTORY_POLL_MS = 5000;
+
 /** Everything the views share: the project, its objects as the live APIs report them, and how to
  *  move between views and refresh. Loaded once by the page so the nav and the views agree. */
 export interface Ctx {

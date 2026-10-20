@@ -45,7 +45,11 @@ export function usePolling<T>(fn: () => Promise<T>, intervalMs = 5000): {
     };
     load(true);
     const id = setInterval(() => load(), intervalMs);
-    return () => { live = false; clearInterval(id); };
+    // back on the tab: catch up now, not at the next tick, so a page left open never shows what
+    // it held when the tab was hidden
+    const onShow = () => { if (!document.hidden) load(); };
+    document.addEventListener("visibilitychange", onShow);
+    return () => { live = false; clearInterval(id); document.removeEventListener("visibilitychange", onShow); };
   }, [intervalMs, tick]);
 
   return { data, error, reload: () => setTick((t) => t + 1) };

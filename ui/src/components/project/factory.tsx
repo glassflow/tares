@@ -5,7 +5,7 @@ import { api } from "../../api";
 import { CrewState, Desk, attachCmd } from "../../pages/Crew";
 import { CopyButton, TimeAgo, usePolling } from "../bits";
 import { ProgressRing, ticketBucket, ticketProgress } from "../ProgressRing";
-import { VLink, type Ctx } from "./common";
+import { FACTORY_POLL_MS, VLink, type Ctx } from "./common";
 import { Goal } from "./overview";
 import type { DocSummary, Milestone, ProjectRepo, ProjectSession, RepoPR, Ticket } from "../../types";
 
@@ -47,13 +47,13 @@ const BAR_CLASS: Record<ReturnType<typeof ticketBucket>, string> = {
 };
 
 export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
-  const { data: docs } = usePolling(() => api.docs(ctx.id), 15000);
-  const { data: tk } = usePolling(() => api.tickets(ctx.id), 15000);
-  const { data: ss } = usePolling(() => api.projectSessions(ctx.id), 15000);
-  const { data: msd } = usePolling(() => api.milestones(ctx.id), 15000);
-  const { data: crew } = usePolling(() => api.projectCrew(ctx.id), 15000);
-  const { data: asm } = usePolling(() => api.assumptions(ctx.id), 30000);
-  const { data: decisions, reload: reloadDecisions } = usePolling(() => api.projectDecisions(ctx.id), 30000);
+  const { data: docs } = usePolling(() => api.docs(ctx.id), FACTORY_POLL_MS);
+  const { data: tk } = usePolling(() => api.tickets(ctx.id), FACTORY_POLL_MS);
+  const { data: ss } = usePolling(() => api.projectSessions(ctx.id), FACTORY_POLL_MS);
+  const { data: msd } = usePolling(() => api.milestones(ctx.id), FACTORY_POLL_MS);
+  const { data: crew } = usePolling(() => api.projectCrew(ctx.id), FACTORY_POLL_MS);
+  const { data: asm } = usePolling(() => api.assumptions(ctx.id), 15000);
+  const { data: decisions, reload: reloadDecisions } = usePolling(() => api.projectDecisions(ctx.id), 15000);
   const { data: rp } = usePolling(() => api.projectRepos(ctx.id), 30000);
   // the repos the project touches (TR-463); picking one narrows the ticket list to its tickets
   const repos = rp?.repos ?? [];
@@ -609,7 +609,7 @@ function NextUp({ ctx, next, of, total, prompt, waiting, byCrew, holderEnded }: 
   ctx: Ctx; next: Ticket; of: number; total: number; prompt: string; waiting?: boolean;
   byCrew?: boolean; holderEnded?: boolean;
 }) {
-  const { data: full } = usePolling(() => api.ticket(ctx.id, next.id), 30000);
+  const { data: full } = usePolling(() => api.ticket(ctx.id, next.id), FACTORY_POLL_MS);
   const text = gist(full?.working_doc_body);
   return (
     <section className="fo-next" aria-labelledby="fo-next-h">
