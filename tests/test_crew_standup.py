@@ -183,6 +183,29 @@ async def main():
         ck("the summary sits under the project's heading",
            "## Shop: 1/4 done\n\nT1 merged." in md and "One shipped" in md, md)
 
+        print("== what happened inside the range counts ==")
+        mid = datetime.now(timezone.utc)
+        as_station("crew-orchestrator", "orchestrator")
+        await mf.assign_ticket("T4", "shop-build-m1", project="Shop")
+        as_station("shop-build-m1", "builder", "crew-orchestrator")
+        await mf.set_stage("T1", "doing", project="Shop")       # reopened after the range
+        await mf.set_stage("T4", "doing", project="Shop")
+        as_station()
+        t4 = store.get_ticket(shop, "T4")
+        store.update_ticket(t4["id"], status="done")             # closed in its home meanwhile
+        async with mk() as cx:
+            then = (await cx.get("/api/crew/standup", params={"since": iso(before),
+                                                              "until": iso(mid)})).json()
+            now = (await cx.get("/api/crew/standup",
+                                params={"since": iso(mid)})).json()
+        ck("a ticket merged in the range and reopened later is still done in that range",
+           [x["ref"] for x in then["projects"][0]["done"]] == ["T1"], then["projects"][0]["done"])
+        p = now["projects"][0]
+        ck("after the reopen, T1 shows as started, not done",
+           "T1" in [x["ref"] for x in p["started"]] and "T1" not in [x["ref"] for x in p["done"]], p)
+        ck("a ticket closed in its home counts as done though the crew moved its stage too",
+           [x["ref"] for x in p["done"]] == ["T4"] and "T4" not in [x["ref"] for x in p["started"]], p)
+
         print("== Slack ==")
         as_station("crew-orchestrator", "orchestrator")
         async with mk() as cx:

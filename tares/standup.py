@@ -53,21 +53,26 @@ def project_facts(store, uid: str, name: str, tickets: list[dict], history: list
     for c in history:
         if c["field"] == "stage" and c["ticket"] in by_id:
             last_stage[c["ticket"]] = c
+    # what a ticket became inside the range counts, whatever happened to it since: a ticket merged
+    # then and reopened later was still done in that range
     done, started, newly_blocked = [], [], set()
     for tid, c in last_stage.items():
         t = by_id[tid]
-        if c["value"] in DONE_STAGES and factory_mod.finished(t):
+        if c["value"] in DONE_STAGES:
             done.append(_ticket(t, at=c["at"], stage=c["value"]))
-        elif c["value"] == "doing" and t["stage"] == "doing":
+        elif c["value"] == "doing":
             started.append(_ticket(t, at=c["at"]))
         elif c["value"] == "blocked":
             newly_blocked.add(tid)
-    staged = {c["ticket"] for c in history if c["field"] == "stage"}
-    # a ticket closed in its home (Linear, GitHub) without the crew moving its stage
+    # a ticket closed in its home (Linear, GitHub) inside the range, whatever stages the crew
+    # moved it through meanwhile; one the crew merged before the range is not closed again here
+    counted = {x["ref"] for x in done}
     for t in tickets:
-        if (t["id"] not in last_stage and t["id"] not in staged and t["status"] == "done"
+        if (factory_mod.label(t) not in counted and t["status"] == "done"
                 and t["stage"] not in DONE_STAGES and _in(t.get("updated_at"), since, until)):
             done.append(_ticket(t, at=t["updated_at"], stage="done"))
+    finished_refs = {x["ref"] for x in done}
+    started = [x for x in started if x["ref"] not in finished_refs]
     done.sort(key=lambda x: x["at"])
     blocked = [_ticket(t, reason=t.get("stage_reason") or "", new=t["id"] in newly_blocked)
                for t in tickets if t["stage"] == "blocked" and not factory_mod.finished(t)]
