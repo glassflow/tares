@@ -11,7 +11,7 @@ import type {
   Assumption, ClaudeCodeUsage, CrewMessage, CrewProject, CrewSettings, CrewStation, Decision, DeskAllowed, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, LinearLink, LinearStatus, Milestone,
   ProjectSession, Ticket, TicketStatus,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
-  TimelineEventRow, Trigger, ModelProvider, ModelProviders,
+  TimelineEventRow, Trigger, ModelProvider, ModelProviders, Standup,
 } from "./types";
 import type { TimelineThread } from "./components/ProjectActivity";
 
@@ -586,6 +586,12 @@ export const api = {
       `/api/projects/${encodeURIComponent(id)}/tickets/${encodeURIComponent(ref)}/messages`),
   crew: () => request<{ stations: CrewStation[]; settings: CrewSettings; grants: string; now: string }>("/api/crew"),
   crewProjects: () => request<{ projects: CrewProject[]; finished?: (Pick<CrewProject, "id" | "name" | "tickets_done" | "tickets_total" | "progress"> & { finished: ProjectFinished | null })[]; now: string }>("/api/crew/projects"),
+  standup: (since: string, until: string) =>
+    request<Standup>(`/api/crew/standup?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}`),
+  standupSummary: (since: string, until: string) =>
+    request<Standup>("/api/crew/standup/summary", { method: "POST", body: JSON.stringify({ since, until }) }),
+  slackPost: (channel: string, text: string) =>
+    request<{ ok: boolean; ts?: string }>("/api/slack/post", { method: "POST", body: JSON.stringify({ channel, text }) }),
   station: (name: string) => request<StationDetail>(`/api/crew/${encodeURIComponent(name)}?recent=40`),
   endStation: (name: string, reason?: string) =>
     request<CrewStation>(`/api/crew/${encodeURIComponent(name)}/end`,

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
@@ -6,6 +6,7 @@ import { CopyButton, ErrorState, TimeAgo, usePolling } from "../components/bits"
 import { ContextBadge, PlanPanel, StationUsage } from "../components/ClaudeUsage";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { ProgressRing } from "../components/ProgressRing";
+import StandupSheet from "../components/Standup";
 import type { CrewProject, CrewSettings, CrewStation, DeskAllowed, DeskItem, ProjectUsage } from "../types";
 
 // The crew of a tares-factory (M3, M8): one always-on crew (orchestrator, reviewer, and a releaser
@@ -429,6 +430,8 @@ export default function Crew() {
   const { data: udata, error: uerror, reload: ureload } = usePolling(() => api.claudeCodeUsage(7), 30000);
   const [params] = useSearchParams();
   const [paneOpen, setPaneOpen] = useState(() => !readPaneFolded());
+  const [standup, setStandup] = useState(false);
+  const closeStandup = useCallback(() => setStandup(false), []);
   const stations = data?.stations ?? [];
   const builders = stations.filter((s) => s.role === "builder");
   // a ?member= link to a builder, or a helper under one, opens the Projects pane for this visit
@@ -456,7 +459,11 @@ export default function Crew() {
           <h1>Crew</h1>
           <p className="subtitle">One crew serves every factory project. It runs on your machine; Tares shows what it hears from it.</p>
         </div>
+        {(projects.length > 0 || finished.length > 0) && (
+          <span className="btnrow"><button type="button" onClick={() => setStandup(true)}>Standup</button></span>
+        )}
       </div>
+      {standup && <StandupSheet onClose={closeStandup} />}
 
       <Notices stations={stations} desk={desk} />
 

@@ -366,6 +366,16 @@ class FactoryStore:
         return [{"at": r[0], "field": r[1], "value": r[2], "reason": r[3], "by": r[4],
                  "role": r[5]} for r in rows]
 
+    def history_between(self, since, until) -> list[dict]:
+        """Every ticket change in [since, until), oldest first, for every project (the standup)."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT ticket, project, changed_at, field, value, reason, by_station "
+                "FROM ticket_history WHERE changed_at >= ? AND changed_at < ? "
+                "ORDER BY changed_at", [since, until]).fetchall()
+        return [{"ticket": r[0], "project": r[1], "at": r[2], "field": r[3], "value": r[4],
+                 "reason": r[5], "by": r[6]} for r in rows]
+
     def factory_branch_prs(self, repos: set[str]) -> dict[tuple[str, str], tuple[str, int]]:
         """{(repo, ticket ref upper case): (repo, number)} for the pull requests GitHub sources
         saw on a `factory/<ref>` branch in one of `repos`, newest first wins (TR-410)."""
