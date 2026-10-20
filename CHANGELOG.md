@@ -5,12 +5,20 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-- An agent on OpenAI that names no model no longer defaults to `babbage-002`. The OpenAI model list drops models an agent cannot run on (legacy completions, embeddings, audio, images, moderation), and the default is the first of `gpt-5`, `gpt-5-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4o` the key can use.
-- Settings, Model providers: the provider table stays inside its card. The action buttons wrap instead of pushing the table past the right edge, and the models column no longer squeezes to one word per line.
-- Crew page: a finished project lists its builders under it, instead of under Other builders.
+## [1.49.0] - 2026-10-20
+
+OpenAI agents default to a chat model, a retired or gone crew station stops showing as Quiet, and
+the model provider table fits its card.
+
+### Added
 - Tares can mark a crew station ended (`POST /api/crew/<station>/end`), so a station whose session is gone stops showing as Quiet.
 - `factory retire` marks the station ended on Tares, so a retired builder no longer shows as Quiet.
 - Crew page: Mark ended on a Quiet station clears a session that is gone.
+
+### Fixed
+- An agent on OpenAI that names no model no longer defaults to `babbage-002`. The OpenAI model list drops models an agent cannot run on (legacy completions, embeddings, audio, images, moderation), and the default is the first of `gpt-5`, `gpt-5-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4o` the key can use.
+- Crew page: a finished project lists its builders under it, instead of under Other builders.
+- Settings, Model providers: the provider table stays inside its card. The action buttons wrap instead of pushing the table past the right edge, and the models column no longer squeezes to one word per line.
 
 ## [1.48.0] - 2026-10-19
 
