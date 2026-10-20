@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../../api";
-import { CrewState, Desk, attachCmd } from "../../pages/Crew";
+import { CrewState, Desk, attachCmd, onCrewSide } from "../../pages/Crew";
 import { CopyButton, TimeAgo, usePolling } from "../bits";
 import { ProgressRing, ticketBucket, ticketProgress } from "../ProgressRing";
 import { FACTORY_POLL_MS, VLink, type Ctx } from "./common";
@@ -310,7 +310,10 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
               {crew.stations.map((s) => (
                 <li key={s.name} className="fo-crew-row">
                   <span className="fo-sess">
-                    <VLink v={{ kind: "claude", name: s.session }}>{s.name}</VLink>
+                    {/* the crew's own stations serve every project: their session lives on the Crew page */}
+                    {onCrewSide(s.name, crew.stations)
+                      ? <Link to={`/crew?member=${encodeURIComponent(s.name)}`}>{s.name}</Link>
+                      : <VLink v={{ kind: "claude", name: s.session }}>{s.name}</VLink>}
                     <small> {s.role}</small>
                     <CrewState s={s} />
                   </span>
