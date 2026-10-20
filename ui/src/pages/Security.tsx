@@ -774,15 +774,15 @@ function ProvidersPanel() {
                         ? <><span className="badge error">key rejected</span><span className="help"> by the endpoint; edit and save a valid key</span></>
                         : <><span className="badge ok">configured</span>{p.source && <span className="help"> from <span className="mono">{p.source}</span></span>}</>}
                   </td>
-                  <td>
+                  <td style={{ minWidth: 220 }}>
                     {p.models_error
                       ? <span className="help" title={p.models_error}><span className="badge error">not listed</span> {p.models_problem}{p.models.length > 0 ? `; the picker offers ${p.models.length} ${p.discovers && p.models_at ? "from the last read" : "built in"}` : ""}</span>
                       : <span className="help" title={p.models.slice(0, 40).join("\n")}>{p.models.length}{p.discovers ? " from the endpoint" : " built in"}</span>}
                   </td>
-                  <td style={{ whiteSpace: "nowrap" }}>
-                    <div className="btnrow" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
-                      {p.discovers && p.configured && <button disabled={busy} onClick={() => refresh(p.id)} title="re-read the models this endpoint serves">Refresh models</button>}
-                      {!p.default && p.configured && <button disabled={busy} onClick={() => makeDefault(p.id)}>Make default</button>}
+                  <td style={{ width: 270 }}>
+                    <div className="btnrow" style={{ justifyContent: "flex-end", flexWrap: "wrap" }}>
+                      {p.discovers && p.configured && <button style={{ whiteSpace: "nowrap" }} disabled={busy} onClick={() => refresh(p.id)} title="re-read the models this endpoint serves">Refresh models</button>}
+                      {!p.default && p.configured && <button style={{ whiteSpace: "nowrap" }} disabled={busy} onClick={() => makeDefault(p.id)}>Make default</button>}
                       <button disabled={busy} onClick={() => startEdit(p)}>Edit</button>
                       {(p.stored || p.kind !== "anthropic") && <button className="danger" disabled={busy} onClick={() => setConfirmDelete(p)}>Remove</button>}
                     </div>
