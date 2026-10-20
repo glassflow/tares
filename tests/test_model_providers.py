@@ -294,6 +294,22 @@ async def main():
             ck("env-seeded OpenAI: models stored, key still from the env",
                r.status_code == 200 and o["models"] == ["llama-x", "mixtral"] and o["source"] == "env:OPENAI_API_KEY" and not o["stored"], str(o)[:200])
             ck("...and discovery used the env key", MODELS_SEEN[-1] == "Bearer sk-env", str(MODELS_SEEN[-1]))
+            # OpenAI lists models an agent cannot run on; sorted, babbage-002 used to come first
+            # and became the default for an agent that names no model
+            listed = ["babbage-002", "dall-e-3", "davinci-002", "gpt-4o", "gpt-4o-mini-transcribe",
+                      "gpt-4o-realtime-preview", "gpt-5", "o3-mini", "text-embedding-3-small",
+                      "tts-1", "whisper-1"]
+            kept = [m for m in listed if pv._openai_chat_model(m)]
+            ck("OpenAI discovery keeps only chat models", kept == ["gpt-4o", "gpt-5", "o3-mini"], str(kept))
+            real_entry = pv.entry
+            try:
+                pv.entry = lambda st, pid: {"id": "openai", "kind": "openai", "models": ["gpt-4o", "gpt-5", "o3-mini"]}
+                ck("OpenAI's default model is the first of OPENAI_MODELS the key can use",
+                   pv.default_model_for(store, "openai") == "gpt-5", pv.default_model_for(store, "openai"))
+                pv.entry = lambda st, pid: {"id": "openai", "kind": "openai", "models": ["o3-mini", "o4-mini"]}
+                ck("...else the first one listed", pv.default_model_for(store, "openai") == "o3-mini")
+            finally:
+                pv.entry = real_entry
             os.environ.pop("OPENAI_BASE_URL")
             # startup discovery: an entry the environment seeded gets its list without a click
             os.environ["TARES_PLATFORM_PROVIDER_URL"] = f"http://127.0.0.1:{chat.server_port}/v1"
