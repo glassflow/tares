@@ -67,6 +67,22 @@ check "and the grants for all" 'allow_has links-app-build-m1 "in their own words
 check "L4: builder may merge on the gate" 'jq -e ".autoMode.allow | any(test(\"pre-authorized at level L4-ship\"))" "$FACTORY_CREW_HOME/stations/links-app-build-m1.settings.json" >/dev/null'
 "$F" retire links-app-build-m1 >/dev/null 2>&1
 
+# TR-534: a project named with an emoji. The header X-Tares-Project takes ASCII only, so a builder
+# carries the project's id and keeps the name for reading; a station recorded by name before the fix
+# gets the id when its settings are written again.
+erepo="$T/emoji"; mkdir -p "$erepo"; git -C "$erepo" init -q
+EP=$(hand_over "🔄 Emoji App" "$erepo")
+"$F" spawn builder "🔄 Emoji App" m1 "$erepo" "work T1" >"$T/emoji.out" 2>&1
+check "a builder for an emoji project starts" 'grep -q "started emoji-app-build-m1" "$T/emoji.out"'
+check "its TARES_PROJECT is the project id" '[ "$(envof emoji-app-build-m1 TARES_PROJECT)" = "$EP" ]'
+check "and the name is kept for reading" '[ "$(envof emoji-app-build-m1 TARES_PROJECT_NAME)" = "🔄 Emoji App" ]'
+check "the header value is plain ASCII" 'LC_ALL=C grep -q "^[ -~]*\$" <<<"$(envof emoji-app-build-m1 TARES_PROJECT)"'
+check "Tares resolves the id the header carries" '[ "$(api GET "/api/projects/$(envof emoji-app-build-m1 TARES_PROJECT)" | jq -r .name)" = "🔄 Emoji App" ]'
+tmp=$(mktemp); jq '."emoji-app-build-m1" |= del(.project_id)' "$FACTORY_CREW_HOME/stations.json" > "$tmp" && mv "$tmp" "$FACTORY_CREW_HOME/stations.json"
+"$F" settings emoji-app-build-m1 >"$T/emoji-settings.json" 2>/dev/null
+check "a station kept by name gets the id when its settings are written again" '[ "$(jq -r .env.TARES_PROJECT "$T/emoji-settings.json")" = "$EP" ]'
+"$F" retire emoji-app-build-m1 >/dev/null 2>&1
+
 # The orchestrator runs `factory spawn` with its settings env, not the human's shell: it still finds
 # the crew home, Tares and the token, and gives the builder the same.
 orch_env=(HOME="$HOME" PATH="$PATH" CLAUDE_BIN="$CLAUDE_BIN" FAKE_CLAUDE_STATE="$FAKE_CLAUDE_STATE" FACTORY_PAUSE=0)
@@ -95,7 +111,7 @@ TARES_AUTH_TOKEN=nvf_dead0000_revoked "$F" doctor >"$T/refused.out" 2>&1
 check "a key Tares refuses never replaces the crew's" '[ "$(cat "$FACTORY_CREW_HOME/.tares-token")" = stub-token ] && grep -q "refuses key dead0000 from the environment; the crew keeps the key it has" "$T/refused.out"'
 check "doctor names the stations' key and finds it good" 'grep -q "ok    stations use a token with no key id from $FACTORY_CREW_HOME/.tares-token, and Tares accepts it" "$T/refused.out"'
 check "no key value in doctor's output" '! grep -q "nvf_dead0000_revoked\|stub-token" "$T/refused.out"'
-check "the watch, started without a key, reads the crew file" 'env -u TARES_AUTH_TOKEN "$F" projects 2>&1 | grep -q "^Links App"'
+check "the watch, started without a key, reads the crew file" 'grep -q "^Links App" <<<"$(env -u TARES_AUTH_TOKEN "$F" projects 2>&1)"'
 mv "$FACTORY_CREW_HOME/.tares-token" "$T/token.bak"; : > "$FACTORY_CREW_HOME/.tares-token"
 env -i "${orch_env[@]}" "$F" spawn builder "Links App" m7 "$repo" "work T7" >"$T/signedout.out" 2>&1
 check "a station whose person signed out says so" 'grep -q "the person signed out of Tares: they run tares login" "$T/signedout.out"'
