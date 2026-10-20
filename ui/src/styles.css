@@ -968,6 +968,21 @@ pre.payload {
 .sheet-body { padding: 16px 20px; overflow-y: auto; flex: 1; }
 .sheet-foot { display: flex; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--line); }
 
+/* the crew's standup sheet */
+.sheet.standup { width: min(720px, 96vw); }
+.standup-range { display: flex; gap: 0; margin-bottom: 12px; }
+.standup-range button { border-radius: 0; }
+.standup-range button + button { margin-left: -1px; }
+.standup-range button.active { background: var(--btn-primary-bg); border-color: var(--btn-primary-bg); color: var(--btn-primary-ink); position: relative; }
+.standup-dates { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.standup-dates label { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+.standup-note { margin: 0 0 10px; font-size: 13px; }
+.standup-report h1 { font-size: 1.15rem; margin-top: 0; }
+.standup-report h2 { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
+.standup-foot { align-items: flex-start; flex-wrap: wrap; justify-content: space-between; }
+.standup-slack { display: flex; flex-direction: column; gap: 6px; flex: 1 1 280px; max-width: 420px; }
+.standup-wait { visibility: hidden; }
+
 /* key/value summary grid (sheet detail) */
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; align-items: center; }
 .kv .k { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; font-variant-ligatures: none; color: var(--ink-faint); font-weight: 400; }

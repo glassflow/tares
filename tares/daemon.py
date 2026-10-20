@@ -55,7 +55,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_
 from . import metrics as _metrics
 from . import docs as docs_mod
 from . import factory as factory_mod
-from . import claude_usage, factory_api
+from . import claude_usage, factory_api, standup as standup_mod
 from . import linear as _linear
 from . import github_tickets as _gh_tickets
 from . import skills as skills_mod
@@ -4782,6 +4782,102 @@ def make_app() -> FastAPI:
             store.set_session_state(prev["session"], "replaced",
                                     "a fresh session picked the build up", now_utc(), force=True)
         return {**out, "taken_over": prev["session"] if prev else None}
+
+    # ── the crew's standup report: before factory_api, whose /api/crew/{name} would take it ──
+    def _standup_range(since: str | None, until: str | None) -> tuple[datetime, datetime]:
+        def parse(v: str, what: str) -> datetime:
+            try:
+                d = datetime.fromisoformat(v.strip().replace("Z", "+00:00"))
+            except ValueError:
+                _err(ValueError(f"{what} is not a date and time: {v!r}"))
+            return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+        end = parse(until, "until") if until else now_utc()
+        start = parse(since, "since") if since else end - timedelta(days=1)
+        if start >= end:
+            _err(ValueError("since must be before until"))
+        if end - start > timedelta(days=92):
+            _err(ValueError("a standup covers at most 92 days"))
+        return start, end
+
+    def _standup(since: str | None, until: str | None) -> dict:
+        start, end = _standup_range(since, until)
+        return standup_mod.facts(store, start, end,
+                                 lambda uid: factory_api.project_progress(store, uid))
+
+    @app.get("/api/crew/standup")
+    async def crew_standup(since: str | None = None, until: str | None = None):
+        """What moved in each project handed to the crew between `since` and `until` (ISO; the
+        last day by default), read from the ledger: done, started, in review, blocked, and the
+        questions waiting on the person. `markdown` is the same report ready to copy."""
+        report = _standup(since, until)
+        return {**report, "markdown": standup_mod.markdown(report)}
+
+    @app.post("/api/crew/standup/summary")
+    async def crew_standup_summary(body: dict = Body(default={})):
+        """{since?, until?}: the same report with a line or two per project written by the cell's
+        model from those facts. Without a model provider, or when it fails, the report comes back
+        without the summary and `summary_error` says why."""
+        report = _standup(body.get("since"), body.get("until"))
+        summary, why = None, None
+        provider, origin = resolve_provider(store)
+        if provider is None:
+            why = "no model provider is set up"
+        elif report["projects"]:
+            pid = providers_mod.default_id(store)
+            model = providers_mod.default_model_for(store, pid)
+            try:
+                reply = await asyncio.wait_for(provider.complete(
+                    model=model, system=standup_mod.SUMMARY_SYSTEM, tools=[],
+                    messages=[{"role": "user", "content": standup_mod.summary_prompt(report)}],
+                    max_tokens=standup_mod.SUMMARY_MAX_TOKENS, tools_allowed=False), timeout=90)
+                _record_ask_usage(model, reply.usage, key_source=origin, kind=provider.kind,
+                                  provider_id=pid)
+                summary = standup_mod.parse_summary(reply.text,
+                                                    {p["id"] for p in report["projects"]})
+                if not summary["overall"] and not summary["projects"]:
+                    summary, why = None, "the model's answer could not be read"
+            except asyncio.TimeoutError:
+                why = "the model took longer than 90s"
+            except Exception as e:  # noqa: BLE001 — the report stands without the summary
+                msg = str(e)
+                why = ("the model provider refused its key; check it under Settings"
+                       if any(c in msg for c in (" 401", " 403", "invalid x-api-key"))
+                       else f"the model call failed ({type(e).__name__})")
+                print(f"standup: summary failed: {type(e).__name__}: {msg[:300]}", flush=True)
+        return {**report, "summary": summary, "summary_error": why,
+                "markdown": standup_mod.markdown(report, summary)}
+
+    @app.post("/api/slack/post")
+    async def slack_post(request: Request, body: dict = Body(...)):
+        """{channel, text, title?}: post markdown to a Slack channel as the cell's bot (the
+        standup's "Send to Slack"). A person's action: refused from a crew station."""
+        if factory_api.caller(request)["station"]:
+            _err(PermissionError("posting to Slack is the person's action, from the console"), 403)
+        channel = str(body.get("channel") or "").strip()
+        text = str(body.get("text") or "").strip()
+        if not channel or not text:
+            _err(ValueError("say which channel and what to post"))
+        token, _origin = resolve_slack_token(store)
+        if not token:
+            _err(ValueError("Slack is not connected: add it under Settings, Slack"), 409)
+        title = " ".join(str(body.get("title") or "").split())
+        msg = {"channel": channel, "text": slack_mod.excerpt(text, 300) or title or "Tares",
+               "blocks": ([slack_mod._header(title)] if title else []) + slack_mod._sections(text),
+               "unfurl_links": False, "unfurl_media": False}
+        try:
+            async with httpx.AsyncClient(timeout=15) as cx:
+                r = await cx.post(f"{slack_mod.API_BASE}/chat.postMessage", json=msg,
+                                  headers={"authorization": f"Bearer {token}"})
+            try:
+                data = r.json()
+            except ValueError:
+                data = None
+        except httpx.HTTPError as e:
+            _err(RuntimeError(f"could not reach Slack: {type(e).__name__}"), 502)
+        ok, error, _retry = slack_mod.classify(r.status_code, data)
+        if not ok:
+            _err(RuntimeError(error or "Slack refused the message"), 502)
+        return {"ok": True, "channel": channel, "ts": (data or {}).get("ts")}
 
     # ── the software factory's crew (M3 onward): routes in tares/factory_api.py ──
     def _factory_project_id(ref: str) -> str:

@@ -1057,3 +1057,22 @@ export interface ResourceRow {
 }
 export type ResourceKind = "sources" | "triggers" | "agents" | "tools" | "skills" | "keys";
 export type Resources = Record<ResourceKind, ResourceRow[]>;
+
+/** The crew's standup (/api/crew/standup): what moved in each handed-over project over a range,
+ *  read from the ledger; `markdown` is the same report ready to copy or post. */
+export interface StandupTicket { ref: string; title: string; holder: string | null; pr: string | null; url: string | null }
+export interface StandupProject {
+  id: string; name: string; moved: boolean; finished: boolean;
+  progress: { done: number; total: number; milestone: { name: string; done: number; total: number } | null };
+  done: StandupTicket[]; started: StandupTicket[]; doing: StandupTicket[];
+  review: (StandupTicket & { stage: string })[];
+  blocked: (StandupTicket & { reason: string; new: boolean })[];
+  needs_you: { label: string; question: string; blocking: boolean; permission: boolean; asked_at: string }[];
+}
+export interface Standup {
+  since: string; until: string; markdown: string;
+  projects: StandupProject[];
+  quiet: { id: string; name: string; progress: StandupProject["progress"]; blocked: number; needs_you: number }[];
+  summary?: { overall: string | null; projects: Record<string, string> } | null;
+  summary_error?: string | null;
+}
