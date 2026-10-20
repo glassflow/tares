@@ -5,6 +5,28 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.50.0] - 2026-10-20
+
+A standup report for the crew: what moved in each project, summed up by the cell's model, ready to
+copy or send to Slack. Software factory project pages stay current while they are open.
+
+### Added
+- Crew page: a Standup button opens a report of what moved in each project handed to the crew,
+  since yesterday (since Friday on a Monday), over the last 7 days, or between custom dates. It
+  lists what is done, started, in review, blocked (with the reason) and waiting on you, with PR
+  links, and puts projects that did not move on one line. The cell's model adds an overall line
+  and a line or two per project; without a provider the report still shows, with the reason.
+  Copy takes the markdown, Send to Slack posts it to a channel you pick as the cell's bot.
+- `GET /api/crew/standup?since&until` returns the report and its markdown (the last day by
+  default, at most 92 days). `POST /api/crew/standup/summary` adds the model's summary (admin,
+  counted as Ask usage). `POST /api/slack/post {channel, text}` posts as the cell's bot (admin,
+  refused from crew stations).
+
+### Fixed
+- A software factory project page left open no longer shows stale tickets, docs and sessions. The
+  factory pages refresh every 5 seconds, and every console page re-reads as soon as its tab is
+  visible again. A doc being edited keeps your changes through a refresh.
+
 ## [1.49.0] - 2026-10-20
 
 OpenAI agents default to a chat model, a retired or gone crew station stops showing as Quiet, and
