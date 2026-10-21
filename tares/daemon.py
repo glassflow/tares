@@ -4404,7 +4404,10 @@ def make_app() -> FastAPI:
         ids = _global_ids(create=True)
         cur = store.get_doc(None, ids[kind])
         try:
-            text, added = docs_mod.append_line(cur["body"], body.get("text"))
+            person = _current_person(request)
+            note = (f" (added by {person['name']}, {datetime.now(timezone.utc).date().isoformat()})"
+                    if person else "")
+            text, added = docs_mod.append_line(cur["body"], body.get("text"), note)
         except docs_mod.DocError as e:
             _err(e)
         if added:
@@ -4513,7 +4516,7 @@ def make_app() -> FastAPI:
             by_id = ctx["by_id"]
             out["assumptions"] = [
                 {**{k: a[k] for k in ("label", "question", "choice", "why", "state", "words",
-                                      "made_by")},
+                                      "made_by", "person", "by_label")},
                  "tickets": [factory_mod.label(by_id[x]) for x in a["tickets"] if x in by_id]}
                 for a in store.list_assumptions(uid, ticket=t["id"])]
             out.update(factory_api.review_state(store, uid, t, _cc_source()))

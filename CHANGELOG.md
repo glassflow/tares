@@ -13,6 +13,10 @@ the project follows [Semantic Versioning](https://semver.org/).
   key (`person_id` or `person: {email, name}` on `POST /api/keys`, `PUT /api/keys/{id}/person`).
   `/api/whoami` now says `kind` (system, key, project or open) and the `person` calling. A cell
   with auth off, or with only the person `local`, behaves as before.
+- Every record of who did something (ticket history, assumptions, checks, reviews, the desk,
+  decisions, the handover) keeps the person behind the key next to the station, and the API lists
+  it as `person` and `by_label` ("Kiran (crew-builder-1)"). A line added to the global AGENTS.md or
+  memory ends "(added by Kiran, 2026-10-21)".
 
 ## [1.51.1] - 2026-10-21
 
