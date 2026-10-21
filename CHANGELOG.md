@@ -31,9 +31,10 @@ the project follows [Semantic Versioning](https://semver.org/).
   memory ends "(added by Kiran, 2026-10-21)".
 - The crew's MCP tools `list_assumptions`, `desk_list` and `list_decisions` list the `person` (and
   `by_label`) too. A doc changed through a person's key records the person in `updated_by`, not the
-  key's name, and so does a doc written with the Claude Code tools `write_doc` and `add_to_global`
-  (they used to stamp "claude code session" over the person; that label now stays only for a key
-  with no person and for the system credential). A `by` the caller sends still comes first.
+  key's name, and so does a doc written with the Claude Code tools `write_doc` and `add_to_global`,
+  a grant added with `add_grant` and a `hand_over` (they used to stamp "claude code session" over
+  the person; that label now stays only for a key with no person and for the system credential).
+  A `by` the caller sends still comes first.
 - Settings, People: adding a person with an email that already belongs to someone says so instead of
   closing the form, changing a person's email keeps the old address as an extra email, and a key's
   person picker shows the person's name while people load.
