@@ -903,6 +903,7 @@ pre.payload {
   background: var(--input-bg); border: 1px solid var(--line); border-radius: 0;
   box-shadow: 0 8px 24px var(--sheet-shadow); max-height: 240px; overflow-y: auto; padding: 4px;
 }
+.combo-list.up { top: auto; bottom: calc(100% + 4px); }
 .combo-item {
   padding: 6px 10px; border-radius: 0; cursor: pointer; white-space: nowrap;
   font-family: var(--mono); font-size: 12.5px;

@@ -142,7 +142,7 @@ async def main():
            r.status_code == 200 and s["summary"] is None
            and "no model provider" in (s["summary_error"] or "") and "## Shop" in s["markdown"], s)
         import tares.daemon as daemon_mod
-        from tares.models import ModelReply, empty_usage
+        from tares.models import ModelReply
         seen = {}
 
         class FakeProvider:
@@ -152,7 +152,11 @@ async def main():
                 seen.update(kw)
                 return ModelReply(text=json.dumps({"overall": "Shop shipped T1.",
                                                    "projects": {shop: "T1 merged; T3 waits on a key."}}),
-                                  tool_calls=[], usage=empty_usage())
+                                  tool_calls=[],
+                                  # one call's usage as a provider reports it: no `calls`
+                                  usage={"input_tokens": 900, "output_tokens": 120,
+                                         "cache_creation_input_tokens": 0,
+                                         "cache_read_input_tokens": 0})
 
         real = daemon_mod.resolve_provider
         daemon_mod.resolve_provider = lambda store: (FakeProvider(), "test")

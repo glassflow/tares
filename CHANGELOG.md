@@ -5,6 +5,17 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.51.1] - 2026-10-21
+
+The crew standup writes its summary again, and its Slack channel list fits on screen.
+
+### Fixed
+- Crew standup: the summary was never shown, always "the model call failed (KeyError)", whatever
+  the model provider. The model answered; recording what the call cost then failed and the
+  summary was dropped.
+- The Slack channel picker opens upward when there is no room below it, so at the foot of the
+  standup sheet the list is no longer cut off by the bottom of the window.
+
 ## [1.51.0] - 2026-10-21
 
 The write-back webhook hears about runs that were refused, and the software factory crew keeps

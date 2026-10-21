@@ -127,6 +127,7 @@ function ChannelCombo({ channels, value, onChange, disabled, emptyLabel, onOpen 
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [hi, setHi] = useState(0);
+  const [up, setUp] = useState(false);   // opens upward when the window has no room below
   const root = useRef<HTMLDivElement>(null);
   const search = useRef<HTMLInputElement>(null);
 
@@ -145,6 +146,9 @@ function ChannelCombo({ channels, value, onChange, disabled, emptyLabel, onOpen 
   useEffect(() => { if (open) search.current?.focus(); }, [open]);
 
   const show = () => {
+    // the list is at most 240px tall (.combo-list); a picker at the foot of a sheet has no room below
+    const box = root.current?.getBoundingClientRect();
+    setUp(!!box && window.innerHeight - box.bottom < 250 && box.top > window.innerHeight - box.bottom);
     setQ(""); setHi(Math.max(0, items.findIndex((i) => i.id === selectedId))); setOpen(true); onOpen();
   };
   const pick = (id: string) => { onChange(id); setOpen(false); };
@@ -170,7 +174,7 @@ function ChannelCombo({ channels, value, onChange, disabled, emptyLabel, onOpen 
         </svg>
       </button>
       {open && (
-        <div className="combo-list slack-pick-list">
+        <div className={"combo-list slack-pick-list" + (up ? " up" : "")}>
           <input ref={search} type="text" className="slack-pick-search" placeholder="Search channels"
                  aria-label="Search Slack channels" autoComplete="off" data-1p-ignore data-lpignore="true"
                  value={q} onChange={(e) => { setQ(e.target.value); setHi(0); }} onKeyDown={keys} />
