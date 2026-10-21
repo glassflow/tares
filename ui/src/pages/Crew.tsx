@@ -312,7 +312,7 @@ const RECENT_SHOWN = 8;
 /** Whether a station is one of the crew's own or a helper under one: they serve every project and
  *  hold no tickets. Goes by its root up the parent chain, so a builder whose project id starts with
  *  crew- stays a builder. */
-function onCrewSide(name: string, all: CrewStation[]): boolean {
+export function onCrewSide(name: string, all: CrewStation[]): boolean {
   let s = all.find((x) => x.name === name);
   for (let i = 0; s && s.role === "helper" && s.parent && i < 10; i++) {
     const up = all.find((x) => x.name === s!.parent);
