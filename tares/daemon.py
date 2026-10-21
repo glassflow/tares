@@ -4405,8 +4405,10 @@ def make_app() -> FastAPI:
         cur = store.get_doc(None, ids[kind])
         try:
             person = _current_person(request)
-            note = (f" (added by {person['name']}, {datetime.now(timezone.utc).date().isoformat()})"
-                    if person else "")
+            # the name sits in a shared doc: one line, so a name cannot add a bullet of its own
+            who = " ".join(str((person or {}).get("name") or "").split())[:60].strip()
+            note = (f" (added by {who}, {datetime.now(timezone.utc).date().isoformat()})"
+                    if who else "")
             text, added = docs_mod.append_line(cur["body"], body.get("text"), note)
         except docs_mod.DocError as e:
             _err(e)

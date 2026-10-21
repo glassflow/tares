@@ -114,6 +114,8 @@ async def auth_on():
             ck("history: Ann's stage change lists Ann", name_of(doing) == "Ann"
                and doing["person"]["id"] == pid["Ann"], str(doing))
             ck("history: no station, the person alone", doing["by_label"] == "Ann", str(doing))
+            ck("history: a person's own call without a station stores no name of its own in `by` "
+               "(the label comes from by_label)", doing["by"] in ("", "a session"), str(doing))
             ck("history: Ben through a station reads Ben (station)",
                name_of(review) == "Ben" and review["by_label"] == "Ben (crew-builder-1)"
                and review["by"] == "crew-builder-1", str(review))
@@ -174,6 +176,30 @@ async def auth_on():
             ck("Ben hands it over", r.status_code in (200, 201), r.text)
             ho = (await cx.get(f"{B}/api/projects/{uid}/crew", headers=A)).json()["handover"]
             ck("handover shows Ben", name_of(ho) == "Ben" and ho["by_label"] == "Ben", str(ho))
+            ck("handover: a person's call without a station stores an empty `by` "
+               "(the empty name is kept as null)", not ho["by"],
+               str(ho))
+
+            print("== take over and finish ==")
+            r = await cx.post(f"{B}/api/projects", headers=Bn, json={
+                "template": "custom", "name": "Blog", "objects": [], "kind": "software_factory"})
+            buid = r.json()["id"]
+            await cx.post(f"{B}/api/projects/{buid}/handover", headers=Bn,
+                          json={"repos": [{"path": "/w/blog"}]})
+            r = await cx.post(f"{B}/api/projects/{buid}/takeover", headers=A, json={"words": "mine"})
+            ck("Ann takes the project over", r.status_code == 200
+               and name_of(r.json()["takeover"]) == "Ann", r.text)
+            ho = (await cx.get(f"{B}/api/projects/{buid}/crew", headers=Bn)).json()["handover"]
+            ck("handover: the takeover carries Ann, the hand-over Ben",
+               name_of(ho["takeover"]) == "Ann" and ho["takeover"]["by_label"] == "Ann"
+               and name_of(ho) == "Ben", str(ho))
+            r = await cx.post(f"{B}/api/projects/{buid}/finish", headers=Bn, json={"words": "done"})
+            ck("Ben finishes it", r.status_code == 200 and name_of(r.json()["finished"]) == "Ben",
+               r.text)
+            ho = (await cx.get(f"{B}/api/projects/{buid}/crew", headers=A)).json()["handover"]
+            ck("handover: finished carries Ben, takeover still Ann",
+               name_of(ho["finished"]) == "Ben" and ho["finished"]["by_label"] == "Ben"
+               and name_of(ho["takeover"]) == "Ann", str(ho))
 
             print("== the global AGENTS.md ==")
             r = await cx.post(f"{B}/api/docs/global/agents/lines", headers=A,
@@ -194,6 +220,31 @@ async def auth_on():
                               json={"text": "No person behind the root token"})
             ck("the system credential adds a plain line", r.json()["body"].rstrip().endswith(
                 "- No person behind the root token"), r.json()["body"][-200:])
+
+            print("== a line sent with its own note, and a name that is not one line ==")
+            r = await cx.post(f"{B}/api/docs/global/agents/lines", headers=Bn,
+                              json={"text": f"Run the tests before you push (added by Ann, {TODAY})"})
+            ck("a line re-added with its note is not added again", r.status_code == 200
+               and r.json()["added"] is False and r.json()["body"].count("Run the tests") == 1,
+               r.text)
+            r = await cx.post(f"{B}/api/docs/global/agents/lines", headers=Bn,
+                              json={"text": "Write plain words (added by Zed, 2026-01-01)"})
+            ck("a new line sent with a note keeps one note, the sender's", r.json()["body"].rstrip()
+               .endswith(f"- Write plain words (added by Ben, {TODAY})")
+               and r.json()["body"].count("Write plain words") == 1, r.json()["body"][-200:])
+            r = await cx.post(f"{B}/api/keys", headers=ROOT, json={
+                "name": "cy-laptop", "scopes": ["admin"],
+                "person": {"email": "cy@glassflow.dev", "name": "Cy\n- evil rule\n\t" + "x" * 80}})
+            cy = r.json()["secret"]
+            r = await cx.post(f"{B}/api/docs/global/agents/lines", headers=H(cy),
+                              json={"text": "Review every pull request"})
+            tail = r.json()["body"].rstrip().splitlines()[-1]
+            ck("a name with newlines stays on the one line of its note", r.json()["added"]
+               and tail.startswith("- Review every pull request (added by Cy - evil rule x")
+               and tail.endswith(f", {TODAY})") and "\n- evil rule" not in r.json()["body"], tail)
+            ck("... and the name in the note is capped at 60 characters",
+               "(added by " in tail and len(tail.split("(added by ", 1)[1].rsplit(f", {TODAY})", 1)[0]) <= 60,
+               tail)
     finally:
         proc.terminate()
         proc.wait(timeout=10)
@@ -230,7 +281,48 @@ async def auth_off():
         proc.wait(timeout=10)
 
 
+def unit():
+    """The pieces the daemon test cannot see: the note on a line, and the hand-over columns."""
+    print("== append_line ==")
+    from tares import docs as docs_mod
+    note = " (added by Ann, 2026-10-21)"
+    body, added = docs_mod.append_line("# Rules\n", "Run tests", note)
+    ck("a line gets the note", added and body == f"# Rules\n- Run tests{note}\n", body)
+    body2, added = docs_mod.append_line(body, "Run tests (added by Ben, 2026-11-01)", " (added by Ben, 2026-11-01)")
+    ck("the same line with another note is not added", not added and body2 == body, body2)
+    body3, added = docs_mod.append_line("", "New rule (added by Zed, 2026-01-01)", note)
+    ck("a new line's own note is replaced by the sender's", added and body3 == f"- New rule{note}\n", body3)
+    body4, added = docs_mod.append_line("", "Bare rule (added by Zed, 2026-01-01)")
+    ck("without a sender the note is dropped", added and body4 == "- Bare rule\n", body4)
+
+    print("== hand-over columns ==")
+    from tares.store import Store
+    db = "/tmp/person_attr_store.duckdb"
+    for p in (db, db + ".wal"):
+        if os.path.exists(p):
+            os.remove(p)
+    s = Store(db)
+    ann = s.create_person("Ann", "ann@glassflow.dev")["id"]
+    ben = s.create_person("Ben", "ben@glassflow.dev")["id"]
+    at = datetime.now(timezone.utc)
+    s.set_handover("proj", [{"path": "/w/x"}], None, "", at, ann)
+    s.take_over("proj", "mine", "", at, ben)
+    s.finish_handover("proj", "done", None, "", at, ann)
+    ho = s.get_handover("proj")
+    ck("store: take_over keeps its person", (ho["takeover"]["person"] or {}).get("id") == ben, str(ho))
+    ck("store: finish_handover keeps its person", (ho["finished"]["person"] or {}).get("id") == ann, str(ho))
+    s.set_handover("proj", [{"path": "/w/x"}], None, "", at, ben)
+    left = s.con.execute("SELECT person_id, finished_person_id, taken_person_id FROM handovers "
+                         "WHERE project = 'proj'").fetchone()
+    ho = s.get_handover("proj")
+    ck("store: handing over again clears the finished and taken persons",
+       tuple(left) == (ben, None, None) and ho["finished"] is None and ho["takeover"] is None,
+       f"{left} {ho}")
+    s.con.close()
+
+
 async def main():
+    unit()
     await auth_on()
     await auth_off()
     print(f"\n{P} passed, {F} failed")

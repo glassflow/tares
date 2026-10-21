@@ -290,7 +290,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
                 {a.question} → <b>{a.choice}</b>
                 <small style={{ display: "block" }}>
                   {a.tickets.length > 0 && <>{a.tickets.map((t, i) => <span key={t}>{i ? ", " : ""}<VLink v={{ kind: "ticket", name: t }}>{t}</VLink></span>)} · </>}
-                  {a.made_by ?? "a session"}{a.words && <> · you said: "{a.words}"</>}
+                  {a.by_label ?? a.made_by ?? "a session"}{a.words && <> · you said: "{a.words}"</>}
                 </small>
               </li>
             ))}

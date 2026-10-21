@@ -530,7 +530,7 @@ function TicketCrew({ ctx, ticket }: { ctx: Ctx; ticket: Ticket }) {
           {reviews.map((r) => (
             <div key={r.id} style={{ marginTop: 10 }}>
               <b>Round {r.round}</b>{" "}
-              <span className="dim">· {r.verdict === "pass" ? "Pass" : r.verdict === "changes" ? "changes asked" : "blocked"} on <span className="mono">{r.head.slice(0, 7)}</span> · <TimeAgo ts={r.at} />{r.by && <> · {r.by}</>}{r.fixed.length > 0 && <> · fixed {r.fixed.join(", ")}</>}</span>
+              <span className="dim">· {r.verdict === "pass" ? "Pass" : r.verdict === "changes" ? "changes asked" : "blocked"} on <span className="mono">{r.head.slice(0, 7)}</span> · <TimeAgo ts={r.at} />{(r.by_label ?? r.by) && <> · {r.by_label ?? r.by}</>}{r.fixed.length > 0 && <> · fixed {r.fixed.join(", ")}</>}</span>
               <div className="dim" style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>Verified: {r.verified}{r.not_verified && <>{"\n"}Not verified: {r.not_verified}</>}</div>
               {r.findings.length > 0 && (
                 <ul className="tk-history">
@@ -553,7 +553,7 @@ function TicketCrew({ ctx, ticket }: { ctx: Ctx; ticket: Ticket }) {
             {assumptions.map((a) => (
               <li key={a.label}>
                 <b>{a.label}</b> <span className="dim">({a.state})</span> {a.question} <b>→</b> {a.choice}
-                <div className="dim">{a.why}{a.made_by && <> · by {a.made_by}</>}{a.words && <> · you said: "{a.words}"</>}</div>
+                <div className="dim">{a.why}{(a.by_label ?? a.made_by) && <> · by {a.by_label ?? a.made_by}</>}{a.words && <> · you said: "{a.words}"</>}</div>
               </li>
             ))}
           </ul>
@@ -569,7 +569,7 @@ function TicketCrew({ ctx, ticket }: { ctx: Ctx; ticket: Ticket }) {
                 {c.broke_test && <span className="dim"> · broke the code under {c.broke_test}: it failed, then passed</span>}
                 {c.match === "not_found" && <div className="fo-warn">not found in the recording</div>}
                 {c.match === "differs" && <div className="fo-warn">the recording shows something else{c.recorded && <>: {c.recorded.slice(0, 200)}</>}</div>}
-                <div className="dim"><TimeAgo ts={c.at} />{c.by && <> · {c.by}</>}</div>
+                <div className="dim"><TimeAgo ts={c.at} />{(c.by_label ?? c.by) && <> · {c.by_label ?? c.by}</>}</div>
               </li>
             ))}
           </ul>
@@ -583,7 +583,7 @@ function TicketCrew({ ctx, ticket }: { ctx: Ctx; ticket: Ticket }) {
               <li key={i}>
                 <TimeAgo ts={h.at} /> · {h.field === "holder" ? <>given to <span className="mono">{h.value}</span></> : <>moved to <b>{h.value}</b></>}
                 {h.reason && <span className="dim">: {h.reason}</span>}
-                {h.by && <span className="dim"> · by {h.by}</span>}
+                {(h.by_label ?? h.by) && <span className="dim"> · by {h.by_label ?? h.by}</span>}
               </li>
             ))}
           </ul>

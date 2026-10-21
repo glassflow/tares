@@ -203,7 +203,7 @@ async def auth_on():
                                json={"emails": ["kiran@glassflow.dev"]})).status_code == 409)
 
             # ── the main email is checked like the extra ones (TR-618 follow-up) ──
-            for bad in ("foo", ["a"], 5, {"x": 1}):
+            for bad in ("foo", ["a"], ["a@b.com"], 5, {"x": 1}):
                 r = await cx.post(f"{B}/api/people", headers=H(AUTH), json={"name": "Bad", "email": bad})
                 ck(f"POST /api/people with email {bad!r} -> 400", r.status_code == 400
                    and "—" not in r.text, r.text)
