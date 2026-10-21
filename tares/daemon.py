@@ -864,6 +864,23 @@ def make_app() -> FastAPI:
             return True
         return "admin" in (getattr(request.state, "scopes", None) or [])
 
+    def _is_system(request) -> bool:
+        """The system credential (the root TARES_AUTH_TOKEN, which is no person), or auth off,
+        where the cell belongs to the one person using it."""
+        if not AUTH_TOKEN:
+            return True
+        return (getattr(request.state, "credential", None) or {}).get("kind") == "system"
+
+    def _is_cell_admin(request) -> bool:
+        """May this caller act as an admin of the cell's people and projects: the system
+        credential, a credential with the admin scope, auth off (all three are _is_admin), or a
+        credential whose person is marked is_admin. One place, so project access can reuse it."""
+        if _is_admin(request):
+            return True
+        person = _current_person(request)
+        p = store.get_person(person["id"]) if person else None
+        return bool(p and p["is_admin"])
+
     # Auth off (no token) → no middleware, the instance is fully open (local default). Auth on →
     # every non-public route needs a credential carrying the required scope; ingest is gated exactly
     # like reads and management (admin implies all scopes).
@@ -3447,7 +3464,7 @@ def make_app() -> FastAPI:
             if p.get("kind") == "software_factory" else p for p in projects.list()]}
 
     @app.post("/api/projects", status_code=201)
-    async def create_project(body: ProjectIn):
+    async def create_project(body: ProjectIn, request: Request):
         if body.kind not in (None, "", "software_factory"):
             _err(ValueError(f"unknown project kind {body.kind!r}; the one there is: "
                             "software_factory"))
@@ -3456,10 +3473,83 @@ def make_app() -> FastAPI:
             out = projects.create(body.template, params, name=body.name or None, goal=body.goal)
         except Exception as e:
             _uc_err(e)
+        # the person who makes a project leads it; the system credential is no person, so a
+        # project it makes has no lead until an admin claims it
+        person = _current_person(request)
+        if person:
+            store.set_project_lead(out["id"], person["id"])
         if body.kind:
             store.set_project_kind(out["id"], body.kind)
-            out = {**out, "kind": body.kind}
-        return out
+        return projects.get(out["id"])
+
+    @app.patch("/api/projects/{uid}")
+    async def set_project_access(uid: str, request: Request, body: dict = Body(...)):
+        """{lead_person_id?, scope?}: who leads the project and whether it is `team` or
+        `private`. The lead changes both. An admin (or the system credential) changes the lead
+        only, which is also how a project with no lead is claimed. Nobody else changes either.
+        Answers with the project."""
+        p = store.get_project(uid)
+        if p is None:
+            _err(KeyError(f"unknown project {uid!r}"), 404)
+        body = body or {}
+        want_lead, want_scope = "lead_person_id" in body, "scope" in body
+        if not (want_lead or want_scope):
+            _err(ValueError("say lead_person_id, scope or both"))
+        person = _current_person(request)
+        is_lead = bool(person and p["lead_person_id"] == person["id"])
+        if not is_lead and (want_scope or not _is_cell_admin(request)):
+            raise HTTPException(status_code=403, detail="only the project lead can change this")
+        if want_scope and body["scope"] not in ("team", "private"):
+            _err(ValueError("scope is team or private"))
+        if want_lead:
+            lead = str(body["lead_person_id"] or "").strip()
+            if not lead:
+                _err(ValueError("lead_person_id must be a person id"))
+            if store.get_person(lead) is None:
+                _err(KeyError(f"no person {lead!r}; GET /api/people lists them"), 404)
+            old_lead = p["lead_person_id"]
+            store.set_project_lead(uid, lead)
+            if old_lead and old_lead != lead:   # the one who handed it over stays on it
+                store.add_project_member(uid, old_lead, person["id"] if person else "system")
+        if want_scope:
+            store.set_project_scope(uid, body["scope"])
+        return projects.get(uid)
+
+    def _lead_or_system(request, uid: str) -> dict:
+        """The project, when this caller may change who is on it: its lead, or the system
+        credential (an admin who is not the lead may not)."""
+        p = store.get_project(uid)
+        if p is None:
+            _err(KeyError(f"unknown project {uid!r}"), 404)
+        person = _current_person(request)
+        if not (person and p["lead_person_id"] == person["id"]) and not _is_system(request):
+            raise HTTPException(status_code=403, detail="only the project lead can change this")
+        return p
+
+    @app.post("/api/projects/{uid}/members")
+    async def add_project_member(uid: str, request: Request, body: dict = Body(...)):
+        """{person_id}: put a person on the project. Adding someone already on it changes
+        nothing. Answers with the project."""
+        p = _lead_or_system(request, uid)
+        pid = str((body or {}).get("person_id") or "").strip()
+        if not pid:
+            _err(ValueError("person_id is required"))
+        if store.get_person(pid) is None:
+            _err(KeyError(f"no person {pid!r}; GET /api/people lists them"), 404)
+        if pid != p["lead_person_id"]:   # the lead is a member already
+            by = _current_person(request)
+            store.add_project_member(uid, pid, by["id"] if by else "system")
+        return projects.get(uid)
+
+    @app.delete("/api/projects/{uid}/members/{person_id}")
+    async def remove_project_member(uid: str, person_id: str, request: Request):
+        """Take a person off the project. The lead cannot be taken off: hand the project to
+        someone else first. Answers with the project."""
+        p = _lead_or_system(request, uid)
+        if person_id == p["lead_person_id"]:
+            _err(ValueError("the lead is always a member; make someone else the lead first"), 409)
+        store.remove_project_member(uid, person_id)
+        return projects.get(uid)
 
     @app.get("/api/projects/{uid}")
     async def get_project(uid: str, request: Request):
@@ -3893,7 +3983,7 @@ def make_app() -> FastAPI:
                 store.set_project_setup(_p["id"], _s)
 
     @app.post("/api/setup/drafts", status_code=202)
-    async def setup_draft(body: dict = Body(...)):
+    async def setup_draft(request: Request, body: dict = Body(...)):
         """{goal, who?, name?, description?} -> {project}: a draft project, and its plan being
         written in the background. GET /api/projects/{id}/setup shows the planning step by step,
         then the plan. `name` is kept as the project's name; `description` goes to the planner."""
@@ -3911,8 +4001,10 @@ def make_app() -> FastAPI:
             _err(ValueError(f"a project named {name!r} already exists"), 409)
         _setup_model()   # no provider: 409 now, on the goal page, not later on the draft
         uid = "uc_" + uuid.uuid4().hex[:10]
+        person = _current_person(request)
         store.create_project(uid, "custom", name or _draft_name(goal), {"objects": []},
-                             status=setup_flow.DRAFT, goal=goal)
+                             status=setup_flow.DRAFT, goal=goal,
+                             lead_person_id=person["id"] if person else None)
         store.log_project(uid, "draft", "planning from the goal")
         store.set_project_setup(uid, {"step": "plan", "goal": goal, "who": who, "plan": None,
                                       "practice_run": None, "name": name, "description": about})
@@ -3987,6 +4079,10 @@ def make_app() -> FastAPI:
             uid, key = setup_flow.apply(store, projects, plan, _make_key, draft=draft)
         except setup_flow.SetupError as e:
             _setup_err(e)
+        if draft is None:   # a draft was led by whoever made it; this project has no lead yet
+            person = _current_person(request)
+            if person:
+                store.set_project_lead(uid, person["id"])
         setup = {"plan": setup_flow.stored_plan(plan), "step": "connect", "practice_run": None}
         if key is not None:
             setup["own_key_id"] = key["id"]

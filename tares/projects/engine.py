@@ -79,13 +79,31 @@ class Engine:
         # `recipe` mirrors `template` for pre-1.14 clients; dropped two releases after 1.14
         title = template.title if template else inst["template"]
         setup = self.store.get_project_setup(uid)
+        lead, members = self._who(inst)
         return {**inst, "template_title": title, "objects": objects,
+                "lead": lead, "members": members,
                 "default": uid == self.default_id(),
                 # the guided setup's progress (the plan itself is on GET .../setup); None for a
                 # project set up any other way
                 "setup": ({"step": setup.get("step"), "practice_run": setup.get("practice_run")}
                           if setup else None),
                 "recipe": inst["template"], "recipe_title": title}
+
+    def _who(self, inst: dict) -> tuple[dict | None, list[dict]]:
+        """A project's lead ({id, name}, None when it has none) and its members: the lead first
+        with reason "lead", then the stored ones ("manual" or "ticket"). Not enforced anywhere
+        yet; this is what the project says."""
+        people = {p["id"]: p for p in self.store.list_people()}
+
+        def ref(pid):
+            return {"id": pid, "name": (people.get(pid) or {}).get("name") or pid}
+        lead_id = inst.get("lead_person_id")
+        lead = ref(lead_id) if lead_id else None
+        members = [{**lead, "reason": "lead"}] if lead else []
+        members += [{**ref(m["person_id"]), "reason": m["reason"]}
+                    for m in self.store.list_project_members(inst["id"])
+                    if m["person_id"] != lead_id]
+        return lead, members
 
     def list(self) -> list[dict]:
         default = self.default_id()
