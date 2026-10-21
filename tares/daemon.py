@@ -4326,10 +4326,12 @@ def make_app() -> FastAPI:
     # builds it. Docs belong to the cell and projects include them; tickets are owned by Linear
     # when the project uses it (written by the sync only), by Tares otherwise ────────────────
     def _by(request: Request, body: dict | None = None) -> str:
-        """Who made a change: what the caller says (`by`), else its credential's name."""
+        """Who made a change: what the caller says (`by`), else the person behind its credential,
+        else the credential's own name."""
         said = str((body or {}).get("by") or "").strip()[:100]
         cred = getattr(request.state, "credential", None) or {}
-        return said or cred.get("name") or ""
+        person = _current_person(request) or {}
+        return said or person.get("name") or cred.get("name") or ""
 
     # The cell's global docs (its AGENTS.md and memory): made the first time a project has docs,
     # included in every project that has docs, so every session working on a project reads them.

@@ -18,6 +18,12 @@ the project follows [Semantic Versioning](https://semver.org/).
   decisions, the handover) keeps the person behind the key next to the station, and the API lists
   it as `person` and `by_label` ("Kiran (crew-builder-1)"). A line added to the global AGENTS.md or
   memory ends "(added by Kiran, 2026-10-21)".
+- The crew's MCP tools `list_assumptions`, `desk_list` and `list_decisions` list the `person` (and
+  `by_label`) too, and a doc changed through a person's key records the person in `updated_by`, not
+  the key's name.
+- Settings, People: adding a person with an email that already belongs to someone says so instead of
+  closing the form, changing a person's email keeps the old address as an extra email, and a key's
+  person picker shows the person's name while people load.
 
 ## [1.51.1] - 2026-10-21
 

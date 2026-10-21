@@ -241,7 +241,7 @@ export const api = {
   people: () => request<{ people: Person[] }>("/api/people"),
   createPerson: (body: { name: string; email?: string; github?: string; is_admin?: boolean }) =>
     request<Person>("/api/people", { method: "POST", body: JSON.stringify(body) }),
-  updatePerson: (id: string, body: { name?: string; email?: string | null; github?: string | null; is_admin?: boolean }) =>
+  updatePerson: (id: string, body: { name?: string; email?: string | null; emails?: string[]; github?: string | null; is_admin?: boolean }) =>
     request<Person>(`/api/people/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) }),
 
   sources: () => request<Source[]>("/api/sources"),

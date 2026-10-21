@@ -266,8 +266,9 @@ class Runtime:
                      person_id: str | None = None) -> int:
         """Push events into a source. `stamp_person` is set by the HTTP route, which knows the
         credential: a connector that records people's sessions (STAMPS_PERSON) gets
-        `tares_person=<person_id>` on every event, or none when `person_id` is None, and whatever
-        the sender put there is dropped. Calls from inside the cell (no credential) leave it off."""
+        `tares_person=<person_id>` on every event, or none when `person_id` is None. The sender
+        cannot set it: the connector builds its labels from fixed fields, so the label comes only
+        from the credential. Calls from inside the cell (no credential) leave it off."""
         cfg = self._push_cfg(token)   # token may be the ingest_key or the source name
         self._ensure_push_wins(cfg)   # first push flips a tail source to push mode (no double-ingest)
         conn = build_connector(cfg, self.store)
@@ -276,7 +277,6 @@ class Runtime:
                 if getattr(conn, "WANTS_HEADERS", False) else conn.map_payload(payload))
         if stamp_person and getattr(conn, "STAMPS_PERSON", False):
             for e in envs:
-                e.labels.pop("tares_person", None)   # set by the cell from the credential, never by the sender
                 if person_id:
                     e.labels["tares_person"] = person_id
         return await self._store_envelopes(cfg.name, envs, bypass_cooldown=bypass_cooldown)
