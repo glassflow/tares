@@ -5,6 +5,12 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- A firing that arrives while its agent is already running for the same key now gets the
+  `skipped` write-back with reason `in_flight`. Since 1.51.0 it was sent only when the duplicate
+  slipped past the first dedupe; the common case, caught when the firing is delivered, sent
+  nothing, and Rius kept the firing queued (RIUS-1103).
+
 ## [1.51.1] - 2026-10-21
 
 The crew standup writes its summary again, and its Slack channel list fits on screen.
