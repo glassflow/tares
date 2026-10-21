@@ -164,15 +164,15 @@ async def auth_on():
 
             print("== an admin ==")
             r = await cx.patch(f"{B}/api/projects/{uid}", headers=A_, json={"scope": "team"})
-            ck("admin person: cannot change the scope", r.status_code == 403, r.text)
+            ck("admin person: cannot change the scope (the private project is unknown to them)", r.status_code == 404, r.text)
             r = await cx.post(f"{B}/api/projects/{uid}/members", headers=A_, json={"person_id": pr})
-            ck("admin person who is not the lead: cannot add members", r.status_code == 403, r.text)
+            ck("admin person who is not on it: cannot add members", r.status_code == 404, r.text)
             r = await cx.delete(f"{B}/api/projects/{uid}/members/{pq}", headers=A_)
-            ck("... nor remove them", r.status_code == 403, r.text)
+            ck("... nor remove them", r.status_code == 404, r.text)
             r = await cx.patch(f"{B}/api/projects/{uid}", headers=A_,
                                json={"lead_person_id": pa, "scope": "team"})
-            ck("admin person: lead and scope together is refused whole", r.status_code == 403
-               and (await cx.get(f"{B}/api/projects/{uid}", headers=A_)).json()["lead"]["id"] == pp, r.text)
+            ck("admin person: lead and scope together is refused whole", r.status_code == 404
+               and (await cx.get(f"{B}/api/projects/{uid}", headers=PR_)).json()["lead"]["id"] == pp, r.text)
             r = await cx.patch(f"{B}/api/projects/{uid}", headers=R_, json={"lead_person_id": pr})
             ck("a key with the admin scope may change the lead", r.status_code == 200
                and r.json()["lead"]["id"] == pr and r.json()["scope"] == "private", r.text[:300])

@@ -358,7 +358,9 @@ async def _project_id(cx, project: str = "") -> tuple[str | None, str | None]:
     r = await cx.get(f"{TARESD}/api/projects")
     if r.status_code >= 400:
         return None, r.text
-    found = r.json().get("projects") or []
+    # a private project you are not on comes back as a bare `hidden` row (for an admin to hand its
+    # lead over in the console): to a tool it does not exist
+    found = [p for p in r.json().get("projects") or [] if not p.get("hidden")]
     if project:
         hit = next((p for p in found if project in (p["id"], p["name"])), None)
         if hit is None:
@@ -379,7 +381,7 @@ async def list_projects() -> str:
     if r.status_code >= 400:
         return r.text
     return json.dumps([{k: p.get(k) for k in ("id", "name", "template", "status")}
-                       for p in r.json().get("projects") or []], default=str)
+                       for p in r.json().get("projects") or [] if not p.get("hidden")], default=str)
 
 
 @mcp.tool()
