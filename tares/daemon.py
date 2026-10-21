@@ -849,8 +849,13 @@ def make_app() -> FastAPI:
         body. With auth off it is the person `local`."""
         ident = getattr(request.state, "credential", None)
         if ident is not None:
-            return ident.get("person")
-        return _person_ref(store.get_person("local")) if not AUTH_TOKEN else None
+            return ident.get("person")   # resolved once, by the guard
+        # auth off: look `local` up once per request and keep it on the request
+        if AUTH_TOKEN:
+            return None
+        if not hasattr(request.state, "person"):
+            request.state.person = _person_ref(store.get_person("local"))
+        return request.state.person
 
     def _is_admin(request) -> bool:
         """The credential may manage people and keys: admin scope (the system credential has it),
@@ -1409,7 +1414,7 @@ def make_app() -> FastAPI:
                 spec["email"], spec.get("name"),
                 via="cloud" if ident.get("kind") == "system" else "key")["id"]
         except ValueError as e:
-            _err(e, 409)
+            _err(e, 409 if "already belongs" in str(e) else 400)
 
     @app.post("/api/keys", status_code=201)
     async def create_key(request: Request, body: dict = Body(...)):
@@ -1461,14 +1466,15 @@ def make_app() -> FastAPI:
     async def create_person(body: dict = Body(...)):
         """{name, email?, emails?, github?, is_admin?}. 201 with the new person; 200 with the
         existing one when that email is already someone's."""
-        email = body.get("email")
-        found = store.find_person_by_email(email) if email else None
-        if found:
-            return _person_out(found)
         try:
+            email = store.check_email(body.get("email"))
+            found = store.find_person_by_email(email) if email else None
+            if found:
+                return _person_out(found)
             p = store.create_person(body.get("name"), email, body.get("emails"), body.get("github"),
                                     bool(body.get("is_admin")), via="admin")
         except ValueError as e:
+            # a second creation of the same email, extra email or GitHub login answers 409
             _err(e, 409 if "already belongs" in str(e) else 400)
         return JSONResponse(_person_out(p), status_code=201)
 
