@@ -64,6 +64,13 @@ DAILY_CAP_SETTING = "agent_daily_cap"
 DAILY_CAP_ENV = "TARES_AGENT_DAILY_CAP"
 DAILY_CAP_MAX = 10000
 
+# Why a run a trigger dispatched was refused before it started, sent as the write-back webhook's
+# `skipped` event (RIUS-1103). A receiver that files findings by the firing, as Rius does, would
+# otherwise wait for a finding that never comes.
+SKIPPED_DAILY_CAP = "daily_cap"
+SKIPPED_BUDGET = "budget_exhausted"
+SKIPPED_IN_FLIGHT = "in_flight"
+
 
 def daily_cap(store) -> tuple[int, str]:
     """(runs per agent per day, where it came from: console | env | default). Read at each run,
@@ -726,6 +733,10 @@ class AgentRunner:
             if going:
                 self.store.add_run_projects(going, agent["projects"])
             self.store.update_delivery(dispatch_id, subscription_id, True, "deduped (already running)")
+            await self._write_back_skipped(
+                agent, trigger_name, self._callback_anchor(agent, trigger_name, key),
+                SKIPPED_IN_FLIGHT, "a run of this agent for the same key is already in flight",
+                dispatch_id, extra={"in_flight_run_id": going} if going else None)
             return
         self._inflight.add(marker)
         run_id = run_id or "run_" + uuid.uuid4().hex[:12]
@@ -822,6 +833,12 @@ class AgentRunner:
             self.store.finish_agent_run(run_id, "failed", error=msg)
             obs.set_attribute(_tracing.SKIPPED_REASON, "no_provider")
             return "failed", msg
+        # The firing this run answers for, resolved before anything can refuse the run: a refusal
+        # is written back under the same key a finding would be (RIUS-1103). Resolved at run
+        # START, not after the loop: see _callback_anchor (TR-294).
+        callback_key, callback_labels = anchor or self._callback_anchor(agent, trigger_name, key)
+        # A hand-off answers for no firing of its own: the agent that handed it on already did.
+        refused_dispatch = None if handoff else dispatch_id
         # Count the runs BEFORE this one (its row is already inserted), so the cap fires at exactly
         # daily-cap runs rather than one over it.
         cap, source = effective_daily_cap(agent, self.store)
@@ -830,6 +847,8 @@ class AgentRunner:
             msg = f"cap of {cap} runs in the last 24h reached for this agent; raise it {where}"
             self.store.finish_agent_run(run_id, "capped", error=msg)
             obs.set_attribute(_tracing.SKIPPED_REASON, "daily_run_cap")
+            await self._write_back_skipped(agent, trigger_name, (callback_key, callback_labels),
+                                           SKIPPED_DAILY_CAP, msg, refused_dispatch, run_id=run_id)
             return "capped", msg
         # The agent's own budget, when set: lifetime spend from the run log. Checked before any
         # model call, so a capped run costs nothing; the message says where to raise it.
@@ -839,13 +858,9 @@ class AgentRunner:
                    f"raise or clear it under Configuration, Advanced")
             self.store.finish_agent_run(run_id, "capped", error=msg)
             obs.set_attribute(_tracing.SKIPPED_REASON, "budget")
+            await self._write_back_skipped(agent, trigger_name, (callback_key, callback_labels),
+                                           SKIPPED_BUDGET, msg, refused_dispatch, run_id=run_id)
             return "capped", msg
-
-        # BEFORE the loop: the write-back's key names the firing this run answers for, and only
-        # now is that unambiguous — the trigger has just fired on it. Resolved after the loop
-        # instead, it named whichever firing had arrived most recently by then, which for a burst
-        # inside one cooldown is a different alert from the one the agent wrote up (TR-294).
-        callback_key, callback_labels = anchor or self._callback_anchor(agent, trigger_name, key)
 
         # Usage accumulates in a mutable dict rather than the loop's return value, so a run that
         # dies mid-loop still records the tokens it already paid for (the finally below).
@@ -1365,6 +1380,32 @@ class AgentRunner:
             if await self._slack(agent["name"], hook, trigger_name, key, finding, meta):
                 return [{"kind": "slack", "label": "Slack webhook"}]
         return []
+
+    async def _write_back_skipped(self, agent: dict, trigger_name: str, anchor: tuple[str, dict],
+                                  reason: str, message: str, dispatch_id: str | None,
+                                  run_id: str | None = None, extra: dict | None = None) -> None:
+        """Tell the agent's write-back webhook that the run a trigger dispatched was refused
+        before it started (RIUS-1103): the daily cap, the budget, or a run for the same key
+        already in flight. `key` and `labels` name the firing exactly as a finding would, so the
+        receiver files the refusal where it would have filed the finding.
+
+        Only for a dispatched run: a rerun or a bootstrap run has no dispatch and answers for no
+        firing. A practice run has none either. Never raises: the refusal is already recorded,
+        and the webhook's own failure is recorded on the run when there is one."""
+        if not dispatch_id or not (agent.get("webhook_url") or "").strip():
+            return
+        key, labels = anchor
+        body = {"event": "skipped", "reason": reason, "message": message,
+                "agent": agent["name"], "trigger": trigger_name,
+                "key": key, "labels": labels,
+                "run_id": run_id, "dispatch_id": dispatch_id, **(extra or {})}
+        try:
+            delivery, derr = await self._webhook(agent, body)
+        except Exception as e:   # a refusal must never fail the run path
+            print(f"[agent {agent['name']}] webhook: skipped write-back failed: {type(e).__name__}: {e}")
+            return
+        if run_id:
+            self.store.set_run_delivery(run_id, delivery, derr)
 
     async def _webhook(self, agent: dict, body: dict, attempts: int = 3) -> tuple[str, str | None]:
         """POST the finding plus its run metadata to the agent's write-back webhook — the machine
