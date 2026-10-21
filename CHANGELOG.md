@@ -5,6 +5,14 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- The write-back webhook gets a `skipped` event when a run a trigger dispatched is refused
+  before it starts: `reason` is `daily_cap` (the agent's runs in 24 hours), `budget_exhausted`
+  (its `budget_usd`) or `in_flight` (a run of the agent for the same key is already going, named
+  in `in_flight_run_id`), with the `message` the run records. It carries the `key` and `labels` a
+  finding would, so a receiver that files findings by the firing, as Rius does, stops waiting
+  for one that never comes (RIUS-1103). A rerun, a bootstrap run or a hand-off sends none.
+
 ## [1.50.0] - 2026-10-20
 
 A standup report for the crew: what moved in each project, summed up by the cell's model, ready to
