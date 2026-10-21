@@ -97,18 +97,21 @@ def resolve_trigger(store, trig, key=None, window: str = "15m",
 def resolve_read(store, catalog: Catalog, where: dict, window: str = "15m",
                  include_payload: bool = False,
                  sources: list | None = None,
-                 scope: dict | None = None) -> tuple[str, int, list, list]:
+                 scope: dict | None = None,
+                 exclude: dict | None = None) -> tuple[str, int, list, list]:
     """Raw label-native read. `where` is a {label: value} conjunction (strict AND). `sources`
     narrows which sources are read (None = all of them). Reading every source is self-pruning: a
     source that doesn't stamp one of the selector's labels yields NULL for it and drops out, so
     the result is exactly the strict-AND match. Returns (rendered payload, row count,
     contributing sources, structured rows). `include_payload` adds the raw lossless record as
     `raw` on each structured row. `scope` narrows the shared findings and memory sources to one
-    project's rows (store._scope_sql)."""
+    project's rows (store._scope_sql). `exclude` drops the rows of projects the caller
+    cannot see (store._exclude_sql)."""
     since = now_utc() - parse_window(window)
     names = sorted(catalog.sources) if sources is None else sorted(set(sources))
     rows = store.read_window(names, None, since, filters=None, where=where,
-                             include_payload=include_payload, scope=scope) if names else []
+                             include_payload=include_payload, scope=scope,
+                             exclude=exclude) if names else []
     lines, structured = _render(rows, include_payload)
     payload = _wrap("read", _selector(None, where), window, lines, not rows)
     contributing = sorted({r[1] for r in rows})

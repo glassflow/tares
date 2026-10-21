@@ -95,7 +95,7 @@ def project_facts(store, uid: str, name: str, tickets: list[dict], history: list
             "blocked": blocked, "needs_you": desk}
 
 
-def facts(store, since: datetime, until: datetime, progress_of) -> dict:
+def facts(store, since: datetime, until: datetime, progress_of, hide=()) -> dict:
     """Every open handed-over project, and the ones finished in the range. Projects that did
     not move are listed by name only, after the ones that did."""
     names = {p["id"]: p["name"] for p in store.list_projects()}
@@ -109,7 +109,7 @@ def facts(store, since: datetime, until: datetime, progress_of) -> dict:
             uids.append((u, at))
     out = []
     for uid, finished_at in uids:
-        if uid not in names:
+        if uid not in names or uid in hide:
             continue
         out.append(project_facts(store, uid, names[uid], store.list_tickets(uid),
                                  history.get(uid, []), since, until, progress_of(uid),

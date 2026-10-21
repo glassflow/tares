@@ -883,12 +883,49 @@ def make_app() -> FastAPI:
         members). An admin who is none of those does not; they can only hand the lead over (see
         set_project_access). Rights come from the credential, never from people.is_admin (A9)."""
         request = request or _CALLER.get()
-        if request is None or p.get("scope") != "private" or _is_system(request):
+        if request is None or p.get("scope") != "private":
+            return True
+        # Slack's /tares ask knows no person, so it runs the Ask agent as the system credential
+        # with this header: every private project is then hidden from it. Only the system
+        # credential can narrow itself this way; anyone else's header is ignored.
+        if _is_system(request) and request.headers.get("x-tares-viewer") != "public":
             return True
         if _pk(request) == p["id"]:
             return True
         person = _current_person(request)
         return bool(person and store.is_project_member(p["id"], person["id"]))
+
+    def _hidden_projects() -> list[dict]:
+        """The private projects this caller cannot see; usually none, and then one small query
+        is all a cell-wide read adds (TR-629)."""
+        return [p for p in store.private_projects() if not _can_see(p)]
+
+    def _hidden_ids() -> set[str]:
+        return {p["id"] for p in _hidden_projects()}
+
+    def _read_exclude() -> dict | None:
+        """What event reads leave out: the rows of the projects the caller cannot see."""
+        hp = _hidden_projects()
+        if not hp:
+            return None
+        return {"ids": [p["id"] for p in hp], "names": [p["name"] for p in hp],
+                "shared": sorted(n for n, c in runtime.catalog.sources.items()
+                                 if c.connector in _SHARED_CONNECTORS)}
+
+    def _hidden_sources(hidden: set[str]) -> set[str]:
+        """Sources that belong only to hidden projects. A source shared with a project the caller
+        can see stays; its hidden rows are dropped row by row (store._exclude_sql)."""
+        if not hidden:
+            return set()
+        return {n for n, uids in store.source_memberships().items() if uids and set(uids) <= hidden}
+
+    def _owned_by_hidden(kind: str, name: str, hidden: set[str]) -> bool:
+        """An object whose every project is hidden from the caller (one it shares with a project
+        they can see stays visible)."""
+        if not hidden:
+            return False
+        uids = store.projects_using(kind, name)
+        return bool(uids) and set(uids) <= hidden
 
     # Auth off (no token) → no middleware, the instance is fully open (local default). Auth on →
     # every non-public route needs a credential carrying the required scope; ingest is gated exactly
@@ -993,6 +1030,16 @@ def make_app() -> FastAPI:
             _err(ValueError(f"unknown project {ref!r}"), 400)
         return p["id"]
 
+    def _fallback_project(*uids) -> str | None:
+        """The first project in `uids` that is set, as a fallback for a write that named none (the
+        project that made the object, else the default). One the caller cannot see is no fallback
+        for them: same ask as an unseen default, and nothing is written into it (TR-629)."""
+        uid = next((u for u in uids if u), None)
+        p = store.get_project(uid) if uid else None
+        if p is not None and not _can_see(p):
+            _err(ValueError("name the project to use (its id or name)"), 400)
+        return uid
+
     _SHARED_CONNECTORS = ("finding", "memory")
 
     def _project_view(uid: str) -> tuple[list[str], dict]:
@@ -1031,19 +1078,24 @@ def make_app() -> FastAPI:
         uid = _key_project(request, req.project)
         if uid:
             names, scope = _project_view(uid)
+        exclude = _read_exclude()
+        hidden_src = _hidden_sources(set(exclude["ids"])) if exclude else set()
         if req.sources:
             if _pk(request):
                 # a project key learns nothing about sources outside its project, not even
                 # whether they exist
                 if set(req.sources) - set(names or []):
                     _err(PermissionError(_project_key_denied(uid)), 403)
-            unknown = sorted(set(req.sources) - set(runtime.catalog.sources))
+            unknown = sorted(set(req.sources) - (set(runtime.catalog.sources) - hidden_src))
             if unknown:
                 _err(KeyError(f"unknown sources {unknown}"), 404)
             names = [s for s in req.sources if names is None or s in names]
+        if hidden_src:
+            names = [n for n in (sorted(runtime.catalog.sources) if names is None else names)
+                     if n not in hidden_src]
         payload, nrows, sources, rows = resolve_read(store, runtime.catalog, req.selector, req.window,
                                                      include_payload=req.include_payload,
-                                                     sources=names, scope=scope)
+                                                     sources=names, scope=scope, exclude=exclude)
         log_key = ", ".join(f"{k}={v}" for k, v in req.selector.items())
         store.log_query("r_" + uuid.uuid4().hex[:12], "(read)", log_key, req.window,
                         nrows, req.client)
@@ -1101,13 +1153,16 @@ def make_app() -> FastAPI:
                              for t in runtime.catalog.triggers if pk in store.projects_using("trigger", t.name)],
                 "projects": [{"id": pk, "name": p.get("name"), "template": p.get("template")}],
             }
+        hidden = _hidden_ids()
+        hidden_src = _hidden_sources(hidden)
         return {
             "sources": [{"name": s.name, "type": s.type, "projects": members.get(s.name, [])}
-                        for s in runtime.catalog.sources.values()],
+                        for s in runtime.catalog.sources.values() if s.name not in hidden_src],
             "triggers": [{"name": t.name, "project": t.project, "sources": t.sources,
-                          "key_field": t.key_field} for t in runtime.catalog.triggers],
+                          "key_field": t.key_field} for t in runtime.catalog.triggers
+                         if not _owned_by_hidden("trigger", t.name, hidden)],
             "projects": [{"id": p["id"], "name": p["name"], "template": p["template"]}
-                         for p in store.list_projects()],
+                         for p in store.list_projects() if p["id"] not in hidden],
         }
 
     # ── catalog.describe — the discovery surface (design doc §4 MCP surface) ──
@@ -1174,6 +1229,11 @@ def make_app() -> FastAPI:
             _err(KeyError(VIEWS_REMOVED), 404)
         if not name or kind not in ("source", "trigger"):
             _err(ValueError("handle must be source:<name> or trigger:<name>"))
+        hidden = _hidden_ids()
+        if hidden:
+            if (name in _hidden_sources(hidden) if kind == "source"
+                    else _owned_by_hidden("trigger", name, hidden)):
+                _err(KeyError(f"unknown {kind} {name!r}"), 404)
         edges = [e for e in _lineage_edges() if handle in (e["from"], e["to"])]
         if pk:
             project_triggers = {f"trigger:{t.name}" for t in runtime.catalog.triggers
@@ -1203,7 +1263,7 @@ def make_app() -> FastAPI:
                               "events_total": health.get("events_total", 0),
                               "status": health.get("status")},
                 "lineage": edges,
-                "sample": store.recent_events(source=name, limit=3),
+                "sample": store.recent_events(source=name, limit=3, exclude=_read_exclude()),
             }
 
         entry = next((t for t in store.list_catalog_triggers() if t["name"] == name), None)
@@ -1218,14 +1278,27 @@ def make_app() -> FastAPI:
     # ── entities — the (label, value) pairs, faceted (the entity surface) ─────
     @app.get("/api/entities")
     async def entities(label: str | None = None, limit: int = 50):
+        hidden = _hidden_ids()
+        hidden_src = _hidden_sources(hidden)
+        # a cell with a hidden source counts the labels of the sources the caller can see only
+        visible_src = ([n for n in runtime.catalog.sources if n not in hidden_src]
+                       if hidden_src else None)
         facets = _label_facets()
+        if hidden_src:
+            facets = {k: {**f, "sources": [n for n in f["sources"] if n not in hidden_src]}
+                      for k, f in facets.items()}
+            facets = {k: f for k, f in facets.items() if f["sources"]}
 
         def values_for(name: str, facet: dict, lim: int):
             # an unnamed `key` facet reads the bare key_value, scoped to its label-less sources;
             # a named label reads that label across events that carry it
             if facet.get("unnamed"):
                 return store.list_entities("key_value", sources=facet["sources"], limit=lim)
-            return store.list_entities(name, limit=lim)
+            vals = store.list_entities(name, sources=visible_src, limit=lim)
+            if name == "tares_project" and hidden:
+                gone = {v.lower() for p in _hidden_projects() for v in (p["id"], p["name"])}
+                vals = [v for v in vals if str(v["value"]).lower() not in gone]
+            return vals
 
         def entry(name: str, facet: dict, lim: int) -> dict:
             srcs = facet["sources"] if facet.get("unnamed") else None
@@ -1674,14 +1747,17 @@ def make_app() -> FastAPI:
     async def list_sources():
         health = runtime.health_snapshot()
         members = store.source_memberships()
+        hidden_src = _hidden_sources(_hidden_ids())
         return [{**s, "config": redact_config(s["connector"], s["config"]),
                  "projects": members.get(s["name"], []),
-                 "health": health.get(s["name"])} for s in store.list_catalog_sources()]
+                 "health": health.get(s["name"])} for s in store.list_catalog_sources()
+                if s["name"] not in hidden_src]
 
     @app.get("/api/sources/{name}")
     async def get_source(name: str):
+        hidden_src = _hidden_sources(_hidden_ids())
         for s in store.list_catalog_sources():
-            if s["name"] == name:
+            if s["name"] == name and name not in hidden_src:
                 return {**s, "config": redact_config(s["connector"], s["config"]),
                         "projects": store.source_memberships().get(name, []),
                         "health": runtime.health_snapshot().get(name)}
@@ -1797,9 +1873,11 @@ def make_app() -> FastAPI:
 
     @app.get("/api/sources/{name}/events")
     async def source_events(name: str, limit: int = 50):
-        if name not in {s["name"] for s in store.list_catalog_sources()}:
+        hidden = _hidden_ids()
+        if name not in {s["name"] for s in store.list_catalog_sources()} \
+                or name in _hidden_sources(hidden):
             _err(KeyError(f"unknown source {name!r}"), 404)
-        return store.recent_events(source=name, limit=min(limit, 500))
+        return store.recent_events(source=name, limit=min(limit, 500), exclude=_read_exclude())
 
     @app.get("/api/sources/{name}/fields")
     async def source_fields(name: str, limit: int = 500):
@@ -1810,7 +1888,7 @@ def make_app() -> FastAPI:
 
         from .connectors import build_connector
         cfg = runtime.catalog.sources.get(name)
-        if cfg is None:
+        if cfg is None or name in _hidden_sources(_hidden_ids()):
             _err(KeyError(f"unknown source {name!r}"), 404)
         conn = build_connector(cfg, store)
 
@@ -1828,7 +1906,7 @@ def make_app() -> FastAPI:
         counts: dict[str, Counter] = {}
         label_counts: dict[str, Counter] = {}   # the EXTRACTED value of each declared label
         sampled = 0
-        for payload in store.recent_payloads(name, min(limit, 2000)):
+        for payload in store.recent_payloads(name, min(limit, 2000), exclude=_read_exclude()):
             ctx = conn.label_context(payload)
             if not isinstance(ctx, dict):
                 continue
@@ -1897,6 +1975,17 @@ def make_app() -> FastAPI:
             price_usage(kind, model, usage),
             key_source=key_source or None, provider=provider_id)
 
+    def _caller_headers(request: Request) -> dict:
+        """The credential this request carried, to hand the Ask agent for its own tool calls. With
+        auth off there is none to forward."""
+        if not AUTH_TOKEN:
+            return {}
+        out = {}
+        for h in ("authorization", "x-tares-token"):
+            if request.headers.get(h):
+                out[h] = request.headers[h]
+        return out or {"Authorization": f"Bearer {AUTH_TOKEN}"}
+
     @app.post("/api/agent/chat")
     async def agent_chat(request: Request):
         from .agent import BUILD_STEPS, run_agent, traced_name
@@ -1909,8 +1998,9 @@ def make_app() -> FastAPI:
             _err(ValueError("add a model provider under Settings to use the assistant"), 400)
         default_pid = providers_mod.default_id(store)
         body = await request.json()
-        # the daemon's own token, so the agent's tool self-calls clear the auth middleware
-        self_headers = {"Authorization": f"Bearer {AUTH_TOKEN}"} if AUTH_TOKEN else {}
+        # the asker's own credential, so the agent's tool self-calls clear the auth middleware and
+        # see what the asker sees: a private project they are not on stays out of Ask (TR-629)
+        self_headers = _caller_headers(request)
         # mode "build" + step (sources|watch|agent) is the AI-guided project builder:
         # same loop, same endpoint, a step-scoped toolset (tares/agent.py, TR-242)
         mode = "build" if body.get("mode") == "build" else "ask"
@@ -1962,12 +2052,26 @@ def make_app() -> FastAPI:
         """Every part on the cell (sources, wake-ups, agents, tools, skills, project keys), each
         with the projects that use it: the All resources page."""
         from . import resources as resources_mod
-        return await asyncio.to_thread(resources_mod.list_resources, store, runtime.catalog,
-                                       runtime.health_snapshot())
+        out = await asyncio.to_thread(resources_mod.list_resources, store, runtime.catalog,
+                                      runtime.health_snapshot())
+        hidden = _hidden_ids()
+        if hidden:   # a part only hidden projects use is left out; a shared one drops their names
+            for kind, rows in out.items():
+                kept = []
+                for r in rows:
+                    users = r.get("used_by") or []
+                    shown = [u for u in users if u["id"] not in hidden]
+                    if users and not shown:
+                        continue
+                    kept.append({**r, "used_by": shown})
+                out[kind] = kept
+        return out
 
     @app.get("/api/mcp-servers")
     async def list_mcp_servers():
-        return {"servers": [_mcp_row(m) for m in store.list_mcp_servers()]}
+        hidden = _hidden_ids()
+        return {"servers": [_mcp_row(m) for m in store.list_mcp_servers()
+                            if not _owned_by_hidden("mcp_server", m["name"], hidden)]}
 
     @app.post("/api/mcp-servers", status_code=201)
     async def create_mcp_server(body: McpServerIn):
@@ -2093,7 +2197,7 @@ def make_app() -> FastAPI:
         store.upsert_catalog_source(src, source_type_for("github_app"), "github_app", "1m",
                                     normalize_config("github_app", {"credential": name}),
                                     ingest_key=ingest_key)
-        store.put_in_project("source", src, store.default_project_id(), creator=True)
+        store.put_in_project("source", src, _fallback_project(store.default_project_id()), creator=True)
         runtime.reload_catalog()
         return src
 
@@ -2284,7 +2388,8 @@ def make_app() -> FastAPI:
                 headers["X-MCP-Readonly"] = "true"
             store.upsert_mcp_server(server, GITHUB_MCP_URL, "Authorization",
                                     CREDENTIAL_PREFIX + name, headers)
-            store.put_in_project("mcp_server", server, store.default_project_id(), creator=True)
+            store.put_in_project("mcp_server", server, _fallback_project(store.default_project_id()),
+                                 creator=True)
         return {"ok": True, "server": server}
 
     @app.get("/api/integrations/github/{name}/repos")
@@ -2469,7 +2574,9 @@ def make_app() -> FastAPI:
 
     @app.get("/api/triggers")
     async def list_triggers():
-        return [_trigger_row(t) for t in store.list_catalog_triggers()]
+        hidden = _hidden_ids()
+        return [_trigger_row(t) for t in store.list_catalog_triggers()
+                if not _owned_by_hidden("trigger", t["name"], hidden)]
 
     def _check_trigger(body: TriggerIn, name: str) -> dict:
         if body.view not in (None, ""):
@@ -2518,8 +2625,10 @@ def make_app() -> FastAPI:
         if body.name != name:
             _err(ValueError("renaming a trigger is not supported; delete and recreate"), 400)
         raw = _check_trigger(body, name)
-        uid = _resolve_project(body.project, default=False) or current.get("owned_by") \
-            or store.default_project_id()
+        if _owned_by_hidden("trigger", name, _hidden_ids()):
+            _err(KeyError(f"unknown trigger {name!r}"), 404)
+        uid = _fallback_project(_resolve_project(body.project, default=False),
+                                current.get("owned_by"), store.default_project_id())
         store.upsert_catalog_trigger(name, raw["sources"], body.condition, body.emit,
                                      body.cooldown, filters=raw.get("filters") or [],
                                      key_field=raw.get("key_field") or "",
@@ -2603,7 +2712,10 @@ def make_app() -> FastAPI:
         # with ?project=: each agent's trigger, handoffs and on/off are that project's wiring
         mine = ("id IN (SELECT run_id FROM run_projects WHERE project = ?)", [in_project]) \
             if in_project else ("", None)
+        hidden = _hidden_ids()
         for a in store.list_catalog_agents(in_project):
+            if _owned_by_hidden("agent", a["name"], hidden):
+                continue
             runs = store.list_agent_runs(a["name"], limit=1, where_sql=mine[0],
                                          where_params=mine[1])
             rows.append({"name": a["name"], "trigger": a["trigger"], "prompt": a["prompt"],
@@ -2685,8 +2797,10 @@ def make_app() -> FastAPI:
         # the path names the agent; a body name is optional and only checked for a rename attempt
         if body.name and body.name != name:
             _err(ValueError("renaming an agent is not supported; delete and recreate"), 400)
-        uid = _resolve_project(body.project, default=False) or existing.get("owned_by") \
-            or store.default_project_id()
+        if _owned_by_hidden("agent", name, _hidden_ids()):
+            _err(KeyError(f"unknown agent {name!r}"), 404)
+        uid = _fallback_project(_resolve_project(body.project, default=False),
+                                existing.get("owned_by"), store.default_project_id())
         raw = _agent_payload(body, uid, name)
         # blank-to-keep for the webhook, matching the connector-secret convention: the UI never
         # receives the stored URL back, so an unedited form must not wipe it.
@@ -2738,7 +2852,7 @@ def make_app() -> FastAPI:
         it. The agent joins it, wired with its own trigger, when it is not wired there yet."""
         agent = store.get_catalog_agent(name)
         uid = _resolve_project(project, default=False) if project else None
-        uid = uid or agent.get("owned_by") or store.default_project_id()
+        uid = _fallback_project(uid, agent.get("owned_by"), store.default_project_id())
         if not store.list_wakes(project=uid, agent=name):
             if not agent.get("trigger"):
                 _err(ValueError(f"{name} has no trigger of its own, so there is nothing to turn "
@@ -2807,17 +2921,26 @@ def make_app() -> FastAPI:
         events on the entity's timeline; a failed run must never look like a conclusion.
         `status` narrows to one run status; `offset` pages (a capped agent's list is mostly
         capped rows, and the ok runs are what a reader looks for, TR-267)."""
-        if store.get_catalog_agent(name) is None:
+        if store.get_catalog_agent(name) is None \
+                or _owned_by_hidden("agent", name, _hidden_ids()):
             _err(KeyError(f"unknown agent {name!r}"), 404)
         if status and status not in _RUN_STATUSES:
             _err(ValueError(f"status must be one of {', '.join(sorted(_RUN_STATUSES))}"), 400)
         # with a project: the runs that belong to it (P-TR-216)
         uid = _resolve_project(project, default=False) if project else None
+        hidden = sorted(_hidden_ids())
+        if uid:
+            where_sql, where_params = ("id IN (SELECT run_id FROM run_projects WHERE project = ?)",
+                                       [uid])
+        elif hidden:   # a run that belongs to a project the caller cannot see is left out
+            where_sql = ("id NOT IN (SELECT run_id FROM run_projects WHERE project IN "
+                         f"({', '.join('?' * len(hidden))}))")
+            where_params = hidden
+        else:
+            where_sql, where_params = "", None
         return store.list_agent_runs(name, limit=min(max(1, limit), 200), offset=offset,
-                                     status=status or None,
-                                     where_sql="id IN (SELECT run_id FROM run_projects WHERE "
-                                               "project = ?)" if uid else "",
-                                     where_params=[uid] if uid else None)
+                                     status=status or None, where_sql=where_sql,
+                                     where_params=where_params)
 
     # ── the Anthropic key: a stored key wins, env is the fallback ────────────
     @app.get("/api/settings/anthropic-key")
@@ -3195,7 +3318,10 @@ def make_app() -> FastAPI:
         try:
             provider, key_origin = resolve_provider(store)
             default_pid = providers_mod.default_id(store)
-            self_headers = {"Authorization": f"Bearer {AUTH_TOKEN}"} if AUTH_TOKEN else {}
+            # Slack knows no person: the system credential, as a public viewer, so no private
+            # project reaches an answer posted in a channel
+            self_headers = ({"Authorization": f"Bearer {AUTH_TOKEN}", "x-tares-viewer": "public"}
+                            if AUTH_TOKEN else {})
             async def _run():
                 nonlocal text, error
                 async for chunk in run_agent(provider, [{"role": "user", "content": question}],
@@ -3308,11 +3434,13 @@ def make_app() -> FastAPI:
     # ── management API: activity (what agents saw / what woke them) ──────────
     @app.get("/api/activity/queries")
     async def activity_queries(limit: int = 100):
-        return store.list_queries(limit=min(limit, 500))
+        hp = _hidden_projects()
+        return store.list_queries(limit=min(limit, 500),
+                                  hide=[v for p in hp for v in (p["id"], p["name"])])
 
     @app.get("/api/activity/dispatches")
     async def activity_dispatches(limit: int = 100):
-        return store.list_dispatches(limit=min(limit, 500))
+        return store.list_dispatches(limit=min(limit, 500), hide=sorted(_hidden_ids()))
 
     @app.get("/api/activity/dispatches/{dispatch_id}")
     async def activity_dispatch(dispatch_id: str):
@@ -3320,7 +3448,7 @@ def make_app() -> FastAPI:
         capped list). Includes the per-subscriber delivery attempts with masked endpoints + agent
         names, so the failure is attributable to a specific agent."""
         d = store.get_dispatch(dispatch_id)
-        if d is None:
+        if d is None or set(store.dispatch_projects(dispatch_id)) & _hidden_ids():
             _err(KeyError(f"unknown dispatch {dispatch_id!r}"), 404)
         from .config import agent_name_from_url
         deliveries = []
@@ -3381,7 +3509,10 @@ def make_app() -> FastAPI:
                   "url": _agent_url(w["agent"]), "created_at": None, "project": w["project"],
                   "created_by": "tares"}
                  for w in store.list_wakes() if w["enabled"]]
+        hidden = _hidden_ids()
         for sub in [*store.all_subscriptions(), *wired]:
+            if sub.get("project") in hidden or _owned_by_hidden("trigger", sub["trigger"] or "", hidden):
+                continue
             norm = sub["url"].rstrip("/")
             a = agents.get(norm)
             if a is None:
@@ -3429,7 +3560,10 @@ def make_app() -> FastAPI:
 
     @app.get("/api/subscriptions")
     async def subscriptions():
-        return store.list_all_subscriptions()
+        hidden = _hidden_ids()
+        return [s for s in store.list_all_subscriptions()
+                if s.get("project") not in hidden
+                and not _owned_by_hidden("trigger", s["trigger"] or "", hidden)]
 
     # ── management API: projects (templates instantiated with params) ─────────
     # A project creates and owns ordinary objects; those stay editable and deletable on their own
@@ -4408,9 +4542,12 @@ def make_app() -> FastAPI:
     async def list_cell_skills():
         """Every skill on Tares, with the projects that use it (no bodies)."""
         names = {p["id"]: p["name"] for p in store.list_projects()}
+        hidden = _hidden_ids()
         return [{"name": sk["name"], "description": sk["description"],
-                 "used_by": [{"id": p, "name": names.get(p, p)} for p in sk["projects"]]}
-                for sk in store.list_all_skills()]
+                 "used_by": [{"id": p, "name": names.get(p, p)} for p in sk["projects"]
+                             if p not in hidden]}
+                for sk in store.list_all_skills()
+                if not sk["projects"] or set(sk["projects"]) - hidden]
 
     @app.put("/api/projects/{uid}/skills/{name}")
     async def update_skill(uid: str, name: str, body: dict = Body(...)):
@@ -4621,9 +4758,12 @@ def make_app() -> FastAPI:
         """Every doc on Tares, with the projects that include it (no bodies)."""
         names = {p["id"]: p["name"] for p in store.list_projects()}
         ids = _global_ids()
+        hidden = _hidden_ids()
         return [{**_marked(d, ids),
-                 "projects": [{"id": p, "name": names.get(p, p)} for p in d["projects"]]}
-                for d in docs_mod.sort_docs(store.list_cell_docs())]
+                 "projects": [{"id": p, "name": names.get(p, p)} for p in d["projects"]
+                              if p not in hidden]}
+                for d in docs_mod.sort_docs(store.list_cell_docs())
+                if not d["projects"] or set(d["projects"]) - hidden]
 
     def _plan_ctx(uid: str) -> dict:
         """What every ticket's view needs from the rest of the plan: the tickets by id, the
@@ -5079,7 +5219,8 @@ def make_app() -> FastAPI:
     def _standup(since: str | None, until: str | None) -> dict:
         start, end = _standup_range(since, until)
         return standup_mod.facts(store, start, end,
-                                 lambda uid: factory_api.project_progress(store, uid))
+                                 lambda uid: factory_api.project_progress(store, uid),
+                                 hide=_hidden_ids())
 
     @app.get("/api/crew/standup")
     async def crew_standup(since: str | None = None, until: str | None = None):
@@ -5169,6 +5310,7 @@ def make_app() -> FastAPI:
         err=lambda e, code=400: _err(e, code), project_or_404=lambda uid: _project_or_404(uid),
         by=lambda request, body=None: _by(request, body), cc_source=lambda: _cc_source(),
         current_person=lambda request: _current_person(request),
+        hidden_ids=lambda: _hidden_ids(),
         global_ids=lambda create=False: _global_ids(create), resolve_project=_factory_project_id,
         ticket_out=lambda uid, t, **kw: _ticket_out(uid, t, **kw),
         ensure_globals=lambda uid: _ensure_globals(uid),
