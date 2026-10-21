@@ -6,7 +6,7 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import { Close } from "../components/icons";
 import { InternalName, Picker, TimeAgo, keyTitle } from "../components/bits";
 import { type Cloud, cloudLink, useCloud } from "../cloud";
-import type { ApiKey, GithubAppTest, GithubCredential, ModelProvider, ModelProviders } from "../types";
+import type { ApiKey, GithubAppTest, GithubCredential, ModelProvider, ModelProviders, Person, Whoami } from "../types";
 import { UsagePanels } from "../components/UsagePanels";
 import LinearSettings from "../components/LinearSettings";
 import OwnerOnly from "../components/OwnerOnly";
@@ -26,7 +26,7 @@ type SettingsTab = "workspace" | "usage" | "access" | "anthropic" | "agents" | "
 const TABS: { key: SettingsTab; label: string; group?: string }[] = [
   { key: "workspace", label: "Workspace" },
   { key: "usage", label: "Usage" },
-  { key: "access", label: "Access and API keys" },
+  { key: "access", label: "Access, people and API keys" },
   { key: "anthropic", label: "Model providers", group: "Agents" },
   { key: "agents", label: "Limits", group: "Agents" },
   { key: "observability", label: "Observability", group: "Agents" },
@@ -147,7 +147,7 @@ export default function Security() {
         ? <WorkspaceSettings cloud={cloud} apiUrl={workspaceApiUrl} onOpenTab={pick} />
         : <div className="panel"><div className="muted">loading…</div></div>)}
       {tab === "usage" && <UsagePanels />}
-      {tab === "access" && <><AccessPanel /><ApiKeysPanel /></>}
+      {tab === "access" && <AccessTab />}
       {tab === "anthropic" && <ProvidersPanel />}
       {tab === "agents" && <AgentLimitsPanel />}
       {tab === "github" && <GithubPanel cloud={cloud} />}
@@ -567,6 +567,131 @@ function GithubPanel({ cloud }: { cloud: Cloud }) {
           onConfirm={() => remove(confirmDelete.name)}
           onCancel={() => setConfirmDelete(undefined)} />
       )}
+    </div>
+  );
+}
+
+// Access, people and keys share one load: who is asking (admin or not) and who is on the cell, so
+// a person added in People is there to pick when a key is made. Only an admin credential manages
+// people and keys (the daemon enforces it); the page just does not offer what it would refuse.
+function AccessTab() {
+  const [me, setMe] = useState<Whoami>();
+  const [people, setPeople] = useState<Person[]>();
+  const [err, setErr] = useState<string>();
+  const loadPeople = () => api.people().then((r) => setPeople(r.people))
+    .catch((e) => setErr(String((e as Error).message ?? e)));
+  useEffect(() => {
+    api.whoami().then(setMe).catch(() => undefined);
+    loadPeople();
+  }, []);
+  const admin = !!me?.scopes.includes("admin");
+  return (
+    <>
+      <AccessPanel />
+      <PeoplePanel people={people} admin={admin} err={err} onChanged={loadPeople} />
+      <ApiKeysPanel people={people ?? []} admin={admin} me={me?.person?.id} />
+    </>
+  );
+}
+
+const personLabel = (p: Person) => p.email ? `${p.name} (${p.email})` : p.name;
+
+type PersonDraft = { id: string; name: string; email: string; github: string; is_admin: boolean };
+
+// Who is on the cell. Everyone who can read sees the list; an admin adds people and edits them.
+function PeoplePanel({ people, admin, err: loadErr, onChanged }: {
+  people?: Person[]; admin: boolean; err?: string; onChanged: () => void;
+}) {
+  const [editing, setEditing] = useState<PersonDraft>();   // id "new": the add form
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>();
+
+  const start = (p?: Person) => {
+    setErr(undefined);
+    setEditing(p ? { id: p.id, name: p.name, email: p.email ?? "", github: p.github ?? "", is_admin: p.is_admin }
+                 : { id: "new", name: "", email: "", github: "", is_admin: false });
+  };
+  const save = async () => {
+    if (!editing) return;
+    setBusy(true); setErr(undefined);
+    const body = { name: editing.name.trim(), email: editing.email.trim(), github: editing.github.trim(),
+                   is_admin: editing.is_admin };
+    try {
+      if (editing.id === "new") await api.createPerson(body);
+      else await api.updatePerson(editing.id, body);
+      setEditing(undefined);
+      onChanged();
+    } catch (e) { setErr(String((e as Error).message ?? e)); }
+    setBusy(false);
+  };
+  const form = (d: PersonDraft) => (
+    <>
+      <div className="row2">
+        <label className="field">
+          <span className="lbl">name</span>
+          <input type="text" value={d.name} autoFocus onChange={(e) => setEditing({ ...d, name: e.target.value })} />
+        </label>
+        <label className="field">
+          <span className="lbl">email</span>
+          <input type="email" value={d.email} onChange={(e) => setEditing({ ...d, email: e.target.value })} />
+        </label>
+      </div>
+      <div className="row2">
+        <label className="field">
+          <span className="lbl">GitHub login</span>
+          <input type="text" className="mono" placeholder="e.g. octocat" value={d.github}
+                 onChange={(e) => setEditing({ ...d, github: e.target.value })} />
+        </label>
+        <label className="field" style={{ display: "flex", gap: 10, alignItems: "baseline", cursor: "pointer" }}>
+          <input type="checkbox" checked={d.is_admin} style={{ transform: "translateY(1px)" }}
+                 onChange={(e) => setEditing({ ...d, is_admin: e.target.checked })} />
+          <span>Admin</span>
+        </label>
+      </div>
+      <div className="btnrow">
+        <button className="primary" disabled={busy || !d.name.trim()} onClick={save}>
+          {busy ? "…" : d.id === "new" ? "Add person" : "Save"}</button>
+        <button disabled={busy} onClick={() => setEditing(undefined)}>Cancel</button>
+      </div>
+    </>
+  );
+
+  return (
+    <div className="panel">
+      <div className="pagehead" style={{ marginBottom: 6 }}>
+        <h2 style={{ margin: 0 }}>People</h2>
+        {admin && <button className="primary" onClick={() => start()}>Add person</button>}
+      </div>
+      <p className="help" style={{ marginTop: 0 }}>
+        Everyone who works on this instance. Each API key belongs to a person, so you can tell whose
+        agent or script is acting.
+      </p>
+      {(loadErr || err) && <div className="alert error">{err ?? loadErr}</div>}
+
+      {editing?.id === "new" && <div className="panel" style={{ marginBottom: 12 }}>{form(editing)}</div>}
+
+      {!people ? <div className="muted">loading…</div>
+        : people.length === 0 ? <p className="help">No one yet.{admin && <> <strong>Add person</strong> to start.</>}</p>
+        : (
+          <table>
+            <thead><tr><th>name</th><th>email</th><th>GitHub</th><th>admin</th><th aria-label="actions" /></tr></thead>
+            <tbody>
+              {people.map((p) => editing?.id === p.id ? (
+                <tr key={p.id}><td colSpan={5}>{form(editing)}</td></tr>
+              ) : (
+                <tr key={p.id}>
+                  <td><strong>{p.name}</strong></td>
+                  <td className="help">{p.email ?? ""}</td>
+                  <td className="mono help">{p.github ?? ""}</td>
+                  <td className="help">{p.is_admin ? "yes" : "no"}</td>
+                  <td style={{ textAlign: "right" }}>
+                    {admin && <button disabled={!!editing} onClick={() => start(p)}>Edit</button>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
     </div>
   );
 }
@@ -1158,7 +1283,7 @@ const SCOPE_HELP: Record<string, string> = {
   admin: "configure: sources, triggers, projects, credentials, keys (implies the rest)",
 };
 
-function ApiKeysPanel() {
+function ApiKeysPanel({ people, admin, me }: { people: Person[]; admin: boolean; me?: string }) {
   const [keys, setKeys] = useState<ApiKey[]>();
   const [enforced, setEnforced] = useState(true);
   const [err, setErr] = useState<string>();
@@ -1166,6 +1291,12 @@ function ApiKeysPanel() {
   const [revoking, setRevoking] = useState<ApiKey>();
   const [creating, setCreating] = useState(false);
   const [showRevoked, setShowRevoked] = useState(false);
+  const personNames = Object.fromEntries([["", "No person"], ...people.map((p) => [p.id, personLabel(p)])]);
+  const bind = async (k: ApiKey, personId: string) => {
+    if (!personId || personId === k.person?.id) return;
+    try { await api.setKeyPerson(k.id, personId); } catch (e) { setErr(String((e as Error).message ?? e)); }
+    load();
+  };
 
   const load = () => api.keys().then((r) => { setKeys(r.keys); setEnforced(r.enforced); })
     .catch((e) => setErr(String((e as Error).message ?? e)));
@@ -1215,12 +1346,17 @@ function ApiKeysPanel() {
       {keys && keys.length > 0 ? (
         <>
         <table style={{ marginBottom: 14 }}>
-          <thead><tr><th>name</th><th>scopes</th><th>key</th><th>created</th><th>last used</th><th></th></tr></thead>
+          <thead><tr><th>name</th><th>person</th><th>scopes</th><th>key</th><th>created</th><th>last used</th><th></th></tr></thead>
           <tbody>
             {/* live keys first; revoked ones only on request, they are history */}
             {[...keys.filter((k) => !k.revoked_at), ...(showRevoked ? keys.filter((k) => k.revoked_at) : [])].map((k) => (
               <tr key={k.id} style={k.revoked_at ? { opacity: 0.45 } : undefined}>
                 <td>{keyTitle(k.name) ? <>{keyTitle(k.name)}<InternalName name={k.name} /></> : k.name}</td>
+                <td>{admin && !k.revoked_at
+                  ? <Picker value={k.person?.id ?? ""} ariaLabel={`person for ${k.name}`} style={{ width: 200 }}
+                            options={k.person ? people.map((p) => p.id) : ["", ...people.map((p) => p.id)]}
+                            labels={personNames} onChange={(v) => bind(k, v)} />
+                  : k.person ? k.person.name : <span className="help">No person</span>}</td>
                 <td>{k.scopes.map((s) => <span className="chip" key={s} title={SCOPE_HELP[s]}>{s}</span>)}
                   {k.project && <span className="help"> · project {projectNames[k.project] ?? k.project} only</span>}</td>
                 <td className="mono">{k.prefix}…</td>
@@ -1247,6 +1383,7 @@ function ApiKeysPanel() {
 
       {creating && (
         <KeyModal
+          people={people} defaultPerson={me}
           onClose={() => setCreating(false)}
           onCreated={(m) => { setCreating(false); setMinted(m); load(); }}
         />
@@ -1272,12 +1409,14 @@ function ApiKeysPanel() {
 
 // Create-key modal — name + scope checkboxes. The secret only exists in the create response, so it
 // surfaces once (in the panel's "created" alert) and never again; this dialog just collects inputs.
-function KeyModal({ onClose, onCreated }: {
+function KeyModal({ people, defaultPerson, onClose, onCreated }: {
+  people: Person[]; defaultPerson?: string;
   onClose: () => void;
   onCreated: (m: { name: string; secret: string }) => void;
 }) {
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<string[]>(["read"]);
+  const [personId, setPersonId] = useState(people.some((p) => p.id === defaultPerson) ? defaultPerson! : "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
 
@@ -1290,7 +1429,7 @@ function KeyModal({ onClose, onCreated }: {
   const create = async () => {
     setBusy(true); setErr(undefined);
     try {
-      const r = await api.createKey(name.trim(), scopes);
+      const r = await api.createKey(name.trim(), scopes, personId || undefined);
       onCreated({ name: r.name, secret: r.secret });
     } catch (e) { setErr(String((e as Error).message ?? e)); setBusy(false); }
   };
@@ -1311,6 +1450,14 @@ function KeyModal({ onClose, onCreated }: {
                    onChange={(e) => setName(e.target.value)} />
             <span className="help">who uses it: one key per agent, script or service</span>
           </label>
+          <div className="field">
+            <span className="lbl">person</span>
+            <Picker value={personId} ariaLabel="person" style={{ width: 280 }}
+                    options={["", ...people.map((p) => p.id)]}
+                    labels={Object.fromEntries([["", "No person"], ...people.map((p) => [p.id, personLabel(p)])])}
+                    onChange={setPersonId} />
+            <span className="help">whose agent or script this is</span>
+          </div>
           <div className="field">
             <span className="lbl">scopes</span>
             {Object.entries(SCOPE_HELP).map(([s, help]) => (

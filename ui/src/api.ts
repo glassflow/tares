@@ -1,6 +1,6 @@
 import type {
   AgentInfo,
-  ApiKey, ExternalAgent,
+  ApiKey, ExternalAgent, Person, Whoami,
   CatalogDescribe, ConnectorSpec, DiscoverProposal, DispatchDetail, DispatchLogEntry, Entity, EnvScan,
   AgentPreset, AgentRun, BuiltinAgent, Handoff,
   GithubAppTest, GithubCredential,
@@ -231,11 +231,18 @@ export const api = {
               url_configured: boolean; slack_configured?: boolean;
               default_provider?: { id: string; name: string; kind: string } | null }>("/api/capabilities"),
   keys: () => request<{ keys: ApiKey[]; enforced: boolean; scopes: string[] }>("/api/keys"),
-  createKey: (name: string, scopes: string[]) =>
-    request<{ id: string; name: string; scopes: string[]; secret: string }>(
-      "/api/keys", { method: "POST", body: JSON.stringify({ name, scopes }) }),
+  createKey: (name: string, scopes: string[], personId?: string) =>
+    request<{ id: string; name: string; scopes: string[]; secret: string; person: { id: string; name: string } | null }>(
+      "/api/keys", { method: "POST", body: JSON.stringify({ name, scopes, ...(personId ? { person_id: personId } : {}) }) }),
+  setKeyPerson: (id: string, personId: string) =>
+    request<ApiKey>(`/api/keys/${id}/person`, { method: "PUT", body: JSON.stringify({ person_id: personId }) }),
   revokeKey: (id: string) => request<{ ok: boolean }>(`/api/keys/${id}`, { method: "DELETE" }),
-  whoami: () => request<{ id: string; name: string; scopes: string[] }>("/api/whoami"),
+  whoami: () => request<Whoami>("/api/whoami"),
+  people: () => request<{ people: Person[] }>("/api/people"),
+  createPerson: (body: { name: string; email?: string; github?: string; is_admin?: boolean }) =>
+    request<Person>("/api/people", { method: "POST", body: JSON.stringify(body) }),
+  updatePerson: (id: string, body: { name?: string; email?: string | null; github?: string | null; is_admin?: boolean }) =>
+    request<Person>(`/api/people/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) }),
 
   sources: () => request<Source[]>("/api/sources"),
   source: (name: string) => request<Source>(`/api/sources/${name}`),

@@ -166,6 +166,30 @@ export interface ApiKey {
   last_used_at: string | null;
   revoked_at: string | null;
   project?: string | null;      // a project key: reads that project only (TR-335)
+  person?: { id: string; name: string } | null;   // who the key belongs to; null: nobody yet
+}
+
+// Someone on the cell. Keys belong to a person; the credential in a request says who is calling.
+export interface Person {
+  id: string;
+  name: string;
+  email: string | null;
+  emails: string[];
+  github: string | null;
+  is_admin: boolean;
+  created_via: string;
+}
+
+// /api/whoami: the credential making the request, and the person it acts as (null for the root
+// token, and for a key nobody has bound once the cell has more than one person).
+export interface Whoami {
+  id: string;
+  name: string;
+  kind: "system" | "key" | "project" | "open";
+  person: { id: string; name: string; email: string | null } | null;
+  scopes: string[];
+  project?: string;
+  project_name?: string | null;
 }
 
 // An agent that joined a project with a webhook subscription (TR-336). The URL comes masked: it
