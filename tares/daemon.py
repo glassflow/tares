@@ -1282,8 +1282,10 @@ def make_app() -> FastAPI:
                                                f"{reason}"}, status_code=401)
         body = await _parse_ingest_body(request)
         try:
+            person = _current_person(request)   # from the credential, never from the body
             n = await runtime.ingest(token, body, bypass_cooldown=_bypass_cooldown(request),
-                                     headers=dict(request.headers))
+                                     headers=dict(request.headers), stamp_person=True,
+                                     person_id=person["id"] if person else None)
         except KeyError as e:
             _err(e, 404)
         except ValueError as e:
