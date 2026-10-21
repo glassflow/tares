@@ -4,6 +4,7 @@ import { useOwnProjects } from "./components/readiness";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { api, auth } from "./api";
+import type { Whoami } from "./types";
 import { useCloud, useWorkspaceOverview } from "./cloud";
 import CommandPalette from "./components/CommandPalette";
 import WorkspaceSwitcher from "./components/WorkspaceSwitcher";
@@ -198,7 +199,13 @@ export default function App() {
   // Settings, loaded once). Nothing shows while it is unknown.
   const logoutUrl = cloud.health?.logout_url || undefined;
   const overview = useWorkspaceOverview(logoutUrl ? cloud.health?.workspace_api_url || undefined : undefined);
-  const email = overview.result?.status === "ok" ? overview.result.data.you?.email : undefined;
+  const cloudEmail = overview.result?.status === "ok" ? overview.result.data.you?.email : undefined;
+  // who this console's credential acts as; the control plane's email is the fallback (the root
+  // token and an unbound key act as nobody)
+  const [person, setPerson] = useState<Whoami["person"]>(null);
+  useEffect(() => { api.whoami().then((w) => setPerson(w.person)).catch(() => {}); }, []);
+  const email = person?.email || cloudEmail;
+  const who = person?.name || email;
   // Start is in the sidebar until the person has a project of their own (and while it is open)
   const { own, projects } = useOwnProjects();
   const here = useLocation().pathname;
@@ -265,7 +272,9 @@ export default function App() {
           </a>
         )}
         <ThemeToggle />
-        {logoutUrl && email && <div className="who" title={`Signed in as ${email}`}>{email}</div>}
+        {(person ? who : logoutUrl && email) && (
+          <div className="who" title={`Signed in as ${who}${person?.email ? ` (${person.email})` : ""}`}>{who}</div>
+        )}
         {auth.get() && (
           <button className="navbtn" onClick={() => signOut(logoutUrl)}
                   title={tip(email ? `Sign out (${email})` : "Sign out")}>
