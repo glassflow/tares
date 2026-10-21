@@ -251,6 +251,26 @@ def flow_call(obj: dict):
     return None
 
 
+def person_queued(obj: dict):
+    """A message the person typed while a turn was running, as the `user` line it would be between
+    turns (TR-522). Claude Code keeps it only as a queued_command attachment, which is otherwise
+    bookkeeping; without this, desk_answer never finds the person's reply. Messages from other
+    sessions and task notifications queue the same way and stay out. None for any other line."""
+    att = obj.get("attachment") if obj.get("type") == "attachment" else None
+    if not isinstance(att, dict) or att.get("type") != "queued_command":
+        return None
+    origin = att.get("origin") if isinstance(att.get("origin"), dict) else {}
+    if att.get("commandMode") != "prompt" or origin.get("kind") != "human":
+        return None
+    prompt = att.get("prompt")
+    if not prompt or not isinstance(prompt, (str, list)):
+        return None
+    line = {k: v for k, v in obj.items() if k not in ("attachment", "type")}
+    line.update(type="user", queued=True, timestamp=att.get("timestamp") or obj.get("timestamp"),
+                message={"role": "user", "content": prompt})
+    return line
+
+
 def process_lines(raw_lines: list, flow: str, hook: dict) -> tuple:
     """Stamp `flow` on each line of a marked session and react to a set_session_flow call: update
     the flow, and emit a synthetic session_flow line right after the call so Tares records the
@@ -261,6 +281,8 @@ def process_lines(raw_lines: list, flow: str, hook: dict) -> tuple:
             o = json.loads(raw)
         except Exception:
             continue
+        if isinstance(o, dict):
+            o = person_queued(o) or o
         if not isinstance(o, dict) or o.get("type") in BOOKKEEPING:
             continue
         asked = flow_call(o)

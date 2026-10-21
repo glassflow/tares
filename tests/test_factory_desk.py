@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "claude-plugin", "scripts"))
 
 _TMP = tempfile.mkdtemp(prefix="tares-factory-desk-")
 os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
@@ -29,6 +30,7 @@ os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
 import httpx
 
+import ship
 import tares.mcp_server as m
 import tares.mcp_factory as mf
 from tares import factory
@@ -412,6 +414,35 @@ async def main():
         ck("a crew-wide station's grant goes to every project", r.status_code == 200
            and f'"{cw}" (20' in await mf.read_grants()
            and r.json()["decision"]["scope"] == "all", r.text)
+
+        print("== a reply typed while the orchestrator's turn runs (TR-522) ==")
+        factory.MATCH_WAIT_SECONDS = 0
+        as_station("crew-orchestrator", "orchestrator")
+        dq = json.loads(await mf.desk_add("Can the releaser read prod?", "yes, reads only",
+                                          "it checks the deploy", project="Shop"))
+
+        def queued(text, mode="prompt", kind="human"):
+            at = (datetime.now(timezone.utc) + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+            return json.dumps({"type": "attachment", "sessionId": "o1", "cwd": "/w", "timestamp": at,
+                               "uuid": f"q-{len(text)}-{kind}",
+                               "attachment": {"type": "queued_command", "prompt": text,
+                                              "commandMode": mode, "origin": {"kind": kind},
+                                              "timestamp": at}})
+        raw = [queued("yeah releaser can do reads on prod thats fine"),
+               queued("<cross-session-message>reads on prod are fine</cross-session-message>", kind="peer"),
+               queued("<task-notification>done</task-notification>", mode="task-notification",
+                      kind="task-notification"),
+               json.dumps({"type": "queue-operation", "sessionId": "o1", "operation": "enqueue"})]
+        objs, _flow, _changed = ship.process_lines(raw, "", {})
+        ck("only the person's queued message is shipped, as a user line",
+           [(o["type"], o.get("queued")) for o in objs] == [("user", True)]
+           and objs[0]["message"]["content"] == "yeah releaser can do reads on prod thats fine", objs)
+        await ingest(objs)
+        out = json.loads(await mf.desk_answer(dq["label"], "reads on prod are fine"))
+        ck("words another session sent do not answer", out["recorded"] is False, out)
+        out = json.loads(await mf.desk_answer(dq["label"], "yeah releaser can do reads on prod thats fine"))
+        ck("a reply typed mid-turn answers, word for word",
+           out["recorded"] and out["matches_what_they_typed"], out)
 
 
 unit()
