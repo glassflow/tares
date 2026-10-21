@@ -6,6 +6,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- A recording carries the person who shipped it: the cell labels every Claude Code event pushed to
+  `/ingest` with `tares_person=<person id>` from the key's person (`local` with auth off, no label
+  for the root token), and drops any `tares_person` the sender wrote. Read by it like any label.
 - People on the cell: `GET/POST /api/people`, `PATCH /api/people/{id}`, and a person on every API
   key (`person_id` or `person: {email, name}` on `POST /api/keys`, `PUT /api/keys/{id}/person`).
   `/api/whoami` now says `kind` (system, key, project or open) and the `person` calling. A cell

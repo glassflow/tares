@@ -82,6 +82,8 @@ class ClaudeCodeConnector(Connector):
         {"name": "station", "help": "the tares-factory station the session plays (crew-reviewer, "
                                     "<project>-build-<slug>); the plugin stamps it from "
                                     "FACTORY_STATION"},
+        {"name": "tares_person", "help": "the person whose key shipped the line (their person id); "
+                                         "set by the cell from the credential, never by the sender"},
         {"name": "subagent", "help": "the subagent a line belongs to (its id), for lines from a "
                                      "subagent's own transcript; the session key stays the "
                                      "parent's"},
@@ -99,6 +101,9 @@ class ClaudeCodeConnector(Connector):
     # Push-only: the Claude Code plugin POSTs transcript lines to /ingest/claude_code; events are
     # mapped by map_payload(). There is no local file tail.
     ACCEPTS_PUSH = True
+    # The cell labels every pushed event with the person of the credential that sent it
+    # (`tares_person`); see Runtime.ingest. Events the cell reads itself carry none.
+    STAMPS_PERSON = True
 
     async def poll(self) -> list[Envelope]:
         return []   # push-only: events arrive via map_payload() from the plugin
