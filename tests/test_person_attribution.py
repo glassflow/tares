@@ -245,6 +245,57 @@ async def auth_on():
             ck("the system credential adds a plain line", r.json()["body"].rstrip().endswith(
                 "- No person behind the root token"), r.json()["body"][-200:])
 
+            print("== docs written through the Claude Code tools ==")
+            # the tools send a fixed label (`by_default`); it must never beat the person
+            r = await cx.post(f"{B}/api/keys", headers=ROOT, json={
+                "name": "bot-key", "scopes": ["admin"]})
+            ck("an unbound key", r.status_code == 201 and not r.json().get("person"), r.text)
+            bot = r.json()["secret"]
+            real_cx = m._cx
+            try:
+                def as_(hd):
+                    m._cx = lambda timeout=10: httpx.AsyncClient(timeout=timeout, headers=hd)
+                as_(A)
+                out = json.loads(await m.write_doc("note", "Ann's note", "text", project=uid))
+                doc = (await cx.get(f"{B}/api/projects/{uid}/docs/{out['id']}", headers=A)).json()
+                ck("write_doc with Ann's key records Ann", doc["updated_by"] == "Ann", str(doc))
+                out2 = json.loads(await m.write_doc("note", "Ann's note", "text 2", id=out["id"],
+                                                    project=uid))
+                doc = (await cx.get(f"{B}/api/projects/{uid}/docs/{out['id']}", headers=A)).json()
+                ck("... and so does a rewrite", out2["id"] == out["id"] and doc["updated_by"] == "Ann",
+                   str(doc))
+                as_(Bn)
+                await m.write_doc("note", "Ann's note", "text 3", id=out["id"], project=uid)
+                doc = (await cx.get(f"{B}/api/projects/{uid}/docs/{out['id']}", headers=A)).json()
+                ck("... a rewrite by Ben records Ben", doc["updated_by"] == "Ben", str(doc))
+                as_(A)
+                out = json.loads(await m.add_to_global("memory", "Ann likes plain words"))
+                gdoc = (await cx.get(f"{B}/api/projects/{uid}/docs/{out['id']}", headers=A)).json()
+                ck("add_to_global with Ann's key records Ann", gdoc.get("updated_by") == "Ann",
+                   str(gdoc))
+                as_(H(bot))
+                out = json.loads(await m.write_doc("note", "Bot note", "text", project=uid))
+                doc = (await cx.get(f"{B}/api/projects/{uid}/docs/{out['id']}", headers=A)).json()
+                ck("write_doc with an unbound key keeps the old label",
+                   doc["updated_by"] == "claude code session", str(doc))
+                json.loads(await m.add_to_global("memory", "Bot rule"))
+                as_(ROOT)
+                out = json.loads(await m.write_doc("note", "Root note", "text", project=uid))
+                doc = (await cx.get(f"{B}/api/projects/{uid}/docs/{out['id']}", headers=A)).json()
+                ck("write_doc with the system credential keeps the old label",
+                   doc["updated_by"] == "claude code session", str(doc))
+            finally:
+                m._cx = real_cx
+            # the same payload straight at the route, as a plain client would send it
+            r = await cx.post(f"{B}/api/projects/{uid}/docs", headers=A, json={
+                "kind": "note", "title": "Direct", "body": "x", "by_default": "claude code session"})
+            ck("route: a person beats by_default", r.status_code == 201
+               and r.json()["updated_by"] == "Ann", r.text)
+            r = await cx.post(f"{B}/api/projects/{uid}/docs", headers=A, json={
+                "kind": "note", "title": "Direct 2", "body": "x", "by": "Ann's script"})
+            ck("route: what the caller says still comes first", r.json()["updated_by"]
+               == "Ann's script", r.text)
+
             print("== a line sent with its own note, and a name that is not one line ==")
             r = await cx.post(f"{B}/api/docs/global/agents/lines", headers=Bn,
                               json={"text": f"Run the tests before you push (added by Ann, {TODAY})"})

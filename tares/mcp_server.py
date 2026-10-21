@@ -536,7 +536,8 @@ async def write_doc(kind: str, title: str, body: str, id: str = "", project: str
     verify; link it with attach_working_doc), `note` (anything else). Working docs and every
     other doc stay in Tares; they never go to Linear or GitHub. A rule or fact that holds for every
     project goes in the shared docs with add_to_global instead. Returns the doc's id."""
-    payload = {"kind": kind, "title": title, "body": body, "by": "claude code session"}
+    payload = {"kind": kind, "title": title, "body": body,
+               "by_default": "claude code session"}
     async with _cx(15) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -602,7 +603,7 @@ async def add_to_global(doc: str, line: str) -> str:
     own rules go in its own AGENTS.md. A line already there is not added twice."""
     async with _cx(15) as cx:
         r = await cx.post(f"{TARESD}/api/docs/global/{doc.strip().lower()}/lines",
-                          json={"text": line, "by": "claude code session"})
+                          json={"text": line, "by_default": "claude code session"})
     if r.status_code >= 400:
         return _out(r)
     d = r.json()
