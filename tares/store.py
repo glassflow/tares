@@ -3894,6 +3894,14 @@ class Store(FactoryStore, ClaudeUsageStore):
         return {"id": r[0], "name": r[1], "scopes": json.loads(r[2]), "last_used_at": r[3],
                 "project": r[4], "person_id": r[5]}
 
+    def key_person_id(self, kid: str) -> str | None:
+        """The person an active key is bound to, None for an unbound or unknown key (unlike a
+        credential's person, this never falls back to `local`)."""
+        with self._lock:
+            r = self.con.execute("SELECT person_id FROM api_keys WHERE id = ? AND revoked_at IS NULL",
+                                 [kid]).fetchone()
+        return r[0] if r else None
+
     def set_key_person(self, kid: str, person_id: str | None) -> bool:
         """Bind an active key to a person (None unbinds it). False when there is no such key."""
         with self._lock:
@@ -3918,6 +3926,20 @@ class Store(FactoryStore, ClaudeUsageStore):
         e = str(e or "").strip().lower()
         return e or None
 
+    @classmethod
+    def _norm_emails(cls, emails) -> list[str]:
+        """A list of addresses, lowercased, without repeats. Anything else (a bare string would
+        be split into letters) or an entry without an @ raises ValueError."""
+        if emails is None:
+            return []
+        if not isinstance(emails, list) or not all(isinstance(x, str) for x in emails):
+            raise ValueError("emails must be a list of email addresses")
+        out = [e for e in dict.fromkeys(cls._norm_email(x) for x in emails) if e]
+        bad = next((e for e in out if "@" not in e), None)
+        if bad:
+            raise ValueError(f"{bad!r} is not an email address")
+        return out
+
     def _taken_emails(self, emails: list[str], besides: str | None = None) -> str | None:
         """The first of `emails` another person already has (as the main or an extra email)."""
         for e in emails:
@@ -3935,7 +3957,7 @@ class Store(FactoryStore, ClaudeUsageStore):
         if not name:
             raise ValueError("name is required")
         email = self._norm_email(email)
-        extra = [e for e in dict.fromkeys(self._norm_email(x) for x in (emails or [])) if e]
+        extra = self._norm_emails(emails)
         github = str(github or "").strip().lstrip("@").lower() or None
         with self._lock:
             clash = self._taken_emails(([email] if email else []) + extra)
@@ -3994,8 +4016,7 @@ class Store(FactoryStore, ClaudeUsageStore):
         if "email" in fields:
             new["email"] = self._norm_email(fields["email"])
         if "emails" in fields:
-            new["emails"] = [e for e in dict.fromkeys(
-                self._norm_email(x) for x in (fields["emails"] or [])) if e]
+            new["emails"] = self._norm_emails(fields["emails"])
         if "github" in fields:
             new["github"] = str(fields["github"] or "").strip().lstrip("@").lower() or None
         if "is_admin" in fields:
@@ -4023,7 +4044,14 @@ class Store(FactoryStore, ClaudeUsageStore):
         e = self._norm_email(email)
         if not e:
             raise ValueError("an email is required")
-        return self.create_person(str(name or "").strip() or e.split("@")[0], email=e, via=via)
+        try:
+            return self.create_person(str(name or "").strip() or e.split("@")[0], email=e, via=via)
+        except ValueError:
+            # two callers asked for one new email at once: the other one made the person first
+            found = self.find_person_by_email(e)
+            if found:
+                return found
+            raise
 
     def only_local_person(self) -> bool:
         """True while `local` is the only person on the cell: a key nobody has bound still acts

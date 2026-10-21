@@ -715,8 +715,8 @@ def make_app() -> FastAPI:
         if path == "/api/whoami":
             return "any"
         if method == "PATCH" and path.startswith("/api/people/"):
-            return "any"   # admin, or the person changing their own name, GitHub login or emails:
-                           # the handler decides, it needs the credential's person
+            return "read"   # an admin, or a key bound to that person changing their own name:
+                            # the handler decides, it needs the credential's person
         # /api/settings holds instance credentials (the Anthropic key): admin even to READ, since
         # a read tells you whether and where a credential is configured.
         if path == "/api/setup/github-suggestion":
@@ -1449,7 +1449,7 @@ def make_app() -> FastAPI:
 
     # ── People: who is on the cell. Keys belong to them; the credential names who is calling ──
     def _person_out(p: dict) -> dict:
-        return {k: p[k] for k in ("id", "name", "email", "emails", "github", "is_admin")}
+        return {k: p[k] for k in ("id", "name", "email", "emails", "github", "is_admin", "created_via")}
 
     @app.get("/api/people")
     async def list_people():
@@ -1472,18 +1472,22 @@ def make_app() -> FastAPI:
 
     @app.patch("/api/people/{pid}")
     async def update_person(pid: str, request: Request, body: dict = Body(...)):
-        """An admin changes anything; a person changes their own name, GitHub login and emails."""
-        me = _current_person(request)
+        """An admin (or the system credential) changes anything; a person changes only their own
+        name. Emails and the GitHub login are how a person is recognised, so they are not self-service."""
         admin = _is_admin(request)
-        if not admin and not (me and me["id"] == pid):
+        ident = getattr(request.state, "credential", None) or {}
+        kid = str(ident.get("id") or "")
+        # themselves = a key explicitly bound to this person; the `local` fallback of an unbound
+        # key does not count, or any read key could rename the only person on a one-person cell
+        own = kid.startswith("key:") and store.key_person_id(kid[4:]) == pid
+        if not admin and not own:
             raise HTTPException(status_code=403, detail="only an admin, or the person themselves, "
                                                         "can change a person")
-        allowed = ("name", "email", "emails", "github", "is_admin") if admin \
-            else ("name", "emails", "github")
+        allowed = ("name", "email", "emails", "github", "is_admin") if admin else ("name",)
         fields = {k: body[k] for k in allowed if k in body}
-        if not admin and any(k in body for k in ("email", "is_admin")):
+        if not admin and any(k in body for k in ("email", "emails", "github", "is_admin")):
             raise HTTPException(status_code=403, detail="only an admin can change a person's "
-                                                        "main email or admin flag")
+                                                        "emails, GitHub login or admin flag")
         try:
             p = store.update_person(pid, **fields)
         except ValueError as e:

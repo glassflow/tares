@@ -69,6 +69,16 @@ async def auth_on():
             ck("unbound key, only `local`: person local", w["kind"] == "key"
                and (w["person"] or {}).get("id") == "local", str(w))
 
+            # ── on a one-person cell, an unbound read or ingest key is not `local` for edits ──
+            for sc in ("read", "ingest"):
+                r = await cx.post(f"{B}/api/keys", json={"name": f"u-{sc}", "scopes": [sc]},
+                                  headers=H(AUTH))
+                r = await cx.patch(f"{B}/api/people/local", headers=H(r.json()["secret"]),
+                                   json={"name": "Hacked"})
+                ck(f"an unbound {sc} key cannot rename `local` -> 403", r.status_code == 403, r.text)
+            ck("... and `local` is untouched",
+               (await cx.get(f"{B}/api/people", headers=H(AUTH))).json()["people"][0]["name"] == "You")
+
             # ── a key bound to a person: find or create by email ──
             body = {"name": "cli: mbp (kiran@glassflow.dev)", "scopes": ["admin"],
                     "person": {"email": "kiran@glassflow.dev", "name": "Kiran N"}}
@@ -82,6 +92,8 @@ async def auth_on():
                 **body, "name": "console", "person": {"email": "KIRAN@glassflow.dev", "name": "Other"}})
             ck("same email twice (any case): one person", r2.json()["person"]["id"] == pid, r2.text)
             people = (await cx.get(f"{B}/api/people", headers=H(AUTH))).json()["people"]
+            ck("a person made through the root token is created_via cloud",
+               next(p for p in people if p["id"] == pid)["created_via"] == "cloud", str(people))
             ck("people: local and one Kiran", sorted(p["id"] for p in people) == sorted(["local", pid]),
                str(people))
             w = (await cx.get(f"{B}/api/whoami", headers=H(kiran_key))).json()
@@ -146,22 +158,42 @@ async def auth_on():
                (await cx.post(f"{B}/api/people", headers=H(lena_read),
                               json={"name": "N"})).status_code == 403)
             r = await cx.patch(f"{B}/api/people/{lena_id}", headers=H(lena_read),
-                               json={"name": "Lena K", "github": "lk", "emails": ["L2@example.com"]})
-            ck("a person changes their own name, github and emails", r.status_code == 200
-               and r.json()["name"] == "Lena K" and r.json()["github"] == "lk"
-               and r.json()["emails"] == ["l2@example.com"], r.text)
-            ck("... but not their admin flag -> 403",
-               (await cx.patch(f"{B}/api/people/{lena_id}", headers=H(lena_read),
-                               json={"is_admin": True})).status_code == 403)
-            ck("... nor their main email -> 403",
-               (await cx.patch(f"{B}/api/people/{lena_id}", headers=H(lena_read),
-                               json={"email": "x@example.com"})).status_code == 403)
+                               json={"name": "Lena K"})
+            ck("a person changes their own name", r.status_code == 200 and r.json()["name"] == "Lena K", r.text)
+            before = (await cx.get(f"{B}/api/people", headers=H(AUTH))).json()["people"]
+            for field, val in (("emails", ["pre-claim@example.com"]), ("github", "lk"),
+                               ("email", "x@example.com"), ("is_admin", True)):
+                r = await cx.patch(f"{B}/api/people/{lena_id}", headers=H(lena_read), json={field: val})
+                ck(f"... but not their {field} -> 403 with a plain message", r.status_code == 403
+                   and "only an admin" in r.text and "—" not in r.text, r.text)
+            ck("... and a refused self edit changes nothing",
+               (await cx.get(f"{B}/api/people", headers=H(AUTH))).json()["people"] == before)
+            r = await cx.patch(f"{B}/api/people/{lena_id}", headers=H(AUTH),
+                               json={"github": "lk", "emails": ["L2@example.com"]})
+            ck("an admin sets a person's github and extra emails", r.status_code == 200
+               and r.json()["github"] == "lk" and r.json()["emails"] == ["l2@example.com"], r.text)
             ck("... nor someone else -> 403",
                (await cx.patch(f"{B}/api/people/{pid}", headers=H(lena_read),
                                json={"name": "Hacked"})).status_code == 403)
             ck("a key with no person cannot patch anyone -> 403",
                (await cx.patch(f"{B}/api/people/{pid}", headers=H(await _unbound(cx, B)),
                                json={"name": "Hacked"})).status_code == 403)
+            ck("an admin's emails must be a list, not a string -> 400",
+               (await cx.patch(f"{B}/api/people/{lena_id}", headers=H(AUTH),
+                               json={"emails": "@"})).status_code == 400)
+            ck("... and each entry needs an @ -> 400",
+               (await cx.patch(f"{B}/api/people/{lena_id}", headers=H(AUTH),
+                               json={"emails": ["nope"]})).status_code == 400)
+            r = await cx.post(f"{B}/api/keys", headers=H(kiran_key), json={
+                "name": "by-key", "scopes": ["read"], "person": {"email": "l2@EXAMPLE.com", "name": "Dup"}})
+            ck("a key's person {email} matching an extra email finds that person",
+               r.status_code == 201 and r.json()["person"]["id"] == lena_id, r.text)
+            r = await cx.post(f"{B}/api/keys", headers=H(kiran_key), json={
+                "name": "by-key2", "scopes": ["read"], "person": {"email": "mia@example.com", "name": "Mia"}})
+            mia_id = r.json()["person"]["id"]
+            ck("a person made through a key is created_via key",
+               next(p for p in (await cx.get(f"{B}/api/people", headers=H(AUTH))).json()["people"]
+                    if p["id"] == mia_id)["created_via"] == "key")
             r = await cx.patch(f"{B}/api/people/{lena_id}", headers=H(AUTH), json={"is_admin": True})
             ck("an admin changes the admin flag", r.status_code == 200 and r.json()["is_admin"] is True, r.text)
             ck("patch an unknown person -> 404",
