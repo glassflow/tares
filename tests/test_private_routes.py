@@ -192,6 +192,21 @@ async def main():
                r.status_code == (await cx.get(f"{B}/api/triggers", headers=B_,
                                               params={"project": "No such"})).status_code, f"{r.status_code} {r.text[:100]}")
 
+            for ref, what in (("Secret", "by name"), (uid, "by id")):
+                r = await cx.post(f"{B}/api/keys", headers=B_, json={"name": "peek", "project": ref})
+                nope = await cx.post(f"{B}/api/keys", headers=B_, json={"name": "peek", "project": "No such"})
+                ck(f"a key for it, {what}, to a stranger: as unknown as a name that does not exist",
+                   r.status_code == nope.status_code == 400 and "unknown project" in r.text and "secret" not in r.text,
+                   f"{r.status_code} {r.text[:120]}")
+            r = await cx.post(f"{B}/api/sources", headers=B_, json={
+                "name": "peek-src", "connector": "docker_logs", "config": {"container": "x"}, "project": "Secret"})
+            ck("a source created into it, to a stranger: unknown project, and no source made",
+               r.status_code == 400 and "unknown project" in r.text
+               and "peek-src" not in [x["name"] for x in (await cx.get(f"{B}/api/sources", headers=ROOT)).json()],
+               f"{r.status_code} {r.text[:120]}")
+            r = await cx.post(f"{B}/api/keys", headers=A_, json={"name": "mine", "project": "Secret"})
+            ck("... while its lead gets the key", r.status_code == 201 and r.json().get("secret"), f"{r.status_code} {r.text[:120]}")
+
             print("== an admin who is not on it hands the lead over, and nothing else ==")
             r = await cx.patch(f"{B}/api/projects/{uid}", headers=B_, json={"scope": "team"})
             ck("scope: unknown", unknown(r, uid), f"{r.status_code} {r.text[:120]}")

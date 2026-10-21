@@ -913,8 +913,11 @@ def make_app() -> FastAPI:
                                         status_code=403)
                 request.state.credential = ident
                 request.state.scopes = sorted(scopes)
-            _CALLER.set(request)
-            return await call_next(request)
+            token = _CALLER.set(request)
+            try:
+                return await call_next(request)
+            finally:
+                _CALLER.reset(token)
 
     def _err(e: Exception, code: int = 400):
         raise HTTPException(status_code=code, detail=str(e))
