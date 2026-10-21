@@ -207,6 +207,26 @@ async def main():
             r = await cx.post(f"{B}/api/keys", headers=A_, json={"name": "mine", "project": "Secret"})
             ck("... while its lead gets the key", r.status_code == 201 and r.json().get("secret"), f"{r.status_code} {r.text[:120]}")
 
+            print("== a private default project ==")
+            await cx.post(f"{B}/api/sources", headers=ROOT, json={
+                "name": "mk-default", "connector": "docker_logs", "config": {"container": "x"}})
+            dflt = next(p for p in (await cx.get(f"{B}/api/projects", headers=ROOT)).json()["projects"] if p["name"] == "Default")
+            await cx.patch(f"{B}/api/projects/{dflt['id']}", headers=ROOT, json={"lead_person_id": pa})
+            r = await cx.patch(f"{B}/api/projects/{dflt['id']}", headers=A_, json={"scope": "private"})
+            ck("set up: the default project is private, Ann leads it", r.status_code == 200
+               and r.json()["scope"] == "private", f"{r.status_code} {r.text[:120]}")
+            def mk(hd):
+                return cx.post(f"{B}/api/sources", headers=hd, json={
+                    "name": "dflt-src", "connector": "docker_logs", "config": {"container": "x"}})
+            r = await mk(B_)
+            ck("a create with no project by someone who cannot see the default: asked to name one",
+               r.status_code == 400 and "name the project" in r.text and dflt["id"] not in r.text
+               and "Default" not in r.text, f"{r.status_code} {r.text[:160]}")
+            names = [x["name"] for x in (await cx.get(f"{B}/api/sources", headers=ROOT)).json()]
+            ck("... and nothing was written into it", "dflt-src" not in names, str(names)[:160])
+            r = await mk(A_)
+            ck("... while its lead creates in it", r.status_code == 201, f"{r.status_code} {r.text[:160]}")
+
             print("== an admin who is not on it hands the lead over, and nothing else ==")
             r = await cx.patch(f"{B}/api/projects/{uid}", headers=B_, json={"scope": "team"})
             ck("scope: unknown", unknown(r, uid), f"{r.status_code} {r.text[:120]}")
