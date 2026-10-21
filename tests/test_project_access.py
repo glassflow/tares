@@ -84,8 +84,11 @@ async def auth_on():
             pp, pq, pa, pr = (await person("Pia", "pia@x.dev"), await person("Quinn", "quinn@x.dev"),
                               await person("Ada", "ada@x.dev", admin=True),
                               await person("Rae", "rae@x.dev"))
-            P_, Q_, A_ = await key(pp, "admin"), await key(pq, "read"), await key(pa, "read")
-            R_ = await key(pr, "admin")   # an admin-scope key bound to a person who is no admin
+            # read keys (Q_ Quinn, PR_ Pia, AR_ Ada) cannot write at all; the others carry the admin
+            # scope: P_ Pia, QW_ Quinn, A_ Ada, R_ Rae
+            P_, Q_, A_ = await key(pp, "admin"), await key(pq, "read"), await key(pa, "admin")
+            R_, QW_ = await key(pr, "admin"), await key(pq, "admin")
+            PR_, AR_ = await key(pp, "read"), await key(pa, "read")
 
             print("== creating ==")
             r = await mk(cx, B, "Shop", P_)
@@ -137,15 +140,24 @@ async def auth_on():
             ck("the lead cannot be taken off: 409", r.status_code == 409 and "lead" in r.text, r.text)
 
             print("== others are refused ==")
-            for who, hd in (("Quinn (member, not lead)", Q_),):
-                for label, req in (
-                        ("PATCH scope", cx.patch(f"{B}/api/projects/{uid}", headers=hd, json={"scope": "team"})),
-                        ("PATCH lead", cx.patch(f"{B}/api/projects/{uid}", headers=hd, json={"lead_person_id": pq})),
-                        ("add member", cx.post(f"{B}/api/projects/{uid}/members", headers=hd, json={"person_id": pr})),
-                        ("remove member", cx.delete(f"{B}/api/projects/{uid}/members/{pq}", headers=hd))):
+            def writes(hd):
+                return (
+                    ("PATCH scope", cx.patch(f"{B}/api/projects/{uid}", headers=hd, json={"scope": "team"})),
+                    ("PATCH lead", cx.patch(f"{B}/api/projects/{uid}", headers=hd, json={"lead_person_id": pq})),
+                    ("add member", cx.post(f"{B}/api/projects/{uid}/members", headers=hd, json={"person_id": pr})),
+                    ("remove member", cx.delete(f"{B}/api/projects/{uid}/members/{pq}", headers=hd)))
+            for who, hd in (("Quinn (read key, not lead)", Q_), ("Pia (read key, the lead)", PR_),
+                            ("Ada (read key, an admin person)", AR_)):
+                for label, req in writes(hd):
                     r = await req
-                    ck(f"{who}: {label} -> 403", r.status_code == 403
-                       and r.json()["detail"] == "only the project lead can change this", r.text)
+                    ck(f"{who}: {label} -> 403 at the guard", r.status_code == 403
+                       and "lacks the 'admin' scope" in r.json()["detail"], r.text)
+            qw = writes(QW_)   # PATCH lead is open to an admin key, so not the second
+            qw[1][1].close()
+            for label, req in qw[:1] + qw[2:]:
+                r = await req
+                ck(f"Quinn (admin key, not lead): {label} -> 403", r.status_code == 403
+                   and r.json()["detail"] == "only the project lead can change this", r.text)
             g = (await cx.get(f"{B}/api/projects/{uid}", headers=Q_)).json()
             ck("... and nothing changed", g["scope"] == "private" and g["lead"]["id"] == pp
                and ids(g["members"]) == [(pp, "lead"), (pq, "manual")], str(g)[:300])
@@ -164,6 +176,8 @@ async def auth_on():
             r = await cx.patch(f"{B}/api/projects/{uid}", headers=R_, json={"lead_person_id": pr})
             ck("a key with the admin scope may change the lead", r.status_code == 200
                and r.json()["lead"]["id"] == pr and r.json()["scope"] == "private", r.text[:300])
+            ck("... and the one who handed it over stays on it", (pp, "manual") in ids(r.json()["members"]),
+               str(r.json()["members"]))
             r = await cx.patch(f"{B}/api/projects/{uid}", headers=R_, json={"scope": "team"})
             ck("... as lead now, it may change the scope too", r.status_code == 200
                and r.json()["scope"] == "team", r.text[:300])
@@ -171,12 +185,12 @@ async def auth_on():
             ck("admin person (is_admin) changes the lead", r.status_code == 200
                and r.json()["lead"]["id"] == pp, r.text[:300])
             g = (await cx.get(f"{B}/api/projects/{uid}", headers=A_)).json()
-            ck("the new lead heads the members, the old lead is not one", ids(g["members"])
-               == [(pp, "lead"), (pq, "manual")], str(g["members"]))
+            ck("the new lead heads the members, the old lead stays on them", ids(g["members"])
+               == [(pp, "lead"), (pq, "manual"), (pr, "manual")], str(g["members"]))
 
             print("== no lead ==")
             r = await cx.patch(f"{B}/api/projects/{rooted}", headers=Q_, json={"lead_person_id": pq})
-            ck("a person who is no admin cannot claim it", r.status_code == 403, r.text)
+            ck("a read key cannot claim it", r.status_code == 403, r.text)
             r = await cx.patch(f"{B}/api/projects/{rooted}", headers=A_, json={"scope": "private"})
             ck("an admin cannot set its scope before claiming", r.status_code == 403, r.text)
             r = await cx.patch(f"{B}/api/projects/{rooted}", headers=A_, json={"lead_person_id": pa})

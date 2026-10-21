@@ -742,9 +742,6 @@ def make_app() -> FastAPI:
                 return "admin"
             if method == "POST" and rest == "/stats":
                 return "read"
-            if ((method == "PATCH" and rest == "")
-                    or (method in ("POST", "DELETE") and rest.startswith("/members"))):
-                return "read"   # lead, admin and members: the handler decides, it needs the person
         if method not in ("GET", "HEAD") and path not in _READ_WRITES:
             return "admin"
         return "read"
@@ -3510,7 +3507,10 @@ def make_app() -> FastAPI:
                 _err(ValueError("lead_person_id must be a person id"))
             if store.get_person(lead) is None:
                 _err(KeyError(f"no person {lead!r}; GET /api/people lists them"), 404)
+            old_lead = p["lead_person_id"]
             store.set_project_lead(uid, lead)
+            if old_lead and old_lead != lead:   # the one who handed it over stays on it
+                store.add_project_member(uid, old_lead, person["id"] if person else "system")
         if want_scope:
             store.set_project_scope(uid, body["scope"])
         return projects.get(uid)
@@ -4079,6 +4079,10 @@ def make_app() -> FastAPI:
             uid, key = setup_flow.apply(store, projects, plan, _make_key, draft=draft)
         except setup_flow.SetupError as e:
             _setup_err(e)
+        if draft is None:   # a draft was led by whoever made it; this project has no lead yet
+            person = _current_person(request)
+            if person:
+                store.set_project_lead(uid, person["id"])
         setup = {"plan": setup_flow.stored_plan(plan), "step": "connect", "practice_run": None}
         if key is not None:
             setup["own_key_id"] = key["id"]

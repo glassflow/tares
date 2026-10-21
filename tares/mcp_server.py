@@ -554,7 +554,9 @@ async def set_project_access(project: str = "", lead: str = "", scope: str = "",
     the person to lead it, `scope` is team or private, `add_members` and `remove_members` are
     people to put on or take off it. A person is given by id or email (list_people shows them).
     Only the project's lead changes the scope or its members; an admin may change the lead.
-    Leave out what you do not want to change. Returns the project's lead, scope and members."""
+    Leave out what you do not want to change. The changes are made one after another and the
+    first refusal stops the rest, so earlier ones stay. Returns the project's lead, scope and
+    members."""
     async with _cx(15) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:

@@ -1036,6 +1036,24 @@ async def main():
             [x["person_id"] for x in store.list_project_members(ldraft)]),
            ("active", dana, "private", [eli]))
 
+        print("== no draft: whoever sets it up leads it ==")
+        def fresh(tag):
+            raw = plan_with(who="own", agents=[], name=f"Lead {tag}",
+                            own_agent={"name": "claude-code", "wake": "webhook",
+                                       "sentence": "Your agent is woken at its webhook"})
+            raw["watches"][0]["name"] = f"lead-{tag}"
+            raw["wakes"][0]["sources"] = [f"lead-{tag}"]
+            raw["wakes"][0]["name"] = f"lead-{tag}-spike"
+            plan, errs = S.normalize(raw, store, runtime.catalog)
+            eq(f"the {tag} plan is valid", errs, [])
+            return plan
+        r = await cx.post("/api/setup/apply", headers=H(dk), json={"plan": fresh("person")})
+        ck("set up with a person's key (201)", r.status_code == 201, r.text[:300])
+        eq("that person leads the project", store.get_project(r.json()["project"]["id"])["lead_person_id"], dana)
+        r = await cx.post("/api/setup/apply", json={"plan": fresh("root")})
+        ck("set up with the root token (201)", r.status_code == 201, r.text[:300])
+        eq("it has no lead", store.get_project(r.json()["project"]["id"])["lead_person_id"], None)
+
         print("== drafts: the person's own name and description ==")
         DN = copy.deepcopy(D)
         DN.update(name="Planner's name", goal="Tell me about every new customer")
