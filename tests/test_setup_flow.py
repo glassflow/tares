@@ -996,6 +996,46 @@ async def main():
         r = await cx.delete(f"/api/projects/{bad_}")
         ck("a draft deletes like any project", r.status_code in (200, 204), r.text)
 
+        print("== drafts: the lead, the scope and the members ==")
+        dana = (await cx.post("/api/people", json={"name": "Dana", "email": "dana@x.dev"})).json()["id"]
+        eli = (await cx.post("/api/people", json={"name": "Eli", "email": "eli@x.dev"})).json()["id"]
+        dk = (await cx.post("/api/keys", json={"name": "dana", "scopes": ["admin"],
+                                              "person_id": dana})).json()["secret"]
+        LD = copy.deepcopy(D)
+        LD.update(name="Lead check", goal="Tell me about every new lead")
+        LD["watches"][0]["name"] = "Lead Events"
+        LD["wakes"][0].update(name="lead-new", sources=["Lead Events"])
+        LD["agents"][0].update(name="lead-look", trigger="lead-new", slack=False)
+        STUB.script = [[("propose_plan", LD)]]
+        r = await cx.post("/api/setup/drafts", headers=H(dk), json={"goal": LD["goal"], "who": "tares"})
+        ck("a draft made with a person's key (202)", r.status_code == 202, r.text)
+        ldraft = r.json()["project"]["id"]
+        eq("the person who made the draft leads it", store.get_project(ldraft)["lead_person_id"], dana)
+        eq("the response says so too", (r.json()["project"].get("lead") or {}).get("name"), "Dana")
+        st = await settled_(ldraft)
+        r = await cx.post("/api/setup/drafts", json={"goal": LD["goal"], "name": "Rooted draft"})
+        eq("a draft made with the root token has no lead",
+           store.get_project(r.json()["project"]["id"])["lead_person_id"], None)
+        await cx.delete(f"/api/projects/{r.json()['project']['id']}")
+        await cx.patch(f"/api/projects/{ldraft}", headers=H(dk), json={"scope": "private"})
+        await cx.post(f"/api/projects/{ldraft}/members", headers=H(dk), json={"person_id": eli})
+        real_upsert = store.upsert_catalog_trigger
+        store.upsert_catalog_trigger = boom
+        r = await cx.post("/api/setup/apply", json={"plan": st["plan"], "project": ldraft})
+        store.upsert_catalog_trigger = real_upsert
+        eq("a failing step: 400", r.status_code, 400)
+        back = store.get_project(ldraft)
+        eq("the draft comes back a draft, with its lead and scope",
+           (back["status"], back["lead_person_id"], back["scope"]), ("draft", dana, "private"))
+        eq("... and its members", [x["person_id"] for x in store.list_project_members(ldraft)], [eli])
+        r = await cx.post("/api/setup/apply", json={"plan": st["plan"], "project": ldraft})
+        ck("set up for real (201)", r.status_code == 201, r.text)
+        back = store.get_project(ldraft)
+        eq("the project keeps its lead, scope and members",
+           (back["status"], back["lead_person_id"], back["scope"],
+            [x["person_id"] for x in store.list_project_members(ldraft)]),
+           ("active", dana, "private", [eli]))
+
         print("== drafts: the person's own name and description ==")
         DN = copy.deepcopy(D)
         DN.update(name="Planner's name", goal="Tell me about every new customer")

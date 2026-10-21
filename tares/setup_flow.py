@@ -1346,7 +1346,7 @@ def apply(store, engine, plan: dict, make_key, draft: str | None = None) -> tupl
         if other is not None and other["id"] != draft:
             raise SetupError(409, f"Setting up stopped while creating the project: a project "
                                   f"named {plan['name']!r} already exists")
-        kept = (row, store.get_project_setup(draft))
+        kept = (row, store.get_project_setup(draft), store.list_project_members(draft))
         store.update_project(draft, name=plan["name"], goal=plan["goal"], status="active",
                              params={"objects": []})
         store.log_project(draft, "create", "set up from the draft")
@@ -1455,11 +1455,14 @@ def apply(store, engine, plan: dict, make_key, draft: str | None = None) -> tupl
             store.delete_project(uid)   # revokes a key made here too
             store.normalize_projects()  # a reused source left in no project goes home
             if kept is not None:        # the draft comes back as it was
-                row, setup = kept
+                row, setup, members = kept
                 store.create_project(uid, row["template"], row["name"], row.get("params") or {},
                                      status=DRAFT, goal=row.get("goal"),
                                      lead_person_id=row.get("lead_person_id"))
                 store.set_project_scope(uid, row.get("scope") or "team")
+                for mem in members:
+                    store.add_project_member(uid, mem["person_id"], added_by=mem["added_by"],
+                                             reason=mem["reason"])
                 store.set_project_setup(uid, setup)
             engine._do_reload()
         except Exception as undo:  # noqa: BLE001

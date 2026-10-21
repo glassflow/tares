@@ -225,6 +225,15 @@ async def auth_on():
             out = json.loads(await m.set_project_access("Mine"))
             ck("... with nothing to change it reads the project", out["scope"] == "private"
                and out["lead"]["id"] == pa, str(out)[:300])
+            combo = (await mk(cx, B, "Combo", P_)).json()["id"]
+            raw = await m.set_project_access("Combo", lead="ada@x.dev", scope="private",
+                                             add_members=["quinn@x.dev"], remove_members=[""])
+            out = json.loads(raw) if raw.startswith("{") else {"error": raw}
+            ck("a lead handed over in the same call as scope and members: all of it lands",
+               out.get("lead", {}).get("id") == pa and out.get("scope") == "private"
+               and (pq, "manual") in ids(out.get("members", [])), raw[:300])
+            out = json.loads(await m.set_project_access("Combo", add_members=["", "  "]))
+            ck("... a blank person is skipped, not a crash", out["lead"]["id"] == pa, str(out)[:300])
 
             print("== deleting ==")
             await cx.post(f"{B}/api/projects/{mine}/members", headers=A_, json={"person_id": pq})

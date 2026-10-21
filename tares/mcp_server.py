@@ -563,28 +563,31 @@ async def set_project_access(project: str = "", lead: str = "", scope: str = "",
         if r.status_code >= 400:
             return _out(r)
         people = r.json().get("people") or []
+        add = [x for x in (add_members or []) if x.strip()]
+        remove = [x for x in (remove_members or []) if x.strip()]
         wanted = {}
-        for ref in [lead] + list(add_members or []) + list(remove_members or []):
+        for ref in [lead] + add + remove:
             if ref.strip():
                 wanted[ref] = _person_in(people, ref)
                 if wanted[ref] is None:
                     return f"no person {ref!r}; list_people shows the ones there are"
-        if lead.strip() or scope.strip():
-            body = {}
-            if lead.strip():
-                body["lead_person_id"] = wanted[lead]["id"]
-            if scope.strip():
-                body["scope"] = scope.strip()
-            r = await cx.patch(f"{TARESD}/api/projects/{uid}", json=body)
+        # the lead goes last: once handed over, the caller can no longer change scope or members
+        if scope.strip():
+            r = await cx.patch(f"{TARESD}/api/projects/{uid}", json={"scope": scope.strip()})
             if r.status_code >= 400:
                 return _out(r)
-        for ref in add_members or []:
+        for ref in add:
             r = await cx.post(f"{TARESD}/api/projects/{uid}/members",
                               json={"person_id": wanted[ref]["id"]})
             if r.status_code >= 400:
                 return _out(r)
-        for ref in remove_members or []:
+        for ref in remove:
             r = await cx.delete(f"{TARESD}/api/projects/{uid}/members/{wanted[ref]['id']}")
+            if r.status_code >= 400:
+                return _out(r)
+        if lead.strip():
+            r = await cx.patch(f"{TARESD}/api/projects/{uid}",
+                               json={"lead_person_id": wanted[lead]["id"]})
             if r.status_code >= 400:
                 return _out(r)
         r = await cx.get(f"{TARESD}/api/projects/{uid}")
