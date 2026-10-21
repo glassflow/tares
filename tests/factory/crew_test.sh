@@ -520,8 +520,15 @@ api POST /api/desk "$(jq -cn --arg p "$FP" '{question: "No project is left. Stop
 FACTORY_CREW_HOME="$E" "$F" crew desk >"$T/ended-desk.out" 2>&1
 check "a running crew sees a finished project's question" 'grep -q "finishing: No project is left" "$T/ended-desk.out"'
 check "a question with nothing in blocks prints no empty blocks line" '! grep -qx "  blocks: *" "$T/ended-desk.out"'
+# TR-599: the same question asked with no project, and one crew-wide question that stays
+api POST /api/desk "$(jq -cn '{question: "No project is left. Stop the crew? Run `tares factory crew down` in your terminal.", recommendation: "yes", why: "nothing to build"}')" >/dev/null
+api POST /api/desk "$(jq -cn '{question: "Nothing left to build. Stop the crew?", recommendation: "yes", why: "shorter words"}')" >/dev/null
+api POST /api/desk "$(jq -cn '{question: "Keep nightly dependency bumps?", recommendation: "yes", why: "cheap"}')" >/dev/null
 FACTORY_CREW_HOME="$E" "$F" crew down >/dev/null 2>&1
 check "crew down withdraws it" 'api GET "/api/desk?state=withdrawn" | jq -e "any(.desk[]; .question == \"No project is left. Stop the crew?\")" >/dev/null'
+check "and the stop-the-crew question asked with no project" 'api GET "/api/desk?state=withdrawn" | jq -e "any(.desk[]; (.question | contains(\"crew down\")) and .project == null and .reason == \"the person stopped the crew\")" >/dev/null'
+check "and one in other words that still asks to stop the crew" 'api GET "/api/desk?state=withdrawn" | jq -e "any(.desk[]; .question == \"Nothing left to build. Stop the crew?\")" >/dev/null'
+check "a crew-wide question about something else stays open" 'api GET /api/desk | jq -e "any(.desk[]; .question == \"Keep nightly dependency bumps?\")" >/dev/null'
 api POST /api/desk "$(jq -cn --arg p "$FP" '{question: "Stop the crew now?", recommendation: "yes", why: "late", project: $p, blocking: true}')" >/dev/null
 FACTORY_CREW_HOME="$E" "$F" crew status >"$T/ended.out" 2>&1
 open_n=$(api GET /api/desk | jq '.desk | length')
