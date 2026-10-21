@@ -526,6 +526,71 @@ async def create_project(name: str, goal: str = "") -> str:
     return _out(r, ("id", "name", "goal"))
 
 
+@mcp.tool()
+async def list_people() -> str:
+    """The people on this Tares: id, name, email, GitHub login and whether they are an admin.
+    set_project_access takes a person by id or email."""
+    async with _cx(10) as cx:
+        r = await cx.get(f"{TARESD}/api/people")
+    if r.status_code >= 400:
+        return _out(r)
+    return json.dumps([{k: p.get(k) for k in ("id", "name", "email", "emails", "github", "is_admin")}
+                       for p in r.json().get("people") or []], default=str)
+
+
+def _person_in(people: list[dict], who: str) -> dict | None:
+    """The person with this id or email (main or extra, any case)."""
+    who = who.strip()
+    low = who.lower()
+    return next((p for p in people if who == p["id"] or low in
+                 [e.lower() for e in ([p.get("email")] + (p.get("emails") or [])) if e]), None)
+
+
+@writable()
+async def set_project_access(project: str = "", lead: str = "", scope: str = "",
+                             add_members: list[str] | None = None,
+                             remove_members: list[str] | None = None) -> str:
+    """Say who leads a project, whether it is `team` or `private`, and who is on it. `lead` is
+    the person to lead it, `scope` is team or private, `add_members` and `remove_members` are
+    people to put on or take off it. A person is given by id or email (list_people shows them).
+    Only the project's lead changes the scope or its members; an admin may change the lead.
+    Leave out what you do not want to change. Returns the project's lead, scope and members."""
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/people")
+        if r.status_code >= 400:
+            return _out(r)
+        people = r.json().get("people") or []
+        wanted = {}
+        for ref in [lead] + list(add_members or []) + list(remove_members or []):
+            if ref.strip():
+                wanted[ref] = _person_in(people, ref)
+                if wanted[ref] is None:
+                    return f"no person {ref!r}; list_people shows the ones there are"
+        if lead.strip() or scope.strip():
+            body = {}
+            if lead.strip():
+                body["lead_person_id"] = wanted[lead]["id"]
+            if scope.strip():
+                body["scope"] = scope.strip()
+            r = await cx.patch(f"{TARESD}/api/projects/{uid}", json=body)
+            if r.status_code >= 400:
+                return _out(r)
+        for ref in add_members or []:
+            r = await cx.post(f"{TARESD}/api/projects/{uid}/members",
+                              json={"person_id": wanted[ref]["id"]})
+            if r.status_code >= 400:
+                return _out(r)
+        for ref in remove_members or []:
+            r = await cx.delete(f"{TARESD}/api/projects/{uid}/members/{wanted[ref]['id']}")
+            if r.status_code >= 400:
+                return _out(r)
+        r = await cx.get(f"{TARESD}/api/projects/{uid}")
+    return _out(r, ("id", "name", "lead", "scope", "members"))
+
+
 @writable()
 async def write_doc(kind: str, title: str, body: str, id: str = "", project: str = "") -> str:
     """Write a markdown doc into the project, or replace one when `id` is given. `kind` is one

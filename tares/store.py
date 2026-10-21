@@ -99,6 +99,16 @@ CREATE TABLE IF NOT EXISTS people (
   created_at TIMESTAMPTZ,
   created_via TEXT
 );
+-- Who is on a project besides its lead (usecases.lead_person_id): reason 'manual' (the lead or
+-- the system added them) or 'ticket' (they hold one of its tickets). The lead is not a row.
+CREATE TABLE IF NOT EXISTS project_members (
+  project   TEXT,
+  person_id TEXT,
+  added_by  TEXT,
+  added_at  TIMESTAMPTZ,
+  reason    TEXT,
+  PRIMARY KEY (project, person_id)
+);
 CREATE TABLE IF NOT EXISTS catalog_sources (
   name       TEXT PRIMARY KEY,
   type       TEXT,
@@ -498,6 +508,11 @@ _MIGRATIONS = [
     # The person a key belongs to (a people.id); NULL = a key made before people existed, or one
     # nobody has bound yet. The cell reads who is calling from this, never from a header.
     "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS person_id TEXT",
+    # A project's lead (a people.id; NULL = nobody, as for every project made before people) and
+    # its scope, 'team' or 'private'. No DEFAULT for the same reason as paused above; NULL scope
+    # reads as 'team'.
+    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS lead_person_id TEXT",
+    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS scope TEXT",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -2242,13 +2257,16 @@ class Store(FactoryStore, ClaudeUsageStore):
         return True
 
     def create_project(self, uid: str, template: str, name: str, params: dict,
-                       status: str = "active", goal: str | None = None) -> None:
+                       status: str = "active", goal: str | None = None,
+                       lead_person_id: str | None = None) -> None:
         ts = now_utc()
         with self._lock:
             self.con.execute(
                 "INSERT INTO usecases (id, recipe, name, params, status, created_at, updated_at, "
-                "last_error, goal) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)",
-                [uid, template, name, json.dumps(params), status, ts, ts, goal or None])
+                "last_error, goal, lead_person_id, scope) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 'team')",
+                [uid, template, name, json.dumps(params), status, ts, ts, goal or None,
+                 lead_person_id or None])
 
     def update_project(self, uid: str, params: dict | None = None, status: str | None = None,
                        last_error: str | None = "", name: str | None = None,
@@ -2274,21 +2292,81 @@ class Store(FactoryStore, ClaudeUsageStore):
     def _project_row(r) -> dict:
         return {"id": r[0], "template": r[1], "name": r[2], "params": json.loads(r[3] or "{}"),
                 "status": r[4], "created_at": r[5], "updated_at": r[6], "last_error": r[7],
-                "goal": r[8], "kind": r[9]}
+                "goal": r[8], "kind": r[9], "lead_person_id": r[10],
+                "scope": r[11] or "team"}
 
     def list_projects(self) -> list[dict]:
         with self._lock:
             rows = self.con.execute(
                 "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
-                "goal, kind FROM usecases ORDER BY created_at").fetchall()
+                "goal, kind, lead_person_id, scope FROM usecases ORDER BY created_at").fetchall()
         return [self._project_row(r) for r in rows]
 
     def get_project(self, uid: str) -> dict | None:
         with self._lock:
             r = self.con.execute(
                 "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
-                "goal, kind FROM usecases WHERE id = ?", [uid]).fetchone()
+                "goal, kind, lead_person_id, scope FROM usecases WHERE id = ?", [uid]).fetchone()
         return self._project_row(r) if r else None
+
+    # ── who a project belongs to: its lead, its scope and its members (TR-623) ──
+    def set_project_lead(self, uid: str, person_id: str | None) -> None:
+        with self._lock:
+            self.con.execute("UPDATE usecases SET lead_person_id = ? WHERE id = ?",
+                             [person_id or None, uid])
+
+    def set_project_scope(self, uid: str, scope: str) -> None:
+        if scope not in ("team", "private"):
+            raise ValueError("scope is team or private")
+        with self._lock:
+            self.con.execute("UPDATE usecases SET scope = ? WHERE id = ?", [scope, uid])
+
+    def add_project_member(self, uid: str, person_id: str, added_by: str | None = None,
+                           reason: str = "manual") -> bool:
+        """Put a person on the project. True when they were added, False when they already were
+        a member (a second add changes nothing, the first reason stays)."""
+        if reason not in ("manual", "ticket"):
+            raise ValueError("reason is manual or ticket")
+        with self._lock:
+            if self.con.execute("SELECT 1 FROM project_members WHERE project = ? AND person_id = ?",
+                                [uid, person_id]).fetchone():
+                return False
+            self.con.execute(
+                "INSERT INTO project_members (project, person_id, added_by, added_at, reason) "
+                "VALUES (?, ?, ?, ?, ?)", [uid, person_id, added_by or None, now_utc(), reason])
+        return True
+
+    def remove_project_member(self, uid: str, person_id: str) -> bool:
+        """True when they were a member (a stored one; the lead is not)."""
+        with self._lock:
+            hit = self.con.execute("SELECT 1 FROM project_members WHERE project = ? "
+                                   "AND person_id = ?", [uid, person_id]).fetchone()
+            self.con.execute("DELETE FROM project_members WHERE project = ? AND person_id = ?",
+                             [uid, person_id])
+        return bool(hit)
+
+    def list_project_members(self, uid: str) -> list[dict]:
+        """The people on the project besides its lead, oldest first: {person_id, added_by,
+        added_at, reason}."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT person_id, added_by, added_at, reason FROM project_members "
+                "WHERE project = ? ORDER BY added_at, person_id", [uid]).fetchall()
+        return [{"person_id": r[0], "added_by": r[1], "added_at": r[2], "reason": r[3]}
+                for r in rows]
+
+    def is_project_member(self, uid: str, person_id: str | None) -> bool:
+        """The project's lead, or a person on its member list."""
+        if not person_id:
+            return False
+        with self._lock:
+            lead = self.con.execute("SELECT lead_person_id FROM usecases WHERE id = ?",
+                                    [uid]).fetchone()
+            if lead and lead[0] == person_id:
+                return True
+            return bool(self.con.execute(
+                "SELECT 1 FROM project_members WHERE project = ? AND person_id = ?",
+                [uid, person_id]).fetchone())
 
     def set_project_kind(self, uid: str, kind: str | None) -> None:
         with self._lock:
@@ -2320,6 +2398,7 @@ class Store(FactoryStore, ClaudeUsageStore):
             self.con.execute("DELETE FROM subscriptions WHERE project = ?", [uid])
             self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ?", [uid])
             self.con.execute("DELETE FROM project_wiring WHERE project = ?", [uid])
+            self.con.execute("DELETE FROM project_members WHERE project = ?", [uid])
             self._forget_unused_skills()   # a skill another project uses stays
             self._forget_unused_docs()     # so does a doc
             self.con.execute("DELETE FROM tickets WHERE project = ?", [uid])

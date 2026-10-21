@@ -6,6 +6,15 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Project access: a project has a lead (the person who made it; none for a project made with the
+  root token), a scope (`team` or `private`) and a member list, shown on `GET /api/projects` and
+  `GET /api/projects/{id}` as `lead`, `scope` and `members`. `PATCH /api/projects/{id}` sets the
+  lead and the scope, `POST /api/projects/{id}/members` and `DELETE .../members/{person}` change the
+  members. The lead changes all of it; an admin or the root token may change only the lead (which is
+  how a project with no lead is claimed). Nothing is hidden or refused by it yet. A project from
+  before reads as `team` with no lead.
+- MCP tools `list_people` and `set_project_access` (lead, scope, members added or removed, people
+  by id or email).
 - A recording carries the person who shipped it: the cell labels every Claude Code event pushed to
   `/ingest` with `tares_person=<person id>` from the key's person (`local` with auth off, no label
   for the root token), and drops any `tares_person` the sender wrote. Read by it like any label.

@@ -1457,7 +1457,9 @@ def apply(store, engine, plan: dict, make_key, draft: str | None = None) -> tupl
             if kept is not None:        # the draft comes back as it was
                 row, setup = kept
                 store.create_project(uid, row["template"], row["name"], row.get("params") or {},
-                                     status=DRAFT, goal=row.get("goal"))
+                                     status=DRAFT, goal=row.get("goal"),
+                                     lead_person_id=row.get("lead_person_id"))
+                store.set_project_scope(uid, row.get("scope") or "team")
                 store.set_project_setup(uid, setup)
             engine._do_reload()
         except Exception as undo:  # noqa: BLE001
