@@ -202,6 +202,57 @@ async def auth_on():
                (await cx.patch(f"{B}/api/people/{lena_id}", headers=H(AUTH),
                                json={"emails": ["kiran@glassflow.dev"]})).status_code == 409)
 
+            # ── the main email is checked like the extra ones (TR-618 follow-up) ──
+            for bad in ("foo", ["a"], ["a@b.com"], 5, {"x": 1}):
+                r = await cx.post(f"{B}/api/people", headers=H(AUTH), json={"name": "Bad", "email": bad})
+                ck(f"POST /api/people with email {bad!r} -> 400", r.status_code == 400
+                   and "—" not in r.text, r.text)
+                r = await cx.patch(f"{B}/api/people/{lena_id}", headers=H(AUTH), json={"email": bad})
+                ck(f"PATCH /api/people with email {bad!r} -> 400", r.status_code == 400
+                   and "—" not in r.text, r.text)
+            r = await cx.patch(f"{B}/api/people/{lena_id}", headers=H(AUTH), json={"email": "Lena2@Example.com"})
+            ck("a good main email is kept lowercased", r.status_code == 200
+               and r.json()["email"] == "lena2@example.com", r.text)
+            r = await cx.post(f"{B}/api/keys", headers=H(AUTH), json={
+                "name": "badp", "scopes": ["read"], "person": {"email": "nope", "name": "N"}})
+            ck("a key's person with a bad email -> 400", r.status_code == 400, r.text)
+
+            # ── who may rename themselves: the guard needs the read scope for PATCH /api/people ──
+            r = await cx.post(f"{B}/api/keys", headers=H(AUTH), json={
+                "name": "lena-ingest", "scopes": ["ingest"], "person_id": lena_id})
+            lena_ingest = r.json()["secret"]
+            r = await cx.patch(f"{B}/api/people/{lena_id}", headers=H(lena_ingest), json={"name": "Ingest Rename"})
+            ck("a bound ingest-only key cannot rename its person -> 403", r.status_code == 403, r.text)
+            ck("... and the name is untouched",
+               next(p for p in (await cx.get(f"{B}/api/people", headers=H(AUTH))).json()["people"]
+                    if p["id"] == lena_id)["name"] == "Lena K")
+            r = await cx.patch(f"{B}/api/people/{lena_id}", headers=H(lena_read), json={"name": "Lena Read"})
+            ck("a bound read key renames its person", r.status_code == 200 and r.json()["name"] == "Lena Read", r.text)
+
+            # ── two creations of one person at once: one wins, the others are told ──
+            rs = await asyncio.gather(*[cx.post(f"{B}/api/people", headers=H(AUTH), json={
+                "name": f"Race {i}", "github": "racer", "email": f"race{i}@example.com"})
+                for i in range(8)])
+            codes = sorted(r.status_code for r in rs)
+            ck("8 creations of one GitHub login at once: one 201, the rest 409",
+               codes == [201] + [409] * 7, str(codes))
+            people = (await cx.get(f"{B}/api/people", headers=H(AUTH))).json()["people"]
+            ck("... and one row", sum(1 for p in people if p["github"] == "racer") == 1, str(people))
+            rs = await asyncio.gather(*[cx.post(f"{B}/api/people", headers=H(AUTH), json={
+                "name": f"Same {i}", "email": "same@example.com"}) for i in range(8)])
+            codes = sorted(r.status_code for r in rs)
+            ck("8 creations of one email at once: one 201, the rest answer with that person (200)",
+               codes == [200] * 7 + [201] and len({r.json()["id"] for r in rs}) == 1, str(codes))
+            people = (await cx.get(f"{B}/api/people", headers=H(AUTH))).json()["people"]
+            ck("... and one row", sum(1 for p in people if p["email"] == "same@example.com") == 1)
+            rs = await asyncio.gather(*[cx.post(f"{B}/api/people", headers=H(AUTH), json={
+                "name": f"Extra {i}", "emails": ["extra@example.com"]}) for i in range(8)])
+            codes = sorted(r.status_code for r in rs)
+            ck("8 creations of one extra email at once: one 201, the rest 409",
+               codes == [201] + [409] * 7, str(codes))
+            people = (await cx.get(f"{B}/api/people", headers=H(AUTH))).json()["people"]
+            ck("... and one row", sum(1 for p in people if "extra@example.com" in p["emails"]) == 1)
+
             # ── a project key carries its person, and reaches nothing of the people routes ──
             pr = (await cx.post(f"{B}/api/projects", headers=H(AUTH), json={"template": "custom", "name": "pp", "objects": []})).json()
             r = await cx.post(f"{B}/api/keys", headers=H(AUTH), json={
@@ -267,8 +318,43 @@ def upgrade():
     s.con.close()
 
 
+def threads():
+    """Several threads create one person at once (the store, no HTTP): one row, no crash."""
+    import threading
+    from tares.store import Store
+    db = "/tmp/people_race.duckdb"
+    for p in (db, db + ".wal"):
+        if os.path.exists(p):
+            os.remove(p)
+    s = Store(db)
+
+    def race(fn):
+        out = []
+        def run(i):
+            try:
+                out.append(("ok", fn(i)))
+            except ValueError as e:
+                out.append(("clash", str(e)))
+            except Exception as e:   # anything else is the 500 this guards against
+                out.append(("crash", repr(e)))
+        ts = [threading.Thread(target=run, args=(i,)) for i in range(8)]
+        [t.start() for t in ts]; [t.join() for t in ts]
+        return out
+
+    out = race(lambda i: s.create_person(f"T{i}", email="t@example.com"))
+    ck("8 threads create one email: one wins, 7 clash, none crash",
+       sorted(k for k, _ in out) == ["clash"] * 7 + ["ok"], str(out))
+    ck("... one row", sum(1 for p in s.list_people() if p["email"] == "t@example.com") == 1)
+    out = race(lambda i: s.person_or_create("u@example.com", f"U{i}")["id"])
+    ck("8 threads person_or_create one email: all get the same person",
+       {k for k, _ in out} == {"ok"} and len({v for _, v in out}) == 1, str(out))
+    ck("... one row", sum(1 for p in s.list_people() if p["email"] == "u@example.com") == 1)
+    s.con.close()
+
+
 asyncio.run(auth_on())
 asyncio.run(auth_off())
 upgrade()
+threads()
 print(f"\n{P} passed, {F} failed")
 raise SystemExit(1 if F else 0)

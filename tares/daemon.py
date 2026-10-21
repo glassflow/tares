@@ -849,8 +849,13 @@ def make_app() -> FastAPI:
         body. With auth off it is the person `local`."""
         ident = getattr(request.state, "credential", None)
         if ident is not None:
-            return ident.get("person")
-        return _person_ref(store.get_person("local")) if not AUTH_TOKEN else None
+            return ident.get("person")   # resolved once, by the guard
+        # auth off: look `local` up once per request and keep it on the request
+        if AUTH_TOKEN:
+            return None
+        if not hasattr(request.state, "person"):
+            request.state.person = _person_ref(store.get_person("local"))
+        return request.state.person
 
     def _is_admin(request) -> bool:
         """The credential may manage people and keys: admin scope (the system credential has it),
@@ -1409,7 +1414,7 @@ def make_app() -> FastAPI:
                 spec["email"], spec.get("name"),
                 via="cloud" if ident.get("kind") == "system" else "key")["id"]
         except ValueError as e:
-            _err(e, 409)
+            _err(e, 409 if "already belongs" in str(e) else 400)
 
     @app.post("/api/keys", status_code=201)
     async def create_key(request: Request, body: dict = Body(...)):
@@ -1461,14 +1466,15 @@ def make_app() -> FastAPI:
     async def create_person(body: dict = Body(...)):
         """{name, email?, emails?, github?, is_admin?}. 201 with the new person; 200 with the
         existing one when that email is already someone's."""
-        email = body.get("email")
-        found = store.find_person_by_email(email) if email else None
-        if found:
-            return _person_out(found)
         try:
+            email = store.check_email(body.get("email"))
+            found = store.find_person_by_email(email) if email else None
+            if found:
+                return _person_out(found)
             p = store.create_person(body.get("name"), email, body.get("emails"), body.get("github"),
                                     bool(body.get("is_admin")), via="admin")
         except ValueError as e:
+            # a second creation of the same email, extra email or GitHub login answers 409
             _err(e, 409 if "already belongs" in str(e) else 400)
         return JSONResponse(_person_out(p), status_code=201)
 
@@ -4398,7 +4404,12 @@ def make_app() -> FastAPI:
         ids = _global_ids(create=True)
         cur = store.get_doc(None, ids[kind])
         try:
-            text, added = docs_mod.append_line(cur["body"], body.get("text"))
+            person = _current_person(request)
+            # the name sits in a shared doc: one line, so a name cannot add a bullet of its own
+            who = " ".join(str((person or {}).get("name") or "").split())[:60].strip()
+            note = (f" (added by {who}, {datetime.now(timezone.utc).date().isoformat()})"
+                    if who else "")
+            text, added = docs_mod.append_line(cur["body"], body.get("text"), note)
         except docs_mod.DocError as e:
             _err(e)
         if added:
@@ -4507,7 +4518,7 @@ def make_app() -> FastAPI:
             by_id = ctx["by_id"]
             out["assumptions"] = [
                 {**{k: a[k] for k in ("label", "question", "choice", "why", "state", "words",
-                                      "made_by")},
+                                      "made_by", "person", "by_label")},
                  "tickets": [factory_mod.label(by_id[x]) for x in a["tickets"] if x in by_id]}
                 for a in store.list_assumptions(uid, ticket=t["id"])]
             out.update(factory_api.review_state(store, uid, t, _cc_source()))

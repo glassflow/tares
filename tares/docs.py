@@ -14,6 +14,8 @@ This module validates what the API and the MCP tools hand the store.
 """
 from __future__ import annotations
 
+import re
+
 DOC_KINDS = {
     "spec": "what is built and why",
     "plan": "milestones and the order of work",
@@ -48,19 +50,24 @@ GRANTS_DOC = ("Grants (all projects)",
 MAX_LINE = 500
 
 
-def append_line(body: str, text) -> tuple[str, bool]:
+_ADDED_NOTE = re.compile(r" \(added by .+, \d{4}-\d{2}-\d{2}\)$")
+
+
+def append_line(body: str, text, note: str = "") -> tuple[str, bool]:
     """(the body with `- text` added at the end, whether it changed). A line already there is
-    not added twice."""
+    not added twice, whoever added it and when: `note` (" (added by Kiran, 2026-10-21)") is
+    kept out of that comparison, and one on the new line is dropped before it is compared
+    or stored."""
     line = " ".join(str(text or "").split())
     if not line:
         raise DocError("say what to add: one line")
     if len(line) > MAX_LINE:
         raise DocError(f"the line is {len(line)} characters; keep it to {MAX_LINE}")
-    entry = f"- {line.lstrip('- ').strip()}"
-    if entry in body.splitlines():
+    entry = _ADDED_NOTE.sub("", f"- {line.lstrip('- ').strip()}")
+    if entry in {_ADDED_NOTE.sub("", x) for x in body.splitlines()}:
         return body, False
     sep = "" if not body or body.endswith("\n") else "\n"
-    return f"{body}{sep}{entry}\n", True
+    return f"{body}{sep}{entry}{note}\n", True
 
 TICKET_STATUSES = ("todo", "in_progress", "done", "canceled")
 TICKET_OWNERS = ("tares", "linear", "github")

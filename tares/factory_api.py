@@ -387,7 +387,8 @@ def register(app, store, h: SimpleNamespace) -> None:
             out.append({"id": uid, "name": names[uid], **project_progress(store, uid),
                         "repos": repo_rows(uid, ho.get("repos") or []),
                         "autonomy": ho.get("autonomy"), "handed_over_at": ho.get("at"),
-                        "handed_over_by": ho.get("by")})
+                        "handed_over_by": ho.get("by_label") or ho.get("by"),
+                        "handed_over_person": ho.get("person")})
         out.sort(key=lambda p: str(p["handed_over_at"] or ""))
         done = []
         for uid in store.handed_over_projects(finished=True):
@@ -488,9 +489,24 @@ def register(app, store, h: SimpleNamespace) -> None:
             h.err(KeyError(f"project has no ticket {ref!r}"), 404)
         return t
 
-    def who(request: Request, body: dict | None = None) -> tuple[str, str]:
+    def by_of(request: Request, body: dict | None = None) -> str:
+        """The name a record keeps for the call: the station, else what the caller says. A key's
+        own name stands in only when no person stands behind the call (TR-619): next to a person
+        it is not a station, and the person's name shows instead."""
         c = caller(request)
-        return (c["station"] or h.by(request, body) or "a session"), c["role"]
+        said = str((body or {}).get("by") or "").strip()[:100]
+        if c["station"] or said:
+            return c["station"] or said
+        return "" if h.current_person(request) else (h.by(request, body) or "")
+
+    def who(request: Request, body: dict | None = None) -> tuple[str, str]:
+        return (by_of(request, body) or "a session"), caller(request)["role"]
+
+    def person_of(request: Request) -> str | None:
+        """The person behind the call's credential, for the record of who did it (TR-619). None
+        for the system credential."""
+        p = h.current_person(request)
+        return p["id"] if p else None
 
     @app.post("/api/projects/{uid}/tickets/{ref}/assign")
     async def assign_ticket(uid: str, ref: str, request: Request, body: dict = Body(...)):
@@ -507,7 +523,8 @@ def register(app, store, h: SimpleNamespace) -> None:
             fields["stage"] = "todo"
         store.update_ticket(t["id"], **fields)
         by, role = who(request, body)
-        store.add_ticket_history(t["id"], uid, "holder", holder, None, by, role, now_utc())
+        store.add_ticket_history(t["id"], uid, "holder", holder, None, by, role, now_utc(),
+                                 person_of(request))
         return h.ticket_out(uid, ticket_or_404(uid, t["id"]), with_doc=False)
 
     @app.post("/api/projects/{uid}/tickets/{ref}/stage")
@@ -539,7 +556,8 @@ def register(app, store, h: SimpleNamespace) -> None:
             fields["pr"] = await factory_github.read_pr(store, parsed[0], parsed[1], prev)
         store.update_ticket(t["id"], **fields)
         by, role = who(request, body)
-        store.add_ticket_history(t["id"], uid, "stage", stage, reason, by, role or None, now_utc())
+        store.add_ticket_history(t["id"], uid, "stage", stage, reason, by, role or None, now_utc(),
+                                 person_of(request))
         if fields.get("pr"):   # a PR GitHub already shows merged makes the ticket merged
             after = ticket_or_404(uid, t["id"])
             merged = merged_fields(after, fields["pr"])
@@ -599,7 +617,7 @@ def register(app, store, h: SimpleNamespace) -> None:
             h.err(e)
         by, role = who(request, body)
         a = store.add_assumption(uid, q, choice, why, affects, ticket_ids(uid, body.get("tickets")),
-                                 by, role, now_utc())
+                                 by, role, now_utc(), person_of(request))
         return assumption_out(uid, a)
 
     @app.get("/api/projects/{uid}/assumptions")
@@ -643,7 +661,7 @@ def register(app, store, h: SimpleNamespace) -> None:
             h.err(e)
         by, _ = who(request, body)
         store.add_check(uid, t["id"], cmd, result, commit, broke, caller(request)["station"],
-                        "", now_utc())
+                        "", now_utc(), person_of(request))
         line = factory_mod.check_line(cmd, result, commit, broke)
         doc_id = t["working_doc"]
         if doc_id and store.get_doc(uid, doc_id):
@@ -721,7 +739,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         by, _ = who(request, body)
         r = store.add_review(uid, t["id"], (t["pr"] or {}).get("url"), head, verdict, verified,
                              not_verified, by, findings, resolved, factory_mod.finding_kind,
-                             now_utc())
+                             now_utc(), person_of(request))
         repo = (t["pr"] or {}).get("repo")
         if repo:
             offer_rules(repo)
@@ -980,7 +998,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         d = store.add_desk_item(uid, q, ctx, opts, rec, why,
                                 " ".join(str(body.get("blocks") or "").split())[:300], tickets,
                                 bool(body.get("blocking")), str(body.get("asked_by") or by)[:120],
-                                asm, now_utc(), station, command)
+                                asm, now_utc(), station, command, person_of(request))
         return desk_out(d)
 
     @app.get("/api/desk")
@@ -1113,7 +1131,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         dec = store.add_decision(d["project"], d["id"], d["question"], words,
                                  choice[:300], standing, scope,
                                  hit is not None, hit["session"] if hit else None, granted,
-                                 d["tickets"], now_utc())
+                                 d["tickets"], now_utc(), person_id=person_of(request))
         store.close_desk_item(d["id"], "answered", None, now_utc())
         by_id = {t["id"]: t for t in store.list_tickets(d["project"])} if d["project"] else {}
         follow = [{"assumption": c["label"],
@@ -1162,7 +1180,7 @@ def register(app, store, h: SimpleNamespace) -> None:
                              "the person, in the console")
         dec = store.add_decision(d["project"], d["id"], d["question"], words, "allowed", True,
                                  scope, False, None, True, d["tickets"], now_utc(),
-                                 via="console")
+                                 via="console", person_id=person_of(request))
         store.close_desk_item(d["id"], "answered", None, now_utc())
         return {"desk_item": desk_out(desk_or_404(d["id"])), "decision": dec,
                 "station": d["station"], "line": line, "added": added, "scope": scope}
@@ -1194,7 +1212,8 @@ def register(app, store, h: SimpleNamespace) -> None:
         old = store.get_handover(uid) or {}
         repos = factory_mod.merge_repos(old.get("repos") or [], new)
         autonomy = autonomy or old.get("autonomy")
-        store.set_handover(uid, repos, autonomy, h.by(request, body), now_utc())
+        store.set_handover(uid, repos, autonomy, by_of(request, body), now_utc(),
+                           person_of(request))
         if old.get("finished"):   # more work on a finished project: it is open again
             store.update_project(uid, status="active")
         include_shared_grants(uid)   # a crew-built project shows the grants it is built under
@@ -1221,7 +1240,7 @@ def register(app, store, h: SimpleNamespace) -> None:
             words = " ".join(str(body.get("words") or "").split())[:500] or \
                 "Taken over by the person with tares factory session"
             by, _ = who(request, body)
-            store.take_over(uid, words, by, now_utc())
+            store.take_over(uid, words, by, now_utc(), person_of(request))
         return {"project": uid, "name": p["name"], "takeover": store.get_handover(uid)["takeover"],
                 "holders": sorted({t["holder"] for t in store.list_tickets(uid) if t["holder"]})}
 
@@ -1244,7 +1263,8 @@ def register(app, store, h: SimpleNamespace) -> None:
                 if t["holder"]:
                     store.update_ticket(t["id"], holder=None)
                     store.add_ticket_history(t["id"], uid, "holder", None,
-                                             "released to the person's session", by, role, at)
+                                             "released to the person's session", by, role, at,
+                                             person_of(request))
             store.release_takeover(uid, at)
         return {"project": uid, "name": p["name"],
                 "takeover": store.get_handover(uid)["takeover"]}
@@ -1342,7 +1362,7 @@ def register(app, store, h: SimpleNamespace) -> None:
             # the person, in their own terminal: their words, or that they marked it themselves
             words = " ".join(str(body.get("words") or "").split())[:500] or \
                 "Marked done by the person with tares factory finish"
-            store.finish_handover(uid, words, None, by, now_utc())
+            store.finish_handover(uid, words, None, by, now_utc(), person_of(request))
             store.update_project(uid, status="done")
             close_project_desk(uid)
             return {"project": uid, "name": p["name"], "finished": store.get_handover(uid)["finished"],
@@ -1359,7 +1379,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         if d["state"] != "answered" or dec is None or not dec["matched"]:
             h.err(ValueError(f"{d['label']} has no answer from the person yet: record their words "
                              "with desk_answer first"), 409)
-        store.finish_handover(uid, dec["words"], d["label"], by, now_utc())
+        store.finish_handover(uid, dec["words"], d["label"], by, now_utc(), person_of(request))
         store.update_project(uid, status="done")
         close_project_desk(uid)
         return {"project": uid, "name": p["name"], "finished": store.get_handover(uid)["finished"],

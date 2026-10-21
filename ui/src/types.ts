@@ -346,6 +346,9 @@ export interface Skill {
 }
 
 // Docs and tickets (TR-403): what a spec session leaves in a project for the session that builds it
+// The person behind a record (TR-619): who stood behind the call, and `by_label` says it in words
+// ("Kiran (crew-builder-1)", or just "Kiran" when no station was named).
+export interface PersonRef { id: string; name: string }
 export type DocKind = "start" | "spec" | "plan" | "agents" | "memory" | "grants" | "note" | "working";
 export interface DocSummary {
   id: string;
@@ -387,9 +390,9 @@ export interface Ticket {
   stage_reason: string | null;
   pr: TicketPR | null;
   pr_note: string | null;         // the stage and GitHub disagree
-  history?: { at: string; field: "holder" | "stage"; value: string | null; reason: string | null; by: string | null; role: string | null }[];
+  history?: { at: string; field: "holder" | "stage"; value: string | null; reason: string | null; by: string | null; role: string | null; person?: PersonRef | null; by_label?: string | null }[];
   // the build, recorded (TR-433, TR-435)
-  assumptions?: { label: string; question: string; choice: string; why: string; state: AssumptionState; words: string | null; made_by: string | null; tickets: string[] }[];
+  assumptions?: { label: string; question: string; choice: string; why: string; state: AssumptionState; words: string | null; made_by: string | null; person?: PersonRef | null; by_label?: string | null; tickets: string[] }[];
   checks?: TicketCheck[];
   // review and merge (TR-440..444)
   verdict?: VerdictNow | null;
@@ -399,7 +402,7 @@ export interface Ticket {
 export interface VerdictNow { verdict: "pass" | "changes" | "block"; head: string; round: number; at: string; current: boolean; note: string | null }
 export interface ChallengeFinding { priority?: string; title?: string; waived?: boolean; reason?: string }
 export interface ReviewFinding { id: string; label: string; severity: "P1" | "P2" | "P3"; file: string | null; line: number | null; blocking: boolean; text: string; kind: string; state: "open" | "fixed"; fixed_in: string | null }
-export interface Review { id: string; round: number; pr: string | null; head: string; verdict: "pass" | "changes" | "block"; verified: string; not_verified: string | null; by: string | null; at: string; findings: ReviewFinding[]; fixed: string[] }
+export interface Review { id: string; round: number; pr: string | null; head: string; verdict: "pass" | "changes" | "block"; verified: string; not_verified: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null; at: string; findings: ReviewFinding[]; fixed: string[] }
 export interface DeskItem {
   id: string; label: string; project: string | null; project_name: string | null; question: string;
   context: string; options: string[]; recommendation: string; why: string; blocks: string;
@@ -407,12 +410,14 @@ export interface DeskItem {
   state: "open" | "answered" | "withdrawn"; reason: string | null; created_at: string; closed_at: string | null;
   // a permission request: the station that was refused and the exact command
   station: string | null; command: string | null;
+  person?: PersonRef | null; by_label?: string | null;   // who asked: the person, and the station when there is one
 }
 export interface DeskAllowed { desk_item: DeskItem; decision: Decision; station: string; line: string; added: boolean; scope: "project" | "all" }
 export interface Decision {
   id: string; label: string | null; question: string; words: string; choice: string | null;
   standing: boolean; scope: "project" | "all"; matched: boolean; granted: boolean; tickets: string[]; at: string;
   via: "console" | null;   // "console": a permission allowed there, with no typed words to match
+  person?: PersonRef | null;   // who decided
 }
 export interface QueueItem { project: string; project_name: string; ticket: string; title: string; holder: string | null; repo: string | null; pr: string | null; head: string | null; waiting_minutes: number | null; blocks_milestone: boolean; layer1_clean: boolean; verdict: VerdictNow | null }
 export interface RuleProposal { id: string; repo: string; kind: string; project: string | null; scope: "project" | "all"; text: string; tickets: string[]; state: "open" | "accepted" | "rejected"; created_at: string }
@@ -420,11 +425,12 @@ export type AssumptionState = "open" | "kept" | "overturned";
 export interface Assumption {
   id: string; label: string; number: number; question: string; choice: string; why: string;
   affects: string; tickets: string[]; state: AssumptionState; words: string | null;
-  made_by: string | null; made_at: string; decided_at: string | null;
+  made_by: string | null; person?: PersonRef | null; by_label?: string | null;
+  made_at: string; decided_at: string | null;
 }
 export interface TicketCheck {
   id: string; command: string; result: string; commit: string | null; broke_test: string | null;
-  by: string | null; at: string;
+  by: string | null; person?: PersonRef | null; by_label?: string | null; at: string;
   match?: "matched" | "not_found" | "differs" | null; recorded?: string | null;
 }
 export type TicketStage = "todo" | "doing" | "review" | "changes" | "merged" | "shipped" | "blocked";
@@ -519,8 +525,8 @@ export interface CrewSettings {
   builders_max: number | null;
 }
 export interface HandoverRepo { path: string | null; name: string | null }
-export interface ProjectFinished { at: string; words: string; decision: string | null; by: string | null }
-export interface Handover { repo: string | null; repos: HandoverRepo[]; autonomy: string | null; by: string | null; at: string; finished?: ProjectFinished | null }
+export interface ProjectFinished { at: string; words: string; decision: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null }
+export interface Handover { repo: string | null; repos: HandoverRepo[]; autonomy: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null; at: string; finished?: ProjectFinished | null }
 // A repo a project touches, with the tickets that change it and their open pull requests (TR-463)
 export interface RepoPR {
   url: string; ticket: string; number: number | null; title: string; branch: string | null;

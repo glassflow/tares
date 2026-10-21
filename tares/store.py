@@ -3927,6 +3927,19 @@ class Store(FactoryStore, ClaudeUsageStore):
         return e or None
 
     @classmethod
+    def check_email(cls, email) -> str | None:
+        """The main email, lowercased: None for none (None or empty), ValueError when it is not
+        a string holding an @."""
+        if email is None:
+            return None
+        if not isinstance(email, str):
+            raise ValueError("email must be an email address")
+        e = cls._norm_email(email)
+        if e and "@" not in e:
+            raise ValueError(f"{e!r} is not an email address")
+        return e
+
+    @classmethod
     def _norm_emails(cls, emails) -> list[str]:
         """A list of addresses, lowercased, without repeats. Anything else (a bare string would
         be split into letters) or an entry without an @ raises ValueError."""
@@ -3956,7 +3969,7 @@ class Store(FactoryStore, ClaudeUsageStore):
         name = str(name or "").strip()
         if not name:
             raise ValueError("name is required")
-        email = self._norm_email(email)
+        email = self.check_email(email)
         extra = self._norm_emails(emails)
         github = str(github or "").strip().lstrip("@").lower() or None
         with self._lock:
@@ -4014,7 +4027,7 @@ class Store(FactoryStore, ClaudeUsageStore):
             if not new["name"]:
                 raise ValueError("name cannot be empty")
         if "email" in fields:
-            new["email"] = self._norm_email(fields["email"])
+            new["email"] = self.check_email(fields["email"])
         if "emails" in fields:
             new["emails"] = self._norm_emails(fields["emails"])
         if "github" in fields:
@@ -4038,12 +4051,12 @@ class Store(FactoryStore, ClaudeUsageStore):
     def person_or_create(self, email: str, name: str | None = None, via: str = "key") -> dict:
         """The person with this email, made first when there is none (named by `name`, else by
         the part of the email before the @). Asking twice for one email gives one person."""
-        found = self.find_person_by_email(email)
-        if found:
-            return found
-        e = self._norm_email(email)
+        e = self.check_email(email)
         if not e:
             raise ValueError("an email is required")
+        found = self.find_person_by_email(e)
+        if found:
+            return found
         try:
             return self.create_person(str(name or "").strip() or e.split("@")[0], email=e, via=via)
         except ValueError:
@@ -4056,7 +4069,9 @@ class Store(FactoryStore, ClaudeUsageStore):
     def only_local_person(self) -> bool:
         """True while `local` is the only person on the cell: a key nobody has bound still acts
         as them, so a single-user cell keeps working."""
-        return [p["id"] for p in self.list_people()] == ["local"]
+        with self._lock:
+            rows = self.con.execute("SELECT id FROM people LIMIT 2").fetchall()
+        return [r[0] for r in rows] == ["local"]
 
     def touch_api_key(self, kid: str) -> None:
         with self._lock:
