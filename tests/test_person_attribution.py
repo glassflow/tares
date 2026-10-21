@@ -6,12 +6,16 @@ person `local`, named "You".
 
 Run: .venv/bin/python tests/test_person_attribution.py
 """
-import asyncio, os, subprocess, sys
+import asyncio, json, logging, os, shutil, subprocess, sys, tempfile
 from datetime import datetime, timezone
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _env import clean_env
+import tares.mcp_factory as mf
+import tares.mcp_server as m
+
+logging.getLogger("httpx").setLevel(logging.WARNING)   # the MCP import turns request logs on
 
 P = F = 0
 def ck(l, c, d=""):
@@ -170,6 +174,18 @@ async def auth_on():
             decs = decs.get("decisions", decs)
             ck("decisions listing: Ben", decs and name_of(decs[0]) == "Ben", str(decs))
 
+            print("== the MCP outputs ==")
+            m.TARESD = mf.TARESD = B
+            m._cx = mf._cx = lambda timeout=10: httpx.AsyncClient(timeout=timeout, headers=A)
+            out = json.loads(await mf.list_assumptions(project=uid))
+            ck("list_assumptions: person and by_label", out and name_of(out[0]) == "Ann"
+               and out[0].get("by_label") == "Ann", str(out))
+            out = json.loads(await mf.desk_list(state="", project=uid))
+            ck("desk_list: person and by_label on each item", len(out) == 2
+               and all(name_of(d) == "Ann" and d.get("by_label") for d in out), str(out))
+            out = json.loads(await mf.list_decisions(project=uid))
+            ck("list_decisions: person", out and name_of(out[0]) == "Ben", str(out))
+
             print("== handover ==")
             r = await cx.post(f"{B}/api/projects/{uid}/handover", headers=Bn,
                               json={"repos": [{"path": "/w/shop"}]})
@@ -207,6 +223,8 @@ async def auth_on():
             ck("Ann adds a line", r.status_code == 200 and r.json()["added"], r.text)
             ck("line ends (added by Ann, date)", r.json()["body"].rstrip().endswith(
                 f"- Run the tests before you push (added by Ann, {TODAY})"), r.json()["body"][-200:])
+            ck("doc updated_by is the person, not the key's name", r.json()["updated_by"] == "Ann",
+               r.text[:300])
             r = await cx.post(f"{B}/api/docs/global/agents/lines", headers=Bn,
                               json={"text": "Run the tests before you push"})
             ck("the same line from Ben is not added again", r.status_code == 200
@@ -216,8 +234,14 @@ async def auth_on():
                               json={"text": "Keep commits short"})
             ck("Ben adds another", r.json()["body"].rstrip().endswith(
                 f"- Keep commits short (added by Ben, {TODAY})"), r.json()["body"][-200:])
+            r = await cx.post(f"{B}/api/docs/global/agents/lines", headers=A,
+                              json={"text": "Name yourself", "by": "Ann's script"})
+            ck("doc updated_by: what the caller says comes first", r.json()["updated_by"]
+               == "Ann's script", r.text[:300])
             r = await cx.post(f"{B}/api/docs/global/agents/lines", headers=ROOT,
                               json={"text": "No person behind the root token"})
+            ck("doc updated_by: the system credential keeps its own name", r.json()["updated_by"]
+               == "auth token (env)", r.json()["updated_by"])
             ck("the system credential adds a plain line", r.json()["body"].rstrip().endswith(
                 "- No person behind the root token"), r.json()["body"][-200:])
 
@@ -297,11 +321,8 @@ def unit():
 
     print("== hand-over columns ==")
     from tares.store import Store
-    db = "/tmp/person_attr_store.duckdb"
-    for p in (db, db + ".wal"):
-        if os.path.exists(p):
-            os.remove(p)
-    s = Store(db)
+    tmp = tempfile.mkdtemp(prefix="person-attr-store-")
+    s = Store(os.path.join(tmp, "store.duckdb"))
     ann = s.create_person("Ann", "ann@glassflow.dev")["id"]
     ben = s.create_person("Ben", "ben@glassflow.dev")["id"]
     at = datetime.now(timezone.utc)
@@ -319,6 +340,7 @@ def unit():
        tuple(left) == (ben, None, None) and ho["finished"] is None and ho["takeover"] is None,
        f"{left} {ho}")
     s.con.close()
+    shutil.rmtree(tmp, ignore_errors=True)
 
 
 async def main():

@@ -138,7 +138,7 @@ async def list_assumptions(state: str = "", project: str = "") -> str:
     if r.status_code >= 400:
         return _out(r)
     return json.dumps([{k: a.get(k) for k in ("label", "question", "choice", "why", "tickets",
-                                              "state", "words", "made_by")}
+                                              "state", "words", "made_by", "person", "by_label")}
                        for a in r.json().get("assumptions") or []], default=str)
 
 
@@ -261,7 +261,8 @@ async def recurring_findings(repo: str) -> str:
 def _desk_line(d: dict) -> dict:
     return {k: d.get(k) for k in ("label", "project_name", "question", "options", "recommendation",
                                   "why", "context", "blocks", "tickets", "blocking", "asked_by",
-                                  "assumptions", "station", "command", "state", "created_at")}
+                                  "assumptions", "station", "command", "state", "created_at", "person",
+                                  "by_label")}
 
 
 @writable()
@@ -362,7 +363,7 @@ async def list_decisions(project: str = "") -> str:
     if r.status_code >= 400:
         return _out(r)
     return json.dumps([{k: d.get(k) for k in ("label", "question", "words", "choice", "standing",
-                                              "matched", "via", "tickets", "at")}
+                                              "matched", "via", "tickets", "at", "person")}
                        for d in r.json().get("decisions") or []], default=str)
 
 
