@@ -5,6 +5,11 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.51.0] - 2026-10-21
+
+The write-back webhook hears about runs that were refused, and the software factory crew keeps
+the person's answers and tidies up after `crew down`.
+
 ### Added
 - The write-back webhook gets a `skipped` event when a run a trigger dispatched is refused
   before it starts: `reason` is `daily_cap` (the agent's runs in 24 hours), `budget_exhausted`
@@ -12,6 +17,18 @@ the project follows [Semantic Versioning](https://semver.org/).
   in `in_flight_run_id`), with the `message` the run records. It carries the `key` and `labels` a
   finding would, so a receiver that files findings by the firing, as Rius does, stops waiting
   for one that never comes (RIUS-1103). A rerun, a bootstrap run or a hand-off sends none.
+
+### Fixed
+- Software factory: a reply the person types while the orchestrator's turn is still running now
+  reaches Tares as their turn, so the desk records it as their answer. Before, Claude Code kept it
+  only as a queued message and `desk_answer` never found it (TR-522). Messages from other sessions
+  and task notifications still stay out.
+- `tares factory crew down` withdraws the "stop the crew?" question, whether or not it was asked
+  with a project, so it no longer sits on the desk after the crew has stopped (TR-599).
+
+### Changed
+- Project page: the crew's own stations in the crew list link to the Crew page, where their
+  sessions live.
 
 ## [1.50.0] - 2026-10-20
 
