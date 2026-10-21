@@ -578,7 +578,7 @@ function AccessTab() {
   const [me, setMe] = useState<Whoami>();
   const [people, setPeople] = useState<Person[]>();
   const [err, setErr] = useState<string>();
-  const loadPeople = () => api.people().then((r) => setPeople(r.people))
+  const loadPeople = () => api.people().then((r) => { setPeople(r.people); setErr(undefined); })
     .catch((e) => setErr(String((e as Error).message ?? e)));
   useEffect(() => {
     api.whoami().then(setMe).catch(() => undefined);
@@ -596,7 +596,10 @@ function AccessTab() {
 
 const personLabel = (p: Person) => p.email ? `${p.name} (${p.email})` : p.name;
 
-type PersonDraft = { id: string; name: string; email: string; github: string; is_admin: boolean };
+// `oldEmail` and `extras` are the person's main and extra addresses as loaded: an edit that changes
+// the main email keeps the old one among the extras, so the person is still found by it.
+type PersonDraft = { id: string; name: string; email: string; github: string; is_admin: boolean;
+                     oldEmail: string; extras: string[] };
 
 // Who is on the cell. Everyone who can read sees the list; an admin adds people and edits them.
 function PeoplePanel({ people, admin, err: loadErr, onChanged }: {
@@ -608,8 +611,9 @@ function PeoplePanel({ people, admin, err: loadErr, onChanged }: {
 
   const start = (p?: Person) => {
     setErr(undefined);
-    setEditing(p ? { id: p.id, name: p.name, email: p.email ?? "", github: p.github ?? "", is_admin: p.is_admin }
-                 : { id: "new", name: "", email: "", github: "", is_admin: false });
+    setEditing(p ? { id: p.id, name: p.name, email: p.email ?? "", github: p.github ?? "", is_admin: p.is_admin,
+                     oldEmail: p.email ?? "", extras: p.emails }
+                 : { id: "new", name: "", email: "", github: "", is_admin: false, oldEmail: "", extras: [] });
   };
   const save = async () => {
     if (!editing) return;
@@ -617,8 +621,22 @@ function PeoplePanel({ people, admin, err: loadErr, onChanged }: {
     const body = { name: editing.name.trim(), email: editing.email.trim(), github: editing.github.trim(),
                    is_admin: editing.is_admin };
     try {
-      if (editing.id === "new") await api.createPerson(body);
-      else await api.updatePerson(editing.id, body);
+      if (editing.id === "new") {
+        const made = await api.createPerson(body);
+        // an email that is already someone's answers with that person (nothing was added): say so
+        const known = people?.find((p) => p.id === made.id);
+        if (known) {
+          setErr(`${body.email} already belongs to ${known.name}.`);
+          setBusy(false);
+          return;
+        }
+      } else {
+        const email = body.email.toLowerCase();
+        const old = editing.oldEmail;
+        const emails = old && email !== old.toLowerCase() ? [...editing.extras.filter((x) => x !== email), old]
+                                                          : undefined;
+        await api.updatePerson(editing.id, emails ? { ...body, emails } : body);
+      }
       setEditing(undefined);
       onChanged();
     } catch (e) { setErr(String((e as Error).message ?? e)); }
@@ -1292,6 +1310,14 @@ function ApiKeysPanel({ people, admin, me }: { people: Person[]; admin: boolean;
   const [creating, setCreating] = useState(false);
   const [showRevoked, setShowRevoked] = useState(false);
   const personNames = Object.fromEntries([["", "No person"], ...people.map((p) => [p.id, personLabel(p)])]);
+  // the key's own person is always a choice, named even before the people have loaded (or when
+  // they failed to), so the picker never shows a raw id
+  const personChoices = (k: ApiKey) => {
+    const ids = people.map((p) => p.id);
+    if (!k.person) return { options: ["", ...ids], labels: personNames };
+    return { options: ids.includes(k.person.id) ? ids : [k.person.id, ...ids],
+             labels: { ...personNames, [k.person.id]: personNames[k.person.id] ?? k.person.name } };
+  };
   const bind = async (k: ApiKey, personId: string) => {
     if (!personId || personId === k.person?.id) return;
     try { await api.setKeyPerson(k.id, personId); } catch (e) { setErr(String((e as Error).message ?? e)); }
@@ -1354,8 +1380,7 @@ function ApiKeysPanel({ people, admin, me }: { people: Person[]; admin: boolean;
                 <td>{keyTitle(k.name) ? <>{keyTitle(k.name)}<InternalName name={k.name} /></> : k.name}</td>
                 <td>{admin && !k.revoked_at
                   ? <Picker value={k.person?.id ?? ""} ariaLabel={`person for ${k.name}`} style={{ width: 200 }}
-                            options={k.person ? people.map((p) => p.id) : ["", ...people.map((p) => p.id)]}
-                            labels={personNames} onChange={(v) => bind(k, v)} />
+                            {...personChoices(k)} onChange={(v) => bind(k, v)} />
                   : k.person ? k.person.name : <span className="help">No person</span>}</td>
                 <td>{k.scopes.map((s) => <span className="chip" key={s} title={SCOPE_HELP[s]}>{s}</span>)}
                   {k.project && <span className="help"> · project {projectNames[k.project] ?? k.project} only</span>}</td>
