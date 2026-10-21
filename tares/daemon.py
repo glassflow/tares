@@ -8,6 +8,7 @@ trigger/agent/project management happens over /api (or the UI at /).
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import json
 import ipaddress
@@ -871,15 +872,23 @@ def make_app() -> FastAPI:
             return True
         return (getattr(request.state, "credential", None) or {}).get("kind") == "system"
 
-    def _is_cell_admin(request) -> bool:
-        """May this caller act as an admin of the cell's people and projects: the system
-        credential, a credential with the admin scope, auth off (all three are _is_admin), or a
-        credential whose person is marked is_admin. One place, so project access can reuse it."""
-        if _is_admin(request):
+    # Who may see a private project (TR-625). The guard below keeps the request being served here,
+    # so the project helpers that ~70 routes already call can check it without taking a request
+    # argument. Auth off has no guard, so nothing is set and every project is visible.
+    _CALLER: contextvars.ContextVar = contextvars.ContextVar("tares_caller", default=None)
+
+    def _can_see(p: dict, request=None) -> bool:
+        """May this caller see project `p`? A team project: anyone who gets this far. A private
+        one: the system credential, a project key for it, and the people on it (its lead and its
+        members). An admin who is none of those does not; they can only hand the lead over (see
+        set_project_access). Rights come from the credential, never from people.is_admin (A9)."""
+        request = request or _CALLER.get()
+        if request is None or p.get("scope") != "private" or _is_system(request):
+            return True
+        if _pk(request) == p["id"]:
             return True
         person = _current_person(request)
-        p = store.get_person(person["id"]) if person else None
-        return bool(p and p["is_admin"])
+        return bool(person and store.is_project_member(p["id"], person["id"]))
 
     # Auth off (no token) → no middleware, the instance is fully open (local default). Auth on →
     # every non-public route needs a credential carrying the required scope; ingest is gated exactly
@@ -904,6 +913,7 @@ def make_app() -> FastAPI:
                                         status_code=403)
                 request.state.credential = ident
                 request.state.scopes = sorted(scopes)
+            _CALLER.set(request)
             return await call_next(request)
 
     def _err(e: Exception, code: int = 400):
@@ -969,11 +979,12 @@ def make_app() -> FastAPI:
         is off, for an update that leaves the project alone). Unknown answers 400."""
         ref = (ref or "").strip()
         if not ref:
-            return store.default_project_id() if default else None
-        if store.get_project(ref) is not None:
-            return ref
-        p = store.get_project_by_name(ref)
-        if p is None:
+            uid = store.default_project_id() if default else None
+            if uid and not _can_see(store.get_project(uid)):
+                _err(ValueError("unknown project ''"), 400)
+            return uid
+        p = store.get_project(ref) or store.get_project_by_name(ref)
+        if p is None or not _can_see(p):   # a private one the caller cannot see is unknown
             _err(ValueError(f"unknown project {ref!r}"), 400)
         return p["id"]
 
@@ -3453,13 +3464,22 @@ def make_app() -> FastAPI:
                                    if uid in store.projects_using("trigger", t.name)),
                 "skills": [s["name"] for s in store.list_skills(uid)]}
 
+    def _hidden_project(p: dict) -> dict:
+        """A private project as someone not on it sees it: enough to name it and to hand its
+        lead over, nothing of what is in it."""
+        return {"id": p["id"], "name": p["name"], "scope": "private", "hidden": True,
+                "lead": p["lead"]}
+
     @app.get("/api/projects")
     async def list_projects(request: Request):
         pk = _pk(request)
         if pk:
             return {"projects": [_project_card(pk)]}
         # a software factory project carries its tickets' progress, for the list's ring
+        # a private project the caller is not on is listed as its name and lead and nothing else
+        # (an admin hands its lead over from this row); everything else about it is unknown
         return {"projects": [
+            _hidden_project(p) if not _can_see(p) else
             {**p, "progress": factory_mod.progress(store.list_tickets(p["id"]))}
             if p.get("kind") == "software_factory" else p for p in projects.list()]}
 
@@ -3487,17 +3507,20 @@ def make_app() -> FastAPI:
         """{lead_person_id?, scope?}: who leads the project and whether it is `team` or
         `private`. The lead changes both. An admin (or the system credential) changes the lead
         only, which is also how a project with no lead is claimed. Nobody else changes either.
-        Answers with the project."""
+        Answers with the project. A private project the caller is not on is unknown to them,
+        except that an admin (the admin scope, which the guard already requires for this route)
+        may still hand it to a lead, so it is never left without one."""
         p = store.get_project(uid)
-        if p is None:
-            _err(KeyError(f"unknown project {uid!r}"), 404)
         body = body or {}
+        hand_over_only = _is_admin(request) and "lead_person_id" in body and "scope" not in body
+        if p is None or not (_can_see(p) or hand_over_only):
+            _err(KeyError(f"unknown project {uid!r}"), 404)
         want_lead, want_scope = "lead_person_id" in body, "scope" in body
         if not (want_lead or want_scope):
             _err(ValueError("say lead_person_id, scope or both"))
         person = _current_person(request)
         is_lead = bool(person and p["lead_person_id"] == person["id"])
-        if not is_lead and (want_scope or not _is_cell_admin(request)):
+        if not is_lead and (want_scope or not _is_admin(request)):
             raise HTTPException(status_code=403, detail="only the project lead can change this")
         if want_scope and body["scope"] not in ("team", "private"):
             _err(ValueError("scope is team or private"))
@@ -3513,14 +3536,13 @@ def make_app() -> FastAPI:
                 store.add_project_member(uid, old_lead, person["id"] if person else "system")
         if want_scope:
             store.set_project_scope(uid, body["scope"])
-        return projects.get(uid)
+        out = projects.get(uid)
+        return out if _can_see(store.get_project(uid)) else _hidden_project(out)
 
     def _lead_or_system(request, uid: str) -> dict:
         """The project, when this caller may change who is on it: its lead, or the system
         credential (an admin who is not the lead may not)."""
-        p = store.get_project(uid)
-        if p is None:
-            _err(KeyError(f"unknown project {uid!r}"), 404)
+        p = _project_or_404(uid)
         person = _current_person(request)
         if not (person and p["lead_person_id"] == person["id"]) and not _is_system(request):
             raise HTTPException(status_code=403, detail="only the project lead can change this")
@@ -3555,6 +3577,7 @@ def make_app() -> FastAPI:
     async def get_project(uid: str, request: Request):
         if _pk(request):
             return _project_card(uid)   # the guard already held it to the key's own project
+        _project_or_404(uid)
         inst = projects.get(uid)
         if inst is None:
             _err(KeyError(f"unknown project {uid!r}"), 404)
@@ -3562,6 +3585,7 @@ def make_app() -> FastAPI:
 
     @app.put("/api/projects/{uid}")
     async def update_project(uid: str, body: ProjectUpdate):
+        _project_or_404(uid)
         given = body.model_fields_set
         try:
             if "goal" in given and not ({"params", "objects"} & given) and not body.name.strip():
@@ -3585,6 +3609,7 @@ def make_app() -> FastAPI:
         in `kept`); every other source stays, in the default project if in no other. Sources are
         only ever deleted when asked: `delete_sources=all` names every source of the project, and
         `none`, or leaving it out, keeps them all."""
+        _project_or_404(uid)
         chosen = [x.strip() for x in delete_sources.split(",") if x.strip() and x.strip() != "none"]
         if chosen == ["all"]:
             chosen = sorted(store.project_sources(uid))
@@ -3596,6 +3621,7 @@ def make_app() -> FastAPI:
     @app.post("/api/projects/{uid}/sources")
     async def add_project_source(uid: str, body: dict = Body(...)):
         """Add an existing source to a project (sources are shared between projects)."""
+        _project_or_404(uid)
         name = str((body or {}).get("name") or "").strip()
         if not name:
             _err(ValueError("name is required"), 400)
@@ -3607,6 +3633,7 @@ def make_app() -> FastAPI:
     @app.delete("/api/projects/{uid}/sources/{name}")
     async def remove_project_source(uid: str, name: str):
         """Take a source out of a project; refused while a trigger of the project reads it."""
+        _project_or_404(uid)
         try:
             return projects.remove_source(uid, name)
         except Exception as e:
@@ -3616,6 +3643,7 @@ def make_app() -> FastAPI:
     async def pause_project(uid: str, body: dict | None = Body(default=None)):
         """Body {"sources": true} also pauses the project's sources, so nothing accumulates while
         it is paused (the AI SRE demo's traffic, for one). Default: sources keep ingesting."""
+        _project_or_404(uid)
         try:
             return projects.pause(uid, sources=bool((body or {}).get("sources")))
         except Exception as e:
@@ -3623,6 +3651,7 @@ def make_app() -> FastAPI:
 
     @app.post("/api/projects/{uid}/resume")
     async def resume_project(uid: str):
+        _project_or_404(uid)
         try:
             return projects.resume(uid)
         except Exception as e:
@@ -3630,6 +3659,7 @@ def make_app() -> FastAPI:
 
     @app.post("/api/projects/{uid}/repair")
     async def repair_project(uid: str, body: ProjectRepair):
+        _project_or_404(uid)
         try:
             return projects.repair(uid, body.key)
         except Exception as e:
@@ -3644,6 +3674,7 @@ def make_app() -> FastAPI:
 
     @app.post("/api/projects/{uid}/actions/{name}")
     async def project_action(uid: str, name: str, request: Request):
+        _project_or_404(uid)
         try:
             body = await request.json()
         except Exception:
@@ -3660,6 +3691,7 @@ def make_app() -> FastAPI:
         """Everything that happened in the project, newest first, one thread per firing or
         unprompted run, with what each led to nested inside (TR-331). Page with `before` =
         the previous page's `next_before`."""
+        _project_or_404(uid)
         if projects.get(uid) is None:
             _err(KeyError(f"unknown project {uid!r}"), 404)
         at = None
@@ -3757,6 +3789,7 @@ def make_app() -> FastAPI:
 
     @app.get("/api/projects/{uid}/summary")
     async def project_summary(uid: str):
+        _project_or_404(uid)
         try:
             return projects.summary(uid)
         except Exception as e:
@@ -4316,10 +4349,7 @@ def make_app() -> FastAPI:
 
     # ── a project's skills (TR-332): instructions its agents load by name ─────
     def _skill_project(uid: str) -> dict:
-        p = store.get_project(uid)
-        if p is None:
-            _err(KeyError(f"unknown project {uid!r}"), 404)
-        return p
+        return _project_or_404(uid)
 
     def _skill_or_404(uid: str, name: str) -> dict:
         sk = store.get_skill(uid, name)
@@ -5366,7 +5396,7 @@ def make_app() -> FastAPI:
     # the findings recorded in it, and stats over its sources ────────────────────────────────
     def _project_or_404(uid: str) -> dict:
         p = store.get_project(uid)
-        if p is None:
+        if p is None or not _can_see(p):   # a private one the caller cannot see is unknown
             _err(KeyError(f"unknown project {uid!r}"), 404)
         return p
 

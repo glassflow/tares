@@ -13,8 +13,13 @@ the project follows [Semantic Versioning](https://semver.org/).
   members. These calls need a key with the admin scope; a read key is refused even when its person
   leads the project. The lead changes all of it; an admin or the root token may change only the lead
   (which is how a project with no lead is claimed), and the lead who handed it over stays on the
-  members. A project set up with a person's key (not from a draft) is led by that person. Nothing is
-  hidden by it yet. A project from before reads as `team` with no lead.
+  members. A project set up with a person's key (not from a draft) is led by that person. A project
+  from before reads as `team` with no lead.
+- A private project is hidden from people who are not on it: every route under `/api/projects/{id}`
+  and the MCP tools answer as if it did not exist (404, or `unknown project` when named), and the
+  list shows it as a name and its lead, nothing else. The lead, the members, the system credential
+  and the project's own keys see it whole. An admin who is not on it can only hand the lead over.
+  Admin rights come from the key's admin scope alone, not from the person's `is_admin` flag.
 - MCP tools `list_people` and `set_project_access` (lead, scope, members added or removed, people
   by id or email).
 - A recording carries the person who shipped it: the cell labels every Claude Code event pushed to
