@@ -187,6 +187,19 @@ async def auth_on():
             g = (await cx.get(f"{B}/api/projects/{uid}", headers=A_)).json()
             ck("the new lead heads the members, the old lead stays on them", ids(g["members"])
                == [(pp, "lead"), (pq, "manual"), (pr, "manual")], str(g["members"]))
+            r = await cx.patch(f"{B}/api/projects/{uid}", headers=R_, json={"lead_person_id": pp})
+            ck("handing the lead to the lead changes nothing", r.status_code == 200
+               and ids(r.json()["members"]) == [(pp, "lead"), (pq, "manual"), (pr, "manual")], r.text[:300])
+            r = await cx.patch(f"{B}/api/projects/{uid}", headers=R_, json={"lead_person_id": pq})
+            got = ids(r.json()["members"])
+            ck("a member made lead is on the list once, as lead", r.status_code == 200
+               and got[0] == (pq, "lead") and [i for i, _ in got].count(pq) == 1, str(got))
+            ck("... the old lead and the others stay, each once", sorted(got[1:]) ==
+               sorted([(pp, "manual"), (pr, "manual")]), str(got))
+            r = await cx.patch(f"{B}/api/projects/{uid}", headers=R_, json={"lead_person_id": pp})
+            got = ids(r.json()["members"])
+            ck("... and handed back, nobody is listed twice", got[0] == (pp, "lead")
+               and sorted(got[1:]) == sorted([(pq, "manual"), (pr, "manual")]), str(got))
 
             print("== no lead ==")
             r = await cx.patch(f"{B}/api/projects/{rooted}", headers=Q_, json={"lead_person_id": pq})

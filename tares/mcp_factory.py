@@ -426,7 +426,7 @@ async def add_grant(words: str, scope: str = "all", project: str = "") -> str:
     async with _cx(10) as cx:
         r = await cx.post(f"{TARESD}/api/grants",
                           json={"words": words, "scope": scope, "project": project,
-                                "by": "claude code session"})
+                                "by_default": "claude code session"})
     return _out(r, ("line", "added"))
 
 
@@ -468,7 +468,7 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
     send `crew-orchestrator` a `[TF:SHIP]` message with SendMessage so it starts now rather than
     on its tick. If no crew is running (list_crew shows no orchestrator working or waiting),
     tell the person to run `tares factory crew up` first."""
-    body: dict = {"repos": repos or [], "by": "claude code session"}
+    body: dict = {"repos": repos or [], "by_default": "claude code session"}
     if repo:
         body["repo"] = repo
     if autonomy:

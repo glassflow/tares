@@ -196,6 +196,40 @@ async def auth_on():
                "(the empty name is kept as null)", not ho["by"],
                str(ho))
 
+            print("== grants and hand-over through the Claude Code tools ==")
+            # the tools send a fixed label (`by_default`); it must never beat the person
+            r = await cx.post(f"{B}/api/keys", headers=ROOT, json={"name": "tools-bot", "scopes": ["admin"]})
+            tbot = r.json()["secret"]
+            r = await cx.post(f"{B}/api/projects", headers=Bn, json={
+                "template": "custom", "name": "Tools", "objects": [], "kind": "software_factory"})
+            tuid = r.json()["id"]
+            async def grants_by():
+                docs = (await cx.get(f"{B}/api/projects/{tuid}/docs", headers=A)).json()
+                docs = docs if isinstance(docs, list) else docs.get("docs", [])
+                return [d.get("updated_by") for d in docs if d.get("kind") == "grants"]
+            out = json.loads(await mf.add_grant("Ann says go ahead", "project", project=tuid))
+            ck("add_grant with Ann's key", out.get("added") is True, str(out))
+            ck("... records Ann, not the tool's label", "Ann" in await grants_by(), str(await grants_by()))
+            await mf.hand_over(project=tuid, repos=[{"path": "/w/tools"}])
+            ho = (await cx.get(f"{B}/api/projects/{tuid}/crew", headers=A)).json()["handover"]
+            ck("hand_over with Ann's key shows Ann", name_of(ho) == "Ann" and ho["by_label"] == "Ann"
+               and not ho["by"], str(ho))
+            real_tool_cx = mf._cx
+            try:
+                mf._cx = lambda timeout=10: httpx.AsyncClient(timeout=timeout, headers=H(tbot))
+                await mf.add_grant("The bot relays a yes", "project", project=tuid)
+                ck("add_grant with an unbound key keeps the old label",
+                   "claude code session" in await grants_by(), str(await grants_by()))
+                tuid2 = (await cx.post(f"{B}/api/projects", headers=ROOT, json={
+                    "template": "custom", "name": "Tools 2", "objects": [],
+                    "kind": "software_factory"})).json()["id"]
+                await mf.hand_over(project=tuid2, repos=[{"path": "/w/tools2"}])
+                ho = (await cx.get(f"{B}/api/projects/{tuid2}/crew", headers=A)).json()["handover"]
+                ck("hand_over with an unbound key keeps the old label",
+                   ho["by_label"] == "claude code session", str(ho))
+            finally:
+                mf._cx = real_tool_cx
+
             print("== take over and finish ==")
             r = await cx.post(f"{B}/api/projects", headers=Bn, json={
                 "template": "custom", "name": "Blog", "objects": [], "kind": "software_factory"})
