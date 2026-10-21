@@ -20,6 +20,8 @@ the project follows [Semantic Versioning](https://semver.org/).
   list shows it as a name and its lead, nothing else. The lead, the members, the system credential
   and the project's own keys see it whole. An admin who is not on it can only hand the lead over.
   Admin rights come from the key's admin scope alone, not from the person's `is_admin` flag.
+  A create that names no project, on a cell whose default project is private, asks the caller
+  who is not on it to name a project, without saying which one the default is.
 - MCP tools `list_people` and `set_project_access` (lead, scope, members added or removed, people
   by id or email).
 - A recording carries the person who shipped it: the cell labels every Claude Code event pushed to

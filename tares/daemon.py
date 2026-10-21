@@ -984,7 +984,9 @@ def make_app() -> FastAPI:
         if not ref:
             uid = store.default_project_id() if default else None
             if uid and not _can_see(store.get_project(uid)):
-                _err(ValueError("unknown project ''"), 400)
+                # a default the caller cannot see is no default for them: say what to do, and
+                # never name the project or write into it
+                _err(ValueError("name the project to use (its id or name)"), 400)
             return uid
         p = store.get_project(ref) or store.get_project_by_name(ref)
         if p is None or not _can_see(p):   # a private one the caller cannot see is unknown
