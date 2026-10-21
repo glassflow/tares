@@ -3,7 +3,7 @@
 never from what the sender wrote. The root token (no person) leaves no label; with auth off it is
 `local`.
 """
-import asyncio, json, os, subprocess, sys
+import asyncio, hashlib, hmac, json, os, subprocess, sys
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -15,6 +15,8 @@ def ck(l, c, d=""):
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
 AUTH = "root-token"
+SECRET = "whsec"
+WEBHOOK_LABELS = [{"name": "app", "field": "app", "primary": True}]
 
 
 async def _wait(url):
@@ -68,6 +70,14 @@ async def persons(cx, B, tok, session, text):
             if (r.get("text") or "") == text]
 
 
+async def webhook_labels(cx, B, source):
+    """The label dicts of every event stored for a webhook source, read back through /read."""
+    rd = (await cx.post(f"{B}/read", headers=H(AUTH), json={
+        "selector": {"app": "a"}, "sources": [source], "window": "3650d",
+        "include_payload": True})).json()
+    return [r.get("labels") or {} for r in rd.get("rows", [])]
+
+
 async def auth_on():
     port = "8871"
     proc = start("/tmp/recording_person_on.duckdb", port, True)
@@ -114,6 +124,28 @@ async def auth_on():
             ck("root token: no tares_person label", lr == [None], str(lr))
             lr = await persons(cx, B, AUTH, "sr", "from-root-spoof")
             ck("root token, line says Q: still no label", lr == [None], str(lr))
+
+            # only claude_code records people: other push sources get no label, whoever pushes
+            await cx.post(f"{B}/api/sources", headers=H(AUTH), json={
+                "name": "plain", "connector": "webhook", "config": {"text_template": "{note}", "labels": WEBHOOK_LABELS}})
+            await cx.post(f"{B}/api/sources", headers=H(AUTH), json={
+                "name": "signed", "connector": "webhook", "config": {
+                    "text_template": "{note}", "labels": WEBHOOK_LABELS, "signature_scheme": "hmac_sha256",
+                    "signing_secret": SECRET, "signature_header": "X-Signature"}})
+            r = await cx.post(f"{B}/ingest/plain", headers=H(keys["P"]),
+                              json={"app": "a", "note": "plain-from-p", "tares_person": pid["Q"]})
+            ck("P's key ingests to a webhook source", r.status_code == 202, r.text)
+            lw = await webhook_labels(cx, B, "plain")
+            ck("a webhook source: a person-bound key leaves no tares_person label",
+               len(lw) == 1 and all("tares_person" not in l for l in lw), str(lw))
+            body = json.dumps({"app": "a", "note": "signed-no-key"}).encode()
+            sig = hmac.new(SECRET.encode(), body, hashlib.sha256).hexdigest()
+            r = await cx.post(f"{B}/ingest/signed", content=body, headers={
+                "content-type": "application/json", "X-Signature": sig})
+            ck("a signed webhook (auth on, no key) ingests", r.status_code == 202, r.text)
+            lw = await webhook_labels(cx, B, "signed")
+            ck("a signed webhook: no tares_person label",
+               len(lw) == 1 and all("tares_person" not in l for l in lw), str(lw))
 
             # the label is filterable like any other: a read by tares_person
             rd = (await cx.post(f"{B}/read", headers=H(AUTH), json={
