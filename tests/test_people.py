@@ -196,6 +196,25 @@ async def auth_on():
                     if p["id"] == mia_id)["created_via"] == "key")
             r = await cx.patch(f"{B}/api/people/{lena_id}", headers=H(AUTH), json={"is_admin": True})
             ck("an admin changes the admin flag", r.status_code == 200 and r.json()["is_admin"] is True, r.text)
+            r = await cx.patch(f"{B}/api/people/{lena_id}", headers=H(AUTH), json={"emails": []})
+            ck("an admin removes the extra emails", r.status_code == 200 and r.json()["emails"] == [], r.text)
+            ck("... and the person is not found by the removed address",
+               next(p for p in (await cx.get(f"{B}/api/people", headers=H(AUTH))).json()["people"]
+                    if p["id"] == lena_id)["emails"] == [])
+            r = await cx.patch(f"{B}/api/people/{lena_id}", headers=H(AUTH),
+                               json={"emails": ["typo@example.com", "keep@example.com"]})
+            r = await cx.patch(f"{B}/api/people/{lena_id}", headers=H(AUTH),
+                               json={"emails": ["keep@example.com"]})
+            ck("an admin removes one extra email and keeps the other", r.status_code == 200
+               and r.json()["emails"] == ["keep@example.com"], r.text)
+            r = await cx.post(f"{B}/api/people", headers=H(AUTH), json={
+                "name": "Owner", "email": "typo@example.com"})
+            ck("a removed extra email is free for its real owner", r.status_code == 201, r.text)
+            r = await cx.patch(f"{B}/api/people/{lena_id}", headers=H(lena_read),
+                               json={"name": "Lena K", "emails": []})
+            ck("a self edit cannot send emails, even with a name -> 403, nothing changes",
+               r.status_code == 403 and next(p for p in (await cx.get(f"{B}/api/people", headers=H(AUTH))).json()["people"]
+                        if p["id"] == lena_id)["emails"] == ["keep@example.com"], r.text)
             ck("patch an unknown person -> 404",
                (await cx.patch(f"{B}/api/people/p_nobody", headers=H(AUTH), json={"name": "x"})).status_code == 404)
             ck("patch to another person's email -> 409",

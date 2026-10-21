@@ -597,9 +597,19 @@ function AccessTab() {
 const personLabel = (p: Person) => p.email ? `${p.name} (${p.email})` : p.name;
 
 // `oldEmail` and `extras` are the person's main and extra addresses as loaded: an edit that changes
-// the main email keeps the old one among the extras, so the person is still found by it.
+// the main email keeps the old one among the extras, so the person is still found by it. `dropped`
+// are the extras the admin removed in this edit.
 type PersonDraft = { id: string; name: string; email: string; github: string; is_admin: boolean;
-                     oldEmail: string; extras: string[] };
+                     oldEmail: string; extras: string[]; dropped: string[] };
+
+// The extra addresses this edit leaves the person with: the loaded ones, plus the old main email when
+// the main one changed, minus the new main email and whatever the admin removed.
+function extraEmails(d: PersonDraft): string[] {
+  const email = d.email.trim().toLowerCase();
+  const old = d.oldEmail.toLowerCase();
+  const all = [...d.extras, ...(old && email !== old ? [old] : [])];
+  return all.filter((x, i) => x !== email && !d.dropped.includes(x) && all.indexOf(x) === i);
+}
 
 // Who is on the cell. Everyone who can read sees the list; an admin adds people and edits them.
 function PeoplePanel({ people, admin, err: loadErr, onChanged }: {
@@ -612,8 +622,9 @@ function PeoplePanel({ people, admin, err: loadErr, onChanged }: {
   const start = (p?: Person) => {
     setErr(undefined);
     setEditing(p ? { id: p.id, name: p.name, email: p.email ?? "", github: p.github ?? "", is_admin: p.is_admin,
-                     oldEmail: p.email ?? "", extras: p.emails }
-                 : { id: "new", name: "", email: "", github: "", is_admin: false, oldEmail: "", extras: [] });
+                     oldEmail: p.email ?? "", extras: p.emails, dropped: [] }
+                 : { id: "new", name: "", email: "", github: "", is_admin: false, oldEmail: "", extras: [],
+                     dropped: [] });
   };
   const save = async () => {
     if (!editing) return;
@@ -631,11 +642,7 @@ function PeoplePanel({ people, admin, err: loadErr, onChanged }: {
           return;
         }
       } else {
-        const email = body.email.toLowerCase();
-        const old = editing.oldEmail;
-        const emails = old && email !== old.toLowerCase() ? [...editing.extras.filter((x) => x !== email), old]
-                                                          : undefined;
-        await api.updatePerson(editing.id, emails ? { ...body, emails } : body);
+        await api.updatePerson(editing.id, { ...body, emails: extraEmails(editing) });
       }
       setEditing(undefined);
       onChanged();
@@ -654,6 +661,20 @@ function PeoplePanel({ people, admin, err: loadErr, onChanged }: {
           <input type="email" value={d.email} onChange={(e) => setEditing({ ...d, email: e.target.value })} />
         </label>
       </div>
+      {d.id !== "new" && extraEmails(d).length > 0 && (
+        <div className="field">
+          <span className="lbl">other emails</span>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+            {extraEmails(d).map((x) => (
+              <span key={x} className="mono help" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                {x}
+                <button type="button" aria-label={`Remove ${x}`}
+                        onClick={() => setEditing({ ...d, dropped: [...d.dropped, x] })}>Remove</button>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="row2">
         <label className="field">
           <span className="lbl">GitHub login</span>
