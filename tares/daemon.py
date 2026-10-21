@@ -45,6 +45,7 @@ from .connectors import (SPECS, normalize_config, redact_config, restore_secrets
 from .connectors.github import _normalize_repo as _gh_normalize_repo
 from .dispatch import Dispatcher
 from .envelope import now_utc
+from .models import add_usage, empty_usage
 from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_conclude,
                              MAX_ROUNDS as AGENT_MAX_ROUNDS,
                              MAX_ROUNDS_LIMIT as AGENT_MAX_ROUNDS_LIMIT,
@@ -4830,7 +4831,10 @@ def make_app() -> FastAPI:
                     model=model, system=standup_mod.SUMMARY_SYSTEM, tools=[],
                     messages=[{"role": "user", "content": standup_mod.summary_prompt(report)}],
                     max_tokens=standup_mod.SUMMARY_MAX_TOKENS, tools_allowed=False), timeout=90)
-                _record_ask_usage(model, reply.usage, key_source=origin, kind=provider.kind,
+                # one reply's usage has no call count; the ledger row wants the loops' total
+                usage = empty_usage()
+                add_usage(usage, reply.usage)
+                _record_ask_usage(model, usage, key_source=origin, kind=provider.kind,
                                   provider_id=pid)
                 summary = standup_mod.parse_summary(reply.text,
                                                     {p["id"] for p in report["projects"]})
