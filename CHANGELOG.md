@@ -5,6 +5,12 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- People on the cell: `GET/POST /api/people`, `PATCH /api/people/{id}`, and a person on every API
+  key (`person_id` or `person: {email, name}` on `POST /api/keys`, `PUT /api/keys/{id}/person`).
+  `/api/whoami` now says `kind` (system, key, project or open) and the `person` calling. A cell
+  with auth off, or with only the person `local`, behaves as before.
+
 ## [1.51.1] - 2026-10-21
 
 The crew standup writes its summary again, and its Slack channel list fits on screen.

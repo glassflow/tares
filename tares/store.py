@@ -89,6 +89,16 @@ CREATE TABLE IF NOT EXISTS api_keys (
   last_used_at TIMESTAMPTZ,
   revoked_at   TIMESTAMPTZ
 );
+CREATE TABLE IF NOT EXISTS people (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  email      TEXT,
+  emails     TEXT,
+  github     TEXT,
+  is_admin   BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ,
+  created_via TEXT
+);
 CREATE TABLE IF NOT EXISTS catalog_sources (
   name       TEXT PRIMARY KEY,
   type       TEXT,
@@ -485,6 +495,9 @@ _MIGRATIONS = [
     "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS pr JSON",
     # The GitHub repo (owner/name) a ticket changes, when its project spans several (TR-456)
     "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS repo TEXT",
+    # The person a key belongs to (a people.id); NULL = a key made before people existed, or one
+    # nobody has bound yet. The cell reads who is calling from this, never from a header.
+    "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS person_id TEXT",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -687,6 +700,7 @@ class Store(FactoryStore, ClaudeUsageStore):
             self._skills_upgrade()
             self._factory_kind_upgrade()
             self._factory_upgrade()
+            self._people_upgrade()
             self._claude_usage_fill()
             self._init_source_stats()
             self._init_entity_counts()
@@ -696,6 +710,14 @@ class Store(FactoryStore, ClaudeUsageStore):
             self.con.execute("CHECKPOINT")
         except Exception as e:
             raise StoreUnavailable(f"cannot initialize the database at {path}: {e}", path) from e
+
+    def _people_upgrade(self) -> None:
+        """The person `local` always exists: the one person of a cell with auth off, and the one
+        an unbound key acts as while nobody else is on the cell."""
+        self.con.execute(
+            "INSERT INTO people (id, name, email, emails, github, is_admin, created_at, created_via) "
+            "SELECT 'local', 'You', NULL, '[]', NULL, TRUE, ?, 'boot' "
+            "WHERE NOT EXISTS (SELECT 1 FROM people WHERE id = 'local')", [now_utc()])
 
     def _columns(self, table: str) -> set:
         return {r[0] for r in self.con.execute(
@@ -3834,18 +3856,20 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     # ── API keys (scoped credentials; only the SHA-256 of the secret is stored) ─
     def insert_api_key(self, kid: str, name: str, prefix: str, hash_: str, scopes: list[str],
-                       project: str | None = None) -> None:
-        """`project` makes it a project key: it reads that project only (TR-335)."""
+                       project: str | None = None, person_id: str | None = None) -> None:
+        """`project` makes it a project key: it reads that project only (TR-335). `person_id`
+        is the person it belongs to."""
         with self._lock:
             self.con.execute(
                 "INSERT INTO api_keys (id, name, prefix, hash, scopes, created_at, last_used_at, "
-                "revoked_at, project) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
-                [kid, name, prefix, hash_, json.dumps(scopes), now_utc(), project or None])
+                "revoked_at, project, person_id) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
+                [kid, name, prefix, hash_, json.dumps(scopes), now_utc(), project or None,
+                 person_id or None])
 
     def list_api_keys(self, project: str | None = None) -> list[dict]:
         """Every key, newest first; with `project`, only that project's keys."""
-        sql = ("SELECT id, name, prefix, scopes, created_at, last_used_at, revoked_at, project "
-               "FROM api_keys ")
+        sql = ("SELECT id, name, prefix, scopes, created_at, last_used_at, revoked_at, project, "
+               "person_id FROM api_keys ")
         params = []
         if project is not None:
             sql += "WHERE project = ? "
@@ -3854,7 +3878,7 @@ class Store(FactoryStore, ClaudeUsageStore):
             rows = self.con.execute(sql + "ORDER BY created_at DESC", params).fetchall()
         return [{"id": r[0], "name": r[1], "prefix": r[2], "scopes": json.loads(r[3]),
                  "created_at": r[4], "last_used_at": r[5], "revoked_at": r[6],
-                 "project": r[7]} for r in rows]
+                 "project": r[7], "person_id": r[8]} for r in rows]
 
     def get_api_key(self, kid: str) -> dict | None:
         return next((k for k in self.list_api_keys() if k["id"] == kid), None)
@@ -3863,12 +3887,176 @@ class Store(FactoryStore, ClaudeUsageStore):
         """Active (non-revoked) key by secret hash, or None."""
         with self._lock:
             r = self.con.execute(
-                "SELECT id, name, scopes, last_used_at, project FROM api_keys "
+                "SELECT id, name, scopes, last_used_at, project, person_id FROM api_keys "
                 "WHERE hash = ? AND revoked_at IS NULL", [hash_]).fetchone()
         if not r:
             return None
         return {"id": r[0], "name": r[1], "scopes": json.loads(r[2]), "last_used_at": r[3],
-                "project": r[4]}
+                "project": r[4], "person_id": r[5]}
+
+    def key_person_id(self, kid: str) -> str | None:
+        """The person an active key is bound to, None for an unbound or unknown key (unlike a
+        credential's person, this never falls back to `local`)."""
+        with self._lock:
+            r = self.con.execute("SELECT person_id FROM api_keys WHERE id = ? AND revoked_at IS NULL",
+                                 [kid]).fetchone()
+        return r[0] if r else None
+
+    def set_key_person(self, kid: str, person_id: str | None) -> bool:
+        """Bind an active key to a person (None unbinds it). False when there is no such key."""
+        with self._lock:
+            hit = self.con.execute("SELECT 1 FROM api_keys WHERE id = ? AND revoked_at IS NULL",
+                                   [kid]).fetchone()
+            if not hit:
+                return False
+            self.con.execute("UPDATE api_keys SET person_id = ? WHERE id = ?", [person_id, kid])
+        return True
+
+    # ── People: who is on the cell. A key belongs to one; the credential names the person ─
+    _PERSON_COLS = "id, name, email, emails, github, is_admin, created_at, created_via"
+
+    @staticmethod
+    def _person_row(r) -> dict:
+        return {"id": r[0], "name": r[1], "email": r[2],
+                "emails": json.loads(r[3]) if r[3] else [], "github": r[4],
+                "is_admin": bool(r[5]), "created_at": r[6], "created_via": r[7]}
+
+    @staticmethod
+    def _norm_email(e) -> str | None:
+        e = str(e or "").strip().lower()
+        return e or None
+
+    @classmethod
+    def _norm_emails(cls, emails) -> list[str]:
+        """A list of addresses, lowercased, without repeats. Anything else (a bare string would
+        be split into letters) or an entry without an @ raises ValueError."""
+        if emails is None:
+            return []
+        if not isinstance(emails, list) or not all(isinstance(x, str) for x in emails):
+            raise ValueError("emails must be a list of email addresses")
+        out = [e for e in dict.fromkeys(cls._norm_email(x) for x in emails) if e]
+        bad = next((e for e in out if "@" not in e), None)
+        if bad:
+            raise ValueError(f"{bad!r} is not an email address")
+        return out
+
+    def _taken_emails(self, emails: list[str], besides: str | None = None) -> str | None:
+        """The first of `emails` another person already has (as the main or an extra email)."""
+        for e in emails:
+            for p in self._people():
+                if p["id"] != besides and e in ([p["email"]] + p["emails"]):
+                    return e
+        return None
+
+    def create_person(self, name: str, email: str | None = None, emails: list[str] | None = None,
+                      github: str | None = None, is_admin: bool = False,
+                      via: str = "admin") -> dict:
+        """Add a person. Emails and the GitHub login are kept lowercased and are unique across
+        people; a clash raises ValueError naming it."""
+        name = str(name or "").strip()
+        if not name:
+            raise ValueError("name is required")
+        email = self._norm_email(email)
+        extra = self._norm_emails(emails)
+        github = str(github or "").strip().lstrip("@").lower() or None
+        with self._lock:
+            clash = self._taken_emails(([email] if email else []) + extra)
+            if clash:
+                raise ValueError(f"{clash} already belongs to another person")
+            if github and any(p["github"] == github for p in self._people()):
+                raise ValueError(f"the GitHub login {github} already belongs to another person")
+            pid = "p_" + uuid.uuid4().hex[:10]
+            self.con.execute(
+                "INSERT INTO people (id, name, email, emails, github, is_admin, created_at, "
+                "created_via) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [pid, name, email, json.dumps(extra), github, bool(is_admin), now_utc(), via])
+        return self.get_person(pid)
+
+    def get_person(self, pid: str) -> dict | None:
+        with self._lock:
+            r = self.con.execute(f"SELECT {self._PERSON_COLS} FROM people WHERE id = ?",
+                                 [pid]).fetchone()
+        return self._person_row(r) if r else None
+
+    def _people(self) -> list[dict]:
+        """list_people for a caller that already holds the lock."""
+        rows = self.con.execute(
+            f"SELECT {self._PERSON_COLS} FROM people ORDER BY created_at, id").fetchall()
+        return [self._person_row(r) for r in rows]
+
+    def list_people(self) -> list[dict]:
+        """Everyone on the cell, oldest first (`local` first on a cell that has it)."""
+        with self._lock:
+            return self._people()
+
+    def find_person_by_email(self, email: str) -> dict | None:
+        """The person with this main or extra email, ignoring case."""
+        e = self._norm_email(email)
+        if not e:
+            return None
+        return next((p for p in self.list_people() if e in ([p["email"]] + p["emails"])), None)
+
+    def find_person_by_github(self, login: str) -> dict | None:
+        g = str(login or "").strip().lstrip("@").lower()
+        if not g:
+            return None
+        return next((p for p in self.list_people() if p["github"] == g), None)
+
+    def update_person(self, pid: str, **fields) -> dict | None:
+        """Change name, email, emails, github or is_admin (anything else is ignored). None when
+        there is no such person; ValueError when an email or login belongs to someone else."""
+        cur = self.get_person(pid)
+        if not cur:
+            return None
+        new = dict(cur)
+        if "name" in fields:
+            new["name"] = str(fields["name"] or "").strip()
+            if not new["name"]:
+                raise ValueError("name cannot be empty")
+        if "email" in fields:
+            new["email"] = self._norm_email(fields["email"])
+        if "emails" in fields:
+            new["emails"] = self._norm_emails(fields["emails"])
+        if "github" in fields:
+            new["github"] = str(fields["github"] or "").strip().lstrip("@").lower() or None
+        if "is_admin" in fields:
+            new["is_admin"] = bool(fields["is_admin"])
+        with self._lock:
+            clash = self._taken_emails(([new["email"]] if new["email"] else []) + new["emails"],
+                                       besides=pid)
+            if clash:
+                raise ValueError(f"{clash} already belongs to another person")
+            if new["github"] and any(p["github"] == new["github"] and p["id"] != pid
+                                     for p in self._people()):
+                raise ValueError(f"the GitHub login {new['github']} already belongs to another person")
+            self.con.execute(
+                "UPDATE people SET name = ?, email = ?, emails = ?, github = ?, is_admin = ? "
+                "WHERE id = ?", [new["name"], new["email"], json.dumps(new["emails"]),
+                                 new["github"], new["is_admin"], pid])
+        return self.get_person(pid)
+
+    def person_or_create(self, email: str, name: str | None = None, via: str = "key") -> dict:
+        """The person with this email, made first when there is none (named by `name`, else by
+        the part of the email before the @). Asking twice for one email gives one person."""
+        found = self.find_person_by_email(email)
+        if found:
+            return found
+        e = self._norm_email(email)
+        if not e:
+            raise ValueError("an email is required")
+        try:
+            return self.create_person(str(name or "").strip() or e.split("@")[0], email=e, via=via)
+        except ValueError:
+            # two callers asked for one new email at once: the other one made the person first
+            found = self.find_person_by_email(e)
+            if found:
+                return found
+            raise
+
+    def only_local_person(self) -> bool:
+        """True while `local` is the only person on the cell: a key nobody has bound still acts
+        as them, so a single-user cell keeps working."""
+        return [p["id"] for p in self.list_people()] == ["local"]
 
     def touch_api_key(self, kid: str) -> None:
         with self._lock:

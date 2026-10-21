@@ -714,6 +714,9 @@ def make_app() -> FastAPI:
             return None
         if path == "/api/whoami":
             return "any"
+        if method == "PATCH" and path.startswith("/api/people/"):
+            return "read"   # an admin, or a key bound to that person changing their own name:
+                            # the handler decides, it needs the credential's person
         # /api/settings holds instance credentials (the Anthropic key): admin even to READ, since
         # a read tells you whether and where a credential is configured.
         if path == "/api/setup/github-suggestion":
@@ -810,17 +813,51 @@ def make_app() -> FastAPI:
         if not tok:
             return None, None
         if AUTH_TOKEN and tok == AUTH_TOKEN:
-            return {"read", "ingest", "admin"}, {"id": "env:auth", "name": "auth token (env)"}
+            # the operator's credential, not a person
+            return ({"read", "ingest", "admin"},
+                    {"id": "env:auth", "name": "auth token (env)", "kind": "system", "person": None})
         key = store.find_api_key(hashlib.sha256(tok.encode()).hexdigest())
         if key:
             last = key.get("last_used_at")
             if last is None or (now_utc() - last).total_seconds() > 60:   # throttle write churn
                 store.touch_api_key(key["id"])
-            ident = {"id": f"key:{key['id']}", "name": key["name"]}
+            ident = {"id": f"key:{key['id']}", "name": key["name"],
+                     "kind": "project" if key.get("project") else "key",
+                     "person": _key_person(key)}
             if key.get("project"):
                 ident["project"] = key["project"]
             return set(key["scopes"]), ident
         return None, None
+
+    def _person_ref(p: dict | None) -> dict | None:
+        """The part of a person a credential carries."""
+        return {"id": p["id"], "name": p["name"], "email": p["email"]} if p else None
+
+    def _key_person(key: dict) -> dict | None:
+        """Who a key acts as: the person it is bound to. A key nobody has bound acts as `local`
+        while `local` is the only person on the cell (a single-user cell keeps working), and as
+        nobody once a second person exists."""
+        if key.get("person_id"):
+            return _person_ref(store.get_person(key["person_id"]))
+        if store.only_local_person():
+            return _person_ref(store.get_person("local"))
+        return None
+
+    def _current_person(request) -> dict | None:
+        """The person making this request ({id, name, email}), or None for the system credential
+        and for a key with no person. Always read from the credential, never from a header or the
+        body. With auth off it is the person `local`."""
+        ident = getattr(request.state, "credential", None)
+        if ident is not None:
+            return ident.get("person")
+        return _person_ref(store.get_person("local")) if not AUTH_TOKEN else None
+
+    def _is_admin(request) -> bool:
+        """The credential may manage people and keys: admin scope (the system credential has it),
+        or auth off, where everyone is the admin."""
+        if not AUTH_TOKEN:
+            return True
+        return "admin" in (getattr(request.state, "scopes", None) or [])
 
     # Auth off (no token) → no middleware, the instance is fully open (local default). Auth on →
     # every non-public route needs a credential carrying the required scope; ingest is gated exactly
@@ -1322,30 +1359,61 @@ def make_app() -> FastAPI:
     # ── API keys: scoped, revocable credentials (admin scope; see docs/design) ─
     _SCOPES = {"read", "ingest", "admin"}
 
+    def _key_out(k: dict) -> dict:
+        """A key as listed: its person as {id, name}, or null when nobody is bound."""
+        p = store.get_person(k["person_id"]) if k.get("person_id") else None
+        return {**k, "person": {"id": p["id"], "name": p["name"]} if p else None}
+
     @app.get("/api/keys")
     async def list_keys():
-        return {"keys": store.list_api_keys(),
+        return {"keys": [_key_out(k) for k in store.list_api_keys()],
                 "enforced": bool(AUTH_TOKEN),   # without a root auth token the instance is open
                 "scopes": sorted(_SCOPES)}
 
     # A project key (TR-335) reads one project and records findings in it; nothing else.
     _PROJECT_SCOPES = {"read", "findings"}
 
-    def _make_key(name: str, scopes: list[str], project: str | None) -> dict:
+    def _make_key(name: str, scopes: list[str], project: str | None,
+                  person_id: str | None = None) -> dict:
         kid = uuid.uuid4().hex[:8]
         secret = f"nvf_{kid}_{secrets.token_urlsafe(24)}"
         store.insert_api_key(kid, name, f"nvf_{kid}", hashlib.sha256(secret.encode()).hexdigest(),
-                             scopes, project=project)
+                             scopes, project=project, person_id=person_id)
         # the secret exists only in this response; the store keeps its hash
         out = {"id": kid, "name": name, "scopes": scopes, "secret": secret}
         if project:
             out["project"] = project
+        p = store.get_person(person_id) if person_id else None
+        out["person"] = {"id": p["id"], "name": p["name"]} if p else None
         return out
 
+    def _body_person(request: Request, body: dict) -> str | None:
+        """The person id a key request names: `person_id` (must exist), or `person: {email, name}`
+        (found by email or made: `cloud` when the system credential asks, as the control plane
+        does, `key` otherwise). None when it names neither."""
+        pid = str(body.get("person_id") or "").strip()
+        if pid:
+            if not store.get_person(pid):
+                _err(KeyError(f"no person {pid!r}"), 404)
+            return pid
+        spec = body.get("person")
+        if spec is None:
+            return None
+        if not isinstance(spec, dict) or not str(spec.get("email") or "").strip():
+            _err(ValueError("person needs an email: {email, name?}"))
+        ident = getattr(request.state, "credential", None) or {}
+        try:
+            return store.person_or_create(
+                spec["email"], spec.get("name"),
+                via="cloud" if ident.get("kind") == "system" else "key")["id"]
+        except ValueError as e:
+            _err(e, 409)
+
     @app.post("/api/keys", status_code=201)
-    async def create_key(body: dict = Body(...)):
-        """{name, scopes, project?}. With `project` (an id or a name) it is a project key: scopes
-        `read` and `findings` (the default), over that project only."""
+    async def create_key(request: Request, body: dict = Body(...)):
+        """{name, scopes, project?, person_id? | person?: {email, name}}. With `project` (an id
+        or a name) it is a project key: scopes `read` and `findings` (the default), over that
+        project only. `person_id` or `person` binds the key to a person (made by email when new)."""
         name = str(body.get("name") or "").strip()
         scopes = sorted(set(body.get("scopes") or []))
         if not name:
@@ -1356,12 +1424,22 @@ def make_app() -> FastAPI:
             scopes = scopes or sorted(_PROJECT_SCOPES)
             if not set(scopes) <= _PROJECT_SCOPES:
                 _err(ValueError(f"a project key's scopes are a subset of {sorted(_PROJECT_SCOPES)}"))
-            return _make_key(name, scopes, uid)
+            return _make_key(name, scopes, uid, _body_person(request, body))
         if "findings" in scopes:
             _err(ValueError("the findings scope is for a project key; name the project"))
         if not scopes or not set(scopes) <= _SCOPES:
             _err(ValueError(f"scopes must be a non-empty subset of {sorted(_SCOPES)}"))
-        return _make_key(name, scopes, None)
+        return _make_key(name, scopes, None, _body_person(request, body))
+
+    @app.put("/api/keys/{kid}/person")
+    async def set_key_person(kid: str, request: Request, body: dict = Body(...)):
+        """Bind a key to a person: {person_id} or {person: {email, name}}. Admin."""
+        if not body.get("person_id") and not body.get("person"):
+            _err(ValueError("say which person: {person_id} or {person: {email, name}}"))
+        if not store.get_api_key(kid) or store.get_api_key(kid)["revoked_at"]:
+            _err(KeyError(f"no active key {kid!r}"), 404)
+        store.set_key_person(kid, _body_person(request, body))
+        return _key_out(store.get_api_key(kid))
 
     @app.delete("/api/keys/{kid}")
     async def revoke_key(kid: str):
@@ -1369,12 +1447,62 @@ def make_app() -> FastAPI:
             _err(KeyError(f"no active key {kid!r}"), 404)
         return {"ok": True, "note": "key revoked; its subscriptions were removed"}
 
+    # ── People: who is on the cell. Keys belong to them; the credential names who is calling ──
+    def _person_out(p: dict) -> dict:
+        return {k: p[k] for k in ("id", "name", "email", "emails", "github", "is_admin", "created_via")}
+
+    @app.get("/api/people")
+    async def list_people():
+        return {"people": [_person_out(p) for p in store.list_people()]}
+
+    @app.post("/api/people")
+    async def create_person(body: dict = Body(...)):
+        """{name, email?, emails?, github?, is_admin?}. 201 with the new person; 200 with the
+        existing one when that email is already someone's."""
+        email = body.get("email")
+        found = store.find_person_by_email(email) if email else None
+        if found:
+            return _person_out(found)
+        try:
+            p = store.create_person(body.get("name"), email, body.get("emails"), body.get("github"),
+                                    bool(body.get("is_admin")), via="admin")
+        except ValueError as e:
+            _err(e, 409 if "already belongs" in str(e) else 400)
+        return JSONResponse(_person_out(p), status_code=201)
+
+    @app.patch("/api/people/{pid}")
+    async def update_person(pid: str, request: Request, body: dict = Body(...)):
+        """An admin (or the system credential) changes anything; a person changes only their own
+        name. Emails and the GitHub login are how a person is recognised, so they are not self-service."""
+        admin = _is_admin(request)
+        ident = getattr(request.state, "credential", None) or {}
+        kid = str(ident.get("id") or "")
+        # themselves = a key explicitly bound to this person; the `local` fallback of an unbound
+        # key does not count, or any read key could rename the only person on a one-person cell
+        own = kid.startswith("key:") and store.key_person_id(kid[4:]) == pid
+        if not admin and not own:
+            raise HTTPException(status_code=403, detail="only an admin, or the person themselves, "
+                                                        "can change a person")
+        allowed = ("name", "email", "emails", "github", "is_admin") if admin else ("name",)
+        fields = {k: body[k] for k in allowed if k in body}
+        if not admin and any(k in body for k in ("email", "emails", "github", "is_admin")):
+            raise HTTPException(status_code=403, detail="only an admin can change a person's "
+                                                        "emails, GitHub login or admin flag")
+        try:
+            p = store.update_person(pid, **fields)
+        except ValueError as e:
+            _err(e, 409 if "already belongs" in str(e) else 400)
+        if not p:
+            _err(KeyError(f"no person {pid!r}"), 404)
+        return _person_out(p)
+
     @app.get("/api/whoami")
     async def whoami(request: Request):
         ident = getattr(request.state, "credential", None)
         scopes = getattr(request.state, "scopes", None)
         if ident is None:   # guard not active (open instance) or ingest-path credential
-            return {"id": "open", "name": "no auth configured", "scopes": sorted(_SCOPES)}
+            return {"id": "open", "name": "no auth configured", "kind": "open",
+                    "person": _current_person(request), "scopes": sorted(_SCOPES)}
         out = {**ident, "scopes": scopes or []}
         if ident.get("project"):   # a project key: the project it reads, by id and name
             out["project_name"] = (store.get_project(ident["project"]) or {}).get("name")
@@ -4892,6 +5020,7 @@ def make_app() -> FastAPI:
     factory_api.register(app, store, SimpleNamespace(
         err=lambda e, code=400: _err(e, code), project_or_404=lambda uid: _project_or_404(uid),
         by=lambda request, body=None: _by(request, body), cc_source=lambda: _cc_source(),
+        current_person=lambda request: _current_person(request),
         global_ids=lambda create=False: _global_ids(create), resolve_project=_factory_project_id,
         ticket_out=lambda uid, t, **kw: _ticket_out(uid, t, **kw),
         ensure_globals=lambda uid: _ensure_globals(uid),
