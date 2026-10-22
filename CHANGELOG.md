@@ -38,6 +38,12 @@ the project follows [Semantic Versioning](https://semver.org/).
   (Slack users are not mapped to people yet). An event with no project label stays visible to
   everyone. Two limits: an entity count over a source shared by several projects still counts the hidden rows, and a
   station's recent lines are not filtered by row.
+- Ask transcripts belong to the person who had the chat: with auth on, a key lists and opens its
+  own, the system credential sees all, and a key with no person can keep none (a save answers 403).
+  The read log records which projects a read was about, including the ones that own the sources it
+  read, so a private project's reads stay out of everyone else's activity feed. A label value or a
+  bare key carried only by a private project's rows no longer lists, and a practice run starts from
+  an event its caller can see.
 - MCP tools `list_people` and `set_project_access` (lead, scope, members added or removed, people
   by id or email).
 - A recording carries the person who shipped it: the cell labels every Claude Code event pushed to
