@@ -530,16 +530,20 @@ async def set_area(repo: str, person: str) -> str:
 def _station_line(s: dict) -> dict:
     return {k: s.get(k) for k in ("name", "role", "parent", "state", "state_reason",
                                   "quiet_minutes", "project_name", "session", "last_at",
-                                  "children")} | {"earlier_sessions": len(s.get("earlier") or [])}
+                                  "children", "crew", "machine")} | {
+        "person": (s.get("person") or {}).get("name"),
+        "earlier_sessions": len(s.get("earlier") or [])}
 
 
 @mcp.tool()
-async def list_crew() -> str:
-    """The crew as Tares sees it: one row per station (orchestrator, reviewer, releaser,
+async def list_crew(mine: bool = False) -> str:
+    """The crews as Tares sees them: one row per station (orchestrator, reviewer, releaser,
     builders, helpers) with its state (working, waiting, quiet, ended), the project it is on,
-    when it last spoke, the stations it started, and how many earlier sessions played it."""
+    when it last spoke, the stations it started, and how many earlier sessions played it. Each
+    row names its crew, the machine the crew runs on and the person it belongs to: two crews can
+    have stations of the same name. With `mine` only the caller's own crews are listed."""
     async with _cx(10) as cx:
-        r = await cx.get(f"{TARESD}/api/crew")
+        r = await cx.get(f"{TARESD}/api/crew", params={"mine": 1} if mine else None)
     if r.status_code >= 400:
         return _out(r)
     return json.dumps([_station_line(s) for s in r.json().get("stations") or []], default=str)

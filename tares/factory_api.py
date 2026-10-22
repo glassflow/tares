@@ -670,14 +670,17 @@ def register(app, store, h: SimpleNamespace) -> None:
         return v.timestamp() if isinstance(v, datetime) else 0.0
 
     def stations(project: str | None = None) -> list[dict]:
+        """The stations, one row each per crew (TR-628): two crews with the same station names
+        never merge. Each row names its crew, machine and person."""
         rows = store.station_sessions(h.cc_source())
         names = {p["id"]: p["name"] for p in store.list_projects()}
+        crews = {c["id"]: c for c in store.list_crews()}
         now = now_utc()
-        by: dict[str, list[dict]] = {}
+        by: dict[tuple, list[dict]] = {}
         for s in rows:
-            by.setdefault(s["station"], []).append(s)
+            by.setdefault((s["crew_id"], s["station"]), []).append(s)
         out = []
-        for name, ss in by.items():
+        for (cid, name), ss in by.items():
             # the newest session plays the station now; an older one that never reported its
             # end (killed) does not outrank it
             ss.sort(key=lambda s: _ts(s["last_at"]), reverse=True)
@@ -691,12 +694,15 @@ def register(app, store, h: SimpleNamespace) -> None:
             earlier = [{"session": s["session"], "started_at": s["started_at"],
                         "last_at": s["last_at"], "lines": s["lines"], "state": "replaced"}
                        for s in ss if s is not cur]
+            crew = crews.get(cid) or {}
             out.append({"name": name, "role": cur["role"], "parent": cur["parent"],
                         "project": cur["project"], "project_name": names.get(cur["project"]),
                         "state": state, "state_reason": cur["state_reason"],
                         "state_at": cur["state_at"], "quiet_minutes": quiet,
                         "session": cur["session"], "started_at": cur["started_at"],
                         "last_at": cur["last_at"], "lines": cur["lines"], "earlier": earlier,
+                        "crew_id": cid, "crew": crew.get("name"),
+                        "machine": crew.get("machine") or "", "person": crew.get("person"),
                         "projects": sorted({s["project"] for s in ss if s["project"]})})
         hidden = h.hidden_ids()
         if hidden:   # a project the caller cannot see is not named by a station (TR-629)
@@ -712,7 +718,9 @@ def register(app, store, h: SimpleNamespace) -> None:
         meters = store.session_meters([st["session"] for st in out])
         spent = store.usage_by_session([s["session"] for s in rows])
         for st in out:
-            st["children"] = sorted(x["name"] for x in out if x["parent"] == st["name"])
+            # the stations this one started: in its own crew, whose names may repeat in another
+            st["children"] = sorted(x["name"] for x in out
+                                    if x["parent"] == st["name"] and x["crew_id"] == st["crew_id"])
             # the context window from the station's status line, and what all its sessions spent
             st["context"] = claude_usage.context_now(meters.get(st["session"]))
             mine = [spent[s] for s in [st["session"], *(e["session"] for e in st["earlier"])]
@@ -721,14 +729,52 @@ def register(app, store, h: SimpleNamespace) -> None:
         if project:
             out = [s for s in out if project in s["projects"]]
         order = {r: i for i, r in enumerate(factory_mod.ROLES)}
-        out.sort(key=lambda s: (order.get(s["role"] or "", 99), s["name"]))
+        out.sort(key=lambda s: (order.get(s["role"] or "", 99), s["name"], s["crew_id"] or ""))
         return out
 
+    def caller_person_id(request: Request) -> str:
+        """The person whose crews the caller means by "mine". A recording with no person (the
+        system credential) is filed under `local`, so a caller with no person is `local` too."""
+        p = h.current_person(request)
+        return p["id"] if p else "local"
+
+    def crews_of(rows: list[dict]) -> list[dict]:
+        """The stations (as `stations()` lists them) grouped by crew, the crew seen last first."""
+        info = {c["id"]: c for c in store.list_crews()}
+        out = []
+        for cid in dict.fromkeys(r["crew_id"] for r in rows):
+            c = info.get(cid) or {}
+            out.append({"id": cid, "name": c.get("name"), "machine": c.get("machine") or "",
+                        "person": c.get("person"), "person_id": c.get("person_id"),
+                        "last_seen": c.get("last_seen"),
+                        "stations": [r for r in rows if r["crew_id"] == cid]})
+        out.sort(key=lambda c: (-_ts(c["last_seen"]), c["id"] or ""))
+        return out
+
+    def pick_station(name: str, request: Request, crew: str | None = None) -> dict:
+        """The station called `name`. Crews can repeat a name: `crew` (a crew id or name) narrows
+        it down, and of several that remain the caller's own crew's wins, then the newest."""
+        rows = [s for s in stations() if s["name"] == name]
+        if crew:
+            rows = [s for s in rows if crew in (s["crew_id"], s["crew"])]
+        if not rows:
+            h.err(KeyError(f"no station {name!r} has reported to Tares"
+                           + (f" in crew {crew!r}" if crew else "")), 404)
+        me = caller_person_id(request)
+        rows.sort(key=lambda s: (((s["person"] or {}).get("id") != me), -_ts(s["last_at"])))
+        return rows[0]
+
     @app.get("/api/crew")
-    async def get_crew(request: Request):
-        """The crew: one row per station (its current session and state, the earlier sessions
-        that played it, the stations it started), the crew's settings, and the shared grants."""
-        return {"stations": stations(), "settings": settings(request),
+    async def get_crew(request: Request, mine: bool = False):
+        """The crews (TR-628): one per person, crew name and machine, each with its stations (the
+        current session and state, the earlier sessions that played it, the stations it
+        started), the crews' settings, and the shared grants. `mine=1` keeps the caller's own
+        crews. `stations` is the same rows flat, for a client that does not group by crew yet."""
+        rows = stations()
+        if mine:
+            me = caller_person_id(request)
+            rows = [s for s in rows if (s["person"] or {}).get("id") == me]
+        return {"crews": crews_of(rows), "stations": rows, "settings": settings(request),
                 "grants": grants_out(None)["all"],
                 "now": now_utc()}
 
@@ -770,12 +816,13 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {"projects": out, "finished": done, "releasing": releasing, "now": now_utc()}
 
     @app.get("/api/crew/{name}")
-    async def get_station(name: str, recent: int = 30):
+    async def get_station(name: str, request: Request, recent: int = 30,
+                          crew: str | None = None):
         """One station: its row as in /api/crew, the tickets it holds in every project, its
-        current session's last lines (`recent`, at most 200), and the command that opens it."""
-        st = next((s for s in stations() if s["name"] == name), None)
-        if st is None:
-            h.err(KeyError(f"no station {name!r} has reported to Tares"), 404)
+        current session's last lines (`recent`, at most 200), and the command that opens it.
+        Crews can repeat a station name: `crew` (id or name) says which; without it the caller's
+        own crew's station comes back."""
+        st = pick_station(name, request, crew)
         held = []
         hidden = h.hidden_ids()
         for p in store.list_projects():
@@ -799,30 +846,27 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "attach": factory_mod.attach_command(name, st.get("role") or "")}
 
     @app.post("/api/crew/{name}/end")
-    async def end_station(name: str, request: Request, body: dict | None = Body(None)):
+    async def end_station(name: str, request: Request, body: dict | None = Body(None),
+                          crew: str | None = None):
         """{reason?}: mark the station's current session ended, for a station that was retired or
         whose session is gone, so it stops showing as working or quiet. Its earlier sessions and
         lines are kept. The orchestrator or the person (unlabeled, such as `factory retire`) may.
         A session that is still alive turns the row back with its next line."""
         deny(request, "end_station")
-        st = next((s for s in stations() if s["name"] == name), None)
-        if st is None:
-            h.err(KeyError(f"no station {name!r} has reported to Tares"), 404)
+        st = pick_station(name, request, crew)
         reason = " ".join(str((body or {}).get("reason") or "").split())[:100] or "marked ended"
         if (store.session_state(st["session"]) or {}).get("state") != "ended":
             store.set_session_state(st["session"], "ended", reason, now_utc(), force=True)
-        return next(s for s in stations() if s["name"] == name)
+        return next(s for s in stations() if s["session"] == st["session"])
 
     # ── a station's context by category: asked from the console, read on the crew's machine ──
     ASK_TTL = 15   # minutes an unanswered ask stays open; the watch reads on the crew's machine
 
     @app.post("/api/crew/{name}/context")
-    async def ask_station_context(name: str):
+    async def ask_station_context(name: str, request: Request, crew: str | None = None):
         """Ask for a new /context reading of the station's session. The factory watch on the
         crew's machine reads it (no model call) within a few seconds, if it runs."""
-        st = next((s for s in stations() if s["name"] == name), None)
-        if st is None:
-            h.err(KeyError(f"no station {name!r} has reported to Tares"), 404)
+        st = pick_station(name, request, crew)
         at = now_utc()
         store.ask_session_context(st["session"], at)
         return {"session": st["session"], "asked_at": at}
@@ -844,7 +888,8 @@ def register(app, store, h: SimpleNamespace) -> None:
         """The stations that worked on this project (builders started for it among them), and
         when it was handed to the crew."""
         h.project_or_404(uid)
-        return {"stations": stations(uid), "handover": store.get_handover(uid),
+        rows = stations(uid)
+        return {"crews": crews_of(rows), "stations": rows, "handover": store.get_handover(uid),
                 "now": now_utc()}
 
     # ── the ledger (TR-427, TR-428, TR-410, TR-429) ───────────────────────────
