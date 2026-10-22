@@ -976,6 +976,10 @@ def register(app, store, h: SimpleNamespace) -> None:
         """Ask for a new /context reading of the station's session. The factory watch on the
         crew's machine reads it (no model call) within a few seconds, if it runs."""
         st = pick_station(name, request, crew)
+        # the reading is taken on its owner's machine: nobody else asks it (the system credential may)
+        if not h.is_system(request) and (st["person"] or {}).get("id") != caller_person_id(request):
+            h.err(PermissionError(f"{name} belongs to another person's crew: only its owner "
+                                  "asks for its context"), 403)
         at = now_utc()
         store.ask_session_context(st["session"], at)
         return {"session": st["session"], "asked_at": at}
