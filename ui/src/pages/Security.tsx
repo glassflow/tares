@@ -1351,7 +1351,7 @@ function ApiKeysPanel({ people, admin, me }: { people: Person[]; admin: boolean;
   // a project key reads one project; the table names it (they are made on the project's page)
   const [projectNames, setProjectNames] = useState<Record<string, string>>({});
   useEffect(() => {
-    api.projects().then((r) => setProjectNames(Object.fromEntries(r.projects.map((p) => [p.id, p.name]))))
+    api.projectsWithHidden().then((r) => setProjectNames(Object.fromEntries(r.projects.map((p) => [p.id, p.name]))))
       .catch(() => undefined);
   }, []);
 
