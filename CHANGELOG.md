@@ -13,6 +13,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 ### Changed
 - A factory project's tickets list reads every working doc's title and every ticket's last review
   in one query each, instead of a few queries per ticket (TR-657).
+- The review queue reads the tickets in review across every project, when each went to review and
+  its last review in one query each, instead of every project's whole ticket list and a few
+  queries per ticket (TR-648).
 
 ### Fixed
 - A firing that arrives while its agent is already running for the same key now gets the

@@ -366,6 +366,40 @@ class FactoryStore:
         return [{"at": r[0], "field": r[1], "value": r[2], "reason": r[3], "by": r[4],
                  "role": r[5]} for r in rows]
 
+    def entered_stage(self, tickets: list[str], stage: str) -> dict:
+        """{ticket: when it last moved to `stage`} in one query (TR-648). Tickets that never
+        did are absent."""
+        if not tickets:
+            return {}
+        marks = ", ".join("?" for _ in tickets)
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT ticket, max(changed_at) FROM ticket_history WHERE ticket IN "
+                f"({marks}) AND field = 'stage' AND value = ? GROUP BY ticket",
+                list(tickets) + [stage]).fetchall()
+        return dict(rows)
+
+    def review_tickets(self) -> list[tuple[str, dict]]:
+        """Every ticket in review with its project's name, in the order the projects were made
+        and then the list's own order, in one query (TR-648)."""
+        with self._lock:
+            rows = self.con.execute(
+                f"SELECT {self._TICKET_COLS}, pname FROM (SELECT t.*, u.name AS pname, "
+                "u.created_at AS pcreated FROM tickets t JOIN usecases u ON u.id = t.project "
+                "WHERE t.stage = 'review') ORDER BY pcreated, position, created_at").fetchall()
+        return [(r[-1], self._ticket_row(r)) for r in rows]
+
+    def milestone_statuses(self, milestones: list[str]) -> list[dict]:
+        """Project, milestone, id and status of every ticket in these milestones (TR-648)."""
+        if not milestones:
+            return []
+        marks = ", ".join("?" for _ in milestones)
+        with self._lock:
+            rows = self.con.execute(
+                f"SELECT project, milestone, id, status FROM tickets WHERE milestone IN ({marks})",
+                list(milestones)).fetchall()
+        return [{"project": r[0], "milestone": r[1], "id": r[2], "status": r[3]} for r in rows]
+
     def history_between(self, since, until) -> list[dict]:
         """Every ticket change in [since, until), oldest first, for every project (the standup)."""
         with self._lock:
