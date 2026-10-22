@@ -847,6 +847,10 @@ def make_app() -> FastAPI:
                 request.state.scopes = sorted(scopes)
             return await call_next(request)
 
+    # per-route timing in /metrics (TR-652): added after every other middleware so it is the
+    # outermost one and times auth rejections too
+    app.add_middleware(_metrics.RequestTiming)
+
     def _err(e: Exception, code: int = 400):
         raise HTTPException(status_code=code, detail=str(e))
 

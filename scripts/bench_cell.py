@@ -394,14 +394,17 @@ def main(argv=None) -> int:
         port = args.port or free_port()
         proc, log = start_daemon(str(copy), port, scratch)
         base = f"http://127.0.0.1:{port}"
-        print(f"daemon {base} (sandboxed, no network) on {copy}; log {log}")
+        print(f"daemon {base} (sandboxed, no network) on {copy}; log {log}", flush=True)
         if project:
             print(f"project {project[1]} ({project[0]})")
         else:
             print("no software_factory project in this database: project rows skipped")
 
         if args.serve:
-            print("serving; Ctrl-C to stop")
+            # SIGTERM stops it like Ctrl-C, so a script that started it in the background (where
+            # SIGINT is ignored) can stop it and still get the cleanup below
+            signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt))
+            print("serving; Ctrl-C or SIGTERM to stop", flush=True)
             try:
                 while proc.poll() is None:
                     time.sleep(1)
