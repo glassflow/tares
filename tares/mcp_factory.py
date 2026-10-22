@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 
-from .mcp_server import TARESD, _cx, _default_project, _out, _project_id, mcp, writable
+from .mcp_server import TARESD, _cx, _person_in, _default_project, _out, _project_id, mcp, writable
 
 
 # ── the plan (TR-411) ─────────────────────────────────────────────────────────
@@ -428,6 +428,35 @@ async def add_grant(words: str, scope: str = "all", project: str = "") -> str:
                           json={"words": words, "scope": scope, "project": project,
                                 "by_default": "claude code session"})
     return _out(r, ("line", "added"))
+
+
+@mcp.tool()
+async def list_areas() -> str:
+    """Who owns which GitHub repo on this Tares: [{repo, person: {id, name}, note}]. A repo is
+    `owner/name`; matching ignores case."""
+    async with _cx(10) as cx:
+        r = await cx.get(f"{TARESD}/api/areas")
+    return _out(r)
+
+
+@writable()
+async def set_area(repo: str, person: str) -> str:
+    """Say who owns a GitHub repo (`owner/name`). `person` is their id or email (list_people
+    shows them). An admin may set or change any repo; anyone else may only claim a repo nobody
+    owns yet, for themselves."""
+    async with _cx(10) as cx:
+        r = await cx.get(f"{TARESD}/api/people")
+        if r.status_code >= 400:
+            return _out(r)
+        p = _person_in(r.json().get("people") or [], person)
+        if p is None:
+            return f"no person {person!r}; list_people shows the ones there are"
+        repo = repo.strip().strip("/")
+        if repo.count("/") != 1:
+            return f"{repo!r} is not a repo: write it as owner/name, like glassflow/tares"
+        owner, name = repo.split("/")
+        r = await cx.put(f"{TARESD}/api/areas/{owner}/{name}", json={"person_id": p["id"]})
+    return _out(r)
 
 
 def _station_line(s: dict) -> dict:

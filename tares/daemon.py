@@ -57,7 +57,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_
 from . import metrics as _metrics
 from . import docs as docs_mod
 from . import factory as factory_mod
-from . import claude_usage, factory_api, standup as standup_mod
+from . import areas as areas_mod, claude_usage, factory_api, standup as standup_mod
 from . import linear as _linear
 from . import github_tickets as _gh_tickets
 from . import skills as skills_mod
@@ -699,6 +699,8 @@ def make_app() -> FastAPI:
     # a project's skills: what its agents are told to do, so writing one is a catalog write
     _SKILLS_PATH = re.compile(r"^/api/projects/[^/]+/skills(/|$)")
 
+    _AREA_ONE = re.compile(r"^/api/areas/[^/]+/[^/]+$")
+
     def _required_scope(method: str, path: str) -> str | None:
         """None = public. 'any' = any valid credential. Reads of credentials and every write are
         admin, except the few in _READ_WRITES: a read with a body, and subscribe, which exposes
@@ -715,6 +717,9 @@ def make_app() -> FastAPI:
             return None
         if path == "/api/whoami":
             return "any"
+        if method == "PUT" and _AREA_ONE.match(path):
+            return "ingest"   # an admin sets any area; a person may claim an unowned repo for
+                              # themselves (TR-627): the handler decides, it needs the credential
         if method == "PATCH" and path.startswith("/api/people/"):
             return "read"   # an admin, or a key bound to that person changing their own name:
                             # the handler decides, it needs the credential's person
@@ -1624,6 +1629,65 @@ def make_app() -> FastAPI:
         if not p:
             _err(KeyError(f"no person {pid!r}"), 404)
         return _person_out(p)
+
+    # ── Area owners (TR-627): the person who owns each GitHub repo ──
+    @app.get("/api/areas")
+    async def list_areas():
+        """[{repo, person: {id, name}, note}], one per repo."""
+        return areas_mod.view(store)
+
+    @app.put("/api/areas")
+    async def replace_areas(body: list = Body(...)):
+        """Admin only. Replace the whole list with [{repo, person_id, note?}]. A repo given twice
+        keeps its last entry; repos are saved in lowercase."""
+        try:
+            areas_mod.save(store, body)
+        except ValueError as e:
+            _err(e, 400)
+        return areas_mod.view(store)
+
+    @app.put("/api/areas/{owner}/{name}")
+    async def set_area(owner: str, name: str, request: Request, body: dict = Body(...)):
+        """{person_id, note?}. An admin sets or reassigns any repo. Anyone else may only claim a
+        repo nobody owns yet, for themselves: who they are comes from their key, never the body."""
+        try:
+            repo = areas_mod.norm_repo(f"{owner}/{name}")
+        except ValueError as e:
+            _err(e, 400)
+        pid = str(body.get("person_id") or "").strip()
+        if not pid or store.get_person(pid) is None:
+            _err(KeyError(f"no person {pid!r}; GET /api/people lists them"), 400)
+        if not _is_admin(request):
+            me = _current_person(request)
+            if not me:
+                raise HTTPException(status_code=403, detail="this key belongs to no person, so it "
+                                    "cannot claim a repo; ask an admin to set the owner")
+            if pid != me["id"]:
+                raise HTTPException(status_code=403, detail="you can claim a repo only for "
+                                    "yourself; ask an admin to set another person as owner")
+            held = areas_mod.owner(store, repo)
+            if held and held["id"] != me["id"]:
+                raise HTTPException(status_code=403, detail=f"{repo} already belongs to "
+                                    f"{held['name']}; ask an admin to reassign it")
+        entries = [e for e in areas_mod.load(store) if e["repo"] != repo]
+        entries.append({"repo": repo, "person_id": pid, "note": body.get("note")})
+        try:
+            areas_mod.save(store, entries)
+        except ValueError as e:
+            _err(e, 400)
+        return next(a for a in areas_mod.view(store) if a["repo"] == repo)
+
+    @app.delete("/api/areas/{owner}/{name}")
+    async def delete_area(owner: str, name: str):
+        """Admin only. Take a repo's owner away."""
+        try:
+            repo = areas_mod.norm_repo(f"{owner}/{name}")
+        except ValueError as e:
+            _err(e, 400)
+        left = [e for e in areas_mod.load(store) if e["repo"] != repo]
+        gone = len(left) != len(areas_mod.load(store))
+        store.set_setting(areas_mod.AREAS_SETTING, json.dumps(left))
+        return {"ok": True, "removed": gone}
 
     @app.get("/api/whoami")
     async def whoami(request: Request):
@@ -5352,6 +5416,7 @@ def make_app() -> FastAPI:
         err=lambda e, code=400: _err(e, code), project_or_404=lambda uid: _project_or_404(uid),
         by=lambda request, body=None: _by(request, body), cc_source=lambda: _cc_source(),
         current_person=lambda request: _current_person(request),
+        area_owner=lambda repo: areas_mod.owner(store, repo),
         hidden_ids=lambda: _hidden_ids(),
         global_ids=lambda create=False: _global_ids(create), resolve_project=_factory_project_id,
         ticket_out=lambda uid, t, **kw: _ticket_out(uid, t, **kw),

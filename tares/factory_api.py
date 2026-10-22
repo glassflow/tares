@@ -198,7 +198,8 @@ def project_progress(store, uid: str) -> dict:
 
 def register(app, store, h: SimpleNamespace) -> None:
     """`h` carries the daemon's helpers: err(exc, code), project_or_404(uid), by(request, body),
-    cc_source(), global_ids(create)."""
+    cc_source(), global_ids(create), area_owner(repo) -> the person who owns that GitHub repo
+    (`owner/name`, any case) or None (TR-627)."""
 
     def deny(request: Request, action: str) -> None:
         why = factory_mod.may(caller(request), action)
