@@ -1743,7 +1743,7 @@ def register(app, store, h: SimpleNamespace) -> None:
             kind, grant_project, areas, needs_lead = grant
             row, _ = put_grant(kind, words, grant_project, giver, areas, needs_lead,
                                "the person, on the desk")
-            granted = True
+            granted = row["state"] == "active"   # one waiting for consent is not in effect yet
         changed = []
         for a, st, w in plan:
             store.decide_assumption(a["id"], st, w, d["label"], now_utc())

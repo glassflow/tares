@@ -346,8 +346,8 @@ async def desk_answer(item: str, words: str, choice: str = "", standing: bool = 
                 else "these words")
         return json.dumps({
             "item": d["desk_item"]["label"], "recorded": False, "still_open": True,
-            "note": f"Tares did not find {what} in what the person typed into your session "
-                    "after the question was asked. Nothing is recorded. Pass their reply exactly "
+            "note": f"Tares did not find {what} in what any session typed since the question "
+                    "was asked. Nothing is recorded. Pass their reply exactly "
                     "as they typed it (a whole message, line or sentence of theirs), or ask "
                     "them again."})
     out = {"item": d["desk_item"]["label"], "recorded": True,

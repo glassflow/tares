@@ -245,6 +245,25 @@ async def main():
         out = json.loads(await mf.desk_answer(d9["label"], words))
         ck("after the recording is in, the same call succeeds", out["recorded"], out)
 
+        print("== lines Claude Code writes that Q did not type ==")
+        orchestrator("P")
+        d15 = await add("Shop: ship on Friday?", project="Shop", tickets=[L["s2"]])
+        orchestrator("Q")
+        words = "Ship it on Friday"
+        notyped = [
+            dict(says("q-meta", words, 11), isMeta=True, origin={"kind": "peer"}),
+            dict(says("q-meta", words, 12), isMeta=False, origin={"kind": "task-notification"}),
+            dict(says("q-meta", words, 13), isCompactSummary=True),
+            dict(says("q-meta", words, 13.5), isMeta=True),   # a scheduled prompt
+        ]
+        await push("Q", notyped)
+        out = await mf.desk_answer(d15["label"], words)
+        ck("a peer message, a task notification and a compaction summary do not answer",
+           not_found(out, "Q") and store.get_desk_item(d15["label"])["state"] == "open", out)
+        await push("Q", [says("q-typed", words, 14)])
+        out = json.loads(await mf.desk_answer(d15["label"], words))
+        ck("a typed line with no origin (headless, older Claude Code) does", out["recorded"], out)
+
         print("== a standing answer is a grant given by Q ==")
         orchestrator("P")
         d10 = await add("Blog: deploy to staging without asking?", project="Blog")
@@ -285,6 +304,21 @@ async def main():
            g and g["given_by"]["id"] == pid["Q"] and g["state"] == "waiting"
            and g["areas"] == ["acme/web"] and not g["in_effect"]
            and any(w["id"] == pid["P"] for w in g["waiting_for"]), out)
+        ck("and it is not reported as granted", out["became_a_grant"] is False
+           and not next(x for x in store.list_decisions(None)
+                        if x["question"].startswith("Shop: run the payment sandbox"))["granted"], out)
+
+        orchestrator("P")
+        d16 = await add("Shop: let the payment code merge itself?", project="Shop",
+                        tickets=[L["s2"]], to="r@example.com")
+        orchestrator("R")
+        words = "Payment code may merge itself"
+        await push("R", [says("r-s1", words, 15)])
+        out = await mf.desk_answer(d16["label"], words, standing=True)
+        ck("a project grant from someone who neither leads the project nor owns its repos: refused",
+           isinstance(out, str) and "error 403" in out
+           and store.get_desk_item(d16["label"])["state"] == "open"
+           and not any(g["words"] == words for g in store.all_grant_rows()), out)
 
         d13 = await add("Quiet: allow anything?", project="Quiet", to="q@example.com")
         words = "Anything goes for every project"

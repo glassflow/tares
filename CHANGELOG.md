@@ -13,7 +13,10 @@ the project follows [Semantic Versioning](https://semver.org/).
   retryable error, because recordings can take a minute to arrive, and nothing is recorded until they
   are. A standing answer becomes a grant given by that person: a project grant, or with `grant_kind`
   personal one for their own machine. A project grant over repos other people own waits for them, as
-  grants do elsewhere. Items from before keep the older rule.
+  grants do elsewhere. Lines Claude Code writes that the person did not type (messages from other
+  sessions, scheduled prompts, task notifications, compaction summaries) never answer an item. Items
+  from before keep the older rule, but a standing answer on one is now checked like any grant, so a
+  project key with no person is refused a project grant.
 - My work for an orchestrator: `GET /api/crew/my-work` (and the `my_work` tool) returns what belongs to
   the person of the key: their ready tickets, the ones a station is working on, the milestones of
   projects they lead that are ready to check, and empty `desk` and `spec_questions` lists. A key with

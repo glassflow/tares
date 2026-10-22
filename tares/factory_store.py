@@ -979,6 +979,11 @@ class FactoryStore:
         q = ("SELECT key_value, event_time, text FROM events WHERE source = ? AND "
              "event_type = 'user' AND event_time >= ? AND "
              "coalesce(json_extract_string(labels, '$.sidechain'), 'false') <> 'true'")
+        # Claude Code also writes other sessions' messages, scheduled prompts, task notifications
+        # and compaction summaries as user lines; none of them is the person typing (TR-634)
+        q += (" AND coalesce(json_extract_string(payload, '$.isMeta'), 'false') <> 'true'"
+              " AND coalesce(json_extract_string(payload, '$.isCompactSummary'), 'false') <> 'true'"
+              " AND coalesce(json_extract_string(payload, '$.origin.kind'), 'human') = 'human'")
         vals: list = [source, since]
         if person:
             who = "json_extract_string(labels, '$.tares_person')"
