@@ -289,7 +289,7 @@ function ContextFold({ s, onAsked }: { s: StationDetail; onAsked: () => void }) 
   const fresh = !!r && Date.now() - readAt < FRESH_MS;
   const ask = async () => {
     setBusy(true); setErr(null);
-    try { const a = await api.askStationContext(s.name); setAskedHere(new Date(a.asked_at).getTime()); onAsked(); }
+    try { const a = await api.askStationContext(s.name, s.crew_id); setAskedHere(new Date(a.asked_at).getTime()); onAsked(); }
     catch (e) { setErr(String((e as Error)?.message ?? e)); }
     finally { setBusy(false); }
   };

@@ -7,7 +7,7 @@ import { ContextBadge, PlanPanel, StationUsage } from "../components/ClaudeUsage
 import ConfirmDialog from "../components/ConfirmDialog";
 import { ProgressRing } from "../components/ProgressRing";
 import StandupSheet from "../components/Standup";
-import type { CrewProject, CrewSettingField, CrewSettings, CrewStation, DeskAllowed, DeskItem, ProjectUsage } from "../types";
+import type { CrewGroup, CrewProject, CrewSettingField, CrewSettings, CrewStation, DeskAllowed, DeskItem, ProjectUsage } from "../types";
 
 // The crew of a tares-factory (M3, M8): one always-on crew (orchestrator, reviewer, and a releaser
 // when the person asked for one) serves every project handed to it, and builders come and go per
@@ -15,6 +15,10 @@ import type { CrewProject, CrewSettingField, CrewSettings, CrewStation, DeskAllo
 // (`tares factory crew up`), and this page shows what Tares hears from them. The page always lists
 // who is on the crew and the projects it holds; a member's details are a click away, and the
 // notices at the top can be dismissed until something new happens.
+//
+// On a shared cell (TR-637) there is one crew per person and machine. The page groups them by
+// person, you first, and a station is told apart by its crew as well as its name, since two crews
+// have an orchestrator each.
 
 const ROLE_TEXT: Record<string, string> = {
   orchestrator: "The only one you talk to: hands out work, answers the others, brings you what needs you.",
@@ -96,22 +100,27 @@ function useDismissed() {
 
 interface Notice { id: string; sig: string; tone: "waiting" | "silent"; title: React.ReactNode; body: React.ReactNode }
 
-function Notices({ stations, desk }: { stations: CrewStation[]; desk: DeskItem[] }) {
+function Notices({ stations, desk, myId }: { stations: CrewStation[]; desk: DeskItem[]; myId: string }) {
   const { shown, dismiss } = useDismissed();
   const d = useDesk(desk);
   const notices: Notice[] = [];
   if (d.items.length) {
+    // the count and the dismissal are about what is yours (for you, or for anyone); other people's
+    // items are listed under their name but never counted as waiting for you
+    const yours = (x: DeskItem) => isMine({ person: x.to_person ?? null }, myId);
     notices.push({
-      id: "desk", sig: desk.map((x) => x.label).sort().join(","), tone: "waiting",
-      title: <DeskTitle open={desk.filter((x) => !d.allowed[x.id]).length} />,
-      body: <DeskList {...d} />,
+      id: "desk", sig: desk.filter(yours).map((x) => x.label).sort().join(","), tone: "waiting",
+      title: <DeskTitle open={desk.filter((x) => yours(x) && !d.allowed[x.id]).length}
+        others={d.items.some((x) => !yours(x)) && !d.items.some(yours)} />,
+      body: <DeskList {...d} myId={myId} />,
     });
   }
   // The orchestrator rests between turns all the time; what it needs from you comes as the desk above.
+  // Only your own crew's silence is yours to act on.
   for (const s of stations) {
-    if (s.state === "quiet") {
+    if (s.state === "quiet" && isMine({ person: s.person ?? null }, myId)) {
       notices.push({
-        id: `quiet:${s.name}`, sig: String(s.last_at ?? ""), tone: "silent",
+        id: `quiet:${skey(s)}`, sig: String(s.last_at ?? ""), tone: "silent",
         title: <>No word from {s.name} for {s.quiet_minutes} min</>,
         body: <p className="help" style={{ margin: 0 }}>It may have been stopped by Claude Code or crashed. <span className="mono">tares factory crew watch</span> brings it back; Tares only shows it.</p>,
       });
@@ -158,23 +167,43 @@ function rememberPaneFolded(folded: boolean) {
 /** Whether the fold a clicked summary belongs to is open, before the click toggles it. */
 const wasOpen = (e: React.MouseEvent<HTMLElement>) => !!(e.currentTarget.parentElement as HTMLDetailsElement | null)?.open;
 
+/** A station on this page: its name repeats across crews, the crew id does not. */
+const skey = (s: { name: string; crew_id?: string | null }) => `${s.crew_id ?? ""}/${s.name}`;
+const sameCrew = (a: { crew_id?: string | null }, b: { crew_id?: string | null }) => (a.crew_id ?? null) === (b.crew_id ?? null);
+
+/** The helpers of a station, in its own crew. */
+const helpersOf = (s: CrewStation, all: CrewStation[]) =>
+  all.filter((x) => x.parent === s.name && x.role === "helper" && sameCrew(x, s));
+
 /** A station and the helpers under it at any depth, the rows MemberRow draws for it. */
 function withHelpers(s: CrewStation, all: CrewStation[]): CrewStation[] {
-  return [s, ...all.filter((x) => x.parent === s.name && x.role === "helper").flatMap((k) => withHelpers(k, all))];
+  return [s, ...helpersOf(s, all).flatMap((k) => withHelpers(k, all))];
 }
+
+/** Whether a crew is the viewer's own. A crew with no person (an older cell) is the viewer's. */
+const isMine = (g: { person: { id: string } | null }, myId: string) => !g.person || g.person.id === myId;
 
 // ── the member list ─────────────────────────────────────────────────────────
 
-function MemberRow({ s, all, selected, depth = 0 }: { s: CrewStation; all: CrewStation[]; selected: string; depth?: number }) {
+/** What a station is on: its project (when `withProject`) and the reason it gave for its state. */
+function onText(s: CrewStation, withProject: boolean): string {
+  const reason = s.state === "ended" ? "" : (s.state_reason ?? "").replace(/[.!]+$/, "");
+  return [withProject ? s.project_name : "", reason].filter(Boolean).join(": ");
+}
+
+function MemberRow({ s, all, selected, depth = 0, withProject = false }: { s: CrewStation; all: CrewStation[]; selected: string; depth?: number; withProject?: boolean }) {
   const [, setParams] = useSearchParams();
-  const kids = all.filter((x) => x.parent === s.name && x.role === "helper");
+  const kids = helpersOf(s, all);
+  const on = onText(s, withProject);
   return (
     <>
-      <li className={`crew-member${selected === s.name ? " is-selected" : ""}`} style={{ paddingLeft: 16 + depth * 20 }}>
-        <button type="button" className="crew-pick" onClick={() => setParams({ member: s.name }, { replace: true })}
-          aria-current={selected === s.name ? "true" : undefined}>
+      <li className={`crew-member${selected === skey(s) ? " is-selected" : ""}`} style={{ paddingLeft: 16 + depth * 20 }}>
+        <button type="button" className="crew-pick"
+          onClick={() => setParams(s.crew_id ? { member: s.name, crew: s.crew_id } : { member: s.name }, { replace: true })}
+          aria-current={selected === skey(s) ? "true" : undefined}>
           <span className="crew-name">{s.name}</span>
           <span className="crew-role">{s.role ?? "station"}</span>
+          {on && <span className="crew-on">{on}</span>}
         </button>
         <span className="crew-side">
           <ContextBadge ctx={s.context} />
@@ -182,7 +211,7 @@ function MemberRow({ s, all, selected, depth = 0 }: { s: CrewStation; all: CrewS
           <CrewState s={s} />
         </span>
       </li>
-      {kids.map((k) => <MemberRow key={k.name} s={k} all={all} selected={selected} depth={depth + 1} />)}
+      {kids.map((k) => <MemberRow key={skey(k)} s={k} all={all} selected={selected} depth={depth + 1} withProject={withProject} />)}
     </>
   );
 }
@@ -236,7 +265,7 @@ function ProjectBlock({ p, builders, all, selected, week, now }: { p: CrewProjec
  *  on a hidden row; opening or closing it by hand is remembered. */
 function BuildersFold({ id, builders, all, selected }: { id: string; builders: CrewStation[]; all: CrewStation[]; selected: string }) {
   const members = builders.flatMap((b) => withHelpers(b, all));
-  const holds = members.some((m) => m.name === selected);
+  const holds = members.some((m) => skey(m) === selected);
   const [open, setOpen] = useState(() => holds || !!readOpen()[id]);
   useEffect(() => { if (holds) setOpen(true); }, [holds]);
   const helpers = members.length - builders.length;
@@ -261,7 +290,7 @@ function BuildersFold({ id, builders, all, selected }: { id: string; builders: C
         </span>}
       </summary>
       <ul className="crew-list">
-        {builders.map((b) => <MemberRow key={b.name} s={b} all={all} selected={selected} depth={1} />)}
+        {builders.map((b) => <MemberRow key={skey(b)} s={b} all={all} selected={selected} depth={1} />)}
       </ul>
     </details>
   );
@@ -274,7 +303,7 @@ type CrewFinished = NonNullable<Awaited<ReturnType<typeof api.crewProjects>>["fi
 function FinishedList({ finished, builders, all, selected }: { finished: CrewFinished[]; builders: CrewStation[]; all: CrewStation[]; selected: string }) {
   const ids = new Set(finished.map((p) => p.id));
   const holds = builders.filter((b) => b.project && ids.has(b.project))
-    .flatMap((b) => withHelpers(b, all)).some((m) => m.name === selected);
+    .flatMap((b) => withHelpers(b, all)).some((m) => skey(m) === selected);
   const [open, setOpen] = useState(holds);
   useEffect(() => { if (holds) setOpen(true); }, [holds]);
   return (
@@ -299,13 +328,13 @@ function FinishedList({ finished, builders, all, selected }: { finished: CrewFin
 
 /** A Quiet station whose session is gone (killed, or never sent its end) stays Quiet for good:
  *  the person ends its row here. Tares keeps its history; a live session's next line undoes it. */
-function MarkEnded({ name, onEnded }: { name: string; onEnded: () => void }) {
+function MarkEnded({ name, crew, onEnded }: { name: string; crew?: string | null; onEnded: () => void }) {
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const end = async () => {
     setAsking(false); setBusy(true); setErr(null);
-    try { await api.endStation(name); onEnded(); }
+    try { await api.endStation(name, undefined, crew); onEnded(); }
     catch (e) { setErr(String((e as Error).message ?? e)); }
     finally { setBusy(false); }
   };
@@ -337,18 +366,18 @@ const RECENT_SHOWN = 8;
 /** Whether a station is one of the crew's own or a helper under one: they serve every project and
  *  hold no tickets. Goes by its root up the parent chain, so a builder whose project id starts with
  *  crew- stays a builder. */
-export function onCrewSide(name: string, all: CrewStation[]): boolean {
-  let s = all.find((x) => x.name === name);
+export function onCrewSide(name: string, all: CrewStation[], crew?: string | null): boolean {
+  let s = all.find((x) => x.name === name && (crew === undefined || (x.crew_id ?? null) === crew));
   for (let i = 0; s && s.role === "helper" && s.parent && i < 10; i++) {
-    const up = all.find((x) => x.name === s!.parent);
+    const up = all.find((x) => x.name === s!.parent && sameCrew(x, s!));
     if (!up) return crewSideByName(s.parent);
     s = up;
   }
   return !!s && CREW_ROLES.includes(s.role ?? "");
 }
 
-function MemberDetail({ name, crewSide, onChanged }: { name: string; crewSide: boolean; onChanged: () => void }) {
-  const { data, error, reload } = usePolling(() => api.station(name), 10000);
+function MemberDetail({ name, crew, crewSide, mine, onChanged }: { name: string; crew: string | null; crewSide: boolean; mine: boolean; onChanged: () => void }) {
+  const { data, error, reload } = usePolling(() => api.station(name, crew), 10000);
   const [allLines, setAllLines] = useState(false);
   // after asking for a /context reading, look again sooner than the usual poll
   const asked = () => { reload(); [3000, 6000, 10000].forEach((ms) => setTimeout(reload, ms)); };
@@ -373,11 +402,18 @@ function MemberDetail({ name, crewSide, onChanged }: { name: string; crewSide: b
           {s.last_at && <>; last spoke <TimeAgo ts={s.last_at} /></>}.
           {!crewSide && s.project_name && <> Works on <Link to={`/projects/${encodeURIComponent(s.project ?? "")}`}>{s.project_name}</Link>.</>}
         </p>
-        {s.state === "quiet" && <MarkEnded name={s.name} onEnded={() => { reload(); onChanged(); }} />}
+        {s.crew_id && (s.crew || s.machine) && (
+          <p className="dim" style={{ margin: 0 }}>
+            {mine ? "Your" : <>{s.person?.name ?? "A"}'s</>} crew {s.crew ?? ""}{s.machine && <> on {s.machine}</>}.
+          </p>
+        )}
+        {mine && s.state === "quiet" && <MarkEnded name={s.name} crew={s.crew_id} onEnded={() => { reload(); onChanged(); }} />}
         <StationUsage s={s} onAsked={asked} />
         <div>
           <div className="crew-detail-label">Open it in a terminal</div>
-          {s.state === "ended"
+          {!mine
+            ? <p className="dim" style={{ margin: 0 }}>It runs on {s.machine || "their machine"}, so only {s.person?.name ?? "its owner"} can open it.</p>
+            : s.state === "ended"
             ? <p className="dim" style={{ margin: 0 }}>It has ended, so there is no session to open.</p>
             : <div className="fo-cmd"><code>{s.attach}</code><CopyButton text={s.attach} label="Copy" /></div>}
         </div>
@@ -550,6 +586,88 @@ function Settings({ st, grants, onChanged }: { st: CrewSettings; grants: string;
   );
 }
 
+/** The crews /api/crew reports. A cell that does not report `crews` yet gets its flat stations as
+ *  one crew of the viewer. */
+function crewGroups(data: Awaited<ReturnType<typeof api.crew>> | undefined): CrewGroup[] {
+  if (!data) return [];
+  if (data.crews) return data.crews;
+  return data.stations.length
+    ? [{ id: null, name: null, machine: "", person: null, person_id: null, last_seen: null, stations: data.stations }]
+    : [];
+}
+
+const STALE_MS = 24 * 3600 * 1000;
+/** A crew nobody heard from for more than a day, by the daemon's clock. A crew with no id is the
+ *  flat fallback and is current. */
+const isStale = (g: CrewGroup, now: string) =>
+  g.id !== null && (!g.last_seen || new Date(now).getTime() - new Date(g.last_seen).getTime() > STALE_MS);
+
+/** One crew: its name, machine and when it was last heard, then its stations with what each is on. */
+function CrewBlock({ g, stations, selected }: { g: CrewGroup; stations: CrewStation[]; selected: string }) {
+  // helpers show under the station that started them
+  const top = g.stations.filter((s) => !(s.role === "helper" && g.stations.some((x) => x.name === s.parent)));
+  return (
+    <div className="crew-block">
+      {(g.name || g.machine) && (
+        <div className="crew-block-head">
+          <b>{g.name ?? "crew"}</b>
+          {g.machine && <span className="dim">{g.machine}</span>}
+          {g.last_seen && <small className="dim">last seen <TimeAgo ts={g.last_seen} /></small>}
+        </div>
+      )}
+      <ul className="crew-list">
+        {top.map((s) => <MemberRow key={skey(s)} s={s} all={stations} selected={selected} withProject />)}
+      </ul>
+    </div>
+  );
+}
+
+/** Crews not seen for a day, shut. Opens by itself when the member picked is in one of them. */
+function StaleCrews({ crews, stations, selected }: { crews: CrewGroup[]; stations: CrewStation[]; selected: string }) {
+  const holds = crews.some((g) => g.stations.some((s) => skey(s) === selected));
+  const [open, setOpen] = useState(holds);
+  useEffect(() => { if (holds) setOpen(true); }, [holds]);
+  return (
+    <details className="crew-stale" open={open}
+      onToggle={(e) => { if (e.target === e.currentTarget) setOpen(e.currentTarget.open); }}>
+      <summary>Not seen recently <span className="dim">· {crews.length}</span></summary>
+      {crews.map((g) => <CrewBlock key={g.id ?? "none"} g={g} stations={stations} selected={selected} />)}
+    </details>
+  );
+}
+
+/** Every person's crews: you first, then the others by name. */
+function CrewPeople({ groups, myId, now, stations, selected }: { groups: CrewGroup[]; myId: string; now: string; stations: CrewStation[]; selected: string }) {
+  const people = new Map<string, { id: string; name: string; mine: boolean; crews: CrewGroup[] }>();
+  for (const g of groups) {
+    const mine = isMine(g, myId);
+    const id = mine ? myId : g.person!.id;
+    if (!people.has(id)) people.set(id, { id, name: mine ? "You" : g.person!.name, mine, crews: [] });
+    people.get(id)!.crews.push(g);
+  }
+  const ordered = [...people.values()].sort((a, b) => Number(b.mine) - Number(a.mine) || a.name.localeCompare(b.name));
+  return (
+    <>
+      {!people.has(myId) && (
+        <p className="dim" style={{ padding: "10px 16px", margin: 0 }}>
+          You have no crew on this cell yet: <span className="mono">tares factory crew up</span>.
+        </p>
+      )}
+      {ordered.map((p) => {
+        const fresh = p.crews.filter((g) => !isStale(g, now));
+        const stale = p.crews.filter((g) => isStale(g, now));
+        return (
+          <section key={p.id} className="crew-person">
+            <h4 className="crew-person-h">{p.name}</h4>
+            {fresh.map((g) => <CrewBlock key={g.id ?? "none"} g={g} stations={stations} selected={selected} />)}
+            {stale.length > 0 && <StaleCrews crews={stale} stations={stations} selected={selected} />}
+          </section>
+        );
+      })}
+    </>
+  );
+}
+
 export default function Crew() {
   const { data, error, reload } = usePolling(() => api.crew(), 10000);
   const { data: pdata, error: perror } = usePolling(() => api.crewProjects(), 15000);
@@ -559,23 +677,33 @@ export default function Crew() {
   const [paneOpen, setPaneOpen] = useState(() => !readPaneFolded());
   const [standup, setStandup] = useState(false);
   const closeStandup = useCallback(() => setStandup(false), []);
-  const stations = data?.stations ?? [];
+  const { data: me, error: meError } = usePolling(() => api.whoami(), 60000);
+  // a recording with no person is filed under `local`, so a caller with none is `local` too
+  const myId = me?.person?.id ?? "local";
+  const groups = crewGroups(data);
+  const stations = groups.flatMap((g) => g.stations);
   const builders = stations.filter((s) => s.role === "builder");
-  // a ?member= link to a builder, or a helper under one, opens the Projects pane for this visit
+  // the member a ?member= link names (with ?crew= when two crews have one of that name), or the
+  // orchestrator of your first crew
   const member = params.get("member");
-  const inProjects = !!member && builders.flatMap((b) => withHelpers(b, stations)).some((m) => m.name === member);
+  const memberCrew = params.get("crew");
+  const sel = member
+    ? stations.find((s) => s.name === member && (memberCrew ? s.crew_id === memberCrew : isMine({ person: s.person ?? null }, myId)))
+      ?? (memberCrew ? undefined : stations.find((s) => s.name === member))
+    : (groups.filter((g) => isMine(g, myId)).flatMap((g) => g.stations).find((s) => s.role === "orchestrator")
+      ?? stations.find((s) => s.role === "orchestrator"));
+  const selected = sel ? skey(sel) : "";
+  // a link to a builder, or a helper under one, opens the Projects pane for this visit
+  const inProjects = builders.flatMap((b) => withHelpers(b, stations)).some((m) => skey(m) === selected);
   useEffect(() => { if (inProjects) setPaneOpen(true); }, [inProjects]);
   if (error && !data) return <ErrorState error={error} what="the crew" onRetry={reload} />;
   const projects = pdata?.projects ?? [];
   const finished = pdata?.finished ?? [];
   const desk = ddata?.desk ?? [];
-  const crew = stations.filter((s) => CREW_ROLES.includes(s.role ?? ""));
   const projectIds = new Set(projects.map((p) => p.id));
   const finishedIds = new Set(finished.map((p) => p.id));
   // a finished project keeps its builders under it; Other builders is for no project or an unknown one
   const stray = pdata ? builders.filter((b) => !b.project || (!projectIds.has(b.project) && !finishedIds.has(b.project))) : [];
-  const selected = member ?? crew.find((s) => s.role === "orchestrator")?.name ?? "";
-  const known = stations.some((s) => s.name === selected);
   const week = new Map((udata?.projects ?? []).filter((x) => x.project).map((x) => [x.project, x]));
   const now = new Map((udata?.window.projects ?? []).filter((x) => x.project).map((x) => [x.project, x]));
 
@@ -584,7 +712,7 @@ export default function Crew() {
       <div className="pagehead">
         <div>
           <h1>Crew</h1>
-          <p className="subtitle">One crew serves every factory project. It runs on your machine; Tares shows what it hears from it.</p>
+          <p className="subtitle">Each person's crew serves the factory projects handed to it. It runs on their machine; Tares shows what it hears from it.</p>
         </div>
         {(projects.length > 0 || finished.length > 0) && (
           <span className="btnrow"><button type="button" onClick={() => setStandup(true)}>Standup</button></span>
@@ -592,9 +720,9 @@ export default function Crew() {
       </div>
       {standup && <StandupSheet onClose={closeStandup} />}
 
-      <Notices stations={stations} desk={desk} />
+      <Notices stations={stations} desk={desk} myId={myId} />
 
-      {data === undefined ? <div className="dim">loading…</div> : stations.length === 0 && projects.length === 0 && finished.length === 0 ? (
+      {data === undefined || (me === undefined && !meError) ? <div className="dim">loading…</div> : stations.length === 0 && projects.length === 0 && finished.length === 0 ? (
         <section className="fo-next fo-next-empty">
           <h2>No crew has reported yet</h2>
           <p className="help">Bring the crew up once, in a terminal, from a folder of its own:</p>
@@ -605,12 +733,8 @@ export default function Crew() {
         <div className="crew-split">
           <div className="crew-col">
             <div className="fo-panel">
-              <header><h3>The crew</h3>{data.settings.releaser === false && <span className="dim">no releaser: tickets end at merged</span>}</header>
-              {crew.length ? (
-                <ul className="crew-list">
-                  {crew.map((s) => <MemberRow key={s.name} s={s} all={stations} selected={selected} />)}
-                </ul>
-              ) : <p className="dim" style={{ padding: "10px 16px", margin: 0 }}>No crew station has reported yet: <span className="mono">tares factory crew up</span>.</p>}
+              <header><h3>Crews</h3>{data.settings.releaser === false && <span className="dim">no releaser: tickets end at merged</span>}</header>
+              <CrewPeople groups={groups} myId={myId} now={data.now} stations={stations} selected={selected} />
             </div>
             <details className="fo-panel fo-fold" open={paneOpen}
               onToggle={(e) => {
@@ -643,7 +767,8 @@ export default function Crew() {
             <PlanPanel data={udata} error={uerror} reload={ureload} />
           </div>
           <div className="crew-col">
-            {known ? <MemberDetail key={selected} name={selected} crewSide={onCrewSide(selected, stations)} onChanged={reload} />
+            {sel ? <MemberDetail key={selected} name={sel.name} crew={sel.crew_id ?? null} crewSide={onCrewSide(sel.name, stations, sel.crew_id ?? null)}
+                mine={isMine({ person: sel.person ?? null }, myId)} onChanged={reload} />
               : <div className="fo-panel crew-detail"><p className="dim" style={{ padding: 16, margin: 0 }}>Pick a member to see what it is doing.</p></div>}
           </div>
         </div>
@@ -675,8 +800,9 @@ export function Desk({ project, onChange }: { project?: string; onChange?: () =>
 
 // ── the desk, shared by the Crew page's notice and a project's page ──────────
 
-function DeskTitle({ open }: { open: number }) {
-  return open ? <>{open} {open === 1 ? "question" : "questions"} waiting for you</> : <>Nothing else waiting for you</>;
+function DeskTitle({ open, others }: { open: number; others?: boolean }) {
+  if (open) return <>{open} {open === 1 ? "question" : "questions"} waiting for you</>;
+  return others ? <>Nothing waiting for you; questions for others below</> : <>Nothing else waiting for you</>;
 }
 
 /** The open items, plus the permission requests allowed here since the page opened: an allowed one
@@ -689,36 +815,63 @@ function useDesk(open: DeskItem[], onChange?: () => void) {
   return { items, allowed, onAllowed };
 }
 
-function DeskList({ items, allowed, onAllowed }: ReturnType<typeof useDesk>) {
+/** The desk items grouped by the person each is for: you first, then the others by name, then
+ *  the ones nobody is named for (yours to answer, as before TR-634). */
+function deskGroups(items: DeskItem[], myId: string) {
+  const by = new Map<string, { key: string; label: string; name: string; mine: boolean; items: DeskItem[] }>();
+  for (const d of items) {
+    const p = d.to_person;
+    const key = !p ? "anyone" : p.id === myId ? "you" : p.id;
+    if (!by.has(key)) by.set(key, { key, label: key === "you" ? "For you" : key === "anyone" ? "For anyone" : `For ${p!.name}`, name: p?.name ?? "", mine: key !== p?.id, items: [] });
+    by.get(key)!.items.push(d);
+  }
+  const rank = (g: { key: string }) => (g.key === "you" ? 0 : g.key === "anyone" ? 2 : 1);
+  return [...by.values()].sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));
+}
+
+/** The open items. With `myId` (the Crew page) they sit under "For <name>" headings once they are
+ *  for more than one person; an item for someone else is read-only here. */
+function DeskList({ items, allowed, onAllowed, myId }: ReturnType<typeof useDesk> & { myId?: string }) {
+  const groups = myId === undefined ? [{ key: "you", label: "", name: "", mine: true, items }] : deskGroups(items, myId);
+  // headed once there is more than one group, or the one group is not yours
+  const headed = groups.length > 1 || groups.some((g) => !g.mine);
   return (
     <>
-      <ul className="crew-desk">
-        {items.map((d) => (
-          <li key={d.id}>
-            <b>{d.label}</b>
-            {allowed[d.id] ? <span className="fo-st fo-st-done" style={{ marginLeft: 6 }}>allowed</span>
-              : d.blocking && <span className="fo-st fo-st-quiet" style={{ marginLeft: 6 }}>blocks work</span>}
-            {d.project_name && <span className="dim"> · {d.project_name}</span>}
-            <div>{d.question}</div>
-            <div className="dim" style={{ fontSize: 13 }}>
-              Recommended: {d.recommendation.replace(/[.!]+$/, "")}. {sentence(d.why)}
-              {d.blocks && <> Blocks: {d.blocks.replace(/[.!]+$/, "")}.</>}
-              {d.assumptions.length > 0 && <> Confirms {d.assumptions.join(", ")}.</>}
-            </div>
-            {d.command && (allowed[d.id] ? <AllowedNote a={allowed[d.id]} />
-              : <PermissionRequest d={d} onAllowed={onAllowed} />)}
-          </li>
-        ))}
-      </ul>
-      {items.some((d) => !d.command) && (
-        <>
-          <p className="help" style={{ margin: 0 }}>Answer questions in the orchestrator's session:</p>
-          <div className="fo-cmd">
-            <code>{attachCmd("crew-orchestrator")}</code>
-            <CopyButton text={attachCmd("crew-orchestrator")} label="Copy" what="the orchestrator's attach command" />
-          </div>
-        </>
-      )}
+      {groups.map((g) => (
+        <div key={g.key} className="crew-desk-group">
+          {headed && <h3 className="crew-desk-for">{g.label}</h3>}
+          <ul className="crew-desk">
+            {g.items.map((d) => (
+              <li key={d.id}>
+                <b>{d.label}</b>
+                {allowed[d.id] ? <span className="fo-st fo-st-done" style={{ marginLeft: 6 }}>allowed</span>
+                  : d.blocking && <span className="fo-st fo-st-quiet" style={{ marginLeft: 6 }}>blocks work</span>}
+                {d.project_name && <span className="dim"> · {d.project_name}</span>}
+                <div>{d.question}</div>
+                <div className="dim" style={{ fontSize: 13 }}>
+                  Recommended: {d.recommendation.replace(/[.!]+$/, "")}. {sentence(d.why)}
+                  {d.blocks && <> Blocks: {d.blocks.replace(/[.!]+$/, "")}.</>}
+                  {d.assumptions.length > 0 && <> Confirms {d.assumptions.join(", ")}.</>}
+                </div>
+                {d.command && (allowed[d.id] ? <AllowedNote a={allowed[d.id]} />
+                  : g.mine ? <PermissionRequest d={d} onAllowed={onAllowed} />
+                  : <p className="help" style={{ margin: "6px 0 0" }}>{d.station ?? "A station"} was refused <span className="mono">{d.command}</span>. {g.name} allows it in their console.</p>)}
+              </li>
+            ))}
+          </ul>
+          {g.mine ? g.items.some((d) => !d.command) && (
+            <>
+              <p className="help" style={{ margin: 0 }}>Answer questions in the orchestrator's session:</p>
+              <div className="fo-cmd">
+                <code>{attachCmd("crew-orchestrator")}</code>
+                <CopyButton text={attachCmd("crew-orchestrator")} label="Copy" what="the orchestrator's attach command" />
+              </div>
+            </>
+          ) : g.items.some((d) => !d.command) && (
+            <p className="help" style={{ margin: 0 }}>{g.name} answers in their own orchestrator's session.</p>
+          )}
+        </div>
+      ))}
     </>
   );
 }

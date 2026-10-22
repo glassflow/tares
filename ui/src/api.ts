@@ -8,7 +8,7 @@ import type {
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults, ProjectScope,
   Skill, SkillSummary,
-  Area, Assumption, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, GrantKind, Grant, GrantsView, PersonalDoc, PersonalDocs, CrewMessage, CrewProject, CrewSettings, CrewStation, Decision, DeskAllowed, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, LinearLink, LinearStatus, Milestone,
+  Area, Assumption, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, GrantKind, Grant, GrantsView, PersonalDoc, PersonalDocs, CrewMessage, CrewProject, CrewGroup, CrewSettings, CrewStation, Decision, DeskAllowed, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, LinearLink, LinearStatus, Milestone,
   ProjectSession, Ticket, TicketStatus,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, ModelProvider, ModelProviders, Standup,
@@ -626,7 +626,7 @@ export const api = {
   // null = unchanged; `clear` unsets a personal value so the team's applies again
   setCrewSettings: (body: Partial<Record<CrewSettingField, string | boolean | number | null>> & { clear?: CrewSettingField[] }) =>
     request<CrewSettingsView>("/api/crew/settings", { method: "PUT", body: JSON.stringify(body) }),
-  crew: () => request<{ stations: CrewStation[]; settings: CrewSettings; grants: string; now: string }>("/api/crew"),
+  crew: () => request<{ crews?: CrewGroup[]; stations: CrewStation[]; settings: CrewSettings; grants: string; now: string }>("/api/crew"),
   crewProjects: () => request<{ projects: CrewProject[]; finished?: (Pick<CrewProject, "id" | "name" | "tickets_done" | "tickets_total" | "progress"> & { finished: ProjectFinished | null })[]; now: string }>("/api/crew/projects"),
   standup: (since: string, until: string) =>
     request<Standup>(`/api/crew/standup?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}`),
@@ -634,12 +634,14 @@ export const api = {
     request<Standup>("/api/crew/standup/summary", { method: "POST", body: JSON.stringify({ since, until }) }),
   slackPost: (channel: string, text: string) =>
     request<{ ok: boolean; ts?: string }>("/api/slack/post", { method: "POST", body: JSON.stringify({ channel, text }) }),
-  station: (name: string) => request<StationDetail>(`/api/crew/${encodeURIComponent(name)}?recent=40`),
-  endStation: (name: string, reason?: string) =>
-    request<CrewStation>(`/api/crew/${encodeURIComponent(name)}/end`,
+  // `crew` is a crew id: two crews can have a station of the same name
+  station: (name: string, crew?: string | null) =>
+    request<StationDetail>(`/api/crew/${encodeURIComponent(name)}?recent=40${crew ? `&crew=${encodeURIComponent(crew)}` : ""}`),
+  endStation: (name: string, reason?: string, crew?: string | null) =>
+    request<CrewStation>(`/api/crew/${encodeURIComponent(name)}/end${crew ? `?crew=${encodeURIComponent(crew)}` : ""}`,
       { method: "POST", body: JSON.stringify(reason ? { reason } : {}) }),
-  askStationContext: (name: string) =>
-    request<{ session: string; asked_at: string }>(`/api/crew/${encodeURIComponent(name)}/context`, { method: "POST" }),
+  askStationContext: (name: string, crew?: string | null) =>
+    request<{ session: string; asked_at: string }>(`/api/crew/${encodeURIComponent(name)}/context${crew ? `?crew=${encodeURIComponent(crew)}` : ""}`, { method: "POST" }),
   claudeCodeUsage: (days = 7) => request<ClaudeCodeUsage>(`/api/claude-code/usage?days=${days}`),
   projectRepos: (id: string) =>
     request<{ repos: ProjectRepo[] }>(`/api/projects/${encodeURIComponent(id)}/repos`),

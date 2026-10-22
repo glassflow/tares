@@ -149,6 +149,12 @@ the project follows [Semantic Versioning](https://semver.org/).
   field to add one line.
 
 ### Changed
+- The Crew page shows every person's crews, you first. Each crew lists its name, machine, when it was
+  last seen and its stations with what each is on; crews not seen for a day fold under "Not seen
+  recently". Stations are told apart by crew, so two crews with a `crew-reviewer` no longer open each
+  other's detail. The desk groups its items "For you" and "For <name>", and other people's items are
+  read-only. It reads the `crews` list from `/api/crew` and falls back to the flat `stations` only when
+  a cell does not send it.
 - A person's own crew settings can no longer be looser than the team's: `PUT /api/crew/settings`
   refuses an `autonomy` or `challenger` that is looser than the team's value with a 400 that names
   it, and a stricter one is kept. If the team tightens later, the person's older, looser value no
