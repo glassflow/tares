@@ -6,6 +6,16 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Questions to an area owner while a spec is written, and their sign-off before the hand-over.
+  `ask_area(repo, text)` puts a question to the person who owns that repo, numbered Q1, Q2 in the
+  project, and it shows in their `my_work` under `spec_questions` until they answer; a repo nobody owns
+  is refused and says to set an owner. `answer_question(id, answer)` works only for the person the
+  question is for. `list_questions(state)` lists them, and `sign_off(repo)` works only for that repo's
+  area owner. The routes are under `/api/projects/{id}/questions` and `/signoffs`. `hand_over` now
+  waits: every repo with tickets needs an area owner and, unless the owner is the project's lead, that
+  owner's sign-off. If something is missing it is refused and lists "repo: area owner (not signed
+  off)". The project's lead can hand over anyway with `override_reason`; the reason is kept on the
+  hand-over and shown on the project timeline. A cell with only the person `local` is not held up.
 - A desk item is for one person. It is addressed to the assignee of the ticket it names, else the
   project's lead, else whoever wrote it, or to the person you name in `to` (an id or an email), and it
   shows in that person's `my_work`; `desk_list` takes `mine`. Only words found in that person's own

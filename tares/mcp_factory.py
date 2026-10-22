@@ -544,6 +544,74 @@ async def set_area(repo: str, person: str) -> str:
     return _out(r)
 
 
+# ── asking an area owner while the spec is written, and their sign-off (TR-636) ──
+
+def _question_line(q: dict) -> dict:
+    return {"id": q.get("id"), "repo": q.get("repo"), "text": q.get("text"), "state": q.get("state"),
+            "to": (q.get("to_person") or {}).get("name"),
+            "asked_by": (q.get("asked_by_person") or {}).get("name"), "asked_at": q.get("asked_at"),
+            "answer": q.get("answer"), "answered_at": q.get("answered_at")}
+
+
+@writable()
+async def ask_area(repo: str, text: str, project: str = "") -> str:
+    """Ask the owner of a repo (`owner/name`) a question while the spec is written: the person
+    set with set_area. It lands in their my_work as a spec question until they answer it; ask it
+    here and tell the person you did, then carry on with what does not depend on the answer.
+    Refused with 'has no area owner; set one with set_area' when nobody owns the repo."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/questions", json={"repo": repo, "text": text})
+    if r.status_code >= 400:
+        return _out(r)
+    return json.dumps(_question_line(r.json()), default=str)
+
+
+@writable()
+async def answer_question(id: str, answer: str, project: str = "") -> str:
+    """Answer a question a spec asked you as the owner of a repo (Q1, Q2... as my_work lists
+    them). Only the person it is addressed to may answer."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/questions/{id}/answer",
+                          json={"answer": answer})
+    if r.status_code >= 400:
+        return _out(r)
+    return json.dumps(_question_line(r.json()), default=str)
+
+
+@mcp.tool()
+async def list_questions(state: str = "", project: str = "") -> str:
+    """The questions a spec asked area owners, oldest first, with the answers. `state` is open
+    or answered; empty lists both."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/questions", params={"state": state})
+    if r.status_code >= 400:
+        return _out(r)
+    return json.dumps([_question_line(q) for q in r.json().get("questions") or []], default=str)
+
+
+@writable()
+async def sign_off(repo: str, project: str = "") -> str:
+    """Say that the tickets in a repo (`owner/name`) are right, as the owner of that repo. Only
+    the area owner may, and only for a repo the project has tickets in. The hand-over waits for
+    one sign-off per repo (the project lead's own repos need none). Signing again changes
+    nothing. The reply lists every repo with its owner and whether it is signed."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/signoffs", json={"repo": repo})
+    return _out(r)
+
+
 def _station_line(s: dict) -> dict:
     return {k: s.get(k) for k in ("name", "role", "parent", "state", "state_reason",
                                   "quiet_minutes", "project_name", "session", "last_at",
@@ -576,7 +644,7 @@ async def get_station(name: str) -> str:
 
 @writable()
 async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy: str = "",
-                    repo: str = "") -> str:
+                    repo: str = "", override_reason: str = "") -> str:
     """Hand a specced project to the crew: Tares records it with every repo it spans, who handed
     it over and to which crew, and the orchestrator picks it up from Tares on its next tick.
     `repos` is one {path, name} per repo:
@@ -587,13 +655,21 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
     send your own crew's orchestrator (the reply names it) a `[TF:SHIP]` message with
     SendMessage so it starts now rather than on its tick. If your crew is not running (the
     reply says so), tell the person to run `tares factory crew up` first. Other people's crews
-    pick up their own tickets on their next tick. Needs a key with a person."""
+    pick up their own tickets on their next tick. Needs a key with a person.
+
+    On a cell with more than one person the hand-over waits for the area owners: every repo the
+    tickets are in needs an owner (set_area), and that owner, unless they lead the project, must
+    have signed off (sign_off). Otherwise you get the list of who is missing. Only the project's
+    lead may hand over anyway, by passing `override_reason` (the person's words on why); it is
+    kept on the hand-over and shown on the project's timeline."""
     crew_name = _caller("crew") or "crew"
     body: dict = {"repos": repos or [], "by_default": "claude code session", "crew": crew_name}
     if repo:
         body["repo"] = repo
     if autonomy:
         body["autonomy"] = autonomy
+    if override_reason:
+        body["override_reason"] = override_reason
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -609,6 +685,8 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
              for x in ho.get("repos") or []] or ["repo: (none given: pass repos=[{path, name}])"]
     if ho.get("autonomy"):
         lines.append(f"autonomy: {ho['autonomy']}")
+    if ho.get("override"):
+        lines.append(f"handed over without every sign-off: {ho['override']['reason']}")
     others = "Other people's crews pick up their own tickets on their next tick."
     orch = [s for s in (crew.json().get("stations") or []) if s.get("role") == "orchestrator"
             and s.get("name") == orch_name and s.get("crew") == crew_name
@@ -635,7 +713,8 @@ async def my_work(crew: str = "") -> str:
     they can see: `ready` (their tickets that can start: nothing they wait on is open), `in_progress`
     (their tickets a station holds, with the holder and stage), `led_projects` (projects they
     lead, with the milestones whose tickets are all delivered: `milestones_ready_to_check`),
-    `desk` (the open desk items addressed to them) and `spec_questions` (empty for now). `crew`
+    `desk` (the open desk items addressed to them) and `spec_questions` (the open questions a
+    spec asked them as the owner of a repo: answer each with answer_question). `crew`
     names your crew; empty means the crew this session belongs to. The orchestrator of a crew works from this, so it starts
     only its own person's tickets. Needs a key with a person."""
     async with _cx(15) as cx:
