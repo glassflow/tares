@@ -636,9 +636,48 @@ CREW_DEFAULTS = {"autonomy": None, "releaser": None, "release_profile": None,
                  "prod_pattern": None, "challenger": None, "builders_max": None}
 
 
+def _stricter_autonomy(a, b):
+    """The stricter of two autonomy levels: the one listed first in AUTONOMY (the person
+    approves more). An unset or unknown one gives way to the other."""
+    levels = list(AUTONOMY)
+    ranked = [x for x in (a, b) if x in levels]
+    return min(ranked, key=levels.index) if ranked else (a or b)
+
+
+def stricter_than_team(team: dict, mine: dict) -> dict:
+    """`mine` with autonomy and challenger held to the team's value, which is a ceiling: a
+    person can ask for more care than the team does, never for less."""
+    out = dict(mine)
+    if team.get("autonomy") in AUTONOMY:
+        out["autonomy"] = _stricter_autonomy(team["autonomy"], mine.get("autonomy"))
+    if team.get("challenger"):
+        out["challenger"] = True
+    return out
+
+
+def personal_ceiling_ok(team: dict, body: dict) -> None:
+    """DocError when `body` sets a personal autonomy or challenger looser than the team's value,
+    naming the team's value. Ingest scope and the other settings have no ceiling."""
+    a = str(body.get("autonomy") or "").strip()
+    t = team.get("autonomy")
+    if a in AUTONOMY and t in AUTONOMY and _stricter_autonomy(a, t) != a:
+        raise DocError(f"autonomy {a} is looser than the team's {t}; a personal value can only "
+                       f"be as strict or stricter. Clear yours to use the team's.")
+    if body.get("challenger") is not None and not body["challenger"] and team.get("challenger"):
+        raise DocError("challenger off is looser than the team's value, on; a personal value "
+                       "can only be as strict or stricter. Clear yours to use the team's.")
+
+
 def crew_settings_ok(body: dict, cur: dict) -> dict:
-    """The crew's settings with the fields `body` sets changed; DocError on a bad value."""
+    """The crew's settings with the fields `body` sets changed; DocError on a bad value.
+    `clear: [field, ...]` unsets those fields (a person's own fall back to the team's)."""
     out = {**CREW_DEFAULTS, **cur}
+    clear = body.get("clear")
+    if clear is not None:
+        if not isinstance(clear, list) or any(k not in CREW_DEFAULTS for k in clear):
+            raise DocError("clear is a list of settings, from: " + ", ".join(CREW_DEFAULTS))
+        for k in clear:
+            out[k] = None
     if body.get("autonomy") not in (None, ""):
         a = str(body["autonomy"]).strip()
         if a not in AUTONOMY:

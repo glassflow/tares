@@ -236,6 +236,10 @@ def register(app, store, h: SimpleNamespace) -> None:
         if person and person.get("id") != "local" and not h.is_system(request):
             mine = stored(personal_key(person))
             out.update({k: v for k, v in mine.items() if v is not None})
+            # the team's autonomy and challenger are a ceiling, also when the team tightened
+            # them after the person chose theirs
+            out.update({k: v for k, v in factory_mod.stricter_than_team(
+                stored(CREW_SETTING), out).items() if k in ("autonomy", "challenger")})
         return out
 
     @app.get("/api/crew/settings")
@@ -260,6 +264,8 @@ def register(app, store, h: SimpleNamespace) -> None:
                 h.err(PermissionError("The cell's settings need the admin scope"), 403)
             key = personal_key(person)
         try:
+            if key != CREW_SETTING:
+                factory_mod.personal_ceiling_ok(stored(CREW_SETTING), body)
             out = factory_mod.crew_settings_ok(body, stored(key))
         except docs_mod.DocError as e:
             h.err(e)
@@ -353,10 +359,20 @@ def register(app, store, h: SimpleNamespace) -> None:
         """A grant still waiting with nobody left to wait for (an owner removed, the repo given
         to the giver) takes effect now."""
         if g["state"] == "waiting" and not waiting_for(g):
+            mirror_in(g, by)   # first: a failure leaves it waiting, to settle on the next try
             store.update_grant_row(g["id"], state="active")
             g = store.get_grant_row(g["id"])
-            mirror_in(g, by)
         return g
+
+    def settle_on_read(g: dict, request: Request) -> dict:
+        """Settle a grant the reader may see, as Tares and not as the reader. One that fails
+        stays as it was and does not fail the read."""
+        if g["state"] != "waiting" or not visible_grant(g, request):
+            return g
+        try:
+            return settle(g, "tares")
+        except Exception:
+            return g
 
     def grant_out(g: dict, refs: dict) -> dict:
         def ref(pid):
@@ -480,8 +496,7 @@ def register(app, store, h: SimpleNamespace) -> None:
             uid = h.project_or_404(h.resolve_project(project.strip()))["id"]
         person = h.current_person(request)
         mine = person["id"] if person else None
-        by = h.by(request, None)
-        every = [settle(g, by) for g in store.all_grant_rows()]
+        every = [settle_on_read(g, request) for g in store.all_grant_rows()]
         rows = [g for g in every if g["state"] != "revoked" and (
             g["kind"] == "team"
             or (g["kind"] == "project" and uid is not None and g["project"] == uid)

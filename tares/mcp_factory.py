@@ -392,13 +392,16 @@ async def get_crew_settings() -> str:
 async def set_crew_settings(autonomy: str = "", release_profile: str | None = None,
                             prod_pattern: str | None = None, challenger: bool | None = None,
                             builders_max: int | None = None,
-                            releaser: bool | None = None) -> str:
+                            releaser: bool | None = None,
+                            clear: list[str] | None = None) -> str:
     """Save the crew's settings the person chose (only the ones given change). They are saved for
-    that person; on a single-user cell they are the cell's. Only the person's own session or the
-    orchestrator may."""
+    that person; on a single-user cell they are the cell's. A personal autonomy or challenger
+    can be as strict as the team's or stricter, not looser. `clear` names settings to unset, so
+    a person's own fall back to the team's. Only the person's own session or the orchestrator
+    may."""
     body = {"autonomy": autonomy or None, "release_profile": release_profile,
             "prod_pattern": prod_pattern, "challenger": challenger, "builders_max": builders_max,
-            "releaser": releaser}
+            "releaser": releaser, "clear": clear}
     async with _cx(10) as cx:
         r = await cx.put(f"{TARESD}/api/crew/settings", json=body)
     return _out(r, SETTING_KEYS)
