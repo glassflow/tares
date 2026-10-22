@@ -2631,6 +2631,20 @@ class Store(FactoryStore, ClaudeUsageStore):
                                     "ORDER BY position, created_at", [project]).fetchall()
         return [self._ticket_row(r) for r in rows]
 
+    def tickets_by_project(self, projects: list[str]) -> dict[str, list[dict]]:
+        """{project: its tickets as list_tickets gives them} in one query (TR-659)."""
+        if not projects:
+            return {}
+        marks = ", ".join("?" for _ in projects)
+        with self._lock:
+            rows = self.con.execute(f"SELECT {self._TICKET_COLS} FROM tickets WHERE project IN "
+                                    f"({marks}) ORDER BY position, created_at",
+                                    list(projects)).fetchall()
+        out: dict[str, list[dict]] = {p: [] for p in projects}
+        for r in rows:
+            out[r[1]].append(self._ticket_row(r))
+        return out
+
     def get_ticket(self, project: str, ref: str) -> dict | None:
         """A ticket of the project by its id, Linear identifier (ENG-12, any case), Linear
         issue id, or number (T3, or 3)."""

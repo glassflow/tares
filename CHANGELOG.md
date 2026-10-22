@@ -16,6 +16,8 @@ the project follows [Semantic Versioning](https://semver.org/).
 - The review queue reads the tickets in review across every project, when each went to review and
   its last review in one query each, instead of every project's whole ticket list and a few
   queries per ticket (TR-648).
+- The projects list reads the catalog once and every software factory project's tickets in one
+  query, instead of both once per project (TR-659).
 
 ### Fixed
 - A firing that arrives while its agent is already running for the same key now gets the

@@ -3309,10 +3309,14 @@ def make_app() -> FastAPI:
         pk = _pk(request)
         if pk:
             return {"projects": [_project_card(pk)]}
-        # a software factory project carries its tickets' progress, for the list's ring
+        # a software factory project carries its tickets' progress, for the list's ring; every
+        # factory project's tickets come in one query (TR-659)
+        cards = projects.list()
+        tickets = store.tickets_by_project([p["id"] for p in cards
+                                            if p.get("kind") == "software_factory"])
         return {"projects": [
-            {**p, "progress": factory_mod.progress(store.list_tickets(p["id"]))}
-            if p.get("kind") == "software_factory" else p for p in projects.list()]}
+            {**p, "progress": factory_mod.progress(tickets[p["id"]])}
+            if p.get("kind") == "software_factory" else p for p in cards]}
 
     @app.post("/api/projects", status_code=201)
     async def create_project(body: ProjectIn):
