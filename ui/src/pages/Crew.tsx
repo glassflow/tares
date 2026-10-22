@@ -105,9 +105,13 @@ function Notices({ stations, desk, myId }: { stations: CrewStation[]; desk: Desk
   const d = useDesk(desk);
   const notices: Notice[] = [];
   if (d.items.length) {
+    // the count and the dismissal are about what is yours (for you, or for anyone); other people's
+    // items are listed under their name but never counted as waiting for you
+    const yours = (x: DeskItem) => isMine({ person: x.to_person ?? null }, myId);
     notices.push({
-      id: "desk", sig: desk.map((x) => x.label).sort().join(","), tone: "waiting",
-      title: <DeskTitle open={desk.filter((x) => !d.allowed[x.id]).length} />,
+      id: "desk", sig: desk.filter(yours).map((x) => x.label).sort().join(","), tone: "waiting",
+      title: <DeskTitle open={desk.filter((x) => yours(x) && !d.allowed[x.id]).length}
+        others={d.items.some((x) => !yours(x)) && !d.items.some(yours)} />,
       body: <DeskList {...d} myId={myId} />,
     });
   }
@@ -684,7 +688,8 @@ export default function Crew() {
   const member = params.get("member");
   const memberCrew = params.get("crew");
   const sel = member
-    ? stations.find((s) => s.name === member && (!memberCrew || s.crew_id === memberCrew))
+    ? stations.find((s) => s.name === member && (memberCrew ? s.crew_id === memberCrew : isMine({ person: s.person ?? null }, myId)))
+      ?? (memberCrew ? undefined : stations.find((s) => s.name === member))
     : (groups.filter((g) => isMine(g, myId)).flatMap((g) => g.stations).find((s) => s.role === "orchestrator")
       ?? stations.find((s) => s.role === "orchestrator"));
   const selected = sel ? skey(sel) : "";
@@ -795,8 +800,9 @@ export function Desk({ project, onChange }: { project?: string; onChange?: () =>
 
 // ── the desk, shared by the Crew page's notice and a project's page ──────────
 
-function DeskTitle({ open }: { open: number }) {
-  return open ? <>{open} {open === 1 ? "question" : "questions"} waiting for you</> : <>Nothing else waiting for you</>;
+function DeskTitle({ open, others }: { open: number; others?: boolean }) {
+  if (open) return <>{open} {open === 1 ? "question" : "questions"} waiting for you</>;
+  return others ? <>Nothing waiting for you; questions for others below</> : <>Nothing else waiting for you</>;
 }
 
 /** The open items, plus the permission requests allowed here since the page opened: an allowed one
@@ -827,7 +833,8 @@ function deskGroups(items: DeskItem[], myId: string) {
  *  for more than one person; an item for someone else is read-only here. */
 function DeskList({ items, allowed, onAllowed, myId }: ReturnType<typeof useDesk> & { myId?: string }) {
   const groups = myId === undefined ? [{ key: "you", label: "", name: "", mine: true, items }] : deskGroups(items, myId);
-  const headed = groups.length > 1;
+  // headed once there is more than one group, or the one group is not yours
+  const headed = groups.length > 1 || groups.some((g) => !g.mine);
   return (
     <>
       {groups.map((g) => (
