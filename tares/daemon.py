@@ -2638,10 +2638,10 @@ def make_app() -> FastAPI:
         # 404 its own next save of the same id
         if viewer["person_id"] is None and not viewer["system"]:
             _err(PermissionError("this key has no person, so it cannot keep Ask history"), 403)
-        # someone else's id is "unknown", the same as a read, so a PUT cannot overwrite it
-        if store.get_ask_session(sid) is not None and store.get_ask_session(sid, **viewer) is None:
+        # someone else's id is "unknown", the same as a read, so a PUT cannot overwrite it; the
+        # store checks the owner and writes in one step
+        if not store.upsert_ask_session(sid, body.title[:120], body.state, **viewer):
             _err(KeyError(f"unknown session {sid!r}"), 404)
-        store.upsert_ask_session(sid, body.title[:120], body.state, viewer["person_id"])
         return {"ok": True}
 
     @app.delete("/api/ask/sessions/{sid}")

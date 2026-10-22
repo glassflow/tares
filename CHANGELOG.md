@@ -49,7 +49,8 @@ the project follows [Semantic Versioning](https://semver.org/).
   The read log records which projects a read was about, including the ones that own the sources it
   read, so a private project's reads stay out of everyone else's activity feed. A label value or a
   bare key carried only by a private project's rows no longer lists, and a practice run starts from
-  an event its caller can see.
+  an event its caller can see. Ask transcripts saved before this upgrade have no person, so with auth
+  on they are visible only to the system credential (the root token); with auth off nothing changes.
 - MCP tools `list_people` and `set_project_access` (lead, scope, members added or removed, people
   by id or email).
 - A recording carries the person who shipped it: the cell labels every Claude Code event pushed to
