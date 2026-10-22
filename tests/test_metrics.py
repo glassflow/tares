@@ -134,6 +134,30 @@ async def main():
             print("== nothing sensitive in the body ==")
             ck("no entity keys or payload text", "checkout" not in body and "e0" not in body.split("tares_")[0])
 
+    print("== scrape token (TR-653) ==")
+    # a second app built with the token set; make_app reads TARES_METRICS_TOKEN when it builds
+    os.environ["TARES_METRICS_TOKEN"] = "scrape-secret"
+    try:
+        tapp = make_app()
+    finally:
+        del os.environ["TARES_METRICS_TOKEN"]
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=tapp), base_url="http://t",
+                                 timeout=20) as cx:
+        r = await cx.get("/metrics")
+        ck("no header: 401 with a Bearer challenge",
+           r.status_code == 401 and r.headers.get("www-authenticate") == "Bearer", str(r.status_code))
+        r = await cx.get("/metrics", headers={"Authorization": "Bearer wrong"})
+        ck("wrong token: 401", r.status_code == 401, str(r.status_code))
+        r = await cx.get("/metrics", headers={"Authorization": "Bearer metrics-test-token"})
+        ck("the cell's own auth token is not the scrape token", r.status_code == 401, str(r.status_code))
+        r = await cx.get("/metrics", headers={"Authorization": "Bearer scrape-secret"})
+        ck("right token: 200, Prometheus text",
+           r.status_code == 200 and r.headers["content-type"].startswith("text/plain")
+           and "# HELP tares_" in r.text, str(r.status_code))
+        r = await cx.get("/health")
+        ck("/health stays public", r.status_code == 200, str(r.status_code))
+    tapp.state.store.con.close()
+
     print(f"\n{PASS} passed, {FAIL} failed")
     return 1 if FAIL else 0
 

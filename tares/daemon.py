@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import ipaddress
 import os
@@ -851,11 +852,22 @@ def make_app() -> FastAPI:
         raise HTTPException(status_code=code, detail=str(e))
 
     # ── agent surface (unchanged contract; queries now logged) ───────────────
+    # A scrape token for /metrics (TR-653), separate from the cell's own auth token on purpose: the
+    # scraper gets only the counters. Read here, not at import, so each app built reads the env.
+    metrics_token = os.getenv("TARES_METRICS_TOKEN", "").strip()
+
     @app.get("/metrics", include_in_schema=False)
-    async def metrics_endpoint():
+    async def metrics_endpoint(request: Request):
         """The daemon's own counters in the Prometheus text format (TR-308): events per source,
         poll outcomes, source state, agent runs, model calls and spend by provider, storage against
-        its limit, trigger evaluation time, event loop lag. Public like /health; counts only."""
+        its limit, trigger evaluation time, event loop lag. Counts only. Public like /health
+        unless TARES_METRICS_TOKEN is set; then it wants `Authorization: Bearer <that token>`
+        (TR-653). The auth guard lets /metrics through either way, so this check decides."""
+        if metrics_token and not hmac.compare_digest(
+                request.headers.get("authorization", "").encode(),
+                f"Bearer {metrics_token}".encode()):
+            return JSONResponse({"detail": "this endpoint needs the metrics scrape token"},
+                                status_code=401, headers={"WWW-Authenticate": "Bearer"})
         try:
             body, ctype = _metrics.render()
         except RuntimeError:
