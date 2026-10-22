@@ -2245,3 +2245,17 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 .cc-table { font-size: 13px; }
 .cc-table th.num { text-align: right; }
 .cc-rest { font-size: 12px; overflow-wrap: anywhere; }
+
+/* who leads a project and who can open it (components/project/access.tsx) */
+.acc { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--ink-soft); }
+.acc strong { color: var(--ink); }
+.acc-row { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+.acc-row .picker { min-width: 180px; }
+.acc-private { display: inline-flex; align-items: center; gap: 4px; color: var(--ink); font-weight: 600; }
+.acc-private .ico, .proj-lock .ico { width: 14px; height: 14px; }
+.acc .help { margin: 0; }
+.acc .alert { margin: 0; }
+.proj-lock { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; font-size: 12px; color: var(--ink-soft); }
+.proj-hidden td { color: var(--ink-faint); background: var(--th-bg); }
+.proj-hidden td strong { color: var(--ink-soft); }
+.proj-lead { display: block; font-size: 12px; color: var(--ink-soft); }

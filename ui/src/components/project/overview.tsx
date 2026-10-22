@@ -8,6 +8,7 @@ import { ErrorState, Picker, TimeAgo, usePolling } from "../bits";
 import type {
   OutlineWatch, ProjectHealth, ProjectOutline, ProjectResult, ProjectResults, ProjectSetup,
 } from "../../types";
+import { AccessLine } from "./access";
 import { VLink, viewFrom, type Ctx, type View } from "./common";
 
 // The goal-first project page (the owner's rule: show the goal and what the agents concluded, in
@@ -349,6 +350,7 @@ export function Overview({ ctx, actions, onResume }: { ctx: Ctx; actions: React.
         <div className="gf-head-text">
           <h1 className="gf-name">{ctx.s.name}</h1>
           <Goal ctx={ctx} />
+          <AccessLine ctx={ctx} />
           {outline?.sentence && <p className="gf-sentence">{outline.sentence}</p>}
         </div>
         <div className="gf-head-actions">
