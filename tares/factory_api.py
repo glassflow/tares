@@ -729,34 +729,34 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {**rv, "open": [f["label"] for f in store.open_findings(t["id"])]}
 
     def queue() -> list[dict]:
-        names = {p["id"]: p["name"] for p in store.list_projects()}
+        # the tickets in review, their milestones' other tickets, when each went to review and
+        # its last review: one query each, however many are waiting (TR-648)
+        waiting = store.review_tickets()
+        ids = [t["id"] for _, t in waiting]
+        siblings = store.milestone_statuses(sorted({t["milestone"] for _, t in waiting
+                                                    if t["milestone"]}))
+        entered = store.entered_stage(ids, "review")
+        lasts = store.last_reviews(ids)
         out = []
-        for uid, pname in names.items():
-            tickets = store.list_tickets(uid)
-            if not any(t["stage"] == "review" for t in tickets):
-                continue
-            for t in tickets:
-                if t["stage"] != "review":
-                    continue
-                # it blocks its milestone when it is the last of the milestone's tickets open
-                others = [x for x in tickets if x["milestone"] and x["milestone"] == t["milestone"]
-                          and x["id"] != t["id"]]
-                blocks = bool(t["milestone"]) and all(
-                    x["status"] in factory_mod.DONE_STATUSES for x in others)
-                since = next((x["at"] for x in reversed(store.ticket_history(t["id"]))
-                              if x["field"] == "stage" and x["value"] == "review"), t["updated_at"])
-                layer = factory_mod.challenger_layer(
-                    store.challenge_events(h.cc_source(), uid, factory_mod.label(t)))
-                last = store.ticket_reviews(t["id"])[-1:]
-                v = verdict_now(t, last[0] if last else None)
-                out.append({"project": uid, "project_name": pname, "ticket": factory_mod.label(t),
-                            "title": t["title"], "holder": t["holder"],
-                            "repo": t.get("repo") or (t["pr"] or {}).get("repo"),
-                            "pr": (t["pr"] or {}).get("url"), "head": (t["pr"] or {}).get("head"),
-                            "waiting_since": since,
-                            "blocks_milestone": blocks,
-                            "layer1_clean": layer["clean"],
-                            "verdict": v})
+        for pname, t in waiting:
+            uid = t["project"]
+            # it blocks its milestone when it is the last of the milestone's tickets open
+            others = [x for x in siblings if x["project"] == uid
+                      and x["milestone"] == t["milestone"] and x["id"] != t["id"]]
+            blocks = bool(t["milestone"]) and all(
+                x["status"] in factory_mod.DONE_STATUSES for x in others)
+            since = entered.get(t["id"], t["updated_at"])
+            layer = factory_mod.challenger_layer(
+                store.challenge_events(h.cc_source(), uid, factory_mod.label(t)))
+            v = verdict_now(t, lasts.get(t["id"]))
+            out.append({"project": uid, "project_name": pname, "ticket": factory_mod.label(t),
+                        "title": t["title"], "holder": t["holder"],
+                        "repo": t.get("repo") or (t["pr"] or {}).get("repo"),
+                        "pr": (t["pr"] or {}).get("url"), "head": (t["pr"] or {}).get("head"),
+                        "waiting_since": since,
+                        "blocks_milestone": blocks,
+                        "layer1_clean": layer["clean"],
+                        "verdict": v})
         now = now_utc()
         for q in out:
             q["waiting_minutes"] = (int((now - q["waiting_since"]).total_seconds() // 60)
