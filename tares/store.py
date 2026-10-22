@@ -3435,13 +3435,21 @@ class Store(FactoryStore, ClaudeUsageStore):
         return [u["id"] for u in self.list_projects()
                 if u["id"].lower() in want or u["name"].lower() in want]
 
-    def read_projects(self, selector: dict | None, *uids: str | None) -> str | None:
-        """The `project` of a read for log_query: the projects it was scoped to (`uids`) and the
-        one its selector names (`tares_project`), comma-joined; None when it was about none."""
+    def read_projects(self, selector: dict | None, *uids: str | None,
+                      sources: list[str] | None = None,
+                      unseen: set[str] | None = None) -> str | None:
+        """The `project` of a read for log_query: the projects it was scoped to (`uids`), the
+        one its selector names (`tares_project`) and the ones the `sources` it read are members
+        of, comma-joined; None when it was about none. `unseen` are the projects the reader
+        could not see: the read returned none of their rows, so they are left off the sources'."""
         ids = [u for u in uids if u]
         named = (selector or {}).get("tares_project")
         if named:
             ids += [i for i in self.project_ids_named([named]) if i not in ids]
+        if sources:
+            member = self.source_memberships()
+            ids += [i for n in sources for i in member.get(n, [])
+                    if i not in ids and i not in (unseen or ())]
         return ",".join(ids) or None
 
     def log_query(self, qid: str, scope: str, key: str, window: str,

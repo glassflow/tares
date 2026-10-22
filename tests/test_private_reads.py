@@ -266,9 +266,11 @@ async def setup(B, ids):
         r = await cx.post(f"{B}/api/sources", headers=ROOT, json={
             "name": "findings", "connector": "finding", "config": {}})
         ck("set up: the shared findings source", r.status_code == 201, f"{r.status_code} {r.text[:160]}")
-        for name, proj in (("evts", ""), ("sess", ""), ("p1-src", p1)):
+        for name, proj in (("evts", ""), ("sess", ""), ("p1-src", p1), ("plain", "")):
+            # `plain` names no labels, so its entities are its bare keys
+            cfg = {} if name == "plain" else {"labels": lbl}
             r = await cx.post(f"{B}/api/sources", headers=ROOT, json={
-                "name": name, "connector": "webhook", "config": {"labels": lbl}, "project": proj})
+                "name": name, "connector": "webhook", "config": cfg, "project": proj})
             ck(f"set up: source {name}", r.status_code == 201, f"{r.status_code} {r.text[:160]}")
         r = await cx.post(f"{B}/api/desk", headers=ROOT, json={
             "question": "Ship the secret thing?", "recommendation": "yes", "why": "it is ready",
@@ -343,6 +345,9 @@ def seed(ids):
     store.append([ev("evts", "shared-key", "SECRET shared-key event",
                      {"service": "practicesvc", "tares_project": p1}),
                   ev("evts", "shared-key", "OPEN shared-key event", {"service": "practicesvc"})])
+    # a label-less source: its entities are bare keys, and the key of a row labelled for p1 hides
+    store.append([ev("plain", "plain-hidden-key", "SECRET plain event", {"tares_project": p1}),
+                  ev("plain", "plain-open-key", "OPEN plain event", {})])
     store.append([ev("evts", "p1-practice-key", "SECRET practice event",
                      {"service": "practicesvc", "tares_project": p1})])
     store.con.close()
@@ -694,6 +699,14 @@ async def ask_session_checks(B, ids):
             ck("a key with no person lists none", await listed(anon) == [], str(await listed(anon)))
             ck("... and opens none",
                (await cx.get(f"{B}/api/ask/sessions/{sid['sys']}", headers=H(anon))).status_code == 404)
+            # it cannot save one either: saving once then 404 on the same id would lose the chat
+            for n in (1, 2):
+                r = await cx.put(f"{B}/api/ask/sessions/{'d' * 16}", headers=H(anon),
+                                 json={"title": "anon", "state": "{}"})
+                ck(f"a key with no person's save {n} of one id: 403", r.status_code == 403,
+                   f"{r.status_code} {r.text[:100]}")
+            ck("... and nothing was stored", await listed(AUTH) == sorted(sid.values()),
+               str(await listed(AUTH)))
         else:
             ck("a key with no person can be made", False, f"{r.status_code} {r.text[:120]}")
         r = await cx.delete(f"{B}/api/ask/sessions/{sid['ann']}", headers=H(ids["ann"]))
@@ -725,6 +738,26 @@ async def label_value_checks(B, ids):
                        isinstance(got, list) and "hiddensvc" in got, str(got))
 
 
+async def key_facet_checks(B, ids):
+    """A source that names no labels has its bare keys as entities. The key of a row labelled for
+    p1 does not list for Bob, in /api/entities or in catalog describe; the open key does."""
+    print("== keys of a label-less source ==")
+    async with httpx.AsyncClient(timeout=20) as cx:
+        async def keys(tok):
+            r = await cx.get(f"{B}/api/entities?label=key", headers=H(tok))
+            ent = sorted(v["value"] for v in r.json()["values"]) if r.status_code == 200 else r.status_code
+            r = await cx.get(f"{B}/catalog/source:plain", headers=H(tok))
+            desc = sorted(v["value"] for v in r.json()["labels"]["key"]) if r.status_code == 200 else r.status_code
+            return ent, desc
+        for who in ("bob", "ann"):
+            ent, desc = await keys(ids[who])
+            for where, got in (("/api/entities", ent), ("catalog describe", desc)):
+                ck(f"{who.title()}: {where} {'omits' if who == 'bob' else 'lists'} the key only p1 carries",
+                   isinstance(got, list) and ("plain-hidden-key" in got) == (who == "ann"), str(got))
+                ck(f"{who.title()}: {where} lists the open key",
+                   isinstance(got, list) and "plain-open-key" in got, str(got))
+
+
 async def query_log_checks(B, ids):
     """F6: the read log hides a private project's reads by their project column, not by looking for
     its name in the selector. A read scoped to p1 by `project` is hidden though its selector does
@@ -743,7 +776,29 @@ async def query_log_checks(B, ids):
         async def log(tok):
             r = await cx.get(f"{B}/api/activity/queries", headers=H(tok))
             return r.text
+        # a keyed read with no project, by the source it read (p1-src belongs to p1), and a broad
+        # one that reads p1-src among others; the stats of a project; Bob's own broad read
+        r = await cx.post(f"{B}/read", headers=H(ids["ann"]), json={
+            "selector": {"service": "checkout"}, "window": "1h", "sources": ["p1-src"],
+            "client": "named-p1-src"})
+        ck("Ann reads p1-src by name", r.status_code == 200 and r.json()["count"] > 0, f"{r.status_code} {r.text[:120]}")
+        r = await cx.post(f"{B}/read", headers=H(ids["ann"]), json={
+            "selector": {"service": "checkout"}, "window": "1h", "client": "broad-ann"})
+        ck("Ann reads every source", r.status_code == 200 and "p1-src" in r.json()["sources"],
+           f"{r.status_code} {r.text[:120]}")
+        r = await cx.post(f"{B}/read", headers=H(ids["bob"]), json={
+            "selector": {"service": "checkout"}, "window": "1h", "client": "broad-bob"})
+        ck("Bob reads every source", r.status_code == 200 and "p1-src" not in r.json()["sources"],
+           f"{r.status_code} {r.text[:120]}")
+        r = await cx.post(f"{B}/api/projects/{ids['p1']}/stats", headers=H(ids["ann"]),
+                          json={"by": "statsbyp1"})
+        ck("Ann takes the stats of p1", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
         b, a = await log(ids["bob"]), await log(ids["ann"])
+        ck("Bob: no keyed read of p1's source by name", "named-p1-src" not in b, b[:300])
+        ck("Bob: no broad read that read p1's source", "broad-ann" not in b, b[:300])
+        ck("Bob: his own broad read is there", "broad-bob" in b, b[:300])
+        ck("Bob: no stats of p1", "statsbyp1" not in b, b[:300])
+        ck("Ann: she sees all four", all(x in a for x in ("named-p1-src", "broad-ann", "broad-bob", "statsbyp1")), a[:300])
         ck("Bob: no read scoped to p1", "scoped-only" not in b, b[:300])
         ck("Bob: no read that names p1 in another case", "tares_project=secret" not in b, b[:300])
         ck("Bob: a read that only mentions the name is there", "service=secret" in b, b[:300])
@@ -800,6 +855,65 @@ async def lineage_checks(B, ids):
            and {ids["p1"], ids["team"]} <= set(r.json()["projects"]), r.text[:200])
 
 
+def store_checks():
+    """On the store alone: an agent's own read and stats tools log the project they were about, the
+    boot upgrade attributes old log rows that named a project, and the Ask history cap counts per
+    owner."""
+    print("== the store: agent tool log, the log upgrade, the Ask cap ==")
+    import tares.builtin_agents as ba
+    from tares.config import catalog_from_db
+    path = os.path.join(tempfile.mkdtemp(dir=TMP), "s.duckdb")
+    store = Store(path)
+    store.upsert_catalog_source("logs", "application_log", "webhook", "5s", {})
+    store.upsert_catalog_source("other", "application_log", "webhook", "5s", {})
+    store.upsert_catalog_trigger("t", ["logs"], {"aggregate": "count", "predicate": "> 0",
+                                                 "window": "1m"}, {}, "5m")
+    store.upsert_catalog_agent("counter", "t", "x")
+    store.create_project("uc_mine", "custom", "Mine", {"objects": []})
+    store.create_project("uc_theirs", "custom", "Theirs", {"objects": []})
+    store.put_in_project("trigger", "t", "uc_mine")
+    store.put_in_project("agent", "counter", "uc_mine")
+    store.put_in_project("source", "logs", "uc_mine")
+    store.put_in_project("source", "other", "uc_theirs")
+    store.normalize_projects()
+
+    class Runtime:
+        catalog = catalog_from_db(store)
+    runner = ba.AgentRunner.__new__(ba.AgentRunner)
+    runner.store, runner.runtime = store, Runtime()
+
+    def logged(scope):
+        return [r[0] for r in store.con.execute(
+            "SELECT project FROM query_log WHERE client = 'agent:counter' AND scope = ?",
+            [scope]).fetchall()]
+    runner._tool("counter", "read", {"selector": {"service": "zzz"}, "window": "30m"})
+    runner._tool("counter", "read", {"selector": {"service": "zzz"}, "window": "30m",
+                                     "sources": ["other"]})
+    got = logged("(read)")
+    ck("an agent's read logs its project", got and got[0] == "uc_mine", str(got))
+    ck("... and the project of a source it names", len(got) == 2 and set(got[1].split(",")) == {"uc_mine", "uc_theirs"}, str(got))
+    runner._tool("counter", "stats", {"by": "service", "window": "30m"})
+    got = logged("(stats)")
+    ck("an agent's stats logs its project", got == ["uc_mine"], str(got))
+
+    # a row logged before the project column, by name; one that named nothing stays unattributed
+    store.log_query("old1", "(read)", "tares_project=Theirs", "1h", 0, "http")
+    store.log_query("old2", "(read)", "service=x", "1h", 0, "http")
+    store.con.close()
+    store = Store(path)
+    rows = dict(store.con.execute("SELECT id, project FROM query_log WHERE id LIKE 'old%'").fetchall())
+    ck("the upgrade attributes a log row that named a project", rows.get("old1") == "uc_theirs", str(rows))
+    ck("... and leaves the rest unattributed", rows.get("old2") is None, str(rows))
+
+    for i in range(store.ASK_SESSIONS_KEEP + 2):
+        store.upsert_ask_session(f"{i:016x}", f"a{i}", "{}", "person-a")
+    store.upsert_ask_session("f" * 16, "b", "{}", "person-b")
+    n_a = len(store.list_ask_sessions("person-a", system=False))
+    ck("the Ask history keeps the newest 50 of one person", n_a == store.ASK_SESSIONS_KEEP, str(n_a))
+    ck("... without touching another person's", len(store.list_ask_sessions("person-b", system=False)) == 1)
+    store.con.close()
+
+
 async def ask_session_auth_off():
     """Auth off is one person using the cell: every transcript is visible, as before."""
     print("== Ask transcripts with auth off ==")
@@ -847,6 +961,7 @@ async def main():
         await ask_checks(B, ids)
         await ask_session_checks(B, ids)
         await label_value_checks(B, ids)
+        await key_facet_checks(B, ids)
         await query_log_checks(B, ids)
         await practice_checks(B, ids)
         await lineage_checks(B, ids)
@@ -854,6 +969,7 @@ async def main():
         stop(proc)
         stub.shutdown()
     await ask_session_auth_off()
+    store_checks()
     shutil.rmtree(TMP, ignore_errors=True)
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)

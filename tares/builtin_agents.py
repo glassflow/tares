@@ -1274,14 +1274,15 @@ class AgentRunner:
             selector = args.get("selector") or {}
             if not isinstance(selector, dict) or not selector:
                 raise ValueError('read needs a selector, e.g. {"service": "checkout"}')
+            read_from = self._tool_sources(agent_name, args)
             payload, nrows, _sources, _rows = resolve_read(
-                self.store, catalog, selector, window,
-                sources=self._tool_sources(agent_name, args))
+                self.store, catalog, selector, window, sources=read_from)
             self.store.log_query("r_" + uuid.uuid4().hex[:12], "(read)",
                                  ", ".join(f"{k}={v}" for k, v in selector.items()),
                                  window, nrows, f"agent:{agent_name}",
                                  project=self.store.read_projects(
-                                     selector, *self.store.projects_using("agent", agent_name)))
+                                     selector, *self.store.projects_using("agent", agent_name),
+                                     sources=read_from))
             return payload
         if name == "stats":
             by = str(args.get("by") or "").strip()

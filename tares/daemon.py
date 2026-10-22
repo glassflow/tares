@@ -1098,7 +1098,10 @@ def make_app() -> FastAPI:
                                                      sources=names, scope=scope, exclude=exclude)
         log_key = ", ".join(f"{k}={v}" for k, v in req.selector.items())
         store.log_query("r_" + uuid.uuid4().hex[:12], "(read)", log_key, req.window,
-                        nrows, req.client, project=store.read_projects(req.selector, uid))
+                        nrows, req.client,
+                        project=store.read_projects(
+                            req.selector, uid, sources=req.sources or sources,
+                            unseen=set(exclude["ids"]) if exclude else None))
         return {"payload": payload, "count": nrows, "sources": sources, "rows": rows}
 
     # Views were removed: a trigger names its own sources. The old routes answer 404 with the
@@ -2565,6 +2568,10 @@ def make_app() -> FastAPI:
         if len(body.state) > 2_000_000:
             _err(ValueError("session too large to save (2 MB cap)"), 413)
         viewer = _ask_viewer(request)
+        # a key with no person has no transcripts to keep: refuse, rather than save once and then
+        # 404 its own next save of the same id
+        if viewer["person_id"] is None and not viewer["system"]:
+            _err(PermissionError("this key has no person, so it cannot keep Ask history"), 403)
         # someone else's id is "unknown", the same as a read, so a PUT cannot overwrite it
         if store.get_ask_session(sid) is not None and store.get_ask_session(sid, **viewer) is None:
             _err(KeyError(f"unknown session {sid!r}"), 404)
