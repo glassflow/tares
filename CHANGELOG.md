@@ -6,6 +6,15 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- My work for an orchestrator: `GET /api/crew/my-work` (and the `my_work` tool) returns what belongs to
+  the person of the key: their ready tickets, the ones a station is working on, the milestones of
+  projects they lead that are ready to check, and empty `desk` and `spec_questions` lists. A key with
+  no person is refused; the root token and a cell of one person see the work of `local`. A hand-over
+  now records who handed the project over and to which crew (`handed_by_person`, `crew`), and the
+  `hand_over` tool names `<crew>-orchestrator` of your own crew, never someone else's running one.
+  `hand_over` is refused for a key with no person, and `crew_projects` shows a person only the
+  projects they lead or hold a ticket in, so the `factory` bash CLI, which reads that list, shows a person
+  only their own projects too.
 - Crews on the cell: it keeps a record of each crew (the person, the crew's name and the machine it
   runs on) and lists stations by crew, so two crews with the same station names never merge. The
   plugin stamps the machine (`hostname -s`, or `FACTORY_MACHINE`) next to the crew name, and the

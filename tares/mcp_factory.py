@@ -8,7 +8,7 @@ import json
 import re
 
 from . import areas as areas_mod
-from .mcp_server import TARESD, _cx, _person_in, _default_project, _out, _project_id, mcp, writable
+from .mcp_server import TARESD, _caller, _cx, _person_in, _default_project, _out, _project_id, mcp, writable
 
 
 # ── the plan (TR-411) ─────────────────────────────────────────────────────────
@@ -560,16 +560,19 @@ async def get_station(name: str) -> str:
 @writable()
 async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy: str = "",
                     repo: str = "") -> str:
-    """Hand a specced project to the crew: Tares records it with every repo it spans, and the
-    orchestrator picks it up from Tares on its next tick. `repos` is one {path, name} per repo:
+    """Hand a specced project to the crew: Tares records it with every repo it spans, who handed
+    it over and to which crew, and the orchestrator picks it up from Tares on its next tick.
+    `repos` is one {path, name} per repo:
     `path` the absolute folder it is checked out in on this machine, `name` its GitHub repo
     (owner/name), the repo that holds the plan first. A later call adds repos, never replaces
     them. `autonomy` only when the person wants this project stricter than the crew
     (L3-review: every merge waits for their yes). `repo` (one path) is the older form. Then
-    send the orchestrator (list_crew shows its name) a `[TF:SHIP]` message with SendMessage so it starts now rather than
-    on its tick. If no crew is running (list_crew shows no orchestrator working or waiting),
-    tell the person to run `tares factory crew up` first."""
-    body: dict = {"repos": repos or [], "by_default": "claude code session"}
+    send your own crew's orchestrator (the reply names it) a `[TF:SHIP]` message with
+    SendMessage so it starts now rather than on its tick. If your crew is not running (the
+    reply says so), tell the person to run `tares factory crew up` first. Other people's crews
+    pick up their own tickets on their next tick. Needs a key with a person."""
+    crew_name = _caller("crew") or "crew"
+    body: dict = {"repos": repos or [], "by_default": "claude code session", "crew": crew_name}
     if repo:
         body["repo"] = repo
     if autonomy:
@@ -581,27 +584,46 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
         r = await cx.post(f"{TARESD}/api/projects/{uid}/handover", json=body)
         if r.status_code >= 400:
             return _out(r)
-        crew = await cx.get(f"{TARESD}/api/crew")
+        crew = await cx.get(f"{TARESD}/api/crew", params={"mine": 1})   # the caller's own crews (TR-633)
     ho = r.json().get("handover") or {}
+    crew_name = ho.get("crew") or crew_name
+    orch_name = f"{crew_name}-orchestrator"
     lines = [f"repo: {x.get('path') or '?'}" + (f" ({x['name']})" if x.get("name") else "")
              for x in ho.get("repos") or []] or ["repo: (none given: pass repos=[{path, name}])"]
     if ho.get("autonomy"):
         lines.append(f"autonomy: {ho['autonomy']}")
+    others = "Other people's crews pick up their own tickets on their next tick."
     orch = [s for s in (crew.json().get("stations") or []) if s.get("role") == "orchestrator"
+            and s.get("name") == orch_name and s.get("crew") == crew_name
             and s.get("state") in ("working", "waiting", "quiet")] if crew.status_code == 200 else []
     if not orch:
-        return ("Recorded as handed to the crew with:\n" + "\n".join(lines) + "\nNo orchestrator "
-                "is running: tell the person to run `tares factory crew up` in a terminal. The "
-                "orchestrator finds this project on Tares when it starts; no message is needed.")
+        return ("Recorded as handed to the crew with:\n" + "\n".join(lines) + f"\nNo orchestrator "
+                f"of crew {crew_name} ({orch_name}) is running: tell the person to run `tares "
+                "factory crew up` in a terminal. The orchestrator finds this project on Tares when "
+                f"it starts; no message is needed. {others}")
     note = ""
     if orch[0].get("state") == "quiet":
         note = (f"\n{orch[0]['name']} has been silent for {orch[0].get('quiet_minutes')} min: if "
                 "the message bounces, tell the person to run `tares factory crew watch`; the "
                 "orchestrator finds the project on Tares when it is back.")
     return (f"Recorded. Now send {orch[0]['name']} a message with SendMessage, so it starts now "
-            f"rather than on its next tick:{note}\n"
+            f"rather than on its next tick. {others}{note}\n"
             f"[TF:SHIP] {project or uid} is ready to build\nproject: {project or uid}\n"
             + "\n".join(lines))
+
+
+@mcp.tool()
+async def my_work(crew: str = "") -> str:
+    """What belongs to the person whose key this is, across the projects handed to a crew that
+    they can see: `ready` (their tickets that can start: nothing they wait on is open), `in_progress`
+    (their tickets a station holds, with the holder and stage), `led_projects` (projects they
+    lead, with the milestones whose tickets are all delivered: `milestones_ready_to_check`),
+    and `desk` and `spec_questions` (empty for now). `crew` names your crew; empty means
+    the crew this session belongs to. The orchestrator of a crew works from this, so it starts
+    only its own person's tickets. Needs a key with a person."""
+    async with _cx(15) as cx:
+        r = await cx.get(f"{TARESD}/api/crew/my-work", params={"crew": crew or _caller("crew")})
+    return _out(r)
 
 
 @mcp.tool()

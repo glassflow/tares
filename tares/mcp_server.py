@@ -49,16 +49,18 @@ _CALLER_STATION = contextvars.ContextVar("tares_caller_station", default="")
 _CALLER_ROLE = contextvars.ContextVar("tares_caller_role", default="")
 _CALLER_PARENT = contextvars.ContextVar("tares_caller_parent", default="")
 _CALLER_PROJECT = contextvars.ContextVar("tares_caller_project", default="")
+_CALLER_CREW = contextvars.ContextVar("tares_caller_crew", default="")
 # Set by main() for the HTTP transports. Never inferred from the environment at call time: tests
 # import this module in-process and must stay on the stdio path.
 _HTTP = False
 
 _CALLER_VARS = {"token": _CALLER_TOKEN, "station": _CALLER_STATION, "role": _CALLER_ROLE,
-                "parent": _CALLER_PARENT, "project": _CALLER_PROJECT}
+                "parent": _CALLER_PARENT, "project": _CALLER_PROJECT, "crew": _CALLER_CREW}
 _CALLER_HEADERS = {"station": "x-tares-station", "role": "x-tares-role",
-                   "parent": "x-tares-parent", "project": "x-tares-project"}
+                   "parent": "x-tares-parent", "project": "x-tares-project",
+                   "crew": "x-tares-crew"}
 _CALLER_ENV = {"station": "FACTORY_STATION", "role": "FACTORY_ROLE", "parent": "FACTORY_PARENT",
-               "project": "TARES_PROJECT"}
+               "project": "TARES_PROJECT", "crew": "FACTORY_CREW"}
 
 
 def _bearer(headers) -> str:
@@ -95,11 +97,11 @@ def _default_project() -> str:
 
 
 def _station_headers() -> dict:
-    """Which tares-factory station the caller is, sent with every call so Tares applies who may
-    write what. Empty for a session that is not a station."""
+    """Which tares-factory station the caller is, and the crew it belongs to (TR-633), sent with
+    every call so Tares applies who may write what. Empty for a session that is not a station."""
     out = {}
     for name, header in (("station", "X-Tares-Station"), ("role", "X-Tares-Role"),
-                         ("parent", "X-Tares-Parent")):
+                         ("parent", "X-Tares-Parent"), ("crew", "X-Tares-Crew")):
         v = _caller(name)
         if v:
             out[header] = v
