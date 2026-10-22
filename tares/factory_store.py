@@ -218,6 +218,9 @@ FACTORY_SCHEMA = [
     "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS person_id TEXT",
     "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS finished_person_id TEXT",
     "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS taken_person_id TEXT",
+    # The crew (its name) of the session that handed the project over (TR-633), so a hand-over says
+    # who handed it over and to which crew.
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS crew TEXT",
     # Grants by kind (TR-630): team (what every project starts from), project (what the work may
     # do; waits for the owner of any repo it reaches into) and personal (what may run on the
     # holder's machine). areas is a JSON list of repos, consents a JSON list of {person_id, at}.
@@ -977,23 +980,26 @@ class FactoryStore:
 
     # ── hand-over to the crew (TR-425) ────────────────────────────────────────
     def set_handover(self, project: str, repos: list[dict], autonomy: str | None,
-                     by: str | None, at, person_id: str | None = None) -> None:
+                     by: str | None, at, person_id: str | None = None,
+                     crew: str | None = None) -> None:
         """Record the hand-over: `repos` is the whole list (the caller merges it with the one
-        already kept); `repo` keeps the first path for older readers."""
+        already kept); `repo` keeps the first path for older readers. `crew` is the name of the
+        crew of whoever handed it over (TR-633)."""
         first = next((r["path"] for r in repos if r.get("path")), None)
         with self._lock:
             self.con.execute(
-                "INSERT INTO handovers (project, repo, handed_by, handed_at, repos, autonomy, person_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (project) DO UPDATE SET "
+                "INSERT INTO handovers (project, repo, handed_by, handed_at, repos, autonomy, "
+                "person_id, crew) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (project) DO UPDATE SET "
                 "repo = excluded.repo, handed_by = excluded.handed_by, "
-                "person_id = excluded.person_id, finished_person_id = NULL, "
+                "person_id = excluded.person_id, crew = excluded.crew, finished_person_id = NULL, "
                 "taken_person_id = NULL, "
                 "handed_at = excluded.handed_at, repos = excluded.repos, "
                 "autonomy = excluded.autonomy, finished_at = NULL, finished_words = NULL, "
                 "finished_decision = NULL, finished_by = NULL, taken_at = NULL, "
                 "taken_words = NULL, taken_by = NULL, released_at = NULL",
                 [project, first, by or None, at, json.dumps(repos), autonomy or None,
-                 person_id or None])
+                 person_id or None, crew or None])
 
     def handed_over_projects(self, finished: bool | None = None,
                              taken: bool | None = None) -> list[str]:
@@ -1042,7 +1048,7 @@ class FactoryStore:
             r = self.con.execute("SELECT repo, handed_by, handed_at, repos, autonomy, "
                                  "finished_at, finished_words, finished_decision, finished_by, "
                                  "taken_at, taken_words, taken_by, released_at, person_id, "
-                                 "finished_person_id, taken_person_id "
+                                 "finished_person_id, taken_person_id, crew "
                                  "FROM handovers WHERE project = ?", [project]).fetchone()
         if not r:
             return None
@@ -1050,6 +1056,7 @@ class FactoryStore:
         refs = self._person_refs([r[13], r[14], r[15]])
         out = {"repo": r[0], "repos": repos, "autonomy": r[4], "by": r[1], "at": r[2],
                "person": refs.get(r[13]), "by_label": by_label(refs.get(r[13]), r[1]),
+               "handed_by_person": refs.get(r[13]), "crew": r[16],
                "finished": ({"at": r[5], "words": r[6], "decision": r[7], "by": r[8],
                              "person": refs.get(r[14]), "by_label": by_label(refs.get(r[14]), r[8])}
                             if r[5] else None),

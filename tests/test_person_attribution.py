@@ -223,10 +223,10 @@ async def auth_on():
                 tuid2 = (await cx.post(f"{B}/api/projects", headers=ROOT, json={
                     "template": "custom", "name": "Tools 2", "objects": [],
                     "kind": "software_factory"})).json()["id"]
-                await mf.hand_over(project=tuid2, repos=[{"path": "/w/tools2"}])
+                out = await mf.hand_over(project=tuid2, repos=[{"path": "/w/tools2"}])
                 ho = (await cx.get(f"{B}/api/projects/{tuid2}/crew", headers=A)).json()["handover"]
-                ck("hand_over with an unbound key keeps the old label",
-                   ho["by_label"] == "claude code session", str(ho))
+                ck("hand_over with an unbound key is refused: it has no person (TR-633)",
+                   "has no person" in out and ho is None, f"{out} {ho}")
             finally:
                 mf._cx = real_tool_cx
 

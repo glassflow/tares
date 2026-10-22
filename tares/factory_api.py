@@ -36,6 +36,16 @@ def caller(request: Request) -> dict:
             "parent": (h.get("x-tares-parent") or "").strip()[:factory_mod.MAX_NAME]}
 
 
+def crew_name_of(request: Request, said: str | None = None) -> str:
+    """The crew the call means (TR-633): `said` (the `crew` parameter), else the X-Tares-Crew
+    header, else `crew`, the name a crew has when nobody named it. Raises ValueError for a name
+    that cannot be a crew's."""
+    name = str(said or request.headers.get("x-tares-crew") or "").strip() or "crew"
+    if not factory_mod.CREW_NAME_RE.match(name):
+        raise ValueError(f"{name!r} is not a crew name: lowercase letters, digits and hyphens")
+    return name
+
+
 _REFRESHING: dict[str, asyncio.Task] = {}
 REFRESH_WAIT = 2.5     # seconds a ticket read waits for GitHub before serving what it has
 _READS_AT_ONCE = 4
@@ -738,6 +748,39 @@ def register(app, store, h: SimpleNamespace) -> None:
         p = h.current_person(request)
         return p["id"] if p else "local"
 
+    NO_PERSON = "This key has no person. An admin binds it in Settings, Keys."
+
+    def work_person(request: Request) -> dict:
+        """The person whose work the caller means (TR-633): the key's person; the system
+        credential is the person `local`, like its recordings. A key with no person is refused."""
+        p = h.current_person(request)
+        if p:
+            return {"id": p["id"], "name": p.get("name") or p["id"]}
+        if not h.is_system(request):
+            h.err(PermissionError(NO_PERSON), 403)
+        local = store.get_person("local") or {}
+        return {"id": "local", "name": local.get("name") or "You"}
+
+    def is_mine(t: dict, me: str) -> bool:
+        """A ticket is the person's when it is assigned to them; the person `local` (a cell of
+        one) also has the tickets nobody owns."""
+        a = t.get("assignee_person_id")
+        return a == me or (me == "local" and not a)
+
+    def leads(p: dict | None, me: str) -> bool:
+        lead = (p or {}).get("lead_person_id")
+        return lead == me or (me == "local" and not lead)
+
+    def my_projects(request: Request) -> set[str] | None:
+        """The projects the caller's person leads or holds a ticket assignment in, or None when
+        nothing narrows the list: the system credential, or a key with no person (a project key)."""
+        if h.is_system(request) or not h.current_person(request):
+            return None
+        me = h.current_person(request)["id"]
+        return {p["id"] for p in store.list_projects()
+                if leads(store.get_project(p["id"]), me)
+                or any(is_mine(t, me) for t in store.list_tickets(p["id"]))}
+
     def crews_of(rows: list[dict]) -> list[dict]:
         """The stations (as `stations()` lists them) grouped by crew, the crew seen last first."""
         info = {c["id"]: c for c in store.list_crews()}
@@ -778,15 +821,59 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "grants": grants_out(None)["all"],
                 "now": now_utc()}
 
+    @app.get("/api/crew/my-work")
+    async def my_work(request: Request, crew: str | None = None):
+        """What belongs to the caller's person (TR-633), across the projects that have an open
+        hand-over and that the caller can see: `ready` (their tickets that can start),
+        `in_progress` (their tickets a station holds), and `led_projects` with the milestones
+        whose tickets are all delivered. `desk` and `spec_questions` are filled by later work."""
+        me = work_person(request)
+        try:
+            crew_name = crew_name_of(request, crew)
+        except ValueError as e:
+            h.err(e)
+        hidden = h.hidden_ids()
+        ready, doing, led = [], [], []
+        for uid in store.handed_over_projects(finished=False, taken=False):
+            p = store.get_project(uid)
+            if p is None or uid in hidden:
+                continue
+            tickets = store.list_tickets(uid)
+            wait = factory_mod.readiness(tickets)
+            for t in tickets:
+                if not is_mine(t, me["id"]) or factory_mod.finished(t):
+                    continue
+                if wait[t["id"]]["ready"]:
+                    ready.append({"project": p["name"], "ticket": factory_mod.label(t),
+                                  "title": t["title"], "repo": t.get("repo") or ""})
+                if t["holder"]:
+                    doing.append({"project": p["name"], "ticket": factory_mod.label(t),
+                                  "title": t["title"], "holder": t["holder"],
+                                  "stage": t["stage"] or ""})
+            if leads(p, me["id"]):
+                ms = []
+                for m in store.list_milestones(uid):
+                    mine = [t for t in tickets if t["milestone"] == m["id"]
+                            and t["status"] != "canceled"]
+                    if mine and all(factory_mod.delivered(t) for t in mine):
+                        ms.append(m["name"])
+                led.append({"project": p["name"], "milestones_ready_to_check": ms})
+        return {"person": me, "crew": crew_name, "ready": ready, "in_progress": doing,
+                "led_projects": led, "desk": [], "spec_questions": []}
+
     @app.get("/api/crew/projects")
-    async def crew_projects():
+    async def crew_projects(request: Request):
         """The projects handed to the crew, oldest hand-over first: each with its repos (the
         folder on the crew's machine and the GitHub name), the autonomy it was handed over at
         when stricter than the crew's, its tickets by stage, the milestone it is on, and which
-        tickets each repo has. The orchestrator works from this list (TR-462)."""
+        tickets each repo has. The orchestrator works from this list (TR-462). A person's key
+        sees the projects the person leads or holds a ticket in; the system credential sees all
+        (TR-633)."""
         names = {p["id"]: p["name"] for p in store.list_projects()}
         hidden = h.hidden_ids()
-        names = {u: n for u, n in names.items() if u not in hidden}
+        mine = my_projects(request)
+        names = {u: n for u, n in names.items()
+                 if u not in hidden and (mine is None or u in mine)}
         out = []
         for uid in store.handed_over_projects(finished=False, taken=False):
             if uid not in names:
@@ -1622,9 +1709,12 @@ def register(app, store, h: SimpleNamespace) -> None:
         crew. Each repo is the folder it is checked out in on the crew's machine and its GitHub
         name (owner/name). A later hand-over adds repos, never replaces them. `autonomy` only
         when the person wants this project stricter than the crew (L3-review). Recorded with
-        the time; the orchestrator finds it in /api/crew/projects."""
+        the time, the person and the crew (`crew`, else X-Tares-Crew, else `crew`); the
+        orchestrator finds it in /api/crew/projects. A key with no person is refused (TR-633)."""
         h.project_or_404(uid)
+        work_person(request)
         try:
+            crew = crew_name_of(request, body.get("crew"))
             new = factory_mod.handover_repos(body.get("repos"))
             if body.get("repo"):
                 new = factory_mod.merge_repos(new, factory_mod.handover_repos(body.get("repo")))
@@ -1632,13 +1722,13 @@ def register(app, store, h: SimpleNamespace) -> None:
             if autonomy and autonomy not in factory_mod.AUTONOMY:
                 raise docs_mod.DocError(f"unknown autonomy {autonomy!r}; one of: "
                                         + ", ".join(factory_mod.AUTONOMY))
-        except docs_mod.DocError as e:
+        except (docs_mod.DocError, ValueError) as e:
             h.err(e)
         old = store.get_handover(uid) or {}
         repos = factory_mod.merge_repos(old.get("repos") or [], new)
         autonomy = autonomy or old.get("autonomy")
         store.set_handover(uid, repos, autonomy, by_of(request, body), now_utc(),
-                           person_of(request))
+                           person_of(request), crew)
         if old.get("finished"):   # more work on a finished project: it is open again
             store.update_project(uid, status="active")
         include_shared_grants(uid)   # a crew-built project shows the grants it is built under
