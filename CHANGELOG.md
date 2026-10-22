@@ -6,6 +6,14 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- A desk item is for one person. It is addressed to the assignee of the ticket it names, else the
+  project's lead, else whoever wrote it, or to the person you name in `to` (an id or an email), and it
+  shows in that person's `my_work`; `desk_list` takes `mine`. Only words found in that person's own
+  recorded sessions, at whichever station, answer it. If the words are not there yet you get a
+  retryable error, because recordings can take a minute to arrive, and nothing is recorded until they
+  are. A standing answer becomes a grant given by that person: a project grant, or with `grant_kind`
+  personal one for their own machine. A project grant over repos other people own waits for them, as
+  grants do elsewhere. Items from before keep the older rule.
 - My work for an orchestrator: `GET /api/crew/my-work` (and the `my_work` tool) returns what belongs to
   the person of the key: their ready tickets, the ones a station is working on, the milestones of
   projects they lead that are ready to check, and empty `desk` and `spec_questions` lists. A key with

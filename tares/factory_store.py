@@ -212,6 +212,9 @@ FACTORY_SCHEMA = [
     "ALTER TABLE ticket_history ADD COLUMN IF NOT EXISTS person_id TEXT",
     "ALTER TABLE decisions ADD COLUMN IF NOT EXISTS person_id TEXT",
     "ALTER TABLE desk_items ADD COLUMN IF NOT EXISTS person_id TEXT",
+    # The person a desk item is addressed to (TR-634): it shows in their my_work and only words
+    # found in their own recorded sessions answer it. NULL for an item from before this.
+    "ALTER TABLE desk_items ADD COLUMN IF NOT EXISTS to_person_id TEXT",
     "ALTER TABLE assumptions ADD COLUMN IF NOT EXISTS person_id TEXT",
     "ALTER TABLE ticket_checks ADD COLUMN IF NOT EXISTS person_id TEXT",
     "ALTER TABLE reviews ADD COLUMN IF NOT EXISTS person_id TEXT",
@@ -870,7 +873,7 @@ class FactoryStore:
     # ── the desk (TR-449..452) ────────────────────────────────────────────────
     _DK_COLS = ("id, number, project, question, context, options, recommendation, why, blocks, "
                 "tickets, blocking, asked_by, assumptions, state, reason, created_at, closed_at, station, "
-                "command, person_id")
+                "command, person_id, to_person_id")
 
     @staticmethod
     def _dk_row(r) -> dict:
@@ -880,23 +883,32 @@ class FactoryStore:
                 "tickets": json.loads(r[9]) if r[9] else [], "blocking": bool(r[10]),
                 "asked_by": r[11], "assumptions": json.loads(r[12]) if r[12] else [],
                 "state": r[13], "reason": r[14], "created_at": r[15], "closed_at": r[16],
-                "station": r[17], "command": r[18], "person_id": r[19]}
+                "station": r[17], "command": r[18], "person_id": r[19], "to_person_id": r[20]}
+
+    def _dk_people(self, rows: list[dict]) -> list[dict]:
+        """Desk rows with `person` (who asked) and `to_person` ({id, name} or None, who it is
+        addressed to) filled in; `to_person_id` stays."""
+        rows = self._with_people(rows, "asked_by")
+        refs = self._person_refs(r.get("to_person_id") for r in rows)
+        for r in rows:
+            r["to_person"] = refs.get(r["to_person_id"])
+        return rows
 
     def add_desk_item(self, project: str | None, question: str, context: str, options: list[str],
                       recommendation: str, why: str, blocks: str, tickets: list[str],
                       blocking: bool, asked_by: str, assumptions: list[str], at,
                       station: str | None = None, command: str | None = None,
-                      person_id: str | None = None) -> dict:
+                      person_id: str | None = None, to_person_id: str | None = None) -> dict:
         did = "dk_" + uuid.uuid4().hex[:10]
         with self._lock:
             n = (self.con.execute("SELECT max(number) FROM desk_items").fetchone()[0] or 0) + 1
             self.con.execute(
                 f"INSERT INTO desk_items ({self._DK_COLS}) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, NULL, ?, ?, ?)",
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, NULL, ?, ?, ?, ?)",
                 [did, n, project, question, context or None, json.dumps(options or []),
                  recommendation, why, blocks or None, json.dumps(tickets or []), blocking,
                  asked_by or None, json.dumps(assumptions or []), at, station or None,
-                 command or None, person_id or None])
+                 command or None, person_id or None, to_person_id or None])
         return self.get_desk_item(did)
 
     def get_desk_item(self, ref: str) -> dict | None:
@@ -904,7 +916,7 @@ class FactoryStore:
         with self._lock:
             r = self.con.execute(f"SELECT {self._DK_COLS} FROM desk_items WHERE id = ? OR "
                                  "number = ?", [ref, int(m.group(1)) if m else -1]).fetchone()
-        return self._with_people([self._dk_row(r)], "asked_by")[0] if r else None
+        return self._dk_people([self._dk_row(r)])[0] if r else None
 
     def list_desk(self, state: str | None = "open", project: str | None = None) -> list[dict]:
         q, vals = f"SELECT {self._DK_COLS} FROM desk_items WHERE 1 = 1", []
@@ -914,7 +926,7 @@ class FactoryStore:
             q += " AND project = ?"; vals.append(project)
         with self._lock:
             rows = self.con.execute(q + " ORDER BY blocking DESC, created_at", vals).fetchall()
-        return self._with_people([self._dk_row(r) for r in rows], "asked_by")
+        return self._dk_people([self._dk_row(r) for r in rows])
 
     def close_desk_item(self, did: str, state: str, reason: str | None, at) -> None:
         with self._lock:
@@ -957,13 +969,21 @@ class FactoryStore:
               "label": f"D{r[13]}" if r[13] else None, "via": r[14], "person_id": r[15]}
              for r in rows], None)
 
-    def person_turns(self, source: str, sessions: list[str] | None, since) -> list[dict]:
+    def person_turns(self, source: str, sessions: list[str] | None, since,
+                     person: str | None = None) -> list[dict]:
         """What a person typed (user turns that are not tool results, not a subagent's) in
-        `sessions` (every session when None) since `since`, newest first (TR-450)."""
+        `sessions` (every session when None) since `since`, newest first (TR-450). With `person`,
+        only turns whose recording carries that `tares_person` (TR-620), in any session; the
+        person `local` also owns the recordings that carry none (the system credential's)
+        (TR-634)."""
         q = ("SELECT key_value, event_time, text FROM events WHERE source = ? AND "
              "event_type = 'user' AND event_time >= ? AND "
              "coalesce(json_extract_string(labels, '$.sidechain'), 'false') <> 'true'")
         vals: list = [source, since]
+        if person:
+            who = "json_extract_string(labels, '$.tares_person')"
+            q += f" AND ({who} = ?" + (f" OR {who} IS NULL" if person == "local" else "") + ")"
+            vals.append(person)
         if sessions is not None:
             if not sessions:
                 return []
