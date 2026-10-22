@@ -2,13 +2,14 @@
 settings over the cell's default, and a personal AGENTS.md and memory that only they see. With auth
 off the one person is `local` and the cell keeps one set of settings, as before.
 """
-import asyncio, os, subprocess, sys
+import asyncio, json, os, subprocess, sys
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _env import clean_env
 from tares import docs as docs_mod
+import tares.mcp_server as m
 
 P = F = 0
 def ck(l, c, d=""):
@@ -157,6 +158,85 @@ async def auth_on():
             ck("a read key cannot save settings -> 403", r.status_code == 403, r.text)
             sa = (await cx.get(f"{B}/api/crew/settings", headers=H(a))).json()
             ck("... and A's settings are as they were", sa["builders_max"] == 7, str(sa))
+
+            # ── a person key with ingest only, no admin (the scope rule for the two writes) ──
+            a_ing = await key("Person A ingest", "person-a@example.test", ["read", "ingest"])
+            c_ing = await key("Person C ingest", "person-c@example.test", ["read", "ingest"])
+            default_before = (await cx.get(f"{B}/api/crew/settings", headers=H(AUTH))).json()
+            sb_before = (await cx.get(f"{B}/api/crew/settings", headers=H(b))).json()
+            r = await cx.put(f"{B}/api/crew/settings", headers=H(a_ing), json={"builders_max": 5})
+            ck("an ingest-only person key saves its own settings -> 200",
+               r.status_code == 200 and r.json()["builders_max"] == 5, r.text)
+            default_after = (await cx.get(f"{B}/api/crew/settings", headers=H(AUTH))).json()
+            sb_after = (await cx.get(f"{B}/api/crew/settings", headers=H(b))).json()
+            ck("... the cell's default did not change",
+               default_after["builders_max"] == default_before["builders_max"], str(default_after))
+            ck("... and another person's settings did not change",
+               sb_after["builders_max"] == sb_before["builders_max"], str(sb_after))
+            ck("... A reads the new value", (await cx.get(f"{B}/api/crew/settings",
+               headers=H(a))).json()["builders_max"] == 5, "")
+            r = await cx.post(f"{B}/api/docs/personal/agents/lines", headers=H(c_ing),
+                              json={"text": "rule from C"})
+            ck("an ingest-only person key writes its own personal rule -> 200",
+               r.status_code == 200, r.text)
+            ga = (await cx.get(f"{B}/api/docs/global", headers=H(a))).json()
+            gc = (await cx.get(f"{B}/api/docs/global", headers=H(c))).json()
+            ck("... it is C's and not A's", "rule from C" in gc["personal"]["agents"]["body"]
+               and "rule from C" not in str(ga), str(gc))
+            r = await cx.put(f"{B}/api/crew/settings", headers=H(c_ing), json={"autonomy": "L3-review"})
+            ck("... and it still saves C's own settings", r.status_code == 200, r.text)
+            ck("... without changing the default", (await cx.get(f"{B}/api/crew/settings",
+               headers=H(AUTH))).json()["autonomy"] == default_before["autonomy"], "")
+            r = await cx.get(f"{B}/api/crew/settings", headers=H(nobody))
+            ck("a key with no person reads the default", r.status_code == 200
+               and r.json()["builders_max"] == default_before["builders_max"], r.text)
+
+            # ── MCP add_to_global with a scope ──
+            real_cx, real_url = m._cx, m.TARESD
+            try:
+                m.TARESD = B
+                team_before = (await cx.get(f"{B}/api/docs/global", headers=H(AUTH))).json()
+                # an admin person: ignoring the scope would post the line to the team doc
+                m._cx = lambda timeout=10: httpx.AsyncClient(timeout=timeout, headers=H(a))
+                raw = await m.add_to_global("agents", "mcp personal rule", scope="personal")
+                try:
+                    out = json.loads(raw)
+                except ValueError:
+                    out = {"raw": raw}
+                ck("MCP add_to_global(scope=personal) adds to the caller's own doc",
+                   out.get("added") is True, raw)
+                # an ingest-only person: the same call must work for them too
+                m._cx = lambda timeout=10: httpx.AsyncClient(timeout=timeout, headers=H(a_ing))
+                raw = await m.add_to_global("memory", "mcp personal fact", scope="personal")
+                try:
+                    out = json.loads(raw)
+                except ValueError:
+                    out = {"raw": raw}
+                ck("... and for a person key without admin", out.get("added") is True, raw)
+                ga = (await cx.get(f"{B}/api/docs/global", headers=H(a))).json()
+                gb = (await cx.get(f"{B}/api/docs/global", headers=H(b))).json()
+                team_after = (await cx.get(f"{B}/api/docs/global", headers=H(AUTH))).json()
+                ck("... the lines are in A's personal docs",
+                   "mcp personal rule" in ga["personal"]["agents"]["body"]
+                   and "mcp personal fact" in ga["personal"]["memory"]["body"], str(ga))
+                ck("... not in the team docs", "mcp personal" not in str(team_after)
+                   and team_after == team_before, str(team_after))
+                ck("... and not in B's", "mcp personal" not in str(gb), str(gb))
+                bad = await m.add_to_global("agents", "x", scope="everyone")
+                ck("a bad scope returns the error string", "team" in bad and "personal" in bad
+                   and not bad.startswith("{"), bad)
+            finally:
+                m._cx, m.TARESD = real_cx, real_url
+
+            # ── a personal doc cannot be attached to a project ──
+            admin_a = await key("Person A admin", "person-a@example.test", ["admin"])
+            p = (await cx.post(f"{B}/api/projects", headers=H(admin_a), json={
+                "template": "custom", "name": "Attach", "objects": []})).json()["id"]
+            pid = (await cx.get(f"{B}/api/docs/personal", headers=H(a))).json()["agents"]["id"]
+            r = await cx.post(f"{B}/api/projects/{p}/docs/{pid}/use", headers=H(admin_a))
+            ck("attaching a personal doc to a project -> 404", r.status_code == 404, r.text)
+            r = await cx.get(f"{B}/api/projects/{p}/docs/{pid}", headers=H(admin_a))
+            ck("... and the project does not serve it", r.status_code == 404, r.text)
     finally:
         proc.terminate(); proc.wait()
 
