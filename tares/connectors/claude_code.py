@@ -84,6 +84,8 @@ class ClaudeCodeConnector(Connector):
                                     "FACTORY_STATION"},
         {"name": "crew", "help": "the tares-factory crew the station belongs to (its name, "
                                  "`crew` by default); the plugin stamps it from FACTORY_CREW"},
+        {"name": "machine", "help": "the machine the crew runs on (`hostname -s`); the plugin "
+                                    "stamps it from the host, or FACTORY_MACHINE"},
         {"name": "subagent", "help": "the subagent a line belongs to (its id), for lines from a "
                                      "subagent's own transcript; the session key stays the "
                                      "parent's"},
@@ -104,6 +106,9 @@ class ClaudeCodeConnector(Connector):
     # The cell labels every pushed event with the person of the credential that sent it
     # (`tares_person`); see Runtime.ingest. Events the cell reads itself carry none.
     STAMPS_PERSON = True
+    # The person of the credential of the push being mapped (set by Runtime.ingest before
+    # map_payload, None for the system credential): the crew a station line belongs to is theirs.
+    person_id: str | None = None
 
     async def poll(self) -> list[Envelope]:
         return []   # push-only: events arrive via map_payload() from the plugin
@@ -156,8 +161,14 @@ class ClaudeCodeConnector(Connector):
             return
         ref = str(o.get("tares_project") or "").strip()
         p = (self.store.get_project(ref) or self.store.get_project_by_name(ref)) if ref else None
-        self.store.set_session_station(sid, name, role, parent, p["id"] if p else None,
-                                       self._ts(o))
+        at = self._ts(o)
+        # the crew (TR-628): this recording's person, the crew's name and the machine; a line
+        # with no person (the system credential) joins the crew of `local`
+        crew_id = self.store.resolve_crew(
+            str(o.get("factory_crew") or o.get("crew") or ""), self.person_id,
+            str(o.get("factory_machine") or o.get("machine") or ""), at)
+        self.store.set_session_station(sid, name, role, parent, p["id"] if p else None, at,
+                                       crew_id)
 
     def _link_project(self, o: dict) -> bool:
         """A `session_project` line (TR-405): the plugin saw the session work in a Tares project
@@ -244,6 +255,7 @@ class ClaudeCodeConnector(Connector):
                 "tares_project": str(o["tares_project"]) if o.get("tares_project") else None,
                 "station": str(o["factory_station"]) if o.get("factory_station") else None,
                 "crew": str(o["factory_crew"]) if o.get("factory_crew") else None,
+                "machine": str(o["factory_machine"]) if o.get("factory_machine") else None,
                 "subagent": str(o.get("subagent") or o.get("agentId") or "") or None
                 if o.get("isSidechain") or o.get("subagent") else None}
 

@@ -6,6 +6,16 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Crews on the cell: it keeps a record of each crew (the person, the crew's name and the machine it
+  runs on) and lists stations by crew, so two crews with the same station names never merge. The
+  plugin stamps the machine (`hostname -s`, or `FACTORY_MACHINE`) next to the crew name, and the
+  crew is made from the first station line of a recording with the person of the key that shipped
+  it; a recording with no person joins the crew of `local`, and sessions from before crews join it
+  when the cell starts. `GET /api/crew` returns `crews` (each with its person, machine, last seen
+  and stations) next to the flat `stations` it had, and `?mine=1` keeps your own crews.
+  `GET /api/crew/{name}` takes `crew` (an id or a name) and, when several crews have a station of
+  that name, returns your own. `list_crew` names each station's crew, machine and person and takes
+  `mine`.
 - Ticket assignees: every ticket has an assignee person, or shows as unowned with the assignee as
   its source named them, wherever it lives. The Linear sync maps the assignee's email (a person's
   main or extra one), the GitHub Issues sync maps the first assignee's login, and a Tares ticket

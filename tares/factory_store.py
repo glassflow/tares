@@ -236,6 +236,19 @@ FACTORY_SCHEMA = [
     # a project grant from someone who is neither the project's lead nor an admin also waits
     # for the lead (for an admin when the project has none)
     "ALTER TABLE grants ADD COLUMN IF NOT EXISTS needs_lead BOOLEAN DEFAULT FALSE",
+    # A crew (TR-628): one person's crew on one machine, so two crews with the same station names
+    # never merge. Named by the person (FACTORY_CREW, `crew` when unset), made from the first
+    # station line a recording carries; machine is '' when the recording names none.
+    """CREATE TABLE IF NOT EXISTS crews (
+      id          TEXT PRIMARY KEY,
+      name        TEXT,
+      person_id   TEXT,
+      machine     TEXT,
+      first_seen  TIMESTAMPTZ,
+      last_seen   TIMESTAMPTZ,
+      UNIQUE (person_id, name, machine)
+    )""",
+    "ALTER TABLE session_stations ADD COLUMN IF NOT EXISTS crew_id TEXT",
 ]
 
 # Words that say "a session" and not a station: shown without parentheses next to a person's name.
@@ -281,7 +294,13 @@ class FactoryStore:
 
     # ── upgrade and clean-up ──────────────────────────────────────────────────
     def _factory_upgrade(self) -> None:
-        """Tickets from before numbers get them, in plan order, per project."""
+        """Tickets from before numbers get them, in plan order, per project. Sessions that played
+        a station before crews existed (TR-628) join the crew `crew` of the person `local`."""
+        if self.con.execute("SELECT 1 FROM session_stations WHERE crew_id IS NULL LIMIT 1"
+                            ).fetchone():
+            cid = self._crew_id("crew", "local", "", now_utc())
+            self.con.execute("UPDATE session_stations SET crew_id = ? WHERE crew_id IS NULL",
+                             [cid])
         rows = self.con.execute("SELECT DISTINCT project FROM tickets WHERE number IS NULL"
                                 ).fetchall()
         for (project,) in rows:
@@ -376,16 +395,51 @@ class FactoryStore:
                 [project, ref, ref, ref]).fetchone()
         return self._ms_row(r) if r else None
 
+    # ── crews (TR-628) ────────────────────────────────────────────────────────
+    def _crew_id(self, name: str, person_id: str, machine: str, at) -> str:
+        """The id of the crew (person, name, machine), made on first sight; last_seen moves up
+        to `at`. Lock held (or no other thread yet)."""
+        r = self.con.execute("SELECT id, last_seen FROM crews WHERE person_id = ? AND name = ? "
+                             "AND machine = ?", [person_id, name, machine]).fetchone()
+        if r:
+            if at is not None and (r[1] is None or at > r[1]):
+                self.con.execute("UPDATE crews SET last_seen = ? WHERE id = ?", [at, r[0]])
+            return r[0]
+        cid = "c_" + uuid.uuid4().hex[:10]
+        self.con.execute("INSERT INTO crews (id, name, person_id, machine, first_seen, last_seen) "
+                         "VALUES (?, ?, ?, ?, ?, ?)", [cid, name, person_id, machine, at, at])
+        return cid
+
+    def resolve_crew(self, name: str | None, person_id: str | None, machine: str | None,
+                     at) -> str:
+        """The crew a station line belongs to: the crew's name (`crew` when the line names none),
+        the person whose recording it is (`local` when it carries none) and the machine ('' when
+        unknown). Made on first sight."""
+        with self._lock:
+            return self._crew_id((name or "").strip() or "crew", person_id or "local",
+                                 (machine or "").strip(), at)
+
+    def list_crews(self) -> list[dict]:
+        """Every crew the cell has seen, with its person's name, newest activity first."""
+        with self._lock:
+            rows = self.con.execute("SELECT id, name, person_id, machine, first_seen, last_seen "
+                                    "FROM crews ORDER BY last_seen DESC, id").fetchall()
+        refs = self._person_refs(r[2] for r in rows)
+        return [{"id": r[0], "name": r[1], "machine": r[3] or "", "first_seen": r[4],
+                 "last_seen": r[5], "person_id": r[2],
+                 "person": refs.get(r[2]) or {"id": r[2], "name": None}} for r in rows]
+
     # ── stations (TR-418, TR-420) ─────────────────────────────────────────────
     def set_session_station(self, session: str, station: str, role: str, parent: str,
-                            project: str | None, at) -> None:
+                            project: str | None, at, crew_id: str | None = None) -> None:
         with self._lock:
             self.con.execute(
-                "INSERT INTO session_stations (session, station, role, parent, project, seen_at) "
-                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (session) DO UPDATE SET "
+                "INSERT INTO session_stations (session, station, role, parent, project, seen_at, "
+                "crew_id) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (session) DO UPDATE SET "
                 "station = excluded.station, role = excluded.role, parent = excluded.parent, "
-                "project = coalesce(excluded.project, session_stations.project)",
-                [session, station, role or None, parent or None, project, at])
+                "project = coalesce(excluded.project, session_stations.project), "
+                "crew_id = coalesce(excluded.crew_id, session_stations.crew_id)",
+                [session, station, role or None, parent or None, project, at, crew_id])
 
     def session_station(self, session: str) -> dict | None:
         with self._lock:
@@ -403,17 +457,17 @@ class FactoryStore:
                 "min(e.event_time), max(e.event_time), count(e.key_value), "
                 "st.state, st.reason, st.state_at, "
                 "(SELECT p.project FROM project_sessions p WHERE p.session = ss.session "
-                " ORDER BY p.linked_at DESC LIMIT 1) "
+                " ORDER BY p.linked_at DESC LIMIT 1), ss.crew_id "
                 "FROM session_stations ss "
                 "LEFT JOIN events e ON e.source = ? AND e.key_value = ss.session "
                 "LEFT JOIN session_states st ON st.session = ss.session "
                 "GROUP BY ss.session, ss.station, ss.role, ss.parent, ss.project, ss.seen_at, "
-                "st.state, st.reason, st.state_at "
+                "ss.crew_id, st.state, st.reason, st.state_at "
                 "ORDER BY coalesce(max(e.event_time), ss.seen_at) DESC", [source]).fetchall()
         return [{"session": r[0], "station": r[1], "role": r[2], "parent": r[3],
                  "project": r[4] or r[12], "seen_at": r[5], "started_at": r[6] or r[5],
                  "last_at": r[7] or r[5], "lines": int(r[8] or 0), "state": r[9],
-                 "state_reason": r[10], "state_at": r[11]} for r in rows]
+                 "state_reason": r[10], "state_at": r[11], "crew_id": r[13]} for r in rows]
 
     # ── the ledger's history (TR-427) ─────────────────────────────────────────
     def add_ticket_history(self, ticket: str, project: str, field: str, value: str | None,

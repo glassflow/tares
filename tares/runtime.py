@@ -272,6 +272,8 @@ class Runtime:
         cfg = self._push_cfg(token)   # token may be the ingest_key or the source name
         self._ensure_push_wins(cfg)   # first push flips a tail source to push mode (no double-ingest)
         conn = build_connector(cfg, self.store)
+        if stamp_person and getattr(conn, "STAMPS_PERSON", False):
+            conn.person_id = person_id   # the connector files what it records under this person
         # a connector that reads its event name from a header (GitHub) asks for them
         envs = (conn.map_payload(payload, headers=headers or {})
                 if getattr(conn, "WANTS_HEADERS", False) else conn.map_payload(payload))
