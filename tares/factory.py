@@ -664,14 +664,23 @@ def crew_settings_ok(body: dict, cur: dict) -> dict:
     return out
 
 
-def grant_line(words, when: str) -> str:
-    """One grant as it is kept: the person's words, quoted, and the day they said them."""
+def grant_words(words) -> str:
+    """The person's words as a grant keeps them: one line, no outer quotes, 400 characters at most."""
     w = " ".join(str(words or "").split()).strip().strip('"')
     if not w:
         raise DocError("a grant quotes the person's words; there are none")
     if len(w) > 400:
         raise DocError(f"the grant is {len(w)} characters; keep it to 400")
-    return f'"{w}" ({when})'
+    return w
+
+
+def grant_line(words, when: str) -> str:
+    """One grant as it is kept: the person's words, quoted, and the day they said them."""
+    return f'"{grant_words(words)}" ({when})'
+
+
+GRANT_KINDS = ("team", "project", "personal")
+GRANT_STATES = ("active", "waiting", "revoked")
 
 
 # Who may write what (the contract's table). A labeled station is any caller that says which
