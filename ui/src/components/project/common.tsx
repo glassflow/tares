@@ -23,11 +23,11 @@ export type ViewKind = "overview" | "result" | "how"
   | "activity" | "events" | "sources" | "source" | "triggers" | "trigger" | "agents"
   | "agent" | "external" | "skills" | "skill" | "sessions" | "settings"
   // what a spec session leaves for the build (TR-407): docs, tickets, the Claude Code sessions
-  | "docs" | "doc" | "tickets" | "ticket" | "claude";
+  | "docs" | "doc" | "tickets" | "ticket" | "claude" | "grants";
 export interface View { kind: ViewKind; name?: string }
 
 const SECTIONS: ViewKind[] = ["overview", "how", "activity", "events", "sources", "triggers", "agents", "skills", "sessions",
-  "docs", "tickets", "claude"];
+  "docs", "tickets", "grants", "claude"];
 const ITEMS: ViewKind[] = ["result", "source", "trigger", "agent", "external", "skill", "doc", "ticket", "claude"];
 export const SETTINGS: [string, string][] = [
   ["mcp", "MCP servers"], ["subscribers", "Subscribers"], ["keys", "Keys"], ["members", "Members"], ["history", "Change history"],

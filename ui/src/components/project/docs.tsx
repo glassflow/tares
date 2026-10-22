@@ -8,7 +8,7 @@ import ConfirmDialog from "../ConfirmDialog";
 import { Combo, CopyButton, ErrorState, Picker, TimeAgo, formatBytes, usePolling } from "../bits";
 import { FACTORY_POLL_MS, Facts, NotHere, VLink, ViewHead, type Ctx } from "./common";
 import { GitHubMark, LinearMark, prBrief } from "./factory";
-import type { Doc, DocKind, GitHubLink, Ticket, TicketStatus } from "../../types";
+import type { Doc, DocKind, PersonalDoc as PersonalDocData, GitHubLink, Ticket, TicketStatus } from "../../types";
 
 // What a spec session leaves in a project for the session that builds it (TR-403, TR-407): the
 // docs (starting prompt, spec, plan, AGENTS.md, notes), the tickets in order with a working doc
@@ -175,6 +175,7 @@ export function DocsView({ ctx }: { ctx: Ctx }) {
           </table>
         </>
       )}
+      <PersonalDocsPanel />
       {working > 0 && (
         <p className="help" style={{ marginTop: 12 }}>
           {working} working {working === 1 ? "doc sits" : "docs sit"} with {working === 1 ? "its ticket" : "their tickets"}:{" "}
@@ -182,6 +183,52 @@ export function DocsView({ ctx }: { ctx: Ctx }) {
         </p>
       )}
     </>
+  );
+}
+
+/** The caller's own AGENTS.md and memory: only they see them, in every project. Hidden when the
+ *  key belongs to no person. A line is added at the end; the daemon refuses past 32 KB. */
+function PersonalDocsPanel() {
+  const { data, reload } = usePolling(() => api.personalDocs(), 60000);
+  if (!data?.person) return null;
+  return (
+    <>
+      <h3 style={{ margin: "22px 0 8px" }}>Only you see these</h3>
+      <PersonalDoc name="agents" title="Your rules" doc={data.agents} onAdded={reload}
+                   help="How you want sessions to work with you. They add to the team rules; where they conflict, the team rule wins." />
+      <PersonalDoc name="memory" title="Your memory" doc={data.memory} onAdded={reload}
+                   help="What a session should remember about you and how you work." />
+    </>
+  );
+}
+
+function PersonalDoc({ name, title, help, doc, onAdded }: {
+  name: "agents" | "memory"; title: string; help: string; doc: PersonalDocData | null; onAdded: () => void;
+}) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>();
+  const add = async () => {
+    setBusy(true); setErr(undefined);
+    try { await api.addPersonalLine(name, text.trim()); setText(""); onAdded(); }
+    catch (e) { setErr(String((e as Error).message ?? e)); }
+    setBusy(false);
+  };
+  return (
+    <div className="panel" style={{ marginBottom: 12 }}>
+      <h4 style={{ margin: "0 0 4px" }}>{title}</h4>
+      <p className="help" style={{ margin: "0 0 8px" }}>{help}</p>
+      <div className="md">
+        {doc?.body.trim() ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{doc.body}</ReactMarkdown>
+          : <span className="dim">Nothing yet.</span>}
+      </div>
+      {err && <div className="alert error" style={{ marginTop: 8 }}>{err}</div>}
+      <form className="btnrow" style={{ marginTop: 10 }} onSubmit={(e) => { e.preventDefault(); if (text.trim() && !busy) add(); }}>
+        <input type="text" aria-label={`Add a line to ${title}`} maxLength={500} value={text} placeholder="add one line"
+               style={{ flex: "1 1 280px" }} onChange={(e) => setText(e.target.value)} />
+        <button type="submit" disabled={busy || !text.trim()}>{busy ? "…" : "Add"}</button>
+      </form>
+    </div>
   );
 }
 

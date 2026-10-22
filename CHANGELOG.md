@@ -94,6 +94,14 @@ the project follows [Semantic Versioning](https://semver.org/).
 - Settings, People: adding a person with an email that already belongs to someone says so instead of
   closing the form, changing a person's email keeps the old address as an extra email, and a key's
   person picker shows the person's name while people load.
+- Console for areas, grants and personal settings: Settings has an Areas tab listing each repo with
+  its owner and note. An admin adds, reassigns and removes owners; anyone else can take a repo
+  nobody owns and edit the note on a repo they own. A project has a Grants view with each grant's
+  words, kind, who gave it, who agreed and whether it is in effect or still waiting for someone,
+  with Consent, Revoke and an Add a grant form. On the Crew page, "Your crew settings" can be
+  changed (autonomy, builders at once, challenger, releaser), with "Use the team's" to drop a
+  personal value. A project's docs show "Only you see these": your own rules and memory, with a
+  field to add one line.
 
 ### Changed
 - A person's own crew settings can no longer be looser than the team's: `PUT /api/crew/settings`

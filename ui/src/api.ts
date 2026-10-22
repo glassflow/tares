@@ -8,7 +8,7 @@ import type {
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults, ProjectScope,
   Skill, SkillSummary,
-  Assumption, ClaudeCodeUsage, CrewMessage, CrewProject, CrewSettings, CrewStation, Decision, DeskAllowed, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, LinearLink, LinearStatus, Milestone,
+  Area, Assumption, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, GrantKind, Grant, GrantsView, PersonalDoc, PersonalDocs, CrewMessage, CrewProject, CrewSettings, CrewStation, Decision, DeskAllowed, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, LinearLink, LinearStatus, Milestone,
   ProjectSession, Ticket, TicketStatus,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, ModelProvider, ModelProviders, Standup,
@@ -606,6 +606,26 @@ export const api = {
   ticketMessages: (id: string, ref: string) =>
     request<{ messages: CrewMessage[] }>(
       `/api/projects/${encodeURIComponent(id)}/tickets/${encodeURIComponent(ref)}/messages`),
+  areas: () => request<Area[]>("/api/areas"),
+  setArea: (repo: string, personId: string, note?: string) =>
+    request<Area>(`/api/areas/${repo.split("/").map(encodeURIComponent).join("/")}`,
+      { method: "PUT", body: JSON.stringify({ person_id: personId, ...(note !== undefined ? { note } : {}) }) }),
+  deleteArea: (repo: string) =>
+    request<{ ok: boolean }>(`/api/areas/${repo.split("/").map(encodeURIComponent).join("/")}`, { method: "DELETE" }),
+  grants: (project: string) => request<GrantsView>(`/api/grants?project=${encodeURIComponent(project)}`),
+  addGrant: (body: { kind: GrantKind; project: string; words: string; areas: string[] }) =>
+    request<{ added: boolean; grant: Grant }>("/api/grants", { method: "POST", body: JSON.stringify(body) }),
+  consentGrant: (id: string) =>
+    request<{ grant: Grant }>(`/api/grants/${encodeURIComponent(id)}/consent`, { method: "POST" }),
+  revokeGrant: (id: string) =>
+    request<{ grant: Grant }>(`/api/grants/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
+  personalDocs: () => request<PersonalDocs>("/api/docs/personal"),
+  addPersonalLine: (name: "agents" | "memory", text: string) =>
+    request<PersonalDoc & { added: boolean }>(`/api/docs/personal/${name}/lines`,
+      { method: "POST", body: JSON.stringify({ text }) }),
+  // null = unchanged; `clear` unsets a personal value so the team's applies again
+  setCrewSettings: (body: Partial<Record<CrewSettingField, string | boolean | number | null>> & { clear?: CrewSettingField[] }) =>
+    request<CrewSettingsView>("/api/crew/settings", { method: "PUT", body: JSON.stringify(body) }),
   crew: () => request<{ stations: CrewStation[]; settings: CrewSettings; grants: string; now: string }>("/api/crew"),
   crewProjects: () => request<{ projects: CrewProject[]; finished?: (Pick<CrewProject, "id" | "name" | "tickets_done" | "tickets_total" | "progress"> & { finished: ProjectFinished | null })[]; now: string }>("/api/crew/projects"),
   standup: (since: string, until: string) =>
