@@ -23,6 +23,22 @@ uv venv && uv pip install -e ".[otlp-grpc]"
 python tests/test_cli.py
 ```
 
+## Benchmarks
+
+`scripts/bench_cell.py` times a cell's endpoints on a copy of its database: the orchestrator's
+calls and the factory page's polls, each alone and fired together. It copies the file, pauses
+every source and trigger and deletes credentials and settings on the copy, and runs the daemon
+under a macOS sandbox with no outbound network. macOS only; the original is never opened.
+
+```bash
+.venv/bin/python scripts/bench_cell.py --db path/to/cell.duckdb               # alone + together
+.venv/bin/python scripts/bench_cell.py --db path/to/cell.duckdb --slow-scan   # /health under an events read
+.venv/bin/python scripts/bench_cell.py --db path/to/cell.duckdb --serve       # keep a daemon up for curl
+```
+
+`--in-review N` (default 5) puts N open tickets in review on the copy so the review queue has
+work; `--project`, `--runs`, `--json` and `--keep` are in `--help`.
+
 ## Console
 
 ```bash

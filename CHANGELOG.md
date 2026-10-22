@@ -5,6 +5,11 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- `scripts/bench_cell.py` times a cell's endpoints (review queue, tickets, projects, the
+  factory page's polls) on a neutralized copy of its database, with the daemon sandboxed off the
+  network, for before and after numbers on speed work (TR-654).
+
 ### Fixed
 - A firing that arrives while its agent is already running for the same key now gets the
   `skipped` write-back with reason `in_flight`. Since 1.51.0 it was sent only when the duplicate
