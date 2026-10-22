@@ -85,6 +85,22 @@ try:
         ck("has the tickets row", any(line.startswith("tickets ") for line in r.stdout.splitlines()),
            r.stdout[-800:])
         ck("original unchanged", "unchanged" in r.stdout, r.stdout[-300:])
+
+    if subprocess.run(["docker", "info"], capture_output=True).returncode:
+        print("  skip docker network check: Docker is not running")
+    else:
+        print("docker")
+        net = "bench-cell-test-" + os.urandom(3).hex()
+        bench_cell.internal_network(net)
+        try:
+            probe = ("import socket\ntry:\n    socket.create_connection(('1.1.1.1', 443), timeout=3)\n"
+                     "    print('connected')\nexcept OSError:\n    print('blocked')")
+            out = subprocess.run(["docker", "run", "--rm", "--network", net, "python:3.12-slim",
+                                  "python", "-c", probe], capture_output=True, text=True,
+                                 timeout=300).stdout.strip()
+            ck("the daemon's network reaches nothing outside", out == "blocked", out)
+        finally:
+            subprocess.run(["docker", "network", "rm", net], capture_output=True)
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 

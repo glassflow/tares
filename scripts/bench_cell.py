@@ -15,6 +15,12 @@ Run:
   .venv/bin/python scripts/bench_cell.py --db ~/tares-perf/factory.duckdb
   .venv/bin/python scripts/bench_cell.py --db ~/tares-perf/factory.duckdb --slow-scan
   .venv/bin/python scripts/bench_cell.py --db ~/tares-perf/factory.duckdb --serve
+  .venv/bin/python scripts/bench_cell.py --db ~/tares-perf/factory.duckdb --docker   # cell-like speed
+
+--docker builds the production image from --src (default: the current directory) and runs the
+daemon in it with a CPU and memory limit, on a Docker network that reaches nothing outside, with
+the timing client in a second container. Numbers then sit near a live cell's instead of 10 to 30
+times below them.
 """
 import argparse
 import asyncio
@@ -352,6 +358,141 @@ def print_table(alone: dict, together: dict, scan: dict | None) -> None:
               f"event loop lag {scan['event_loop_lag']} s")
 
 
+def run_timings(base: str, uid: str | None, source: str | None, runs: int,
+                slow_scan: bool) -> tuple[dict, dict, dict | None]:
+    """Every timing against a daemon at `base`: alone, together and (slow_scan) /health under an
+    events read. Runs on the host, or in the client container in --docker mode."""
+    with httpx.Client(base_url=base, timeout=120) as client:
+        if uid:
+            tickets = client.get(f"/api/projects/{uid}/tickets").json().get("tickets") or []
+            rows = rows_for(uid, tickets[0]["id"] if tickets else None)
+        else:
+            rows = [("projects", ["/api/projects"], {}), ("review-queue", ["/api/review-queue"], {})]
+        alone = bench_alone(client, rows, runs)
+    together = bench_together(base, rows, runs) if uid else {}
+    scan = None
+    if slow_scan:
+        if source:
+            scan = bench_slow_scan(base, source)
+        else:
+            print("slow scan skipped: no events in this database")
+    return alone, together, scan
+
+
+def wait_health(base: str, timeout: float = 180) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if httpx.get(base + "/health", timeout=2).status_code == 200:
+                return True
+        except httpx.HTTPError:
+            pass
+        time.sleep(0.5)
+    return False
+
+
+# ── --docker: the daemon in a container with the cell's CPU and memory limits ──────────────────
+# The Mac runs the daemon 10 to 30 times faster than a cell does. In --docker mode the daemon runs
+# in the production image (deploy/docker/Dockerfile, built from --src) with --cpus and --memory
+# like a cell's pod, on an internal Docker network with no way out. The timing client runs in a
+# second container on that network, so it does not take the daemon's CPU.
+
+# A cell's pod may use 1 CPU, but a droplet core is much slower than an Apple one, so --cpus 1 on a
+# Mac times close to the bare Mac. 0.25 is calibrated, not a real limit: on 2026-10-22 it put the
+# factory copy at projects 394 ms, tickets 404 ms, the MCP list_tickets path 1.1 s, against 0.8,
+# 0.7 and 1.4 s live. Memory is factory's real limit, and it matters: at 1g the review queue's
+# events scans no longer fit and it took 7.6 s instead of 0.9 s.
+DOCKER_CPUS = "0.25"
+DOCKER_MEMORY = "2g"
+
+
+def docker(*args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(["docker", *args], check=check, text=True,
+                          stdout=subprocess.PIPE if capture else None,
+                          stderr=subprocess.PIPE if capture else None)
+
+
+def docker_build(src: Path) -> str:
+    """Build the production image from the worktree being timed; returns its tag."""
+    if not (src / "deploy/docker/Dockerfile").exists():
+        sys.exit(f"bench_cell: {src} has no deploy/docker/Dockerfile; pass --src <tares worktree>")
+    head = subprocess.run(["git", "-C", str(src), "rev-parse", "--short", "HEAD"],
+                          text=True, capture_output=True).stdout.strip() or "dev"
+    tag = f"tares-bench:{head}"
+    print(f"building {tag} from {src} (deploy/docker/Dockerfile)", flush=True)
+    r = subprocess.run(["docker", "build", "-q", "-f", "deploy/docker/Dockerfile", "-t", tag, "."],
+                       cwd=src, text=True, capture_output=True)
+    if r.returncode:
+        sys.exit(f"bench_cell: docker build failed\n{r.stderr[-3000:]}")
+    return tag
+
+
+def internal_network(name: str) -> None:
+    """A Docker network whose containers reach each other and nothing else, not even the host."""
+    docker("network", "create", "--internal", name, capture=True)
+
+
+class DockerRun:
+    """The daemon container and its internal network; stop() removes both."""
+
+    def __init__(self, tag: str, scratch: Path, cpus: str, memory: str):
+        self.id = os.urandom(4).hex()
+        self.net = f"bench-cell-{self.id}"
+        self.daemon = f"bench-cell-daemon-{self.id}"
+        self.proxy = None
+        self.tag = tag
+        internal_network(self.net)
+        docker("run", "-d", "--name", self.daemon, "--network", self.net,
+               "--cpus", cpus, "--memory", memory, "--memory-swap", memory,
+               "--user", "0", "-v", f"{scratch}:/bench",
+               "-e", "TARES_DB=/bench/cell.duckdb", "-e", "TARES_HOME=/bench/home",
+               "-e", "TARES_HOST=0.0.0.0", "-e", "TARES_PORT=8787",
+               "-e", "TARES_OTLP_GRPC_PORT=off", tag, "taresd", capture=True)
+        self.base = f"http://{self.daemon}:8787"
+
+    def publish(self, port: int) -> str:
+        """For --serve: a forwarder on the internal network and the default bridge publishes the
+        daemon on 127.0.0.1:<port>. The daemon itself stays without a way out."""
+        self.proxy = f"bench-cell-proxy-{self.id}"
+        # created on the default bridge: Docker publishes no port of a container that starts on
+        # an internal network; the internal one is attached after
+        docker("create", "--name", self.proxy, "-p", f"127.0.0.1:{port}:8787",
+               "alpine/socat:1.8.0.0", "TCP-LISTEN:8787,fork,reuseaddr",
+               f"TCP:{self.daemon}:8787", capture=True)
+        docker("network", "connect", self.net, self.proxy, capture=True)
+        docker("start", self.proxy, capture=True)
+        return f"http://127.0.0.1:{port}"
+
+    def client(self, script_dir: Path, scratch: Path, args: list[str]) -> int:
+        """Run this script's --client mode in a container on the same network; it writes
+        /out/result.json into the scratch dir."""
+        return docker("run", "--rm", "--network", self.net, "-v", f"{script_dir}:/tool:ro",
+                      "-v", f"{scratch}:/out", "--user", "0", "--entrypoint", "python",
+                      self.tag, "/tool/bench_cell.py", "--client-url", self.base, *args,
+                      check=False).returncode
+
+    def logs(self) -> str:
+        return docker("logs", "--tail", "60", self.daemon, check=False, capture=True).stderr or ""
+
+    def stop(self) -> None:
+        for c in (self.proxy, self.daemon):
+            if c:
+                docker("rm", "-f", c, check=False, capture=True)
+        docker("network", "rm", self.net, check=False, capture=True)
+
+
+def client_main(args) -> int:
+    """--client-url: only the timings, against a daemon this process did not start (the client
+    container of --docker mode). Writes /out/result.json."""
+    if not wait_health(args.client_url):
+        sys.exit(f"bench_cell: {args.client_url} did not answer /health within 180 s")
+    alone, together, scan = run_timings(args.client_url, args.client_project or None,
+                                        args.client_source or None, args.runs, args.slow_scan)
+    Path("/out/result.json").write_text(json.dumps(
+        {"alone": alone, "together": together, "slow_scan": scan}))
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--db", required=True, help="the cell database to copy (never opened)")
@@ -367,17 +508,36 @@ def main(argv=None) -> int:
                                                           "until Ctrl-C")
     ap.add_argument("--keep", action="store_true", help="keep the scratch directory")
     ap.add_argument("--json", action="store_true", help="also write bench.json here")
+    ap.add_argument("--docker", action="store_true",
+                    help="run the daemon in the production image with a cell's CPU and memory "
+                         "limits, on a Docker network with no way out")
+    ap.add_argument("--src", default=".", help="--docker: the tares worktree to build the image "
+                                               "from (default: the current directory)")
+    ap.add_argument("--cpus", default=DOCKER_CPUS, help=f"--docker: daemon CPU limit (default "
+                                                        f"{DOCKER_CPUS}, calibrated to the live cell)")
+    ap.add_argument("--memory", default=DOCKER_MEMORY, help=f"--docker: daemon memory limit "
+                                                             f"(default {DOCKER_MEMORY}, factory's)")
+    ap.add_argument("--client-url", help=argparse.SUPPRESS)
+    ap.add_argument("--client-project", help=argparse.SUPPRESS)
+    ap.add_argument("--client-source", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
+    if args.client_url:
+        return client_main(args)
 
     original = Path(args.db).expanduser()
     if not original.exists():
         sys.exit(f"bench_cell: {original} does not exist")
-    sandboxed([])   # fail before copying gigabytes when the sandbox is missing
+    if args.docker:
+        if docker("info", check=False, capture=True).returncode:
+            sys.exit("bench_cell: --docker needs a running Docker")
+        tag = docker_build(Path(args.src).resolve())
+    else:
+        sandboxed([])   # fail before copying gigabytes when the sandbox is missing
     digest = sha256(original)
     print(f"original sha256 {digest}  {original}")
 
     scratch = Path(tempfile.mkdtemp(prefix="bench-cell-"))
-    proc = None
+    proc = run = None
     try:
         copy = scratch / "cell.duckdb"
         shutil.copyfile(original, copy)
@@ -392,9 +552,18 @@ def main(argv=None) -> int:
         project = pick_project(str(copy), args.project)
         source = busiest_source(str(copy)) if args.slow_scan else None
         port = args.port or free_port()
-        proc, log = start_daemon(str(copy), port, scratch)
-        base = f"http://127.0.0.1:{port}"
-        print(f"daemon {base} (sandboxed, no network) on {copy}; log {log}", flush=True)
+        if args.docker:
+            (scratch / "home").mkdir(exist_ok=True)
+            run = DockerRun(tag, scratch, args.cpus, args.memory)
+            base = run.publish(port) if args.serve else run.base
+            if args.serve and not wait_health(base):
+                sys.exit(f"bench_cell: the daemon container did not start\n{run.logs()}")
+            print(f"daemon {base} in {tag}, --cpus {args.cpus} --memory {args.memory}, "
+                  f"internal network {run.net} (no way out)", flush=True)
+        else:
+            proc, log = start_daemon(str(copy), port, scratch)
+            base = f"http://127.0.0.1:{port}"
+            print(f"daemon {base} (sandboxed, no network) on {copy}; log {log}", flush=True)
         if project:
             print(f"project {project[1]} ({project[0]})")
         else:
@@ -406,39 +575,37 @@ def main(argv=None) -> int:
             signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt))
             print("serving; Ctrl-C or SIGTERM to stop", flush=True)
             try:
-                while proc.poll() is None:
+                while proc.poll() is None if proc else True:
                     time.sleep(1)
             except KeyboardInterrupt:
                 pass
             return 0
 
-        with httpx.Client(base_url=base, timeout=120) as client:
-            ticket_ref = None
-            rows = []
-            if project:
-                tickets = client.get(f"/api/projects/{project[0]}/tickets").json().get("tickets") or []
-                ticket_ref = tickets[0]["id"] if tickets else None
-                rows = rows_for(project[0], ticket_ref)
-            else:
-                rows = [("projects", ["/api/projects"], {}), ("review-queue", ["/api/review-queue"], {})]
-            alone = bench_alone(client, rows, args.runs)
-        together = bench_together(base, rows, args.runs) if project else {}
-        scan = None
-        if args.slow_scan:
-            if source:
-                scan = bench_slow_scan(base, source[0])
-            else:
-                print("slow scan skipped: no events in this database")
+        if args.docker:
+            client_args = ["--db", "-", "--runs", str(args.runs)]
+            client_args += ["--client-project", project[0]] if project else []
+            client_args += ["--client-source", source[0]] if source else []
+            client_args += ["--slow-scan"] if args.slow_scan else []
+            if run.client(Path(__file__).resolve().parent, scratch, client_args):
+                sys.exit(f"bench_cell: the client container failed; daemon log:\n{run.logs()}")
+            res = json.loads((scratch / "result.json").read_text())
+            alone, together, scan = res["alone"], res["together"], res["slow_scan"]
+        else:
+            alone, together, scan = run_timings(base, project and project[0],
+                                                source and source[0], args.runs, args.slow_scan)
         print_table(alone, together, scan)
         if args.json:
             Path("bench.json").write_text(json.dumps(
-                {"project": project, "runs": args.runs, "in_review": moved, "alone": alone, "together": together,
+                {"project": project, "runs": args.runs, "in_review": moved,
+                 "docker": {"cpus": args.cpus, "memory": args.memory} if args.docker else None, "alone": alone, "together": together,
                  "slow_scan": scan}, indent=2))
             print("wrote bench.json")
         return 0
     finally:
         if proc is not None:
             stop_daemon(proc)
+        if run is not None:
+            run.stop()
         if args.keep:
             print(f"kept {scratch}")
         else:
