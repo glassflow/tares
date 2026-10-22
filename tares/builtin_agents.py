@@ -481,6 +481,7 @@ class AgentRunner:
                 self.store.add_run_projects(going, projects)
             self.store.update_delivery(dispatch_id, subscription_id, True,
                                        "deduped (already running)")
+            self._write_back_in_flight(agent, trigger_name, key, dispatch_id, going)
             return None
         run_id = "run_" + uuid.uuid4().hex[:12]
         task = asyncio.create_task(self._guarded(agent, subscription_id, trigger_name, key,
@@ -733,10 +734,7 @@ class AgentRunner:
             if going:
                 self.store.add_run_projects(going, agent["projects"])
             self.store.update_delivery(dispatch_id, subscription_id, True, "deduped (already running)")
-            await self._write_back_skipped(
-                agent, trigger_name, self._callback_anchor(agent, trigger_name, key),
-                SKIPPED_IN_FLIGHT, "a run of this agent for the same key is already in flight",
-                dispatch_id, extra={"in_flight_run_id": going} if going else None)
+            self._write_back_in_flight(agent, trigger_name, key, dispatch_id, going)
             return
         self._inflight.add(marker)
         run_id = run_id or "run_" + uuid.uuid4().hex[:12]
@@ -1380,6 +1378,23 @@ class AgentRunner:
             if await self._slack(agent["name"], hook, trigger_name, key, finding, meta):
                 return [{"kind": "slack", "label": "Slack webhook"}]
         return []
+
+    def _write_back_in_flight(self, agent: dict, trigger_name: str, key: str,
+                              dispatch_id: str | None, going: str | None) -> None:
+        """Write back the firing deduped against a run already in flight for its key
+        (RIUS-1103), from either dedupe: `deliver`'s, which almost every duplicate meets, and
+        `_guarded`'s, for one that slips in between. The key is resolved now, while the firing is
+        the newest in the window (TR-294); the post runs in the background, so the dispatch is
+        never blocked."""
+        if not dispatch_id or not (agent.get("webhook_url") or "").strip():
+            return
+        anchor = self._callback_anchor(agent, trigger_name, key)
+        task = asyncio.create_task(self._write_back_skipped(
+            agent, trigger_name, anchor, SKIPPED_IN_FLIGHT,
+            "a run of this agent for the same key is already in flight",
+            dispatch_id, extra={"in_flight_run_id": going} if going else None))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def _write_back_skipped(self, agent: dict, trigger_name: str, anchor: tuple[str, dict],
                                   reason: str, message: str, dispatch_id: str | None,
