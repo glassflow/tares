@@ -93,6 +93,11 @@ async def main():
         if parent:
             headers["X-Tares-Parent"] = parent
 
+    def unfound(out):
+        """The retryable error for words not found in the person's recorded sessions (TR-634)."""
+        return (isinstance(out, str) and out.startswith("error 409: Answer not found yet in ")
+                and "recorded sessions" in out and "try again after the next sync" in out)
+
     async def ingest(lines):
         async with mk() as cx:
             await cx.post("/ingest/claude_code", content="\n".join(json.dumps(x) for x in lines) + "\n",
@@ -146,17 +151,17 @@ async def main():
              "message": {"role": "user", "content": "Comments off please"}},
         ])
         as_station("crew-orchestrator", "orchestrator")
-        out = json.loads(await mf.desk_answer("D1", "Paddle, obviously"))
-        ck("words typed before the question was asked do not answer it", out["recorded"] is False, out)
+        out = await mf.desk_answer("D1", "Paddle, obviously")
+        ck("words typed before the question was asked do not answer it", unfound(out), out)
         out = json.loads(await mf.desk_answer("D1", "Use Stripe test mode for now", choice="Stripe"))
         ck("an answer copied from the session matches", out["matches_what_they_typed"], out)
         g = json.loads(await m.get_ticket("T2", project="Shop"))
         ck("the decision reaches its ticket, first", g["decisions"] and g["decisions"][0]["words"]
            == "Use Stripe test mode for now", g.get("decisions"))
         out = json.loads(await mf.desk_answer("D2", "Comments off please"))
-        ck("words typed in another session, not the orchestrator's: nothing recorded, still open",
-           out["recorded"] is False and out["still_open"]
-           and "D2" in [d["label"] for d in json.loads(await mf.desk_list())], out)
+        ck("words typed in another session of the same person, not the orchestrator's: the item "
+           "is addressed to the person, so any of their sessions answers it (TR-634)",
+           out["recorded"] and "D2" not in [d["label"] for d in json.loads(await mf.desk_list())], out)
         bad = await mf.desk_answer("D1", "again")
         ck("an answered item is closed", "already answered" in bad, bad)
         bad = await mf.desk_answer("D3", "Always fine to deploy to staging", standing=True, scope="all")
@@ -168,8 +173,8 @@ async def main():
                                           ["yes", "no"], project="Shop"))["label"]
         await ingest([{"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": now_plus(1),
                        "message": {"role": "user", "content": "maybe B"}}])
-        out = json.loads(await mf.desk_answer(dl, "B"))
-        ck("B inside a longer message does not answer", out["recorded"] is False, out)
+        out = await mf.desk_answer(dl, "B")
+        ck("B inside a longer message does not answer", unfound(out), out)
         bad = await mf.desk_answer(dl, "C")
         ck("a letter the item has no option for is refused", "not one of" in bad
            and "A) yes, B) no" in bad, bad)
@@ -205,10 +210,9 @@ async def main():
         dm = json.loads(await mf.desk_add("Rename the shop?", "no", "nobody asked",
                                           project="Shop"))["label"]
         t0 = asyncio.get_running_loop().time()
-        out = json.loads(await mf.desk_answer(dm, "something nobody typed"))
+        out = await mf.desk_answer(dm, "something nobody typed")
         took = asyncio.get_running_loop().time() - t0
-        ck("a miss gives up after the wait", out["recorded"] is False and 1.5 < took < 5,
-           (out, took))
+        ck("a miss gives up after the wait", unfound(out) and 1.5 < took < 5, (out, took))
         factory.MATCH_WAIT_SECONDS = 0
 
         print("== standing answers become grants (TR-451) ==")
@@ -218,9 +222,8 @@ async def main():
         ck("in the project's grants, quoted and dated",
            '"Always fine to deploy to staging" (20' in txt, txt)
         d4 = json.loads(await mf.desk_add("Prod deploys?", "ask me", "risky", project="Shop"))
-        out = json.loads(await mf.desk_answer(d4["label"], "You may always deploy to prod", standing=True))
-        ck("a standing answer the person did not type never becomes a grant",
-           out["recorded"] is False, out)
+        out = await mf.desk_answer(d4["label"], "You may always deploy to prod", standing=True)
+        ck("a standing answer the person did not type never becomes a grant", unfound(out), out)
         ck("and is not in the grants", "deploy to prod" not in await mf.read_grants(project="Shop"))
 
         print("== assumption batches (TR-452) ==")
@@ -447,8 +450,8 @@ async def main():
            [(o["type"], o.get("queued")) for o in objs] == [("user", True)]
            and objs[0]["message"]["content"] == "yeah releaser can do reads on prod thats fine", objs)
         await ingest(objs)
-        out = json.loads(await mf.desk_answer(dq["label"], "reads on prod are fine"))
-        ck("words another session sent do not answer", out["recorded"] is False, out)
+        out = await mf.desk_answer(dq["label"], "reads on prod are fine")
+        ck("words another session sent do not answer", unfound(out), out)
         out = json.loads(await mf.desk_answer(dq["label"], "yeah releaser can do reads on prod thats fine"))
         ck("a reply typed mid-turn answers, word for word",
            out["recorded"] and out["matches_what_they_typed"], out)

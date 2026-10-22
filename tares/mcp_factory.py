@@ -264,17 +264,21 @@ def _desk_line(d: dict) -> dict:
     return {k: d.get(k) for k in ("label", "project_name", "question", "options", "recommendation",
                                   "why", "context", "blocks", "tickets", "blocking", "asked_by",
                                   "assumptions", "station", "command", "state", "created_at", "person",
-                                  "by_label")}
+                                  "by_label", "to_person")}
 
 
 @writable()
 async def desk_add(question: str, recommendation: str, why: str, options: list[str] | None = None,
                    context: str = "", blocks: str = "", tickets: list[str] | None = None,
                    blocking: bool = False, asked_by: str = "", assumptions: list[str] | None = None,
-                   project: str = "", station: str = "", command: str = "") -> str:
+                   project: str = "", station: str = "", command: str = "",
+                   to: str = "") -> str:
     """Put a question for the person on the desk (one desk for every project; numbered D1,
     D2...): the question, your recommendation and why, the options, two lines of context, what
-    it blocks (tickets, stations), whether it blocks, and who asked. For the batch of
+    it blocks (tickets, stations), whether it blocks, and who asked. `to` is the person it is
+    for (a person id or an email): it shows in their my_work, and only what they typed in their
+    own sessions answers it. Left out, it goes to the assignee of the first ticket in `tickets`
+    that has one, else the project's lead, else the person whose key this is. For the batch of
     assumptions to confirm once per milestone, pass their numbers in `assumptions`. Then ask the
     person in your session, one item at a time, blockers first. Only the orchestrator writes
     the desk.
@@ -287,6 +291,8 @@ async def desk_add(question: str, recommendation: str, why: str, options: list[s
             "options": options or [], "context": context, "blocks": blocks,
             "tickets": tickets or [], "blocking": blocking, "asked_by": asked_by,
             "assumptions": assumptions or [], "station": station, "command": command}
+    if to:
+        body["to"] = to
     if project or _default_project():
         body["project"] = project or _default_project()
     async with _cx(10) as cx:
@@ -297,11 +303,15 @@ async def desk_add(question: str, recommendation: str, why: str, options: list[s
 
 
 @mcp.tool()
-async def desk_list(state: str = "open", project: str = "") -> str:
+async def desk_list(state: str = "open", project: str = "", mine: bool = False) -> str:
     """The desk: open questions (or `answered`, `withdrawn`) across every project, blockers
-    first, then oldest. Ask the first one."""
+    first, then oldest. `mine` keeps the ones addressed to the person whose key this is. Ask the
+    first one."""
+    params = {"state": state, "project": project}
+    if mine:
+        params["mine"] = "true"
     async with _cx(10) as cx:
-        r = await cx.get(f"{TARESD}/api/desk", params={"state": state, "project": project})
+        r = await cx.get(f"{TARESD}/api/desk", params=params)
     if r.status_code >= 400:
         return _out(r)
     return json.dumps([_desk_line(d) for d in r.json().get("desk") or []], default=str)
@@ -310,17 +320,22 @@ async def desk_list(state: str = "open", project: str = "") -> str:
 @writable()
 async def desk_answer(item: str, words: str, choice: str = "", standing: bool = False,
                       scope: str = "project", kept: list[str] | None = None,
-                      overturned: dict | None = None) -> str:
+                      overturned: dict | None = None, grant_kind: str = "project") -> str:
     """Record the person's answer to a desk item (D3). `words` is their reply exactly as they
-    typed it in your session, never your summary: Tares checks it against what they typed and
-    says whether it matches. A reply of one letter ("B") is passed as is: Tares maps it to that
-    option. `choice` the option it picks. `standing` only when they said it
-    holds from now on ("always fine for staging"); with `scope` all it holds for every project.
-    A standing answer that matches becomes a grant. For an assumption batch: `kept` the
+    typed it, never your summary: Tares looks for it in the recorded sessions of the person the
+    item is for (any station, any session of theirs). If it is not there yet, you get a
+    retryable error: recordings can take a minute to arrive, so try again after the next sync.
+    Nothing is recorded until the words are found. A reply of one letter ("B") is passed as
+    is: Tares maps it to that option. `choice` the option it picks. `standing` only when they
+    said it holds from now on ("always fine for staging"); with `scope` all it holds for every project.
+    A standing answer that matches becomes a grant given by that person: `grant_kind` project
+    (the default; with `scope` all, a team grant, which needs an admin) or personal (for their
+    own machine). A project grant that reaches into repos other people own waits for their
+    consent (`grant` says what it waits for). For an assumption batch: `kept` the
     assumptions they keep, `overturned` {A3: their words}; open a follow-up ticket for each
     overturned one."""
     body = {"words": words, "choice": choice, "standing": standing, "scope": scope,
-            "kept": kept or [], "overturned": overturned or {}}
+            "grant_kind": grant_kind, "kept": kept or [], "overturned": overturned or {}}
     async with _cx(30) as cx:   # Tares looks for a reply it has not read yet for up to 10 s
         r = await cx.post(f"{TARESD}/api/desk/{item}/answer", json=body)
     if r.status_code >= 400:
@@ -331,13 +346,13 @@ async def desk_answer(item: str, words: str, choice: str = "", standing: bool = 
                 else "these words")
         return json.dumps({
             "item": d["desk_item"]["label"], "recorded": False, "still_open": True,
-            "note": f"Tares did not find {what} in what the person typed into your session "
-                    "after the question was asked. Nothing is recorded. Pass their reply exactly "
+            "note": f"Tares did not find {what} in what any session typed since the question "
+                    "was asked. Nothing is recorded. Pass their reply exactly "
                     "as they typed it (a whole message, line or sentence of theirs), or ask "
                     "them again."})
     out = {"item": d["desk_item"]["label"], "recorded": True,
            "matches_what_they_typed": True, "choice": d["decision"].get("choice"),
-           "became_a_grant": d["granted"],
+           "became_a_grant": d["granted"], "grant": d.get("grant"),
            "assumptions": d["assumptions"], "follow_up_tickets_needed": d["follow_up"]}
     return json.dumps(out, default=str)
 
@@ -618,8 +633,8 @@ async def my_work(crew: str = "") -> str:
     they can see: `ready` (their tickets that can start: nothing they wait on is open), `in_progress`
     (their tickets a station holds, with the holder and stage), `led_projects` (projects they
     lead, with the milestones whose tickets are all delivered: `milestones_ready_to_check`),
-    and `desk` and `spec_questions` (empty for now). `crew` names your crew; empty means
-    the crew this session belongs to. The orchestrator of a crew works from this, so it starts
+    `desk` (the open desk items addressed to them) and `spec_questions` (empty for now). `crew`
+    names your crew; empty means the crew this session belongs to. The orchestrator of a crew works from this, so it starts
     only its own person's tickets. Needs a key with a person."""
     async with _cx(15) as cx:
         r = await cx.get(f"{TARESD}/api/crew/my-work", params={"crew": crew or _caller("crew")})
