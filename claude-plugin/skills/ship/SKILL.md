@@ -5,7 +5,7 @@ description: Hand a project planned on Tares to the tares-factory crew, so its o
 
 # Ship: hand a project to the crew
 
-You are in the user's own session, not a crew station. The crew is one always-on team (`crew-orchestrator`, `crew-reviewer`, and `crew-releaser` when the user asked for one) that the user started with `tares factory crew up`. Handing a project over is one record on Tares; the orchestrator finds it there, reads the plan, starts builders inside the project's repos and replies with what it started. You start nothing yourself.
+You are in the user's own session, not a crew station. The crew is one always-on team (`<crew>-orchestrator`, `<crew>-reviewer`, and `<crew>-releaser` when the user asked for one; the crew is called `crew` unless the user named it, and `list_crew` shows the names) that the user started with `tares factory crew up`. Handing a project over is one record on Tares; the orchestrator finds it there, reads the plan, starts builders inside the project's repos and replies with what it started. You start nothing yourself.
 
 ## 1. What to hand over
 
@@ -19,8 +19,8 @@ Show the user these in a few lines and ask for a yes, recommending it.
 ## 2. Hand over
 
 1. Call `hand_over(project, repos=[{path, name}, ...], autonomy=...)` (autonomy only when stricter). The project page then shows "Handed to the crew" with the time and its repos, and the orchestrator finds it in `crew_projects`.
-2. Check the orchestrator is running: `ListAgents` lists `crew-orchestrator`, or `list_crew` shows it working or waiting.
-3. If it is, `SendMessage` to `crew-orchestrator` the `[TF:SHIP]` message `hand_over` returned, so it starts now rather than on its next tick. Tell the user the orchestrator will reply here with the builders it started, and that they answer the crew's questions in the orchestrator's session (`tares factory crew attach orchestrator`).
+2. Check the orchestrator is running: `ListAgents` lists the crew's orchestrator (`<crew>-orchestrator`), or `list_crew` shows it working or waiting.
+3. If it is, `SendMessage` to the orchestrator the `[TF:SHIP]` message `hand_over` returned, so it starts now rather than on its next tick. Tell the user the orchestrator will reply here with the builders it started, and that they answer the crew's questions in the orchestrator's session (`tares factory crew attach orchestrator`).
 4. If it is not running, tell the user to run, **in their own terminal**, `tares factory crew up`; the orchestrator picks the project up from Tares when it boots. Explain in one line why you can't run it for them: starting the stations hands them the user's permissions, so Claude Code requires the user to do it.
 
 ## Don'ts

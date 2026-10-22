@@ -322,8 +322,8 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
                   <span className="fo-row-end">
                     <small>{s.last_at ? <TimeAgo ts={s.last_at} /> : null}</small>
                     {s.state !== "ended" && (
-                      <CopyButton text={attachCmd(s.name)} label="Copy attach" className="fo-copy-sm"
-                                  title={`Copy ${attachCmd(s.name)}: it opens ${s.name}'s session in a terminal`} />
+                      <CopyButton text={attachCmd(s.name, s.role ?? undefined)} label="Copy attach" className="fo-copy-sm"
+                                  title={`Copy ${attachCmd(s.name, s.role ?? undefined)}: it opens ${s.name}'s session in a terminal`} />
                     )}
                   </span>
                 </li>

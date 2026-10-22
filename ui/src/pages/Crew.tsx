@@ -46,12 +46,37 @@ function sentence(s: string): string {
   return /[.!?]$/.test(c) ? c : `${c}.`;
 }
 
+const CREW_NAME_RE = /^[a-z0-9][a-z0-9-]{0,30}$/;
+
+/** The crew role of a station named `<crew>-<role>`, for any crew name; "" for a builder, a helper
+ *  or anything else. `role` is the role the station reports, when known. A name with -build- in it
+ *  is a builder's (a crew name cannot hold that word), so a project named crew-build-tools is not
+ *  mangled. The same rule as the daemon's crew_station_role. */
+export function crewStationRole(name: string, role?: string): string {
+  if (role && !CREW_ROLES.includes(role)) return "";
+  if (`-${name}-`.includes("-build-")) return "";
+  for (const r of role ? [role] : CREW_ROLES) {
+    const crew = name.endsWith(`-${r}`) ? name.slice(0, -r.length - 1) : "";
+    if (!CREW_NAME_RE.test(crew)) continue;
+    // crew-reviewer-releaser is a helper of crew-reviewer, not a releaser
+    if (!role && CREW_ROLES.some((x) => crew === x || crew.endsWith(`-${x}`))) return "";
+    return r;
+  }
+  return "";
+}
+
+/** A crew station (`<crew>-<role>`) or a helper of one (`<crew>-<role>-<suffix>`), by its name
+ *  alone: no -build- in it, and a role word set between hyphens. */
+export function crewSideByName(name: string): boolean {
+  if (`-${name}-`.includes("-build-")) return false;
+  return !!crewStationRole(name) || CREW_ROLES.some((r) => name.includes(`-${r}-`));
+}
+
 /** The command that opens a station's session in a terminal. The crew's own stations go by their
- *  role (crew-reviewer is reviewer); any other, a helper of one among them too, by its full name.
- *  The same rule as the daemon's attach_command. */
-export function attachCmd(name: string): string {
-  const role = name.startsWith("crew-") ? name.slice(5) : "";
-  return `tares factory crew attach ${CREW_ROLES.includes(role) ? role : name}`;
+ *  role (crew-reviewer and ana-mbp-reviewer are both reviewer); any other, a helper of one among
+ *  them too, by its full name. The same rule as the daemon's attach_command. */
+export function attachCmd(name: string, role?: string): string {
+  return `tares factory crew attach ${crewStationRole(name, role) || name}`;
 }
 
 // ── dismissed notices: per viewer, in this browser; a notice comes back when what it says changes ──
@@ -316,7 +341,7 @@ export function onCrewSide(name: string, all: CrewStation[]): boolean {
   let s = all.find((x) => x.name === name);
   for (let i = 0; s && s.role === "helper" && s.parent && i < 10; i++) {
     const up = all.find((x) => x.name === s!.parent);
-    if (!up) return CREW_ROLES.some((r) => s!.parent === `crew-${r}` || s!.parent!.startsWith(`crew-${r}-`));
+    if (!up) return crewSideByName(s.parent);
     s = up;
   }
   return !!s && CREW_ROLES.includes(s.role ?? "");
@@ -719,7 +744,7 @@ function PermissionRequest({ d, onAllowed }: { d: DeskItem; onAllowed: (a: DeskA
   const station = d.station ?? "the station";
   // A builder's grant may hold in its project only. A crew station (and its helpers) serves every
   // project and starts with only the grants for every project, as does an item with no project.
-  const either = !!d.project && !station.startsWith("crew-");
+  const either = !!d.project && !crewSideByName(station);
   const [scope, setScope] = useState<"project" | "all">(either ? "project" : "all");
   const [words, setWords] = useState(() => grantSentence(d, scope));
   const [edited, setEdited] = useState(false);

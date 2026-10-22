@@ -9,9 +9,11 @@ You are one station in the **tares-factory crew**: one team of Claude Code sessi
 
 | Variable | Meaning |
 |---|---|
-| `FACTORY_STATION` | your name, e.g. `crew-reviewer` or `shop-build-m1-api`. Peers address you by it |
+| `FACTORY_STATION` | your name, e.g. `<crew>-reviewer` or `shop-build-m1-api`. Peers address you by it |
+| `FACTORY_CREW` | your crew's name (`crew` unless the person named it). Every crew station is called `<crew>-<role>`; a builder is `<project>-build-<slug>`, or `<crew>-<project>-build-<slug>` in a named crew |
+| `FACTORY_ORCHESTRATOR` | the orchestrator's name, `<crew>-orchestrator`: the target of every message to it |
 | `FACTORY_ROLE` | `orchestrator`, `reviewer`, `releaser`, `builder` or `helper` |
-| `FACTORY_PARENT` | the station that started you (builders: `crew-orchestrator`; helpers: their station). Empty for crew stations |
+| `FACTORY_PARENT` | the station that started you (builders: `$FACTORY_ORCHESTRATOR`; helpers: their station). Empty for crew stations |
 | `TARES_PROJECT` | builders and their helpers: the project you work on. Crew stations serve all projects and pass `project=` on every Tares call |
 | `TARES_FACTORY_URL` | the Tares the crew uses; your Tares tools reach the same one |
 | `FACTORY_HOME` | the crew home (default `~/factory`): reports, `stations.json`, events |
@@ -58,7 +60,7 @@ These come from a month of running this setup by hand. Each one exists because i
 
 ## Messages
 
-Send with `SendMessage` to a station's exact name (`crew-orchestrator`, `crew-reviewer`, `crew-releaser`, `<project>-build-<slug>`). If a name doesn't resolve, run `factory roster`; never guess and never use socket addresses or auto-generated titles.
+Send with `SendMessage` to a station's exact name (`$FACTORY_ORCHESTRATOR`, `$FACTORY_CREW-reviewer`, `$FACTORY_CREW-releaser`, a builder's name from `factory roster`). The orchestrator's name is in FACTORY_ORCHESTRATOR (default crew-orchestrator). If a name doesn't resolve, run `factory roster`; never guess and never use socket addresses or auto-generated titles.
 
 The first line is what the person sees in the preview, so it carries the type, the gist and the ticket ref (Tares shows a message on the ticket it names):
 

@@ -390,6 +390,15 @@ async def main():
         r = await allow(crewp["label"], {"words": "crew-reviewer may comment", "scope": "project"})
         ck("a crew station's grant is for every project, even asked on one (it starts with only "
            "those)", r.status_code == 400 and "never reaches it" in r.text, r.text)
+        as_station("crew-orchestrator", "orchestrator")
+        namedp = json.loads(await mf.desk_add(
+            "ana-mbp-reviewer was refused a command. Allow it?", "ana-mbp-reviewer may comment on PR 12",
+            "it reviews Shop's pull request", project="Shop", station="ana-mbp-reviewer",
+            command="gh pr comment 12 --body ok"))
+        as_station()
+        r = await allow(namedp["label"], {"words": "ana-mbp-reviewer may comment", "scope": "project"})
+        ck("a named crew's station is a crew station too: its grant is for every project",
+           r.status_code == 400 and "never reaches it" in r.text, r.text)
         r = await allow(pq["label"], {"words": words, "scope": "project"})
         out = r.json()
         ck("the console allows it for the station, with the grant line", r.status_code == 200

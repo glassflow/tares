@@ -20,7 +20,8 @@ fi
 
 skill=$FACTORY_ROLE
 if [ "$skill" = helper ]; then
-  case "${FACTORY_PARENT:-}" in crew-*) skill=${FACTORY_PARENT#crew-} ;; *-build-*) skill=builder ;; esac
+  crew=${FACTORY_CREW:-crew}
+  case "${FACTORY_PARENT:-}" in "$crew"-orchestrator*|"$crew"-reviewer*|"$crew"-releaser*) skill=${FACTORY_PARENT#"$crew"-} ;; *-build-*) skill=builder ;; esac
 fi
 
 context="You are the ${FACTORY_ROLE} station \`${FACTORY_STATION:-?}\` of the tares-factory crew."

@@ -83,6 +83,8 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
 Tares is the workspace `tares login` signed in to, else $TARESD_URL (default http://127.0.0.1:8787).
 The crew's key is the saved login's; for a Tares of your own with auth on, TARES_AUTH_TOKEN.
 The crew home is ~/factory (FACTORY_CREW_HOME overrides).
+The crew is named `crew` unless you name it (FACTORY_CREW_NAME, or crew_name in crew.json): its stations are
+<crew>-orchestrator, <crew>-reviewer and <crew>-releaser, so two crews can be told apart.
 EOF
 }
 
@@ -123,6 +125,26 @@ TOKEN_FILE="$CREW_HOME/.tares-token"
 export -n TARES_AUTH_TOKEN TARES_FACTORY_SOURCE TARES_FACTORY_KEY_SOURCE 2>/dev/null || true
 
 ccfg() { jq -r "$1" "$CREW_CFG" 2>/dev/null || true; }
+
+# The crew's name (TR-541): every station name and message target starts from it, so two crews on one
+# machine, or one person's crews on two machines, can be told apart. FACTORY_CREW_NAME, else crew.json's
+# crew_name, else "crew". "build" is reserved: a name with -build- in it marks a builder.
+crew_name_ok() { # name → 0 when it can name a crew
+  [[ "$1" =~ ^[a-z0-9][a-z0-9-]{0,30}$ ]] && [[ "-$1-" != *-build-* ]]
+}
+CREW_NAME_RULE="1 to 31 characters: a-z, 0-9 and hyphens, starting with a letter or digit, and not containing the word build between hyphens"
+CREW_NAME_CACHE=""
+crew_name() {
+  if [ -z "$CREW_NAME_CACHE" ]; then
+    local n=${FACTORY_CREW_NAME:-} src=FACTORY_CREW_NAME
+    if [ -z "$n" ]; then n=$(ccfg '.crew_name // empty'); src="crew_name in $CREW_CFG"; fi
+    [ -n "$n" ] || { n=crew; src=default; }
+    crew_name_ok "$n" || die "the crew name \"$n\" (from $src) is not valid: it is $CREW_NAME_RULE"
+    CREW_NAME_CACHE=$n
+  fi
+  echo "$CREW_NAME_CACHE"
+}
+crew_orchestrator() { echo "$(crew_name)-orchestrator"; }
 slugify() { tr '[:upper:]' '[:lower:]' <<<"$1" | tr -c 'a-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//'; echo; }
 event() { [ -d "$CREW_HOME" ] && jq -cn --arg e "$1" --arg s "${2:-}" --arg d "${3:-}" \
   '{at: (now | todate), station: $s, event: $e, detail: $d}' >> "$EVENTS" 2>/dev/null || true; }
@@ -439,7 +461,13 @@ grant_rules() { # project-label human
 # ---------- stations ----------
 
 station_name() { # role-or-station → full station name
-  case "$1" in orchestrator|reviewer|releaser) echo "crew-$1" ;; *) echo "$1" ;; esac
+  case "$1" in orchestrator|reviewer|releaser) echo "$(crew_name)-$1" ;; *) echo "$1" ;; esac
+}
+# A builder is <project>-build-<slug> in the default crew; any other crew puts its name in front, so two
+# crews' builders for one project never share a name.
+builder_name() { # project-slug slug
+  local c; c=$(crew_name)
+  if [ "$c" = crew ]; then echo "$1-build-$2"; else echo "$c-$1-build-$2"; fi
 }
 stations_get() { [ -f "$STATIONS" ] && jq -r --arg s "$1" ".[\$s]$2 // empty" "$STATIONS" || true; }
 stations_put() { # station, json object to merge
@@ -529,7 +557,7 @@ release_locks() {
 # so status, roster and the duplicate check see them.
 adopt_unrecorded() {
   [ -f "$CREW_CFG" ] || return 0
-  local id name session cwd role project repo live
+  local id name session cwd role project repo live c; c=$(crew_name)
   live=$(active_json) || return 0
   while IFS=$'\t' read -r id name session cwd; do
     [ -n "$id" ] || continue
@@ -537,9 +565,15 @@ adopt_unrecorded() {
     jq -e --arg id "$(stations_get "$name" '.id')" "$GONE"' any(.[]; .id == $id and (gone | not))' <<<"$live" >/dev/null && continue
     project=""; repo=""
     case "$name" in
-      crew-orchestrator|crew-reviewer|crew-releaser) role=${name#crew-}; [ "$cwd" = "$CREW_HOME" ] || continue ;;
+      "$c-orchestrator"|"$c-reviewer"|"$c-releaser") role=${name#"$c"-}; [ "$cwd" = "$CREW_HOME" ] || continue ;;
       *-build-*) role=builder; repo=$cwd
-        project=$(project_repo_rows | C="$cwd" awk -F'\t' '$2 == ENVIRON["C"] { print $1; exit }')
+        # Ours only when the name is this crew's builder name for a project of that repo: <project>-build- for
+        # the default crew, <crew>-<project>-build- for a named one. Another crew's builder (a-shop-build-m1)
+        # is not the default crew's, whatever prefix it shares.
+        project=""
+        while IFS= read -r p; do
+          case "$name" in "$(builder_name "$(slugify "$p")" "")"*) project=$p; break ;; esac
+        done < <(project_repo_rows | C="$cwd" awk -F'\t' '$2 == ENVIRON["C"] { print $1 }')
         [ -n "$project" ] || continue ;;
       *) continue ;;
     esac
@@ -549,12 +583,12 @@ adopt_unrecorded() {
     effort=$(jq -r 'index("--effort") as $i | if $i then .[$i+1] else "" end' <<<"$flags")
     stations_put "$name" "$(jq -n --arg role "$role" --arg id "$id" --arg session "$session" --arg model "$model" \
       --arg effort "$effort" --arg cwd "$cwd" --arg settings "$CREW_HOME/stations/$name.settings.json" \
-      --arg project "$project" --arg repo "$repo" \
-      '{role: $role, parent: (if $role == "builder" then "crew-orchestrator" else "" end), project: $project, repo: $repo,
+      --arg project "$project" --arg repo "$repo" --arg orch "$(crew_orchestrator)" \
+      '{role: $role, parent: (if $role == "builder" then $orch else "" end), project: $project, repo: $repo,
         id: $id, sessionId: $session,
         model: $model, effort: $effort, cwd: $cwd, settings: $settings, status: "active", startedAt: (now | todate), adopted: true}')"
-  done < <(jq -r "$GONE"'
-    .[] | select((.name // "") | test("^crew-|-build-"))
+  done < <(jq -r --arg c "$c" "$GONE"'
+    .[] | select((.name // "") | test("^" + $c + "-|-build-"))
     | select(gone | not)
     | [.id, .name, .sessionId, .cwd] | @tsv' <<<"$live")
 }
@@ -575,7 +609,12 @@ level_text() {
 level_rank() { case "$1" in L3-review) echo 3 ;; L4-ship) echo 4 ;; *) return 1 ;; esac; }
 
 parent_role() { # parent station → the role a helper works under
-  case "$1" in crew-*) echo "${1#crew-}" ;; *-build-*) echo builder ;; *) echo "" ;; esac
+  local c; c=$(crew_name)
+  case "$1" in
+    "$c"-orchestrator*|"$c"-reviewer*|"$c"-releaser*) echo "${1#"$c"-}" ;;
+    *-build-*) echo builder ;;
+    *) echo "" ;;
+  esac
 }
 
 # Per-station settings, passed with --settings. Plugins can't ship permissions or auto-mode rules,
@@ -642,11 +681,13 @@ write_settings() { # station role parent project repo
     --arg role "$role" --arg station "$station" --arg parent "$parent" --arg project "$project" \
     --arg pslug "$( [ -n "$project" ] && slugify "$project" || true)" --arg home "$CREW_HOME" --arg repo "$repo" \
     --arg wt "$wt" --arg tares_url "$TARES" --arg tok "$tok_file" --arg mcp_url "$(mcp_url)" \
+    --arg crew "$(crew_name)" --arg orch "$(crew_orchestrator)" \
     --arg env_line "$env_line" --argjson allow "$allow_json" --argjson deny "$deny_json" --argjson perms "$perms_json" \
     --arg status_line "$(printf 'python3 %q' "$KIT_PLUGIN/scripts/statusline.py")" --arg compact "$(compact_window 2>/dev/null)" \
     '{
       env: ({
         FACTORY_STATION: $station, FACTORY_ROLE: $role, FACTORY_PARENT: $parent,
+        FACTORY_CREW: $crew, FACTORY_ORCHESTRATOR: $orch,
         FACTORY_HOME: $home, FACTORY_CREW_HOME: $home, FACTORY_WORKTREES: $wt,
         TARES_FACTORY_URL: $tares_url, TARESD_URL: $tares_url, TARES_FACTORY_MCP_URL: $mcp_url,
         FACTORY_AUTOCOMPACT: $compact,
@@ -790,7 +831,7 @@ launch() { # station role parent project repo cwd model effort prompt [resume-se
 }
 
 boot_prompt() { # role [task]
-  local p="Boot as the $1 station: load the skills factory-protocol and station-$1, follow their Boot sections, and send crew-orchestrator READY when you are set."
+  local p="Boot as the $1 station: load the skills factory-protocol and station-$1, follow their Boot sections, and send $(crew_orchestrator) READY when you are set."
   [ "$1" = orchestrator ] && p="Boot as the orchestrator station: load the skills factory-protocol and station-orchestrator, then follow the Boot section. The other stations will send you READY."
   [ -n "${2:-}" ] && p="$p
 
@@ -862,6 +903,53 @@ stop_watch() {
   say "stopped the watch"
 }
 
+# Keeps the crew's name in crew.json, so every station and the watch (which run without
+# FACTORY_CREW_NAME) resolve the same one.
+store_crew_name() { # name
+  local tmp; tmp=$(mktemp)
+  jq --arg n "$1" '.crew_name = $n' "$CREW_CFG" > "$tmp" && mv "$tmp" "$CREW_CFG" || { rm -f "$tmp"; die "could not save the crew name in $CREW_CFG"; }
+  CREW_NAME_CACHE=""
+}
+people_count() { # people on this Tares other than the built-in local one; 0 when Tares can't say
+  tares_http GET /api/people 2>/dev/null | jq '[.people[]? | select(.id != "local")] | length' 2>/dev/null || echo 0
+}
+suggest_crew_name() { # <first name>-<short hostname>, lowercased
+  local first host s
+  first=$(ccfg '.human.name // ""'); first=$(slugify "${first%% *}")
+  host=$(slugify "$(hostname -s 2>/dev/null || hostname 2>/dev/null || true)")
+  s="$first${first:+${host:+-}}$host"
+  s=$(sed 's/build/bld/g' <<<"${s:0:31}" | sed 's/-$//')
+  crew_name_ok "$s" || s=crew
+  echo "$s"
+}
+# A crew shared with other people (TR-541) is named once at its first start, so its sessions are told
+# apart from the same person's crew on another machine. One person keeps "crew".
+setup_crew_name() {
+  local stored; stored=$(ccfg '.crew_name // empty')
+  if [ -n "$stored" ]; then
+    [ -z "${FACTORY_CREW_NAME:-}" ] || [ "$FACTORY_CREW_NAME" = "$stored" ] || \
+      die "this crew is named $stored (crew_name in $CREW_CFG), but FACTORY_CREW_NAME says $FACTORY_CREW_NAME. Its stations carry the stored name: change crew_name in $CREW_CFG after \`$ME crew down\`, or unset FACTORY_CREW_NAME."
+    return 0
+  fi
+  # A crew already running with no stored name is the default crew: renaming it would start a second
+  # orchestrator and reviewer beside the running ones, so it keeps "crew" until it is taken down.
+  if [ -f "$STATIONS" ] && jq -e 'any(.[]; .status == "active")' "$STATIONS" >/dev/null 2>&1; then
+    [ -z "${FACTORY_CREW_NAME:-}" ] || [ "$FACTORY_CREW_NAME" = crew ] || \
+      die "this crew is already running under the name crew, but FACTORY_CREW_NAME says $FACTORY_CREW_NAME. Take it down first (\`$ME crew down\`) to give it a new name."
+    return 0
+  fi
+  if [ -n "${FACTORY_CREW_NAME:-}" ]; then store_crew_name "$(crew_name)"; return 0; fi
+  [ "$(people_count)" -gt 1 ] || return 0
+  local sugg n; sugg=$(suggest_crew_name)
+  while :; do
+    n=$(ask "More than one person works on this Tares. What should this crew be called, so it is told apart from the crews of the others (and from yours on another machine)?" \
+      "$sugg" "used in the station names: $sugg-orchestrator, $sugg-reviewer" '^[a-z0-9][a-z0-9-]{0,30}$')
+    crew_name_ok "$n" && break
+    say "\"$n\" is not a valid crew name: it is $CREW_NAME_RULE"
+  done
+  store_crew_name "$n"
+}
+
 cmd_crew_up() {
   local roles="" watch=1
   while [ $# -gt 0 ]; do
@@ -873,6 +961,7 @@ cmd_crew_up() {
   ensure_crew_home
   ensure_home_trusted
   keep_token
+  setup_crew_name
   ensure_settings
   prime
   [ -n "${roles// /}" ] || roles=$(crew_roles)
@@ -924,14 +1013,15 @@ cmd_spawn() {
       project=$(jq -r .name <<<"$row"); local slug; slug=$(slugify "$2"); task=$4
       [ -n "$slug" ] && [ -n "$(slugify "$project")" ] || die "the project name and the slug need letters or digits a station name can use (a-z, 0-9)"
       [ -n "$autonomy" ] || autonomy=$(jq -r '.autonomy // empty' <<<"$row")
-      case "$(slugify "$project")" in crew|crew-*) die "a project name can't start with \"crew\": station names starting crew- belong to the crew itself" ;; esac
+      local cn; cn=$(crew_name)
+      case "$(slugify "$project")" in "$cn"|"$cn"-*) die "a project name can't start with \"$cn\": station names starting $cn- belong to the crew itself" ;; esac
       repo=$(git -C "$3" rev-parse --show-toplevel 2>/dev/null) || die "$3 is not a git repository"
       local rp ok="" real; real=$(cd -P "$repo" && pwd)
       while IFS= read -r rp; do
         [ -n "$rp" ] && [ -d "$rp" ] && [ "$(cd -P "$rp" && pwd)" = "$real" ] && ok=1
       done < <(jq -r '.repos[] | .path // empty' <<<"$row")
       [ -n "$ok" ] || die "$repo is not one of $project's repos on Tares ($(jq -r '[.repos[] | .path // .name] | join(", ")' <<<"$row")); a repo joins the project at its hand-over"
-      role=builder; parent=crew-orchestrator; station="$(slugify "$project")-build-$slug"; cwd=$repo
+      role=builder; parent=$(crew_orchestrator); station=$(builder_name "$(slugify "$project")" "$slug"); cwd=$repo
       model=$(ccfg '.stations.builder.model'); effort=$(ccfg '.stations.builder.effort')
       local active max; max=$(setting builders_max)
       active=$(jq -r '[to_entries[] | select(.value.role == "builder" and .value.status == "active")] | length' "$STATIONS" 2>/dev/null || echo 0)
@@ -940,7 +1030,7 @@ cmd_spawn() {
       local exclude; exclude="$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)/info/exclude"
       grep -qx '.factory/' "$exclude" 2>/dev/null || echo '.factory/' >> "$exclude" ;;
     helper|releaser-helper)
-      if [ "$kind" = releaser-helper ]; then parent=crew-releaser; else parent=$(station_name "${1:-}"); shift || true; fi
+      if [ "$kind" = releaser-helper ]; then parent=$(station_name releaser); else parent=$(station_name "${1:-}"); shift || true; fi
       [ $# -ge 2 ] || die "usage: factory spawn helper <parent-station> <slug> \"<task>\""
       [ -n "$(stations_get "$parent" '.role')" ] || die "$parent is not a recorded station"
       task=$2; role=helper; station="$parent-$(slugify "$1")"
@@ -1270,7 +1360,7 @@ cmd_status() {
     fi
     printf '%-30s %-12s %-14s %-8s %-8s %s\n' "$s" "$role" "$model/$effort" "${st:-gone}" "$tempo" "${detail:0:70}"
   done
-  active_json | jq -r "$GONE"' map(select(((.name // "") | test("^crew-|-build-")) and (gone | not))) | group_by(.name)[] | select(length > 1)
+  active_json | jq -r --arg c "$(crew_name)" "$GONE"' map(select(((.name // "") | test("^" + $c + "-|-build-")) and (gone | not))) | group_by(.name)[] | select(length > 1)
     | "TWO SESSIONS named \(.[0].name): \(map(.id) | join(", ")); stop the one stations.json does not list (factory roster)"' || true
   [ $old = 0 ] || echo "plugin: $old station(s) run an older version; $ME crew watch moves each onto this one when it's idle"
   halted && echo "HALTED: $(jq -r .reason "$HALT_FILE" 2>/dev/null)"
@@ -1425,10 +1515,17 @@ nap() { # seconds: wait them out, serving readings meanwhile
 }
 
 cmd_roster() { # compact, for stations
+  echo "crew: $(crew_name) (orchestrator: $(crew_orchestrator))"
   require_crew
   adopt_unrecorded
   [ -f "$STATIONS" ] || { echo "no stations"; return; }
   local agents; agents=$(active_json) || die "$UNREAD"
+  # Messages go to a station by its session title. An orchestrator that runs under another title
+  # (the crew was renamed since it started) gets none of them.
+  local title; title=$(jq -r --argjson a "$agents" "$GONE"' to_entries[] | select(.value.status == "active" and .value.role == "orchestrator")
+    | .value.id as $id | $a[] | select(.id == $id and (gone | not)) | .name' "$STATIONS" | head -1)
+  [ -z "$title" ] || [ "$title" = "$(crew_orchestrator)" ] || \
+    say "Orchestrator session title is $title, expected $(crew_orchestrator): messages to it will not arrive"
   jq -r --argjson a "$agents" "$GONE $TURN"' to_entries[] | select(.value.status == "active") |
     "\(.key)\t\(.value.role)\t\(.value.project // "")\t\((.value.id) as $id | ([$a[] | select(.id == $id and (gone | not)) | turn][0] // "gone"))"' "$STATIONS"
 }
@@ -1440,7 +1537,7 @@ cmd_settings() { # station [role]: write and print the settings a station launch
   require_crew
   local station; station=$(station_name "${1:?usage: $ME settings <station> [role]}")
   local role=${2:-$(stations_get "$station" '.role')}
-  [ -n "$role" ] || role=${station#crew-}
+  [ -n "$role" ] || role=${station#"$(crew_name)"-}
   cat "$(write_settings "$station" "$role" "$(stations_get "$station" '.parent')" "$(stations_get "$station" '.project')" "$(stations_get "$station" '.repo')")"
 }
 
@@ -1822,6 +1919,8 @@ local_only() {
   esac
   return 1
 }
+# A crew name that is not valid stops here, not halfway through a command.
+case "$cmd" in _parse-bg-id|_mcp-url|help) ;; *) crew_name >/dev/null ;; esac
 if local_only "$cmd" "${1:-}"; then merge_crew_defaults; tares_on || true; keep_token
 else prime; fi
 case "$cmd" in

@@ -562,7 +562,7 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
     (owner/name), the repo that holds the plan first. A later call adds repos, never replaces
     them. `autonomy` only when the person wants this project stricter than the crew
     (L3-review: every merge waits for their yes). `repo` (one path) is the older form. Then
-    send `crew-orchestrator` a `[TF:SHIP]` message with SendMessage so it starts now rather than
+    send the orchestrator (list_crew shows its name) a `[TF:SHIP]` message with SendMessage so it starts now rather than
     on its tick. If no crew is running (list_crew shows no orchestrator working or waiting),
     tell the person to run `tares factory crew up` first."""
     body: dict = {"repos": repos or [], "by_default": "claude code session"}

@@ -82,6 +82,8 @@ class ClaudeCodeConnector(Connector):
         {"name": "station", "help": "the tares-factory station the session plays (crew-reviewer, "
                                     "<project>-build-<slug>); the plugin stamps it from "
                                     "FACTORY_STATION"},
+        {"name": "crew", "help": "the tares-factory crew the station belongs to (its name, "
+                                 "`crew` by default); the plugin stamps it from FACTORY_CREW"},
         {"name": "subagent", "help": "the subagent a line belongs to (its id), for lines from a "
                                      "subagent's own transcript; the session key stays the "
                                      "parent's"},
@@ -241,6 +243,7 @@ class ClaudeCodeConnector(Connector):
                 "flow": str(o["flow"]) if o.get("flow") else None,
                 "tares_project": str(o["tares_project"]) if o.get("tares_project") else None,
                 "station": str(o["factory_station"]) if o.get("factory_station") else None,
+                "crew": str(o["factory_crew"]) if o.get("factory_crew") else None,
                 "subagent": str(o.get("subagent") or o.get("agentId") or "") or None
                 if o.get("isSidechain") or o.get("subagent") else None}
 
