@@ -257,7 +257,7 @@ async def sync_project(store, uid: str) -> list[Envelope]:
             store.create_ticket(uid, "github", iss.get("title") or ident, status, pos,
                                 external_id=iss["id"], identifier=ident, url=iss.get("url"),
                                 milestone=ms, assignee_person_id=who, assignee_raw=raw)
-            ticket_assignee.join(store, project, who, "system")
+            ticket_assignee.sync_join(store, project, who, status)
             out.append(_env(project, link, iss, "created",
                             f"{ident} added in GitHub: {iss.get('title')}", {"status": status}))
             continue
@@ -282,7 +282,7 @@ async def sync_project(store, uid: str) -> list[Envelope]:
             changes["milestone"] = ms
         if (cur["assignee_person_id"], cur["assignee_raw"]) != (who, raw):
             changes.update(assignee_person_id=who, assignee_raw=raw)
-            ticket_assignee.join(store, project, who, "system")
+            ticket_assignee.sync_join(store, project, who, status)
         if changes:
             store.update_ticket(cur["id"], **changes)
     # "blocked by" becomes dependencies, once every issue has its ticket

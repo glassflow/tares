@@ -39,6 +39,7 @@ import httpx
 
 from tares import github_tickets as gt
 from tares import linear
+from tares import ticket_assignee
 import tares.mcp_server as m
 
 logging.getLogger("httpx").setLevel(logging.WARNING)   # the MCP import turns request logs on
@@ -57,7 +58,7 @@ def ck(label, cond, detail=""):
 LIN_PROJECT = {"id": "lp-uuid-1", "name": "Invoicing",
                "url": "https://linear.app/acme/project/invoicing-ab12cd34ef56",
                "slugId": "ab12cd34ef56"}
-LIN = {"assignees": {}}     # issue id -> the assignee object Linear sends
+LIN = {"assignees": {}, "done": set()}     # issue id -> the assignee object Linear sends; issues Linear closed
 
 
 def lin_issue(n):
@@ -77,6 +78,8 @@ def lin_handler(request: httpx.Request) -> httpx.Response:
             node = lin_issue(n)
             if "assignee { email name }" in q and node["id"] in LIN["assignees"]:
                 node["assignee"] = LIN["assignees"][node["id"]]
+            if node["id"] in LIN["done"]:
+                node["state"] = {"name": "Done", "type": "completed"}
             nodes.append(node)
         return httpx.Response(200, json={"data": {"project": {"issues": {
             "nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}}}})
@@ -92,7 +95,7 @@ def lin_handler(request: httpx.Request) -> httpx.Response:
 linear._transport = httpx.MockTransport(lin_handler)
 
 # ── the fake GitHub: it sends `assignees` only when the query asks for it ─────
-GH = {"assignees": {}}      # issue number -> [logins]
+GH = {"assignees": {}, "closed": set()}      # issue number -> [logins]; issues closed
 LABEL = "tares:Gh project"
 
 
@@ -104,7 +107,8 @@ def gh_handler(request: httpx.Request) -> httpx.Response:
     nodes = []
     for n in range(1, 5):
         node = {"id": f"I_{n}", "number": n, "title": f"Gh issue {n}",
-                "url": f"https://github.com/acme/app/issues/{n}", "state": "OPEN",
+                "url": f"https://github.com/acme/app/issues/{n}",
+                "state": "CLOSED" if n in GH["closed"] else "OPEN",
                 "stateReason": None, "labels": {"nodes": [{"name": LABEL}]}, "milestone": None,
                 "blockedBy": {"nodes": []}}
         if "assignees(first: 1)" in q:
@@ -178,7 +182,7 @@ async def main():
         uid = (await cx.post("/api/projects", json={"template": "custom", "name": "Invoices",
                                                     "objects": []})).json()["id"]
         catch = Catch()
-        logging.getLogger("tares.linear").addHandler(catch)
+        logging.getLogger("tares.ticket_assignee").addHandler(catch)
         r = await cx.post(f"/api/projects/{uid}/linear", json={"project": LIN_PROJECT["url"]})
         ck("link answers 200", r.status_code == 200, r.text[:300])
         tk = await tickets(uid)
@@ -196,16 +200,15 @@ async def main():
            and tk[5]["assignee_raw"] is None, tk[5])
         ck("the link's sync warned about the null email", any(
             "without an email" in x for x in catch.records), catch.records)
+        ck("the warning names the project", any("Invoices" in x for x in catch.records),
+           catch.records)
         catch.records.clear()
         LIN["assignees"]["i5"] = {"email": None, "name": "Other Nameless"}
         await linear.sync_project(store, uid)
-        ck("a sync with two null emails warns once, not once per ticket",
-           len(catch.records) == 1 and "2 assignee(s)" in catch.records[0], catch.records)
-        del LIN["assignees"]["i5"]
-        catch.records.clear()
         await linear.sync_project(store, uid)
-        ck("a sync with one null email warns once", len(catch.records) == 1, catch.records)
-        logging.getLogger("tares.linear").removeHandler(catch)
+        ck("later syncs of the same project do not warn again", not catch.records, catch.records)
+        del LIN["assignees"]["i5"]
+        logging.getLogger("tares.ticket_assignee").removeHandler(catch)
 
         print("== Linear: later changes ==")
         p_ghost = await person("Ghost", "ghost@x.dev")
@@ -246,6 +249,40 @@ async def main():
            kiran not in mem, mem)
         ck("an unknown assignee joins nobody", len(mem) == 1, mem)
 
+        print("== a synced assignee joins only on an open ticket ==")
+        dora = await person("Dora", "dora@x.dev")
+        evan = await person("Evan", "evan@x.dev")
+        LIN["assignees"]["i3"] = {"email": "dora@x.dev", "name": "Dora"}
+        LIN["done"] = {"i3"}
+        LIN["assignees"]["i4"] = {"email": "evan@x.dev", "name": "Evan"}
+        await linear.sync_project(store, uid)
+        mem = {x["person_id"]: x for x in store.list_project_members(uid)}
+        ck("assigned on an open ticket: joins, added by the system",
+           mem.get(evan, {}).get("reason") == "ticket" and mem[evan]["added_by"] == "system", mem)
+        ck("assigned on a done ticket: the ticket carries her, the project does not",
+           dora not in mem and store.get_ticket(uid, "FAC-3")["assignee_person_id"] == dora, mem)
+        LIN["done"] = set()
+        LIN["assignees"]["i3"] = {"email": "ghost@x.dev", "name": "Ghost"}
+        LIN["assignees"]["i4"] = {"email": None, "name": "Nameless Nat"}
+        await linear.sync_project(store, uid)
+
+        print("== the Linear lookup is cached for one sync ==")
+        class Counting:
+            def __init__(self, s):
+                self.s, self.n = s, 0
+
+            def find_person_by_email(self, email):
+                self.n += 1
+                return self.s.find_person_by_email(email)
+
+        counting, cache = Counting(store), {}
+        a = ticket_assignee.from_linear(counting, {"email": "lena@x.dev"}, cache)
+        b = ticket_assignee.from_linear(counting, {"email": "LENA@x.dev"}, cache)
+        c = ticket_assignee.from_linear(counting, {"email": "who@x.dev"}, cache)
+        d = ticket_assignee.from_linear(counting, {"email": "WHO@x.dev"}, cache)
+        ck("the same email twice is one lookup, a person or nobody", counting.n == 2
+           and a == b == (lena, None) and c == (None, "who@x.dev") and d == (None, "WHO@x.dev"), (counting.n, a, b, c, d))
+
         # ── GitHub ──────────────────────────────────────────────────────────
         print("== GitHub: the first assignee is mapped by login ==")
         gid = (await cx.post("/api/projects", json={"template": "custom", "name": "Gh project",
@@ -269,6 +306,21 @@ async def main():
         tk = await tickets(gid)
         ck("a GitHub login added to a person is picked up; unassigning follows",
            tk[4]["assignee"]["id"] == lena and tk[1]["assignee"] is None, (tk[4], tk[1]))
+
+        print("== GitHub on a private project: only an open ticket brings its assignee in ==")
+        store.set_project_scope(gid, "private")
+        store.update_person(dora, github="dora-gh")
+        store.update_person(evan, github="evan-gh")
+        GH["assignees"][2] = ["evan-gh"]
+        GH["assignees"][3] = ["dora-gh"]
+        GH["closed"] = {3}
+        await gt.sync_project(store, gid)
+        mem = {x["person_id"]: x for x in store.list_project_members(gid)}
+        ck("open issue: the assignee joins, added by the system",
+           mem.get(evan, {}).get("reason") == "ticket" and mem[evan]["added_by"] == "system", mem)
+        ck("closed issue: the ticket carries her, the project does not",
+           dora not in mem and store.get_ticket(gid, "GH-3")["assignee_person_id"] == dora, mem)
+        GH["closed"] = set()
 
         # ── Tares tickets ───────────────────────────────────────────────────
         print("== Tares tickets: routes ==")
@@ -365,6 +417,52 @@ async def main():
         json.loads(await m.write_ticket("S4", assignee="ghost@x.dev", project="Secret"))
         ck("a manual member keeps its reason when assigned", {x["person_id"]: x["reason"] for x in
                                           store.list_project_members(priv)}.get(p_ghost) == "manual")
+
+        print("== private project: only the lead or the system adds a person by assigning ==")
+        mira = await person("Mira", "mira@x.dev")
+        noor = await person("Noor", "noor@x.dev")
+        store.add_project_member(priv, mira, owner, reason="manual")
+        mira_key = await key(mira)
+        base = len(store.list_project_members(priv))
+        before = len(await tickets(priv, owner_key))
+        r = await cx.post(f"/api/projects/{priv}/tickets", headers=mira_key,
+                          json={"title": "S5", "assignee": noor})
+        ck("a member who is not the lead cannot bring in a stranger: 403 that says to ask the lead",
+           r.status_code == 403 and "lead" in r.text, (r.status_code, r.text[:200]))
+        ck("and no ticket was made and nobody joined", len(await tickets(priv, owner_key)) == before
+           and not store.is_project_member(priv, noor)
+           and len(store.list_project_members(priv)) == base)
+        r = await cx.post(f"/api/projects/{priv}/tickets", headers=mira_key,
+                          json={"title": "S6", "assignee": kiran})
+        ck("the same member may assign someone already on the project", r.status_code == 201
+           and r.json()["assignee"]["id"] == kiran, r.text[:200])
+        s6 = r.json()["id"]
+        r = await cx.put(f"/api/projects/{priv}/tickets/{s6}", headers=mira_key,
+                         json={"assignee": noor})
+        ck("a PUT that would bring in a stranger: 403, the assignee stays", r.status_code == 403
+           and store.get_ticket(priv, s6)["assignee_person_id"] == kiran
+           and not store.is_project_member(priv, noor), (r.status_code, r.text[:200]))
+        r = await cx.put(f"/api/projects/{priv}/tickets/{s6}", headers=mira_key,
+                         json={"assignee": owner})
+        ck("assigning the lead is fine and adds no row for the lead", r.status_code == 200
+           and owner not in {x["person_id"] for x in store.list_project_members(priv)},
+           (r.status_code, r.text[:200]))
+        ticket_assignee.join(store, store.get_project(priv), owner, "system")
+        ck("a sync that names the lead adds no member row for them",
+           owner not in {x["person_id"] for x in store.list_project_members(priv)})
+        r = await cx.put(f"/api/projects/{priv}/tickets/{s6}", headers=owner_key,
+                         json={"assignee": noor})
+        ck("the lead can: Noor joins for a ticket, added by the lead", r.status_code == 200
+           and {x["person_id"]: (x["reason"], x["added_by"]) for x in
+                store.list_project_members(priv)}.get(noor) == ("ticket", owner), r.text[:200])
+        store.remove_project_member(priv, noor)
+        r = await cx.put(f"/api/projects/{priv}/tickets/{s6}", headers=owner_key,
+                         json={"assignee": noor, "title": "S6b"})
+        ck("the same assignee sent again does not bring back a person the lead removed",
+           r.status_code == 200 and not store.is_project_member(priv, noor), r.text[:200])
+        r = await cx.post(f"/api/projects/{priv}/tickets", json={"title": "S7", "assignee": noor})
+        ck("the system credential can: Noor joins, added by nobody a person", r.status_code == 201
+           and store.is_project_member(priv, noor), r.text[:200])
 
         print("== reassigning a held Tares ticket ==")
         t_a = store.get_ticket(team, "T1")

@@ -5033,6 +5033,22 @@ def make_app() -> FastAPI:
         except ValueError as e:
             _err(KeyError(str(e)), 404)
 
+    def _assign_join(request, project: dict, prev: str | None, who: str | None) -> bool:
+        """May this caller give the ticket `who` as its assignee, and does that add them to the
+        project? Only a change joins anyone, and on a private project only the lead or the system
+        credential may bring in someone who is not on it (403 otherwise, like the members route);
+        any member may assign a person already on it."""
+        if (not who or who == prev or project.get("scope") != "private"
+                or who == project.get("lead_person_id")
+                or store.is_project_member(project["id"], who)):
+            return False
+        me = _current_person(request)
+        if not _is_system(request) and not (me and me["id"] == project.get("lead_person_id")):
+            raise HTTPException(status_code=403, detail=(
+                "that person is not on this private project: assign someone who is, or ask the "
+                "project lead to add them"))
+        return True
+
     def _added_by(request) -> str:
         """Who a project member added by assigning a ticket is recorded as: the person behind the
         credential, from the credential alone."""
@@ -5080,6 +5096,7 @@ def make_app() -> FastAPI:
         except docs_mod.DocError as e:
             _err(e)
         who, raw = _assignee_ref(body.get("assignee"))
+        joins = _assign_join(request, project, None, who)
         pos = body.get("position")
         milestone = _milestone_ref(uid, body.get("milestone"))
         depends = _depends_ref(uid, None, body.get("depends_on"))
@@ -5089,7 +5106,8 @@ def make_app() -> FastAPI:
                                   milestone=milestone, depends_on=depends,
                                   repo=_repo_ok(body.get("repo")),
                                   assignee_person_id=who, assignee_raw=raw)
-        ticket_assignee.join(store, project, who, _added_by(request))
+        if joins:
+            ticket_assignee.join(store, project, who, _added_by(request))
         return _ticket_out(uid, _ticket_or_404(uid, tid))
 
     @app.get("/api/projects/{uid}/tickets/{ref}")
@@ -5111,6 +5129,7 @@ def make_app() -> FastAPI:
         project = _project_or_404(uid)
         t = _ticket_or_404(uid, ref)
         fields: dict = {}
+        joins = False
         if "working_doc" in body:
             fields["working_doc"] = _working_doc_ok(uid, body.get("working_doc"))
         if "repo" in body:
@@ -5134,10 +5153,11 @@ def make_app() -> FastAPI:
             fields["depends_on"] = _depends_ref(uid, t["id"], body.get("depends_on"))
         if "assignee" in body:
             who, raw = _assignee_ref(body.get("assignee"))
+            joins = _assign_join(request, project, t.get("assignee_person_id"), who)
             fields.update(assignee_person_id=who, assignee_raw=raw)
         if fields:
             store.update_ticket(t["id"], **fields)
-        if "assignee" in body:
+        if joins:
             ticket_assignee.join(store, project, fields["assignee_person_id"], _added_by(request))
         return _ticket_out(uid, _ticket_or_404(uid, t["id"]), with_doc=True)
 

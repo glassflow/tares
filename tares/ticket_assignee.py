@@ -14,6 +14,8 @@ import logging
 
 log = logging.getLogger("tares.ticket_assignee")
 
+_warned: set = set()      # projects already warned about assignees without an email
+
 Mapped = tuple[str | None, str | None]    # (person id, raw)
 
 
@@ -39,6 +41,15 @@ def from_linear(store, assignee: dict | None, cache: dict | None = None) -> Mapp
         if person:
             return person["id"], None
     return None, email or name or None
+
+
+def warn_nameless(project: dict, count: int) -> None:
+    """Say once per project per daemon run that Linear sent assignees without an email."""
+    if count and project["id"] not in _warned:
+        _warned.add(project["id"])
+        log.warning("Linear sent %d assignee(s) without an email in project %s (this key may not "
+                    "read emails); those tickets are matched by nothing and show the assignee's "
+                    "name", count, project.get("name") or project["id"])
 
 
 def from_github(store, issue: dict) -> Mapped:
@@ -77,9 +88,18 @@ def assign(store, project: dict, tid: str, person_id: str | None, raw: str | Non
 
 
 def join(store, project: dict, person_id: str | None, added_by: str | None = None) -> None:
-    """A person assigned to a ticket of a private project is a member of it (reason `ticket`)."""
-    if person_id and project.get("scope") == "private":
+    """A person assigned to a ticket of a private project is a member of it (reason `ticket`).
+    The lead is a member already and gets no row."""
+    if (person_id and project.get("scope") == "private"
+            and person_id != project.get("lead_person_id")):
         store.add_project_member(project["id"], person_id, added_by, reason="ticket")
+
+
+def sync_join(store, project: dict, person_id: str | None, status: str) -> None:
+    """The join for an assignee a sync mapped: only for a ticket still open, so linking a project
+    does not bring in everyone who ever finished or dropped a ticket."""
+    if status not in ("done", "canceled"):
+        join(store, project, person_id, "system")
 
 
 def view(store, t: dict) -> dict:

@@ -20,7 +20,6 @@ Everything here is read-only towards Linear.
 from __future__ import annotations
 
 import json
-import logging
 import time
 from datetime import datetime, timezone
 
@@ -29,7 +28,6 @@ import httpx
 from . import ticket_assignee
 from .envelope import Envelope, now_utc
 
-log = logging.getLogger("tares.linear")
 
 API_URL = "https://api.linear.app/graphql"
 
@@ -301,9 +299,7 @@ async def sync_project(store, uid: str) -> list[Envelope]:
     people: dict = {}
     nameless = [i for i in issues if isinstance(i.get("assignee"), dict)
                 and not str(i["assignee"].get("email") or "").strip()]
-    if nameless:
-        log.warning("Linear sent %d assignee(s) without an email (this key may not read emails); "
-                    "those tickets are matched by nothing and show the assignee's name", len(nameless))
+    ticket_assignee.warn_nameless(project, len(nameless))
     for iss in issues:
         seen.add(iss["id"])
         status = status_of(iss.get("state"))
@@ -316,7 +312,7 @@ async def sync_project(store, uid: str) -> list[Envelope]:
             store.create_ticket(uid, "linear", iss.get("title") or ident, status, pos,
                                 external_id=iss["id"], identifier=ident, url=iss.get("url"),
                                 milestone=ms, assignee_person_id=who, assignee_raw=raw)
-            ticket_assignee.join(store, project, who, "system")
+            ticket_assignee.sync_join(store, project, who, status)
             out.append(_env(project, link, iss, "created",
                             f"{ident} added in Linear: {iss.get('title')}", {"status": status}))
             continue
@@ -341,7 +337,7 @@ async def sync_project(store, uid: str) -> list[Envelope]:
             changes["milestone"] = ms
         if (cur["assignee_person_id"], cur["assignee_raw"]) != (who, raw):
             changes.update(assignee_person_id=who, assignee_raw=raw)
-            ticket_assignee.join(store, project, who, "system")
+            ticket_assignee.sync_join(store, project, who, status)
         if changes:
             store.update_ticket(cur["id"], **changes)
     # blocking relations become dependencies, once every issue has its ticket
