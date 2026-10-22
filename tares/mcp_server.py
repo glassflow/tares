@@ -782,7 +782,9 @@ async def list_tickets(project: str = "") -> str:
     canceled), milestone, depends_on, the GitHub repo it changes (`repo`, owner/name, for a
     project that spans several), whether it is ready (all it depends on is done) or which tickets
     block it, the link when it lives in Linear or GitHub, and the id and title of each one's
-    working doc. Work the ready tickets in this order. Also says where they live: `linear` is
+    working doc, and who it is for (`assignee`, {id, name}, or null with `assignee_raw` as the
+    source named them, and `assignee_note`: "assignee: Kiran" or "unowned (kiran@x.com is not on
+    this cell)"). Work the ready tickets in this order. Also says where they live: `linear` is
     the Linear project and `github` the repo and issue label, each with when it was last synced
     (null when the project does not use it); with both null the tickets live in Tares. Read one
     with get_ticket to get its working doc."""
@@ -803,13 +805,21 @@ async def list_tickets(project: str = "") -> str:
         "tickets": [{k: t.get(k) for k in ("id", "label", "number", "identifier", "title",
                                             "status", "milestone_name", "depends_on", "ready",
                                             "blocked_by", "holder", "stage", "stage_reason",
-                                            "repo", "url", "working_doc", "working_doc_title")}
-                    | {"pr": _pr_brief(t.get("pr")), "pr_note": t.get("pr_note")}
+                                            "repo", "url", "working_doc", "working_doc_title",
+                                            "assignee", "assignee_raw")}
+                    | {"pr": _pr_brief(t.get("pr")), "pr_note": t.get("pr_note"),
+                       "assignee_note": _assignee_note(t)}
                     for t in data.get("tickets") or []]}
     if any(t.get("status") == "in_progress" for t in data.get("tickets") or []):
         out["note"] = ("A ticket is already in progress: unless you are the session working on "
                        "it, call pick_up before anything else.")
     return json.dumps(out, default=str)
+
+
+def _assignee_note(t: dict) -> str:
+    """"assignee: Kiran", or "unowned (kiran@x.com is not on this cell)", or "unowned"."""
+    from .ticket_assignee import note
+    return note(t)
 
 
 def _pr_brief(pr: dict | None) -> dict | None:
@@ -823,7 +833,8 @@ def _pr_brief(pr: dict | None) -> dict | None:
 async def get_ticket(ticket: str, project: str = "") -> str:
     """One ticket, by its Tares id, its number (T3), its Linear identifier (for example
     ENG-12) or its GitHub identifier (for example GH-12), with the body of its working doc, who
-    holds it and where it stands, its pull request as GitHub has it (head, CI, the reviewer's verdict, merged), its history, and the
+    holds it and where it stands, who it is for (`assignee`, or `assignee_raw` when that person is
+    not on this cell), its pull request as GitHub has it (head, CI, the reviewer's verdict, merged), its history, and the
     crew's messages about it: everything you need to work on it."""
     async with _cx(15) as cx:
         uid, why = await _project_id(cx, project)
@@ -833,6 +844,7 @@ async def get_ticket(ticket: str, project: str = "") -> str:
         if r.status_code >= 400:
             return _out(r)
         out = r.json()
+        out["assignee_note"] = _assignee_note(out)
         msgs = await cx.get(f"{TARESD}/api/projects/{uid}/tickets/{out['id']}/messages")
     if msgs.status_code == 200:
         out["messages"] = [{k: m.get(k) for k in ("at", "from", "to", "type", "first_line")}
@@ -843,7 +855,8 @@ async def get_ticket(ticket: str, project: str = "") -> str:
 @writable()
 async def write_ticket(title: str, status: str = "", position: float | None = None,
                        milestone: str | None = None, depends_on: list[str] | None = None,
-                       id: str = "", project: str = "", repo: str | None = None) -> str:
+                       id: str = "", project: str = "", repo: str | None = None,
+                       assignee: str | None = None) -> str:
     """Add a ticket to the project's list, or change one when `id` is given (its id or T<n>).
     Only for a project whose tickets live in Tares: when they live in Linear or GitHub, create
     and change them there (milestones and "blocks" or "blocked by" relations included; `gh` for
@@ -852,10 +865,15 @@ async def write_ticket(title: str, status: str = "", position: float | None = No
     write_milestone ("" takes it out of its milestone); `depends_on` lists the tickets (T<n> or
     id) that must be done first ([] clears them); `repo` is the GitHub repo the ticket changes
     (owner/name), for a project that spans several repos ("" clears it; a Linear or GitHub ticket
-    takes only this, and attach_working_doc). Returns the ticket with its label (T<n>)."""
+    takes only this, and attach_working_doc); `assignee` is the person it is for (a person id or
+    an email; an email nobody on the cell has is kept as written and the ticket shows as unowned;
+    "" clears it). Assigning someone to a ticket of a private project adds them to it. Returns
+    the ticket with its label (T<n>)."""
     body: dict = {"title": title}
     if repo is not None:
         body["repo"] = repo
+    if assignee is not None:
+        body["assignee"] = assignee
     if status:
         body["status"] = status
     if position is not None:
@@ -875,7 +893,7 @@ async def write_ticket(title: str, status: str = "", position: float | None = No
         else:
             r = await cx.post(f"{TARESD}/api/projects/{uid}/tickets", json=body)
     return _out(r, ("id", "label", "title", "status", "position", "milestone_name",
-                    "depends_on", "repo"))
+                    "depends_on", "repo", "assignee", "assignee_raw"))
 
 
 @writable()
