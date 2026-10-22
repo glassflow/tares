@@ -95,10 +95,23 @@ the project follows [Semantic Versioning](https://semver.org/).
   closing the form, changing a person's email keeps the old address as an extra email, and a key's
   person picker shows the person's name while people load.
 
+### Changed
+- A person's own crew settings can no longer be looser than the team's: `PUT /api/crew/settings`
+  refuses an `autonomy` or `challenger` that is looser than the team's value with a 400 that names
+  it, and a stricter one is kept. If the team tightens later, the person's older, looser value no
+  longer applies. `clear: ["autonomy", ...]` in the body (and the MCP tool `set_crew_settings`)
+  unsets a personal setting so the team's applies again. Ingest scope and the other settings have
+  no ceiling.
+- A personal AGENTS.md or memory holds at most 32 KB; a line that would pass it is refused with a
+  400 saying the doc is full.
+
 ### Fixed
 - Area owners: reassigning a repo's owner without a note no longer clears the note it had (send
   `note` to replace it, or `null` to clear it), and the MCP `set_area` refuses a repo name with a
   `#`, `?` or space instead of saving a shortened repo.
+- Reading grants settled every waiting grant on the cell, as the reader, including ones on a
+  private project the reader cannot see. It now settles only grants the reader may see, recorded as
+  Tares, and a grant that cannot be settled stays waiting instead of failing the read.
 
 ## [1.51.1] - 2026-10-21
 

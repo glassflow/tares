@@ -57,6 +57,9 @@ GRANTS_DOC = ("Grants (all projects)",
               "What the person allows a tares-factory crew to do in every project, in their own "
               "words with the day they said it. Only the person's words become a grant.\n\n")
 MAX_LINE = 500
+# A person's own AGENTS.md or memory is read into every session they start, so it has a ceiling of
+# its own, well under MAX_DOC_BYTES.
+MAX_PERSONAL_BYTES = 32 * 1024
 
 
 def read_all_text(data: dict) -> str:
@@ -78,11 +81,11 @@ def read_all_text(data: dict) -> str:
 _ADDED_NOTE = re.compile(r" \(added by .+, \d{4}-\d{2}-\d{2}\)$")
 
 
-def append_line(body: str, text, note: str = "") -> tuple[str, bool]:
+def append_line(body: str, text, note: str = "", limit: int | None = None) -> tuple[str, bool]:
     """(the body with `- text` added at the end, whether it changed). A line already there is
     not added twice, whoever added it and when: `note` (" (added by Kiran, 2026-10-21)") is
     kept out of that comparison, and one on the new line is dropped before it is compared
-    or stored."""
+    or stored. With `limit` (bytes), a line that would take the body over it is refused."""
     line = " ".join(str(text or "").split())
     if not line:
         raise DocError("say what to add: one line")
@@ -92,7 +95,11 @@ def append_line(body: str, text, note: str = "") -> tuple[str, bool]:
     if entry in {_ADDED_NOTE.sub("", x) for x in body.splitlines()}:
         return body, False
     sep = "" if not body or body.endswith("\n") else "\n"
-    return f"{body}{sep}{entry}{note}\n", True
+    out = f"{body}{sep}{entry}{note}\n"
+    if limit is not None and len(out.encode()) > limit:
+        raise DocError(f"this doc is full: {limit // 1024} KB at most, and this line would take it "
+                       f"to {len(out.encode()) // 1024 + 1} KB")
+    return out, True
 
 TICKET_STATUSES = ("todo", "in_progress", "done", "canceled")
 TICKET_OWNERS = ("tares", "linear", "github")

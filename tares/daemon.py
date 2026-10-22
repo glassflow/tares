@@ -4810,7 +4810,8 @@ def make_app() -> FastAPI:
         kind, title = docs_mod.PERSONAL_DOCS[name]
         cur = store.personal_doc(person["id"], kind)
         try:
-            text, added = docs_mod.append_line(cur["body"] if cur else "", body.get("text"))
+            text, added = docs_mod.append_line(cur["body"] if cur else "", body.get("text"),
+                                           limit=docs_mod.MAX_PERSONAL_BYTES)
         except docs_mod.DocError as e:
             _err(e)
         by = _by(request, body)
