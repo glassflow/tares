@@ -10,7 +10,10 @@ the project follows [Semantic Versioning](https://semver.org/).
   it and when. A team grant needs the admin scope; a project grant comes from the project's lead,
   from the owner of the repos it names, or from an admin; a personal grant is for the person on the
   key and only they see it. A project grant that names a repo (`areas`) owned by someone else waits
-  until that owner consents, then takes effect. `POST /api/grants` adds one, `GET /api/grants`
+  until that owner consents, then takes effect. A project grant from someone who is neither the
+  project's lead nor an admin also waits for the lead (for an admin when the project has no lead).
+  Whoever a grant waits for can consent to it on a private project they are not in, and finds it in
+  `waiting_for_me`. `POST /api/grants` adds one, `GET /api/grants`
   lists the team, project and your own personal grants with `state`, `consents`, `waiting_for` and
   `in_effect`, `POST /api/grants/{id}/consent` and `.../revoke` answer and end one. The MCP tools
   `add_grant` (new `kind` and `areas`), `read_grants` and `consent_grant` do the same. The first

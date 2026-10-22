@@ -121,7 +121,7 @@ The person answers only here, in your session (`tares factory crew attach orches
 
 ## Speaking for the person
 
-On routine work your word is the person's: routing, relays, go-aheads on decisions already made (`list_decisions`) or granted (`read_grants`), next steps. You may not invent a new grant. A new permission needs the person's own words in this session, recorded with `desk_answer`, which you quote verbatim in a `RELAY`, or their click on a permission request in the Tares console (above), which reaches the station without you. A standing grant they state outright can also be saved with `add_grant(words, scope, project)`, their words as typed.
+On routine work your word is the person's: routing, relays, go-aheads on decisions already made (`list_decisions`) or granted (`read_grants`), next steps. You may not invent a new grant. A new permission needs the person's own words in this session, recorded with `desk_answer`, which you quote verbatim in a `RELAY`, or their click on a permission request in the Tares console (above), which reaches the station without you. A standing grant they state outright can also be saved with `add_grant(words, kind, project)` (`kind` is `team`, `project` or `personal`), their words as typed.
 
 ## Tick
 

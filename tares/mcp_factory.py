@@ -430,7 +430,8 @@ async def read_grants(project: str = "") -> str:
     rows = d.get("grants") or []
     live = [g for g in rows if g.get("in_effect")]
     waiting = [g for g in rows if g["state"] == "waiting"]
-    seen = {g["words"] for g in rows}
+    waiting += [g for g in d.get("waiting_for_me") or [] if g["id"] not in {w["id"] for w in waiting}]
+    seen = {g["words"] for g in rows} | set(d.get("known_words") or [])
     # grants written to the docs by a path that does not make rows yet (a standing answer)
     older = [line for body in (d.get("all"), d.get("project") if project else None)
              for line in _doc_grants(body) if _doc_words(line) not in seen]
@@ -463,16 +464,18 @@ def _doc_grants(body) -> list[str]:
 
 @writable()
 async def add_grant(words: str, kind: str = "", project: str = "",
-                    areas: list[str] | None = None) -> str:
+                    areas: list[str] | None = None, scope: str = "") -> str:
     """Keep one grant: `words` are the person's own words, quoted exactly as they said them
     (never your summary); Tares adds today's date. `kind` is `team` (every project; `all` is the
     old name), `project` (this project only, name it in `project`) or `personal` (what may run on
     the person's own machine, for the key's own person). Without `kind`, a `project` makes it a
     project grant and no project a team grant. `areas` lists the GitHub repos (owner/name) a
     project grant reaches into: it waits, not in effect, until each repo's area owner (other than
-    the giver) calls consent_grant. Only the person's own session or the orchestrator, relaying
-    the person verbatim, may add one."""
-    body = {"words": words, "kind": kind, "project": project, "areas": areas or [],
+    the giver) calls consent_grant. A project grant from someone who is neither the project's
+    lead nor an admin also waits for the lead (an admin, when the project has none). `scope` is
+    the older name of `kind`. Only the person's own session or the orchestrator, relaying the
+    person verbatim, may add one."""
+    body = {"words": words, "kind": kind or scope, "project": project, "areas": areas or [],
             "by_default": "claude code session"}
     async with _cx(10) as cx:
         r = await cx.post(f"{TARESD}/api/grants", json=body)
@@ -481,9 +484,10 @@ async def add_grant(words: str, kind: str = "", project: str = "",
 
 @writable()
 async def consent_grant(id: str) -> str:
-    """Say yes, as the owner of a repo a project grant names, to grant `id` (like `G7`). Only a
-    person it waits for can; the grant is in effect once every owner has. Never call it for
-    someone else: the answer is the owner's own."""
+    """Say yes, as the owner of a repo a project grant names or as the project's lead (an admin,
+    when it has none), to grant `id` (like `G7`). `read_grants` lists the ones waiting for you.
+    Only a person it waits for can; the grant is in effect once all of them have. Never call it
+    for someone else: the answer is their own."""
     async with _cx(10) as cx:
         r = await cx.post(f"{TARESD}/api/grants/{id.strip()}/consent")
     return _out(r)

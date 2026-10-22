@@ -233,6 +233,9 @@ FACTORY_SCHEMA = [
       consents         TEXT,
       state            TEXT
     )""",
+    # a project grant from someone who is neither the project's lead nor an admin also waits
+    # for the lead (for an admin when the project has none)
+    "ALTER TABLE grants ADD COLUMN IF NOT EXISTS needs_lead BOOLEAN DEFAULT FALSE",
 ]
 
 # Words that say "a session" and not a station: shown without parentheses next to a person's name.
@@ -1008,28 +1011,30 @@ class FactoryStore:
             self.con.execute("DELETE FROM milestones WHERE id = ?", [mid])
 
     # ── grants by kind (TR-630) ───────────────────────────────────────────────
-    _GRANT_COLS = "id, kind, project, holder_person_id, words, given_by, given_at, areas, consents, state"
+    _GRANT_COLS = ("id, kind, project, holder_person_id, words, given_by, given_at, areas, consents, "
+                   "state, needs_lead")
 
     @staticmethod
     def _grant_row(r) -> dict:
         return {"id": r[0], "kind": r[1], "project": r[2], "holder_person_id": r[3],
                 "words": r[4], "given_by": r[5], "given_at": r[6],
                 "areas": json.loads(r[7]) if r[7] else [],
-                "consents": json.loads(r[8]) if r[8] else [], "state": r[9]}
+                "consents": json.loads(r[8]) if r[8] else [], "state": r[9],
+                "needs_lead": bool(r[10])}
 
     def add_grant_row(self, kind: str, words: str, project: str | None = None,
                       holder: str | None = None, given_by: str | None = None,
                       areas: list[str] | None = None, consents: list[dict] | None = None,
-                      state: str = "active", given_at=None) -> dict:
+                      state: str = "active", given_at=None, needs_lead: bool = False) -> dict:
         """One grant, numbered G1, G2... for the cell; nothing is checked here."""
         with self._lock:
             top = self.con.execute("SELECT max(CAST(substr(id, 2) AS INTEGER)) FROM grants"
                                    ).fetchone()[0] or 0
             gid = f"G{top + 1}"
             self.con.execute(
-                f"INSERT INTO grants ({self._GRANT_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                f"INSERT INTO grants ({self._GRANT_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [gid, kind, project, holder, words, given_by, given_at or now_utc(),
-                 json.dumps(areas or []), json.dumps(consents or []), state])
+                 json.dumps(areas or []), json.dumps(consents or []), state, needs_lead])
         return self.get_grant_row(gid)
 
     def get_grant_row(self, gid: str) -> dict | None:
@@ -1046,8 +1051,15 @@ class FactoryStore:
                       key=lambda g: int(g["id"][1:]))
 
     def update_grant_row(self, gid: str, state: str | None = None,
-                         consents: list[dict] | None = None) -> None:
+                         consents: list[dict] | None = None, areas: list[str] | None = None,
+                         needs_lead: bool | None = None) -> None:
         with self._lock:
+            if areas is not None:
+                self.con.execute("UPDATE grants SET areas = ? WHERE id = ?",
+                                 [json.dumps(areas), gid])
+            if needs_lead is not None:
+                self.con.execute("UPDATE grants SET needs_lead = ? WHERE id = ?",
+                                 [needs_lead, gid])
             if state is not None:
                 self.con.execute("UPDATE grants SET state = ? WHERE id = ?", [state, gid])
             if consents is not None:

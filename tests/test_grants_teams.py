@@ -1,5 +1,6 @@
 """Grants by kind (TR-630): team, project and personal grants as rows. A project grant that names
-a repo someone else owns waits until that owner consents. The old grants docs become rows on the
+a repo someone else owns waits until that owner consents, and one from a person who is neither the
+project's lead nor an admin waits for the lead too (an admin, when the project has no lead). The old grants docs become rows on the
 first start and stay as they were. With auth off the one person is `local` and grants work as before.
 
 Run: .venv/bin/python tests/test_grants_teams.py
@@ -169,7 +170,11 @@ async def auth_on():
             r = await cx.post(f"{B}/api/grants", headers=KB,
                               json={"kind": "project", "project": p1, "words": "change acme/web",
                                     "areas": ["acme/web"]})
-            ck("B, owner of the repo it names, may", r.status_code == 201 and r.json()["grant"]["in_effect"], r.text)
+            g = r.json().get("grant", {})
+            ck("B, owner of the repo it names but not the lead, may add it: it waits for the lead",
+               r.status_code == 201 and g.get("state") == "waiting" and not g.get("in_effect")
+               and [w["id"] for w in g.get("waiting_for", [])] == [a], r.text)
+            bgid = g.get("id")
             r = await cx.post(f"{B}/api/grants", headers=KB,
                               json={"kind": "project", "project": p1, "words": "change acme/api",
                                     "areas": ["acme/api"]})
@@ -219,6 +224,108 @@ async def auth_on():
             r = await cx.post(f"{B}/api/grants/{gid}/consent", headers=KB)
             ck("consenting again -> 409", r.status_code == 409, r.text)
 
+            print("-- a non-lead's grant waits for the lead (A18) --")
+            doc = (await cx.get(f"{B}/api/grants", headers=KA, params={"project": p1})).json()
+            ck("B's grant is not in the grants doc yet", "change acme/web" not in doc["project"], doc["project"])
+            r = await cx.post(f"{B}/api/grants/{bgid}/consent", headers=KB)
+            ck("B cannot consent to their own grant, as the owner or for the lead -> 403", r.status_code == 403, r.text)
+            r = await cx.post(f"{B}/api/grants/{bgid}/consent", headers=KC)
+            ck("C cannot consent for the lead -> 403", r.status_code == 403, r.text)
+            r = await cx.post(f"{B}/api/grants/{bgid}/consent", headers=KD)
+            ck("an admin cannot stand in for a lead the project has -> 403", r.status_code == 403, r.text)
+            r = await cx.post(f"{B}/api/grants/{bgid}/consent", headers=KA)
+            g = r.json().get("grant", {})
+            ck("the lead consents: it is active", r.status_code == 200 and g.get("state") == "active"
+               and g.get("in_effect") and g.get("waiting_for") == [], r.text)
+            doc = (await cx.get(f"{B}/api/grants", headers=KA, params={"project": p1})).json()
+            ck("... and the grants doc holds it", "change acme/web" in doc["project"], doc["project"])
+            r = await cx.post(f"{B}/api/grants", headers=KB,
+                              json={"kind": "project", "project": p1, "words": "open the docs PR",
+                                    "areas": ["acme/web"]})
+            wg = r.json()["grant"]
+            r = await cx.post(f"{B}/api/grants", headers=KA,
+                              json={"kind": "project", "project": p1, "words": "open the docs PR"})
+            g = r.json().get("grant", {})
+            ck("the lead's own add of the same words takes the waiting one into effect",
+               r.status_code == 201 and r.json()["added"] is True and g.get("id") == wg["id"]
+               and g.get("state") == "active", r.text)
+            r = await cx.post(f"{B}/api/grants", headers=KA,
+                              json={"kind": "project", "project": p1, "words": "open the docs PR"})
+            ck("... and again is the same grant", r.json()["added"] is False and r.json()["grant"]["id"] == wg["id"], r.text)
+            r = await cx.post(f"{B}/api/grants", headers=KB,
+                              json={"kind": "project", "project": p1, "words": "second ask",
+                                    "areas": ["acme/web"]})
+            w1 = r.json()["grant"]
+            r = await cx.post(f"{B}/api/grants", headers=KB,
+                              json={"kind": "project", "project": p1, "words": "second ask",
+                                    "areas": ["acme/web"]})
+            ck("the same non-lead grant twice is one waiting grant", r.json()["added"] is False
+               and r.json()["grant"]["id"] == w1["id"] and r.json()["grant"]["state"] == "waiting", r.text)
+
+            print("-- a project with no lead: an admin consents --")
+            p3 = (await cx.post(f"{B}/api/projects", headers=ROOT, json={
+                "template": "custom", "name": "Leadless", "objects": []})).json()["id"]
+            r = await cx.post(f"{B}/api/grants", headers=KB,
+                              json={"kind": "project", "project": p3, "words": "edit web on p3",
+                                    "areas": ["acme/web"]})
+            g = r.json().get("grant", {})
+            ck("B's grant on it waits for an admin", r.status_code == 201 and g.get("state") == "waiting"
+               and [w["id"] for w in g.get("waiting_for", [])] == ["admin"], r.text)
+            for who, key_ in (("B", KB), ("A without the admin scope", KA), ("C", KC)):
+                r = await cx.post(f"{B}/api/grants/{g['id']}/consent", headers=key_)
+                ck(f"{who} cannot consent -> 403", r.status_code == 403, r.text)
+            r = await cx.post(f"{B}/api/grants/{g['id']}/consent", headers=KD)
+            g2 = r.json().get("grant", {})
+            ck("a key with the admin scope consents: active, on the consents",
+               r.status_code == 200 and g2.get("state") == "active"
+               and [c["id"] for c in g2.get("consents", [])] == [d], r.text)
+            r = await cx.post(f"{B}/api/grants", headers=KB,
+                              json={"kind": "project", "project": p3, "words": "edit web again",
+                                    "areas": ["acme/web"]})
+            r = await cx.post(f"{B}/api/grants/{r.json()['grant']['id']}/consent", headers=ROOT)
+            ck("the system credential consents too", r.status_code == 200
+               and r.json()["grant"]["state"] == "active", r.text)
+
+            print("-- the owner who cannot see the project can still consent --")
+            p4 = (await cx.post(f"{B}/api/projects", headers=KA_ADMIN, json={
+                "template": "custom", "name": "Secret", "objects": []})).json()["id"]
+            await cx.patch(f"{B}/api/projects/{p4}", headers=KA_ADMIN, json={"scope": "private"})
+            r = await cx.get(f"{B}/api/grants", headers=KB, params={"project": p4})
+            ck("set up: B cannot see the private project -> 404", r.status_code == 404, r.text)
+            r = await cx.post(f"{B}/api/grants", headers=KA,
+                              json={"kind": "project", "project": p4, "words": "touch acme/web in secret",
+                                    "areas": ["acme/web"]})
+            sg = r.json()["grant"]
+            ck("A's grant on it waits for B", sg["state"] == "waiting"
+               and [w["id"] for w in sg["waiting_for"]] == [b], r.text)
+            mine = (await cx.get(f"{B}/api/grants", headers=KB)).json()
+            ck("B finds it under waiting_for_me, with its words",
+               [x["id"] for x in mine["waiting_for_me"]] == [sg["id"]]
+               and mine["waiting_for_me"][0]["words"] == "touch acme/web in secret", str(mine["waiting_for_me"]))
+            ck("... and not in the plain list", all(x["id"] != sg["id"] for x in mine["grants"]), str(mine["grants"]))
+            r = await cx.post(f"{B}/api/grants/{sg['id']}/revoke", headers=KB)
+            ck("B cannot revoke it: the project is not theirs to see -> 404", r.status_code == 404, r.text)
+            r = await cx.post(f"{B}/api/grants/{sg['id']}/consent", headers=KC)
+            ck("C, not waited for, still gets 404 for the private project's grant", r.status_code == 404, r.text)
+            r = await cx.post(f"{B}/api/grants/{sg['id']}/consent", headers=KB)
+            ck("B consents: it is active", r.status_code == 200 and r.json()["grant"]["state"] == "active", r.text)
+            mine = (await cx.get(f"{B}/api/grants", headers=KB)).json()
+            ck("... and leaves waiting_for_me", mine["waiting_for_me"] == [], str(mine["waiting_for_me"]))
+
+            print("-- a grant nobody is left to wait for takes effect --")
+            await cx.put(f"{B}/api/areas/acme/ops", headers=ROOT, json={"person_id": b})
+            r = await cx.post(f"{B}/api/grants", headers=KA,
+                              json={"kind": "project", "project": p1, "words": "restart acme/ops",
+                                    "areas": ["acme/ops"]})
+            og = r.json()["grant"]
+            ck("A's grant naming acme/ops waits for B", og["state"] == "waiting", r.text)
+            await cx.put(f"{B}/api/areas/acme/ops", headers=ROOT, json={"person_id": a})
+            rows = (await cx.get(f"{B}/api/grants", headers=KA, params={"project": p1})).json()
+            now = next(x for x in rows["grants"] if x["id"] == og["id"])
+            ck("acme/ops moves to A, the giver: the next read finds it in effect",
+               now["state"] == "active" and now["in_effect"] and now["waiting_for"] == [], str(now))
+            ck("... and the grants doc holds it", "restart acme/ops" in rows["project"], rows["project"])
+
             print("-- two owners, both must --")
             await cx.put(f"{B}/api/areas/acme/billing", headers=ROOT, json={"person_id": c})
             r = await cx.post(f"{B}/api/grants", headers=KA,
@@ -265,8 +372,24 @@ async def auth_on():
                str(rows))
             r = await cx.post(f"{B}/api/grants/{gid}/revoke", headers=KA)
             ck("revoking twice -> 409", r.status_code == 409, r.text)
+            r = await cx.post(f"{B}/api/grants/{pg['id']}/revoke", headers=KD)
+            ck("an admin key cannot see, so cannot revoke, B's personal grant -> 404", r.status_code == 404, r.text)
             r = await cx.post(f"{B}/api/grants/{pg['id']}/revoke", headers=KB)
             ck("B revokes their own personal grant", r.status_code == 200, r.text)
+            r = await cx.post(f"{B}/api/grants", headers=KA,
+                              json={"kind": "project", "project": p1, "words": "admin ends this"})
+            r = await cx.post(f"{B}/api/grants/{r.json()['grant']['id']}/revoke", headers=KD)
+            ck("an admin key revokes a project grant it neither gave nor leads",
+               r.status_code == 200 and r.json()["grant"]["state"] == "revoked", r.text)
+
+            print("-- personal grants stay with their project --")
+            r = await cx.post(f"{B}/api/grants", headers=KB,
+                              json={"kind": "personal", "words": "use p2 laptop", "project": p2})
+            ck("B adds a personal grant tied to the Docs project", r.status_code == 201, r.text)
+            for label, params, want in (("Docs", {"project": p2}, True), ("Web", {"project": p1}, False),
+                                        ("no project", {}, False)):
+                rows = (await cx.get(f"{B}/api/grants", headers=KB, params=params)).json()["grants"]
+                ck(f"B sees it when asking for {label}: {want}", ("use p2 laptop" in words(rows)) is want, str(rows))
 
             print("-- the list --")
             rows = (await cx.get(f"{B}/api/grants", headers=KA, params={"project": p1})).json()["grants"]
@@ -302,15 +425,45 @@ async def auth_on():
             ck("consent_grant by B makes it active", "active" in out, out)
             who["k"] = KA
             out = await mf.read_grants(p1)
-            ck("read_grants now lists it in effect, with nothing waiting",
+            ck("read_grants now lists it in effect, no longer waiting",
                "ship acme/web fixes" in out.split("Waiting for consent")[0]
-               and "Waiting for consent" not in out, out)
+               and "ship acme/web fixes" not in out.partition("Waiting for consent")[2], out)
+            who["k"] = KA
+            out = await mf.add_grant("by the old keyword", scope="personal")
+            ck("add_grant still takes scope= as the older name of kind",
+               "personal" in out and "by the old keyword" in out and "TypeError" not in out, out)
+            who["k"] = KB
+            out = await mf.read_grants()
+            ck("read_grants, with no project, lists what waits for you", "Waiting for consent" not in out, out)
+            await cx.post(f"{B}/api/grants", headers=KA, json={
+                "kind": "project", "project": p4, "words": "secret ask", "areas": ["acme/web"]})
+            out = await mf.read_grants()
+            ck("... and a grant waiting for you on a project you cannot see",
+               "Waiting for consent" in out and "secret ask" in out.split("Waiting for consent")[1], out)
             who["k"] = KD
             out = await mf.add_grant("read the logs", "all")
             ck("the older call add_grant(words, \"all\") is a team grant",
                "team" in out and "read the logs" in out, out)
     finally:
         stop(proc)
+
+
+async def old_doc_lines():
+    print("== read_grants: an old doc line whose grant was revoked stays out ==")
+    doc = {"all": '# Grants\n\n- "old words" (2026-10-01)\n- "other old words" (2026-10-01)\n',
+           "project": "", "grants": []}
+
+    def serve(extra):
+        def handler(request):
+            return httpx.Response(200, json={**doc, **extra})
+        return lambda timeout=10: httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    m._cx = mf._cx = serve({"known_words": ["old words"]})
+    out = await mf.read_grants()
+    ck("a line whose words belong to a revoked grant is not listed", "old words" not in out.replace("other old words", ""), out)
+    ck("... and one that belongs to no grant still is", "other old words" in out, out)
+    m._cx = mf._cx = serve({})
+    out = await mf.read_grants()
+    ck("(control) without known_words both are listed", out.count("old words") == 2, out)
 
 
 async def auth_off():
@@ -341,6 +494,7 @@ async def auth_off():
 async def main():
     await migration()
     await auth_on()
+    await old_doc_lines()
     await auth_off()
 
 
