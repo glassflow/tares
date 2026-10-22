@@ -408,7 +408,7 @@ function MemberDetail({ name, crew, crewSide, mine, onChanged }: { name: string;
           </p>
         )}
         {mine && s.state === "quiet" && <MarkEnded name={s.name} crew={s.crew_id} onEnded={() => { reload(); onChanged(); }} />}
-        <StationUsage s={s} onAsked={asked} />
+        <StationUsage s={s} onAsked={asked} mine={mine} />
         <div>
           <div className="crew-detail-label">Open it in a terminal</div>
           {!mine
@@ -677,8 +677,9 @@ export default function Crew() {
   const [paneOpen, setPaneOpen] = useState(() => !readPaneFolded());
   const [standup, setStandup] = useState(false);
   const closeStandup = useCallback(() => setStandup(false), []);
-  const { data: me, error: meError } = usePolling(() => api.whoami(), 60000);
-  // a recording with no person is filed under `local`, so a caller with none is `local` too
+  const { data: me, error: meError, reload: meReload } = usePolling(() => api.whoami(), 60000);
+  // a recording with no person is filed under `local`, so a caller with none is `local` too;
+  // an answer that failed says nothing about who you are, so the page waits for one (below)
   const myId = me?.person?.id ?? "local";
   const groups = crewGroups(data);
   const stations = groups.flatMap((g) => g.stations);
@@ -696,6 +697,7 @@ export default function Crew() {
   // a link to a builder, or a helper under one, opens the Projects pane for this visit
   const inProjects = builders.flatMap((b) => withHelpers(b, stations)).some((m) => skey(m) === selected);
   useEffect(() => { if (inProjects) setPaneOpen(true); }, [inProjects]);
+  if (meError && !me) return <ErrorState error={meError} what="who you are" onRetry={meReload} />;
   if (error && !data) return <ErrorState error={error} what="the crew" onRetry={reload} />;
   const projects = pdata?.projects ?? [];
   const finished = pdata?.finished ?? [];

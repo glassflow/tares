@@ -249,7 +249,7 @@ function Breakdown({ r, size }: { r: ContextReading; size: number }) {
 const FRESH_MS = 10 * 60000;
 
 /** A station's context window, on its detail: one line and a bar, the details in their title. */
-export function StationUsage({ s, onAsked }: { s: StationDetail; onAsked: () => void }) {
+export function StationUsage({ s, onAsked, mine }: { s: StationDetail; onAsked: () => void; mine: boolean }) {
   const ctx = s.context;
   const tip = ctx ? `${contextTitle(ctx)}${ctx.at ? `; reported ${agoText(ctx.at)}` : ""}` : undefined;
   return (
@@ -268,14 +268,14 @@ export function StationUsage({ s, onAsked }: { s: StationDetail; onAsked: () => 
       ) : (
         <p className="dim" style={{ margin: 0 }}>No report yet. A station reports after each reply once it runs on this version of the plugin; the watch moves idle stations onto it.</p>
       )}
-      <ContextFold s={s} onAsked={onAsked} />
+      <ContextFold s={s} onAsked={onAsked} mine={mine} />
     </div>
   );
 }
 
 /** The window by category from /context, behind a fold that starts shut. Opening it asks for a
  *  reading when there is none or the last one is old; folding it again asks nothing. */
-function ContextFold({ s, onAsked }: { s: StationDetail; onAsked: () => void }) {
+function ContextFold({ s, onAsked, mine }: { s: StationDetail; onAsked: () => void; mine: boolean }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -298,7 +298,8 @@ function ContextFold({ s, onAsked }: { s: StationDetail; onAsked: () => void }) 
     if (e.target !== e.currentTarget) return;
     const next = e.currentTarget.open;
     setOpen(next);
-    if (next && !fresh && !waiting && !busy) void ask();
+    // a reading is asked of the machine it runs on: only for your own station
+    if (next && mine && !fresh && !waiting && !busy) void ask();
   };
   const size = r?.max_tokens ?? s.context?.size ?? 0;
   const reading = busy || waiting;
@@ -322,7 +323,7 @@ function ContextFold({ s, onAsked }: { s: StationDetail; onAsked: () => void }) 
         )}
         {err && <p className="fo-warn" style={{ margin: 0 }}>{err}</p>}
         {r && size > 0 ? <Breakdown r={r} size={size} />
-          : !reading && !err && <p className="dim" style={{ margin: 0 }}>No reading yet.</p>}
+          : !reading && !err && <p className="dim" style={{ margin: 0 }}>{mine ? "No reading yet." : `No reading yet. Only ${s.person?.name ?? "its owner"} can ask for one.`}</p>}
       </div>
     </details>
   );

@@ -266,6 +266,25 @@ async def main():
                 return await cx.post(f"/api/crew/{name}/end", params=params, json={"reason": "retired"},
                                      headers=admin[who] if who else root)
 
+        async def ask_context(who, name, **params):
+            async with mk() as cx:
+                return await cx.post(f"/api/crew/{name}/context", params=params,
+                                     headers=admin[who] if who else root)
+
+        async def asks():   # what `factory crew watch` reads
+            async with mk() as cx:
+                return (await cx.get("/api/crew/context/asks", headers=root)).json()["asks"]
+
+        print("== a /context reading is asked only of your own station ==")
+        r = await ask_context("Q", "a-reviewer", crew="a")
+        ck("Q cannot ask P's a-reviewer for a reading: 403", r.status_code == 403, r.text)
+        ck("and no ask was left on it", "p-r9" not in [x["session"] for x in await asks()])
+        r = await ask_context("P", "a-reviewer", crew="a")
+        ck("P asks their own a-reviewer", r.status_code == 200 and r.json()["session"] == "p-r9", r.text)
+        ck("the ask is open for the watch", "p-r9" in [x["session"] for x in await asks()])
+        r = await ask_context(None, "a-reviewer", crew="a")
+        ck("the system credential may ask any", r.status_code == 200, r.text)
+
         r = await end("Q", "a-reviewer")
         ck("Q cannot end P's a-reviewer by its name alone: 403", r.status_code == 403, r.text)
         r = await end("Q", "a-reviewer", crew="a")

@@ -172,6 +172,9 @@ the project follows [Semantic Versioning](https://semver.org/).
   crew has a station of the same name.
 
 ### Fixed
+- Opening another person's station on the Crew page no longer asks their machine for a context reading
+  (the page says only its owner can), and the server refuses that ask with a 403. When the page
+  cannot tell who you are, it says so and offers Retry instead of treating you as `local`.
 - Ending a station by its name alone no longer ends another person's station of that name: only its
   owner (or the system credential) ends it, and anyone else gets a 403.
 - A desk item can only be addressed to someone who can see the project: for a private project, `to` must
