@@ -6,6 +6,12 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Area owners: the cell records which person owns each GitHub repo (`owner/name`, matched in
+  lowercase). `GET /api/areas` lists them, `PUT /api/areas` replaces the list and `DELETE
+  /api/areas/{owner}/{name}` removes one (both need the admin scope), and `PUT
+  /api/areas/{owner}/{name}` sets one: an admin may set or reassign any repo, anyone with a person
+  on their key may claim a repo nobody owns yet, for themselves. The MCP tools `list_areas` and
+  `set_area` do the same. Project keys cannot reach these routes.
 - The console shows a project's lead, scope and members. The project page has a "Lead" line with a
   Team/Private control and "Change lead" for the lead (an admin changes the lead only), a Members
   page under Settings to add and remove people, and the Projects list shows each lead, a lock on
