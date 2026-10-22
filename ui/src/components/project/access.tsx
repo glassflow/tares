@@ -18,13 +18,20 @@ export function usePeople() {
   const { data: people } = usePolling(() => api.people(), 60000);
   const meId = me?.person?.id ?? null;
   const list: Person[] = people?.people ?? [];
-  return { list, meId, isAdmin: !!me?.scopes?.includes("admin") };
+  return { list, meId, isAdmin: !!me?.scopes?.includes("admin"), kind: me?.kind };
 }
 
 /** The caller against this project: the lead, an admin, or neither. */
 function useAccess(ctx: Ctx) {
-  const { list, meId, isAdmin } = usePeople();
-  return { list, isAdmin, isLead: isAdmin && !!meId && ctx.s.lead?.id === meId };
+  const { list, meId, isAdmin, kind } = usePeople();
+  const leadsIt = !!meId && ctx.s.lead?.id === meId;
+  return {
+    list, isAdmin, isLead: isAdmin && leadsIt,
+    // who the members routes accept: the lead, the system credential, or auth off (the
+    // backend's _lead_or_system), and only with the admin scope
+    canMembers: isAdmin && (leadsIt || kind === "system" || kind === "open"),
+    leadNeedsAdmin: leadsIt && !isAdmin,
+  };
 }
 
 /** Pick a person and make them the project's lead. Shared by the project page and the list's
@@ -35,7 +42,7 @@ export function LeadPicker({ id, people, onDone, onCancel }: {
   const [pick, setPick] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
-  const chosen = people.some((p) => p.id === pick) ? pick : people[0]?.id ?? "";
+  const chosen = people.some((p) => p.id === pick) ? pick : "";
   const save = async () => {
     setBusy(true); setErr(undefined);
     try { await api.setProjectAccess(id, { lead_person_id: chosen }); onDone(); }
@@ -45,8 +52,9 @@ export function LeadPicker({ id, people, onDone, onCancel }: {
   return (
     <>
       <div className="acc-row">
-        <Picker value={chosen} onChange={setPick} ariaLabel="New lead" options={people.map((p) => p.id)}
-                labels={Object.fromEntries(people.map((p) => [p.id, p.name]))} />
+        <Picker value={chosen} onChange={setPick} ariaLabel="New lead"
+                options={["", ...people.map((p) => p.id)]}
+                labels={{ "": "Choose a person", ...Object.fromEntries(people.map((p) => [p.id, p.name])) }} />
         <button type="button" className="primary" disabled={busy || !chosen} onClick={save}>
           {busy ? "Saving…" : "Make lead"}
         </button>
@@ -122,14 +130,14 @@ export function AccessLine({ ctx }: { ctx: Ctx }) {
 
 /** Settings, Members: who is on the project, and for its lead, who is added or removed. */
 export function MembersView({ ctx }: { ctx: Ctx }) {
-  const { list, isLead } = useAccess(ctx);
+  const { list, canMembers, leadNeedsAdmin } = useAccess(ctx);
   const [pick, setPick] = useState("");
   const [busy, setBusy] = useState<string>();
   const [err, setErr] = useState<string>();
   const members = ctx.s.members ?? [];
   const onIt = new Set(members.map((m) => m.id));
   const candidates = list.filter((p) => !onIt.has(p.id));
-  const chosen = candidates.some((p) => p.id === pick) ? pick : candidates[0]?.id ?? "";
+  const chosen = candidates.some((p) => p.id === pick) ? pick : "";
 
   const run = async (key: string, fn: () => Promise<unknown>) => {
     setBusy(key); setErr(undefined);
@@ -154,7 +162,7 @@ export function MembersView({ ctx }: { ctx: Ctx }) {
                 <td><strong>{m.name}</strong></td>
                 <td className="help">{REASON[m.reason] ?? m.reason}</td>
                 <td style={{ textAlign: "right" }}>
-                  {isLead && m.reason !== "lead" && (
+                  {canMembers && m.reason !== "lead" && (
                     <button type="button" className="danger" disabled={busy === m.id}
                             onClick={() => run(m.id, () => api.removeProjectMember(ctx.id, m.id))}>
                       {busy === m.id ? "Removing…" : "Remove"}
@@ -166,14 +174,15 @@ export function MembersView({ ctx }: { ctx: Ctx }) {
           </tbody>
         </table>
       ) : <div className="empty">Nobody is on this project yet. It has no lead.</div>}
-      {isLead ? (
+      {canMembers ? (
         <div className="panel" style={{ marginTop: 12 }}>
           {candidates.length ? (
             <div className="field" style={{ marginBottom: 0 }}>
               <span className="lbl">Add a person</span>
               <div className="btnrow">
-                <Picker value={chosen} onChange={setPick} ariaLabel="Person to add" options={candidates.map((p) => p.id)}
-                        labels={Object.fromEntries(candidates.map((p) => [p.id, p.name]))} />
+                <Picker value={chosen} onChange={setPick} ariaLabel="Person to add"
+                        options={["", ...candidates.map((p) => p.id)]}
+                        labels={{ "": "Choose a person", ...Object.fromEntries(candidates.map((p) => [p.id, p.name])) }} />
                 <button type="button" className="primary" disabled={!!busy || !chosen}
                         onClick={() => run("add", () => api.addProjectMember(ctx.id, chosen))}>
                   {busy === "add" ? "Adding…" : "Add"}
@@ -183,7 +192,11 @@ export function MembersView({ ctx }: { ctx: Ctx }) {
           ) : <p className="help" style={{ margin: 0 }}>Everyone on this cell is on this project already.</p>}
         </div>
       ) : (
-        <p className="help">Only the project's lead changes who is on it.</p>
+        <p className="help">
+          {leadNeedsAdmin
+            ? "You lead this project, but this key needs the admin scope to change who is on it."
+            : "Only the project's lead changes who is on it."}
+        </p>
       )}
     </>
   );
