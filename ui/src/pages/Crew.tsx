@@ -2,12 +2,12 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { Link, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
-import { CopyButton, ErrorState, TimeAgo, usePolling } from "../components/bits";
+import { CopyButton, ErrorState, Picker, TimeAgo, usePolling } from "../components/bits";
 import { ContextBadge, PlanPanel, StationUsage } from "../components/ClaudeUsage";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { ProgressRing } from "../components/ProgressRing";
 import StandupSheet from "../components/Standup";
-import type { CrewProject, CrewSettings, CrewStation, DeskAllowed, DeskItem, ProjectUsage } from "../types";
+import type { CrewProject, CrewSettingField, CrewSettings, CrewStation, DeskAllowed, DeskItem, ProjectUsage } from "../types";
 
 // The crew of a tares-factory (M3, M8): one always-on crew (orchestrator, reviewer, and a releaser
 // when the person asked for one) serves every project handed to it, and builders come and go per
@@ -401,20 +401,122 @@ function MemberDetail({ name, crewSide, onChanged }: { name: string; crewSide: b
   );
 }
 
-function Settings({ st, grants }: { st: CrewSettings; grants: string }) {
+type SettingsDraft = { autonomy: string; releaser: boolean; release_profile: string; prod_pattern: string; challenger: boolean; builders_max: string };
+const draftOf = (st: CrewSettings): SettingsDraft => ({
+  autonomy: st.autonomy ?? "", releaser: !!st.releaser, release_profile: st.release_profile ?? "",
+  prod_pattern: st.prod_pattern ?? "", challenger: !!st.challenger, builders_max: st.builders_max == null ? "" : String(st.builders_max),
+});
+
+// Change the crew's settings. A person's autonomy and challenger sit under the team's value: a
+// looser one is refused with a message naming the team's, shown as is. "Use the team's" unsets a
+// personal value. With no person (the root token) or the person `local` the change is the cell's
+// default, as the daemon decides.
+function SettingsForm({ st, personal, onDone }: { st: CrewSettings; personal: boolean; onDone: () => void }) {
+  const [d, setD] = useState(() => draftOf(st));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>();
+  const was = draftOf(st);
+  const send = async (body: Parameters<typeof api.setCrewSettings>[0]) => {
+    setBusy(true); setErr(undefined);
+    try { await api.setCrewSettings(body); onDone(); }
+    catch (e) { setErr(String((e as Error).message ?? e)); }
+    setBusy(false);
+  };
+  const save = () => {
+    const body: Parameters<typeof api.setCrewSettings>[0] = {};
+    if (d.autonomy && d.autonomy !== was.autonomy) body.autonomy = d.autonomy;
+    if (d.releaser !== was.releaser) body.releaser = d.releaser;
+    if (d.release_profile !== was.release_profile) body.release_profile = d.release_profile;
+    if (d.prod_pattern !== was.prod_pattern) body.prod_pattern = d.prod_pattern;
+    if (d.challenger !== was.challenger) body.challenger = d.challenger;
+    if (d.builders_max !== was.builders_max && d.builders_max !== "") body.builders_max = Number(d.builders_max);
+    if (Object.keys(body).length === 0) { onDone(); return; }
+    send(body);
+  };
+  const team = (field: CrewSettingField) => personal && (
+    <button type="button" className="fo-link-btn" disabled={busy} onClick={() => send({ clear: [field] })}>Use the team's</button>
+  );
+  return (
+    <div>
+      {err && <div className="alert error">{err}</div>}
+      <div className="row2">
+        <div className="field">
+          <span className="lbl">Autonomy</span>
+          <Picker value={d.autonomy} onChange={(v) => setD({ ...d, autonomy: v })} ariaLabel="Autonomy"
+                  options={["", ...Object.keys(AUTONOMY_TEXT)]}
+                  labels={{ "": "Not set", ...Object.fromEntries(Object.entries(AUTONOMY_TEXT).map(([k, t]) => [k, `${k}: ${t}`])) }} />
+          {team("autonomy")}
+        </div>
+        <label className="field">
+          <span className="lbl">Builders at once</span>
+          <input type="number" min={1} max={20} value={d.builders_max} onChange={(e) => setD({ ...d, builders_max: e.target.value })} />
+          {team("builders_max")}
+        </label>
+      </div>
+      <div className="row2">
+        <div className="field">
+          <label style={{ display: "flex", gap: 10, alignItems: "baseline", cursor: "pointer" }}>
+            <input type="checkbox" checked={d.challenger} onChange={(e) => setD({ ...d, challenger: e.target.checked })} />
+            <span>Codex challenger on builders</span>
+          </label>
+          {team("challenger")}
+        </div>
+        <div className="field">
+          <label style={{ display: "flex", gap: 10, alignItems: "baseline", cursor: "pointer" }}>
+            <input type="checkbox" checked={d.releaser} onChange={(e) => setD({ ...d, releaser: e.target.checked })} />
+            <span>Run a releaser</span>
+          </label>
+          {team("releaser")}
+        </div>
+      </div>
+      {d.releaser && (
+        <div className="row2">
+          <label className="field">
+            <span className="lbl">Release profile</span>
+            <input type="text" maxLength={300} value={d.release_profile} onChange={(e) => setD({ ...d, release_profile: e.target.value })} />
+            {team("release_profile")}
+          </label>
+          <label className="field">
+            <span className="lbl">Production pattern</span>
+            <input type="text" maxLength={300} value={d.prod_pattern} onChange={(e) => setD({ ...d, prod_pattern: e.target.value })} />
+            {team("prod_pattern")}
+          </label>
+        </div>
+      )}
+      <div className="btnrow">
+        <button className="primary" disabled={busy} onClick={save}>{busy ? "…" : "Save"}</button>
+        <button disabled={busy} onClick={onDone}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function Settings({ st, grants, onChanged }: { st: CrewSettings; grants: string; onChanged: () => void }) {
+  const { data: me } = usePolling(() => api.whoami(), 60000);
+  const [editing, setEditing] = useState(false);
   const lines = grants.split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
+  // a person other than `local`, with a key of their own: these are their settings over the team's
+  const person = me && me.kind !== "system" && me.person && me.person.id !== "local" ? me.person : null;
+  const title = person ? `Your crew settings, ${person.name}` : "How far the crew may go";
   return (
     <details className="fo-panel crew-fold">
-      <summary>How far the crew may go{st.autonomy && <span className="dim"> · {st.autonomy}{st.releaser ? ", with a releaser" : ", no releaser"}</span>}</summary>
+      <summary>{title}{st.autonomy && <span className="dim"> · {st.autonomy}{st.releaser ? ", with a releaser" : ", no releaser"}</span>}</summary>
       <div className="crew-settings">
-        <dl>
-          <dt>Autonomy</dt>
-          <dd>{st.autonomy ? <><b>{st.autonomy}</b>: {AUTONOMY_TEXT[st.autonomy]}</> : <span className="dim">not set: the first <span className="mono">tares factory crew up</span> asks</span>}</dd>
-          <dt>Releaser</dt>
-          <dd>{st.releaser === null ? <span className="dim">not set</span> : st.releaser ? <>yes, release profile {st.release_profile ?? "not set"}</> : "no: tickets end at merged on main"}</dd>
-          <dt>Codex challenger on builders</dt><dd>{st.challenger === null ? <span className="dim">not set</span> : st.challenger ? "on" : "off"}</dd>
-          <dt>Builders at once</dt><dd>{st.builders_max ?? <span className="dim">not set</span>}</dd>
-        </dl>
+        {editing ? (
+          <SettingsForm st={st} personal={!!person} onDone={() => { setEditing(false); onChanged(); }} />
+        ) : (
+          <>
+            <dl>
+              <dt>Autonomy</dt>
+              <dd>{st.autonomy ? <><b>{st.autonomy}</b>: {AUTONOMY_TEXT[st.autonomy]}</> : <span className="dim">not set: the first <span className="mono">tares factory crew up</span> asks</span>}</dd>
+              <dt>Releaser</dt>
+              <dd>{st.releaser === null ? <span className="dim">not set</span> : st.releaser ? <>yes, release profile {st.release_profile ?? "not set"}</> : "no: tickets end at merged on main"}</dd>
+              <dt>Codex challenger on builders</dt><dd>{st.challenger === null ? <span className="dim">not set</span> : st.challenger ? "on" : "off"}</dd>
+              <dt>Builders at once</dt><dd>{st.builders_max ?? <span className="dim">not set</span>}</dd>
+            </dl>
+            <p style={{ margin: "0 0 16px" }}><button type="button" onClick={() => setEditing(true)}>Change</button></p>
+          </>
+        )}
         <h2>Grants for every project</h2>
         {lines.length ? <ul className="crew-grants">{lines.map((g, i) => <li key={i}>{g}</li>)}</ul>
           : <p className="dim">None yet. A grant is kept only in your own words, with the day you said it.</p>}
@@ -525,7 +627,7 @@ export default function Crew() {
       <ReviewQueue />
       <RuleProposals />
 
-      {data && <Settings st={data.settings} grants={data.grants} />}
+      {data && <Settings st={data.settings} grants={data.grants} onChanged={reload} />}
     </div>
   );
 }

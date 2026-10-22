@@ -548,6 +548,9 @@ export interface CrewSettings {
   challenger: boolean | null;
   builders_max: number | null;
 }
+// The merged settings the caller sees (GET /api/crew/settings): theirs over the cell's default.
+export interface CrewSettingsView extends CrewSettings { autonomy_levels?: Record<string, string> }
+export type CrewSettingField = "autonomy" | "challenger" | "builders_max" | "releaser" | "release_profile" | "prod_pattern";
 export interface HandoverRepo { path: string | null; name: string | null }
 export interface ProjectFinished { at: string; words: string; decision: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null }
 export interface Handover { repo: string | null; repos: HandoverRepo[]; autonomy: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null; at: string; finished?: ProjectFinished | null }
@@ -1112,3 +1115,32 @@ export interface Standup {
   summary?: { overall: string | null; projects: Record<string, string> } | null;
   summary_error?: string | null;
 }
+
+// Area owners (TR-627): the person who owns each GitHub repo.
+export interface Area { repo: string; person: PersonRef; note: string | null }
+
+// Grants by kind (TR-630): what a person allows, and who still has to say yes.
+export type GrantKind = "team" | "project" | "personal";
+export interface Grant {
+  id: string;
+  kind: GrantKind;
+  project: string | null;
+  words: string;
+  state: "active" | "waiting" | "revoked";
+  given_at: string | null;
+  given_by: PersonRef | null;
+  holder: PersonRef | null;
+  areas: string[];
+  consents: (PersonRef & { at: string })[];
+  waiting_for: { id: string; name: string | null }[];   // id "admin": an admin has to
+  in_effect: boolean;
+}
+export interface GrantsView {
+  grants: Grant[];
+  waiting_for_me: Grant[];
+  known_words: string[];
+}
+
+// A person's own AGENTS.md and memory (GET /api/docs/personal); null until the first line.
+export interface PersonalDoc { id: string; title: string; body: string; updated_at: string; updated_by: string | null }
+export interface PersonalDocs { person: PersonRef | null; agents: PersonalDoc | null; memory: PersonalDoc | null }

@@ -9,6 +9,7 @@ import { type Cloud, cloudLink, useCloud } from "../cloud";
 import type { ApiKey, GithubAppTest, GithubCredential, ModelProvider, ModelProviders, Person, Whoami } from "../types";
 import { UsagePanels } from "../components/UsagePanels";
 import LinearSettings from "../components/LinearSettings";
+import AreasPanel from "../components/AreasPanel";
 import OwnerOnly from "../components/OwnerOnly";
 import WorkspaceSettings from "./WorkspaceSettings";
 
@@ -21,7 +22,7 @@ import WorkspaceSettings from "./WorkspaceSettings";
 // The per-source ingest URL is an address, not a secret — it lives on the source page, not here.
 //   · Workspace  (Tares Cloud only) team, plan, storage, credit and delete, held by the control
 //                  plane (TR-375); shown first, and the default tab, when /health has workspace_api_url
-type SettingsTab = "workspace" | "usage" | "access" | "anthropic" | "agents" | "github" | "linear" | "slack" | "observability";
+type SettingsTab = "workspace" | "usage" | "access" | "anthropic" | "agents" | "areas" | "github" | "linear" | "slack" | "observability";
 // The tabs as a second sidebar (TR-521): the workspace itself on top, then one group per concern.
 const TABS: { key: SettingsTab; label: string; group?: string }[] = [
   { key: "workspace", label: "Workspace" },
@@ -30,6 +31,7 @@ const TABS: { key: SettingsTab; label: string; group?: string }[] = [
   { key: "anthropic", label: "Model providers", group: "Agents" },
   { key: "agents", label: "Limits", group: "Agents" },
   { key: "observability", label: "Observability", group: "Agents" },
+  { key: "areas", label: "Areas" },
   { key: "github", label: "GitHub", group: "Integrations" },
   { key: "linear", label: "Linear", group: "Integrations" },
   { key: "slack", label: "Slack", group: "Integrations" },
@@ -150,6 +152,7 @@ export default function Security() {
       {tab === "access" && <AccessTab />}
       {tab === "anthropic" && <ProvidersPanel />}
       {tab === "agents" && <AgentLimitsPanel />}
+      {tab === "areas" && <AreasPanel />}
       {tab === "github" && <GithubPanel cloud={cloud} />}
       {tab === "linear" && <LinearSettings cloud={cloud} />}
       {/* Until /health answers (it can be slow on a busy instance) the self-host panels show, so
