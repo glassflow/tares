@@ -12,6 +12,13 @@ the project follows [Semantic Versioning](https://semver.org/).
   /api/areas/{owner}/{name}` sets one: an admin may set or reassign any repo, anyone with a person
   on their key may claim a repo nobody owns yet, for themselves. The MCP tools `list_areas` and
   `set_area` do the same. Project keys cannot reach these routes.
+- Crew settings, AGENTS.md and memory per person. `PUT /api/crew/settings` saves the caller's own
+  settings (the system credential, the person `local` and a cell with auth off still change the
+  cell-wide default), and `GET` returns theirs over that default; a key with no person is refused.
+  Each person also has a personal AGENTS.md and memory, made with their first line
+  (`POST /api/docs/personal/{agents|memory}/lines`, or `add_to_global` with `scope="personal"`),
+  listed and readable only by them. `read_global_docs` returns the team AGENTS.md and memory, then
+  "Your rules" (the team rule wins on a conflict) and "Your memory".
 - The console shows a project's lead, scope and members. The project page has a "Lead" line with a
   Team/Private control and "Change lead" for the lead (an admin changes the lead only), a Members
   page under Settings to add and remove people, and the Projects list shows each lead, a lock on

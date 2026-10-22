@@ -40,6 +40,15 @@ GLOBAL_DOCS = {
                "# Memory\n\n"
                "Facts and preferences that hold across projects. One line each, newest last.\n\n"),
 }
+# A person's own AGENTS.md and memory (TR-624): the same two docs as above, one pair per person,
+# made with the person's first line. They belong to the person, join no project and are listed
+# only to them. Not in DOC_KINDS: a project cannot be given one. {name: (doc kind, title)}
+PERSONAL_DOCS = {
+    "agents": ("personal_agents", "Your AGENTS.md"),
+    "memory": ("personal_memory", "Your memory"),
+}
+PERSONAL_CONFLICT = ("These add to the team rules above; when they conflict, the team rule "
+                     "wins.")
 # The grants for every project of a tares-factory crew (TR-419): on the cell, made with the first
 # grant, and included in the projects that read their grants (not in every project, like the two
 # above: only a crew-built project has grants).
@@ -48,6 +57,22 @@ GRANTS_DOC = ("Grants (all projects)",
               "What the person allows a tares-factory crew to do in every project, in their own "
               "words with the day they said it. Only the person's words become a grant.\n\n")
 MAX_LINE = 500
+
+
+def read_all_text(data: dict) -> str:
+    """What read_global_docs hands a session, from the /api/docs/global answer: the team
+    AGENTS.md, the team memory, then the caller's own rules (with the line saying the team's win)
+    and their own memory. A personal section is left out while its doc is empty."""
+    parts = [d["body"].rstrip() for d in (data.get("agents"), data.get("memory")) if d]
+    who = (data.get("person") or {}).get("name") or ""
+    personal = data.get("personal") or {}
+    rules = ((personal.get("agents") or {}).get("body") or "").strip()
+    memory = ((personal.get("memory") or {}).get("body") or "").strip()
+    if rules:
+        parts.append(f"# Your rules ({who})\n\n{PERSONAL_CONFLICT}\n\n{rules}")
+    if memory:
+        parts.append(f"# Your memory ({who})\n\n{memory}")
+    return "\n\n".join(parts)
 
 
 _ADDED_NOTE = re.compile(r" \(added by .+, \d{4}-\d{2}-\d{2}\)$")

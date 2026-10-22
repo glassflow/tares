@@ -518,6 +518,9 @@ _MIGRATIONS = [
     # reads as 'team'.
     "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS lead_person_id TEXT",
     "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS scope TEXT",
+    # The person a doc belongs to (a people.id): a personal AGENTS.md or memory (TR-624). NULL =
+    # a doc of the cell, as every doc made before this column.
+    "ALTER TABLE docs ADD COLUMN IF NOT EXISTS owner TEXT",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -2666,27 +2669,29 @@ class Store(FactoryStore, ClaudeUsageStore):
                              "AND kind = 'skill' AND name = ?", [project, name])
 
     # ── docs and tickets (TR-403): validated by tares/docs.py before they get here ──
-    _DOC_COLS = "d.id, d.kind, d.title, d.made_by, d.updated_by, d.created_at, d.updated_at"
+    _DOC_COLS = ("d.id, d.kind, d.title, d.made_by, d.updated_by, d.created_at, d.updated_at, "
+                 "d.owner")
 
     @staticmethod
     def _doc_row(r, body: str | None = None) -> dict:
         out = {"id": r[0], "kind": r[1], "title": r[2], "made_by": r[3], "updated_by": r[4],
-               "created_at": r[5], "updated_at": r[6]}
+               "created_at": r[5], "updated_at": r[6], "owner": r[7]}
         if body is not None:
             out["body"] = body
         return out
 
     def create_doc(self, project: str | None, kind: str, title: str, body: str,
-                   by: str = "") -> str:
+                   by: str = "", owner: str | None = None) -> str:
         """A new doc on the cell, included in `project` (None: on the cell only, for every
-        project to include). Returns its id."""
+        project to include). `owner` (a people.id) makes it that person's own: never included in
+        a project, listed only to them. Returns its id."""
         doc_id = "doc_" + uuid.uuid4().hex[:10]
         ts = now_utc()
         with self._lock:
             self.con.execute(
                 "INSERT INTO docs (id, kind, title, body, made_by, updated_by, created_at, "
-                "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [doc_id, kind, title, body, project, by or None, ts, ts])
+                "updated_at, owner) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [doc_id, kind, title, body, project, by or None, ts, ts, owner])
             if project:
                 self._use_doc(project, doc_id)
         return doc_id
@@ -2716,30 +2721,43 @@ class Store(FactoryStore, ClaudeUsageStore):
             users = [u[0] for u in self.con.execute(
                 "SELECT usecase_id FROM usecase_objects WHERE kind = 'doc' AND name = ? "
                 "ORDER BY usecase_id", [doc_id]).fetchall()]
-        return {**self._doc_row(r, r[7]), "projects": users}
+        return {**self._doc_row(r, r[8]), "projects": users}
+
+    def personal_doc(self, person_id: str, kind: str) -> dict | None:
+        """The doc of `kind` that belongs to this person, with its body, or None until they
+        write the first line."""
+        with self._lock:
+            r = self.con.execute(f"SELECT {self._DOC_COLS}, d.body FROM docs d WHERE d.owner = ? "
+                                 "AND d.kind = ? ORDER BY d.created_at LIMIT 1",
+                                 [person_id, kind]).fetchone()
+        return self._doc_row(r, r[8]) if r else None
 
     def list_docs(self, project: str, kind: str | None = None) -> list[dict]:
         """The docs a project includes, without bodies: size in bytes instead."""
         q = (f"SELECT DISTINCT {self._DOC_COLS}, octet_length(encode(d.body)) FROM docs d "
-             "JOIN usecase_objects o ON o.kind = 'doc' AND o.name = d.id WHERE o.usecase_id = ?")
+             "JOIN usecase_objects o ON o.kind = 'doc' AND o.name = d.id WHERE o.usecase_id = ? "
+             "AND d.owner IS NULL")
         vals: list = [project]
         if kind:
             q += " AND d.kind = ?"; vals.append(kind)
         with self._lock:
             rows = self.con.execute(q, vals).fetchall()
-        return [{**self._doc_row(r), "size": int(r[7] or 0)} for r in rows]
+        return [{**self._doc_row(r), "size": int(r[8] or 0)} for r in rows]
 
-    def list_cell_docs(self) -> list[dict]:
-        """Every doc on the cell (no bodies), with the projects that include it."""
+    def list_cell_docs(self, viewer: str | None = None) -> list[dict]:
+        """Every doc on the cell (no bodies), with the projects that include it. A personal doc
+        is listed only to its person (`viewer`, a people.id): nobody else sees it, whatever their
+        rights."""
         with self._lock:
             rows = self.con.execute(f"SELECT {self._DOC_COLS}, octet_length(encode(d.body)) "
-                                    "FROM docs d ORDER BY d.title").fetchall()
+                                    "FROM docs d WHERE d.owner IS NULL OR d.owner = ? "
+                                    "ORDER BY d.title", [viewer or ""]).fetchall()
             users = self.con.execute("SELECT name, usecase_id FROM usecase_objects WHERE "
                                      "kind = 'doc' GROUP BY name, usecase_id").fetchall()
         by: dict[str, list] = {}
         for n, u in users:
             by.setdefault(n, []).append(u)
-        return [{**self._doc_row(r), "size": int(r[7] or 0), "projects": sorted(by.get(r[0], []))}
+        return [{**self._doc_row(r), "size": int(r[8] or 0), "projects": sorted(by.get(r[0], []))}
                 for r in rows]
 
     def _use_doc(self, project: str, doc_id: str) -> None:
@@ -2752,8 +2770,9 @@ class Store(FactoryStore, ClaudeUsageStore):
         """A doc already on the cell, included in one more project. False when there is no such
         doc."""
         with self._lock:
-            if not self.con.execute("SELECT 1 FROM docs WHERE id = ?", [doc_id]).fetchone():
-                return False
+            if not self.con.execute("SELECT 1 FROM docs WHERE id = ? AND owner IS NULL",
+                                    [doc_id]).fetchone():
+                return False        # no such doc, or a person's own: those join no project
             self._use_doc(project, doc_id)
         return True
 

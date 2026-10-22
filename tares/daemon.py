@@ -696,6 +696,7 @@ def make_app() -> FastAPI:
     # the only writes a read key may make: reads that take a body, and a reader's own delivery.
     # Every other write, including a route added later, needs admin.
     _READ_WRITES = ("/read", "/subscribe", "/unsubscribe", "/api/labels/preview")
+    _PERSONAL_LINES = re.compile(r"^/api/docs/personal/[^/]+/lines$")
     # a project's skills: what its agents are told to do, so writing one is a catalog write
     _SKILLS_PATH = re.compile(r"^/api/projects/[^/]+/skills(/|$)")
 
@@ -723,6 +724,11 @@ def make_app() -> FastAPI:
         if method == "PATCH" and path.startswith("/api/people/"):
             return "read"   # an admin, or a key bound to that person changing their own name:
                             # the handler decides, it needs the credential's person
+        if (method == "PUT" and path == "/api/crew/settings") or (
+                method == "POST" and _PERSONAL_LINES.match(path)):
+            return "ingest"  # a person's own crew settings and personal docs (TR-624): the
+                             # handler decides whose, from the credential's person. A read key
+                             # is refused here; admin implies ingest
         # /api/settings holds instance credentials (the Anthropic key): admin even to READ, since
         # a read tells you whether and where a credential is configured.
         if path == "/api/setup/github-suggestion":
@@ -4759,12 +4765,55 @@ def make_app() -> FastAPI:
                 for d in docs_mod.sort_docs(store.list_docs(uid, kind.strip().lower() or None))]
 
     @app.get("/api/docs/global")
-    async def get_global_docs():
+    async def get_global_docs(request: Request):
         """The cell's global AGENTS.md and memory, with their bodies; null until the first
-        project has docs."""
+        project has docs. `person` and `personal` are the caller's own, see /api/docs/personal."""
         ids = _global_ids()
-        return {k: (_marked(store.get_doc(None, ids[k]), ids) if k in ids else None)
-                for k in docs_mod.GLOBAL_DOCS}
+        out = {k: (_marked(store.get_doc(None, ids[k]), ids) if k in ids else None)
+               for k in docs_mod.GLOBAL_DOCS}
+        # the caller's own AGENTS.md and memory ride along: only theirs, never another person's
+        out["person"], out["personal"] = _personal_out(request)
+        return out
+
+    def _personal_out(request: Request) -> tuple[dict | None, dict]:
+        """(the caller's person, {agents, memory}: their personal docs with bodies or null)."""
+        person = _current_person(request)
+        mine = {name: (store.personal_doc(person["id"], kind) if person else None)
+                for name, (kind, _title) in docs_mod.PERSONAL_DOCS.items()}
+        return ({"id": person["id"], "name": person["name"]} if person else None), mine
+
+    @app.get("/api/docs/personal")
+    async def get_personal_docs(request: Request):
+        """The caller's own personal AGENTS.md and memory, with their bodies (null until the first
+        line). Another person's are not reachable by any route."""
+        person, mine = _personal_out(request)
+        return {"person": person, **mine}
+
+    @app.post("/api/docs/personal/{name}/lines")
+    async def add_personal_line(name: str, request: Request, body: dict = Body(...)):
+        """{text}: add one line to the caller's personal AGENTS.md (`agents`) or memory
+        (`memory`), made with the first line. Any station of that person may. The person comes
+        from the credential: a key with no person has none to write for."""
+        if name not in docs_mod.PERSONAL_DOCS:
+            _err(KeyError(f"no personal doc {name!r}; one of: " + ", ".join(docs_mod.PERSONAL_DOCS)),
+                 404)
+        person = _current_person(request)
+        if not person:
+            _err(PermissionError("This key has no person, so it has no personal docs."), 403)
+        kind, title = docs_mod.PERSONAL_DOCS[name]
+        cur = store.personal_doc(person["id"], kind)
+        try:
+            text, added = docs_mod.append_line(cur["body"] if cur else "", body.get("text"))
+        except docs_mod.DocError as e:
+            _err(e)
+        by = _by(request, body)
+        if cur is None:
+            doc_id = store.create_doc(None, kind, title, text, by=by, owner=person["id"])
+        else:
+            doc_id = cur["id"]
+            if added:
+                store.update_doc(doc_id, body=text, by=by)
+        return {**store.personal_doc(person["id"], kind), "added": added}
 
     @app.post("/api/docs/global/{kind}/lines")
     async def add_global_line(kind: str, request: Request, body: dict = Body(...)):
@@ -4860,15 +4909,17 @@ def make_app() -> FastAPI:
         return _doc_or_404(uid, doc_id)
 
     @app.get("/api/docs")
-    async def list_cell_docs():
-        """Every doc on Tares, with the projects that include it (no bodies)."""
+    async def list_cell_docs(request: Request):
+        """Every doc on Tares, with the projects that include it (no bodies). A person's own
+        AGENTS.md and memory show only to them."""
+        viewer = (_current_person(request) or {}).get("id")
         names = {p["id"]: p["name"] for p in store.list_projects()}
         ids = _global_ids()
         hidden = _hidden_ids()
         return [{**_marked(d, ids),
                  "projects": [{"id": p, "name": names.get(p, p)} for p in d["projects"]
                               if p not in hidden]}
-                for d in docs_mod.sort_docs(store.list_cell_docs())
+                for d in docs_mod.sort_docs(store.list_cell_docs(viewer))
                 if not d["projects"] or set(d["projects"]) - hidden]
 
     def _plan_ctx(uid: str) -> dict:
@@ -5417,6 +5468,8 @@ def make_app() -> FastAPI:
         by=lambda request, body=None: _by(request, body), cc_source=lambda: _cc_source(),
         current_person=lambda request: _current_person(request),
         area_owner=lambda repo: areas_mod.owner(store, repo),
+        is_system=lambda request: _is_system(request),
+        is_admin=lambda request: _is_admin(request),
         hidden_ids=lambda: _hidden_ids(),
         global_ids=lambda create=False: _global_ids(create), resolve_project=_factory_project_id,
         ticket_out=lambda uid, t, **kw: _ticket_out(uid, t, **kw),
