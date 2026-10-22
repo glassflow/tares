@@ -1,5 +1,5 @@
 """The factory routes answer with a constant number of queries, however many tickets a project has
-(TR-657), and the batched answers are exactly what the per-ticket code gave: a golden file recorded
+(TR-657) or are in review (TR-648), and the batched answers are exactly what the per-ticket code gave: a golden file recorded
 from the code before batching.
 
 Run:    .venv/bin/python tests/test_factory_batching.py
@@ -66,6 +66,22 @@ def normalize(obj):
     return walk(obj)
 
 
+def golden(got, name: str) -> None:
+    """Compare with the recorded answer, or record it with --record."""
+    path = os.path.join(FIXTURES, name)
+    if RECORD:
+        os.makedirs(FIXTURES, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(got, f, indent=1, sort_keys=True, default=str)
+            f.write("\n")
+        print(f"  recorded {path}")
+        return
+    want = json.load(open(path))
+    same = json.loads(json.dumps(got, sort_keys=True, default=str)) == want
+    ck("same answer as before batching (golden file)", same,
+       f"differs from tests/fixtures/factory_batching/{name}")
+
+
 class CountingCon:
     """Stands in for store.con and counts execute calls (a DuckDB connection's own execute
     cannot be patched)."""
@@ -119,6 +135,37 @@ def build(store, name: str, n: int) -> str:
     return uid
 
 
+def add_review_work(store, uid: str, name: str, t0) -> None:
+    """Stage history and Codex challenger events for a project's tickets in review (TR-648): a
+    ticket that went to review, back to changes and to review again; one that went once; one with
+    no history (it falls back to its last update). Their times are days apart, so the queue's
+    order is fixed."""
+    from datetime import timedelta
+    from tares.envelope import Envelope
+    from tares import factory as factory_mod
+    review = [t for t in store.list_tickets(uid) if t["stage"] == "review"]
+    for k, t in enumerate(review):
+        at = t0 - timedelta(days=10 * (k + 1))
+        if k % 3 != 2:
+            store.add_ticket_history(t["id"], uid, "stage", "doing", None, "b", "builder", at)
+            store.add_ticket_history(t["id"], uid, "stage", "review", None, "b", "builder",
+                                     at + timedelta(hours=1))
+        if k % 3 == 0:
+            store.add_ticket_history(t["id"], uid, "stage", "changes", None, "r", "reviewer",
+                                     at + timedelta(hours=2))
+            store.add_ticket_history(t["id"], uid, "stage", "review", None, "b", "builder",
+                                     at + timedelta(hours=3 + k))
+        lab = factory_mod.label(t)
+        verdicts = (("FAIL", [{"priority": "P1", "title": f"crash in {lab}"}]),
+                    ("PASS", []))[: 1 + k % 2]
+        store.append([Envelope(
+            source="claude_code", source_type="event_stream", key_value=f"s-{name}",
+            event_type="challenge_commit", text="codex", event_time=at + timedelta(minutes=i),
+            payload={"challenge": {"verdict": v, "sha": f"{i}", "findings": f}},
+            labels={"branch": f"factory/{lab}", "tares_project": name})
+            for i, (v, f) in enumerate(verdicts)])
+
+
 async def _no_refresh(store, uid):
     return None
 
@@ -128,6 +175,18 @@ async def main():
     app = make_app()
     store = app.state.store
     small, big = build(store, "small", 10), build(store, "big", 30)
+    # a milestone whose only other ticket is done: its ticket in review blocks it
+    solo = "uc_solo"
+    store.create_project(solo, "custom", "solo", {"objects": []})
+    store.set_project_kind(solo, "software_factory")
+    m = store.create_milestone(solo, "M1. Last one", goal="g")
+    store.create_ticket(solo, "tares", "Done already", status="done", milestone=m)
+    store.update_ticket(store.create_ticket(solo, "tares", "Last open", milestone=m), stage="review")
+    store.update_ticket(store.create_ticket(solo, "tares", "No milestone"), stage="review")
+    from tares.store import now_utc
+    t0 = now_utc()
+    for uid, name in ((small, "small"), (big, "big"), (solo, "solo")):
+        add_review_work(store, uid, name, t0)
     counting = CountingCon(store.con)
     store.con = counting
 
@@ -142,19 +201,7 @@ async def main():
 
         print("== tickets list (TR-657) ==")
         out, _ = await get(f"/api/projects/{big}/tickets")
-        got = normalize(out)
-        path = os.path.join(FIXTURES, "tickets.json")
-        if RECORD:
-            os.makedirs(FIXTURES, exist_ok=True)
-            with open(path, "w") as f:
-                json.dump(got, f, indent=1, sort_keys=True, default=str)
-                f.write("\n")
-            print(f"  recorded {path}")
-        else:
-            want = json.load(open(path))
-            same = json.loads(json.dumps(got, sort_keys=True, default=str)) == want
-            ck("same answer as before batching (golden file)", same,
-               "differs from tests/fixtures/factory_batching/tickets.json")
+        golden(normalize(out), "tickets.json")
         # The PR refresh the route runs first still reads per ticket with a PR; it is out of this
         # ticket's scope, so the count covers the list itself.
         from tares import factory_api
@@ -167,6 +214,42 @@ async def main():
         ck("queries do not grow with the tickets (10 vs 30)", q_small == q_big,
            f"{q_small} queries for 10 tickets, {q_big} for 30")
         print(f"  {q_big} queries for 30 tickets")
+
+        print("== review queue (TR-648) ==")
+        out, _ = await get("/api/review-queue")
+        queue = out["queue"]
+        ck("tickets in review from every project are queued", len(queue) == 8,
+           f"{len(queue)} queued")
+        first = queue[0]
+        ck("the ticket that blocks its milestone comes first",
+           first["blocks_milestone"] and first["project_name"] == "solo", str(first)[:200])
+        by_title = {(q["project_name"], q["title"]): q for q in queue}
+        hist = {t["title"]: store.ticket_history(t["id"]) for t in store.list_tickets(big)
+                if t["stage"] == "review"}
+        for title, h in hist.items():
+            want = max((x["at"] for x in h if x["field"] == "stage" and x["value"] == "review"),
+                       default=None)
+            if want is None:
+                continue
+            got_at = by_title[("big", title)]["waiting_since"]
+            ck(f"{title} waits since its latest move to review",
+               str(got_at).replace("T", " ")[:19] == str(want)[:19], f"{got_at} vs {want}")
+        golden(normalize(out), "review_queue.json")
+        # queries other than the challenger lookup (one per ticket in review, TR-658 was
+        # skipped) do not grow with the tickets in review
+        real = store.challenge_events
+        store.challenge_events = lambda *a: []
+        try:
+            _, q_few = await get("/api/review-queue")
+            more = [t for t in store.list_tickets(big) if t["stage"] in ("doing", "changes")]
+            for t in more:
+                store.update_ticket(t["id"], stage="review")
+            _, q_many = await get("/api/review-queue")
+        finally:
+            store.challenge_events = real
+        ck(f"queries do not grow with the tickets in review (8 vs {8 + len(more)})",
+           q_few == q_many, f"{q_few} vs {q_many}")
+        print(f"  {q_many} queries for {8 + len(more)} tickets in review")
 
     store.con = counting._con
     print(f"\n{PASS} passed, {FAIL} failed")
