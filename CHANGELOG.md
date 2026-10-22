@@ -9,6 +9,10 @@ the project follows [Semantic Versioning](https://semver.org/).
 - `scripts/bench_cell.py` times a cell's endpoints (review queue, tickets, projects, the
   factory page's polls) on a neutralized copy of its database, with the daemon sandboxed off the
   network, for before and after numbers on speed work (TR-654).
+- `/metrics` times every HTTP request: `tares_http_request_duration_seconds{route, method, status}`,
+  labelled by route template (such as `/api/projects/{uid}/tickets`), never by a raw path or ID
+  (TR-652).
+- `bench_cell.py --serve` also stops on SIGTERM, so a script can stop it.
 
 ### Fixed
 - A firing that arrives while its agent is already running for the same key now gets the
