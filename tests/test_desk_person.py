@@ -252,8 +252,9 @@ async def main():
         orchestrator("Q")
         late, early = "Gift cards go in the next release", "Coupons stay off for now"
         await push("Q", [says("q-s2", late, -20), says("q-s2", early, -300)])
-        out = json.loads(await mf.desk_answer(d9b["label"], late))
-        ck("typed 20 s before the cell stamped the question: still the answer", out["recorded"], out)
+        out = await mf.desk_answer(d9b["label"], late)
+        ck("typed 20 s before the cell stamped the question: still the answer",
+           out.startswith("{") and json.loads(out)["recorded"], out)
         out = await mf.desk_answer(d9c["label"], early)
         ck("typed 5 minutes before the question: not an answer", not_found(out, "Q"), out)
 

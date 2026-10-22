@@ -172,6 +172,12 @@ the project follows [Semantic Versioning](https://semver.org/).
   crew has a station of the same name.
 
 ### Fixed
+- Ending a station by its name alone no longer ends another person's station of that name: only its
+  owner (or the system credential) ends it, and anyone else gets a 403.
+- A desk item can only be addressed to someone who can see the project: for a private project, `to` must
+  be its lead or a member, else the item is refused (403) instead of reaching a person who cannot open it.
+- An answer typed within a minute before the cell stamped the question still answers it, so a machine
+  whose clock runs a little behind no longer gets the retry error every time.
 - The factory watch read the `/context` ask of every crew on the cell each round, and failed on the
   ones that were not its own. It now answers only an ask for the session its own station plays.
 - Area owners: reassigning a repo's owner without a note no longer clears the note it had (send
