@@ -1,0 +1,35 @@
+diff --git a/tests/test_desk_person.py b/tests/test_desk_person.py
+index 90b0f7a..eb6647b 100644
+--- a/tests/test_desk_person.py
++++ b/tests/test_desk_person.py
+@@ -328,6 +328,30 @@ async def main():
+            isinstance(out, str) and "error 403" in out
+            and store.get_desk_item(d13["label"])["state"] == "open", out)
+ 
++        print("== an item goes only to someone who can see the project ==")
++        as_(root)
++        async with mk() as cx:
++            r = await cx.post("/api/projects", json={"template": "custom", "name": "Vault",
++                                                     "objects": [], "kind": "software_factory"})
++            vault = r.json()["id"]
++            store.set_project_lead(vault, pid["P"])
++            store.set_project_scope(vault, "private")
++        ck("set up: Vault is private, P leads it", store.get_project(vault)["scope"] == "private")
++        orchestrator("P")
++        out = await add("Vault: rotate the key?", project="Vault", to=pid["Q"])
++        ck("`to` a person who is not on a private project: 403", isinstance(out, str)
++           and out.startswith("error 403") and "not on this private project" in out, out)
++        out = await add("Vault: rotate the key?", project="Vault", to="q@example.com")
++        ck("an email gets the same answer", isinstance(out, str) and out.startswith("error 403"), out)
++        ck("nothing was added", not [d for d in store.list_desk("open", vault)])
++        out = await add("Vault: rotate the key?", project="Vault", to=pid["P"])
++        ck("`to` the lead works", to_of(out) == pid["P"], out)
++        store.add_project_member(vault, pid["Q"], pid["P"], reason="manual")
++        out = await add("Vault: who owns it?", project="Vault", to=pid["Q"])
++        ck("`to` a member works", to_of(out) == pid["Q"], out)
++        out = await add("Shop: ship it?", project="Shop", to=pid["R"])
++        ck("on a team project anyone on the cell can be addressed", to_of(out) == pid["R"], out)
++
+         print("== an item from before items were addressed keeps the older rule ==")
+         as_(root)
+         d14 = await add("Old: tabs or spaces?")
