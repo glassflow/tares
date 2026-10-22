@@ -502,6 +502,7 @@ def challenger_layer(events: list[dict]) -> dict:
 
 DESK_STATES = ("open", "answered", "withdrawn")
 MATCH_HOURS = 48       # an answer is looked for in what the person typed this recently
+MATCH_SKEW_SECONDS = 60  # a reply typed this long before the item's cell timestamp still counts: machines' clocks differ
 
 
 MAX_COMMAND = 2000     # a refused command, kept as the station ran it

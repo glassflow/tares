@@ -245,6 +245,19 @@ async def main():
         out = json.loads(await mf.desk_answer(d9["label"], words))
         ck("after the recording is in, the same call succeeds", out["recorded"], out)
 
+        print("== a reply from a machine whose clock runs behind ==")
+        orchestrator("P")
+        d9b = await add("Shop: gift cards?", project="Shop", tickets=[L["s2"]])
+        d9c = await add("Shop: coupons?", project="Shop", tickets=[L["s2"]])
+        orchestrator("Q")
+        late, early = "Gift cards go in the next release", "Coupons stay off for now"
+        await push("Q", [says("q-s2", late, -20), says("q-s2", early, -300)])
+        out = await mf.desk_answer(d9b["label"], late)
+        ck("typed 20 s before the cell stamped the question: still the answer",
+           out.startswith("{") and json.loads(out)["recorded"], out)
+        out = await mf.desk_answer(d9c["label"], early)
+        ck("typed 5 minutes before the question: not an answer", not_found(out, "Q"), out)
+
         print("== lines Claude Code writes that Q did not type ==")
         orchestrator("P")
         d15 = await add("Shop: ship on Friday?", project="Shop", tickets=[L["s2"]])
@@ -327,6 +340,30 @@ async def main():
         ck("a grant for every project needs an admin, and Q is not one: refused, item still open",
            isinstance(out, str) and "error 403" in out
            and store.get_desk_item(d13["label"])["state"] == "open", out)
+
+        print("== an item goes only to someone who can see the project ==")
+        as_(root)
+        async with mk() as cx:
+            r = await cx.post("/api/projects", json={"template": "custom", "name": "Vault",
+                                                     "objects": [], "kind": "software_factory"})
+            vault = r.json()["id"]
+            store.set_project_lead(vault, pid["P"])
+            store.set_project_scope(vault, "private")
+        ck("set up: Vault is private, P leads it", store.get_project(vault)["scope"] == "private")
+        orchestrator("P")
+        out = await add("Vault: rotate the key?", project="Vault", to=pid["Q"])
+        ck("`to` a person who is not on a private project: 403", isinstance(out, str)
+           and out.startswith("error 403") and "not on this private project" in out, out)
+        out = await add("Vault: rotate the key?", project="Vault", to="q@example.com")
+        ck("an email gets the same answer", isinstance(out, str) and out.startswith("error 403"), out)
+        ck("nothing was added", not [d for d in store.list_desk("open", vault)])
+        out = await add("Vault: rotate the key?", project="Vault", to=pid["P"])
+        ck("`to` the lead works", to_of(out) == pid["P"], out)
+        store.add_project_member(vault, pid["Q"], pid["P"], reason="manual")
+        out = await add("Vault: who owns it?", project="Vault", to=pid["Q"])
+        ck("`to` a member works", to_of(out) == pid["Q"], out)
+        out = await add("Shop: ship it?", project="Shop", to=pid["R"])
+        ck("on a team project anyone on the cell can be addressed", to_of(out) == pid["R"], out)
 
         print("== an item from before items were addressed keeps the older rule ==")
         as_(root)
