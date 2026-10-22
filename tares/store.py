@@ -627,6 +627,43 @@ def _scope_sql(scope) -> tuple[str, list]:
     return sql + ")", params
 
 
+def _exclude_sql(exclude, sources=None) -> tuple[str, list]:
+    """Rows that belong to projects the caller cannot see -> ('AND ...' SQL, params). `exclude` is
+    {"ids": [project ids], "names": [project names], "shared": [the shared finding and
+    memory sources, or None for every source]}, or None/empty for no filter (the common
+    case: no private project, nothing added to the query). A row is left out when its
+    `tares_project` label names one of them, when its session (key) is linked to one in
+    project_sessions, or when a shared finding or memory row was recorded in one (payload
+    `project`). A row with none of those is kept. `sources` is what the query reads: the payload
+    test is left out when none of them is a shared source."""
+    if not exclude or not (exclude.get("ids") or exclude.get("names")):
+        return "", []
+    ids = list(exclude.get("ids") or [])
+    both = sorted({v.lower() for v in [*ids, *(exclude.get("names") or [])]})
+    ph = lambda n: ", ".join(["?"] * n)
+    # NOT COALESCE(x IN (...), FALSE) keeps a row with no value: x is NULL, so is the test. It
+    # also leaves the NULLs as NULLs, which is cheaper than COALESCE(x, '') on every row.
+    # The payload is the dear column to open, so it is only looked into for the shared sources
+    # that can carry another project's rows (`shared`); no list given means every source.
+    shared = exclude.get("shared")
+    if shared is not None and sources is not None:
+        shared = [x for x in shared if x in sources]
+    if shared is None:
+        pay, pparams = (f" AND NOT COALESCE(json_extract_string(payload, '$.project') "
+                        f"IN ({ph(len(ids))}), FALSE)"), ids
+    elif shared:
+        pay = (f" AND NOT COALESCE(CASE WHEN source IN ({ph(len(shared))}) THEN "
+               f"json_extract_string(payload, '$.project') IN ({ph(len(ids))}) END, FALSE)")
+        pparams = [*shared, *ids]
+    else:
+        pay, pparams = "", []
+    sql = (f" AND NOT COALESCE(lower(json_extract_string(labels, '$.tares_project')) "
+           f"IN ({ph(len(both))}), FALSE){pay}"
+           f" AND NOT COALESCE(key_value IN "
+           f"(SELECT session FROM project_sessions WHERE project IN ({ph(len(ids))})), FALSE)")
+    return sql, [*both, *pparams, *ids]
+
+
 def _cgroup_mem_bytes() -> int | None:
     """The container's memory limit in bytes (cgroup v2, then v1), or None if unlimited/unknown."""
     for p in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
@@ -1325,7 +1362,8 @@ class Store(FactoryStore, ClaudeUsageStore):
     # ── reads ───────────────────────────────────────────────────────────────
     def read_window(self, sources: list[str], key: str | None, since: datetime, cap: int = 12,
                          filters: list | None = None, where: dict | None = None,
-                         include_payload: bool = False, scope: dict | None = None):
+                         include_payload: bool = False, scope: dict | None = None,
+                         exclude: dict | None = None):
         """Rows for an entity across sources, time-ordered: (event_time, source, text, labels), plus
         the raw lossless `payload` as a 5th column when `include_payload` is set.
 
@@ -1338,14 +1376,16 @@ class Store(FactoryStore, ClaudeUsageStore):
         stays lossless; this bound is a read-path summary, matching what an SRE actually wants.
         `include_payload` pulls the full stored record per row (bounded by the same cap) for callers
         that need fidelity beyond the summary `text`. `scope` narrows the shared findings and
-        memory sources to one project's rows (see _scope_sql).
+        memory sources to one project's rows (see _scope_sql). `exclude` drops the rows of the
+        projects the caller cannot see (see _exclude_sql).
         """
         cols = "event_time, source, text, labels" + (", payload" if include_payload else "")
         ph = ", ".join(["?"] * len(sources))
         fsql, fparams = _filter_sql(filters)
         wsql, wparams = _where_sql(where)
         ssql, sparams = _scope_sql(scope)
-        wsql, wparams = wsql + ssql, wparams + sparams
+        esql, eparams = _exclude_sql(exclude, sources)
+        wsql, wparams = wsql + ssql + esql, wparams + sparams + eparams
         ksql, kparams = (" AND key_value = ?", [key]) if key is not None else ("", [])
         with self._lock:
             return self.con.execute(
@@ -2301,6 +2341,14 @@ class Store(FactoryStore, ClaudeUsageStore):
                 "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
                 "goal, kind, lead_person_id, scope FROM usecases ORDER BY created_at").fetchall()
         return [self._project_row(r) for r in rows]
+
+    def private_projects(self) -> list[dict]:
+        """The private projects, as {id, name, scope}: the one small query every cell-wide read
+        runs to learn whether it has anything to hide (usually it has not)."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT id, name FROM usecases WHERE scope = 'private'").fetchall()
+        return [{"id": r[0], "name": r[1], "scope": "private"} for r in rows]
 
     def get_project(self, uid: str) -> dict | None:
         with self._lock:
@@ -3360,11 +3408,17 @@ class Store(FactoryStore, ClaudeUsageStore):
                 [qid, scope, key, window, rows_returned, client, now_utc()],
             )
 
-    def list_queries(self, limit: int = 100) -> list[dict]:
+    def list_queries(self, limit: int = 100, hide: list[str] | None = None) -> list[dict]:
+        """The read log. `hide` lists project names and ids the caller cannot see: a row whose
+        selector or scope names one is left out (a read of `tares_project=Secret`)."""
+        terms = [h.lower() for h in (hide or []) if h]
+        sql = "".join(" AND instr(lower(COALESCE(key_value, '') || ' ' || COALESCE(scope, '')), ?) = 0"
+                      for _ in terms)
         with self._lock:
             rows = self.con.execute(
                 "SELECT id, scope, key_value, time_window, rows_returned, client, queried_at "
-                "FROM query_log ORDER BY queried_at DESC LIMIT ?", [int(limit)],
+                f"FROM query_log WHERE TRUE{sql} ORDER BY queried_at DESC LIMIT ?",
+                [*terms, int(limit)],
             ).fetchall()
         return [
             {"id": r[0], "scope": r[1], "key": r[2], "window": r[3],
@@ -3495,11 +3549,14 @@ class Store(FactoryStore, ClaudeUsageStore):
                 [*sources, since, *kparams, *fparams, *wparams]).fetchone()
         return row[0] if row else None
 
-    def list_dispatches(self, limit: int = 100) -> list[dict]:
+    def list_dispatches(self, limit: int = 100, hide: list[str] | None = None) -> list[dict]:
         # `delivered` and `pending` are computed LIVE from deliveries, not read from the snapshot:
         # a Tares agent's in-process run finishes after fire() returns, so its outcome lands late.
         # Counting ok/NULL deliveries keeps the row honest as those runs complete.
         # `error` = the most recent failed delivery's reason (NULL if none failed).
+        # `hide` = projects the caller cannot see: a firing recorded against one is left out.
+        where = (" WHERE NOT EXISTS (SELECT 1 FROM dispatch_projects p WHERE p.dispatch_id = "
+                 f"l.dispatch_id AND p.project IN ({', '.join('?' * len(hide))}))") if hide else ""
         with self._lock:
             rows = self.con.execute(
                 "SELECT l.dispatch_id, l.trigger, l.key_value, l.kind, l.fired_at, l.subscribers, "
@@ -3510,7 +3567,8 @@ class Store(FactoryStore, ClaudeUsageStore):
                 "l.payload, "
                 "(SELECT arg_max(d.error, d.delivered_at) FROM dispatch_deliveries d "
                 " WHERE d.dispatch_id = l.dispatch_id AND d.ok = FALSE) AS error "
-                "FROM dispatch_log l ORDER BY l.fired_at DESC LIMIT ?", [int(limit)],
+                f"FROM dispatch_log l{where} ORDER BY l.fired_at DESC LIMIT ?",
+                [*(hide or []), int(limit)],
             ).fetchall()
         return [
             {"dispatch_id": r[0], "trigger": r[1], "key": r[2], "kind": r[3],
@@ -3568,9 +3626,12 @@ class Store(FactoryStore, ClaudeUsageStore):
                 [*sources, since, *fparams]).fetchone()
         return (r[0], r[1]) if r else None
 
-    def recent_events(self, source: str | None = None, limit: int = 50) -> list[dict]:
-        where = "WHERE source = ?" if source else ""
-        params = ([source] if source else []) + [int(limit)]
+    def recent_events(self, source: str | None = None, limit: int = 50,
+                      exclude: dict | None = None) -> list[dict]:
+        esql, eparams = _exclude_sql(exclude, [source] if source else None)
+        clauses = (["source = ?"] if source else []) + ([esql[5:]] if esql else [])
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        params = ([source] if source else []) + eparams + [int(limit)]
         with self._lock:
             rows = self.con.execute(
                 f"SELECT source, key_value, event_type, text, event_time, ingest_time "
@@ -3609,12 +3670,15 @@ class Store(FactoryStore, ClaudeUsageStore):
                 return str(p["finding"])
         return None
 
-    def recent_payloads(self, source: str, limit: int = 500) -> list[dict]:
+    def recent_payloads(self, source: str, limit: int = 500,
+                        exclude: dict | None = None) -> list[dict]:
         """The lossless payloads of a source's most recent events (for field profiling)."""
+        esql, eparams = _exclude_sql(exclude, [source])
         with self._lock:
             rows = self.con.execute(
-                "SELECT payload FROM events WHERE source = ? ORDER BY ingest_time DESC LIMIT ?",
-                [source, int(limit)]).fetchall()
+                f"SELECT payload FROM events WHERE source = ?{esql} "
+                "ORDER BY ingest_time DESC LIMIT ?",
+                [source, *eparams, int(limit)]).fetchall()
         out = []
         for (pj,) in rows:
             try:

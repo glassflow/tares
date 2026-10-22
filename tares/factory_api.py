@@ -350,6 +350,17 @@ def register(app, store, h: SimpleNamespace) -> None:
                         "session": cur["session"], "started_at": cur["started_at"],
                         "last_at": cur["last_at"], "lines": cur["lines"], "earlier": earlier,
                         "projects": sorted({s["project"] for s in ss if s["project"]})})
+        hidden = h.hidden_ids()
+        if hidden:   # a project the caller cannot see is not named by a station (TR-629)
+            kept = []
+            for st in out:
+                if st["projects"] and set(st["projects"]) <= hidden:
+                    continue
+                st["projects"] = [u for u in st["projects"] if u not in hidden]
+                if st["project"] in hidden:
+                    st["project"], st["project_name"] = None, None
+                kept.append(st)
+            out = kept
         meters = store.session_meters([st["session"] for st in out])
         spent = store.usage_by_session([s["session"] for s in rows])
         for st in out:
@@ -379,6 +390,8 @@ def register(app, store, h: SimpleNamespace) -> None:
         when stricter than the crew's, its tickets by stage, the milestone it is on, and which
         tickets each repo has. The orchestrator works from this list (TR-462)."""
         names = {p["id"]: p["name"] for p in store.list_projects()}
+        hidden = h.hidden_ids()
+        names = {u: n for u, n in names.items() if u not in hidden}
         out = []
         for uid in store.handed_over_projects(finished=False, taken=False):
             if uid not in names:
@@ -415,7 +428,10 @@ def register(app, store, h: SimpleNamespace) -> None:
         if st is None:
             h.err(KeyError(f"no station {name!r} has reported to Tares"), 404)
         held = []
+        hidden = h.hidden_ids()
         for p in store.list_projects():
+            if p["id"] in hidden:
+                continue
             for t in store.list_tickets(p["id"]):
                 if t["holder"] == name:
                     held.append({"project": p["id"], "project_name": p["name"],
@@ -747,7 +763,8 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {**rv, "open": [f["label"] for f in store.open_findings(t["id"])]}
 
     def queue() -> list[dict]:
-        names = {p["id"]: p["name"] for p in store.list_projects()}
+        hidden = h.hidden_ids()
+        names = {p["id"]: p["name"] for p in store.list_projects() if p["id"] not in hidden}
         out = []
         for uid, pname in names.items():
             tickets = store.list_tickets(uid)
@@ -886,9 +903,10 @@ def register(app, store, h: SimpleNamespace) -> None:
         return "\n".join(L)
 
     # ── recurring findings and rules offered from them (TR-443) ───────────────
-    def recurring(repo: str) -> list[dict]:
+    def recurring(repo: str, hidden: set | frozenset = frozenset()) -> list[dict]:
         from datetime import timedelta
-        rows = store.repo_findings(repo, now_utc() - timedelta(days=factory_mod.RECUR_DAYS))
+        rows = [f for f in store.repo_findings(repo, now_utc() - timedelta(days=factory_mod.RECUR_DAYS))
+                if f["project"] not in hidden]
         names = {p["id"]: p["name"] for p in store.list_projects()}
         by: dict[str, dict] = {}
         for f in rows:
@@ -914,11 +932,21 @@ def register(app, store, h: SimpleNamespace) -> None:
 
     @app.get("/api/recurring-findings")
     async def recurring_findings(repo: str):
-        return {"repo": repo, "recurring": recurring(repo.strip())}
+        return {"repo": repo, "recurring": recurring(repo.strip(), h.hidden_ids())}
 
     @app.get("/api/rule-proposals")
     async def list_rule_proposals(state: str = "open"):
-        return {"proposals": store.list_rule_proposals(state.strip() or None)}
+        hidden = h.hidden_ids()
+        names = [p["name"] for p in store.list_projects() if p["id"] in hidden]
+        out = []
+        for rp in store.list_rule_proposals(state.strip() or None):
+            if rp.get("project") in hidden:
+                continue
+            # a rule that came back across projects lists the tickets it came from
+            rp = {**rp, "tickets": [t for t in rp.get("tickets") or []
+                                    if not any(str(t).startswith(n + " ") for n in names)]}
+            out.append(rp)
+        return {"proposals": out}
 
     @app.post("/api/rule-proposals/{pid}/{decision}")
     async def decide_rule(pid: str, decision: str, request: Request,
@@ -1008,11 +1036,14 @@ def register(app, store, h: SimpleNamespace) -> None:
         if st and st not in factory_mod.DESK_STATES:
             h.err(ValueError("state is one of: " + ", ".join(factory_mod.DESK_STATES)))
         uid = h.project_or_404(h.resolve_project(project.strip()))["id"] if project.strip() else None
-        return {"desk": [desk_out(d) for d in store.list_desk(st, uid)]}
+        hidden = h.hidden_ids()
+        return {"desk": [desk_out(d) for d in store.list_desk(st, uid)
+                         if d["project"] not in hidden]}
 
     def desk_or_404(ref: str) -> dict:
         d = store.get_desk_item(ref)
-        if d is None:
+        # an item of a project the caller cannot see does not exist for them (TR-629)
+        if d is None or (d["project"] and d["project"] in h.hidden_ids()):
             h.err(KeyError(f"no desk item {ref!r}"), 404)
         return d
 

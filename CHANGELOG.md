@@ -22,6 +22,17 @@ the project follows [Semantic Versioning](https://semver.org/).
   Admin rights come from the key's admin scope alone, not from the person's `is_admin` flag.
   A create that names no project, on a cell whose default project is private, asks the caller
   who is not on it to name a project, without saying which one the default is.
+- A private project's data stays out of what a non-member reads across the cell: the raw read
+  (`/read`, MCP `read`), the event and field lists, entity counts, sources made for the project,
+  triggers, agents and their runs, resources, the roster, subscriptions, skills, docs, the standup,
+  the factory's stations, queue, desk and crew lists, and the tables that follow a project's work
+  (sessions, queries, dispatches). An event belongs to a project by its `tares_project` label, by a
+  Claude Code session recorded in the project, or by the `project` a shared finding or memory row
+  was written in. Ask runs with the asker's own visibility and leaves a private project out of
+  `list_projects`; with auth on, `/tares ask` in Slack treats every private project as hidden
+  (Slack users are not mapped to people yet). An event with no project label stays visible to
+  everyone. Two limits: an entity count over a source shared by several projects still counts the hidden rows, and a
+  station's recent lines are not filtered by row.
 - MCP tools `list_people` and `set_project_access` (lead, scope, members added or removed, people
   by id or email).
 - A recording carries the person who shipped it: the cell labels every Claude Code event pushed to
