@@ -2137,6 +2137,15 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 .crew-member.is-selected { background: var(--accent-soft); }
 .crew-pick { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: inherit; font: inherit; }
 .crew-pick:hover .crew-name { text-decoration: underline; }
+.crew-on { flex-basis: 100%; font-size: 12px; color: var(--ink-soft); overflow-wrap: anywhere; }
+/* a person's section on the Crew page, and each of their crews in it */
+.crew-person { border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.crew-person:last-child { border-bottom: 0; }
+.crew-person-h { margin: 0; padding: 12px 16px 4px; font-size: 14px; }
+.crew-block-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 8px 16px 4px; font-size: 13px; }
+.crew-block + .crew-block { margin-top: 6px; }
+.crew-stale > summary { cursor: pointer; padding: 8px 16px; font-size: 13px; color: var(--ink-soft); }
+.crew-desk-for { margin: 10px 0 0; font-size: 13px; color: var(--ink-soft); }
 .crew-project { border-bottom: 1px solid var(--line); padding: 10px 0 0; }
 .crew-project:last-child { border-bottom: 0; }
 .crew-project-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; padding: 0 16px; }

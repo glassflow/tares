@@ -435,6 +435,7 @@ export interface DeskItem {
   // a permission request: the station that was refused and the exact command
   station: string | null; command: string | null;
   person?: PersonRef | null; by_label?: string | null;   // who asked: the person, and the station when there is one
+  to_person?: PersonRef | null;   // who it is for (TR-634); null on an item from before
 }
 export interface DeskAllowed { desk_item: DeskItem; decision: Decision; station: string; line: string; added: boolean; scope: "project" | "all" }
 export interface Decision {
@@ -502,6 +503,21 @@ export interface CrewStation {
   context: StationContext | null;
   /** what all the station's sessions spent, null before any reply */
   usage: UsageTotals | null;
+  /** the crew it belongs to (TR-628): a station name repeats across crews, the crew id does not */
+  crew_id?: string | null;
+  crew?: string | null;
+  machine?: string;
+  person?: PersonRef | null;
+}
+/** One person's crew on one machine, with its stations (TR-628) */
+export interface CrewGroup {
+  id: string | null;
+  name: string | null;
+  machine: string;
+  person: PersonRef | null;
+  person_id: string | null;
+  last_seen: string | null;
+  stations: CrewStation[];
 }
 // What Claude Code sessions spend (tares/claude_usage.py)
 export interface StationContext {
