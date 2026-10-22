@@ -378,6 +378,11 @@ _MIGRATIONS = [
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS model TEXT",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS slack_channel TEXT",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS webhook_url TEXT",
+    # whose transcript an Ask session is; NULL = no person (Slack, the system credential, rows from
+    # before this column), which only the system credential sees once auth is on
+    "ALTER TABLE ask_sessions ADD COLUMN IF NOT EXISTS person_id TEXT",
+    # the project ids a read was about (comma-joined), so the log can hide a private project's reads
+    "ALTER TABLE query_log ADD COLUMN IF NOT EXISTS project TEXT",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS webhook_token TEXT",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS mcp_servers JSON",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS external_tools JSON",
@@ -744,6 +749,7 @@ class Store(FactoryStore, ClaudeUsageStore):
             for stmt in FACTORY_SCHEMA + CLAUDE_USAGE_SCHEMA:
                 self.con.execute(stmt)
             self._rename_query_log_scope()
+            self._query_log_projects()
             self._fold_views()
             self._migrate_claude_code_repo_label()
             self._normalize_projects()
@@ -762,6 +768,19 @@ class Store(FactoryStore, ClaudeUsageStore):
             self.con.execute("CHECKPOINT")
         except Exception as e:
             raise StoreUnavailable(f"cannot initialize the database at {path}: {e}", path) from e
+
+    def _query_log_projects(self) -> None:
+        """Reads logged before the project column: the ones that named a project in their selector
+        (`tares_project=<id or name>`) get it, so the log still hides a private project's. The rest
+        cannot be told apart and stay unattributed."""
+        rows = self.con.execute(
+            "SELECT id, key_value FROM query_log WHERE project IS NULL "
+            "AND key_value LIKE '%tares_project=%'").fetchall()
+        for qid, key in rows:
+            m = re.search(r"tares_project=([^,]*)", key or "")
+            ids = self.project_ids_named([m.group(1).strip()]) if m else []
+            if ids:
+                self.con.execute("UPDATE query_log SET project = ? WHERE id = ?", [",".join(ids), qid])
 
     def _people_upgrade(self) -> None:
         """The person `local` always exists: the one person of a cell with auth off, and the one
@@ -3360,36 +3379,45 @@ class Store(FactoryStore, ClaudeUsageStore):
     # would couple the store's schema to the UI's message shape for no reader's benefit.
     ASK_SESSIONS_KEEP = 50   # bounded history: enough to scroll back, never a growth vector
 
-    def list_ask_sessions(self) -> list[dict]:
+    # `person_id` scopes a transcript to one person. `system=True` (the system credential, or auth
+    # off) sees every row; otherwise only the rows of `person_id`, so a caller with no person sees
+    # none. The 50-row cap counts per owner so one person cannot push another's history out.
+    def list_ask_sessions(self, person_id: str | None = None, system: bool = True) -> list[dict]:
+        where, args = ("", []) if system else (" WHERE person_id = ?", [person_id])
         with self._lock:
             rows = self.con.execute(
-                "SELECT id, title, created_at, updated_at FROM ask_sessions "
-                "ORDER BY updated_at DESC").fetchall()
+                "SELECT id, title, created_at, updated_at FROM ask_sessions" + where +
+                " ORDER BY updated_at DESC", args).fetchall()
         return [{"id": r[0], "title": r[1], "created_at": r[2], "updated_at": r[3]} for r in rows]
 
-    def get_ask_session(self, sid: str) -> dict | None:
+    def get_ask_session(self, sid: str, person_id: str | None = None,
+                        system: bool = True) -> dict | None:
         with self._lock:
             row = self.con.execute(
-                "SELECT id, title, state, created_at, updated_at FROM ask_sessions WHERE id = ?",
-                [sid]).fetchone()
-        if row is None:
+                "SELECT id, title, state, created_at, updated_at, person_id FROM ask_sessions "
+                "WHERE id = ?", [sid]).fetchone()
+        if row is None or not (system or (person_id is not None and row[5] == person_id)):
             return None
         return {"id": row[0], "title": row[1], "state": row[2],
                 "created_at": row[3], "updated_at": row[4]}
 
-    def upsert_ask_session(self, sid: str, title: str, state: str) -> None:
+    def upsert_ask_session(self, sid: str, title: str, state: str,
+                           person_id: str | None = None) -> None:
+        """Callers check that `sid` is not someone else's first; the owner is set on insert and
+        never changes."""
         ts = now_utc()
         with self._lock:
             self.con.execute(
-                "INSERT INTO ask_sessions (id, title, state, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?) "
+                "INSERT INTO ask_sessions (id, title, state, created_at, updated_at, person_id) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (id) DO UPDATE SET title = excluded.title, "
                 "state = excluded.state, updated_at = excluded.updated_at",
-                [sid, title, state, ts, ts])
+                [sid, title, state, ts, ts, person_id])
             self.con.execute(
-                "DELETE FROM ask_sessions WHERE id NOT IN "
-                "(SELECT id FROM ask_sessions ORDER BY updated_at DESC LIMIT ?)",
-                [self.ASK_SESSIONS_KEEP])
+                "DELETE FROM ask_sessions WHERE person_id IS NOT DISTINCT FROM ? AND id NOT IN "
+                "(SELECT id FROM ask_sessions WHERE person_id IS NOT DISTINCT FROM ? "
+                "ORDER BY updated_at DESC LIMIT ?)",
+                [person_id, person_id, self.ASK_SESSIONS_KEEP])
 
     def delete_ask_session(self, sid: str) -> bool:
         with self._lock:
@@ -3398,27 +3426,47 @@ class Store(FactoryStore, ClaudeUsageStore):
         return bool(n and n[0])
 
     # ── activity logs (agent-facing observability) ────────────────────────────
+    def project_ids_named(self, refs: list[str]) -> list[str]:
+        """The ids of the projects whose id or name is one of `refs` (case-insensitive); unknown
+        refs are skipped. Takes no view of who may see them: it is for attributing a read."""
+        want = {str(r).strip().lower() for r in refs if r and str(r).strip()}
+        if not want:
+            return []
+        return [u["id"] for u in self.list_projects()
+                if u["id"].lower() in want or u["name"].lower() in want]
+
+    def read_projects(self, selector: dict | None, *uids: str | None) -> str | None:
+        """The `project` of a read for log_query: the projects it was scoped to (`uids`) and the
+        one its selector names (`tares_project`), comma-joined; None when it was about none."""
+        ids = [u for u in uids if u]
+        named = (selector or {}).get("tares_project")
+        if named:
+            ids += [i for i in self.project_ids_named([named]) if i not in ids]
+        return ",".join(ids) or None
+
     def log_query(self, qid: str, scope: str, key: str, window: str,
-                  rows_returned: int, client: str) -> None:
-        """`scope` says what was read: a trigger's name, an agent tool, "(read)" for a raw read."""
+                  rows_returned: int, client: str, project: str | None = None) -> None:
+        """`scope` says what was read: a trigger's name, an agent tool, "(read)" for a raw read.
+        `project` is the comma-joined ids of the projects it was about (see read_projects)."""
         with self._lock:
             self.con.execute(
                 "INSERT INTO query_log (id, scope, key_value, time_window, rows_returned, client, "
-                "queried_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [qid, scope, key, window, rows_returned, client, now_utc()],
+                "queried_at, project) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [qid, scope, key, window, rows_returned, client, now_utc(), project],
             )
 
     def list_queries(self, limit: int = 100, hide: list[str] | None = None) -> list[dict]:
-        """The read log. `hide` lists project names and ids the caller cannot see: a row whose
-        selector or scope names one is left out (a read of `tares_project=Secret`)."""
-        terms = [h.lower() for h in (hide or []) if h]
-        sql = "".join(" AND instr(lower(COALESCE(key_value, '') || ' ' || COALESCE(scope, '')), ?) = 0"
-                      for _ in terms)
+        """The read log. `hide` lists the ids of the projects the caller cannot see: a read that was
+        about one of them (its `project` column) is left out."""
+        sql, params = "", []
+        if hide:
+            sql = " AND NOT list_has_any(string_split(COALESCE(project, ''), ','), ?)"
+            params = [list(hide)]
         with self._lock:
             rows = self.con.execute(
                 "SELECT id, scope, key_value, time_window, rows_returned, client, queried_at "
                 f"FROM query_log WHERE TRUE{sql} ORDER BY queried_at DESC LIMIT ?",
-                [*terms, int(limit)],
+                [*params, int(limit)],
             ).fetchall()
         return [
             {"id": r[0], "scope": r[1], "key": r[2], "window": r[3],
@@ -3612,18 +3660,20 @@ class Store(FactoryStore, ClaudeUsageStore):
         }
 
     def newest_key(self, sources: list[str], filters: list | None,
-                   since: datetime) -> tuple[str, datetime] | None:
+                   since: datetime, exclude: dict | None = None) -> tuple[str, datetime] | None:
         """(entity, event time) of the newest event since `since` across `sources` that passes
-        `filters` (a trigger's), or None."""
+        `filters` (a trigger's), or None. `exclude` drops the rows of projects the caller
+        cannot see."""
         if not sources:
             return None
         ph = ", ".join(["?"] * len(sources))
         fsql, fparams = _filter_sql(filters)
+        esql, eparams = _exclude_sql(exclude, list(sources))
         with self._lock:
             r = self.con.execute(
                 f"SELECT key_value, event_time FROM events WHERE source IN ({ph}) AND ingest_time >= ? "
-                f"AND COALESCE(key_value, '') <> ''{fsql} ORDER BY ingest_time DESC LIMIT 1",
-                [*sources, since, *fparams]).fetchone()
+                f"AND COALESCE(key_value, '') <> ''{fsql}{esql} ORDER BY ingest_time DESC LIMIT 1",
+                [*sources, since, *fparams, *eparams]).fetchone()
         return (r[0], r[1]) if r else None
 
     def recent_events(self, source: str | None = None, limit: int = 50,
@@ -3748,16 +3798,22 @@ class Store(FactoryStore, ClaudeUsageStore):
         return len(updates)
 
     def list_entities(self, label: str, sources: list[str] | None = None,
-                      limit: int = 200) -> list[dict]:
+                      limit: int = 200, exclude: dict | None = None) -> list[dict]:
         """Distinct values of `label` (an entity per value) with event count + last seen, most
         active first. `label` may be 'key_value' or any named label. Optionally scoped to sources.
 
         Reads the maintained entity_counts counter (kept in sync by append()/purge_events()) instead
         of a full-table `GROUP BY json_extract_string(labels, …)`. If any relevant (source, label)
         was truncated for exceeding the cardinality cap, that label isn't materialized — fall back to
-        a live scan so the answer stays correct (just slower, for a label that shouldn't be an axis)."""
+        a live scan so the answer stays correct (just slower, for a label that shouldn't be an axis).
+        The counter has no project, so `exclude` (see _exclude_sql) also takes the live scan: a label
+        value that only a hidden project's rows carry must not list."""
         if not _FIELD_RE.match(label):
             raise ValueError(f"bad label name {label!r}")
+        xsql, xparams = _exclude_sql(exclude, sources)
+        if xsql:
+            with self._lock:
+                return self._list_entities_scan(label, sources, limit, xsql, xparams)
         ph = ", ".join(["?"] * len(sources)) if sources else ""
         with self._lock:
             tq = "SELECT 1 FROM entity_label_state WHERE label = ? AND truncated = TRUE"
@@ -3789,7 +3845,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         with self._lock:
             return self.con.execute(q + " LIMIT 1", p).fetchone() is not None
 
-    def _list_entities_scan(self, label: str, sources: list[str] | None, limit: int) -> list[dict]:
+    def _list_entities_scan(self, label: str, sources: list[str] | None, limit: int,
+                            xsql: str = "", xparams: list | None = None) -> list[dict]:
         """The pre-counter implementation: scan events and GROUP BY the label. Used only as the
         fallback for a truncated (high-cardinality) label. Caller holds the lock."""
         expr = _label_expr(label)
@@ -3798,6 +3855,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         if sources:
             where += f" AND source IN ({', '.join(['?'] * len(sources))})"
             params += sources
+        where += xsql
+        params += xparams or []
         rows = self.con.execute(
             f"SELECT {expr} AS v, COUNT(*), MAX(ingest_time) FROM events {where} "
             f"GROUP BY v ORDER BY COUNT(*) DESC LIMIT ?", [*params, int(limit)],

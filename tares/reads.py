@@ -76,13 +76,15 @@ def _selector(key, where) -> str:
 
 def resolve_sources_full(store, sources: list, scope: str, key=None, window: str = "15m",
                          where: dict | None = None, filters: list | None = None,
-                         include_payload: bool = False) -> tuple[str, int, list]:
+                         include_payload: bool = False,
+                         exclude: dict | None = None) -> tuple[str, int, list]:
     """(rendered payload, row count, structured rows) for an entity across `sources`, narrowed by
     `filters`. `scope` heads the payload (a trigger's name). The entity is selected by `key`
-    and/or `where`; `include_payload` adds the raw lossless record as `raw` on each row."""
+    and/or `where`; `include_payload` adds the raw lossless record as `raw` on each row;
+    `exclude` drops the rows of projects the caller cannot see (store._exclude_sql)."""
     since = now_utc() - parse_window(window)
     rows = store.read_window(list(sources), key, since, filters=filters, where=where,
-                             include_payload=include_payload) if sources else []
+                             include_payload=include_payload, exclude=exclude) if sources else []
     lines, structured = _render(rows, include_payload)
     return _wrap(scope, _selector(key, where), window, lines, not rows), len(rows), structured
 

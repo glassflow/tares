@@ -1098,7 +1098,7 @@ def make_app() -> FastAPI:
                                                      sources=names, scope=scope, exclude=exclude)
         log_key = ", ".join(f"{k}={v}" for k, v in req.selector.items())
         store.log_query("r_" + uuid.uuid4().hex[:12], "(read)", log_key, req.window,
-                        nrows, req.client)
+                        nrows, req.client, project=store.read_projects(req.selector, uid))
         return {"payload": payload, "count": nrows, "sources": sources, "rows": rows}
 
     # Views were removed: a trigger names its own sources. The old routes answer 404 with the
@@ -1236,6 +1236,10 @@ def make_app() -> FastAPI:
                     else _owned_by_hidden("trigger", name, hidden)):
                 _err(KeyError(f"unknown {kind} {name!r}"), 404)
         edges = [e for e in _lineage_edges() if handle in (e["from"], e["to"])]
+        if hidden:
+            # a source that feeds a trigger of a hidden project must not name that trigger
+            edges = [e for e in edges
+                     if not _owned_by_hidden("trigger", e["to"].split(":", 1)[1], hidden)]
         if pk:
             project_triggers = {f"trigger:{t.name}" for t in runtime.catalog.triggers
                                 if pk in store.projects_using("trigger", t.name)}
@@ -1248,11 +1252,14 @@ def make_app() -> FastAPI:
             entry = {**entry, "config": redact_config(entry["connector"], entry["config"])}
             health = runtime.health_snapshot().get(name) or {}
             names = _source_label_names(entry)
+            exclude = _read_exclude()
             if names:
-                labels = {ln: store.list_entities(ln, sources=[name], limit=20) for ln in names}
+                labels = {ln: store.list_entities(ln, sources=[name], limit=20, exclude=exclude)
+                          for ln in names}
                 primary_label = _source_primary(entry)
             else:
-                labels = {"key": store.list_entities("key_value", sources=[name], limit=20)}
+                labels = {"key": store.list_entities("key_value", sources=[name], limit=20,
+                                                     exclude=exclude)}
                 primary_label = "key"
             return {
                 "handle": handle, "kind": "source", "entry": entry,
@@ -1264,7 +1271,7 @@ def make_app() -> FastAPI:
                               "events_total": health.get("events_total", 0),
                               "status": health.get("status")},
                 "lineage": edges,
-                "sample": store.recent_events(source=name, limit=3, exclude=_read_exclude()),
+                "sample": store.recent_events(source=name, limit=3, exclude=exclude),
             }
 
         entry = next((t for t in store.list_catalog_triggers() if t["name"] == name), None)
@@ -1284,6 +1291,7 @@ def make_app() -> FastAPI:
         # a cell with a hidden source counts the labels of the sources the caller can see only
         visible_src = ([n for n in runtime.catalog.sources if n not in hidden_src]
                        if hidden_src else None)
+        exclude = _read_exclude()
         facets = _label_facets()
         if hidden_src:
             facets = {k: {**f, "sources": [n for n in f["sources"] if n not in hidden_src]}
@@ -1294,8 +1302,9 @@ def make_app() -> FastAPI:
             # an unnamed `key` facet reads the bare key_value, scoped to its label-less sources;
             # a named label reads that label across events that carry it
             if facet.get("unnamed"):
-                return store.list_entities("key_value", sources=facet["sources"], limit=lim)
-            vals = store.list_entities(name, sources=visible_src, limit=lim)
+                return store.list_entities("key_value", sources=facet["sources"], limit=lim,
+                                           exclude=exclude)
+            vals = store.list_entities(name, sources=visible_src, limit=lim, exclude=exclude)
             if name == "tares_project" and hidden:
                 gone = {v.lower() for p in _hidden_projects() for v in (p["id"], p["name"])}
                 vals = [v for v in vals if str(v["value"]).lower() not in gone]
@@ -1757,12 +1766,13 @@ def make_app() -> FastAPI:
 
     @app.get("/api/sources/{name}")
     async def get_source(name: str):
-        hidden_src = _hidden_sources(_hidden_ids())
+        hidden = _hidden_ids()
+        hidden_src = _hidden_sources(hidden)
         for s in store.list_catalog_sources():
             if s["name"] == name and name not in hidden_src:
                 return {**s, "config": redact_config(s["connector"], s["config"]),
                         "projects": [u for u in store.source_memberships().get(name, [])
-                                     if u not in _hidden_ids()],
+                                     if u not in hidden],
                         "health": runtime.health_snapshot().get(name)}
         _err(KeyError(f"unknown source {name!r}"), 404)
 
@@ -2530,30 +2540,41 @@ def make_app() -> FastAPI:
     # ── Ask sessions — server-side chat history, so a conversation survives navigation and a
     # console reopened tomorrow can pick up where it left off. The console PUTs the whole session
     # after each exchange; the store keeps the newest 50.
+    def _ask_viewer(request) -> dict:
+        """Whose Ask transcripts this caller may touch: all of them for the system credential (and
+        auth off), a person's own for a key with a person, none for a key without one."""
+        person = _current_person(request)
+        return {"person_id": person["id"] if person else None, "system": _is_system(request)}
+
     @app.get("/api/ask/sessions")
-    async def ask_sessions():
-        return {"sessions": store.list_ask_sessions()}
+    async def ask_sessions(request: Request):
+        return {"sessions": store.list_ask_sessions(**_ask_viewer(request))}
 
     @app.get("/api/ask/sessions/{sid}")
-    async def ask_session(sid: str):
-        row = store.get_ask_session(sid)
+    async def ask_session(sid: str, request: Request):
+        row = store.get_ask_session(sid, **_ask_viewer(request))
         if row is None:
             _err(KeyError(f"unknown session {sid!r}"), 404)
         return row
 
     @app.put("/api/ask/sessions/{sid}")
-    async def save_ask_session(sid: str, body: AskSessionIn):
+    async def save_ask_session(sid: str, body: AskSessionIn, request: Request):
         if not re.fullmatch(r"[0-9a-f]{16,64}", sid):
             _err(ValueError("session id must be a hex id"), 400)
         # a runaway transcript should degrade the one session, not the instance
         if len(body.state) > 2_000_000:
             _err(ValueError("session too large to save (2 MB cap)"), 413)
-        store.upsert_ask_session(sid, body.title[:120], body.state)
+        viewer = _ask_viewer(request)
+        # someone else's id is "unknown", the same as a read, so a PUT cannot overwrite it
+        if store.get_ask_session(sid) is not None and store.get_ask_session(sid, **viewer) is None:
+            _err(KeyError(f"unknown session {sid!r}"), 404)
+        store.upsert_ask_session(sid, body.title[:120], body.state, viewer["person_id"])
         return {"ok": True}
 
     @app.delete("/api/ask/sessions/{sid}")
-    async def remove_ask_session(sid: str):
-        if not store.delete_ask_session(sid):
+    async def remove_ask_session(sid: str, request: Request):
+        if store.get_ask_session(sid, **_ask_viewer(request)) is None \
+                or not store.delete_ask_session(sid):
             _err(KeyError(f"unknown session {sid!r}"), 404)
         return {"ok": True}
 
@@ -3444,9 +3465,7 @@ def make_app() -> FastAPI:
     # ── management API: activity (what agents saw / what woke them) ──────────
     @app.get("/api/activity/queries")
     async def activity_queries(limit: int = 100):
-        hp = _hidden_projects()
-        return store.list_queries(limit=min(limit, 500),
-                                  hide=[v for p in hp for v in (p["id"], p["name"])])
+        return store.list_queries(limit=min(limit, 500), hide=sorted(_hidden_ids()))
 
     @app.get("/api/activity/dispatches")
     async def activity_dispatches(limit: int = 100):
@@ -4372,6 +4391,7 @@ def make_app() -> FastAPI:
         from .reads import parse_window, resolve_sources_full
         plan = setup.get("plan") or {}
         window = trig.emit.get("context_window") or "15m"
+        exclude = _read_exclude()
         key = None
         for w in plan.get("watches") or []:
             cfg = runtime.catalog.sources.get(w.get("name"))
@@ -4384,14 +4404,16 @@ def make_app() -> FastAPI:
                 key = (env.labels or {}).get(trig.key_field) if trig.key_field else None
                 key = str(key or env.key_value or "")
                 _p, count, _rows = resolve_sources_full(store, trig.sources, trig.name, key=key,
-                                                        window=window, filters=trig.filters)
+                                                        window=window, filters=trig.filters,
+                                                        exclude=exclude)
                 if not count:
                     await _practice_ingest(w["name"], w["sample"])
                 break
         if not key:
             # the newest event the wake-up would count (its filters) in the last day, with the
             # timeline reaching back to it
-            hit = store.newest_key(list(trig.sources), trig.filters, now_utc() - timedelta(days=1))
+            hit = store.newest_key(list(trig.sources), trig.filters, now_utc() - timedelta(days=1),
+                                   exclude=exclude)
             if hit:
                 key, at = hit
                 at = at if at.tzinfo else at.replace(tzinfo=timezone.utc)
@@ -4400,7 +4422,7 @@ def make_app() -> FastAPI:
                     window = f"{age_m}m"
         if not key:
             for s in trig.sources:
-                ev = store.recent_events(source=s, limit=1)
+                ev = store.recent_events(source=s, limit=1, exclude=exclude)
                 if ev and ev[0].get("key"):
                     key = ev[0]["key"]
                     break
@@ -4408,7 +4430,8 @@ def make_app() -> FastAPI:
             _err(ValueError("Nothing has arrived yet to practice on. Send a test event first."),
                  409)
         payload, _n, _rows = resolve_sources_full(store, trig.sources, trig.name, key=key,
-                                                  window=window, filters=trig.filters)
+                                                  window=window, filters=trig.filters,
+                                                  exclude=exclude)
         return key, payload
 
     @app.post("/api/projects/{uid}/setup/practice")
@@ -5744,7 +5767,8 @@ def make_app() -> FastAPI:
                                scope=f"project {p.get('name') or uid}", project_rows=scope)
         except ValueError as e:
             _err(e)
-        store.log_query("s_" + uuid.uuid4().hex[:12], "(stats)", f"by {by}", window, 0, "http")
+        store.log_query("s_" + uuid.uuid4().hex[:12], "(stats)", f"by {by}", window, 0, "http",
+                        project=uid)
         return {"stats": text}
 
     # /api/usecases*: the pre-1.14 routes, same handlers, old response shape ({"usecases"},

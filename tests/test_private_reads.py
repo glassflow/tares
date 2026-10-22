@@ -258,7 +258,9 @@ async def setup(B, ids):
         r = await cx.patch(f"{B}/api/projects/{p1}", headers=H(ids["ann"]), json={"scope": "private"})
         ck("set up: Ann leads a private project, Bob is not on it", r.status_code == 200
            and r.json()["scope"] == "private", r.text[:200])
-        ids["p1"], ids["team"] = p1, team
+        team2 = (await cx.post(f"{B}/api/projects", headers=H(ids["ann"]), json={
+            "template": "custom", "name": "Open two", "objects": []})).json()["id"]
+        ids["p1"], ids["team"], ids["team2"] = p1, team, team2
         lbl = [{"name": "service", "field": "service", "primary": True},
                {"name": "tares_project", "field": "tares_project"}]
         r = await cx.post(f"{B}/api/sources", headers=ROOT, json={
@@ -314,7 +316,35 @@ def seed(ids):
         ev("sess", "sess-secret", "SECRET session event", {"service": "checkout"}),
         ev("sess", "sess-other", "OPEN other-session event", {"service": "checkout"}),
         ev("p1-src", "checkout", "SECRET own-source event", {"service": "checkout"}),
+        # a label value only a hidden project's row in a shared source carries (F5)
+        ev("evts", "hidden-key", "SECRET label-value event", {"service": "hiddensvc", "tares_project": p1}),
+        ev("evts", "open-key", "OPEN label-value event", {"service": "opensvc"}),
     ])
+    # practice (F7): a trigger whose filter lets nothing through, on a project of its own, and the
+    # newest event of the shared source belongs to p1, so a practice picks it unless the read
+    # excludes it
+    team2 = ids["team2"]
+    store.upsert_catalog_trigger("t-nomatch", ["evts"], {"aggregate": "count", "predicate": "> 0",
+                                                         "window": "1m"}, {}, "5m",
+                                 filters=[{"field": "service", "op": "contains", "value": "zzz-never"}])
+    store.set_owned_by("trigger", "t-nomatch", team2)
+    store.upsert_project_object(team2, "trigger", "t-nomatch", "t-nomatch")
+    store.mark_customized("trigger", "t-nomatch")
+    for uid in (team, team2):
+        store.set_project_setup(uid, {"plan": {"who": "own"}})
+    # lineage and membership (F8, F10): evts is in both projects, and p1 has a trigger on it
+    for uid in (p1, team):
+        store.upsert_project_object(uid, "source", "evts", "evts")
+    store.upsert_catalog_trigger("t-p1-evts", ["evts"], {"aggregate": "count", "predicate": "> 0",
+                                                         "window": "1m"}, {}, "5m")
+    store.set_owned_by("trigger", "t-p1-evts", p1)
+    store.upsert_project_object(p1, "trigger", "t-p1-evts", "t-p1-evts")
+    store.mark_customized("trigger", "t-p1-evts")
+    store.append([ev("evts", "shared-key", "SECRET shared-key event",
+                     {"service": "practicesvc", "tares_project": p1}),
+                  ev("evts", "shared-key", "OPEN shared-key event", {"service": "practicesvc"})])
+    store.append([ev("evts", "p1-practice-key", "SECRET practice event",
+                     {"service": "practicesvc", "tares_project": p1})])
     store.con.close()
 
 
@@ -349,8 +379,11 @@ def seed_objects(store, ids, now):
         store.add_dispatch_projects(did, [uid])
     store.add_subscription("sub-secret", "t-secret", "http://127.0.0.1:9/secret-hook")
     store.add_subscription("sub-open", "t-open", "http://127.0.0.1:9/open-hook")
-    store.log_query("q-secret", "(read)", "tares_project=Secret", "1h", 1, "mcp")
+    store.log_query("q-secret", "(read)", "tares_project=Secret", "1h", 1, "mcp",
+                    project=store.read_projects({"tares_project": "Secret"}))
     store.log_query("q-open", "(read)", "service=checkout", "1h", 1, "mcp")
+    # names p1 in its text but is about no project (F6: the old substring test hid this one)
+    store.log_query("q-lookalike", "(read)", "service=secret", "1h", 1, "mcp")
     store.upsert_skill(p1, "secret-skill", "SECRET skill", "body")
     store.upsert_skill(team, "open-skill", "OPEN skill", "body")
     store.create_doc(p1, "note", "SECRET doc", "body")
@@ -612,6 +645,181 @@ async def ask_checks(B, ids):
         ck("Slack: the open project and events are there", "Open" in got and has_all(got, OPENS[:2]), got[:400])
 
 
+async def ask_session_checks(B, ids):
+    """Ask transcripts belong to the person who had the chat. Ann and Bob each list and open only
+    their own; the system credential sees all; a transcript with no person (Slack, the system
+    credential) is the system's alone; a key with no person sees none."""
+    print("== Ask transcripts per person ==")
+    ROOT = H(AUTH)
+    sid = {"ann": "a" * 16, "bob": "b" * 16, "sys": "c" * 16}
+    async with httpx.AsyncClient(timeout=20) as cx:
+        async def put(tok, key, title):
+            return await cx.put(f"{B}/api/ask/sessions/{sid[key]}", headers=H(tok),
+                                json={"title": title, "state": json.dumps({"by": title})})
+
+        async def listed(tok):
+            r = await cx.get(f"{B}/api/ask/sessions", headers=H(tok))
+            return sorted(x["id"] for x in r.json()["sessions"]) if r.status_code == 200 else r.status_code
+
+        ck("Ann saves her transcript", (await put(ids["ann"], "ann", "ann chat")).status_code == 200)
+        ck("Bob saves his", (await put(ids["bob"], "bob", "bob chat")).status_code == 200)
+        ck("the system credential saves one with no person",
+           (await put(AUTH, "sys", "slack chat")).status_code == 200)
+        ck("Ann lists only hers", await listed(ids["ann"]) == [sid["ann"]], str(await listed(ids["ann"])))
+        ck("Bob lists only his", await listed(ids["bob"]) == [sid["bob"]], str(await listed(ids["bob"])))
+        ck("the system credential lists all three", await listed(AUTH) == sorted(sid.values()),
+           str(await listed(AUTH)))
+        ck("Ann opens hers",
+           (await cx.get(f"{B}/api/ask/sessions/{sid['ann']}", headers=H(ids["ann"]))).status_code == 200)
+        ck("Bob cannot open Ann's: 404",
+           (await cx.get(f"{B}/api/ask/sessions/{sid['ann']}", headers=H(ids["bob"]))).status_code == 404)
+        ck("Ann cannot open the transcript with no person: 404",
+           (await cx.get(f"{B}/api/ask/sessions/{sid['sys']}", headers=H(ids["ann"]))).status_code == 404)
+        ck("the system credential opens Ann's",
+           (await cx.get(f"{B}/api/ask/sessions/{sid['ann']}", headers=ROOT)).status_code == 200)
+        # break-test: Bob tries to take Ann's transcript over, by PUT and by DELETE
+        r = await put(ids["bob"], "ann", "bob overwrote")
+        ck("Bob's PUT to Ann's id: 404", r.status_code == 404, f"{r.status_code} {r.text[:100]}")
+        r = await cx.delete(f"{B}/api/ask/sessions/{sid['ann']}", headers=H(ids["bob"]))
+        ck("Bob's DELETE of Ann's id: 404", r.status_code == 404, f"{r.status_code} {r.text[:100]}")
+        mine = (await cx.get(f"{B}/api/ask/sessions/{sid['ann']}", headers=H(ids["ann"]))).json()
+        ck("... and Ann's transcript is untouched", mine["title"] == "ann chat"
+           and json.loads(mine["state"]) == {"by": "ann chat"}, str(mine)[:200])
+        r = await cx.delete(f"{B}/api/ask/sessions/{sid['sys']}", headers=H(ids["bob"]))
+        ck("Bob's DELETE of the no-person transcript: 404", r.status_code == 404, r.text[:100])
+        # a key with no person has nobody's transcripts to see
+        r = await cx.post(f"{B}/api/keys", headers=ROOT, json={"name": "no-person", "scopes": ["admin"]})
+        if r.status_code in (200, 201):
+            anon = r.json()["secret"]
+            ck("a key with no person lists none", await listed(anon) == [], str(await listed(anon)))
+            ck("... and opens none",
+               (await cx.get(f"{B}/api/ask/sessions/{sid['sys']}", headers=H(anon))).status_code == 404)
+        else:
+            ck("a key with no person can be made", False, f"{r.status_code} {r.text[:120]}")
+        r = await cx.delete(f"{B}/api/ask/sessions/{sid['ann']}", headers=H(ids["ann"]))
+        ck("Ann deletes her own", r.status_code == 200, r.text[:100])
+
+
+async def label_value_checks(B, ids):
+    """F5: a label value that only a hidden project's rows carry does not list, in /api/entities or
+    in catalog describe, while a value its open rows carry does. The counter behind both has no
+    project, so the read takes the live scan when a project is hidden."""
+    print("== label values of a shared source ==")
+    async with httpx.AsyncClient(timeout=20) as cx:
+        async def values(tok):
+            r = await cx.get(f"{B}/api/entities?label=service", headers=H(tok))
+            ent = sorted(v["value"] for v in r.json()["values"]) if r.status_code == 200 else r.status_code
+            r = await cx.get(f"{B}/catalog/source:evts", headers=H(tok))
+            desc = sorted(v["value"] for v in r.json()["labels"]["service"]) if r.status_code == 200 else r.status_code
+            return ent, desc
+        for who in ("bob", "ann"):
+            ent, desc = await values(ids[who])
+            for where, got in (("/api/entities", ent), ("catalog describe", desc)):
+                if who == "bob":
+                    ck(f"Bob: {where} lists no value only p1 carries",
+                       isinstance(got, list) and "hiddensvc" not in got, str(got))
+                    ck(f"Bob: {where} lists the open values",
+                       isinstance(got, list) and {"checkout", "opensvc"} <= set(got), str(got))
+                else:
+                    ck(f"Ann: {where} lists the p1 value",
+                       isinstance(got, list) and "hiddensvc" in got, str(got))
+
+
+async def query_log_checks(B, ids):
+    """F6: the read log hides a private project's reads by their project column, not by looking for
+    its name in the selector. A read scoped to p1 by `project` is hidden though its selector does
+    not name it; a read that only mentions the name is shown."""
+    print("== the read log ==")
+    async with httpx.AsyncClient(timeout=20) as cx:
+        r = await cx.post(f"{B}/read", headers=H(ids["ann"]), json={
+            "selector": {"service": "scoped-only"}, "window": "1h", "project": ids["p1"]})
+        ck("Ann reads inside p1", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
+        r = await cx.post(f"{B}/read", headers=H(ids["ann"]), json={
+            "selector": {"tares_project": "secret"}, "window": "1h"})
+        ck("Ann reads tares_project=secret (any case)", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
+        r = await cx.post(f"{B}/read", headers=H(ids["bob"]), json={
+            "selector": {"service": "open-only"}, "window": "1h"})
+        ck("Bob reads something open", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
+        async def log(tok):
+            r = await cx.get(f"{B}/api/activity/queries", headers=H(tok))
+            return r.text
+        b, a = await log(ids["bob"]), await log(ids["ann"])
+        ck("Bob: no read scoped to p1", "scoped-only" not in b, b[:300])
+        ck("Bob: no read that names p1 in another case", "tares_project=secret" not in b, b[:300])
+        ck("Bob: a read that only mentions the name is there", "service=secret" in b, b[:300])
+        ck("Bob: his own read is there", "open-only" in b, b[:300])
+        ck("Ann: she sees the scoped read and the named one",
+           "scoped-only" in a and "tares_project=secret" in a, a[:300])
+
+
+async def practice_checks(B, ids):
+    """F7: a practice starts from the newest event the caller can see. The newest event of the
+    shared source belongs to p1: Bob's practice does not pick its key, by the trigger's filters
+    or by the newest-event fallback, and Ann's does."""
+    print("== practice input ==")
+    async with httpx.AsyncClient(timeout=20) as cx:
+        async def key_of(tok, uid, what):
+            r = await cx.post(f"{B}/api/projects/{uid}/setup/practice", headers=H(tok))
+            if r.status_code != 200:
+                ck(f"{what}: practice runs", False, f"{r.status_code} {r.text[:160]}")
+                return None
+            d = await cx.get(f"{B}/api/activity/dispatches/{r.json()['dispatch_id']}", headers=H(ids["ann"]))
+            return d.json().get("key"), d.text
+        for who, want in (("bob", False), ("ann", True)):
+            for uid, how in ((ids["team"], "newest event the filters pass"),
+                             (ids["team2"], "newest event")):
+                got = await key_of(ids[who], uid, f"{who} {how}")
+                if got is None:
+                    continue
+                key, text = got
+                ck(f"{who.title()}: practice on the {how} {'starts from' if want else 'skips'} the p1 entity",
+                   (key == "p1-practice-key") == want and (want or "SECRET" not in text), f"{key} {text[:160]}")
+
+
+async def lineage_checks(B, ids):
+    """F8: the lineage of a shared source does not name a trigger of a hidden project, for any
+    caller. F10: a source in a hidden and an open project lists only the open one in /api/sources,
+    in the list and by name."""
+    print("== lineage and project lists ==")
+    async with httpx.AsyncClient(timeout=20) as cx:
+        for who in ("bob", "ann"):
+            r = await cx.get(f"{B}/catalog/source:evts", headers=H(ids[who]))
+            lin = json.dumps(r.json().get("lineage")) if r.status_code == 200 else str(r.status_code)
+            ck(f"{who.title()}: lineage keeps the open triggers", "trigger:t-open" in lin, lin[:200])
+            ck(f"{who.title()}: lineage {'omits' if who == 'bob' else 'has'} the p1 trigger",
+               ("t-p1-evts" in lin) == (who == "ann"), lin[:200])
+            r = await cx.get(f"{B}/api/sources", headers=H(ids[who]))
+            row = next((x for x in r.json() if x["name"] == "evts"), None) if r.status_code == 200 else None
+            r2 = await cx.get(f"{B}/api/sources/evts", headers=H(ids[who]))
+            for where, got in (("list", row), ("by name", r2.json() if r2.status_code == 200 else None)):
+                projs = (got or {}).get("projects")
+                ck(f"{who.title()}: /api/sources {where} lists {'only the open project' if who == 'bob' else 'both projects'}",
+                   isinstance(projs, list) and ids["team"] in projs and (ids["p1"] in projs) == (who == "ann"), str(projs))
+        r = await cx.get(f"{B}/api/sources/evts", headers=H(AUTH))
+        ck("the system credential sees both projects", r.status_code == 200
+           and {ids["p1"], ids["team"]} <= set(r.json()["projects"]), r.text[:200])
+
+
+async def ask_session_auth_off():
+    """Auth off is one person using the cell: every transcript is visible, as before."""
+    print("== Ask transcripts with auth off ==")
+    port = free_port()
+    B = f"http://127.0.0.1:{port}"
+    proc = spawn(port, {"TARES_AUTH_TOKEN": "", "TARES_DB": os.path.join(TMP, "authoff.duckdb")})
+    try:
+        if not await _wait(f"{B}/health"):
+            ck("daemon up (auth off)", False); return
+        async with httpx.AsyncClient(timeout=20) as cx:
+            for i in ("d", "e"):
+                await cx.put(f"{B}/api/ask/sessions/{i * 16}", json={"title": i, "state": "{}"})
+            got = sorted(x["id"] for x in (await cx.get(f"{B}/api/ask/sessions")).json()["sessions"])
+            ck("auth off lists every transcript", got == ["d" * 16, "e" * 16], str(got))
+            ck("... and opens any",
+               (await cx.get(f"{B}/api/ask/sessions/{'d' * 16}")).status_code == 200)
+    finally:
+        stop(proc)
+
+
 async def main():
     timing()
     ids = {}
@@ -637,10 +845,16 @@ async def main():
         await daemon_checks(B, ids)
         await list_checks(B, ids)
         await ask_checks(B, ids)
+        await ask_session_checks(B, ids)
+        await label_value_checks(B, ids)
+        await query_log_checks(B, ids)
+        await practice_checks(B, ids)
+        await lineage_checks(B, ids)
     finally:
         stop(proc)
         stub.shutdown()
-        shutil.rmtree(TMP, ignore_errors=True)
+    await ask_session_auth_off()
+    shutil.rmtree(TMP, ignore_errors=True)
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
 
