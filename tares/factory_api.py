@@ -11,11 +11,12 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from fastapi import Body, Request
 
+from . import areas as areas_mod
 from . import claude_usage
 from . import docs as docs_mod
 from . import factory as factory_mod
@@ -24,6 +25,7 @@ from .envelope import now_utc
 
 CREW_SETTING = "crew_settings"
 GRANTS_SETTING = "global_grants"   # the id of the cell's "Grants (all projects)" doc
+GRANTS_MIGRATED_SETTING = "grants_migrated"   # set once the old grants docs became rows (TR-630)
 
 
 def caller(request: Request) -> dict:
@@ -200,7 +202,8 @@ def register(app, store, h: SimpleNamespace) -> None:
     """`h` carries the daemon's helpers: err(exc, code), project_or_404(uid), by(request, body),
     cc_source(), global_ids(create), current_person(request), is_system(request), is_admin(request),
     area_owner(repo) -> the person who owns that GitHub repo (`owner/name`, any case) or None
-    (TR-627)."""
+    (TR-627); is_admin(request) says whether the credential has the admin scope (the system
+    credential does, and so does everyone with auth off)."""
 
     def deny(request: Request, action: str) -> None:
         why = factory_mod.may(caller(request), action)
@@ -299,35 +302,258 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "all_id": shared["id"] if shared else None,
                 "project_id": own["id"] if own else None}
 
+    # ── grants by kind (TR-630) ───────────────────────────────────────────────
+    # A grant is a row: team (what every project starts from), project (what the work may do) or
+    # personal (what may run on the holder's machine). A project grant that names a repo whose
+    # area owner is not the giver waits until that owner consents. A grant in effect is also
+    # written to the grants docs (as before), so what reads those docs keeps working.
+    def pending_owners(areas, given_by, consents) -> list[dict]:
+        """The owners of `areas` who have still to consent: not the giver, not already consented."""
+        done = {c["person_id"] for c in consents}
+        out: dict[str, dict] = {}
+        for repo in areas:
+            o = h.area_owner(repo)
+            if o and o["id"] != given_by and o["id"] not in done:
+                out[o["id"]] = {"id": o["id"], "name": o["name"]}
+        return list(out.values())
+
+    def waiting_for(g: dict) -> list[dict]:
+        if g["state"] != "waiting":
+            return []
+        return pending_owners(g["areas"], g["given_by"], g["consents"])
+
+    def grant_out(g: dict, refs: dict) -> dict:
+        def ref(pid):
+            return refs.get(pid) or {"id": pid, "name": None}
+        return {"id": g["id"], "kind": g["kind"], "project": g["project"], "words": g["words"],
+                "state": g["state"], "given_at": g["given_at"],
+                "given_by": ref(g["given_by"]) if g["given_by"] else None,
+                "holder": ref(g["holder_person_id"]) if g["holder_person_id"] else None,
+                "areas": g["areas"],
+                "consents": [{**ref(c["person_id"]), "at": c["at"]} for c in g["consents"]],
+                "waiting_for": waiting_for(g), "in_effect": g["state"] == "active"}
+
+    def grants_view(rows: list[dict]) -> list[dict]:
+        ids = {g["given_by"] for g in rows} | {g["holder_person_id"] for g in rows}
+        ids |= {c["person_id"] for g in rows for c in g["consents"]}
+        refs = store._person_refs(ids)
+        order = {k: i for i, k in enumerate(factory_mod.GRANT_KINDS)}
+        rows = sorted(rows, key=lambda g: (g["state"] != "active", order.get(g["kind"], 9),
+                                           int(g["id"][1:])))
+        return [grant_out(g, refs) for g in rows]
+
+    _LEGACY_LINE = re.compile(r'^- "(.*)" \((\d{4}-\d{2}-\d{2})\)(?: \(added by .+\))?$')
+
+    def legacy_lines(body: str):
+        """(words, day or None) of each line of an old grants doc."""
+        for raw in (body or "").splitlines():
+            if not raw.startswith("- "):
+                continue
+            m = _LEGACY_LINE.match(raw.strip())
+            if m:
+                yield m.group(1), m.group(2)
+            elif raw[2:].strip():
+                yield raw[2:].strip(), None
+
+    def migrate_grants() -> None:
+        """Once: each line of the old grants docs becomes an active team or project grant. The
+        docs stay as they are."""
+        if store.get_setting(GRANTS_MIGRATED_SETTING):
+            return
+        have = {(g["kind"], g["project"], g["words"]) for g in store.all_grant_rows()}
+
+        def take(kind: str, uid: str | None, body: str) -> None:
+            for words, day in legacy_lines(body):
+                if (kind, uid, words) in have:
+                    continue
+                have.add((kind, uid, words))
+                at = (datetime.fromisoformat(day).replace(tzinfo=timezone.utc) if day
+                      else now_utc())
+                store.add_grant_row(kind, words, project=uid, given_at=at)
+
+        gid = shared_grants_id()
+        if gid:
+            take("team", None, store.get_doc(None, gid)["body"])
+        for p in store.list_projects():
+            d = project_grants_doc(p["id"])
+            if d:
+                take("project", p["id"], store.get_doc(p["id"], d["id"])["body"])
+        store.set_setting(GRANTS_MIGRATED_SETTING, "1")
+
+    def mirror_in(g: dict, by: str) -> None:
+        """A team or project grant in effect, into the grants doc that readers of the docs use."""
+        if g["kind"] == "personal":
+            return
+        day = g["given_at"].date().isoformat() if g["given_at"] else now_utc().date().isoformat()
+        append_grant(g["project"] if g["kind"] == "project" else None,
+                     factory_mod.grant_line(g["words"], day), by)
+
+    def mirror_out(g: dict, by: str) -> None:
+        """A grant revoked: its lines go from the grants doc (the doc is the old view of it)."""
+        if g["kind"] == "personal":
+            return
+        uid = g["project"] if g["kind"] == "project" else None
+        if uid is None:
+            doc_id = shared_grants_id()
+        else:
+            d = project_grants_doc(uid)
+            doc_id = d["id"] if d else None
+        if not doc_id:
+            return
+        doc = store.get_doc(None, doc_id) if uid is None else store.get_doc(uid, doc_id)
+        keep = [ln for ln in doc["body"].splitlines()
+                if not any(w == g["words"] for w, _ in legacy_lines(ln))]
+        text = "\n".join(keep) + "\n"
+        if text != doc["body"]:
+            store.update_doc(doc_id, body=text, by=by)
+
+    def visible_grant(g: dict, request: Request) -> bool:
+        """May this caller read this grant? Personal: its holder. Project: whoever can see the
+        project. Team: anyone."""
+        person = h.current_person(request)
+        if g["kind"] == "personal":
+            return bool(person and g["holder_person_id"] == person["id"])
+        if g["kind"] == "project":
+            try:
+                h.project_or_404(g["project"])
+            except Exception:
+                return False
+        return True
+
+    def grant_or_404(gid: str, request: Request) -> dict:
+        g = store.get_grant_row(gid)
+        if g is None or not visible_grant(g, request):
+            h.err(KeyError(f"unknown grant {gid!r}"), 404)
+        return g
+
     @app.get("/api/grants")
-    async def get_grants(project: str = ""):
+    async def get_grants(request: Request, project: str = ""):
         """The grants for every project (`all`) and, with `project`, that project's own, as
-        markdown."""
+        markdown (what the docs hold), and `grants`: the team grants, that project's and the
+        caller's own personal ones, each {id, kind, words, state, given_by, consents,
+        waiting_for, in_effect}, those in effect first. Revoked ones are left out."""
         uid = None
         if project.strip():
             uid = h.project_or_404(h.resolve_project(project.strip()))["id"]
-        return grants_out(uid)
+        person = h.current_person(request)
+        mine = person["id"] if person else None
+        rows = [g for g in store.all_grant_rows() if g["state"] != "revoked" and (
+            g["kind"] == "team"
+            or (g["kind"] == "project" and uid is not None and g["project"] == uid)
+            or (g["kind"] == "personal" and mine is not None and g["holder_person_id"] == mine
+                and g["project"] in (None, uid)))]
+        return {**grants_out(uid), "grants": grants_view(rows)}
 
     @app.post("/api/grants", status_code=201)
     async def add_grant(request: Request, body: dict = Body(...)):
-        """{words, scope: all|project, project?}: one grant, quoting the person, dated today.
-        Only the orchestrator among the crew may add one; a person's own session may."""
+        """{kind: team|project|personal, words, project?, areas?}: one grant, quoting the person,
+        dated today (`scope: all|project` is the older name for kind). Team needs the admin
+        scope; project, the project's lead, an area owner for repos they own, or the admin
+        scope; personal, a key that belongs to a person, for themselves. A project grant that
+        names a repo owned by someone other than the giver waits for that owner. Only the
+        orchestrator among the crew may add one; a person's own session may."""
         deny(request, "grants")
-        scope = str(body.get("scope") or "all").strip().lower()
-        if scope not in ("all", "project"):
-            h.err(ValueError("scope is all or project"))
+        project_ref = str(body.get("project") or "").strip()
+        kind = str(body.get("kind") or body.get("scope") or "").strip().lower()
+        kind = "team" if kind == "all" else kind or ("project" if project_ref else "team")
+        if kind not in factory_mod.GRANT_KINDS:
+            h.err(ValueError("kind is team, project or personal"))
         try:
-            line = factory_mod.grant_line(body.get("words"), now_utc().date().isoformat())
+            words = factory_mod.grant_words(body.get("words"))
         except docs_mod.DocError as e:
             h.err(e)
-        uid = None
-        if scope == "project":
-            ref = str(body.get("project") or "").strip()
-            if not ref:
-                h.err(ValueError("name the project the grant is for"))
-            uid = h.project_or_404(h.resolve_project(ref))["id"]
-        added = append_grant(uid, line, h.by(request, body))
-        return {**grants_out(uid), "added": added, "line": line}
+        raw_areas = body.get("areas") or []
+        if not isinstance(raw_areas, list):
+            h.err(ValueError("areas is a list of repos, like [\"acme/web\"]"))
+        if raw_areas and kind != "project":
+            h.err(ValueError("areas belong to a project grant"))
+        try:
+            areas = list(dict.fromkeys(areas_mod.norm_repo(a) for a in raw_areas))
+        except ValueError as e:
+            h.err(e)
+        person = h.current_person(request)
+        pid = person["id"] if person else None
+        p = None
+        if kind == "project" and not project_ref:
+            h.err(ValueError("name the project the grant is for"))
+        if kind != "team" and project_ref:
+            p = h.project_or_404(h.resolve_project(project_ref))
+        if kind == "team":
+            if not h.is_admin(request):
+                h.err(PermissionError("a team grant needs the admin scope"), 403)
+        elif kind == "project":
+            owns_all = bool(areas) and pid is not None and all(
+                (h.area_owner(a) or {}).get("id") == pid for a in areas)
+            if not (h.is_admin(request) or (pid and p.get("lead_person_id") == pid) or owns_all):
+                h.err(PermissionError("a project grant comes from the project's lead, or from "
+                                      "the owner of the repos it names"), 403)
+        elif pid is None:
+            h.err(PermissionError("a personal grant belongs to a person, and this key has none"),
+                  403)
+        uid = p["id"] if p else None
+        holder = pid if kind == "personal" else None
+        day = now_utc().date().isoformat()
+        line = factory_mod.grant_line(words, day)
+        same = next((g for g in store.all_grant_rows()
+                     if g["state"] != "revoked" and (g["kind"], g["project"], g["words"],
+                                                     g["holder_person_id"])
+                     == (kind, uid, words, holder)), None)
+        if same is not None:
+            row, added = same, False
+        else:
+            state = "waiting" if pending_owners(areas, pid, []) else "active"
+            row = store.add_grant_row(kind, words, project=uid, holder=holder, given_by=pid,
+                                      areas=areas, state=state)
+            added = True
+            if state == "active":
+                mirror_in(row, h.by(request, body))
+        return {**grants_out(uid if kind != "personal" else None), "added": added, "line": line,
+                "grant": grants_view([row])[0]}
+
+    @app.post("/api/grants/{gid}/consent")
+    async def consent_grant(gid: str, request: Request):
+        """The owner of a repo the grant names says yes. Only a person it is waiting for may; the
+        grant takes effect when the last of them has."""
+        deny(request, "grants")
+        g = grant_or_404(gid, request)
+        person = h.current_person(request)
+        if g["state"] != "waiting":
+            h.err(ValueError(f"{g['id']} is {g['state']}; there is nothing to consent to"), 409)
+        if not person or person["id"] not in {w["id"] for w in waiting_for(g)}:
+            h.err(PermissionError(f"{g['id']} waits for the owners of "
+                                  f"{', '.join(g['areas'])}; this key is not one of them"), 403)
+        consents = g["consents"] + [{"person_id": person["id"], "at": now_utc().isoformat()}]
+        state = "waiting" if pending_owners(g["areas"], g["given_by"], consents) else "active"
+        store.update_grant_row(g["id"], state=state, consents=consents)
+        g = store.get_grant_row(g["id"])
+        if state == "active":
+            mirror_in(g, h.by(request, None))
+        return {"grant": grants_view([g])[0]}
+
+    @app.post("/api/grants/{gid}/revoke")
+    async def revoke_grant(gid: str, request: Request):
+        """The giver, the project's lead, the holder of a personal grant, or the admin scope for
+        a team or project one, ends it. A revoked grant is never in effect again."""
+        deny(request, "grants")
+        g = grant_or_404(gid, request)
+        person = h.current_person(request)
+        pid = person["id"] if person else None
+        lead = False
+        if g["kind"] == "project":
+            lead = bool(pid and (store.get_project(g["project"]) or {}).get("lead_person_id") == pid)
+        allowed = bool(pid and pid in (g["given_by"], g["holder_person_id"])) or lead or (
+            g["kind"] != "personal" and h.is_admin(request))
+        if not allowed:
+            h.err(PermissionError("a grant is ended by who gave it, the project's lead, or its "
+                                  "holder"), 403)
+        if g["state"] == "revoked":
+            h.err(ValueError(f"{g['id']} is already revoked"), 409)
+        was = g["state"]
+        store.update_grant_row(g["id"], state="revoked")
+        g = store.get_grant_row(g["id"])
+        if was == "active":
+            mirror_out(g, h.by(request, None))
+        return {"grant": grants_view([g])[0]}
 
     def append_grant(uid: str | None, line: str, by: str) -> bool:
         """One grant line into the shared grants (uid None) or the project's own."""
@@ -348,6 +574,12 @@ def register(app, store, h: SimpleNamespace) -> None:
         if added:
             store.update_doc(doc_id, body=text, by=by)
         return added
+
+    try:
+        migrate_grants()
+    except Exception as e:   # the grants docs still serve; the next start tries again
+        print(f"[tares] moving the grants into the grants table failed: {type(e).__name__}: {e}",
+              flush=True)
 
     # ── stations (TR-420): sessions grouped by the station they play ──────────
     def _ts(v) -> float:

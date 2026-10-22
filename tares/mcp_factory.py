@@ -5,6 +5,7 @@ as tares/mcp_server.py, which imports this module at its end.
 from __future__ import annotations
 
 import json
+import re
 
 from .mcp_server import TARESD, _cx, _person_in, _default_project, _out, _project_id, mcp, writable
 
@@ -402,34 +403,90 @@ async def set_crew_settings(autonomy: str = "", release_profile: str | None = No
     return _out(r, SETTING_KEYS)
 
 
+def _grant_line(g: dict) -> str:
+    where = {"team": "every project", "project": "this project", "personal": "yours only"}[g["kind"]]
+    day = str(g.get("given_at") or "")[:10]
+    text = f'- [{g["id"]}, {g["kind"]}, {where}] "{g["words"]}" ({day})'
+    if g["state"] == "waiting":
+        text += ", waiting for " + ", ".join(w["name"] or w["id"] for w in g["waiting_for"])
+    elif (g.get("given_by") or {}).get("name"):
+        text += f", given by {g['given_by']['name']}"
+    return text
+
+
 @mcp.tool()
 async def read_grants(project: str = "") -> str:
     """What the person allows the crew to do, in their own words with the date: the grants for
-    every project, and the project's own when `project` is given. Never act on a permission
-    that is not here or in the person's own words in your session."""
+    every project, the project's own when `project` is given, and your personal ones. Those in
+    effect come first; a project grant that reaches into another person's repo is listed as
+    waiting for that owner and is NOT in effect. Never act on a permission that is not here or
+    in the person's own words in your session."""
     params = {"project": project} if project else {}
     async with _cx(10) as cx:
         r = await cx.get(f"{TARESD}/api/grants", params=params)
     if r.status_code >= 400:
         return _out(r)
     d = r.json()
-    parts = [d.get("all") or "No grants for every project yet."]
-    if project:
-        parts.append(d.get("project") or f"No grants of {project}'s own yet.")
-    return "\n\n".join(p.rstrip() for p in parts)
+    rows = d.get("grants") or []
+    live = [g for g in rows if g.get("in_effect")]
+    waiting = [g for g in rows if g["state"] == "waiting"]
+    seen = {g["words"] for g in rows}
+    # grants written to the docs by a path that does not make rows yet (a standing answer)
+    older = [line for body in (d.get("all"), d.get("project") if project else None)
+             for line in _doc_grants(body) if _doc_words(line) not in seen]
+    parts = []
+    if live:
+        parts.append("In effect:\n" + "\n".join(_grant_line(g) for g in live))
+    if older:
+        parts.append("In effect (older, no kind yet):\n" + "\n".join(f"- {ln}" for ln in older))
+    if waiting:
+        parts.append("Waiting for consent, not in effect:\n"
+                     + "\n".join(_grant_line(g) for g in waiting))
+    return "\n\n".join(parts) or ("No grants yet." if not project
+                                   else f"No grants for every project or for {project} yet.")
+
+
+def _doc_words(line: str) -> str:
+    """The words inside `"words" (date)`, or the whole line when it is not in that shape."""
+    m = re.match(r'^"(.*)" \(\d{4}-\d{2}-\d{2}\)', line)
+    return m.group(1) if m else line
+
+
+def _doc_grants(body) -> list[str]:
+    """The lines of an old grants doc, `"words" (date)` as kept, and their words."""
+    out = []
+    for raw in (body or "").splitlines():
+        if raw.startswith("- ") and raw[2:].strip():
+            out.append(raw[2:].strip())
+    return out
 
 
 @writable()
-async def add_grant(words: str, scope: str = "all", project: str = "") -> str:
+async def add_grant(words: str, kind: str = "", project: str = "",
+                    areas: list[str] | None = None) -> str:
     """Keep one grant: `words` are the person's own words, quoted exactly as they said them
-    (never your summary); Tares adds today's date. `scope` is `all` (every project) or
-    `project` (this project only, name it in `project`). Only the person's own session or the
-    orchestrator, relaying the person verbatim, may add one."""
+    (never your summary); Tares adds today's date. `kind` is `team` (every project; `all` is the
+    old name), `project` (this project only, name it in `project`) or `personal` (what may run on
+    the person's own machine, for the key's own person). Without `kind`, a `project` makes it a
+    project grant and no project a team grant. `areas` lists the GitHub repos (owner/name) a
+    project grant reaches into: it waits, not in effect, until each repo's area owner (other than
+    the giver) calls consent_grant. Only the person's own session or the orchestrator, relaying
+    the person verbatim, may add one."""
+    body = {"words": words, "kind": kind, "project": project, "areas": areas or [],
+            "by_default": "claude code session"}
     async with _cx(10) as cx:
-        r = await cx.post(f"{TARESD}/api/grants",
-                          json={"words": words, "scope": scope, "project": project,
-                                "by_default": "claude code session"})
-    return _out(r, ("line", "added"))
+        r = await cx.post(f"{TARESD}/api/grants", json=body)
+    return _out(r, ("line", "added", "grant"))
+
+
+@writable()
+async def consent_grant(id: str) -> str:
+    """Say yes, as the owner of a repo a project grant names, to grant `id` (like `G7`). Only a
+    person it waits for can; the grant is in effect once every owner has. Never call it for
+    someone else: the answer is the owner's own."""
+    async with _cx(10) as cx:
+        r = await cx.post(f"{TARESD}/api/grants/{id.strip()}/consent")
+    return _out(r)
 
 
 @mcp.tool()
