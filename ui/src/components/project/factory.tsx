@@ -6,6 +6,7 @@ import { CrewState, Desk, attachCmd, onCrewSide } from "../../pages/Crew";
 import { CopyButton, TimeAgo, usePolling } from "../bits";
 import { ProgressRing, ticketBucket, ticketProgress } from "../ProgressRing";
 import { FACTORY_POLL_MS, VLink, type Ctx } from "./common";
+import { AccessLine } from "./access";
 import { Goal } from "./overview";
 import type { DocSummary, Milestone, ProjectRepo, ProjectSession, RepoPR, Ticket } from "../../types";
 
@@ -132,6 +133,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
           {tk?.github && <div className="fo-linear"><GitHubMark />Tickets live in GitHub{" "}
             <a href={tk.github.url} target="_blank" rel="noreferrer">{tk.github.repo} ↗</a></div>}
           <Goal ctx={ctx} />
+          <AccessLine ctx={ctx} />
         </div>
         <div className="gf-head-actions">
           {byCrew

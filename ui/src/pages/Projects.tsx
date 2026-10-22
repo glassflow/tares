@@ -1,6 +1,9 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api";
+import { LeadPicker, usePeople } from "../components/project/access";
+import { Lock } from "../components/icons";
 import { ErrorState, TimeAgo, projectGoal, usePolling } from "../components/bits";
 import { ProgressRing } from "../components/ProgressRing";
 import { ReadyReminder } from "../components/readiness";
@@ -24,9 +27,11 @@ export function projectKindCounts(u: Project) {
 }
 
 export default function Projects() {
-  const { data: inst, error: instError, reload: reloadInst } = usePolling(() => api.projects(), 10000);
+  const { data: inst, error: instError, reload: reloadInst } = usePolling(() => api.projectsWithHidden(), 10000);
   const projects = (inst?.projects ?? []).filter((p) => !p.default);
-  const loose = inst?.projects.find((p) => p.default)?.objects.length ?? 0;
+  const loose = inst?.projects.find((p) => p.default && !p.hidden)?.objects.length ?? 0;
+  const { list: people, isAdmin } = usePeople();
+  const [handing, setHanding] = useState<string>();   // the hidden project whose lead is being changed
 
   return (
     <>
@@ -64,6 +69,35 @@ export default function Projects() {
           </thead>
           <tbody>
             {projects.map((u) => {
+              // a private project the caller is not on: its name and lead, nothing to open
+              if (u.hidden) {
+                return (
+                  <tr key={u.id} className="proj-hidden">
+                    <td colSpan={5}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        <Lock /><strong>{u.name}</strong>
+                      </span>
+                      <span className="proj-lead">
+                        {u.lead ? `Private, led by ${u.lead.name}` : "Private, no lead"}
+                      </span>
+                      {handing === u.id && (
+                        <div style={{ marginTop: 8 }}>
+                          <LeadPicker id={u.id} people={people.filter((p) => p.id !== u.lead?.id)}
+                                      onDone={() => { setHanding(undefined); reloadInst(); }}
+                                      onCancel={() => setHanding(undefined)} />
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      {isAdmin && handing !== u.id && (
+                        <div className="btnrow" style={{ justifyContent: "flex-end" }}>
+                          <button type="button" onClick={() => setHanding(u.id)}>Change lead</button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              }
               const c = projectKindCounts(u);
               const missing = u.objects.filter((o) => o.missing).length;
               // a draft opens where its setup stopped: nothing of it exists yet
@@ -73,7 +107,9 @@ export default function Projects() {
                 <tr key={u.id}>
                   <td>
                     <Link to={to}><strong>{u.name}</strong></Link>
+                    {u.scope === "private" && <span className="proj-lock"><Lock /> Private</span>}
                     {u.kind === "software_factory" && <span className="fo-tag" style={{ marginLeft: 8 }}>Software factory</span>}
+                    {u.lead && <span className="proj-lead">Lead: {u.lead.name}</span>}
                   </td>
                   <td className="help"><span className="proj-goal">{projectGoal(u)}</span></td>
                   <td className={u.progress ? "fo-ring-cell" : undefined}>

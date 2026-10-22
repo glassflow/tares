@@ -6,7 +6,7 @@ import type {
   GithubAppTest, GithubCredential,
   LabelFacet, ModelUsage, QueryLogEntry,
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
-  ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults,
+  ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults, ProjectScope,
   Skill, SkillSummary,
   Assumption, ClaudeCodeUsage, CrewMessage, CrewProject, CrewSettings, CrewStation, Decision, DeskAllowed, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, LinearLink, LinearStatus, Milestone,
   ProjectSession, Ticket, TicketStatus,
@@ -455,7 +455,12 @@ export const api = {
   templates: () => request<{ templates: Template[] }>("/api/projects/templates"),
   // by key, hidden templates included (the gallery list leaves those out)
   template: (key: string) => request<Template>(`/api/projects/templates/${encodeURIComponent(key)}`),
-  projects: () => request<{ projects: Project[] }>("/api/projects"),
+  // every caller but the Projects page wants projects it can open: a private one the caller is
+  // not on comes back as a bare `hidden` entry (no objects, no status), which they leave out
+  projects: () => request<{ projects: Project[] }>("/api/projects").then((r) => ({
+    projects: r.projects.filter((p) => !p.hidden),
+  })),
+  projectsWithHidden: () => request<{ projects: Project[] }>("/api/projects"),
   project: (id: string) => request<Project>(`/api/projects/${encodeURIComponent(id)}`),
   // Accepted memory: only what a user accepted is ever written (a proposal is just text until then).
   remember: (body: { key: string; content: string; memory_type?: string }) =>
@@ -497,6 +502,16 @@ export const api = {
       { method: "POST", body: JSON.stringify({ handled }) }),
   projectHealth: (id: string) =>
     request<ProjectHealth>(`/api/projects/${encodeURIComponent(id)}/health`),
+  // Who leads a project and who can see it. The lead changes both; an admin changes the lead only.
+  setProjectAccess: (id: string, body: { lead_person_id?: string; scope?: ProjectScope }) =>
+    request<Project>(`/api/projects/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) }),
+  // Members: the lead only. Each answers with the project.
+  addProjectMember: (id: string, personId: string) =>
+    request<Project>(`/api/projects/${encodeURIComponent(id)}/members`,
+      { method: "POST", body: JSON.stringify({ person_id: personId }) }),
+  removeProjectMember: (id: string, personId: string) =>
+    request<Project>(`/api/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(personId)}`,
+      { method: "DELETE" }),
   // Triggers, agents and MCP servers always go with the project. `deleteSources`: which of its
   // sources to delete too; one another project still uses is kept (and reported) either way.
   deleteProject: (id: string, purgeEvents = false, deleteSources: string[] = []) =>

@@ -6,6 +6,11 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- The console shows a project's lead, scope and members. The project page has a "Lead" line with a
+  Team/Private control and "Change lead" for the lead (an admin changes the lead only), a Members
+  page under Settings to add and remove people, and the Projects list shows each lead, a lock on
+  private projects, and a greyed "Private, led by <name>" row, with "Change lead" for an admin, for
+  a private project you are not on.
 - Project access: a project has a lead (the person who made it; none for a project made with the
   root token), a scope (`team` or `private`) and a member list, shown on `GET /api/projects` and
   `GET /api/projects/{id}` as `lead`, `scope` and `members`. `PATCH /api/projects/{id}` sets the

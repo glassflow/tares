@@ -15,7 +15,7 @@ import type {
 // and the full setup, the left-nav views for when something does not work as expected:
 //   ?view=activity       a section: activity, events, sources, triggers, agents, skills, sessions
 //   ?view=agent:<name>   one item: source:, trigger:, agent:, external:<subscription id>, skill:
-//   ?view=settings:keys  one settings page: mcp, subscribers, keys, history
+//   ?view=settings:keys  one settings page: mcp, subscribers, keys, members, history
 // plus `add=1` (or add=<trigger> on agents) to open a section's Add form, `run=` / `dispatch=`
 // on an agent to open that run, and `thread=` on activity to open one thread.
 
@@ -30,7 +30,7 @@ const SECTIONS: ViewKind[] = ["overview", "how", "activity", "events", "sources"
   "docs", "tickets", "claude"];
 const ITEMS: ViewKind[] = ["result", "source", "trigger", "agent", "external", "skill", "doc", "ticket", "claude"];
 export const SETTINGS: [string, string][] = [
-  ["mcp", "MCP servers"], ["subscribers", "Subscribers"], ["keys", "Keys"], ["history", "Change history"],
+  ["mcp", "MCP servers"], ["subscribers", "Subscribers"], ["keys", "Keys"], ["members", "Members"], ["history", "Change history"],
 ];
 
 /** The views of the goal-first page; every other view is the full setup, with the left nav. */

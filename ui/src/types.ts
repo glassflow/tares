@@ -826,7 +826,13 @@ export interface Project {
   goal?: string | null; // what the project should achieve, one line (<= 200 chars); null = not set yet
   kind?: "software_factory" | null;   // its own page and tag; null = an ordinary project
   progress?: TicketProgress;           // a software factory project's tickets (GET /api/projects only)
+  lead?: PersonRef | null;             // who leads it; null: nobody yet. Absent on an older daemon
+  scope?: ProjectScope;                // team: everyone on the cell sees it; private: lead and members only
+  members?: ProjectMember[];           // the lead first (reason "lead"), then the others
+  hidden?: boolean;                    // a private project the caller is not on: name and lead, nothing else
 }
+export type ProjectScope = "team" | "private";
+export interface ProjectMember { id: string; name: string; reason: "lead" | "manual" | "ticket" }
 // a software factory project's tickets as its progress ring shows them (tares/factory.py
 // `progress`): total is done + doing + blocked + todo; canceled ones stay out of it
 export interface TicketProgress { done: number; doing: number; blocked: number; todo: number; canceled: number; total: number }

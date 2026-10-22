@@ -16,6 +16,7 @@ import { AgentView, AgentsView, ExternalView } from "../components/project/agent
 import { SkillView, SkillsView } from "../components/project/skills";
 import { ClaudeSessionView, ClaudeSessionsView, DocView, DocsView, TicketView, TicketsView } from "../components/project/docs";
 import FactoryOverview from "../components/project/factory";
+import { MembersView, AccessLine } from "../components/project/access";
 import { HistoryView, KeysView, McpView, SubscribersView } from "../components/project/settings";
 import type { ProjectSummary, Template, RecipeAction, RecipeActionOption, Source } from "../types";
 
@@ -247,6 +248,7 @@ export default function ProjectShell({ s, id, reload, template }: {
       case "settings":
         return view.name === "subscribers" ? <SubscribersView ctx={ctx} />
           : view.name === "keys" ? <KeysView ctx={ctx} />
+          : view.name === "members" ? <MembersView ctx={ctx} />
           : view.name === "history" ? <HistoryView ctx={ctx} />
           : <McpView ctx={ctx} />;
     }
@@ -313,6 +315,7 @@ export default function ProjectShell({ s, id, reload, template }: {
               ? ` Paused: ${pausedSources.length === sourceCount ? "sources" : `${pausedSources.length} of ${sourceCount} sources`}, triggers and agents are off.`
               : " Paused: triggers and agents are off; sources keep ingesting.")}
           </p>
+          <AccessLine ctx={ctx} />
         </div>
         <div className="btnrow">
           {pauseButton}
