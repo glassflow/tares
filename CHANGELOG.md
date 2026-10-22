@@ -29,9 +29,9 @@ the project follows [Semantic Versioning](https://semver.org/).
   (sessions, queries, dispatches). An event belongs to a project by its `tares_project` label, by a
   Claude Code session recorded in the project, or by the `project` a shared finding or memory row
   was written in. Ask runs with the asker's own visibility and leaves a private project out of
-  `list_projects`; `/tares ask` in Slack treats every private project as hidden (Slack users are not
-  mapped to people yet). An event with no project label stays visible to everyone. Two limits: an
-  entity count over a source shared by several projects still counts the hidden rows, and a
+  `list_projects`; with auth on, `/tares ask` in Slack treats every private project as hidden
+  (Slack users are not mapped to people yet). An event with no project label stays visible to
+  everyone. Two limits: an entity count over a source shared by several projects still counts the hidden rows, and a
   station's recent lines are not filtered by row.
 - MCP tools `list_people` and `set_project_access` (lead, scope, members added or removed, people
   by id or email).

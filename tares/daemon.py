@@ -1156,7 +1156,8 @@ def make_app() -> FastAPI:
         hidden = _hidden_ids()
         hidden_src = _hidden_sources(hidden)
         return {
-            "sources": [{"name": s.name, "type": s.type, "projects": members.get(s.name, [])}
+            "sources": [{"name": s.name, "type": s.type,
+                         "projects": [u for u in members.get(s.name, []) if u not in hidden]}
                         for s in runtime.catalog.sources.values() if s.name not in hidden_src],
             "triggers": [{"name": t.name, "project": t.project, "sources": t.sources,
                           "key_field": t.key_field} for t in runtime.catalog.triggers
@@ -1664,7 +1665,7 @@ def make_app() -> FastAPI:
         source = body.get("source")
         spec = body.get("label") or {}
         cfg = runtime.catalog.sources.get(str(source))
-        if cfg is None:
+        if cfg is None or cfg.name in _hidden_sources(_hidden_ids()):
             _err(KeyError(f"unknown source {source!r}"), 404)
         try:   # validate the label spec exactly like a save would (bad regex -> 400 here)
             normalized = normalize_label_specs([spec])
@@ -1677,7 +1678,7 @@ def make_app() -> FastAPI:
         conn = build_connector(cfg, store)
         pairs: Counter = Counter()   # (before, after) -> events
         sampled = 0
-        for payload in store.recent_payloads(cfg.name, 2000):
+        for payload in store.recent_payloads(cfg.name, 2000, exclude=_read_exclude()):
             ctx = conn.label_context(payload)
             if not isinstance(ctx, dict):
                 continue
@@ -1747,9 +1748,10 @@ def make_app() -> FastAPI:
     async def list_sources():
         health = runtime.health_snapshot()
         members = store.source_memberships()
-        hidden_src = _hidden_sources(_hidden_ids())
+        hidden = _hidden_ids()
+        hidden_src = _hidden_sources(hidden)
         return [{**s, "config": redact_config(s["connector"], s["config"]),
-                 "projects": members.get(s["name"], []),
+                 "projects": [u for u in members.get(s["name"], []) if u not in hidden],
                  "health": health.get(s["name"])} for s in store.list_catalog_sources()
                 if s["name"] not in hidden_src]
 
@@ -1759,7 +1761,8 @@ def make_app() -> FastAPI:
         for s in store.list_catalog_sources():
             if s["name"] == name and name not in hidden_src:
                 return {**s, "config": redact_config(s["connector"], s["config"]),
-                        "projects": store.source_memberships().get(name, []),
+                        "projects": [u for u in store.source_memberships().get(name, [])
+                                     if u not in _hidden_ids()],
                         "health": runtime.health_snapshot().get(name)}
         _err(KeyError(f"unknown source {name!r}"), 404)
 
@@ -1984,7 +1987,8 @@ def make_app() -> FastAPI:
         for h in ("authorization", "x-tares-token"):
             if request.headers.get(h):
                 out[h] = request.headers[h]
-        return out or {"Authorization": f"Bearer {AUTH_TOKEN}"}
+        # none carried (not reachable behind the guard): the narrowest view, never the system's
+        return out or {"Authorization": f"Bearer {AUTH_TOKEN}", "x-tares-viewer": "public"}
 
     @app.post("/api/agent/chat")
     async def agent_chat(request: Request):
@@ -2710,9 +2714,14 @@ def make_app() -> FastAPI:
                 "cost_usd": None, "input_tokens": 0, "output_tokens": 0, "uncosted_runs": 0}
         rows = []
         # with ?project=: each agent's trigger, handoffs and on/off are that project's wiring
-        mine = ("id IN (SELECT run_id FROM run_projects WHERE project = ?)", [in_project]) \
-            if in_project else ("", None)
         hidden = _hidden_ids()
+        if in_project:
+            mine = ("id IN (SELECT run_id FROM run_projects WHERE project = ?)", [in_project])
+        elif hidden:   # no project named: the newest run the caller may see
+            mine = ("id NOT IN (SELECT run_id FROM run_projects WHERE project IN "
+                    f"({', '.join('?' * len(hidden))}))", sorted(hidden))
+        else:
+            mine = ("", None)
         for a in store.list_catalog_agents(in_project):
             if _owned_by_hidden("agent", a["name"], hidden):
                 continue
@@ -2744,7 +2753,8 @@ def make_app() -> FastAPI:
                          "effective_max_rounds": effective_max_rounds(a),
                          "enabled": a["enabled"], "updated_at": a.get("updated_at"),
                          "project": in_project or a.get("owned_by"),
-                         "projects": store.projects_using("agent", a["name"]),
+                         "projects": [u for u in store.projects_using("agent", a["name"])
+                                      if u not in hidden],
                          "owned_by": a.get("owned_by"), "customized": bool(a.get("customized")),
                          "last_run": runs[0] if runs else None})
         plist = providers_mod.list_providers(store)
