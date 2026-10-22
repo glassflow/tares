@@ -588,6 +588,33 @@ class FactoryStore:
                         "findings": mine, "fixed": fixed_here})
         return out
 
+    def last_reviews(self, tickets: list[str]) -> dict[str, dict]:
+        """Each ticket's latest review round, shaped like an element of ticket_reviews(), in two
+        queries for any number of tickets (TR-657). Tickets never reviewed are absent."""
+        if not tickets:
+            return {}
+        marks = ", ".join("?" for _ in tickets)
+        with self._lock:
+            revs = self.con.execute(
+                "SELECT id, round, pr, head, verdict, verified, not_verified, by_station, "
+                f"reviewed_at, ticket FROM reviews WHERE ticket IN ({marks}) "
+                "QUALIFY row_number() OVER (PARTITION BY ticket ORDER BY round DESC) = 1",
+                list(tickets)).fetchall()
+            ids = [r[0] for r in revs]
+            fs = self.con.execute(
+                "SELECT id, review, number, severity, file, line, blocking, text, kind, state, "
+                f"fixed_in FROM review_findings WHERE review IN ({', '.join('?' for _ in ids)}) "
+                f"OR fixed_in IN ({', '.join('?' for _ in ids)}) ORDER BY number",
+                ids + ids).fetchall() if ids else []
+        finds = [{"id": f[0], "review": f[1], "label": f"F{f[2]}", "severity": f[3], "file": f[4],
+                  "line": f[5], "blocking": bool(f[6]), "text": f[7], "kind": f[8],
+                  "state": f[9], "fixed_in": f[10]} for f in fs]
+        return {r[9]: {"id": r[0], "round": r[1], "pr": r[2], "head": r[3], "verdict": r[4],
+                       "verified": r[5], "not_verified": r[6], "by": r[7], "at": r[8],
+                       "findings": [f for f in finds if f["review"] == r[0]],
+                       "fixed": [f["label"] for f in finds if f["fixed_in"] == r[0]]}
+                for r in revs}
+
     def open_findings(self, ticket: str) -> list[dict]:
         return [f for r in self.ticket_reviews(ticket) for f in r["findings"] if f["state"] == "open"]
 

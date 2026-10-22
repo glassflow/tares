@@ -10,6 +10,10 @@ the project follows [Semantic Versioning](https://semver.org/).
   labelled by route template (such as `/api/projects/{uid}/tickets`), never by a raw path or ID
   (TR-652).
 
+### Changed
+- A factory project's tickets list reads every working doc's title and every ticket's last review
+  in one query each, instead of a few queries per ticket (TR-657).
+
 ### Fixed
 - A firing that arrives while its agent is already running for the same key now gets the
   `skipped` write-back with reason `in_flight`. Since 1.51.0 it was sent only when the duplicate
