@@ -1382,7 +1382,8 @@ class Store(FactoryStore, ClaudeUsageStore):
     def read_window(self, sources: list[str], key: str | None, since: datetime, cap: int = 12,
                          filters: list | None = None, where: dict | None = None,
                          include_payload: bool = False, scope: dict | None = None,
-                         exclude: dict | None = None):
+                         exclude: dict | None = None, owners: set | None = None,
+                         shared: list[str] | None = None):
         """Rows for an entity across sources, time-ordered: (event_time, source, text, labels), plus
         the raw lossless `payload` as a 5th column when `include_payload` is set.
 
@@ -1396,9 +1397,13 @@ class Store(FactoryStore, ClaudeUsageStore):
         `include_payload` pulls the full stored record per row (bounded by the same cap) for callers
         that need fidelity beyond the summary `text`. `scope` narrows the shared findings and
         memory sources to one project's rows (see _scope_sql). `exclude` drops the rows of the
-        projects the caller cannot see (see _exclude_sql).
+        projects the caller cannot see (see _exclude_sql). When `owners` is a set, the ids of the
+        projects the returned rows belong to are added to it (see _row_owners); `shared` names the
+        shared finding and memory sources, the only ones whose payload `project` counts.
         """
         cols = "event_time, source, text, labels" + (", payload" if include_payload else "")
+        if owners is not None:
+            cols += ", key_value, json_extract_string(payload, '$.project')"
         ph = ", ".join(["?"] * len(sources))
         fsql, fparams = _filter_sql(filters)
         wsql, wparams = _where_sql(where)
@@ -1407,8 +1412,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         wsql, wparams = wsql + ssql + esql, wparams + sparams + eparams
         ksql, kparams = (" AND key_value = ?", [key]) if key is not None else ("", [])
         with self._lock:
-            return self.con.execute(
-                f"SELECT {cols} FROM ("
+            rows = self.con.execute(
+                f"SELECT * FROM ("
                 f"  SELECT {cols}, "
                 f"  ROW_NUMBER() OVER (PARTITION BY source ORDER BY event_time DESC) AS rn "
                 # reference sources are declarative context — always surfaced for the matched
@@ -1418,6 +1423,40 @@ class Store(FactoryStore, ClaudeUsageStore):
                 f") WHERE rn <= {int(cap)} ORDER BY event_time",
                 [*sources, since, *kparams, *fparams, *wparams],
             ).fetchall()
+        if owners is None:
+            return [r[:-1] for r in rows]
+        n = len(rows[0]) - 3 if rows else 0       # the columns asked for, before key, payload project, rn
+        owners |= self._row_owners(rows, n, shared)
+        return [r[:n] for r in rows]
+
+    def _row_owners(self, rows: list, n: int, shared: list[str] | None) -> set[str]:
+        """The ids of the projects the `rows` belong to, by the three tests _exclude_sql hides by:
+        the `tares_project` label (id or name), the payload `project` of a shared finding or
+        memory row, and the row's session (key) linked in project_sessions. Each row is its first
+        `n` columns (event_time, source, text, labels, ...), then key_value, the payload project
+        and the row number. Rows the caller could not see were already dropped from the read."""
+        shared = set(shared or [])
+        found: set[str] = set()
+        named: set[str] = set()
+        keys: set[str] = set()
+        for r in rows:
+            try:
+                tag = (json.loads(r[3]) if isinstance(r[3], str) else r[3] or {}).get("tares_project")
+            except (ValueError, AttributeError):
+                tag = None
+            if tag:
+                named.add(str(tag))
+            if r[n + 1] and r[1] in shared:
+                found.add(str(r[n + 1]))
+            if r[n]:
+                keys.add(r[n])
+        found.update(self.project_ids_named(sorted(named)))
+        if keys:
+            with self._lock:
+                found.update(x[0] for x in self.con.execute(
+                    f"SELECT DISTINCT project FROM project_sessions WHERE session IN "
+                    f"({', '.join(['?'] * len(keys))})", sorted(keys)).fetchall())
+        return found
 
     def aggregate(self, sources: list[str], field: str | None, agg: str, since: datetime,
                   filters: list | None = None, where: dict | None = None,
@@ -3437,11 +3476,14 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def read_projects(self, selector: dict | None, *uids: str | None,
                       sources: list[str] | None = None,
-                      unseen: set[str] | None = None) -> str | None:
+                      unseen: set[str] | None = None,
+                      owners: set[str] | None = None) -> str | None:
         """The `project` of a read for log_query: the projects it was scoped to (`uids`), the
         one its selector names (`tares_project`) and the ones the `sources` it read are members
         of, comma-joined; None when it was about none. `unseen` are the projects the reader
-        could not see: the read returned none of their rows, so they are left off the sources'."""
+        could not see: the read returned none of their rows, so they are left off the sources'.
+        `owners` are the projects the rows it returned belong to (read_window), which covers the
+        private rows that sit in a source no private project owns."""
         ids = [u for u in uids if u]
         named = (selector or {}).get("tares_project")
         if named:
@@ -3450,6 +3492,7 @@ class Store(FactoryStore, ClaudeUsageStore):
             member = self.source_memberships()
             ids += [i for n in sources for i in member.get(n, [])
                     if i not in ids and i not in (unseen or ())]
+        ids += [i for i in sorted(owners or ()) if i not in ids and i not in (unseen or ())]
         return ",".join(ids) or None
 
     def log_query(self, qid: str, scope: str, key: str, window: str,

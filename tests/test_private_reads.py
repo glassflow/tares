@@ -347,7 +347,11 @@ def seed(ids):
                   ev("evts", "shared-key", "OPEN shared-key event", {"service": "practicesvc"})])
     # a label-less source: its entities are bare keys, and the key of a row labelled for p1 hides
     store.append([ev("plain", "plain-hidden-key", "SECRET plain event", {"tares_project": p1}),
-                  ev("plain", "plain-open-key", "OPEN plain event", {})])
+                  ev("plain", "plain-open-key", "OPEN plain event", {}),
+                  # a row of p1 in a source no private project owns, found by a label of its own (F18)
+                  ev("plain", "plain-hidden-key", "SECRET zone event",
+                     {"tares_project": p1, "zone": "z-f18"}),
+                  ev("plain", "plain-open-key", "OPEN zone event", {"zone": "z-open"})])
     store.append([ev("evts", "p1-practice-key", "SECRET practice event",
                      {"service": "practicesvc", "tares_project": p1})])
     store.con.close()
@@ -793,7 +797,27 @@ async def query_log_checks(B, ids):
         r = await cx.post(f"{B}/api/projects/{ids['p1']}/stats", headers=H(ids["ann"]),
                           json={"by": "statsbyp1"})
         ck("Ann takes the stats of p1", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
+        # F18: p1's rows in sources no private project owns: by the label, by the payload project
+        # of a shared findings source, by a session linked to p1; Bob's own reads of the same
+        # sources stay in his feed
+        for sel, src, what in (({"zone": "z-f18"}, "plain", "label"),
+                               ({"service": "checkout"}, "findings", "payload"),
+                               ({"service": "checkout"}, "sess", "session")):
+            for who in ("ann", "bob"):
+                r = await cx.post(f"{B}/read", headers=H(ids[who]), json={
+                    "selector": sel, "window": "1h", "sources": [src], "client": f"f18-{what}-{who}"})
+                ck(f"{who.title()} reads {src} by {what}", r.status_code == 200,
+                   f"{r.status_code} {r.text[:120]}")
+        r = await cx.post(f"{B}/read", headers=H(ids["ann"]), json={
+            "selector": {"zone": "z-f18"}, "window": "1h", "client": "f18-label-all"})
+        ck("Ann's label read finds the row", r.status_code == 200 and r.json()["count"] == 1,
+           f"{r.status_code} {r.text[:160]}")
         b, a = await log(ids["bob"]), await log(ids["ann"])
+        for what in ("label", "payload", "session"):
+            ck(f"Bob: no read of p1's rows found by {what}", f"f18-{what}-ann" not in b, b[:300])
+            ck(f"Bob: his own read by {what} is there", f"f18-{what}-bob" in b, b[:300])
+            ck(f"Ann: she sees the read by {what}", f"f18-{what}-ann" in a, a[:300])
+        ck("Bob: no label read of every source", "f18-label-all" not in b, b[:300])
         ck("Bob: no keyed read of p1's source by name", "named-p1-src" not in b, b[:300])
         ck("Bob: no broad read that read p1's source", "broad-ann" not in b, b[:300])
         ck("Bob: his own broad read is there", "broad-bob" in b, b[:300])
@@ -892,6 +916,13 @@ def store_checks():
     got = logged("(read)")
     ck("an agent's read logs its project", got and got[0] == "uc_mine", str(got))
     ck("... and the project of a source it names", len(got) == 2 and set(got[1].split(",")) == {"uc_mine", "uc_theirs"}, str(got))
+    # a row of another project in a source this agent's project owns (F18): the read is about both
+    store.append([Envelope("logs", "application_log", "k1", "evt", "zone row", now_utc(),
+                           {"text": "zone row"}, {"zone": "zq", "tares_project": "Theirs"})])
+    runner._tool("counter", "read", {"selector": {"zone": "zq"}, "window": "30m", "sources": ["logs"]})
+    got = logged("(read)")
+    ck("... and the project a row of its sources belongs to",
+       len(got) == 3 and set(got[2].split(",")) == {"uc_mine", "uc_theirs"}, str(got))
     runner._tool("counter", "stats", {"by": "service", "window": "30m"})
     got = logged("(stats)")
     ck("an agent's stats logs its project", got == ["uc_mine"], str(got))

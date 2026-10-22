@@ -1093,15 +1093,17 @@ def make_app() -> FastAPI:
         if hidden_src:
             names = [n for n in (sorted(runtime.catalog.sources) if names is None else names)
                      if n not in hidden_src]
+        owners: set[str] = set()
         payload, nrows, sources, rows = resolve_read(store, runtime.catalog, req.selector, req.window,
                                                      include_payload=req.include_payload,
-                                                     sources=names, scope=scope, exclude=exclude)
+                                                     sources=names, scope=scope, exclude=exclude,
+                                                     owners=owners)
         log_key = ", ".join(f"{k}={v}" for k, v in req.selector.items())
         store.log_query("r_" + uuid.uuid4().hex[:12], "(read)", log_key, req.window,
                         nrows, req.client,
                         project=store.read_projects(
                             req.selector, uid, sources=req.sources or sources,
-                            unseen=set(exclude["ids"]) if exclude else None))
+                            unseen=set(exclude["ids"]) if exclude else None, owners=owners))
         return {"payload": payload, "count": nrows, "sources": sources, "rows": rows}
 
     # Views were removed: a trigger names its own sources. The old routes answer 404 with the
