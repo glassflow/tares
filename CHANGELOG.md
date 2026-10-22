@@ -95,6 +95,11 @@ the project follows [Semantic Versioning](https://semver.org/).
   closing the form, changing a person's email keeps the old address as an extra email, and a key's
   person picker shows the person's name while people load.
 
+### Fixed
+- Area owners: reassigning a repo's owner without a note no longer clears the note it had (send
+  `note` to replace it, or `null` to clear it), and the MCP `set_area` refuses a repo name with a
+  `#`, `?` or space instead of saving a shortened repo.
+
 ## [1.51.1] - 2026-10-21
 
 The crew standup writes its summary again, and its Slack channel list fits on screen.
