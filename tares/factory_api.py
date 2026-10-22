@@ -958,6 +958,11 @@ def register(app, store, h: SimpleNamespace) -> None:
         A session that is still alive turns the row back with its next line."""
         deny(request, "end_station")
         st = pick_station(name, request, crew)
+        # `crew` narrows the name; with none, pick_station falls back to another person's station
+        # of that name, which a caller must not end (the system credential may)
+        if not h.is_system(request) and (st["person"] or {}).get("id") != caller_person_id(request):
+            h.err(PermissionError(f"{name} belongs to another person's crew: only its owner "
+                                  "ends it"), 403)
         reason = " ".join(str((body or {}).get("reason") or "").split())[:100] or "marked ended"
         if (store.session_state(st["session"]) or {}).get("state") != "ended":
             store.set_session_state(st["session"], "ended", reason, now_utc(), force=True)
@@ -1498,6 +1503,13 @@ def register(app, store, h: SimpleNamespace) -> None:
             if person is None:
                 h.err(KeyError(f"no person {said!r} on this cell: give a person id or an email "
                                "(list_people shows who is here)"), 404)
+            project = store.get_project(uid) if uid else None
+            if (project and project.get("scope") == "private"
+                    and not store.is_project_member(uid, person["id"])):
+                # the question would reach someone who cannot see the project
+                h.err(PermissionError("that person is not on this private project: address "
+                                      "the item to someone who is, or ask the project lead to "
+                                      "add them"), 403)
             return person["id"]
         if uid:
             by_ref = {factory_mod.label(t): t for t in store.list_tickets(uid)}
@@ -1674,8 +1686,10 @@ def register(app, store, h: SimpleNamespace) -> None:
             choice = picked
         from datetime import timedelta
         import asyncio
-        # only what the person typed after the question was asked can answer it
-        since = max(d["created_at"], now_utc() - timedelta(hours=factory_mod.MATCH_HOURS))
+        # only what the person typed after the question was asked can answer it; their machine's
+        # clock may run behind the cell's, so a reply a minute "early" still counts
+        since = max(d["created_at"] - timedelta(seconds=factory_mod.MATCH_SKEW_SECONDS),
+                    now_utc() - timedelta(hours=factory_mod.MATCH_HOURS))
         # an item addressed to a person is answered in that person's own recorded sessions; one
         # from before (no person) keeps the orchestrator's session, or any from an unlabelled caller
         to = d.get("to_person_id")

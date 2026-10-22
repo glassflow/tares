@@ -231,6 +231,12 @@ async def main():
         ck("Q's dependent ticket is ready now, next to the other",
            [x["ticket"] for x in wq["ready"] if x["project"] == "Shop"] == ["T3", "T4"], wq["ready"])
 
+        print("== a held ticket that merges leaves in_progress ==")
+        store.update_ticket(t2["id"], stage="merged", status="done")
+        wp = (await work("P")).json()
+        ck("T2 was held by a station and merged: it is no longer in progress", wp["in_progress"] == [], wp["in_progress"])
+        store.update_ticket(t2["id"], stage="doing", status="in_progress")   # as before, for what follows
+
         print("== a person with no tickets ==")
         wr = (await work("R")).json()
         ck("R has no ready tickets and nothing in progress", wr["ready"] == [] and wr["in_progress"] == []
