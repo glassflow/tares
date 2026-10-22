@@ -8,9 +8,11 @@ input=$(cat)
 tool=$(jq -r '.tool_name // ""' <<<"$input")
 cmd=$(jq -r '.tool_input.command // ""' <<<"$input")
 role=$FACTORY_ROLE
-# A helper works under its parent station's role: crew-<role>, or a builder named <project>-build-<slug>.
+# A helper works under its parent station's role: <crew>-<role>, or a builder named <project>-build-<slug>
+# (<crew>-<project>-build-<slug> in a crew with its own name; "build" is not allowed in a crew name).
 if [ "$role" = helper ]; then
-  case "${FACTORY_PARENT:-}" in crew-*) role=${FACTORY_PARENT#crew-} ;; *-build-*) role=builder ;; esac
+  crew=${FACTORY_CREW:-crew}
+  case "${FACTORY_PARENT:-}" in "$crew"-orchestrator*|"$crew"-reviewer*|"$crew"-releaser*) role=${FACTORY_PARENT#"$crew"-} ;; *-build-*) role=builder ;; esac
 fi
 
 deny() {

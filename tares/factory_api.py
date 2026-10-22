@@ -796,7 +796,7 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "context_asked_at": m.get("context_asked_at"),
                 "recent": [{"at": x.get("event_time"), "type": x.get("event_type"),
                             "text": str(x.get("text") or "")[:600]} for x in lines],
-                "attach": factory_mod.attach_command(name)}
+                "attach": factory_mod.attach_command(name, st.get("role") or "")}
 
     @app.post("/api/crew/{name}/end")
     async def end_station(name: str, request: Request, body: dict | None = Body(None)):
@@ -1543,9 +1543,9 @@ def register(app, store, h: SimpleNamespace) -> None:
             h.err(ValueError("scope is project or all"))
         if scope == "project" and not d["project"]:
             h.err(ValueError(f"{d['label']} has no project: allow it for every project"))
-        # A crew station (crew-reviewer, crew-releaser and their helpers) serves every project and
-        # starts with only the grants for every project: one kept for a project never reaches it.
-        if scope == "project" and str(d["station"] or "").startswith("crew-"):
+        # A crew station (<crew>-reviewer, <crew>-releaser and their helpers) serves every project
+        # and starts with only the grants for every project: one kept for a project never reaches it.
+        if scope == "project" and d["station"] and factory_mod.on_crew_side(d["station"], stations()):
             h.err(ValueError(f"{d['station']} works for every project, so a grant for one project "
                              "never reaches it: allow it for every project"))
         if scope == "project" and store.get_project(d["project"]) is None:

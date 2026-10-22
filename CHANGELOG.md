@@ -14,6 +14,13 @@ the project follows [Semantic Versioning](https://semver.org/).
   and `get_ticket` add `assignee_note`. Assigning a person to a ticket of a private project adds
   them to it as a member (reason `ticket`); unassigning removes nobody. Changing the assignee does
   not touch who holds the ticket.
+- A crew has a name (`crew_name` in crew.json, or `FACTORY_CREW_NAME`; default `crew`), and every
+  station name and message target comes from it: `<name>-orchestrator`, `<name>-reviewer`,
+  `<name>-releaser`, and `<name>-<project>-build-<slug>` for builders. That tells two crews on one
+  machine, or one person's crews on two machines, apart. `factory crew up` asks for the name when
+  the cell has more than one person. Stations get `FACTORY_CREW` and `FACTORY_ORCHESTRATOR`,
+  transcripts carry a `crew` label, and `factory roster` prints the crew name and warns when the
+  orchestrator session title does not match. The default crew keeps its names.
 - Grants by kind: a grant is a row with a kind (`team`, `project` or `personal`), its words, who gave
   it and when. A team grant needs the admin scope; a project grant comes from the project's lead,
   from the owner of the repos it names, or from an admin; a personal grant is for the person on the

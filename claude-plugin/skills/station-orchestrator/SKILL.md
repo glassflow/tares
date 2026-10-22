@@ -1,6 +1,6 @@
 ---
 name: station-orchestrator
-description: Operating manual for the orchestrator station (crew-orchestrator) of the tares-factory crew. Load only when FACTORY_ROLE is orchestrator, after factory-protocol.
+description: Operating manual for the orchestrator station (`<crew>-orchestrator`) of the tares-factory crew. Load only when FACTORY_ROLE is orchestrator, after factory-protocol.
 ---
 
 # Orchestrator station
@@ -13,7 +13,7 @@ Every Tares call names its project (`project=`).
 
 1. Load `factory-protocol` if you haven't.
 2. Read the crew settings (`get_crew_settings`) and grants (`read_grants`). Note whether the crew has a releaser (`releaser: true`). Read the newest entries of every `$FACTORY_HOME/reports/*.md`.
-3. Run `factory roster` (and `list_crew`). Expect `READY` from `crew-reviewer` (and `crew-releaser` when the crew has one), and from any builder still recorded as active.
+3. Run `factory roster` (and `list_crew`). Expect `READY` from `$FACTORY_CREW-reviewer` (and `$FACTORY_CREW-releaser` when the crew has one), and from any builder still recorded as active.
 4. **Your work list is Tares.** Call `crew_projects`: every project handed to the crew, with its repos (`path` on this machine, GitHub `name`), progress and the milestone it is on. For each, re-read where it stands (`list_milestones`, `list_tickets`) and handle any project with work left and no active builder as in "Starting a project" below.
 5. **Re-ask the desk.** `desk_list(state="open")`: if items are open, ask the one your report says you were asking (else the top one) now, as in "The desk" below. The person may be attached right after a revive.
 6. Arm your schedule with `CronCreate`: every 20 minutes, with the prompt `Orchestrator tick: follow the Tick section of the station-orchestrator skill.` Check `CronList` first so you never hold two.
@@ -40,7 +40,7 @@ A project reaches you two ways: a `[TF:SHIP]` message from the spec session (sta
 - **Across repos.** Give a builder a ticket only once every ticket it `depends_on` is merged, even when that ticket is in another repo and held by another builder. Start a repo's builder when its first ticket is ready; until then, say in your report which ticket it waits on. When the waited-on ticket merges, assign the waiting one and, if needed, start its builder.
 - **Builders.** `factory retire <station>` a builder once all its tickets are merged and nothing more in its repo is ready for it.
 - **Ledger.** Tares holds it: you set holders with `assign_ticket`; each holder moves its own stage with `set_stage`; GitHub fills PR, CI and the `factory/review` verdict. You read it all with `list_tickets` and `get_ticket`.
-- **Release**, only when the crew has a releaser: when a milestone's tickets are merged, send `crew-releaser` a `RELEASE` with the project, repo, refs and tickets. Without one, nobody tags or deploys: the milestone is done at merged.
+- **Release**, only when the crew has a releaser: when a milestone's tickets are merged, send `$FACTORY_CREW-releaser` a `RELEASE` with the project, repo, refs and tickets. Without one, nobody tags or deploys: the milestone is done at merged.
 - **Check a station's claims from the record.** When a station has stalled, or a `DONE` is something Tares or GitHub can't confirm, read its ticket (`get_ticket`: checks against the recording, messages, history) and its report, then ask it one line. Once per stall, not every tick.
 - **Learnings for every project.** A builder's `FYI` proposing a rule for all projects: decide, and if it holds, `add_to_global(doc="agents", line=...)` for a rule every session should follow, or `doc="memory"` for a fact that holds across projects.
 

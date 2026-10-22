@@ -242,7 +242,7 @@ Ask: "Hand this to the orchestrator now?" On yes:
    the user wants this project stricter than the crew. Tares records it, the project page shows
    its repos, and the orchestrator finds it in `crew_projects`. The tool says which orchestrator
    is running.
-2. Send that orchestrator (normally `crew-orchestrator`) the `[TF:SHIP]` message the tool returns,
+2. Send that orchestrator (`list_crew` names it: `<crew>-orchestrator`) the `[TF:SHIP]` message the tool returns,
    with SendMessage, so it starts now rather than on its next tick.
 3. Tell the user the orchestrator has it and will start the builders; they talk to it with
    `tares factory crew attach orchestrator`, and watch the crew on the Crew page.

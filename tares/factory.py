@@ -602,7 +602,8 @@ def says_every_project(words: str) -> bool:
 # ── the crew (M3): one always-on crew serves every project ────────────────────
 
 ROLES = ("orchestrator", "reviewer", "releaser", "builder", "helper")
-# the always-on stations, named crew-<role>; builders and helpers come and go
+# the always-on stations, named <crew>-<role> (crew-<role> for the default crew, TR-541); builders
+# and helpers come and go
 CREW_ROLES = ("orchestrator", "reviewer", "releaser")
 AUTONOMY = {
     "L3-review": "you approve each merge",
@@ -624,12 +625,60 @@ def station_ok(name, role, parent) -> tuple[str, str, str]:
     return name, role, parent
 
 
-def attach_command(station: str) -> str:
+CREW_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}$")
+
+
+def crew_station_role(station: str, role: str = "") -> str:
+    """The crew role (orchestrator, reviewer, releaser) of a station named `<crew>-<role>`, for any
+    crew name; "" for a builder, a helper or anything else. `role` is the role the station
+    reports, when known: a builder or helper is never a crew role, whatever its name ends in. A
+    name with `-build-` in it is a builder's, never a crew station's (a crew name cannot hold that
+    word), so a project named crew-build-tools is not mangled."""
+    if role and role not in CREW_ROLES:
+        return ""
+    if "-build-" in f"-{station}-":
+        return ""
+    for r in ((role,) if role else CREW_ROLES):
+        crew = station[:-len(r) - 1] if station.endswith("-" + r) else ""
+        if not CREW_NAME_RE.match(crew):
+            continue
+        if not role and any(crew.endswith("-" + x) or crew == x for x in CREW_ROLES):
+            return ""  # `crew-reviewer-releaser`: a helper of crew-reviewer, not a releaser
+        return r
+    return ""
+
+
+def _crew_side_by_name(name: str) -> bool:
+    """A crew station (`<crew>-<role>`) or a helper of one (`<crew>-<role>-<suffix>`), by its name
+    alone: no `-build-` in it, and a role word set between hyphens."""
+    if "-build-" in f"-{name}-":
+        return False
+    return bool(crew_station_role(name)) or any(f"-{r}-" in name for r in CREW_ROLES)
+
+
+def on_crew_side(name: str, rows: list[dict]) -> bool:
+    """Whether a station is one of the crew's own or a helper under one (they serve every project
+    and hold no tickets), by its role and its parent chain in `rows`, the stations as /api/crew
+    lists them. A parent no row reports is read by its name, for any crew name."""
+    cur = next((r for r in rows if r.get("name") == name), None)
+    if cur is None:
+        return _crew_side_by_name(name)
+    for _ in range(10):
+        if cur is None or cur.get("role") != "helper" or not cur.get("parent"):
+            break
+        up = next((r for r in rows if r.get("name") == cur["parent"]), None)
+        if up is None:
+            return _crew_side_by_name(cur["parent"])
+        cur = up
+    return cur is not None and cur.get("role") in CREW_ROLES
+
+
+def attach_command(station: str, role: str = "") -> str:
     """The command that opens a station's session in a terminal. The crew's own stations go by
-    their role (`crew-reviewer` is `reviewer`); any other, a helper of one among them
-    (`crew-reviewer-lint`), by its full name, as `factory crew attach` takes them."""
-    role = station[len("crew-"):] if station.startswith("crew-") else ""
-    return f"tares factory crew attach {role if role in CREW_ROLES else station}"
+    their role (`crew-reviewer` and `ana-mbp-reviewer` are both `reviewer`); any other, a helper
+    of one among them (`crew-reviewer-lint`), by its full name, as `factory crew attach` takes
+    them."""
+    return f"tares factory crew attach {crew_station_role(station, role) or station}"
 
 
 CREW_DEFAULTS = {"autonomy": None, "releaser": None, "release_profile": None,
