@@ -198,39 +198,70 @@ def project_progress(store, uid: str) -> dict:
 
 def register(app, store, h: SimpleNamespace) -> None:
     """`h` carries the daemon's helpers: err(exc, code), project_or_404(uid), by(request, body),
-    cc_source(), global_ids(create), area_owner(repo) -> the person who owns that GitHub repo
-    (`owner/name`, any case) or None (TR-627)."""
+    cc_source(), global_ids(create), current_person(request), is_system(request), is_admin(request),
+    area_owner(repo) -> the person who owns that GitHub repo (`owner/name`, any case) or None
+    (TR-627)."""
 
     def deny(request: Request, action: str) -> None:
         why = factory_mod.may(caller(request), action)
         if why:
             h.err(PermissionError(why), 403)
 
-    # ── crew settings (TR-419) ────────────────────────────────────────────────
-    def settings() -> dict:
+    # ── crew settings (TR-419, TR-624): the cell's default, and each person's own over it ──
+    def stored(key: str) -> dict:
         try:
-            cur = json.loads(store.get_setting(CREW_SETTING) or "{}")
+            cur = json.loads(store.get_setting(key) or "{}")
         except ValueError:
             cur = {}
-        return {**factory_mod.CREW_DEFAULTS, **{k: cur.get(k) for k in factory_mod.CREW_DEFAULTS}}
+        return {k: cur.get(k) for k in factory_mod.CREW_DEFAULTS}
+
+    def personal_key(person: dict) -> str:
+        return f"{CREW_SETTING}:{person['id']}"
+
+    def writes_default(request: Request) -> bool:
+        """Does this caller's write change the cell-wide default? The system credential does, and
+        the person `local`, and auth off (a single-user cell stays as it was). Anyone else
+        changes their own."""
+        person = h.current_person(request)
+        return h.is_system(request) or (
+            (person or {}).get("id") == "local" and h.is_admin(request))
+
+    def settings(request: Request | None = None) -> dict:
+        """The cell's default, with the caller's own settings over it where they set one."""
+        out = {**factory_mod.CREW_DEFAULTS, **stored(CREW_SETTING)}
+        person = h.current_person(request) if request is not None else None
+        if person and person.get("id") != "local" and not h.is_system(request):
+            mine = stored(personal_key(person))
+            out.update({k: v for k, v in mine.items() if v is not None})
+        return out
 
     @app.get("/api/crew/settings")
-    async def get_crew_settings():
+    async def get_crew_settings(request: Request):
         """The crew's settings for every project: autonomy (L3-review, L4-ship), whether it runs
         a releaser, release profile, prod pattern, challenger on builders, most builders at
-        once. Unset ones are null."""
-        return {**settings(), "autonomy_levels": factory_mod.AUTONOMY}
+        once. Unset ones are null. The caller's own come over the cell's default."""
+        return {**settings(request), "autonomy_levels": factory_mod.AUTONOMY}
 
     @app.put("/api/crew/settings")
     async def put_crew_settings(request: Request, body: dict = Body(...)):
-        """Change the fields given; the rest keep their value."""
+        """Change the fields given; the rest keep their value. The system credential and the
+        person `local` change the cell's default; any other person changes their own."""
         deny(request, "grants")
+        if writes_default(request):
+            key = CREW_SETTING
+        else:
+            person = h.current_person(request)
+            if not person:
+                h.err(PermissionError("This key has no person"), 403)
+            if person["id"] == "local":
+                h.err(PermissionError("The cell's settings need the admin scope"), 403)
+            key = personal_key(person)
         try:
-            out = factory_mod.crew_settings_ok(body, settings())
+            out = factory_mod.crew_settings_ok(body, stored(key))
         except docs_mod.DocError as e:
             h.err(e)
-        store.set_setting(CREW_SETTING, json.dumps(out))
-        return {**out, "autonomy_levels": factory_mod.AUTONOMY}
+        store.set_setting(key, json.dumps(out))
+        return {**settings(request), "autonomy_levels": factory_mod.AUTONOMY}
 
     # ── grants (TR-419): the person's words, dated; shared, and per project ───
     def shared_grants_id(create: bool = False) -> str | None:
@@ -378,10 +409,11 @@ def register(app, store, h: SimpleNamespace) -> None:
         return out
 
     @app.get("/api/crew")
-    async def get_crew():
+    async def get_crew(request: Request):
         """The crew: one row per station (its current session and state, the earlier sessions
         that played it, the stations it started), the crew's settings, and the shared grants."""
-        return {"stations": stations(), "settings": settings(), "grants": grants_out(None)["all"],
+        return {"stations": stations(), "settings": settings(request),
+                "grants": grants_out(None)["all"],
                 "now": now_utc()}
 
     @app.get("/api/crew/projects")

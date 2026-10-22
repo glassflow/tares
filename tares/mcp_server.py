@@ -17,6 +17,9 @@ import os
 import httpx
 from mcp.server.fastmcp import FastMCP
 
+from . import docs as docs_mod
+
+
 def _factory_token() -> str:
     """The token a tares-factory station presents: `tares factory` keeps it in a file only the
     person can read and names the file in the station's settings (never the token itself)."""
@@ -653,28 +656,36 @@ async def get_doc(id: str, project: str = "") -> str:
 @mcp.tool()
 async def read_global_docs() -> str:
     """The docs every project shares: the AGENTS.md for all projects (the user's standing rules)
-    and the memory (facts and preferences that hold across projects), as markdown. Read them at
-    the start of any work on a project and follow them; do not ask the user again for what they
-    already say."""
+    and the memory (facts and preferences that hold across projects), as markdown, then the
+    caller's own rules and memory when they have any (they add to the team's; when they conflict,
+    the team rule wins). Read them at the start of any work on a project and follow them; do not
+    ask the user again for what they already say."""
     async with _cx(10) as cx:
         r = await cx.get(f"{TARESD}/api/docs/global")
     if r.status_code >= 400:
         return _out(r)
     data = r.json()
-    if not any(data.values()):
+    text = docs_mod.read_all_text(data)
+    if not text:
         return "No shared docs yet: they are made with the first project that has docs."
-    return "\n\n".join(d["body"].rstrip() for d in data.values() if d)
+    return text
 
 
 @writable()
-async def add_to_global(doc: str, line: str) -> str:
+async def add_to_global(doc: str, line: str, scope: str = "team") -> str:
     """Add one line to a doc every project shares: `doc` is `agents` (the AGENTS.md for all
     projects: a rule every session should follow, e.g. "always build on a branch, never commit
     to main") or `memory` (a fact or preference that holds across projects, e.g. "the household
     uses euros"). Ask the user first, and add only what holds beyond this project; a project's
-    own rules go in its own AGENTS.md. A line already there is not added twice."""
+    own rules go in its own AGENTS.md. A line already there is not added twice. `scope` is `team`
+    (the default: the docs every person shares) or `personal` (the caller's own AGENTS.md or
+    memory, read only by them: a preference of theirs that is not the team's)."""
+    scope = (scope or "team").strip().lower()
+    if scope not in ("team", "personal"):
+        return "scope is `team` or `personal`"
+    area = "personal" if scope == "personal" else "global"
     async with _cx(15) as cx:
-        r = await cx.post(f"{TARESD}/api/docs/global/{doc.strip().lower()}/lines",
+        r = await cx.post(f"{TARESD}/api/docs/{area}/{doc.strip().lower()}/lines",
                           json={"text": line, "by_default": "claude code session"})
     if r.status_code >= 400:
         return _out(r)

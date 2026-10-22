@@ -379,7 +379,8 @@ async def get_crew_settings() -> str:
     `releaser` (whether the crew runs a releaser; without one a ticket ends at merged),
     `release_profile`, `prod_pattern` (what counts as prod), `challenger` (builders run the
     Codex challenger), `builders_max`. Unset ones are null: ask the person, one at a time, with
-    a recommendation."""
+    a recommendation. These are the caller's own settings where they have set one, else the
+    team's default."""
     async with _cx(10) as cx:
         r = await cx.get(f"{TARESD}/api/crew/settings")
     return _out(r, SETTING_KEYS)
@@ -390,8 +391,9 @@ async def set_crew_settings(autonomy: str = "", release_profile: str | None = No
                             prod_pattern: str | None = None, challenger: bool | None = None,
                             builders_max: int | None = None,
                             releaser: bool | None = None) -> str:
-    """Save the crew's settings the person chose (only the ones given change). Only the person's
-    own session or the orchestrator may."""
+    """Save the crew's settings the person chose (only the ones given change). They are saved for
+    that person; on a single-user cell they are the cell's. Only the person's own session or the
+    orchestrator may."""
     body = {"autonomy": autonomy or None, "release_profile": release_profile,
             "prod_pattern": prod_pattern, "challenger": challenger, "builders_max": builders_max,
             "releaser": releaser}
