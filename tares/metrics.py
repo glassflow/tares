@@ -5,6 +5,9 @@ agent runs and their outcomes, model calls, tokens and spend by provider, databa
 its limit, trigger evaluations and how long they take, and the event loop's lag. Labels name the
 source, agent, provider or status; never an entity key or anything from a payload.
 
+The endpoint is public unless TARES_METRICS_TOKEN is set; then it wants
+`Authorization: Bearer <token>` (TR-653).
+
 Every hook here is a no-op when the client library is missing, so nothing else in the daemon
 guards its calls. The endpoint answers 404 in that case.
 """
