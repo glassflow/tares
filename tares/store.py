@@ -772,15 +772,24 @@ class Store(FactoryStore, ClaudeUsageStore):
     def _query_log_projects(self) -> None:
         """Reads logged before the project column: the ones that named a project in their selector
         (`tares_project=<id or name>`) get it, so the log still hides a private project's. The rest
-        cannot be told apart and stay unattributed."""
+        cannot be told apart and stay unattributed. A row that named something no project answers
+        to is marked with '' (read like no project everywhere) so later boots do not look at it
+        again."""
         rows = self.con.execute(
             "SELECT id, key_value FROM query_log WHERE project IS NULL "
             "AND key_value LIKE '%tares_project=%'").fetchall()
+        if not rows:
+            return
+        by_ref: dict[str, list[str]] = {}
+        for u in self.list_projects():
+            for ref in {u["id"].lower(), u["name"].lower()}:
+                by_ref.setdefault(ref, []).append(u["id"])
         for qid, key in rows:
             m = re.search(r"tares_project=([^,]*)", key or "")
-            ids = self.project_ids_named([m.group(1).strip()]) if m else []
-            if ids:
-                self.con.execute("UPDATE query_log SET project = ? WHERE id = ?", [",".join(ids), qid])
+            ref = m.group(1).strip().lower() if m else ""
+            ids = by_ref.get(ref, []) if ref else []
+            self.con.execute("UPDATE query_log SET project = ? WHERE id = ?",
+                             [",".join(ids), qid])
 
     def _people_upgrade(self) -> None:
         """The person `local` always exists: the one person of a cell with auth off, and the one
@@ -1402,8 +1411,17 @@ class Store(FactoryStore, ClaudeUsageStore):
         shared finding and memory sources, the only ones whose payload `project` counts.
         """
         cols = "event_time, source, text, labels" + (", payload" if include_payload else "")
+        ocols: list = []
         if owners is not None:
-            cols += ", key_value, json_extract_string(payload, '$.project')"
+            # the payload is only opened for the shared sources, as _exclude_sql does
+            shared = [x for x in (shared or []) if x in sources]
+            if shared:
+                cols += (", key_value, CASE WHEN source IN "
+                         f"({', '.join(['?'] * len(shared))}) THEN "
+                         "json_extract_string(payload, '$.project') END")
+                ocols = shared
+            else:
+                cols += ", key_value, NULL"
         ph = ", ".join(["?"] * len(sources))
         fsql, fparams = _filter_sql(filters)
         wsql, wparams = _where_sql(where)
@@ -1421,21 +1439,21 @@ class Store(FactoryStore, ClaudeUsageStore):
                 f"  FROM events WHERE source IN ({ph}) "
                 f"    AND (source_type = 'reference' OR event_time >= ?){ksql}{fsql}{wsql}"
                 f") WHERE rn <= {int(cap)} ORDER BY event_time",
-                [*sources, since, *kparams, *fparams, *wparams],
+                [*ocols, *sources, since, *kparams, *fparams, *wparams],
             ).fetchall()
         if owners is None:
             return [r[:-1] for r in rows]
         n = len(rows[0]) - 3 if rows else 0       # the columns asked for, before key, payload project, rn
-        owners |= self._row_owners(rows, n, shared)
+        owners |= self._row_owners(rows, n)
         return [r[:n] for r in rows]
 
-    def _row_owners(self, rows: list, n: int, shared: list[str] | None) -> set[str]:
+    def _row_owners(self, rows: list, n: int) -> set[str]:
         """The ids of the projects the `rows` belong to, by the three tests _exclude_sql hides by:
         the `tares_project` label (id or name), the payload `project` of a shared finding or
         memory row, and the row's session (key) linked in project_sessions. Each row is its first
         `n` columns (event_time, source, text, labels, ...), then key_value, the payload project
-        and the row number. Rows the caller could not see were already dropped from the read."""
-        shared = set(shared or [])
+        (read only for the shared sources, NULL for the rest) and the row number. Rows the caller
+        could not see were already dropped from the read."""
         found: set[str] = set()
         named: set[str] = set()
         keys: set[str] = set()
@@ -1446,7 +1464,7 @@ class Store(FactoryStore, ClaudeUsageStore):
                 tag = None
             if tag:
                 named.add(str(tag))
-            if r[n + 1] and r[1] in shared:
+            if r[n + 1]:
                 found.add(str(r[n + 1]))
             if r[n]:
                 keys.add(r[n])
@@ -3441,11 +3459,17 @@ class Store(FactoryStore, ClaudeUsageStore):
                 "created_at": row[3], "updated_at": row[4]}
 
     def upsert_ask_session(self, sid: str, title: str, state: str,
-                           person_id: str | None = None) -> None:
-        """Callers check that `sid` is not someone else's first; the owner is set on insert and
+                           person_id: str | None = None, system: bool = True) -> bool:
+        """Save a transcript; False (nothing written) when `sid` already belongs to someone the
+        caller may not see (same rule as get_ask_session). The check and the write happen under
+        one lock hold, so two saves cannot both pass the check. The owner is set on insert and
         never changes."""
         ts = now_utc()
         with self._lock:
+            row = self.con.execute(
+                "SELECT person_id FROM ask_sessions WHERE id = ?", [sid]).fetchone()
+            if row is not None and not (system or (person_id is not None and row[0] == person_id)):
+                return False
             self.con.execute(
                 "INSERT INTO ask_sessions (id, title, state, created_at, updated_at, person_id) "
                 "VALUES (?, ?, ?, ?, ?, ?) "
@@ -3457,6 +3481,7 @@ class Store(FactoryStore, ClaudeUsageStore):
                 "(SELECT id FROM ask_sessions WHERE person_id IS NOT DISTINCT FROM ? "
                 "ORDER BY updated_at DESC LIMIT ?)",
                 [person_id, person_id, self.ASK_SESSIONS_KEEP])
+        return True
 
     def delete_ask_session(self, sid: str) -> bool:
         with self._lock:

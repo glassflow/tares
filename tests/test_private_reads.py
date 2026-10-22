@@ -352,8 +352,24 @@ def seed(ids):
                   ev("plain", "plain-hidden-key", "SECRET zone event",
                      {"tares_project": p1, "zone": "z-f18"}),
                   ev("plain", "plain-open-key", "OPEN zone event", {"zone": "z-open"})])
+    # (stored before p1-practice-key: the newest-event fallbacks go by arrival)
+    store.append([Envelope("evts", "event_stream", "watchsvc", "evt", "SECRET watch event",
+                           now - timedelta(minutes=5), {"text": "SECRET watch event"},
+                           {"service": "watchsvc", "tares_project": p1})])
     store.append([ev("evts", "p1-practice-key", "SECRET practice event",
                      {"service": "practicesvc", "tares_project": p1})])
+    # a practice whose plan has an example event (F17): the entity of the example already has a
+    # row, but it belongs to p1. The practice counts what the caller can see, finds none and
+    # sends the example. Counting without the exclude finds p1's row and sends nothing.
+    watch = ids["watch"] = "uc_watchproj"
+    store.create_project(watch, "custom", "Watch sample", {})
+    store.upsert_catalog_trigger("t-watch", ["evts"], {"aggregate": "count", "predicate": "> 0",
+                                                      "window": "1m"}, {}, "5m")
+    store.set_owned_by("trigger", "t-watch", watch)
+    store.upsert_project_object(watch, "trigger", "t-watch", "t-watch")
+    store.mark_customized("trigger", "t-watch")
+    store.set_project_setup(watch, {"plan": {"who": "own", "watches": [
+        {"name": "evts", "sample": {"service": "watchsvc", "note": "WATCH-SAMPLE"}}]}})
     store.con.close()
 
 
@@ -854,6 +870,18 @@ async def practice_checks(B, ids):
                 ck(f"{who.title()}: practice on the {how} {'starts from' if want else 'skips'} the p1 entity",
                    (key == "p1-practice-key") == want and (want or "SECRET" not in text), f"{key} {text[:160]}")
 
+        # the example event of the plan (F17): Bob's practice finds no row he can see for its
+        # entity, so it sends the example; the row of p1 for the same entity stays out
+        r = await cx.post(f"{B}/api/projects/{ids['watch']}/setup/practice", headers=H(ids["bob"]))
+        ok = r.status_code == 200
+        d = (await cx.get(f"{B}/api/activity/dispatches/{r.json()['dispatch_id']}",
+                          headers=H(ids["ann"]))).json() if ok else {}
+        text = json.dumps(d.get("payload"))
+        ck("Bob: a practice on the plan's example event sends the example for an entity p1 also has",
+           ok and d.get("key") == "watchsvc" and "WATCH-SAMPLE" in text,
+           f"{r.status_code} {text[:200]}")
+        ck("... and never shows him p1's row of that entity", ok and "SECRET" not in text, text[:200])
+
 
 async def lineage_checks(B, ids):
     """F8: the lineage of a shared source does not name a trigger of a hidden project, for any
@@ -923,6 +951,35 @@ def store_checks():
     got = logged("(read)")
     ck("... and the project a row of its sources belongs to",
        len(got) == 3 and set(got[2].split(",")) == {"uc_mine", "uc_theirs"}, str(got))
+    # F21: only a shared finding or memory source names its project in the payload. A row of any
+    # other source that happens to carry a `project` field (a deploy's, a ticket's) says nothing
+    # about a project of this cell, so a read of it is not about that project.
+    store.upsert_catalog_source("findings", "finding", "finding", "5s", {})
+    store.put_in_project("source", "findings", "uc_mine")
+    Runtime.catalog = catalog_from_db(store)
+    store.append([
+        Envelope("logs", "application_log", "k2", "evt", "deploy row", now_utc(),
+                 {"text": "deploy row", "project": "uc_theirs"}, {"marker": "pq"}),
+        Envelope("findings", "finding", "k2", "evt", "finding row", now_utc(),
+                 {"text": "finding row", "project": "uc_theirs"}, {"marker": "pq"})])
+    runner._tool("counter", "read", {"selector": {"marker": "pq"}, "window": "30m",
+                                     "sources": ["logs"]})
+    got = logged("(read)")
+    ck("a payload `project` on a source that is not shared does not attribute the read",
+       len(got) == 4 and got[3] == "uc_mine", str(got))
+    runner._tool("counter", "read", {"selector": {"marker": "pq"}, "window": "30m",
+                                     "sources": ["findings"]})
+    got = logged("(read)")
+    ck("... while a shared findings row does",
+       len(got) == 5 and set(got[4].split(",")) == {"uc_mine", "uc_theirs"}, str(got))
+    since = now_utc() - timedelta(minutes=30)
+    for srcs, want, what in ((["logs"], set(), "a non-shared source"),
+                             (["findings"], {"uc_theirs"}, "the findings source")):
+        owners: set = set()
+        store.read_window(srcs, None, since, where={"marker": "pq"}, owners=owners,
+                          shared=["findings"])
+        ck(f"the owners of a read of {what} by the store: {sorted(want) or 'none'}",
+           owners == want, str(owners))
     runner._tool("counter", "stats", {"by": "service", "window": "30m"})
     got = logged("(stats)")
     ck("an agent's stats logs its project", got == ["uc_mine"], str(got))
@@ -930,11 +987,22 @@ def store_checks():
     # a row logged before the project column, by name; one that named nothing stays unattributed
     store.log_query("old1", "(read)", "tares_project=Theirs", "1h", 0, "http")
     store.log_query("old2", "(read)", "service=x", "1h", 0, "http")
+    store.log_query("old3", "(read)", "tares_project=NoSuchProject", "1h", 0, "http")
     store.con.close()
     store = Store(path)
     rows = dict(store.con.execute("SELECT id, project FROM query_log WHERE id LIKE 'old%'").fetchall())
     ck("the upgrade attributes a log row that named a project", rows.get("old1") == "uc_theirs", str(rows))
     ck("... and leaves the rest unattributed", rows.get("old2") is None, str(rows))
+    ck("... and marks one that named no project, so the next boot skips it", rows.get("old3") == "", str(rows))
+    # a project made later is not read into a row the upgrade already looked at
+    store.create_project("uc_late", "custom", "NoSuchProject", {"objects": []})
+    store.con.close()
+    store = Store(path)
+    rows = dict(store.con.execute("SELECT id, project FROM query_log WHERE id LIKE 'old%'").fetchall())
+    ck("... which a later boot leaves alone", rows.get("old3") == "" and rows.get("old1") == "uc_theirs", str(rows))
+    shown = {q["id"] for q in store.list_queries(hide=["uc_theirs"])}
+    ck("the marked row reads as no project: the hide filter keeps it, drops a hidden project's",
+       "old3" in shown and "old2" in shown and "old1" not in shown, str(shown))
 
     for i in range(store.ASK_SESSIONS_KEEP + 2):
         store.upsert_ask_session(f"{i:016x}", f"a{i}", "{}", "person-a")
@@ -942,6 +1010,19 @@ def store_checks():
     n_a = len(store.list_ask_sessions("person-a", system=False))
     ck("the Ask history keeps the newest 50 of one person", n_a == store.ASK_SESSIONS_KEEP, str(n_a))
     ck("... without touching another person's", len(store.list_ask_sessions("person-b", system=False)) == 1)
+    # the owner check and the write are one step: another person's id is refused and left as it was
+    first = store.ASK_SESSIONS_KEEP + 1       # the newest of person-a's, kept by the cap
+    mine = f"{first:016x}"
+    ck("a save of another person's id is refused",
+       store.upsert_ask_session(mine, "taken", "{}", "person-b", system=False) is False)
+    ck("... and writes nothing", store.get_ask_session(mine, "person-a", system=False)["title"]
+       == f"a{first}", str(store.get_ask_session(mine)))
+    ck("... the owner saves it, and so does the system credential",
+       store.upsert_ask_session(mine, "mine", "{}", "person-a", system=False) is True
+       and store.upsert_ask_session(mine, "sys", "{}", None, system=True) is True
+       and store.get_ask_session(mine, "person-a", system=False)["title"] == "sys")
+    ck("... a caller with no person saves nothing of a person's",
+       store.upsert_ask_session(mine, "none", "{}", None, system=False) is False)
     store.con.close()
 
 

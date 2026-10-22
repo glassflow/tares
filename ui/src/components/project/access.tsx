@@ -7,8 +7,10 @@ import { Lock } from "../icons";
 import { ViewHead, type Ctx } from "./common";
 
 // Who leads a project, whether it is open to the team or private, and who is on it. The lead
-// changes the scope and the members; an admin changes the lead only. The calls need a key with the
-// admin scope, so a credential without it sees all of this read-only, as does auth off.
+// changes the scope and the members; an admin changes the lead only. The calls need the admin
+// scope, so a key without it sees all of this read-only. With auth off everyone has the admin
+// scope and the one person is `local`. The system credential (the root token) has no person: it
+// sees every private project and may manage access, but it leads nothing.
 
 /** The people on the cell, who the caller is, and whether the caller's key has the admin scope
  *  (the project calls need it; the person's own admin flag does not count). Empty or false until
@@ -27,8 +29,8 @@ function useAccess(ctx: Ctx) {
   const leadsIt = !!meId && ctx.s.lead?.id === meId;
   return {
     list, isAdmin, isLead: isAdmin && leadsIt,
-    // who the members routes accept: the lead, the system credential, or auth off (the
-    // backend's _lead_or_system), and only with the admin scope
+    // who the members routes accept (the backend's _lead_or_system): the lead, or the system
+    // credential, which auth off counts as too; and only with the admin scope
     canMembers: isAdmin && (leadsIt || kind === "system" || kind === "open"),
     leadNeedsAdmin: leadsIt && !isAdmin,
   };
