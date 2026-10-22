@@ -13,7 +13,8 @@ the project follows [Semantic Versioning](https://semver.org/).
   now records who handed the project over and to which crew (`handed_by_person`, `crew`), and the
   `hand_over` tool names `<crew>-orchestrator` of your own crew, never someone else's running one.
   `hand_over` is refused for a key with no person, and `crew_projects` shows a person only the
-  projects they lead or hold a ticket in.
+  projects they lead or hold a ticket in, so the `factory` bash CLI, which reads that list, shows a person
+  only their own projects too.
 - Crews on the cell: it keeps a record of each crew (the person, the crew's name and the machine it
   runs on) and lists stations by crew, so two crews with the same station names never merge. The
   plugin stamps the machine (`hostname -s`, or `FACTORY_MACHINE`) next to the crew name, and the

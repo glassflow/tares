@@ -843,13 +843,13 @@ def register(app, store, h: SimpleNamespace) -> None:
             for t in tickets:
                 if not is_mine(t, me["id"]) or factory_mod.finished(t):
                     continue
-                if wait[t["id"]]["ready"]:
-                    ready.append({"project": p["name"], "ticket": factory_mod.label(t),
-                                  "title": t["title"], "repo": t.get("repo") or ""})
                 if t["holder"]:
                     doing.append({"project": p["name"], "ticket": factory_mod.label(t),
                                   "title": t["title"], "holder": t["holder"],
                                   "stage": t["stage"] or ""})
+                elif wait[t["id"]]["ready"]:
+                    ready.append({"project": p["name"], "ticket": factory_mod.label(t),
+                                  "title": t["title"], "repo": t.get("repo") or ""})
             if leads(p, me["id"]):
                 ms = []
                 for m in store.list_milestones(uid):

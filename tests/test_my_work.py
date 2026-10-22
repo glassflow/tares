@@ -208,6 +208,12 @@ async def main():
            and set(wp) == {"person", "crew", "ready", "in_progress", "led_projects", "desk",
                            "spec_questions"}, set(wp))
 
+        print("== a ticket that is only assigned to a station (stage todo) is in progress, not ready ==")
+        store.update_ticket(t2["id"], holder="a-shop-build-m1")
+        wp = (await work("P")).json()
+        ck("the assigned ticket is in progress and not in ready",
+           names(wp["in_progress"]) == ["T2"] and names(wp["ready"]) == ["T1"], (wp["ready"], wp["in_progress"]))
+
         print("== a ticket held by a station is in progress, and no longer ready ==")
         store.update_ticket(t2["id"], holder="a-shop-build-m1", stage="doing", status="in_progress")
         wp = (await work("P")).json()
@@ -221,6 +227,7 @@ async def main():
         store.update_ticket(t1["id"], stage="merged", status="done")
         wp, wq = (await work("P")).json(), (await work("Q")).json()
         ck("P's ready no longer lists the merged ticket", wp["ready"] == [], wp["ready"])
+        ck("a merged ticket leaves in_progress", names(wp["in_progress"]) == ["T2"], wp["in_progress"])
         ck("Q's dependent ticket is ready now, next to the other",
            [x["ticket"] for x in wq["ready"] if x["project"] == "Shop"] == ["T3", "T4"], wq["ready"])
 
