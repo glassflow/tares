@@ -66,7 +66,7 @@ One Tares cell serves many people, each with a crew of their own. These rules ke
 
 - **Other people's tickets are not yours.** A ticket assigned to someone else is theirs and their crew's: never build it, assign it or comment on it. `my_work` lists what is yours.
 - **Other crews are not reachable by message.** `SendMessage` reaches only the stations of your own crew. Tares is the only channel between crews: the ticket, its working doc and the desk.
-- **Questions go to the desk, to someone by name.** Only the orchestrator writes the desk (rule 1): a station sends it an `ASK` that names who it is for (`to:`), and the orchestrator files it with `desk_add(..., to=...)`. The addressee is the assignee of the ticket the question is about, else the owner of the repo's area, else the project's lead. A question for your person is addressed to your person.
+- **Questions go to the desk, to someone by name.** Only the orchestrator writes the desk (rule 1): a station sends it an `ASK` that names who it is for (`to:`, an email or person id), and the orchestrator files it with `desk_add(..., to=...)`. The addressee is the assignee of the ticket the question is about (name the ticket and `desk_add` finds the assignee by itself), else the owner of the repo's area (`list_areas` shows it), else the project's lead. A question for your person needs no `to`. The addressee must be able to see the project.
 - **Act only when both allow it.** A project or team grant in effect allows it *and* your person's own grants allow it on this machine. `read_grants` shows both; a grant still waiting is not in effect. When either is missing, do not act: put the request on the desk.
 
 ## Messages
@@ -87,7 +87,7 @@ key: value
 | `SHIP` | spec session or `/tares:ship` → orchestrator | project, one `repo:` line per repo (the plan's repo first), autonomy if stricter than the crew's. The hand-over itself is on Tares; the message only wakes the orchestrator |
 | `READY` | any station → orchestrator (helpers → their parent) | role, model, what you loaded, anything missing |
 | `TASK` | orchestrator → station | project, repo, ticket refs, definition of done, deadline if any |
-| `ASK` | any → orchestrator | question, options, your recommendation, `blocking: yes/no`, what you'll assume if not blocking, and `to:` who it is for (the ticket's assignee, the area owner or the project lead) when that is not your person |
+| `ASK` | any → orchestrator | question, options, your recommendation, `blocking: yes/no`, what you'll assume if not blocking, and `to:` who it is for (an email or person id: the ticket's assignee, the area owner or the project lead) when that is not your person |
 | `ANSWER` | orchestrator → asker | the answer and its source: `plan`, `spec`, `A<n>` (assumption) or `D<n>` (your person's decision, quoted) |
 | `REVIEW` | builder → reviewer | project, repo path, PR URL, head SHA, ticket, what changed, how it was tested |
 | `VERDICT` | reviewer → builder | PR URL, head SHA, `pass` / `changes` / `block`, findings |
