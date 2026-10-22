@@ -1,5 +1,5 @@
 """The factory routes answer with a constant number of queries, however many tickets a project has
-(TR-657) or are in review (TR-648), and the batched answers are exactly what the per-ticket code gave: a golden file recorded
+(TR-657), are in review (TR-648) or projects a cell has (TR-659), and the batched answers are exactly what the per-ticket code gave: a golden file recorded
 from the code before batching.
 
 Run:    .venv/bin/python tests/test_factory_batching.py
@@ -183,6 +183,8 @@ async def main():
     store.create_ticket(solo, "tares", "Done already", status="done", milestone=m)
     store.update_ticket(store.create_ticket(solo, "tares", "Last open", milestone=m), stage="review")
     store.update_ticket(store.create_ticket(solo, "tares", "No milestone"), stage="review")
+    # a project that is not a software factory: no progress, same card as before
+    store.create_project("uc_plain", "custom", "plain", {"objects": []})
     from tares.store import now_utc
     t0 = now_utc()
     for uid, name in ((small, "small"), (big, "big"), (solo, "solo")):
@@ -250,6 +252,25 @@ async def main():
         ck(f"queries do not grow with the tickets in review (8 vs {8 + len(more)})",
            q_few == q_many, f"{q_few} vs {q_many}")
         print(f"  {q_many} queries for {8 + len(more)} tickets in review")
+
+        print("== projects list (TR-659) ==")
+        out, _ = await get("/api/projects")
+        cards = {p["name"]: p for p in out["projects"]}
+        ck("factory projects carry their progress, others do not",
+           all("progress" in cards[n] for n in ("small", "big", "solo"))
+           and "progress" not in cards["plain"], str(sorted(cards)))
+        golden(normalize(out), "projects.json")
+        # a factory project costs the list no more queries than any other project
+        _, q0 = await get("/api/projects")
+        store.create_project("uc_plain2", "custom", "plain2", {"objects": []})
+        _, q1 = await get("/api/projects")
+        build(store, "more", 12)
+        _, q2 = await get("/api/projects")
+        ck("a factory project adds no more queries than a plain one",
+           q2 - q1 == q1 - q0, f"{q0}, +plain {q1}, +factory {q2}")
+        # the catalog is read once for the list, not once per project
+        ck("a project adds at most 4 queries", q1 - q0 <= 4, f"{q1 - q0}")
+        print(f"  {q2} queries for {len(out['projects']) + 2} projects")
 
     store.con = counting._con
     print(f"\n{PASS} passed, {FAIL} failed")
