@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 import httpx
 
 from .connectors.github import _normalize_repo
+from . import ticket_assignee
 from .envelope import Envelope, now_utc
 
 API_URL = "https://api.github.com/graphql"
@@ -60,6 +61,7 @@ _QUERY = """query($owner: String!, $name: String!, $label: String!, $after: Stri
            orderBy: {field: CREATED_AT, direction: ASC}) {
       nodes { id number title url state stateReason(enableDuplicate: true)
               labels(first: 30) { nodes { name } } milestone { id }
+              assignees(first: 1) { nodes { login } }
               blockedBy(first: 50) { nodes { id } } }
       pageInfo { hasNextPage endCursor } } } }"""
 
@@ -249,11 +251,13 @@ async def sync_project(store, uid: str) -> list[Envelope]:
         pos = float(iss["number"])
         ident = identifier_of(iss)
         ms = ms_ids.get((iss.get("milestone") or {}).get("id") or "")
+        who, raw = ticket_assignee.from_github(store, iss)
         cur = have.get(iss["id"])
         if cur is None:
             store.create_ticket(uid, "github", iss.get("title") or ident, status, pos,
                                 external_id=iss["id"], identifier=ident, url=iss.get("url"),
-                                milestone=ms)
+                                milestone=ms, assignee_person_id=who, assignee_raw=raw)
+            ticket_assignee.join(store, project, who, "system")
             out.append(_env(project, link, iss, "created",
                             f"{ident} added in GitHub: {iss.get('title')}", {"status": status}))
             continue
@@ -276,6 +280,9 @@ async def sync_project(store, uid: str) -> list[Envelope]:
             changes.update(identifier=ident, url=iss.get("url"))
         if cur["milestone"] != ms:
             changes["milestone"] = ms
+        if (cur["assignee_person_id"], cur["assignee_raw"]) != (who, raw):
+            changes.update(assignee_person_id=who, assignee_raw=raw)
+            ticket_assignee.join(store, project, who, "system")
         if changes:
             store.update_ticket(cur["id"], **changes)
     # "blocked by" becomes dependencies, once every issue has its ticket

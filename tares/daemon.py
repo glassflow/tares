@@ -60,6 +60,7 @@ from . import factory as factory_mod
 from . import areas as areas_mod, claude_usage, factory_api, standup as standup_mod
 from . import linear as _linear
 from . import github_tickets as _gh_tickets
+from . import ticket_assignee
 from . import skills as skills_mod
 from . import providers as providers_mod
 from .runtime import Runtime
@@ -4943,6 +4944,7 @@ def make_app() -> FastAPI:
         out = {k: t[k] for k in ("id", "owner", "identifier", "url", "title", "status",
                                  "position", "working_doc", "updated_at", "number", "milestone",
                                  "holder", "stage", "stage_reason", "pr", "repo")}
+        out.update(ticket_assignee.view(store, t))   # assignee {id, name} | None, assignee_raw
         out["label"] = factory_mod.label(t)
         out["pr_note"] = factory_api.pr_note(t)
         out["milestone_name"] = ctx["ms"].get(t["milestone"]) if t["milestone"] else None
@@ -5023,6 +5025,20 @@ def make_app() -> FastAPI:
     # where a ticket or milestone not owned by Tares lives; its owner is the key
     _HOME_NAME = {"linear": "Linear", "github": "GitHub"}
 
+    def _assignee_ref(v) -> tuple[str | None, str | None]:
+        """(person id, raw) for the `assignee` a caller sent; 404 for text that is neither a
+        person id nor an email."""
+        try:
+            return ticket_assignee.resolve(store, v)
+        except ValueError as e:
+            _err(KeyError(str(e)), 404)
+
+    def _added_by(request) -> str:
+        """Who a project member added by assigning a ticket is recorded as: the person behind the
+        credential, from the credential alone."""
+        by = _current_person(request)
+        return by["id"] if by else "system"
+
     def _ticket_or_404(uid: str, ref: str) -> dict:
         t = store.get_ticket(uid, ref)
         if t is None:
@@ -5048,11 +5064,12 @@ def make_app() -> FastAPI:
                 "github": store.get_project_github(uid)}
 
     @app.post("/api/projects/{uid}/tickets", status_code=201)
-    async def create_project_ticket(uid: str, body: dict = Body(...)):
-        """{title, status?, position?, working_doc?, milestone?, depends_on?, repo?}: a ticket
-        Tares owns. `repo` is the GitHub repo (owner/name) it changes, for a project that spans
-        several. Refused when the project's tickets live in Linear or GitHub."""
-        _project_or_404(uid)
+    async def create_project_ticket(uid: str, request: Request, body: dict = Body(...)):
+        """{title, status?, position?, working_doc?, milestone?, depends_on?, repo?, assignee?}: a
+        ticket Tares owns. `repo` is the GitHub repo (owner/name) it changes, for a project that
+        spans several. `assignee` is a person id or an email (an email nobody on the cell has is
+        kept as written, and the ticket shows as unowned). Refused when the project's tickets live in Linear or GitHub."""
+        project = _project_or_404(uid)
         home = store.project_ticket_home(uid)
         if home:
             _err(ValueError(f"this project's tickets live in {_HOME_NAME[home]}; add the ticket "
@@ -5062,6 +5079,7 @@ def make_app() -> FastAPI:
             status = docs_mod.status_ok(body.get("status"))
         except docs_mod.DocError as e:
             _err(e)
+        who, raw = _assignee_ref(body.get("assignee"))
         pos = body.get("position")
         milestone = _milestone_ref(uid, body.get("milestone"))
         depends = _depends_ref(uid, None, body.get("depends_on"))
@@ -5069,7 +5087,9 @@ def make_app() -> FastAPI:
                                   float(pos) if pos is not None else None,
                                   working_doc=_working_doc_ok(uid, body.get("working_doc")),
                                   milestone=milestone, depends_on=depends,
-                                  repo=_repo_ok(body.get("repo")))
+                                  repo=_repo_ok(body.get("repo")),
+                                  assignee_person_id=who, assignee_raw=raw)
+        ticket_assignee.join(store, project, who, _added_by(request))
         return _ticket_out(uid, _ticket_or_404(uid, tid))
 
     @app.get("/api/projects/{uid}/tickets/{ref}")
@@ -5081,18 +5101,21 @@ def make_app() -> FastAPI:
         return _ticket_out(uid, _ticket_or_404(uid, ref), with_doc=True)
 
     @app.put("/api/projects/{uid}/tickets/{ref}")
-    async def update_project_ticket(uid: str, ref: str, body: dict = Body(...)):
+    async def update_project_ticket(uid: str, ref: str, request: Request,
+                                    body: dict = Body(...)):
         """Change a ticket. A Linear or GitHub ticket only takes `working_doc` and `repo` (its
-        title, status, order, milestone and blocking relations change where it lives); a Tares
-        ticket also takes title, status, position, milestone and depends_on."""
-        _project_or_404(uid)
+        title, status, order, assignee, milestone and blocking relations change where it lives);
+        a Tares ticket also takes title, status, position, assignee, milestone and depends_on.
+        `assignee` is a person id or an email; "" clears it. Changing it leaves the holder and
+        stage alone."""
+        project = _project_or_404(uid)
         t = _ticket_or_404(uid, ref)
         fields: dict = {}
         if "working_doc" in body:
             fields["working_doc"] = _working_doc_ok(uid, body.get("working_doc"))
         if "repo" in body:
             fields["repo"] = _repo_ok(body.get("repo"))
-        own = {"title", "status", "position", "milestone", "depends_on"} & set(body)
+        own = {"title", "status", "position", "milestone", "depends_on", "assignee"} & set(body)
         if own and t["owner"] != "tares":
             _err(ValueError(f"{t['identifier'] or t['id']} lives in {_HOME_NAME[t['owner']]}: "
                             "change its " + ", ".join(sorted(own)) + " there"), 409)
@@ -5109,8 +5132,13 @@ def make_app() -> FastAPI:
             fields["milestone"] = _milestone_ref(uid, body.get("milestone"))
         if "depends_on" in body:
             fields["depends_on"] = _depends_ref(uid, t["id"], body.get("depends_on"))
+        if "assignee" in body:
+            who, raw = _assignee_ref(body.get("assignee"))
+            fields.update(assignee_person_id=who, assignee_raw=raw)
         if fields:
             store.update_ticket(t["id"], **fields)
+        if "assignee" in body:
+            ticket_assignee.join(store, project, fields["assignee_person_id"], _added_by(request))
         return _ticket_out(uid, _ticket_or_404(uid, t["id"]), with_doc=True)
 
     @app.delete("/api/projects/{uid}/tickets/{ref}")

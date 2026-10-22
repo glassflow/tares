@@ -6,6 +6,14 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Ticket assignees: every ticket has an assignee person, or shows as unowned with the assignee as
+  its source named them, wherever it lives. The Linear sync maps the assignee's email (a person's
+  main or extra one), the GitHub Issues sync maps the first assignee's login, and a Tares ticket
+  takes `assignee` (a person id or an email) on `POST` and `PUT /api/projects/{id}/tickets` and in
+  `write_ticket`. Tickets show `assignee` ({id, name} or null) and `assignee_raw`; `list_tickets`
+  and `get_ticket` add `assignee_note`. Assigning a person to a ticket of a private project adds
+  them to it as a member (reason `ticket`); unassigning removes nobody. Changing the assignee does
+  not touch who holds the ticket.
 - Grants by kind: a grant is a row with a kind (`team`, `project` or `personal`), its words, who gave
   it and when. A team grant needs the admin scope; a project grant comes from the project's lead,
   from the owner of the repos it names, or from an admin; a personal grant is for the person on the

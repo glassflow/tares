@@ -20,12 +20,16 @@ Everything here is read-only towards Linear.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from datetime import datetime, timezone
 
 import httpx
 
+from . import ticket_assignee
 from .envelope import Envelope, now_utc
+
+log = logging.getLogger("tares.linear")
 
 API_URL = "https://api.linear.app/graphql"
 
@@ -214,7 +218,7 @@ _ISSUES = """query($id: String!, $after: String) {
   project(id: $id) {
     issues(first: 50, after: $after, includeArchived: false) {
       nodes { id identifier title url sortOrder updatedAt state { name type }
-              projectMilestone { id }
+              projectMilestone { id } assignee { email name }
               inverseRelations(first: 20) { nodes { type issue { id } } } }
       pageInfo { hasNextPage endCursor }
     }
@@ -294,9 +298,16 @@ async def sync_project(store, uid: str) -> list[Envelope]:
     ms_ids = _sync_milestones(store, uid, milestones)
     have = {t["external_id"]: t for t in store.list_tickets(uid) if t["owner"] == "linear"}
     seen, out = set(), []
+    people: dict = {}
+    nameless = [i for i in issues if isinstance(i.get("assignee"), dict)
+                and not str(i["assignee"].get("email") or "").strip()]
+    if nameless:
+        log.warning("Linear sent %d assignee(s) without an email (this key may not read emails); "
+                    "those tickets are matched by nothing and show the assignee's name", len(nameless))
     for iss in issues:
         seen.add(iss["id"])
         status = status_of(iss.get("state"))
+        who, raw = ticket_assignee.from_linear(store, iss.get("assignee"), people)
         pos = float(iss.get("sortOrder") or 0)
         ident = iss.get("identifier") or iss["id"]
         ms = ms_ids.get((iss.get("projectMilestone") or {}).get("id") or "")
@@ -304,7 +315,8 @@ async def sync_project(store, uid: str) -> list[Envelope]:
         if cur is None:
             store.create_ticket(uid, "linear", iss.get("title") or ident, status, pos,
                                 external_id=iss["id"], identifier=ident, url=iss.get("url"),
-                                milestone=ms)
+                                milestone=ms, assignee_person_id=who, assignee_raw=raw)
+            ticket_assignee.join(store, project, who, "system")
             out.append(_env(project, link, iss, "created",
                             f"{ident} added in Linear: {iss.get('title')}", {"status": status}))
             continue
@@ -327,6 +339,9 @@ async def sync_project(store, uid: str) -> list[Envelope]:
             changes.update(identifier=ident, url=iss.get("url"))
         if cur["milestone"] != ms:
             changes["milestone"] = ms
+        if (cur["assignee_person_id"], cur["assignee_raw"]) != (who, raw):
+            changes.update(assignee_person_id=who, assignee_raw=raw)
+            ticket_assignee.join(store, project, who, "system")
         if changes:
             store.update_ticket(cur["id"], **changes)
     # blocking relations become dependencies, once every issue has its ticket
