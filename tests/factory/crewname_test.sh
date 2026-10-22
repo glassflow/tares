@@ -116,6 +116,11 @@ tmp=$(mktemp); jq --arg c "$repo" '. + [{id: "0000a002", name: "a-shop-build-m2"
 FACTORY_CREW_HOME=$A "$F" roster >/dev/null 2>&1
 check "crew a: an unrecorded a-shop-build-m2 is adopted, under a-orchestrator" '[ "$(st $A a-shop-build-m2 .role)" = builder ] && [ "$(st $A a-shop-build-m2 .parent)" = a-orchestrator ] && [ "$(st $A a-shop-build-m2 .project)" = shop ]'
 check "crew a: b's unrecorded builder is not adopted" '[ -z "$(st $A b-shop-build-m9 .role)" ]'
+# The default crew adopts only its own <project>-build-<slug> sessions, not a named crew's on the same repo.
+tmp=$(mktemp); jq --arg c "$repo" '. + [{id: "0000d005", name: "shop-build-m5", cwd: $c, state: "working", sessionId: "s-d005", startedAt: 100, pid: 4244}]' "$FAKE_CLAUDE_STATE/agents.json" > "$tmp" && mv "$tmp" "$FAKE_CLAUDE_STATE/agents.json"
+"$F" roster >/dev/null 2>&1
+check "default crew: an unrecorded shop-build-m5 is adopted" '[ "$(st $D shop-build-m5 .role)" = builder ] && [ "$(st $D shop-build-m5 .parent)" = crew-orchestrator ]'
+check "default crew: a- and b- builders on the same repo are not adopted" '[ -z "$(st $D a-shop-build-m2 .role)" ] && [ -z "$(st $D b-shop-build-m9 .role)" ] && [ -z "$(st $D a-shop-build-m1 .role)" ]'
 # Any command, not only roster, refuses a crew name that is not valid.
 FACTORY_CREW_HOME=$T/empty FACTORY_CREW_NAME=Bad_Name "$F" status >"$T/bad-status.out" 2>&1; rc=$?
 check "a command other than roster refuses an invalid crew name" '[ $rc -ne 0 ] && grep -q "is not valid: it is 1 to 31 characters" "$T/bad-status.out"'
@@ -162,6 +167,14 @@ check "two people: a typed name is used" '[ "$(jq -r .crew_name $C2/crew.json)" 
 printf 'Bad Name\nana-desk\n' | FACTORY_CREW_HOME=$C3 "$F" crew up >"$T/up-four.out" 2>&1
 check "two people: a name that is not valid is asked again" 'grep -q "is not one of the choices\|is not a valid crew name" "$T/up-four.out" && [ "$(jq -r .crew_name $C3/crew.json)" = ana-desk ]'
 check "two people: FACTORY_CREW_NAME skips the question" 'C4=$T/crew-five; trust "$C4"; FACTORY_CREW_HOME=$C4 FACTORY_CREW_NAME=ravi-pc "$F" crew up </dev/null >"$T/up-five.out" 2>&1; ! grep -q "What should this crew be called" "$T/up-five.out" && [ "$(jq -r .crew_name $C4/crew.json)" = ravi-pc ]'
+# A default crew that is already running keeps its name when Tares gains a second person: crew up must not
+# start a second orchestrator and reviewer under a new name beside the running ones.
+n=$(launches)
+FACTORY_CREW_HOME=$D "$F" crew up --yes >"$T/up-d1.out" 2>&1
+FACTORY_CREW_HOME=$D "$F" crew up </dev/null >"$T/up-d2.out" 2>&1
+check "running default crew: crew up does not ask, rename or start anything" '! grep -q "What should this crew be called" "$T/up-d1.out" "$T/up-d2.out" && jq -e "has(\"crew_name\") | not" $D/crew.json >/dev/null && [ "$(launches)" = "$n" ] && [ "$(jq "[.[] | select(.role == \"orchestrator\")] | length" $D/stations.json)" = 1 ]'
+FACTORY_CREW_HOME=$D FACTORY_CREW_NAME=zzz "$F" crew up --yes >"$T/up-d3.out" 2>&1; rc=$?
+check "running default crew: another FACTORY_CREW_NAME is refused and nothing is stored" '[ $rc -ne 0 ] && grep -q "already running under the name crew" "$T/up-d3.out" && jq -e "has(\"crew_name\") | not" $D/crew.json >/dev/null && [ "$(launches)" = "$n" ]'
 
 # The plugin sends the crew's name with every MCP call, next to the station headers.
 check "the plugin sends X-Tares-Crew from FACTORY_CREW" '[ "$(jq -r ".mcpServers.tares.headers[\"X-Tares-Crew\"]" "$here/../../claude-plugin/.mcp.json")" = "\${FACTORY_CREW:-}" ]'

@@ -567,9 +567,13 @@ adopt_unrecorded() {
     case "$name" in
       "$c-orchestrator"|"$c-reviewer"|"$c-releaser") role=${name#"$c"-}; [ "$cwd" = "$CREW_HOME" ] || continue ;;
       *-build-*) role=builder; repo=$cwd
-        # another crew's builder on this machine is not ours; the default crew's builders carry no crew name
-        [ "$c" = crew ] || case "$name" in "$c"-*) ;; *) continue ;; esac
-        project=$(project_repo_rows | C="$cwd" awk -F'\t' '$2 == ENVIRON["C"] { print $1; exit }')
+        # Ours only when the name is this crew's builder name for a project of that repo: <project>-build- for
+        # the default crew, <crew>-<project>-build- for a named one. Another crew's builder (a-shop-build-m1)
+        # is not the default crew's, whatever prefix it shares.
+        project=""
+        while IFS= read -r p; do
+          case "$name" in "$(builder_name "$(slugify "$p")" "")"*) project=$p; break ;; esac
+        done < <(project_repo_rows | C="$cwd" awk -F'\t' '$2 == ENVIRON["C"] { print $1 }')
         [ -n "$project" ] || continue ;;
       *) continue ;;
     esac
@@ -925,6 +929,13 @@ setup_crew_name() {
   if [ -n "$stored" ]; then
     [ -z "${FACTORY_CREW_NAME:-}" ] || [ "$FACTORY_CREW_NAME" = "$stored" ] || \
       die "this crew is named $stored (crew_name in $CREW_CFG), but FACTORY_CREW_NAME says $FACTORY_CREW_NAME. Its stations carry the stored name: change crew_name in $CREW_CFG after \`$ME crew down\`, or unset FACTORY_CREW_NAME."
+    return 0
+  fi
+  # A crew already running with no stored name is the default crew: renaming it would start a second
+  # orchestrator and reviewer beside the running ones, so it keeps "crew" until it is taken down.
+  if [ -f "$STATIONS" ] && jq -e 'any(.[]; .status == "active")' "$STATIONS" >/dev/null 2>&1; then
+    [ -z "${FACTORY_CREW_NAME:-}" ] || [ "$FACTORY_CREW_NAME" = crew ] || \
+      die "this crew is already running under the name crew, but FACTORY_CREW_NAME says $FACTORY_CREW_NAME. Take it down first (\`$ME crew down\`) to give it a new name."
     return 0
   fi
   if [ -n "${FACTORY_CREW_NAME:-}" ]; then store_crew_name "$(crew_name)"; return 0; fi
