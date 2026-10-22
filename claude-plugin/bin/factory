@@ -1113,14 +1113,14 @@ cmd_retire() { # station
 }
 # Tares learns a station ended only from its session's last line, which a stopped or killed session
 # never sends: say it here, or its row stays Working or Quiet. Never fails the retire; a station that
-# never reported to Tares (404) is fine.
+# never reported to Tares (404) is fine. The crew goes along: other crews have a station of the same name.
 tell_tares_ended() { # station
   [ -n "$TARES" ] || TARES=$(tares_url)
   local tok code
   tok=$(tares_token)
   code=$({ [ -n "$tok" ] && printf 'Authorization: Bearer %s\n' "$tok"; true; } | curl -sS -o /dev/null \
     -w '%{http_code}' --max-time 3 -X POST -H @- -H 'Content-Type: application/json' \
-    --data '{"reason":"retired"}' "$TARES/api/crew/$(uri "$1")/end" 2>/dev/null) || true
+    --data '{"reason":"retired"}' "$TARES/api/crew/$(uri "$1")/end?crew=$(uri "$(crew_name)")" 2>/dev/null) || true
   case "$code" in
     200|404) ;;
     *) say "could not tell Tares at $TARES that $1 ended; mark it ended on the Crew page" ;;
@@ -1501,10 +1501,16 @@ serve_readings() {
     if ( cmd_plan >/dev/null 2>&1 ); then PLAN_OK=1
     elif [ $PLAN_OK = 1 ]; then PLAN_OK=0; say "could not read the plan's limits ($ME plan says why); trying again every ${every}s"; fi
   fi
-  local s
-  for s in $(tares_http GET /api/crew/context/asks 2>/dev/null | jq -r '.asks[]?.station' 2>/dev/null); do
+  # Tares lists every crew's asks, and crews repeat station names: answer only an ask for the session
+  # this watch's own station plays, or another crew's ask is read here (and fails) every round.
+  local s sid id ask
+  while IFS=$'\t' read -r s ask; do
+    [ -n "$s" ] || continue
+    id=$(stations_get "$s" '.id'); [ -n "$id" ] || continue
+    sid=$(job_state "$id" | jq -r '.sessionId // empty'); [ -n "$sid" ] || sid=$(stations_get "$s" '.sessionId')
+    [ "$sid" = "$ask" ] || [ "$(stations_get "$s" '.sessionId')" = "$ask" ] || continue
     ( cmd_context "$s" >/dev/null ) || say "could not read the context of $s"
-  done
+  done < <(tares_http GET /api/crew/context/asks 2>/dev/null | jq -r '.asks[]? | [.station, .session] | @tsv' 2>/dev/null)
 }
 nap() { # seconds: wait them out, serving readings meanwhile
   local until=$(( $(date +%s) + $1 ))

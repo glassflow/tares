@@ -58,6 +58,7 @@ each ticket's branch and pull request, and start nothing new.
 ## When you're stuck
 
 - Missing information the plan should have had: `ASK` the orchestrator with your recommendation. If it's not blocking, assume and continue.
+- A question about the ticket (what it should do, a choice the working doc leaves open) is for the ticket's assignee, normally your person: `ASK` with `to:` their name, and the orchestrator puts it on the desk addressed to them (only it writes the desk). A mismatch with a dependency built by another crew (the route, field names or version that differ from what you were told) goes the same way with `to:` that dependency ticket's assignee; name the route, the field names or the version in the question. Other crews cannot be messaged: the desk is how they hear.
 - A test or build you can't make pass after two honest attempts: write what you tried to your report, `set_stage(ticket, "blocked", reason=...)`, `ASK` with `blocking: yes`.
 - A permission denial: don't work around it. Put the exact command, verbatim, in your report and tell the orchestrator your station name and that command, word for word (protocol rule 13). If the person allows it, the factory restarts you with the grant and says so; then run the command again if it is still needed.
 

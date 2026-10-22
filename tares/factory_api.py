@@ -958,6 +958,11 @@ def register(app, store, h: SimpleNamespace) -> None:
         A session that is still alive turns the row back with its next line."""
         deny(request, "end_station")
         st = pick_station(name, request, crew)
+        # `crew` narrows the name; with none, pick_station falls back to another person's station
+        # of that name, which a caller must not end (the system credential may)
+        if not h.is_system(request) and (st["person"] or {}).get("id") != caller_person_id(request):
+            h.err(PermissionError(f"{name} belongs to another person's crew: only its owner "
+                                  "ends it"), 403)
         reason = " ".join(str((body or {}).get("reason") or "").split())[:100] or "marked ended"
         if (store.session_state(st["session"]) or {}).get("state") != "ended":
             store.set_session_state(st["session"], "ended", reason, now_utc(), force=True)

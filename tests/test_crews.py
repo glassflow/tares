@@ -243,6 +243,42 @@ async def main():
         ck("a project's crew names the crew of its builder",
            [c["id"] for c in pc["crews"]] == [cq["id"]] and [s["name"] for s in pc["stations"]] == ["a-shop-build-m1"], pc)
 
+        print("== ending a station is for its own crew's person ==")
+        # P's crew a has an a-reviewer; Q's has none. Without `crew`, the name alone would fall
+        # back to the newest a-reviewer of anyone, which is P's
+        await push("P", [st_line("p-r9", "a-reviewer", "reviewer", "a-orchestrator", crew="a",
+                                 machine="m1", ago=2), say("p-r9", "a-reviewer", "reviewing", 1)])
+
+        async def state_of(session):
+            out = await crew()
+            return next((x["state"] for x in out["stations"] if x["session"] == session), None)
+
+        admin = {}   # ending a station takes the admin scope; the same two people, with it
+        async with mk() as cx:
+            for who, mail in (("P", "pat@example.com"), ("Q", "quinn@example.com")):
+                r = await cx.post("/api/keys", json={"name": f"{who}-admin", "scopes": ["admin"],
+                                                     "person": {"email": mail, "name": who}})
+                admin[who] = {"Authorization": f"Bearer {r.json()['secret']}"}
+                ck(f"{who}'s admin key is the same person", r.json()["person"]["id"] == pid[who], r.text)
+
+        async def end(who, name, **params):
+            async with mk() as cx:
+                return await cx.post(f"/api/crew/{name}/end", params=params, json={"reason": "retired"},
+                                     headers=admin[who] if who else root)
+
+        r = await end("Q", "a-reviewer")
+        ck("Q cannot end P's a-reviewer by its name alone: 403", r.status_code == 403, r.text)
+        r = await end("Q", "a-reviewer", crew="a")
+        ck("nor with the crew's name, which both people use", r.status_code == 403, r.text)
+        ck("P's reviewer is still working", await state_of("p-r9") != "ended")
+        r = await end("Q", "a-orchestrator", crew="a")
+        ck("Q ends their own a-orchestrator", r.status_code == 200 and r.json()["session"] == "q-o1", r.text)
+        ck("and P's orchestrator is untouched", await state_of("p-o2") != "ended")
+        r = await end("P", "a-reviewer")
+        ck("P ends their own a-reviewer", r.status_code == 200 and r.json()["session"] == "p-r9", r.text)
+        r = await end(None, "a-orchestrator", crew="a")
+        ck("the system credential may end any", r.status_code == 200, r.text)
+
         print("== sessions from before crews ==")
         from tares.store import Store
         path = os.path.join(_TMP, "old.duckdb")

@@ -78,11 +78,27 @@ check "no plan to read (an API key): said plainly" '[ $rc != 0 ] && grep -q "Pro
 # The watch answers an ask from the Crew page between its rounds.
 before=$(grep -c '"/context"' "$FAKE_CLAUDE_STATE/calls.jsonl")
 api POST /api/crew/crew-orchestrator/context >/dev/null
+# Another crew's station of its own (this crew has none of that name): its ask is not this watch's to read.
+api POST /ingest/claude_code "$(jq -cn '{type: "session_station", sessionId: "s-foreign", timestamp: (now | todate),
+  station: "foreign-station", role: "builder", factory_station: "foreign-station"}')" >/dev/null
+api POST /api/crew/foreign-station/context >/dev/null
 FACTORY_ASK_POLL=1 FACTORY_PLAN_EVERY=0 "$F" crew watch --interval 60 >"$T/watch.out" 2>&1 & WATCH=$!
-for _ in $(seq 40); do [ "$(api GET /api/crew/context/asks | jq '.asks | length')" = 0 ] && break; sleep 0.25; done
+for _ in $(seq 40); do [ "$(api GET /api/crew/context/asks | jq '[.asks[] | select(.station == "crew-orchestrator")] | length')" = 0 ] && break; sleep 0.25; done
+sleep 1
 kill "$WATCH" 2>/dev/null; wait "$WATCH" 2>/dev/null; WATCH=""
-check "the watch reads what the Crew page asked for" '[ "$(api GET /api/crew/context/asks | jq ".asks | length")" = 0 ] && [ "$(grep -c "\"/context\"" "$FAKE_CLAUDE_STATE/calls.jsonl")" -gt "$before" ]'
+check "the watch reads what the Crew page asked for" '[ "$(api GET /api/crew/context/asks | jq "[.asks[] | select(.station == \"crew-orchestrator\")] | length")" = 0 ] && [ "$(grep -c "\"/context\"" "$FAKE_CLAUDE_STATE/calls.jsonl")" -gt "$before" ]'
+check "and leaves another crew's ask alone" '[ "$(api GET /api/crew/context/asks | jq -r "[.asks[].station] | join(\",\")")" = foreign-station ] && ! grep "\"/context\"" "$FAKE_CLAUDE_STATE/calls.jsonl" | grep -q s-foreign'
 check "and reads no plan when told not to" '[ "$(grep -c "\"/usage\"" "$FAKE_CLAUDE_STATE/calls.jsonl")" = 2 ]'
+# Another crew's station can carry this crew's station name: an ask for its session is not this watch's to read.
+before=$(grep -c '"/context"' "$FAKE_CLAUDE_STATE/calls.jsonl")
+api POST /ingest/claude_code "$(jq -cn '{type: "session_station", sessionId: "s-other-crew", timestamp: (now + 5 | todate),
+  station: "crew-orchestrator", role: "orchestrator", factory_station: "crew-orchestrator"}')" >/dev/null
+api POST /api/crew/crew-orchestrator/context >/dev/null
+FACTORY_ASK_POLL=1 FACTORY_PLAN_EVERY=0 "$F" crew watch --interval 60 >"$T/watch2.out" 2>&1 & WATCH=$!
+sleep 4
+kill "$WATCH" 2>/dev/null; wait "$WATCH" 2>/dev/null; WATCH=""
+check "an ask for the same name in another crew is left alone" \
+  '[ "$(api GET /api/crew/context/asks | jq -r "[.asks[] | select(.station == \"crew-orchestrator\") | .session] | join(\",\")")" = s-other-crew ] && [ "$(grep -c "\"/context\"" "$FAKE_CLAUDE_STATE/calls.jsonl")" = "$before" ]'
 
 [ $fail = 0 ] && echo "usage: all cases pass"
 exit $fail

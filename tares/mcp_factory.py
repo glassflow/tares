@@ -346,10 +346,12 @@ async def desk_answer(item: str, words: str, choice: str = "", standing: bool = 
                 else "these words")
         return json.dumps({
             "item": d["desk_item"]["label"], "recorded": False, "still_open": True,
-            "note": f"Tares did not find {what} in what any session typed since the question "
-                    "was asked. Nothing is recorded. Pass their reply exactly "
-                    "as they typed it (a whole message, line or sentence of theirs), or ask "
-                    "them again."})
+            "note": f"Tares did not find {what} in what the person typed since the question "
+                    "was asked (an item with an addressee looks only in that person's own "
+                    "sessions and says retry when it finds nothing; this one has none, so a "
+                    "labelled caller is matched against orchestrator sessions only). Nothing "
+                    "is recorded. Pass their reply exactly as they typed it (a whole message, "
+                    "line or sentence of theirs), or ask them again."})
     out = {"item": d["desk_item"]["label"], "recorded": True,
            "matches_what_they_typed": True, "choice": d["decision"].get("choice"),
            "became_a_grant": d["granted"], "grant": d.get("grant"),

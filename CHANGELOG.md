@@ -157,8 +157,17 @@ the project follows [Semantic Versioning](https://semver.org/).
   no ceiling.
 - A personal AGENTS.md or memory holds at most 32 KB; a line that would pass it is refused with a
   400 saying the doc is full.
+- The station skills work from your own work on a shared cell. The orchestrator ticks on `my_work`,
+  checks milestones only for the projects you lead, and reads the crew's shared docs and settings at
+  boot. A station sends a question for someone else as an `ASK` with `to:`, and the orchestrator files
+  it on the desk. The reviewer and releaser answer only their own crew's tickets, and `/tares:ship`
+  and the session skill hand over to the orchestrator of the crew that holds the project.
+- Ending a station (`POST /api/crew/{name}/end`) is for the person whose crew it belongs to, or an
+  admin key with no person. `tares factory retire` now says which crew the station is in.
 
 ### Fixed
+- The factory watch read the `/context` ask of every crew on the cell each round, and failed on the
+  ones that were not its own. It now answers only an ask for the session its own station plays.
 - Area owners: reassigning a repo's owner without a note no longer clears the note it had (send
   `note` to replace it, or `null` to clear it), and the MCP `set_area` refuses a repo name with a
   `#`, `?` or space instead of saving a shortened repo.
