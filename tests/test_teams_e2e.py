@@ -164,7 +164,9 @@ async def main():
         r = await get("kiran", f"/api/projects/{uid}")
         ck("kiran's GET now answers 200", r.status_code == 200, r.text)
 
-        print("== ashish hands the project over from crew a ==")
+        print("== kiran signs off acme/web, then ashish hands the project over from crew a ==")
+        r = await post("kiran", f"/api/projects/{uid}/signoffs", {"repo": "acme/web"})
+        ck("kiran signs off the repo they own", r.status_code == 201, r.text)
         r = await post("ashish", f"/api/projects/{uid}/handover",
                        {"repos": [{"path": os.path.join(_TMP, "api"), "name": "acme/api"},
                                   {"path": os.path.join(_TMP, "web"), "name": "acme/web"}]},
