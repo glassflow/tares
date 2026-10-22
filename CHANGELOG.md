@@ -162,8 +162,8 @@ the project follows [Semantic Versioning](https://semver.org/).
   boot. A station sends a question for someone else as an `ASK` with `to:`, and the orchestrator files
   it on the desk. The reviewer and releaser answer only their own crew's tickets, and `/tares:ship`
   and the session skill hand over to the orchestrator of the crew that holds the project.
-- Ending a station (`POST /api/crew/{name}/end`) is for the person whose crew it belongs to, or an
-  admin key with no person. `tares factory retire` now says which crew the station is in.
+- `tares factory retire` now says which crew the station is in, so it ends the right one when another
+  crew has a station of the same name.
 
 ### Fixed
 - The factory watch read the `/context` ask of every crew on the cell each round, and failed on the
