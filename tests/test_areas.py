@@ -121,6 +121,15 @@ async def auth_on():
             ck("an admin key sets it again in another case: still one entry, now Jo's",
                r.status_code == 200 and owners((await cx.get(f"{B}/api/areas", headers=JR_)).json())
                == {"glassflow/tares-cloud": jo}, r.text)
+            ck("... a reassign without a note keeps the note the repo had",
+               r.json().get("note") == "infra", r.text)
+            r = await cx.put(f"{B}/api/areas/glassflow/tares-cloud", headers=ROOT,
+                             json={"person_id": jo, "note": "billing"})
+            ck("... a note in the body replaces it", r.json().get("note") == "billing", r.text)
+            r = await cx.put(f"{B}/api/areas/glassflow/tares-cloud", headers=ROOT,
+                             json={"person_id": jo, "note": None})
+            ck("... and a null note clears it", r.status_code == 200 and r.json().get("note") == "",
+               r.text)
             r = await cx.put(f"{B}/api/areas/glassflow/tares-cloud", headers=ROOT, json={"person_id": "ghost"})
             ck("unknown person_id: 400", r.status_code == 400, r.text)
             r = await cx.put(f"{B}/api/areas/glassflow/tares-cloud", headers=ROOT, json={})
@@ -200,6 +209,12 @@ async def auth_on():
             ck("... an unknown person is named", "ghost@x.dev" in out and "no person" in out, out)
             out = await mf.set_area("justone", "jo@x.dev")
             ck("... a repo without owner/name is refused", "owner/name" in out, out)
+            before = json.loads(await mf.list_areas())
+            for bad in ("glassflow/a#b", "glassflow/a?b", "glassflow/a b"):
+                out = await mf.set_area(bad, "jo@x.dev")
+                ck(f"... {bad!r} is refused, not cut short at the # or ?",
+                   "owner/name" in out and not out.startswith("{"), out)
+            ck("... and nothing was saved by those", json.loads(await mf.list_areas()) == before, "")
 
             print("== project keys stay closed ==")
             r = await cx.post(f"{B}/api/projects", headers=ROOT, json={"template": "custom", "name": "P1", "objects": []})

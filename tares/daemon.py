@@ -1679,8 +1679,11 @@ def make_app() -> FastAPI:
             if held and held["id"] != me["id"]:
                 raise HTTPException(status_code=403, detail=f"{repo} already belongs to "
                                     f"{held['name']}; ask an admin to reassign it")
+        old = next((e for e in areas_mod.load(store) if e["repo"] == repo), None)
         entries = [e for e in areas_mod.load(store) if e["repo"] != repo]
-        entries.append({"repo": repo, "person_id": pid, "note": body.get("note")})
+        # a reassign keeps the note the repo had unless the body names one
+        note = body["note"] if "note" in body else (old or {}).get("note")
+        entries.append({"repo": repo, "person_id": pid, "note": note})
         try:
             areas_mod.save(store, entries)
         except ValueError as e:

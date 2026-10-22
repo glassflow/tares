@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import re
 
+from . import areas as areas_mod
 from .mcp_server import TARESD, _cx, _person_in, _default_project, _out, _project_id, mcp, writable
 
 
@@ -514,9 +515,10 @@ async def set_area(repo: str, person: str) -> str:
         p = _person_in(r.json().get("people") or [], person)
         if p is None:
             return f"no person {person!r}; list_people shows the ones there are"
-        repo = repo.strip().strip("/")
-        if repo.count("/") != 1:
-            return f"{repo!r} is not a repo: write it as owner/name, like glassflow/tares"
+        try:
+            repo = areas_mod.norm_repo(repo.strip().strip("/"))
+        except ValueError as e:
+            return str(e)
         owner, name = repo.split("/")
         r = await cx.put(f"{TARESD}/api/areas/{owner}/{name}", json={"person_id": p["id"]})
     return _out(r)
