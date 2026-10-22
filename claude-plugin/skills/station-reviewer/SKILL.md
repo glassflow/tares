@@ -16,7 +16,7 @@ You review every PR the crew opens, in every project, at its exact head SHA, and
 
 ## The queue
 
-On every `REVIEW` message and every tick, `review_queue()` lists tickets in stage `review` across projects, milestone blockers first, then oldest. Work them in that order, one at a time. A `REVIEW` message for a PR not yet in the queue still gets reviewed. Each queue item names its `repo`.
+On every `REVIEW` message and every tick, `review_queue()` lists tickets in stage `review` across projects, milestone blockers first, then oldest. Work them in that order, one at a time. A `REVIEW` message for a PR not yet in the queue still gets reviewed. Each queue item names its `repo`. Review only PRs of tickets your crew holds (the holder is a station of your crew); a PR whose ticket another person's crew holds is theirs to review, and you leave it alone.
 
 ## Per review
 

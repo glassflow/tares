@@ -147,6 +147,7 @@ jq -cn --arg n "$b-rebase" --arg at "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
   curl -sS -X POST -H 'Content-Type: application/x-ndjson' --data-binary @- "$TARESD_URL/ingest/claude_code" >/dev/null
 "$F" retire "$b-rebase" >"$T/retire.out" 2>&1
 check "retire marks the station ended on Tares" '[ "$(api GET "/api/crew/$b-rebase" | jq -r ".state + \"/\" + .state_reason")" = ended/retired ] && ! grep -q "could not tell Tares" "$T/retire.out"'
+check "and says which crew's station it is" 'grep -q "POST /api/crew/$b-rebase/end?crew=" "$T/tares/taresd.log"'
 before=$(launches)
 "$F" revive "$b-rebase" >"$T/retired.out" 2>&1
 check "a retired station is not revived" '[ "$(launches)" = "$before" ] && grep -q "was retired" "$T/retired.out" && [ ! -e "$FACTORY_CREW_HOME/stations/$b-rebase.lock" ]'
