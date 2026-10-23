@@ -1040,7 +1040,7 @@ class FactoryStore:
         """Record the hand-over: `repos` is the whole list (the caller merges it with the one
         already kept); `repo` keeps the first path for older readers. `crew` is the name of the
         crew of whoever handed it over (TR-633). `override_reason` is why the project lead handed
-        it over without every area owner's sign-off (TR-636); a later hand-over replaces it."""
+        it over without every area owner's sign-off (TR-636); a later hand-over with none keeps it."""
         first = next((r["path"] for r in repos if r.get("path")), None)
         with self._lock:
             self.con.execute(
@@ -1050,7 +1050,8 @@ class FactoryStore:
                 "ON CONFLICT (project) DO UPDATE SET "
                 "repo = excluded.repo, handed_by = excluded.handed_by, "
                 "person_id = excluded.person_id, crew = excluded.crew, "
-                "override_reason = excluded.override_reason, override_at = excluded.override_at, "
+                "override_reason = COALESCE(excluded.override_reason, handovers.override_reason), "
+                "override_at = COALESCE(excluded.override_at, handovers.override_at), "
                 "finished_person_id = NULL, "
                 "taken_person_id = NULL, "
                 "handed_at = excluded.handed_at, repos = excluded.repos, "
@@ -1197,10 +1198,13 @@ class FactoryStore:
         return hit is not None
 
     def add_signoff(self, project: str, repo: str, person_id: str, at) -> None:
-        """The area owner's sign-off for a repo; signing again keeps the first."""
+        """The area owner's sign-off for a repo. Signing again keeps the first time; when the
+        area has a new owner, their sign-off replaces the old owner's."""
         with self._lock:
             self.con.execute("INSERT INTO signoffs (project, repo, person_id, \"at\") "
-                             "VALUES (?, ?, ?, ?) ON CONFLICT (project, repo) DO NOTHING",
+                             "VALUES (?, ?, ?, ?) ON CONFLICT (project, repo) DO UPDATE SET "
+                             "person_id = excluded.person_id, \"at\" = excluded.\"at\" "
+                             "WHERE signoffs.person_id <> excluded.person_id",
                              [project, repo, person_id, at])
 
     def list_signoffs(self, project: str) -> list[dict]:

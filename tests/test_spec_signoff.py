@@ -82,6 +82,7 @@ async def main():
         async def ticket(who, uid, title, repo):
             r = await call(who, "POST", f"/api/projects/{uid}/tickets", {"title": title, "repo": repo})
             assert r.status_code == 201, r.text
+            return r.json()
 
         async def handover(who, uid, **extra):
             return await call(who, "POST", f"/api/projects/{uid}/handover",
@@ -272,6 +273,114 @@ async def main():
         ck("asking someone who cannot see it: 403", r.status_code == 403, r.text)
         r = await call("kiran", "GET", f"/api/projects/{priv}/questions")
         ck("and kiran cannot read its questions: 404", r.status_code == 404, r.text)
+
+
+        print("== the area changes hands: the new owner signs, the old owner's row does not count ==")
+        mv = await make_project("ashish", "signoff-moved")
+        await ticket("ashish", mv, "web again", "acme/web")
+        r = await call("kiran", "POST", f"/api/projects/{mv}/signoffs", {"repo": "acme/web"})
+        ck("kiran signs acme/web", r.status_code == 201, r.text)
+        first_at = store.list_signoffs(mv)[0]["at"]
+        r = await call("kiran", "POST", f"/api/projects/{mv}/signoffs", {"repo": "acme/web"})
+        ck("kiran signing again keeps the first row and time", r.status_code == 201
+           and len(store.list_signoffs(mv)) == 1 and store.list_signoffs(mv)[0]["at"] == first_at, r.text)
+        r = await call("ashish", "PUT", "/api/areas/acme/web", {"person_id": pid["lee"]})
+        ck("acme/web moves to lee", r.status_code < 300, r.text)
+        r = await call("ashish", "GET", f"/api/projects/{mv}/signoffs")
+        ck("kiran's sign-off no longer counts: the repo reads not signed off",
+           r.json()["signoffs"][0]["signed_off"] is False and r.json()["signoffs"][0]["owner"]["name"] == "lee"
+           and r.json()["waiting_for"] == ["acme/web: lee (not signed off)"], r.text)
+        r = await handover("ashish", mv)
+        ck("hand-over is refused until lee signs", r.status_code == 409
+           and "acme/web: lee (not signed off)" in r.text, r.text)
+        r = await call("lee", "POST", f"/api/projects/{mv}/signoffs", {"repo": "acme/web"})
+        ck("lee signs: 201", r.status_code == 201, r.text)
+        rows = store.list_signoffs(mv)
+        ck("the row is lee's now, one row", len(rows) == 1 and rows[0]["person_id"] == pid["lee"], rows)
+        r = await call("ashish", "GET", f"/api/projects/{mv}/signoffs")
+        ck("the repo reads signed off", r.json()["signoffs"][0]["signed_off"] is True
+           and r.json()["waiting_for"] == [], r.text)
+        r = await handover("ashish", mv)
+        ck("hand-over goes through after the new owner signs", r.status_code == 200
+           and r.json()["handover"]["override"] is None, r.text)
+        r = await call("ashish", "PUT", "/api/areas/acme/web", {"person_id": pid["kiran"]})
+        ck("acme/web moves back to kiran", r.status_code < 300, r.text)
+        r = await call("ashish", "GET", f"/api/projects/{mv}/signoffs")
+        ck("lee's row does not count for kiran, who has not signed again",
+           r.json()["signoffs"][0]["signed_off"] is False
+           and r.json()["waiting_for"] == ["acme/web: kiran (not signed off)"], r.text)
+        r = await handover("ashish", mv)
+        ck("a further hand-over is refused again", r.status_code == 409, r.text)
+
+        print("== a later hand-over keeps the override record ==")
+        kp = await make_project("ashish", "signoff-keep")
+        await ticket("ashish", kp, "web keep", "acme/web")
+        why2 = "kiran is away and it is a one-line change"
+        r = await handover("ashish", kp, override_reason=why2)
+        ck("the lead overrides", r.status_code == 200 and r.json()["handover"]["override"]["reason"] == why2,
+           r.text)
+        at1 = store.get_handover(kp)["override"]["at"]
+        r = await call("kiran", "POST", f"/api/projects/{kp}/signoffs", {"repo": "acme/web"})
+        ck("kiran signs afterwards", r.status_code == 201, r.text)
+        r = await handover("ashish", kp)
+        ck("a second hand-over with nothing missing is accepted", r.status_code == 200, r.text)
+        ov = (store.get_handover(kp).get("override") or {})
+        ck("the reason and its time are still there", ov.get("reason") == why2 and ov.get("at") == at1, r.text)
+        r = await call("ashish", "GET", f"/api/projects/{kp}/timeline")
+        ev = (r.json() or {}).get("events") or []
+        ck("and so is the timeline event", len(ev) == 1 and ev[0]["kind"] == "handover_override"
+           and why2 in ev[0]["text"], r.text)
+
+        print("== canceled tickets do not hold the hand-over ==")
+        cp = await make_project("ashish", "signoff-canceled")
+        await ticket("ashish", cp, "api part", "acme/api")
+        gone = await ticket("ashish", cp, "dropped ghost work", "acme/ghost")
+        r = await call("ashish", "PUT", f"/api/projects/{cp}/tickets/{gone.get('ref') or gone['id']}",
+                       {"status": "canceled"})
+        ck("the ticket in acme/ghost is canceled", r.status_code == 200, r.text)
+        r = await call("ashish", "GET", f"/api/projects/{cp}/signoffs")
+        ck("acme/ghost is not listed and nothing is awaited", [x["repo"] for x in r.json()["signoffs"]]
+           == ["acme/api"] and r.json()["waiting_for"] == [], r.text)
+        r = await handover("ashish", cp)
+        ck("hand-over goes through with no owner for the canceled repo", r.status_code == 200, r.text)
+
+        print("== a repo the project has no tickets in cannot be signed, even by its owner ==")
+        nt = await make_project("ashish", "signoff-no-tickets")
+        await ticket("ashish", nt, "api only", "acme/api")
+        r = await call("kiran", "POST", f"/api/projects/{nt}/signoffs", {"repo": "acme/web"})
+        ck("kiran owns acme/web but the project has no tickets there: 409", r.status_code == 409
+           and "the project has no tickets in acme/web" in r.text, r.text)
+        ck("no row was written", store.list_signoffs(nt) == [])
+
+        print("== the override reason is cut to 500 characters ==")
+        lp = await make_project("ashish", "signoff-long-reason")
+        await ticket("ashish", lp, "web long", "acme/web")
+        r = await handover("ashish", lp, override_reason="x" * 700)
+        ck("accepted, stored as 500", r.status_code == 200
+           and len(r.json()["handover"]["override"]["reason"]) == 500, r.text)
+
+        print("== a private project's questions stay out of a person's my_work who cannot see it ==")
+        store.add_spec_question(priv, pid["kiran"], "acme/web", "private question", pid["ashish"],
+                                datetime.now(timezone.utc))
+        ck("the question exists, open, for kiran", any(
+            q["to_person_id"] == pid["kiran"] for q in store.list_spec_questions(priv, "open")))
+        r = await call("kiran", "GET", "/api/crew/my-work")
+        ck("kiran's my_work does not list it", all(q["project"] != "signoff-private"
+                                                    for q in r.json()["spec_questions"])
+           and "private question" not in r.text, r.text)
+
+        print("== deleting a project takes its questions and sign-offs ==")
+        dp = await make_project("ashish", "signoff-doomed")
+        await ticket("ashish", dp, "web doomed", "acme/web")
+        r = await call("ashish", "POST", f"/api/projects/{dp}/questions", {"repo": "acme/web", "text": "q"})
+        ck("a question on it", r.status_code == 201, r.text)
+        r = await call("kiran", "POST", f"/api/projects/{dp}/signoffs", {"repo": "acme/web"})
+        ck("a sign-off on it", r.status_code == 201, r.text)
+        count = lambda t: store.con.execute(f"SELECT COUNT(*) FROM {t} WHERE project = ?", [dp]).fetchone()[0]
+        ck("both tables hold a row", count("spec_questions") == 1 and count("signoffs") == 1)
+        r = await call("ashish", "DELETE", f"/api/projects/{dp}")
+        ck("the project is deleted", r.status_code < 300, r.text)
+        ck("its questions and sign-offs are gone", count("spec_questions") == 0 and count("signoffs") == 0)
 
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
