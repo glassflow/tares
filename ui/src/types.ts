@@ -862,6 +862,7 @@ export interface ProjectHealthIssue {
   message: string;
   fix: string | null;
   view: string | null;        // a project view to open, same form as ?view= (e.g. "source:checkout-errors")
+  agent?: string;             // with view "settings:agents": the agent whose daily cap this is (TR-670)
 }
 export interface ProjectHealth {
   state: "working" | "attention" | "paused" | "setting_up";

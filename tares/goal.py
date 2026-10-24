@@ -1204,14 +1204,17 @@ def project_health(store, catalog, uid: str, project: dict, runtime_health: dict
                            "fix": "Check the connection", "view": f"source:{n}"})
     capped = []
     for a in ready:
-        cap, _src = effective_daily_cap(a, store)
+        cap, src = effective_daily_cap(a, store)
         if store.agent_runs_today(a["name"], include_practice=False) >= cap:
             capped.append(a["name"])
-            warnings.append({"severity": "warning",
-                             "message": f"{a['name']} reached its limit of {_plural(cap, 'run')} "
-                                        "a day, so it does not run until its earlier runs are a "
-                                        "day old.",
-                             "fix": "Raise the limit", "view": f"agent:{a['name']}"})
+            issue = {"severity": "warning",
+                     "message": f"{a['name']} reached its limit of {_plural(cap, 'run')} "
+                                "a day, so it does not run until its earlier runs are a "
+                                "day old.",
+                     "fix": "Raise the limit", "view": f"agent:{a['name']}"}
+            if src != "agent":   # the instance-wide cap is a console setting (Settings, Limits)
+                issue.update(view="settings:agents", agent=a["name"])
+            warnings.append(issue)
             continue
         budget = a.get("budget_usd")
         if budget and store.agent_cost_total(a["name"]) >= float(budget):

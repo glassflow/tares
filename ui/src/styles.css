@@ -621,6 +621,8 @@ label.field { display: block; margin-bottom: 14px; }
 /* div.field is the same thing for fields that hold interactive children (a Picker, option rows)
    where nesting them in a <label> would misdirect clicks — the LOOK must not differ. */
 div.field { display: block; margin-bottom: 14px; }
+/* the field a link came for (TR-670: "Raise the limit" opens Settings, Limits on the daily cap) */
+label.field.field-focus { padding: 10px 12px; margin-left: -12px; border-radius: 6px; background: var(--sand-wash); box-shadow: 0 0 0 2px var(--accent, #ffac00); }
 label.field .lbl, div.field > .lbl { display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px; }
 label.field .lbl .req { color: var(--accent-deep); }
 label.field.invalid input, label.field.invalid textarea, label.field.invalid select { border-color: var(--err); background: var(--err-soft); }
