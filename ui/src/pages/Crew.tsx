@@ -159,7 +159,7 @@ function CodeVersion({ s, all }: { s: CrewStation; all: CrewStation[] }) {
   const older = !!newest && versionBefore(s.claude_version, newest);
   return (
     <small className={`crew-cc${older ? " is-older" : ""}`}
-      title={older ? `Claude Code ${s.claude_version}; ${newest} is installed. It moves when idle, or run tares factory crew update.` : `Claude Code ${s.claude_version}`}>
+      title={older ? `Claude Code ${s.claude_version}; ${newest} runs on another station. It moves when idle, or run tares factory crew update.` : `Claude Code ${s.claude_version}`}>
       {s.claude_version}{older ? " · older" : ""}
     </small>
   );

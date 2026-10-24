@@ -45,7 +45,9 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
   tares factory crew update [--wait <s>]    move every station onto the Claude Code installed now,
                                             right away: each when it is idle (one someone has open
                                             waits), the orchestrator last, same conversation; then
-                                            checks each runs it, one session per name
+                                            checks each runs it, one session per name; gives up on a
+                                            busy one after --wait seconds (default 1800, 0 = never);
+                                            run from a station, it leaves that station to the watch
   tares factory crew restart [--wait <s>]   the same, for stations that already run it too
   tares factory crew halt ["<reason>"]      stop risky actions on every station until resume
   tares factory crew resume                 lift a halt
@@ -74,7 +76,7 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
   tares factory settings <station> [role]   print the settings a station launches with
 
   used by the orchestrator (as `factory`, inside its session):
-  factory roster                            stations, roles, projects, states (tab separated)
+  factory roster                            stations, roles, projects, states, Claude Code version (tab separated)
   factory spawn builder [--autonomy L3-review] <project> <slug> <repo path> "<task>"
                                             one builder per milestone and repo of a project
   factory spawn helper <parent-station> <slug> "<task>"
@@ -1269,6 +1271,7 @@ prune_spares() { # target version
     [ -e "$sock" ] || continue   # claimed: a session runs in it
     v=$(grep -Eo '/versions/[0-9][^ /]*' <<<"$cmd" | head -1 | cut -d/ -f3) || true
     older_than "$v" "$1" || continue
+    [ -e "$sock" ] || continue   # claimed since the listing: leave it
     kill "$pid" 2>/dev/null && event spare-pruned "" "$v"
   done < <(ps -axo pid=,command= 2>/dev/null)
   return 0
@@ -1312,9 +1315,11 @@ cc_pick() { # target → a station name, or nothing
 # Restart a station on the Claude Code now on PATH, in the same conversation, and check its process
 # runs it; an older spare from the pool is stopped and the restart tried again. Exit status: 0 it runs
 # the new version (or its version can't be told), 3 Tares doesn't answer, 4 it isn't idle any more or
-# the crew is halted, 5 an older spare came back every time, 1 anything else.
+# the crew is halted, 5 an older spare came back every time, 1 anything else. It runs in a subshell with
+# its own errexit, so the caller turns errexit off around the call (`set +e; claude_move ...; rc=$?; set -e`):
+# `claude_move ... && ... || ...` would turn it off inside the subshell too.
 claude_move() { # station target
-  local s=$1 target=$2 rc
+  local s=$1 target=$2
   set +e
   ( set -e; TARES_STATE=""; SETTINGS=""; CREW_PROJECTS=""
     tares_on || exit 3   # without Tares there are no settings to restart it with
@@ -1326,6 +1331,7 @@ claude_move() { # station target
     prompt="Claude Code was updated to $target, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-$skill, re-read your report, re-arm your schedule if you have one, then carry on where you were."
     while [ $try -lt "$tries" ]; do
       try=$((try + 1))
+      if [ $try -gt 1 ]; then ! halted && ! attached "$s" || exit 4; fi   # the first restart started it on the prompt, so only a halt or someone opening it stops a retry
       prune_spares "$target"
       cmd_restart "$s" "$prompt"
       v=""; for _ in 1 2 3 4 5 6; do v=$(station_cc "$s"); [ -n "$v" ] && break; sleep "${FACTORY_PAUSE:-2}"; done
@@ -1340,15 +1346,13 @@ claude_move() { # station target
     done
     stations_put "$s" "$(jq -n --arg t "$target" '{cc_failed: $t}')"
     exit 5 )
-  rc=$?
-  set -e
-  return $rc
+  return $?
 }
 
 watch_claude_move() { # station target: the watch's turn at claude_move, with what it says
   local s=$1 target=$2 rc dup
   say "$s runs an older Claude Code than $target; restarting it on $target now that it's idle, in the same conversation"
-  claude_move "$s" "$target" && rc=0 || rc=$?
+  set +e; claude_move "$s" "$target"; rc=$?; set -e
   case $rc in
     0) say "$s runs Claude Code $target"
        dup=$(duplicate_sessions) || dup=""
@@ -1362,7 +1366,7 @@ watch_claude_move() { # station target: the watch's turn at claude_move, with wh
 
 cmd_crew_update() { # [--force] [--wait seconds]: every station onto the Claude Code now on PATH, each when idle, the orchestrator last
   require_crew
-  local force=0 limit=0
+  local force=0 limit=1800 self="" mine=${FACTORY_STATION:-}
   while [ $# -gt 0 ]; do
     case "$1" in
       --force) force=1; shift ;;
@@ -1376,6 +1380,7 @@ cmd_crew_update() { # [--force] [--wait seconds]: every station onto the Claude 
   local agents; agents=$(active_json) || die "$UNREAD"
   local s v others="" orch="" failed=""
   for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS"); do
+    if [ -n "$mine" ] && [ "$s" = "$mine" ]; then self=$s; continue; fi   # the station running this command can't wait for itself
     if [ -f "$CREW_HOME/stations/$s.done" ] || ! is_alive "$s"; then say "$s is stopped; it starts on Claude Code $target when the watch revives it"; continue; fi
     if [ -z "$(stations_get "$s" '.sessionId')" ]; then say "$s has no conversation to resume; $ME restart $s --fresh starts it again"; failed="$failed $s"; continue; fi
     v=$(station_cc "$s" "$agents")
@@ -1387,11 +1392,12 @@ cmd_crew_update() { # [--force] [--wait seconds]: every station onto the Claude 
   for group in "$others" "$orch"; do
     left=$group; told=""
     while [ -n "${left// /}" ]; do
+      halted && die "the crew was halted; nothing more was restarted ($ME crew resume, then crew update again)"
       still=""
       for s in $left; do
         if ! quiet "$s" || attached "$s"; then still="$still $s"; continue; fi
         say "restarting $s on Claude Code $target, in the same conversation"
-        claude_move "$s" "$target" && rc=0 || rc=$?
+        set +e; claude_move "$s" "$target"; rc=$?; set -e
         case $rc in
           0) say "$s runs Claude Code $target" ;;
           4) still="$still $s" ;;
@@ -1417,7 +1423,11 @@ cmd_crew_update() { # [--force] [--wait seconds]: every station onto the Claude 
     failed="$failed two-sessions"
   fi
   if [ -n "${failed// /}" ]; then die "not every station runs Claude Code $target:$failed"; fi
-  say "every station runs Claude Code $target, one session each"
+  if [ -n "$self" ]; then
+    say "every other station runs Claude Code $target, one session each; $self, which ran this command, moves when $ME crew watch finds it idle, or run $ME restart $self from another session"
+  else
+    say "every station runs Claude Code $target, one session each"
+  fi
 }
 
 cmd_halt() {

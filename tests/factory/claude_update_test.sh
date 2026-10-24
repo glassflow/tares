@@ -135,7 +135,7 @@ check "a stale spare is noticed and the restart tried again" '[ "$(launches)" = 
 check "an unclaimed older spare was stopped" '! kill -0 "$spare" 2>/dev/null'
 check "a claimed one (a session runs in it) and a new one were left" 'kill -0 "$claimed" 2>/dev/null && kill -0 "$fresh" 2>/dev/null'
 check "the move succeeded in the end" 'grep -q "crew-reviewer runs Claude Code 1.2.0" "$T/watch.out"'
-kill $claimed $fresh 2>/dev/null; KEEP=""; rm -f "$FAKE_CLAUDE_STATE/ps-list"
+kill $claimed $fresh 2>/dev/null; KEEP=""; : > "$FAKE_CLAUDE_STATE/ps-list"
 
 # Every launch lands on an old spare: three tries, then the watch leaves that station until the next
 # version, and the orchestrator is not held back for ever by it. `crew update` tries again.
@@ -187,6 +187,30 @@ check "the watch reports it after a move too" 'newcc 1.5.0; all_idle; watch1; gr
 jq 'map(select(.id != "dup00001"))' "$FAKE_CLAUDE_STATE/agents.json" > "$tmp" && mv "$tmp" "$FAKE_CLAUDE_STATE/agents.json"
 all_idle; "$F" crew update >"$T/dup2.out" 2>&1; rc=$?
 check "one session each: it passes" '[ $rc = 0 ] && grep -q "one session each" "$T/dup2.out"'
+
+# crew update run from a station (the orchestrator) leaves that station out instead of waiting on itself.
+bounded() { # seconds command...: runs it, kills it when it is still going after that long; sets bounded_rc (137 = killed)
+  local secs=$1 bp i; shift
+  "$@" & bp=$!
+  for i in $(seq "$secs"); do kill -0 "$bp" 2>/dev/null || break; sleep 1; done
+  if kill -0 "$bp" 2>/dev/null; then kill "$bp" 2>/dev/null; wait "$bp" 2>/dev/null; bounded_rc=137; else wait "$bp"; bounded_rc=$?; fi
+}
+newcc 1.5.5; all_idle; busy crew-orchestrator; o=$(st crew-orchestrator .id); before=$(launches)
+bounded 40 env FACTORY_STATION=crew-orchestrator "$F" crew update >"$T/self.out" 2>&1; rc=$bounded_rc
+check "from the orchestrator: it finishes, the others move, the orchestrator is left" '[ $rc = 0 ] && [ "$(launches)" = $((before + 2)) ] && [ "$(st crew-orchestrator .id)" = "$o" ] && [ "$(runs crew-reviewer)" = 1.5.5 ] && [ "$(runs crew-releaser)" = 1.5.5 ]'
+check "it says how the orchestrator moves" 'grep -q "crew-orchestrator, which ran this command, moves when" "$T/self.out"'
+
+# A halt in the middle of crew update stops it; it does not wait for ever.
+newcc 1.5.6; all_idle; busy crew-reviewer
+( sleep 3; "$F" crew halt "testing" >/dev/null 2>&1 ) & hp=$!
+bounded 40 "$F" crew update --wait 0 >"$T/halt.out" 2>&1; rc=$bounded_rc
+wait "$hp" 2>/dev/null; "$F" crew resume >/dev/null 2>&1
+check "halted in the middle: crew update stops and says so" '[ $rc != 0 ] && [ $rc != 137 ] && grep -q "the crew was halted" "$T/halt.out"'
+
+# Numbers compare as numbers: 1.10.0 is newer than 1.9.0 (a plain sort says the opposite).
+newcc 1.10.0; all_idle; before=$(launches)
+watch1
+check "1.10.0 is newer than 1.5.x: the watch moves a station" '[ "$(launches)" -gt "$before" ]'
 
 # A version nobody can read, or one that is older than a station's, never moves anything.
 echo "" > "$FAKE_CLAUDE_STATE/version"; all_idle; before=$(launches)

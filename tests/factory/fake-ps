@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # A stand-in for `ps` in tests: answers `ps -o <field>= -p <pid>` from $FAKE_CLAUDE_STATE/ps/<pid>.<field>
-# (written by fake-claude for each fake session); anything else goes to the real ps.
+# (written by fake-claude for each fake session); any other call goes to the real ps.
 S=${FAKE_CLAUDE_STATE:-}
 field=""; pid=""; prev=""
-# the whole listing (ps -axo pid=,command=): $S/ps-list when a test wrote one
-if [ "$1" = -axo ] && [ -n "$S" ] && [ -f "$S/ps-list" ]; then cat "$S/ps-list"; exit 0; fi
+# the whole listing (ps -axo pid=,command=): $S/ps-list, empty when a test wrote none, so a test never
+# reads the real Claude Code processes of the machine it runs on
+if [ "$1" = -axo ] && [ -n "$S" ]; then cat "$S/ps-list" 2>/dev/null; exit 0; fi
 for a in "$@"; do
   case "$prev" in -o) field=${a%=} ;; -p) pid=$a ;; esac
   prev=$a
