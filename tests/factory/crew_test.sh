@@ -107,7 +107,7 @@ api POST "/api/projects/$P1/handover" "$(jq -cn --arg r "$repo" '{repos: [{path:
 b=links-app-build-m1
 check "builder recorded" '[ "$(st $b .role)" = builder ]'
 check "builder runs in its repo" '[ "$(jq -r "select(.args[2] == \"$b\") | .cwd" "$FAKE_CLAUDE_STATE/calls.jsonl")" = "$repo" ]'
-check "builder TARES_PROJECT" '[ "$(envof $b TARES_PROJECT)" = "Links App" ]'
+check "builder TARES_PROJECT is the project id, the name beside it" '[ "$(envof $b TARES_PROJECT)" = "$P1" ] && [ "$(envof $b TARES_PROJECT_NAME)" = "Links App" ]'
 check "builder FACTORY_PARENT" '[ "$(envof $b FACTORY_PARENT)" = crew-orchestrator ]'
 check "builder FACTORY_REPO" '[ "$(envof $b FACTORY_REPO)" = "$repo" ]'
 check "builder worktrees in its repo" '[ "$(envof $b FACTORY_WORKTREES)" = "$repo/.factory/worktrees" ]'
@@ -139,7 +139,7 @@ check "projects lists each handed-over project with its builders and repos" 'gre
 "$F" spawn helper "$b" rebase "rebase T2" >/dev/null 2>&1
 check "helper name" '[ "$(st $b-rebase .role)" = helper ]'
 check "helper parent" '[ "$(envof $b-rebase FACTORY_PARENT)" = $b ]'
-check "helper project" '[ "$(envof $b-rebase TARES_PROJECT)" = "Links App" ]'
+check "helper project" '[ "$(envof $b-rebase TARES_PROJECT)" = "$P1" ] && [ "$(envof $b-rebase TARES_PROJECT_NAME)" = "Links App" ]'
 # Retire tells Tares the station ended (TR-565): give it a session on Tares first, as the plugin would.
 api POST /api/sources '{"name":"claude_code","connector":"claude_code","poll":"10s","config":{"push":true}}' >/dev/null
 jq -cn --arg n "$b-rebase" --arg at "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \

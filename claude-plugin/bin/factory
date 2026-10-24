@@ -635,11 +635,23 @@ write_settings() { # station role parent project repo
   wt="$CREW_HOME/worktrees"; [ -n "$repo" ] && wt="$repo/.factory/worktrees"
   [ -s "$TOKEN_FILE" ] && tok_file=$TOKEN_FILE
 
+  # TARES_PROJECT goes out as the X-Tares-Project header, which takes no emoji or other non-ASCII
+  # (TR-534): it carries the project's id; the name is TARES_PROJECT_NAME, for reading only.
+  local pid=""
+  if [ -n "$project" ]; then
+    pid=$(stations_get "$station" '.project_id'); [ -n "$pid" ] || [ -z "$parent" ] || pid=$(stations_get "$parent" '.project_id')
+    [ -n "$pid" ] || pid=$(jq -r '.id // empty' <<<"$(project_row "$project")" 2>/dev/null || true)
+    if [ -n "$pid" ]; then stations_put "$station" "$(jq -cn --arg p "$pid" '{project_id: $p}')"
+    elif LC_ALL=C grep -q '^[ -~]*$' <<<"$project"; then pid=$project
+    else echo "$ME: could not find $project's id on Tares; $station starts without a default project" >&2
+    fi
+  fi
+
   mkdir -p "$CREW_HOME/stations"
   # statusLine: after each reply it sends Tares the session's context window and the plan's limits;
   # FACTORY_AUTOCOMPACT tells it where the station compacts (the --autocompact it was started with)
   jq -n \
-    --arg role "$role" --arg station "$station" --arg parent "$parent" --arg project "$project" \
+    --arg role "$role" --arg station "$station" --arg parent "$parent" --arg project "$project" --arg pid "$pid" \
     --arg pslug "$( [ -n "$project" ] && slugify "$project" || true)" --arg home "$CREW_HOME" --arg repo "$repo" \
     --arg wt "$wt" --arg tares_url "$TARES" --arg tok "$tok_file" --arg mcp_url "$(mcp_url)" \
     --arg env_line "$env_line" --argjson allow "$allow_json" --argjson deny "$deny_json" --argjson perms "$perms_json" \
@@ -655,7 +667,7 @@ write_settings() { # station role parent project repo
       } + (if $tok != "" then {TARES_FACTORY_TOKEN_FILE: $tok,
              # the same file under a name Claude Code does not hide from the plugin header helper
              TARES_FACTORY_CRED_FILE: $tok} else {} end)
-        + (if $project != "" then {TARES_PROJECT: $project, FACTORY_PROJECT: $pslug} else {} end)
+        + (if $project != "" then {TARES_PROJECT: $pid, TARES_PROJECT_NAME: $project, FACTORY_PROJECT: $pslug} else {} end)
         + (if $repo != "" then {FACTORY_REPO: $repo} else {} end)),
       crossSessionInbound: "accept",
       enabledPlugins: { "tares@inline": true },
@@ -951,7 +963,7 @@ cmd_spawn() {
   station_lock "$station"
   is_alive "$station" "$cwd" && die "$station is already running; message it instead"
   if [ "$role" = builder ]; then
-    stations_put "$station" "$(jq -n --arg a "$autonomy" '{autonomy: $a}')"
+    stations_put "$station" "$(jq -n --arg a "$autonomy" --arg p "$(jq -r .id <<<"$row")" '{autonomy: $a, project_id: $p}')"
     rm -f "$CREW_HOME/stations/$station.done"
   fi
   local prompt; prompt=$(boot_prompt builder "$task")
@@ -1602,7 +1614,7 @@ session_project() { # project row (json)
   local prompt="/tares:session $name"
   [ -n "$taken" ] && prompt="$prompt (taken over from the crew)"
   person_claude "$(session_dir "$id")" "$slug-session" session "$prompt" \
-    TARES_PROJECT="$name" TARES_SESSION_TAKEOVER="${taken:-}" TARES_SESSION_NAME="$slug-session"
+    TARES_PROJECT="$id" TARES_PROJECT_NAME="$name" TARES_SESSION_TAKEOVER="${taken:-}" TARES_SESSION_NAME="$slug-session"
 }
 
 session_idea() { # idea
