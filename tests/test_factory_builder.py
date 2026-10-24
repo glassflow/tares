@@ -50,13 +50,16 @@ def ck(label, cond, detail=""):
     print(("  ok   " if cond else "  FAIL ") + label + ("" if cond else f"  {detail}"))
 
 
+HEAD = {"value": "aaaaaaa1111"}
+
+
 def fake_github(request: httpx.Request) -> httpx.Response:
     parts = request.url.path.strip("/").split("/")
     if parts[3] == "pulls":
         return httpx.Response(200, json={
             "number": int(parts[4]), "title": "PR", "state": "open", "merged": False,
             "html_url": f"https://github.com/acme/shop/pull/{parts[4]}",
-            "head": {"sha": "aaaaaaa1111", "ref": "factory/T2"}})
+            "head": {"sha": HEAD["value"], "ref": "factory/T2"}})
     if parts[5] == "status":
         return httpx.Response(200, json={"statuses": []})
     return httpx.Response(200, json={"check_runs": []})
@@ -153,6 +156,16 @@ async def main():
         ck("the desk question on it, not the one on another ticket",
            "guest carts allowed?" in brief and "(blocking)" in brief and "Logo colour" not in brief, brief)
         ck("pointers to the rest, not the rest", "## Read as needed" in brief, brief)
+        as_station("crew-orchestrator", "orchestrator")
+        await m.add_to_global("agents", "Never commit to main.")
+        again = await mf.builder_brief("T2", project="Shop")
+        ck("the shared AGENTS.md rides along with the project's",
+           "AGENTS.md shared by every project" in again and "Never commit to main." in again
+           and "AGENTS.md of this project" in again, again)
+        await mf.decide_assumption("A2", "kept", project="Shop")
+        again = await mf.builder_brief("T3", project="Shop")
+        ck("an assumption the person kept is no longer listed", "Currency?" not in again, again)
+        as_station("shop-build-m1", "builder", "crew-orchestrator")
         ck("no em dashes", "—" not in brief, brief)
 
         print("== starting the ticket is the same call (TR-683) ==")
@@ -161,11 +174,26 @@ async def main():
         ck("start moves it to doing and still returns the brief", g["stage"] == "doing"
            and out.startswith("# Builder brief: T2"), (g["stage"], out[:80]))
         as_station("shop-build-m2", "builder", "crew-orchestrator")
-        out = await mf.builder_brief("T2", start=True, project="Shop")
+        out = await mf.builder_brief("T1", start=True, project="Shop")
         ck("a builder that does not hold it gets the refusal and the brief",
-           out.startswith("Could not move the ticket to doing") and "# Builder brief: T2" in out, out[:300])
-        ck("and the ticket did not move", json.loads(await m.get_ticket("T2", project="Shop"))["holder"]
-           == "shop-build-m1")
+           out.startswith("Could not move the ticket to doing") and "# Builder brief: T1" in out, out[:300])
+        g = json.loads(await m.get_ticket("T1", project="Shop"))
+        ck("and the ticket did not move", g["holder"] == "shop-build-m1" and g["stage"] in (None, "todo"),
+           (g["holder"], g["stage"]))
+        await m.write_ticket("Old", status="done", project="Shop")
+        as_station("crew-orchestrator", "orchestrator")
+        await mf.assign_ticket("T4", "shop-build-m1", project="Shop")
+        as_station("shop-build-m1", "builder", "crew-orchestrator")
+        await mf.builder_brief("T4", start=True, project="Shop")
+        ck("start leaves a ticket that is already done alone",
+           json.loads(await m.get_ticket("T4", project="Shop"))["stage"] in (None, "todo", "merged"))
+        as_station("crew-orchestrator", "orchestrator")
+        await m.write_ticket("Dropped", status="canceled", project="Shop")
+        await m.write_ticket("After dropped", depends_on=["T5"], project="Shop")
+        out = await mf.builder_brief("T6", project="Shop")
+        ck("a canceled dependency is named, not counted as done",
+           "T5 Dropped: " in out and "CANCELED" in out and "NOT DONE" not in out, out[:400])
+        as_station("shop-build-m2", "builder", "crew-orchestrator")
         bad = await mf.builder_brief("T99", project="Shop")
         ck("an unknown ticket is an error, not a crash", "brief" not in bad.lower() or "T99" in bad, bad)
 
@@ -196,6 +224,16 @@ async def main():
         bad = await mf.set_stage("T2", "review", checks=[{"command": "c"}], project="Shop")
         g = json.loads(await m.get_ticket("T2", project="Shop"))
         ck("a bad check stops the stage change", "what it showed" in bad and len(g["checks"]) == 3, (bad, g["checks"]))
+        out = await mf.builder_brief("T2", start=True, project="Shop")
+        g = json.loads(await m.get_ticket("T2", project="Shop"))
+        ck("start on a ticket already in review leaves it there", g["stage"] == "review"
+           and "Could not move" not in out, (g["stage"], out[:120]))
+        store.upsert_github_credential("gh", "ghp_x")
+        t2 = store.get_ticket(shop, "T2")
+        store.update_ticket(t2["id"], pr={**t2["pr"], "checked_at": ago(600)})
+        HEAD["value"] = "bbbbbbb2222"
+        out = await mf.builder_brief("T2", project="Shop")
+        ck("the brief reads the pull request again, so a revive sees its new head", "head bbbbbbb2222" in out, store.get_ticket(shop, "T2")["pr"])
         again = await mf.builder_brief("T2", project="Shop")
         ck("after a revive the brief says where it left off",
            "## Where you left off" in again and "`pytest -q` -> 14 passed (broke test_cart)" in again
@@ -225,9 +263,37 @@ async def main():
             pc = (await cx.get(f"/api/projects/{shop}/crew")).json()["coordination"]
             ck("one merged PR: calls per merged PR", pc["merged_prs"] == 1 and pc["per_merged_pr"] == 5.0
                and pc["stations"] == {"shop-build-m1": 5}, pc)
+        t3 = store.get_ticket(shop, "T3")
+        store.update_ticket(t3["id"], stage="doing",
+                            pr={"repo": "acme/shop", "number": 9, "merged": True, "state": "closed"})
+        async with mk() as cx:
+            pc = (await cx.get(f"/api/projects/{shop}/crew")).json()["coordination"]
+            ck("a PR GitHub shows merged counts before the stage catches up", pc["merged_prs"] == 2, pc)
         as_station("crew-orchestrator", "orchestrator")
         listed = json.loads(await mf.list_crew())
         ck("list_crew shows it", next(s for s in listed if s["name"] == "shop-build-m1")["coordination_calls"] == 5, listed)
+
+    print("== a session is parsed again only when it has new tool calls (TR-683 review) ==")
+    parsed = []
+    real = factory.is_coordination
+    factory.is_coordination = lambda tool: (parsed.append(tool), real(tool))[1]
+    try:
+        await ingest([
+            {"type": "session_station", "sessionId": "b2", "cwd": "/w/shop", "timestamp": ago(30),
+             "station": "shop-build-m2", "role": "builder", "parent": "crew-orchestrator", "tares_project": "Shop"},
+            tool_line("b2", "mcp__tares__get_ticket", {"ticket": "T3"}, 10),
+        ])
+        both = store.coordination_calls("claude_code", ["b1", "b2"])
+        ck("both sessions counted", both == {"b1": 5, "b2": 1}, both)
+        parsed.clear()
+        ck("a different list of sessions reuses the counts",
+           store.coordination_calls("claude_code", ["b1"]) == {"b1": 5} and not parsed, parsed)
+        await ingest([tool_line("b2", "SendMessage", {"to": "crew-reviewer", "message": "[TF:REVIEW] T3"}, 5)])
+        parsed.clear()
+        again = store.coordination_calls("claude_code", ["b1", "b2"])
+        ck("a new call re-reads only its own session", again == {"b1": 5, "b2": 2} and len(parsed) == 2, (again, parsed))
+    finally:
+        factory.is_coordination = real
 
     print("== the builder manual: start is one Tares read (TR-683) ==")
     manual = open(os.path.join(ROOT, "claude-plugin", "skills", "station-builder", "SKILL.md")).read()

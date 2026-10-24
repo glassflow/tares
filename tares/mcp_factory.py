@@ -262,20 +262,34 @@ async def builder_brief(ticket: str, start: bool = False, project: str = "") -> 
     (stage, holder, PR, verdict), its working doc, its milestone and acceptance checks, the state
     of what it depends on, the project's AGENTS.md (it wins over the generic flow) and the shared
     one, open assumptions and desk questions on it, and where you left off (checks recorded,
-    Codex, earlier review rounds, the crew's latest messages). `start=True` also moves the ticket
-    to doing first, so starting a ticket is this one call."""
+    Codex, earlier review rounds, the crew's latest messages). `start=True` also moves a ticket
+    that has not been started to doing, so starting a ticket is this one call; a ticket already in
+    review, changes, blocked or merged keeps its stage."""
     async with _cx(30) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
             return why
-        note = ""
-        if start:
-            r = await cx.post(f"{TARESD}/api/projects/{uid}/tickets/{ticket}/stage",
-                              json={"stage": "doing"})
-            if r.status_code >= 400:
-                note = f"Could not move the ticket to doing: {_out(r)}\n\n"
-        r = await cx.get(f"{TARESD}/api/projects/{uid}/tickets/{ticket}/builder-brief")
-    return note + r.json()["brief"] if r.status_code == 200 else _out(r)
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/tickets/{ticket}/builder-brief",
+                         params={"start": "true"} if start else None)
+    return r.json()["brief"] if r.status_code == 200 else _out(r)
+
+
+@mcp.tool()
+async def write_repo_map(repo: str, body: str, note: str, project: str = "") -> str:
+    """Write the map of a GitHub repo (owner/name) that the builder and reviewer briefs serve:
+    layout, entry points, how to install, build, test and lint, conventions, the files tickets
+    touch most, known traps. One map per repo, shared by every project on it, at most 8,000
+    characters (about 2,000 tokens). `body` replaces the whole map, so start from the one in your
+    brief; `note` says what changed and becomes a dated line in its history. Write it when the
+    brief says the repo has none; update it when a merged PR changes the layout or the build, test
+    or lint commands."""
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.put(f"{TARESD}/api/repo-map",
+                         json={"repo": repo, "body": body, "note": note, "project": uid})
+    return _out(r)
 
 
 @mcp.tool()
