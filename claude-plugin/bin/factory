@@ -38,10 +38,16 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
                                             when it's idle (same conversation); restart a station
                                             between its turns when you allow it something new in
                                             Tares (same conversation, its fresh settings have it);
-                                            between rounds, read the plan's limits and the context
+                                            a frozen crew keeps its kit and is only told of a newer
+                                            one; between rounds, read the plan's limits and the context
                                             the Crew page asks for
   tares factory crew halt ["<reason>"]      stop risky actions on every station until resume
   tares factory crew resume                 lift a halt
+  tares factory crew freeze                 keep the crew on today's plugin kit: a station that starts
+                                            again uses a copy of it, and the watch moves none onto a
+                                            newer kit (it still tells you one is there)
+  tares factory crew unfreeze               lift the freeze; the watch moves each station onto the
+                                            checkout's kit when it's idle
   tares factory crew down                   stop the watch and every station (Tares keeps the record)
   tares factory spec ["<idea>"]             plan a project with Claude and /tares:spec, in the repo it
                                             builds on or a folder of its repos; it ends with the
@@ -112,6 +118,8 @@ CREW_HOME="${FACTORY_CREW_HOME:-$HOME/factory}"
 CREW_CFG="$CREW_HOME/crew.json"
 STATIONS="$CREW_HOME/stations.json"
 HALT_FILE="$CREW_HOME/HALT"
+FROZEN_KIT="$CREW_HOME/frozen-kit"   # the kit as `crew freeze` found it, while the crew is frozen
+NEWER_FILE="$CREW_HOME/kit-newer"    # the newer kit the watch last told the person about
 EVENTS="$CREW_HOME/events.jsonl"
 TOKEN_FILE="$CREW_HOME/.tares-token"
 
@@ -283,7 +291,8 @@ all_repos() { crew_projects | jq -r '[.[] | .repos[] | .path | select(. != null)
 
 settings_defaults() {
   jq -n '{autonomy: "L4-ship", releaser: false, release_profile: "kind",
-          prod_pattern: "(^|[-_.])(prod|production)([-_.]|$)", challenger: false, builders_max: 2}'
+          prod_pattern: "(^|[-_.])(prod|production)([-_.]|$)", challenger: false, builders_max: 2,
+          kit: {frozen: null}}'
 }
 settings_raw() {
   local s; s=$(tares_http GET /api/crew/settings) || die "could not read the crew settings from Tares at $TARES$(no_key_hint)"
@@ -643,7 +652,7 @@ write_settings() { # station role parent project repo
     --arg pslug "$( [ -n "$project" ] && slugify "$project" || true)" --arg home "$CREW_HOME" --arg repo "$repo" \
     --arg wt "$wt" --arg tares_url "$TARES" --arg tok "$tok_file" --arg mcp_url "$(mcp_url)" \
     --arg env_line "$env_line" --argjson allow "$allow_json" --argjson deny "$deny_json" --argjson perms "$perms_json" \
-    --arg status_line "$(printf 'python3 %q' "$KIT_PLUGIN/scripts/statusline.py")" --arg compact "$(compact_window 2>/dev/null)" \
+    --arg status_line "$(printf 'python3 %q' "$(kit_dir)/scripts/statusline.py")" --arg compact "$(compact_window 2>/dev/null)" \
     '{
       env: ({
         FACTORY_STATION: $station, FACTORY_ROLE: $role, FACTORY_PARENT: $parent,
@@ -671,7 +680,27 @@ write_settings() { # station role parent project repo
 # script lives. Claude Code names a --plugin-dir plugin `tares@inline`, and a person who once turned
 # that off in their own settings would get stations without it, so every session this CLI starts
 # turns it on in its own --settings (stations in their settings file, the spec session in SPEC_SETTINGS).
-plugin_flags() { printf '%s\n' --plugin-dir "$KIT_PLUGIN"; }
+plugin_flags() { printf '%s\n' --plugin-dir "$(kit_dir)"; }
+
+# A frozen crew (`crew freeze`) keeps the kit it was frozen on: Tares holds the setting, and the copy
+# of the kit sits in FROZEN_KIT. The watch asks upgrades_frozen before it moves a station onto
+# anything newer. Tares unreadable: a copy on disk means frozen, so a blip never lets a station move.
+upgrades_frozen() { # → 0 while the crew's kit is frozen
+  if crew_settings >/dev/null 2>&1; then jq -e '.kit.frozen != null' <<<"$SETTINGS" >/dev/null
+  else [ -d "$FROZEN_KIT" ]; fi
+}
+frozen_field() { # field → what the freeze recorded (at, by, version), from this round's settings
+  [ -z "$SETTINGS" ] || jq -r --arg f "$1" '.kit.frozen[$f] // empty' <<<"$SETTINGS"
+}
+kit_dir() { # → the kit a station starts on: the frozen copy while frozen, else this checkout
+  if [ -d "$FROZEN_KIT" ] && upgrades_frozen; then echo "$FROZEN_KIT"; else echo "$KIT_PLUGIN"; fi
+}
+on_frozen_copy() { # station → 0 when it runs from the frozen copy, which is going away
+  [ "$(stations_get "$1" '.plugin')" = "$FROZEN_KIT" ]
+}
+frozen_copy_in_use() { # → 0 while an active station runs from the frozen copy
+  [ -f "$STATIONS" ] && jq -e --arg p "$FROZEN_KIT" 'any(.[]; .status == "active" and .plugin == $p)' "$STATIONS" >/dev/null 2>&1
+}
 MY_VERSION=$(jq -r '.version // ""' "$KIT_PLUGIN/.claude-plugin/plugin.json" 2>/dev/null || true)
 installed_tares() { # → "name version scope" for each installed tares plugin of another version
   jq -r --arg v "$MY_VERSION" '.plugins // {} | to_entries[] | select(.key | startswith("tares@"))
@@ -715,8 +744,8 @@ stuck_on_context() { # station → 0 when Claude Code's thrashing notice is the 
   [ "$st" != working ]
 }
 
-kit_version() { # a fingerprint of what the stations run on: this CLI, hooks, skills and scripts; never fails
-  { (cd "$KIT_PLUGIN" && find . -type f ! -path '*/__pycache__/*' ! -name '*.pyc' ! -name '.*' ! -name '*~' \
+kit_version() { # [dir] a fingerprint of what the stations run on: this CLI, hooks, skills and scripts; never fails
+  { (cd "${1:-$KIT_PLUGIN}" && find . -type f ! -path '*/__pycache__/*' ! -name '*.pyc' ! -name '.*' ! -name '*~' \
       ! -name '4913' ! -name '*.orig' ! -name '*.rej' ! -name '*.swp' -print0 2>/dev/null | LC_ALL=C sort -z \
       | xargs -0 cat 2>/dev/null) || true; } | cksum | cut -d' ' -f1
 }
@@ -758,6 +787,7 @@ launch() { # station role parent project repo cwd model effort prompt [resume-se
                  --settings "$settings" --autocompact "$(compact_window)"
                  --append-system-prompt "$identity")
   local f; while IFS= read -r f; do [ -n "$f" ] && args+=("$f"); done < <(plugin_flags)
+  local kd; kd=$(kit_dir)
   [ -n "$resume" ] && args+=(--resume "$resume")
   args+=("$prompt")
 
@@ -780,9 +810,9 @@ launch() { # station role parent project repo cwd model effort prompt [resume-se
   done
   stations_put "$station" "$(jq -n --arg role "$role" --arg parent "$parent" --arg project "$project" --arg repo "$repo" \
     --arg cwd "$cwd" --arg id "$id" --arg session "$session" --arg model "$model" --arg effort "$effort" --arg settings "$settings" \
-    --arg kit "$(kit_version)" --arg grants "$gsum" \
+    --arg kit "$(kit_version "$kd")" --arg plugin "$kd" --arg grants "$gsum" \
     '{role: $role, parent: $parent, project: $project, repo: $repo, cwd: $cwd, id: $id, sessionId: $session,
-      model: $model, effort: $effort, settings: $settings, kit: $kit, grants: $grants, grants_tried: null,
+      model: $model, effort: $effort, settings: $settings, kit: $kit, plugin: $plugin, grants: $grants, grants_tried: null,
       status: "active", startedAt: (now | todate)}')"
   [ -z "$gsum" ] || printf '%s\n' "$grants" > "$CREW_HOME/stations/$station.grants"
   event started "$station" "$id"
@@ -1064,6 +1094,7 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
   [ $once = 1 ] || say "watching the crew every ${interval}s (it revives stations that stop, and gives one a permission you allowed in Tares); Ctrl-C to stop"
   while :; do
     local s kit settled=0 down=0 candidate=""; kit=$(kit_version)
+    TARES_STATE=""; SETTINGS=""; tares_on || true   # this round's Tares and settings; one that doesn't answer changes no grants
     # An update counts once it has held for a whole round in a clean checkout: a pull or an edit in
     # progress is not a release.
     [ "$kit" = "$seen" ] && kit_clean && settled=1
@@ -1072,11 +1103,14 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
       said_dirty=1
     fi
     seen=$kit
-    if [ $settled = 1 ] && [ "$kit" != "$kit_start" ] && [ $once = 0 ]; then
+    if upgrades_frozen; then
+      [ $settled = 0 ] || tell_newer_kit "$kit"
+    elif [ $settled = 1 ] && [ "$kit" != "$kit_start" ] && [ $once = 0 ]; then
       say "the plugin was updated; the watch restarts on the new version"
       exec "$src" crew watch --interval "$interval"
+    else
+      reap_frozen_copy
     fi
-    TARES_STATE=""; tares_on || true   # this round's Tares; one that doesn't answer changes no grants
     if ! active_json >/dev/null; then
       say "$UNREAD; nothing is revived or restarted this round"
       [ $once = 1 ] && return 0
@@ -1102,7 +1136,7 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
           [ $rc = 0 ] || say "could not restart $s; will try again next round"
         elif ! halted && between_turns "$s" && regrant_due "$s"; then
           regrant_station "$s"
-        elif [ -z "$candidate" ] && movable "$s" "$kit"; then
+        elif [ -z "$candidate" ] && ! upgrades_frozen && movable "$s" "$kit"; then
           candidate=$s
         fi
         continue
@@ -1120,7 +1154,7 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
     done
     # One station a round moves onto an updated plugin, and only while every station is up, so a
     # version that can't start a station never takes the crew down one station at a time.
-    if [ -n "$candidate" ] && [ $settled = 1 ] && [ $down = 0 ] && ! halted; then upgrade_station "$candidate" "$kit"; fi
+    if [ -n "$candidate" ] && [ $settled = 1 ] && [ $down = 0 ] && ! halted && ! upgrades_frozen; then upgrade_station "$candidate" "$kit"; fi
     [ $once = 1 ] && return 0
     nap "$interval"
   done
@@ -1183,8 +1217,11 @@ If something you tried was refused for want of one of these and is still needed,
   esac
 }
 
+stale_kit() { # station kit → 0 when it runs another version, or from a frozen copy that is going away
+  [ "$(stations_get "$1" '.kit')" != "$2" ] || { ! upgrades_frozen && on_frozen_copy "$1"; }
+}
 movable() { # station kit → 0 when it runs another version, has a conversation to resume, and is quiet
-  [ "$(stations_get "$1" '.kit')" != "$2" ] && [ -n "$(stations_get "$1" '.sessionId')" ] && quiet "$1"
+  stale_kit "$1" "$2" && [ -n "$(stations_get "$1" '.sessionId')" ] && quiet "$1"
 }
 
 upgrade_station() { # station kit: restart it on the new version, in the same conversation
@@ -1194,6 +1231,7 @@ upgrade_station() { # station kit: restart it on the new version, in the same co
   ( set -e; TARES_STATE=""; SETTINGS=""; CREW_PROJECTS=""
     tares_on || exit 3   # without Tares there are no settings to restart it with
     crew_settings >/dev/null
+    ! upgrades_frozen || exit 4   # frozen since the round began
     quiet "$s" || exit 4   # it started something since the first check
     say "$s runs an older version of the plugin; restarting it on this one now that it's idle, in the same conversation"
     cmd_restart "$s" "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-$skill (they may have changed), re-read your report, re-arm your schedule if you have one, then carry on where you were."
@@ -1215,6 +1253,60 @@ cmd_halt() {
   say "tell the orchestrator too ($ME crew attach orchestrator) so it sends HALT to every station"
 }
 cmd_resume() { require_crew; rm -f "$HALT_FILE"; event resume; say "crew resumed"; }
+
+frozen_text() { # → "since <time> by <who>" from the freeze recorded in this round's settings
+  echo "since $(frozen_field at) by $(frozen_field by)"
+}
+# Said once for each distinct kit newer than the frozen one, and again only for another change.
+tell_newer_kit() { # live kit
+  local was; was=$(frozen_field version)
+  [ -n "$was" ] || return 0
+  if [ "$1" = "$was" ]; then rm -f "$NEWER_FILE"; return 0; fi
+  [ "$(cat "$NEWER_FILE" 2>/dev/null)" != "$1" ] || return 0
+  say "kit $1 is newer than the frozen kit $was; not moving stations ($ME crew unfreeze lets them follow it)"
+  event kit-newer "" "$1"
+  echo "$1" > "$NEWER_FILE"
+}
+# The frozen copy goes once no station runs from it; until then a station that does would lose its hooks.
+reap_frozen_copy() {
+  [ -d "$FROZEN_KIT" ] && ! frozen_copy_in_use || return 0
+  rm -rf "$FROZEN_KIT" "$NEWER_FILE"
+}
+
+cmd_freeze() {
+  require_crew
+  SETTINGS=""; crew_settings >/dev/null || die "could not read the crew settings from Tares at $TARES$(no_key_hint)"
+  if upgrades_frozen; then say "the kit is already frozen $(frozen_text); $ME crew unfreeze lifts it"; return 0; fi
+  rm -rf "$FROZEN_KIT.new"; mkdir -p "$FROZEN_KIT.new"
+  cp -R "$KIT_PLUGIN/." "$FROZEN_KIT.new/" || { rm -rf "$FROZEN_KIT.new"; die "could not copy the kit to $FROZEN_KIT"; }
+  rm -rf "$FROZEN_KIT"; mv "$FROZEN_KIT.new" "$FROZEN_KIT"
+  local version out
+  version=$(kit_version "$FROZEN_KIT")
+  out=$(tares_http PUT /api/crew/settings "$(jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg by "${FACTORY_STATION:-$(id -un)}" --arg v "$version" \
+    '{kit: {frozen: {at: $at, by: $by, version: $v}}}')") || { rm -rf "$FROZEN_KIT"; die "could not save the freeze on Tares at $TARES$(no_key_hint)"; }
+  jq -e --arg v "$version" '.kit.frozen.version == $v' <<<"$out" >/dev/null \
+    || { rm -rf "$FROZEN_KIT"; die "Tares at $TARES did not keep the freeze; it needs a newer version"; }
+  SETTINGS=""; crew_settings >/dev/null || true
+  rm -f "$NEWER_FILE"
+  event freeze "" "$version"
+  say "kit frozen $(frozen_text): stations that start or revive use this kit, and the watch moves none onto a newer one. $ME crew unfreeze lifts it."
+}
+
+cmd_unfreeze() {
+  require_crew
+  SETTINGS=""; crew_settings >/dev/null || die "could not read the crew settings from Tares at $TARES$(no_key_hint)"
+  upgrades_frozen || { say "the kit is not frozen"; return 0; }
+  tares_http PUT /api/crew/settings '{"kit": {"frozen": null}}' >/dev/null || die "could not lift the freeze on Tares at $TARES$(no_key_hint)"
+  SETTINGS=""
+  rm -f "$NEWER_FILE"
+  event unfreeze
+  if frozen_copy_in_use; then
+    say "kit unfrozen: the watch moves each station onto the checkout's kit when it's idle, and removes $FROZEN_KIT once none runs from it"
+  else
+    rm -rf "$FROZEN_KIT"
+    say "kit unfrozen: the watch moves each station onto the checkout's kit when it's idle"
+  fi
+}
 
 desk_json() { tares_http GET "/api/desk?state=open" 2>/dev/null | jq -c '.desk // []' || echo '[]'; }
 
@@ -1254,7 +1346,7 @@ cmd_status() {
   else echo "no stations running; $ME crew up starts them"; fi
   for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS"); do
     case "$(stations_get "$s" '.role')" in helper) ;; *)
-      [ "$(stations_get "$s" '.kit')" = "$kit" ] || [ -f "$CREW_HOME/stations/$s.done" ] || old=$((old + 1)) ;;
+      stale_kit "$s" "$kit" && [ ! -f "$CREW_HOME/stations/$s.done" ] && old=$((old + 1)) ;;
     esac
     local id role model effort st job tempo detail needs
     id=$(stations_get "$s" '.id'); role=$(stations_get "$s" '.role')
@@ -1272,8 +1364,14 @@ cmd_status() {
   done
   active_json | jq -r "$GONE"' map(select(((.name // "") | test("^crew-|-build-")) and (gone | not))) | group_by(.name)[] | select(length > 1)
     | "TWO SESSIONS named \(.[0].name): \(map(.id) | join(", ")); stop the one stations.json does not list (factory roster)"' || true
-  [ $old = 0 ] || echo "plugin: $old station(s) run an older version; $ME crew watch moves each onto this one when it's idle"
+  local frozen=0; upgrades_frozen && frozen=1
+  if [ $old = 0 ]; then :
+  elif [ $frozen = 1 ]; then echo "plugin: $old station(s) run an older version; the freeze holds them ($ME crew unfreeze lets the watch move each onto the checkout's)"
+  else echo "plugin: $old station(s) run an older version; $ME crew watch moves each onto this one when it's idle"; fi
   halted && echo "HALTED: $(jq -r .reason "$HALT_FILE" 2>/dev/null)"
+  if [ $frozen = 1 ]; then
+    echo "FROZEN: the kit $(frozen_text); the watch moves no station onto a newer kit$([ "$kit" = "$(frozen_field version)" ] || echo " (a newer kit is available)")"
+  fi
   local wp; if wp=$(watch_pid); then echo "watch: running (pid $wp), it revives any station that stops and gives one a permission you allowed in Tares; log in $WATCH_LOG"
   else echo "watch: not running; $ME crew up starts it (or run $ME crew watch yourself)"; fi
   local items n; items=$(desk_json)
@@ -1456,7 +1554,9 @@ cmd_crew() {
     watch) cmd_watch "$@" ;;
     halt) cmd_halt "$@" ;;
     resume) cmd_resume ;;
-    *) die "$ME crew takes up, down, status, desk, attach, logs, watch, halt or resume" ;;
+    freeze) cmd_freeze ;;
+    unfreeze) cmd_unfreeze ;;
+    *) die "$ME crew takes up, down, status, desk, attach, logs, watch, halt, resume, freeze or unfreeze" ;;
   esac
 }
 
@@ -1729,6 +1829,17 @@ doctor_keys() {
   fi
 }
 
+doctor_kit() { # the freeze, and whether the checkout has a kit the crew is not following
+  crew_settings >/dev/null 2>&1 || return 0
+  if ! upgrades_frozen; then ok "the kit follows the plugin checkout (not frozen)"; return 0; fi
+  local live; live=$(kit_version)
+  if [ ! -d "$FROZEN_KIT" ]; then
+    no "the kit is frozen $(frozen_text), but its copy $FROZEN_KIT is missing, so new starts use the checkout: $ME crew unfreeze, then $ME crew freeze"
+  elif [ "$live" != "$(frozen_field version)" ]; then
+    warn "the kit is frozen $(frozen_text), and the checkout has a newer kit that no station moves onto: $ME crew unfreeze lets them follow it"
+  else ok "the kit is frozen $(frozen_text); the checkout has nothing newer"; fi
+}
+
 cmd_doctor() {
   local bad=0
   ok() { printf '  ok    %s\n' "$*"; }
@@ -1769,7 +1880,8 @@ cmd_doctor() {
     done
     if tares_on; then
       local raw missing; raw=$(settings_raw 2>/dev/null || echo '{}'); missing=$(settings_missing "$raw")
-      [ -z "$missing" ] && ok "crew settings on Tares: $(crew_settings)" || warn "crew settings not answered yet ($(echo $missing)); $ME crew up asks them"
+      [ -z "$missing" ] && ok "crew settings on Tares: $(crew_settings | jq -c 'del(.kit)')" || warn "crew settings not answered yet ($(echo $missing)); $ME crew up asks them"
+      doctor_kit
       if [ -z "$missing" ] && releaser_on && [ "$(setting release_profile)" = kind ]; then
         command -v docker >/dev/null && ok "docker" || no "docker not installed (release profile kind)"
         command -v kind >/dev/null && ok "kind" || no "kind not installed (release profile kind): brew install kind"

@@ -211,13 +211,14 @@ def register(app, store, h: SimpleNamespace) -> None:
             cur = json.loads(store.get_setting(CREW_SETTING) or "{}")
         except ValueError:
             cur = {}
-        return {**factory_mod.CREW_DEFAULTS, **{k: cur.get(k) for k in factory_mod.CREW_DEFAULTS}}
+        return {k: cur.get(k, d) for k, d in factory_mod.CREW_DEFAULTS.items()}
 
     @app.get("/api/crew/settings")
     async def get_crew_settings():
         """The crew's settings for every project: autonomy (L3-review, L4-ship), whether it runs
         a releaser, release profile, prod pattern, challenger on builders, most builders at
-        once. Unset ones are null."""
+        once. Unset ones are null. `kit.frozen` says when `factory crew freeze` froze the
+        crew's plugin kit, and by whom, or is null while the crew follows the checkout."""
         return {**settings(), "autonomy_levels": factory_mod.AUTONOMY}
 
     @app.put("/api/crew/settings")

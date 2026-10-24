@@ -643,7 +643,30 @@ def attach_command(station: str) -> str:
 
 
 CREW_DEFAULTS = {"autonomy": None, "releaser": None, "release_profile": None,
-                 "prod_pattern": None, "challenger": None, "builders_max": None}
+                 "prod_pattern": None, "challenger": None, "builders_max": None,
+                 "kit": {"frozen": None}}
+
+
+def kit_ok(v) -> dict:
+    """The kit setting: `frozen` is null (the crew follows the checkout) or when, by whom and
+    which kit version `factory crew freeze` froze it at; DocError on anything else."""
+    if not isinstance(v, dict) or set(v) - {"frozen"}:
+        raise DocError("kit is an object with one field, frozen")
+    f = v.get("frozen")
+    if f is None:
+        return {"frozen": None}
+    if not isinstance(f, dict):
+        raise DocError("kit.frozen is null or an object with at, by and version")
+    out = {}
+    for k in ("at", "by", "version"):
+        x = f.get(k)
+        if not isinstance(x, str) or not x.strip():
+            raise DocError(f"kit.frozen.{k} is a non-empty string")
+        x = " ".join(x.split())
+        if len(x) > 100:
+            raise DocError(f"kit.frozen.{k} is {len(x)} characters; keep it to 100")
+        out[k] = x
+    return {"frozen": out}
 
 
 def crew_settings_ok(body: dict, cur: dict) -> dict:
@@ -671,6 +694,8 @@ def crew_settings_ok(body: dict, cur: dict) -> dict:
         if not 1 <= n <= 20:
             raise DocError("builders_max is between 1 and 20")
         out["builders_max"] = n
+    if body.get("kit") is not None:
+        out["kit"] = kit_ok(body["kit"])
     return out
 
 
