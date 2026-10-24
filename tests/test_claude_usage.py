@@ -292,6 +292,18 @@ async def main():
                 "SELECT cost_usd FROM session_usage WHERE message = 'mx'").fetchone()[0]
             store.con.execute("DELETE FROM session_usage WHERE message = 'mx'")
         ck("a model version the table does not list stays unpriced through the fill", unlisted is None, unlisted)
+        # unpriced rows, as a version that did not price them leaves them; the fill prices what the table lists
+        for msg, model in (("md", "claude-haiku-4-5-20251001"), ("mr", "claude-opus-4-10")):
+            store.record_reply_usage("b1", msg, datetime.now(timezone.utc), model, None, None,
+                                     {"input_tokens": 1_000_000, "output_tokens": 0})
+        with store._lock:
+            store.con.execute("UPDATE session_usage SET cost_usd = NULL WHERE message IN ('md', 'mr')")
+            store._claude_usage_fill()
+            got = dict(store.con.execute(
+                "SELECT message, cost_usd FROM session_usage WHERE message IN ('md', 'mr')").fetchall())
+            store.con.execute("DELETE FROM session_usage WHERE message IN ('md', 'mr')")
+        ck("a dated snapshot is priced through the fill", got["md"] is not None and abs(got["md"] - 1.0) < 1e-9, got)
+        ck("a version that runs on from a listed prefix stays unpriced through the fill", got["mr"] is None, got)
 
         print("== a project delete ==")
         async with mk() as cx:
