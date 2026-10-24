@@ -50,13 +50,16 @@ def ck(label, cond, detail=""):
     print(("  ok   " if cond else "  FAIL ") + label + ("" if cond else f"  {detail}"))
 
 
+HEAD = {"value": "aaaaaaa1111"}
+
+
 def fake_github(request: httpx.Request) -> httpx.Response:
     parts = request.url.path.strip("/").split("/")
     if parts[3] == "pulls":
         return httpx.Response(200, json={
             "number": int(parts[4]), "title": "PR", "state": "open", "merged": False,
             "html_url": f"https://github.com/acme/shop/pull/{parts[4]}",
-            "head": {"sha": "aaaaaaa1111", "ref": "factory/T2"}})
+            "head": {"sha": HEAD["value"], "ref": "factory/T2"}})
     if parts[5] == "status":
         return httpx.Response(200, json={"statuses": []})
     return httpx.Response(200, json={"check_runs": []})
@@ -208,6 +211,12 @@ async def main():
         g = json.loads(await m.get_ticket("T2", project="Shop"))
         ck("start on a ticket already in review leaves it there", g["stage"] == "review"
            and "Could not move" not in out, (g["stage"], out[:120]))
+        store.upsert_github_credential("gh", "ghp_x")
+        t2 = store.get_ticket(shop, "T2")
+        store.update_ticket(t2["id"], pr={**t2["pr"], "checked_at": ago(600)})
+        HEAD["value"] = "bbbbbbb2222"
+        out = await mf.builder_brief("T2", project="Shop")
+        ck("the brief reads the pull request again, so a revive sees its new head", "head bbbbbbb2222" in out, store.get_ticket(shop, "T2")["pr"])
         again = await mf.builder_brief("T2", project="Shop")
         ck("after a revive the brief says where it left off",
            "## Where you left off" in again and "`pytest -q` -> 14 passed (broke test_cart)" in again

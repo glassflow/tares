@@ -918,6 +918,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         moves a ticket that has not been started (no stage, or todo, and not done or canceled) to doing; a ticket already
         past that (review, changes, blocked, merged) keeps its stage."""
         p = h.project_or_404(uid)
+        await refresh_prs(store, uid)
         t = ticket_or_404(uid, ref)
         note = ""
         if start and (t["stage"] or "todo") == "todo" and not factory_mod.finished(t):
