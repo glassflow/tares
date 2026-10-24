@@ -766,8 +766,21 @@ async def main():
             "message": "checkout-triage reached its limit of 2 runs a day, so it does not run "
                        "until its earlier runs are a day old.",
             "fix": "Raise the limit", "view": "agent:checkout-triage"}]))
+        # the instance-wide cap is a console setting, not a field on the agent's page: its button
+        # opens Settings, Limits for this agent (TR-670)
         store.con.execute("UPDATE catalog_agents SET daily_cap = NULL "
                           "WHERE name = 'checkout-triage'")
+        used = store.agent_runs_today("checkout-triage", include_practice=False)
+        r = await cx.put("/api/settings/agents", json={"daily_cap": used})
+        ck("the instance-wide cap is set", r.status_code == 200, r.text)
+        h = (await cx.get(f"/api/projects/{a}/health")).json()
+        eq("the instance-wide cap points at Settings, Limits", (h["state"], h["issues"]), (
+            "attention", [{"severity": "warning",
+                           "message": f"checkout-triage reached its limit of {used} runs a day, so "
+                                      "it does not run until its earlier runs are a day old.",
+                           "fix": "Raise the limit", "view": "settings:agents",
+                           "agent": "checkout-triage"}]))
+        await cx.put("/api/settings/agents", json={"daily_cap": None})
         await cx.post("/api/agents/builtin/checkout-triage/disable")
         h = (await cx.get(f"/api/projects/{a}/health")).json()
         eq("no agent can run", (h["state"], h["issues"][:1]), ("attention", [{

@@ -131,6 +131,10 @@ function HealthBanner({ ctx, health, onResume }: { ctx: Ctx; health: ProjectHeal
     // credentials and model providers are the cell's, on the console's own Settings page
     if (issue?.fix && (issue.view === "settings:github" || issue.view === "settings:providers"))
       return <Link className={`btn gf-fix ${cls}`} to="/settings">{issue.fix}</Link>;
+    // the daily run cap is one console setting for every agent, not a field on the agent's page
+    if (issue?.fix && issue.view === "settings:agents")
+      return <Link className={`btn gf-fix ${cls}`}
+                   to={`/settings?tab=agents${issue.agent ? `&agent=${encodeURIComponent(issue.agent)}` : ""}`}>{issue.fix}</Link>;
     const v = issue && viewFrom(issue.view, hasSessions);
     return issue?.fix && v
       ? <button type="button" className={`gf-fix ${cls}`} onClick={() => ctx.go(v)}>{issue.fix}</button>
