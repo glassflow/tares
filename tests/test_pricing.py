@@ -55,7 +55,7 @@ TABLE = {
     "claude-sonnet-4-5-20250929": (3.0, 15.0, 0.30),
     "claude-haiku-5-5": (0.10, 0.50, 0.01),
     "claude-haiku-4-5-20251001": (1.0, 5.0, 0.10),
-    "claude-haiku-3-5-20241022": (0.80, 4.0, 0.08),
+    "claude-3-5-haiku-20241022": (0.80, 4.0, 0.08),
 }
 for m, want in TABLE.items():
     ck(f"{m} prices {want}", price_row(m) == want, str(price_row(m)))
@@ -66,6 +66,10 @@ ck("the table is ordered longest prefix first",
 ck("an unlisted version is unpriced, not the family's rate",
    all(price_row(m) is None for m in ("claude-opus-4-2", "claude-opus-5-6", "claude-sonnet-4-9",
                                       "claude-haiku-4-6", "claude-fable-5-2")))
+ck("a version that runs on from a listed prefix is unpriced, not that row's rate",
+   all(price_row(m) is None for m in ("claude-opus-4-10", "claude-fable-5-12", "claude-sonnet-45")),
+   str([price_row(m) for m in ("claude-opus-4-10", "claude-fable-5-12", "claude-sonnet-45")]))
+ck("the made-up haiku 3.5 id matches no row", price_row("claude-haiku-3-5-20241022") is None)
 ck("a version-less alias and a date snapshot still price",
    price_row("claude-opus-4-0") == (15.0, 75.0, 1.50) and price_row("claude-opus-4-5-20251101") == (5.0, 25.0, 0.50))
 ck("an unlisted family is unpriced", price_row("claude-haiku-9") is None and price_row("claude-mythos-5-1") is None)

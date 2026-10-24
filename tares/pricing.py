@@ -42,14 +42,16 @@ MODEL_PRICING = [
     ("claude-sonnet-4", 3.0, 15.0, 0.30),
     ("claude-haiku-5-5", 0.10, 0.50, 0.01),
     ("claude-haiku-4-5", 1.0, 5.0, 0.10),
-    ("claude-haiku-3-5", 0.80, 4.0, 0.08),
+    ("claude-3-5-haiku", 0.80, 4.0, 0.08),
 ]
 MODEL_PRICING.sort(key=lambda row: -len(row[0]))
 # What may follow a prefix: nothing, a date snapshot (-20251001) or an alias suffix. Another
-# version number (claude-opus-4-2, claude-opus-5-6) is a model this table does not list, so it
-# is unpriced instead of borrowing the family's rate. The same test is SQL in claude_usage_store.
-NEXT_VERSION_SQL = "^-[0-9]{1,2}([^0-9]|$)"
-_NEXT_VERSION = re.compile(r"-\d{1,2}(?!\d)")
+# version number is a model this table does not list, so it is unpriced instead of borrowing the
+# family's rate: the next minor (claude-opus-4-2, claude-opus-5-6), a version that runs on from
+# the prefix's last digit (claude-opus-4-10, claude-fable-5-12, claude-sonnet-45). The same test
+# is SQL in claude_usage_store.
+NEXT_VERSION_SQL = "^(-[0-9]{1,2}([^0-9]|$)|[0-9])"
+_NEXT_VERSION = re.compile(r"-\d{1,2}(?!\d)|\d")
 # Cache write bills at 1.25x the input rate (2x for a write kept an hour).
 CACHE_WRITE_MULT = 1.25
 CACHE_WRITE_1H_MULT = 2.0
