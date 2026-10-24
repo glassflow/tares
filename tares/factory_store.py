@@ -460,6 +460,38 @@ class FactoryStore:
         self._proto_cache = ((source, n), out)
         return out
 
+    def coordination_calls(self, source: str, sessions: list[str]) -> dict[str, int]:
+        """Per session, how many tool calls only coordinate the crew (TR-683, factory.is_coordination)."""
+        from .factory import is_coordination
+        if not sessions:
+            return {}
+        marks = ", ".join("?" for _ in sessions)
+        with self._lock:
+            n = self.con.execute("SELECT count(*) FROM events WHERE source = ? AND "
+                                 "event_type = 'tool_use'", [source]).fetchone()[0]
+            key = (source, n, tuple(sorted(sessions)))
+            hit = getattr(self, "_coord_cache", None)
+            if hit and hit[0] == key:
+                return hit[1]
+            # the rendered text names each tool as "→ name(": a cheap filter before the parse
+            rows = self.con.execute(
+                f"SELECT key_value, payload FROM events WHERE source = ? AND key_value IN ({marks}) "
+                "AND event_type = 'tool_use' AND (text LIKE '%→ mcp__%' OR text LIKE '%→ SendMessage(%' "
+                "OR text LIKE '%→ ListAgents(%' OR text LIKE '%→ Skill(%' OR text LIKE '%→ Cron%')",
+                [source, *sessions]).fetchall()
+        out: dict[str, int] = {}
+        for sid, pj in rows:
+            try:
+                o = json.loads(pj) if pj else {}
+            except (TypeError, ValueError):
+                continue
+            msg = o.get("message") if isinstance(o.get("message"), dict) else {}
+            for b in msg.get("content") or []:
+                if isinstance(b, dict) and b.get("type") == "tool_use" and is_coordination(b.get("name")):
+                    out[sid] = out.get(sid, 0) + 1
+        self._coord_cache = (key, out)
+        return out
+
     # ── assumptions (TR-433) ──────────────────────────────────────────────────
     _AS_COLS = ("id, project, number, question, choice, why, affects, tickets, state, words, batch, "
                 "made_by, made_role, made_at, decided_at")

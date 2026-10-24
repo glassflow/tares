@@ -80,16 +80,20 @@ async def assign_ticket(ticket: str, holder: str, project: str = "") -> str:
 
 @writable()
 async def set_stage(ticket: str, stage: str, reason: str = "", pr: str = "",
-                    project: str = "") -> str:
+                    checks: list[dict] | None = None, project: str = "") -> str:
     """Move a ticket you hold: `stage` is doing (you started), review (its PR is up: pass `pr`,
     the pull request's URL), changes (the reviewer asked for changes), merged, or blocked (say
     why in `reason`). Only the releaser marks a ticket shipped. A ticket held by another station
     is refused; ask the orchestrator. For a ticket that lives in Linear or GitHub, also move it
     there (Linear's own tools, `gh` for GitHub). Name your branch factory/<ticket> (factory/T3)
-    so Tares finds the pull request on its own too."""
+    so Tares finds the pull request on its own too. Asking for review, pass the checks you ran
+    as `checks` ([{command, result, commit, broke_test}, ...]) instead of one add_check call
+    each; they are recorded before the stage moves."""
     body = {"stage": stage, "reason": reason}
     if pr:
         body["pr"] = pr
+    if checks:
+        body["checks"] = checks
     async with _cx(20) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -159,19 +163,24 @@ async def decide_assumption(assumption: str, state: str, words: str = "",
 
 @writable()
 async def add_check(ticket: str, command: str, result: str, commit: str = "",
-                    broke_test: str = "", project: str = "") -> str:
+                    broke_test: str = "", more: list[dict] | None = None,
+                    project: str = "") -> str:
     """Record a check you ran on a ticket: the exact `command`, what it showed (`result`), the
     `commit` it ran on, and, for a test you added, `broke_test`: the test you saw fail when you
     broke the code it covers (then pass again once restored). One line goes into the Checks part
     of the ticket's working doc; the rest of the doc is untouched. Record each check after you
-    run it, never one you did not run: the reviewer compares them with your session."""
+    run it, never one you did not run: the reviewer compares them with your session. Several
+    checks you ran back to back go in one call: `more` takes the others as
+    [{command, result, commit, broke_test}, ...]."""
     body = {"command": command, "result": result, "commit": commit, "broke_test": broke_test}
+    if more:
+        body["checks"] = more
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
             return why
         r = await cx.post(f"{TARESD}/api/projects/{uid}/tickets/{ticket}/checks", json=body)
-    return _out(r, ("line", "working_doc"))
+    return _out(r, ("line", "lines", "working_doc"))
 
 
 @writable()
@@ -245,6 +254,28 @@ async def review_brief(ticket: str, head: str = "", project: str = "") -> str:
         r = await cx.get(f"{TARESD}/api/projects/{uid}/tickets/{ticket}/brief",
                          params={"head": head})
     return r.json()["brief"] if r.status_code == 200 else _out(r)
+
+
+@mcp.tool()
+async def builder_brief(ticket: str, start: bool = False, project: str = "") -> str:
+    """Start every ticket here, and again after a revive: one read with where the ticket stands
+    (stage, holder, PR, verdict), its working doc, its milestone and acceptance checks, the state
+    of what it depends on, the project's AGENTS.md (it wins over the generic flow) and the shared
+    one, open assumptions and desk questions on it, and where you left off (checks recorded,
+    Codex, earlier review rounds, the crew's latest messages). `start=True` also moves the ticket
+    to doing first, so starting a ticket is this one call."""
+    async with _cx(30) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        note = ""
+        if start:
+            r = await cx.post(f"{TARESD}/api/projects/{uid}/tickets/{ticket}/stage",
+                              json={"stage": "doing"})
+            if r.status_code >= 400:
+                note = f"Could not move the ticket to doing: {_out(r)}\n\n"
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/tickets/{ticket}/builder-brief")
+    return note + r.json()["brief"] if r.status_code == 200 else _out(r)
 
 
 @mcp.tool()
@@ -432,7 +463,8 @@ async def add_grant(words: str, scope: str = "all", project: str = "") -> str:
 def _station_line(s: dict) -> dict:
     return {k: s.get(k) for k in ("name", "role", "parent", "state", "state_reason",
                                   "quiet_minutes", "project_name", "session", "last_at",
-                                  "children")} | {"earlier_sessions": len(s.get("earlier") or [])}
+                                  "children", "coordination_calls")
+            } | {"earlier_sessions": len(s.get("earlier") or [])}
 
 
 @mcp.tool()

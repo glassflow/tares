@@ -610,6 +610,16 @@ AUTONOMY = {
 }
 MAX_NAME = 120
 
+# a model call whose tool only coordinates the crew: Tares and Linear MCP calls, messages, the
+# agent list, skill loads and the schedule (TR-683)
+_COORDINATION_PREFIXES = ("mcp__tares__", "mcp__plugin_tares_tares__", "mcp__linear")
+_COORDINATION_TOOLS = ("SendMessage", "ListAgents", "Skill", "CronCreate", "CronList", "CronDelete")
+
+
+def is_coordination(tool: str) -> bool:
+    tool = str(tool or "")
+    return tool in _COORDINATION_TOOLS or tool.startswith(_COORDINATION_PREFIXES)
+
 
 def station_ok(name, role, parent) -> tuple[str, str, str]:
     """(station, role, parent), cleaned; DocError when the station has no name or an unknown
