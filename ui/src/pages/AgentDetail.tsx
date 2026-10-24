@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -433,6 +433,27 @@ export function RunsPanel({ name, agent, from = [], focusDispatch, focusRun, ope
   );
 }
 
+/** Consecutive capped runs, newest first, as one entry; a lone capped run stays a plain run.
+ *  A trigger firing past the daily cap leaves one capped row per firing (TR-671), so a capped
+ *  agent's list is otherwise a wall of identical lines. */
+export type RunItem = { run: AgentRun } | { capped: AgentRun[] };
+export function collapseCapped(runs: AgentRun[]): RunItem[] {
+  const items: RunItem[] = [];
+  let streak: AgentRun[] = [];
+  const flush = () => {
+    if (streak.length === 1) items.push({ run: streak[0] });
+    else if (streak.length > 1) items.push({ capped: streak });
+    streak = [];
+  };
+  for (const r of runs) {
+    if (r.status === "capped") { streak.push(r); continue; }
+    flush();
+    items.push({ run: r });
+  }
+  flush();
+  return items;
+}
+
 export function RunsTable({ runs, runsError, agent, emptyText, focusDispatch, focusRun, openRun, setOpenRun }: {
   runs: AgentRun[] | undefined;
   runsError: string | undefined;
@@ -443,6 +464,8 @@ export function RunsTable({ runs, runsError, agent, emptyText, focusDispatch, fo
   openRun: string | undefined;
   setOpenRun: (id: string | undefined) => void;
 }) {
+  // a folded group is keyed by its newest run, which stays put while older ones are paged in
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
   if (runsError) return <ErrorState error={runsError} what="this agent’s runs" />;
   if (!runs?.length) {
     return <div className="empty">{emptyText ?? (agent.trigger ? <>no runs yet; this agent runs when <span className="mono">{agent.trigger}</span> fires</> : <>no runs yet; a handoff starts this agent</>)}</div>;
@@ -451,6 +474,15 @@ export function RunsTable({ runs, runsError, agent, emptyText, focusDispatch, fo
     (!!focusDispatch && r.dispatch_id === focusDispatch) || (!!focusRun && r.id === focusRun);
   // an agent that concludes: how each run ended gets a column, so nobody reads the text for it
   const outcomes = !!agent.offers_conclude;
+  const row = (r: AgentRun) => {
+    const focused = isFocused(r);
+    // A deep-linked run starts open; clicking any row toggles it like the roster table.
+    const open = openRun !== undefined ? openRun === r.id : focused;
+    return (
+      <RunRow key={r.id} r={r} open={open} focused={focused} outcomes={outcomes}
+              onToggle={() => setOpenRun(open ? "" : r.id)} />
+    );
+  };
   return (
     <table>
       <thead>
@@ -461,13 +493,25 @@ export function RunsTable({ runs, runsError, agent, emptyText, focusDispatch, fo
         </tr>
       </thead>
       <tbody>
-        {runs.map((r) => {
-          const focused = isFocused(r);
-          // A deep-linked run starts open; clicking any row toggles it like the roster table.
-          const open = openRun !== undefined ? openRun === r.id : focused;
+        {collapseCapped(runs).map((item) => {
+          if ("run" in item) return row(item.run);
+          const group = item.capped;
+          const key = group[0].id;
+          // a deep link to a run inside a folded group opens the group
+          const open = openGroups.has(key) || group.some(isFocused);
           return (
-            <RunRow key={r.id} r={r} open={open} focused={focused} outcomes={outcomes}
-                    onToggle={() => setOpenRun(open ? "" : r.id)} />
+            <Fragment key={key}>
+              <tr className="clickable" data-testid="capped-group"
+                  title="runs the daily cap or the agent's budget refused; no model call was made"
+                  onClick={() => setOpenGroups((g) => { const n = new Set(g); n.has(key) ? n.delete(key) : n.add(key); return n; })}>
+                <td colSpan={outcomes ? 9 : 8}>
+                  {group.length} runs skipped, capped
+                  <span className="dim"> · latest <TimeAgo ts={group[0].started_at} /></span>
+                </td>
+                <td className="dim">{open ? "▾" : "▸"}</td>
+              </tr>
+              {open && group.map(row)}
+            </Fragment>
           );
         })}
       </tbody>

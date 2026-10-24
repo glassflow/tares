@@ -11,7 +11,7 @@ import re
 import secrets
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import duckdb
 
@@ -2055,17 +2055,38 @@ class Store(FactoryStore, ClaudeUsageStore):
         trigger in a hot loop — the exact case this cap exists for — would silence its agent
         indefinitely. `failed` rows ARE counted: some of them failed after spending tokens, and
         this is a cost ceiling, so the conservative direction is to count them."""
-        sql = ("SELECT count(*) FROM agent_runs WHERE agent = ? "
-               "AND started_at > now() - INTERVAL 1 DAY AND status <> 'capped'")
+        where, params = self._cap_window(agent, exclude_run_id, include_practice)
+        with self._lock:
+            row = self.con.execute(f"SELECT count(*) FROM agent_runs WHERE {where}", params).fetchone()
+        return int(row[0]) if row else 0
+
+    def agent_cap_frees_at(self, agent: str, cap: int, exclude_run_id: str | None = None,
+                           include_practice: bool = True):
+        """When a run past the daily cap is allowed again: the moment the run that holds the count
+        at `cap` is a day old (a rolling window, so the oldest run in it, or a later one when the
+        count is already over the cap). The same runs `agent_runs_today` counts. None when the
+        agent is under the cap, so nothing waits."""
+        where, params = self._cap_window(agent, exclude_run_id, include_practice)
+        with self._lock:
+            rows = self.con.execute(f"SELECT started_at FROM agent_runs WHERE {where} "
+                                    "ORDER BY started_at", params).fetchall()
+        if len(rows) < cap:
+            return None
+        started = rows[len(rows) - cap][0]
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        return started + timedelta(days=1)
+
+    @staticmethod
+    def _cap_window(agent: str, exclude_run_id: str | None, include_practice: bool):
+        where = "agent = ? AND started_at > now() - INTERVAL 1 DAY AND status <> 'capped'"
         params: list = [agent]
         if exclude_run_id:
-            sql += " AND id <> ?"
+            where += " AND id <> ?"
             params.append(exclude_run_id)
         if not include_practice:   # project health: a practice run is not the agent's workload
-            sql += " AND NOT COALESCE(practice, FALSE)"
-        with self._lock:
-            row = self.con.execute(sql, params).fetchone()
-        return int(row[0]) if row else 0
+            where += " AND NOT COALESCE(practice, FALSE)"
+        return where, params
 
     def reap_stale_agent_runs(self, older_than: str | None = None) -> int:
         """Close out orphaned `running` rows, returning how many were reaped.

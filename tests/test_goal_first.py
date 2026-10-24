@@ -764,8 +764,21 @@ async def main():
         eq("the daily cap", (h["state"], h["issues"]), ("attention", [{
             "severity": "warning",
             "message": "checkout-triage reached its limit of 2 runs a day, so it does not run "
-                       "until its earlier runs are a day old.",
+                       "until its earlier runs are a day old; next run allowed in 24h.",
             "fix": "Raise the limit", "view": "agent:checkout-triage"}]))
+        # the cap is a rolling window: at the cap, the message says when the oldest run in it ages
+        # out (TR-671); over it, when enough have (above, 5 runs against a cap of 2: 24h)
+        store.con.execute("UPDATE catalog_agents SET daily_cap = ? WHERE name = 'checkout-triage'",
+                          [store.agent_runs_today("checkout-triage", include_practice=False)])
+        oldest = store.con.execute("SELECT id FROM agent_runs WHERE agent = 'checkout-triage' "
+                                   "AND status <> 'capped' AND NOT COALESCE(practice, FALSE) "
+                                   "ORDER BY started_at LIMIT 1").fetchone()[0]
+        store.con.execute("UPDATE agent_runs SET started_at = now() - INTERVAL '22 hours 48 minutes' "
+                          "WHERE id = ?", [oldest])
+        h = (await cx.get(f"/api/projects/{a}/health")).json()
+        ck("the daily cap says when the next run is allowed",
+           h["issues"][0]["message"].endswith("a day old; next run allowed in 1h 12m."),
+           h["issues"][0]["message"])
         # the instance-wide cap is a console setting, not a field on the agent's page: its button
         # opens Settings, Limits for this agent (TR-670)
         store.con.execute("UPDATE catalog_agents SET daily_cap = NULL "
@@ -777,7 +790,8 @@ async def main():
         eq("the instance-wide cap points at Settings, Limits", (h["state"], h["issues"]), (
             "attention", [{"severity": "warning",
                            "message": f"checkout-triage reached its limit of {used} runs a day, so "
-                                      "it does not run until its earlier runs are a day old.",
+                                      "it does not run until its earlier runs are a day old; "
+                                      "next run allowed in 1h 12m.",
                            "fix": "Raise the limit", "view": "settings:agents",
                            "agent": "checkout-triage"}]))
         await cx.put("/api/settings/agents", json={"daily_cap": None})

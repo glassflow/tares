@@ -6,6 +6,16 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- "Raise the limit" on an agent that stopped at the daily run cap opened the agent's own page,
+  which has no cap field. It now opens Settings, Limits, with the daily cap in view and marked
+  for that agent; an agent with its own cap in its project still opens its own page (TR-670).
+- The daily run cap message now says when the next run is allowed ("next run allowed in
+  1h 12m"), counted from the run in the 24 hour window that has to age out first, on the project
+  banner and in the capped run's error. An agent's run list folds the runs the cap refused into
+  one line ("50 runs skipped, capped") that opens to list them. The Limits help line names who the
+  number applies to: every agent without its own limit (TR-671).
+
+### Fixed
 - A firing that arrives while its agent is already running for the same key now gets the
   `skipped` write-back with reason `in_flight`. Since 1.51.0 it was sent only when the duplicate
   slipped past the first dedupe; the common case, caught when the firing is delivered, sent

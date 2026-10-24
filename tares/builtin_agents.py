@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 import os
 import time
 import uuid
@@ -94,6 +94,20 @@ def effective_daily_cap(agent: dict, store) -> tuple[int, str]:
     if own:
         return int(own), "agent"
     return daily_cap(store)
+
+
+def next_run_words(frees_at, now=None) -> str:
+    """"next run allowed in 1h 12m": the wait until a capped agent's window frees a slot, rounded
+    up to the minute so it never promises a run before it can happen. "" when nothing waits."""
+    if frees_at is None:
+        return ""
+    now = now or datetime.now(timezone.utc)
+    minutes = max(1, -(-int((frees_at - now).total_seconds()) // 60))
+    h, m = divmod(minutes, 60)
+    wait = f"{h}h {m}m" if h and m else f"{h}h" if h else f"{m}m"
+    return f"next run allowed in {wait}"
+
+
 MAX_BOOTSTRAP_KEYS = 50    # a project bootstraps at most this many entities in one go
 # Handoffs (TR-334): a chain stops after this many handoffs in a row; the next one is recorded
 # as a capped run. The cooldown per (from, to, entity) lives in trigger_state under this name.
@@ -843,6 +857,10 @@ class AgentRunner:
         if self.store.agent_runs_today(agent["name"], exclude_run_id=run_id) >= cap:
             where = "in its project's daily_cap" if source == "agent" else "under Settings, Agents"
             msg = f"cap of {cap} runs in the last 24h reached for this agent; raise it {where}"
+            wait = next_run_words(self.store.agent_cap_frees_at(agent["name"], cap,
+                                                                exclude_run_id=run_id))
+            if wait:
+                msg += f", or wait: {wait}"
             self.store.finish_agent_run(run_id, "capped", error=msg)
             obs.set_attribute(_tracing.SKIPPED_REASON, "daily_run_cap")
             await self._write_back_skipped(agent, trigger_name, (callback_key, callback_labels),

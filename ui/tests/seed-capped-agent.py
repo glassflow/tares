@@ -1,5 +1,6 @@
 """Seed a scratch Tares for raise-limit.e2e.cjs: a project with a `watcher` agent that has used its
-one run a day. Starts a daemon on the scratch data dir, builds the project through its API, stops
+one run a day, 22h48m ago, so its next run is allowed in about 1h 12m, followed by 8 runs the cap
+refused (TR-671). Starts a daemon on the scratch data dir, builds the project through its API, stops
 it, and writes the finished run straight into the database. Prints the project id.
 usage: python seed-capped-agent.py <data-dir> <port> <mcp-port> <ui-dist> <tares-bin>"""
 import json, os, subprocess, sys, time, urllib.error, urllib.request, uuid
@@ -52,5 +53,12 @@ store = Store(os.path.join(home, "tares.duckdb"))
 run = uuid.uuid4().hex
 store.start_agent_run(run, "watcher", "spike", "d1", "checkout", "h", project=proj)
 store.finish_agent_run(run, "concluded", rounds=2)
+store.con.execute("UPDATE agent_runs SET started_at = now() - INTERVAL '22 hours 48 minutes' "
+                  "WHERE id = ?", [run])
+for i in range(8):   # what a trigger firing past the cap leaves behind, one row each
+    capped = uuid.uuid4().hex
+    store.start_agent_run(capped, "watcher", "spike", f"d{i + 2}", "checkout", "h", project=proj)
+    store.finish_agent_run(capped, "capped", error="cap of 1 runs in the last 24h reached for "
+                                                   "this agent; raise it under Settings, Agents")
 store.con.close()
 print(proj)
