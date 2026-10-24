@@ -156,6 +156,16 @@ async def main():
         ck("the desk question on it, not the one on another ticket",
            "guest carts allowed?" in brief and "(blocking)" in brief and "Logo colour" not in brief, brief)
         ck("pointers to the rest, not the rest", "## Read as needed" in brief, brief)
+        as_station("crew-orchestrator", "orchestrator")
+        await m.add_to_global("agents", "Never commit to main.")
+        again = await mf.builder_brief("T2", project="Shop")
+        ck("the shared AGENTS.md rides along with the project's",
+           "AGENTS.md shared by every project" in again and "Never commit to main." in again
+           and "AGENTS.md of this project" in again, again)
+        await mf.decide_assumption("A2", "kept", project="Shop")
+        again = await mf.builder_brief("T3", project="Shop")
+        ck("an assumption the person kept is no longer listed", "Currency?" not in again, again)
+        as_station("shop-build-m1", "builder", "crew-orchestrator")
         ck("no em dashes", "—" not in brief, brief)
 
         print("== starting the ticket is the same call (TR-683) ==")
@@ -253,6 +263,12 @@ async def main():
             pc = (await cx.get(f"/api/projects/{shop}/crew")).json()["coordination"]
             ck("one merged PR: calls per merged PR", pc["merged_prs"] == 1 and pc["per_merged_pr"] == 5.0
                and pc["stations"] == {"shop-build-m1": 5}, pc)
+        t3 = store.get_ticket(shop, "T3")
+        store.update_ticket(t3["id"], stage="doing",
+                            pr={"repo": "acme/shop", "number": 9, "merged": True, "state": "closed"})
+        async with mk() as cx:
+            pc = (await cx.get(f"/api/projects/{shop}/crew")).json()["coordination"]
+            ck("a PR GitHub shows merged counts before the stage catches up", pc["merged_prs"] == 2, pc)
         as_station("crew-orchestrator", "orchestrator")
         listed = json.loads(await mf.list_crew())
         ck("list_crew shows it", next(s for s in listed if s["name"] == "shop-build-m1")["coordination_calls"] == 5, listed)
