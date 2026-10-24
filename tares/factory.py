@@ -11,6 +11,7 @@ what", so every session reads the same plan.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 
@@ -156,6 +157,11 @@ def handover_repos(repos) -> list[dict]:
 
 MAP_MAX_CHARS = 8000   # about 2,000 tokens
 MAP_NOTE_MAX = 200
+
+
+def map_version(body: str | None) -> str:
+    """What a writer must name to change the map: a short hash of the map it read ("" for none)."""
+    return hashlib.sha1(body.encode()).hexdigest()[:10] if body else ""
 
 
 def map_ok(body, note) -> tuple[str, str]:
