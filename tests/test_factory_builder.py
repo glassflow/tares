@@ -292,6 +292,17 @@ async def main():
         parsed.clear()
         again = store.coordination_calls("claude_code", ["b1", "b2"])
         ck("a new call re-reads only its own session", again == {"b1": 5, "b2": 2} and len(parsed) == 2, (again, parsed))
+        print("== pruned events do not leave a stale count (TR-684) ==")
+        store.con.execute("DELETE FROM events WHERE key_value = 'b2'")
+        gone = store.coordination_calls("claude_code", ["b1", "b2"])
+        ck("a session whose calls are all gone counts none", gone == {"b1": 5}, gone)
+        await ingest([tool_line("b2", "mcp__tares__get_ticket", {"ticket": "T3"}, 4)])
+        back = store.coordination_calls("claude_code", ["b2"])
+        ck("and counts again from what is there", back == {"b2": 1}, back)
+        store.con.execute("DELETE FROM events WHERE key_value = 'b2'")
+        await ingest([tool_line("b2", "Bash", {"command": "ls"}, 3)])
+        swapped = store.coordination_calls("claude_code", ["b2"])
+        ck("pruned calls replaced by as many new ones are counted afresh", swapped == {}, swapped)
     finally:
         factory.is_coordination = real
 

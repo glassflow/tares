@@ -21,6 +21,7 @@ from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
 from .envelope import now_utc
+from .factory_store import MapChanged
 
 CREW_SETTING = "crew_settings"
 GRANTS_SETTING = "global_grants"   # the id of the cell's "Grants (all projects)" doc
@@ -816,12 +817,13 @@ def register(app, store, h: SimpleNamespace) -> None:
 
     # ── the repo map (TR-681): one per GitHub repo, shared by every project that names it ──
     def repo_of(uid: str, t: dict) -> str | None:
-        """The repo a ticket changes: its own, its PR's, else the project's only named repo."""
+        """The repo a ticket changes: its own, its PR's, else the project's only repo (when it has a
+        GitHub name). With several repos, or one without a name, a ticket that names none has none."""
         repo = t.get("repo") or (t.get("pr") or {}).get("repo")
         if repo:
             return repo
-        named = [r["name"] for r in (store.get_handover(uid) or {}).get("repos") or [] if r.get("name")]
-        return named[0] if len(named) == 1 else None
+        repos = (store.get_handover(uid) or {}).get("repos") or []
+        return repos[0].get("name") or None if len(repos) == 1 else None
 
     def repo_map_md(repo: str | None, builder: bool) -> list[str]:
         if not repo:
@@ -836,15 +838,18 @@ def register(app, store, h: SimpleNamespace) -> None:
                     f"and lint, conventions, the files tickets touch most, known traps; at most "
                     f"{factory_mod.MAP_MAX_CHARS} characters). Every project on this repo then starts "
                     "from it.", ""]
-        L = [f"## Repo map: {repo} (shared by every project on it; changed {str(m['updated_at'])[:10]} "
-             f"by {m['updated_by']})", m["body"].strip()]
+        version = factory_mod.map_version(m["body"])
+        L = [f"## Repo map: {repo} (shared by every project on it; version {version}, changed "
+             f"{str(m['updated_at'])[:10]} by {m['updated_by']})", m["body"].strip()]
         recent = store.repo_map_history(repo, 3)
         if recent:
             L += ["Recent changes to the map:"] + [f"- {str(x['at'])[:10]} {x['by']}: {x['note']}"
                                                    for x in recent]
         if builder:
             L += ["If your pull request changes the layout or the build, test or lint commands, "
-                  "update the map with write_repo_map after it merges."]
+                  f"update the map with write_repo_map(base=\"{version}\") after it merges. If someone "
+                  "changed the map meanwhile, the answer is the map now: fold your change into it and "
+                  "write again."]
         return L + [""]
 
     @app.get("/api/repo-map")
@@ -857,10 +862,21 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {"repo": name, "map": m, "history": store.repo_map_history(name, 10) if m else [],
                 "max_chars": factory_mod.MAP_MAX_CHARS}
 
+    def named_repos() -> set[str]:
+        """Every GitHub repo some project names: on its hand-over or on one of its tickets."""
+        out: set[str] = set()
+        for p in store.list_projects():
+            for r in (store.get_handover(p["id"]) or {}).get("repos") or []:
+                if r.get("name"):
+                    out.add(r["name"].lower())
+            out.update(t["repo"].lower() for t in store.list_tickets(p["id"]) if t.get("repo"))
+        return out
+
     @app.put("/api/repo-map")
     async def put_repo_map(request: Request, body: dict = Body(...)):
-        """{repo, body, note, project?}: replace the repo's map. Builders (and a person's own
-        session) write it; `note` becomes a dated line in the map's history."""
+        """{repo, body, base, note, project?}: replace the repo's map. Builders (and a person's own
+        session) write it; `base` is the version of the map they read (none when there was none),
+        `note` becomes a dated line in the map's history. The repo must be one a project names."""
         deny(request, "repo_map")
         try:
             name = factory_mod.repo_ok(body.get("repo"))
@@ -869,10 +885,24 @@ def register(app, store, h: SimpleNamespace) -> None:
             text, note = factory_mod.map_ok(body.get("body"), body.get("note"))
         except docs_mod.DocError as e:
             h.err(e)
+        if name.lower() not in named_repos():
+            raise HTTPException(404, f"no project names {name}: hand a project over with that repo, "
+                                     "or give one of its tickets that repo, before writing its map")
         by, _ = who(request, body)
-        changed = store.set_repo_map(name, text, note, by, str(body.get("project") or "") or None,
-                                     now_utc())
-        return {"repo": name, "changed": changed, "chars": len(text),
+        try:
+            changed = store.set_repo_map(name, text, note, by, str(body.get("project") or "") or None,
+                                         now_utc(), str(body.get("base") or ""))
+        except MapChanged as e:
+            cur = e.current
+            if not cur:
+                raise HTTPException(409, "there is no map for this repo yet: write it with an empty base")
+            raise HTTPException(409, (
+                f"the map changed since you read it (now version {factory_mod.map_version(cur['body'])}, "
+                f"changed {str(cur['updated_at'])[:10]} by {cur['updated_by']}), or you gave no base. "
+                "Nothing was written. Fold your change into this map and write again with that "
+                f"version as base:\n\n{cur['body']}"))
+        return {"repo": name, "changed": changed, "chars": len(text), "version": factory_mod.map_version(
+                    store.get_repo_map(name)["body"]),
                 "max_chars": factory_mod.MAP_MAX_CHARS, "history": store.repo_map_history(name, 5)}
 
     @app.get("/api/projects/{uid}/tickets/{ref}/brief")

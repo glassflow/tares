@@ -125,14 +125,17 @@ async def main():
         out = json.loads(await mf.write_repo_map("acme/shop", MAP, "first map from TR-681 work", project="Shop"))
         ck("the map is saved with its size", out["changed"] and out["chars"] == len(MAP)
            and out["max_chars"] == factory.MAP_MAX_CHARS, out)
-        again = json.loads(await mf.write_repo_map("acme/shop", MAP, "same again", project="Shop"))
+        v1 = factory.map_version(MAP)
+        again = json.loads(await mf.write_repo_map("acme/shop", MAP, "same again", v1, project="Shop"))
         ck("the same map again changes nothing and adds no history line", not again["changed"]
            and len(again["history"]) == 1, again)
-        over = await mf.write_repo_map("acme/shop", "x" * (factory.MAP_MAX_CHARS + 1), "too big", project="Shop")
+        over = await mf.write_repo_map("acme/shop", "x" * (factory.MAP_MAX_CHARS + 1), "too big", v1, project="Shop")
         ck("a map over the cap is refused and the saved one stays", "most is" in over
            and store.get_repo_map("acme/shop")["body"] == MAP, over[:200])
-        nonote = await mf.write_repo_map("acme/shop", MAP + " More.", " ", project="Shop")
+        nonote = await mf.write_repo_map("acme/shop", MAP + " More.", " ", v1, project="Shop")
         ck("a change with no note is refused", "what changed" in nonote and store.get_repo_map("acme/shop")["body"] == MAP, nonote)
+        longnote = await mf.write_repo_map("acme/shop", MAP + " More.", "n" * (factory.MAP_NOTE_MAX + 1), v1, project="Shop")
+        ck("a note over 200 characters is refused", "note" in longnote and store.get_repo_map("acme/shop")["body"] == MAP, longnote)
         bad = await mf.write_repo_map("not a repo", MAP, "n", project="Shop")
         ck("something that is not owner/name is refused", "owner/name" in bad, bad)
 
@@ -144,15 +147,17 @@ async def main():
         ck("the repo name matches whatever the case", "## Repo map: Acme/Shop" in brief, brief[:300])
         ck("with the recent change line and the update rule", "first map from TR-681 work" in brief
            and "update the map with write_repo_map" in brief, brief)
+        ck("and the version to write from", f'base="{v1}"' in brief and f"version {v1}" in brief, brief)
         ck("no em dashes", "—" not in brief)
         out = json.loads(await mf.write_repo_map("acme/shop", MAP + " Deploys: make ship.", "added how it deploys",
-                                                 project="Storefront"))
+                                                 v1, project="Storefront"))
         hist = store.repo_map_history("acme/shop")
         ck("an update from the second project is a dated line, newest first",
            out["changed"] and [h["note"] for h in hist] == ["added how it deploys", "first map from TR-681 work"]
            and hist[0]["by"] == "front-build-m1" and hist[0]["project"] == web, hist)
         as_station("shop-build-m1", "builder", "crew-orchestrator")
         brief = await mf.builder_brief("T1", project="Shop")
+        v2 = factory.map_version(MAP + " Deploys: make ship.")
         ck("and the first project sees the update", "Deploys: make ship." in brief and "added how it deploys" in brief, brief)
 
         print("== the reviewer's brief carries it too (TR-681) ==")
@@ -169,11 +174,33 @@ async def main():
         for station, role in (("crew-reviewer", "reviewer"), ("crew-orchestrator", "orchestrator"),
                               ("crew-releaser", "releaser")):
             as_station(station, role)
-            out = await mf.write_repo_map("acme/shop", "hijack", "n", project="Shop")
+            out = await mf.write_repo_map("acme/shop", "hijack", "n", v2, project="Shop")
             ck(f"a {role} may not", "only a builder" in out and store.get_repo_map("acme/shop")["body"].startswith("Layout"), out)
         as_station("", "")
-        out = json.loads(await mf.write_repo_map("acme/shop", MAP, "person's own session puts it back", project="Shop"))
+        out = json.loads(await mf.write_repo_map("acme/shop", MAP, "person's own session puts it back", v2, project="Shop"))
         ck("a person's own session may", out["changed"], out)
+
+        print("== a write from a stale copy cannot overwrite a newer map (TR-684) ==")
+        as_station("front-build-m1", "builder", "crew-orchestrator")
+        old = await mf.write_repo_map("acme/shop", MAP + " Lint: ruff.", "stale write", v2, project="Storefront")
+        ck("a base that is not the saved version is refused with the map now", old.startswith("error 409")
+           and "changed since you read it" in old and f"version {v1}" in old and MAP in old, old[:300])
+        ck("and nothing was written", store.get_repo_map("acme/shop")["body"] == MAP and len(store.repo_map_history("acme/shop")) == 3,
+           store.repo_map_history("acme/shop"))
+        nobase = await mf.write_repo_map("acme/shop", MAP + " Lint: ruff.", "no base", project="Storefront")
+        ck("a write that names no base is refused the same way", nobase.startswith("error 409") and "gave no base" in nobase, nobase[:200])
+        good = json.loads(await mf.write_repo_map("acme/shop", MAP + " Lint: ruff.", "folded in", v1, project="Storefront"))
+        ck("a write from the version it read goes through", good["changed"] and good["version"] == factory.map_version(MAP + " Lint: ruff."), good)
+
+        print("== only a repo some project names (TR-684) ==")
+        stray = await mf.write_repo_map("acme/typo", MAP, "stray", project="Storefront")
+        ck("a repo no project names is refused and no map is made", stray.startswith("error 404") and "no project names acme/typo" in stray
+           and store.get_repo_map("acme/typo") is None, stray)
+        await store_handover(app, shop, [{"path": "/w/shop", "name": "acme/shop"}, {"path": "/w/api", "name": "acme/api"}])
+        first = await mf.write_repo_map("acme/api", MAP, "a base for a map that is not there", "abc", project="Shop")
+        ck("a base for a repo with no map yet is refused", first.startswith("error 409") and "no map for this repo yet" in first, first)
+        ok = json.loads(await mf.write_repo_map("acme/api", MAP, "first api map", "", project="Shop"))
+        ck("a repo only a hand-over names is accepted", ok["changed"], ok)
 
         print("== a ticket with no repo falls back to the project's only repo (TR-681) ==")
         as_station("crew-orchestrator", "orchestrator")
@@ -182,9 +209,36 @@ async def main():
         as_station("shop-build-m1", "builder", "crew-orchestrator")
         none = await mf.builder_brief("T2", project="Shop")
         ck("with no repo to name, no map section", "## Repo map" not in none, none)
-        await store_handover(app, shop)
+        for label, repos in (("one named repo", [{"path": "/w/shop", "name": "acme/shop"}]),):
+            await store_handover(app, shop, repos)
+            brief = await mf.builder_brief("T2", project="Shop")
+            ck(f"with {label} on the hand-over, that repo's map", "## Repo map: acme/shop" in brief, brief)
+        for label, repos in (("two named repos", [{"path": "/w/shop", "name": "acme/shop"}, {"path": "/w/api", "name": "acme/api"}]),
+                             ("one named and one unnamed repo", [{"path": "/w/shop", "name": "acme/shop"}, {"path": "/w/docs"}])):
+            await store_handover(app, shop, repos)
+            brief = await mf.builder_brief("T2", project="Shop")
+            ck(f"with {label}, a ticket that names none gets no map (it could be either)", "## Repo map" not in brief, brief)
+        await store_handover(app, shop, [{"path": "/w/docs"}])
         brief = await mf.builder_brief("T2", project="Shop")
-        ck("with one named repo on the hand-over, that repo's map", "## Repo map: acme/shop" in brief, brief)
+        ck("with one repo and no GitHub name, no map", "## Repo map" not in brief, brief)
+
+        print("== the map and its history are one write (TR-684) ==")
+        before = store.get_repo_map("acme/api")["body"]
+        store.con.execute("ALTER TABLE repo_map_history RENAME TO repo_map_history_away")
+        try:
+            try:
+                store.set_repo_map("acme/api", MAP + " Torn.", "torn", "x", None, datetime.now(timezone.utc),
+                                   factory.map_version(before))
+                failed = False
+            except Exception:
+                failed = True
+        finally:
+            store.con.execute("ALTER TABLE repo_map_history_away RENAME TO repo_map_history")
+        ck("a history write that fails leaves the map as it was", failed and store.get_repo_map("acme/api")["body"] == before,
+           store.get_repo_map("acme/api"))
+        retry = store.set_repo_map("acme/api", MAP + " Torn.", "torn", "x", None, datetime.now(timezone.utc),
+                                   factory.map_version(before))
+        ck("and a retry then writes both", retry and store.repo_map_history("acme/api")[0]["note"] == "torn")
 
     print("== the builder manual says when to write and update it (TR-681) ==")
     manual = open(os.path.join(ROOT, "claude-plugin/skills/station-builder/SKILL.md")).read()
@@ -193,9 +247,8 @@ async def main():
         r"layout.{0,80}(build|test|lint)", manual, re.S) is not None and "update" in manual.lower())
 
 
-async def store_handover(app, uid):
-    app.state.store.set_handover(uid, [{"path": "/w/shop", "name": "acme/shop"}], None, "t",
-                                 datetime.now(timezone.utc))
+async def store_handover(app, uid, repos):
+    app.state.store.set_handover(uid, repos, None, "t", datetime.now(timezone.utc))
 
 
 unit()
