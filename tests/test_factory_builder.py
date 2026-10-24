@@ -12,6 +12,7 @@ Run: .venv/bin/python tests/test_factory_builder.py
 """
 import asyncio
 import json
+import logging
 import os
 import re
 import sys
@@ -32,6 +33,8 @@ os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-builder"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
 import httpx
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 import tares.mcp_server as m
 import tares.mcp_factory as mf
