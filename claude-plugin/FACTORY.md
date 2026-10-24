@@ -93,9 +93,9 @@ Code stops idle sessions after about an hour) and gives a station a permission y
 Tares; its log is `~/factory/watch.log`, and `crew down` stops it. `tares factory doctor` checks everything the crew needs.
 
 `tares factory crew freeze` keeps the crew on today's plugin kit: the watch still tells you when the
-checkout has a newer one, but moves no station onto it, and a station that stops comes back on a
-copy of the kit as it was frozen. `tares factory crew unfreeze` lets the stations follow the
-checkout again.
+checkout has a newer one, but moves no station onto it. A station that starts or revives uses a copy
+of the kit as it was frozen; a station already running keeps reading the checkout until it restarts.
+`tares factory crew unfreeze` lets the stations follow the checkout again.
 
 ## 3. Plan a project
 

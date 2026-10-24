@@ -415,7 +415,7 @@ function Settings({ st, grants }: { st: CrewSettings; grants: string }) {
           <dt>Codex challenger on builders</dt><dd>{st.challenger === null ? <span className="dim">not set</span> : st.challenger ? "on" : "off"}</dd>
           <dt>Builders at once</dt><dd>{st.builders_max ?? <span className="dim">not set</span>}</dd>
           <dt>Kit</dt>
-          <dd>{st.kit?.frozen ? <>frozen since {new Date(st.kit.frozen.at).toLocaleString()} by {st.kit.frozen.by}: the watch moves no station onto a newer kit</> : "following the checkout"}</dd>
+          <dd>{st.kit?.frozen ? <>frozen since {new Date(st.kit.frozen.at).toLocaleString()} by {st.kit.frozen.by}: stations that start or revive use the frozen kit, running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit</> : "following the checkout"}</dd>
         </dl>
         <h2>Grants for every project</h2>
         {lines.length ? <ul className="crew-grants">{lines.map((g, i) => <li key={i}>{g}</li>)}</ul>

@@ -44,8 +44,9 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
   tares factory crew halt ["<reason>"]      stop risky actions on every station until resume
   tares factory crew resume                 lift a halt
   tares factory crew freeze                 keep the crew on today's plugin kit: a station that starts
-                                            again uses a copy of it, and the watch moves none onto a
-                                            newer kit (it still tells you one is there)
+                                            or revives uses a copy of it, a running one keeps reading
+                                            the checkout until it restarts, and the watch moves none
+                                            onto a newer kit (it still tells you one is there)
   tares factory crew unfreeze               lift the freeze; the watch moves each station onto the
                                             checkout's kit when it's idle
   tares factory crew down                   stop the watch and every station (Tares keeps the record)
@@ -120,6 +121,17 @@ STATIONS="$CREW_HOME/stations.json"
 HALT_FILE="$CREW_HOME/HALT"
 FROZEN_KIT="$CREW_HOME/frozen-kit"   # the kit as `crew freeze` found it, while the crew is frozen
 NEWER_FILE="$CREW_HOME/kit-newer"    # the newer kit the watch last told the person about
+FREEZING="$CREW_HOME/freezing"       # present while `crew freeze` has the copy but Tares not yet the setting
+CHECKOUT_FILE="$CREW_HOME/kit-checkout"   # the checkout the frozen copy was taken from
+# The frozen copy as stations record it: physical, so a symlinked crew home still matches.
+frozen_phys() { echo "$(cd -P "$CREW_HOME" 2>/dev/null && pwd || echo "$CREW_HOME")/frozen-kit"; }
+# A factory run from the frozen copy (a station started while frozen) still means the checkout by
+# KIT_PLUGIN: what it fingerprints, copies and starts stations on once the crew is unfrozen.
+if [ -f "$CHECKOUT_FILE" ]; then
+  case "$KIT_PLUGIN/" in
+    "$(frozen_phys)"/*) c=$(cat "$CHECKOUT_FILE"); [ ! -d "$c" ] || { KIT_PLUGIN=$c; TEMPLATES="$KIT_PLUGIN/templates"; } ;;
+  esac
+fi
 EVENTS="$CREW_HOME/events.jsonl"
 TOKEN_FILE="$CREW_HOME/.tares-token"
 
@@ -693,13 +705,13 @@ frozen_field() { # field → what the freeze recorded (at, by, version), from th
   [ -z "$SETTINGS" ] || jq -r --arg f "$1" '.kit.frozen[$f] // empty' <<<"$SETTINGS"
 }
 kit_dir() { # → the kit a station starts on: the frozen copy while frozen, else this checkout
-  if [ -d "$FROZEN_KIT" ] && upgrades_frozen; then echo "$FROZEN_KIT"; else echo "$KIT_PLUGIN"; fi
+  if [ -d "$FROZEN_KIT" ] && upgrades_frozen; then frozen_phys; else echo "$KIT_PLUGIN"; fi
 }
 on_frozen_copy() { # station → 0 when it runs from the frozen copy, which is going away
-  [ "$(stations_get "$1" '.plugin')" = "$FROZEN_KIT" ]
+  [ "$(stations_get "$1" '.plugin')" = "$(frozen_phys)" ]
 }
 frozen_copy_in_use() { # → 0 while an active station runs from the frozen copy
-  [ -f "$STATIONS" ] && jq -e --arg p "$FROZEN_KIT" 'any(.[]; .status == "active" and .plugin == $p)' "$STATIONS" >/dev/null 2>&1
+  [ -f "$STATIONS" ] && jq -e --arg p "$(frozen_phys)" 'any(.[]; .status == "active" and .plugin == $p)' "$STATIONS" >/dev/null 2>&1
 }
 MY_VERSION=$(jq -r '.version // ""' "$KIT_PLUGIN/.claude-plugin/plugin.json" 2>/dev/null || true)
 installed_tares() { # → "name version scope" for each installed tares plugin of another version
@@ -1255,7 +1267,8 @@ cmd_halt() {
 cmd_resume() { require_crew; rm -f "$HALT_FILE"; event resume; say "crew resumed"; }
 
 frozen_text() { # → "since <time> by <who>" from the freeze recorded in this round's settings
-  echo "since $(frozen_field at) by $(frozen_field by)"
+  if [ -n "$(frozen_field at)" ]; then echo "since $(frozen_field at) by $(frozen_field by)"
+  else echo "(Tares does not say since when)"; fi
 }
 # Said once for each distinct kit newer than the frozen one, and again only for another change.
 tell_newer_kit() { # live kit
@@ -1268,28 +1281,43 @@ tell_newer_kit() { # live kit
   echo "$1" > "$NEWER_FILE"
 }
 # The frozen copy goes once no station runs from it; until then a station that does would lose its hooks.
+# A freeze under way (its marker, ignored once 5 minutes old) has the copy before Tares has the setting.
+freezing() { [ -n "$(find "$FREEZING" -mmin -5 2>/dev/null)" ]; }
 reap_frozen_copy() {
-  [ -d "$FROZEN_KIT" ] && ! frozen_copy_in_use || return 0
-  rm -rf "$FROZEN_KIT" "$NEWER_FILE"
+  [ -d "$FROZEN_KIT" ] && ! frozen_copy_in_use && ! freezing || return 0
+  rm -rf "$FROZEN_KIT" "$NEWER_FILE" "$CHECKOUT_FILE"
 }
 
+freeze_fail() { # made-a-copy message: nothing of a freeze that did not happen stays behind
+  rm -f "$FREEZING"; [ "$1" = 0 ] || rm -rf "$FROZEN_KIT" "$CHECKOUT_FILE"
+  die "$2"
+}
 cmd_freeze() {
   require_crew
   SETTINGS=""; crew_settings >/dev/null || die "could not read the crew settings from Tares at $TARES$(no_key_hint)"
   if upgrades_frozen; then say "the kit is already frozen $(frozen_text); $ME crew unfreeze lifts it"; return 0; fi
-  rm -rf "$FROZEN_KIT.new"; mkdir -p "$FROZEN_KIT.new"
-  cp -R "$KIT_PLUGIN/." "$FROZEN_KIT.new/" || { rm -rf "$FROZEN_KIT.new"; die "could not copy the kit to $FROZEN_KIT"; }
-  rm -rf "$FROZEN_KIT"; mv "$FROZEN_KIT.new" "$FROZEN_KIT"
-  local version out
+  touch "$FREEZING"
+  local made=0 version out
+  if frozen_copy_in_use; then
+    [ "$(kit_version "$FROZEN_KIT")" = "$(kit_version)" ] \
+      || freeze_fail 0 "stations still run from the kit copy of an earlier freeze, and the checkout has changed since: wait until $ME crew watch has moved them ($ME crew status), then freeze again"
+  else
+    made=1
+    rm -rf "$FROZEN_KIT.new"; mkdir -p "$FROZEN_KIT.new"
+    cp -R "$KIT_PLUGIN/." "$FROZEN_KIT.new/" || { rm -rf "$FROZEN_KIT.new"; freeze_fail 0 "could not copy the kit to $FROZEN_KIT"; }
+    rm -rf "$FROZEN_KIT"; mv "$FROZEN_KIT.new" "$FROZEN_KIT"
+  fi
+  echo "$KIT_PLUGIN" > "$CHECKOUT_FILE"
   version=$(kit_version "$FROZEN_KIT")
   out=$(tares_http PUT /api/crew/settings "$(jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg by "${FACTORY_STATION:-$(id -un)}" --arg v "$version" \
-    '{kit: {frozen: {at: $at, by: $by, version: $v}}}')") || { rm -rf "$FROZEN_KIT"; die "could not save the freeze on Tares at $TARES$(no_key_hint)"; }
+    '{kit: {frozen: {at: $at, by: $by, version: $v}}}')") || freeze_fail $made "could not save the freeze on Tares at $TARES$(no_key_hint)"
   jq -e --arg v "$version" '.kit.frozen.version == $v' <<<"$out" >/dev/null \
-    || { rm -rf "$FROZEN_KIT"; die "Tares at $TARES did not keep the freeze; it needs a newer version"; }
+    || freeze_fail $made "Tares at $TARES did not keep the freeze; it needs a newer version"
+  rm -f "$FREEZING"
   SETTINGS=""; crew_settings >/dev/null || true
   rm -f "$NEWER_FILE"
   event freeze "" "$version"
-  say "kit frozen $(frozen_text): stations that start or revive use this kit, and the watch moves none onto a newer one. $ME crew unfreeze lifts it."
+  say "kit frozen $(frozen_text): stations that start or revive use this kit; running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit. $ME crew unfreeze lifts it."
 }
 
 cmd_unfreeze() {
@@ -1303,7 +1331,7 @@ cmd_unfreeze() {
   if frozen_copy_in_use; then
     say "kit unfrozen: the watch moves each station onto the checkout's kit when it's idle, and removes $FROZEN_KIT once none runs from it"
   else
-    rm -rf "$FROZEN_KIT"
+    rm -rf "$FROZEN_KIT" "$CHECKOUT_FILE"
     say "kit unfrozen: the watch moves each station onto the checkout's kit when it's idle"
   fi
 }
@@ -1370,7 +1398,7 @@ cmd_status() {
   else echo "plugin: $old station(s) run an older version; $ME crew watch moves each onto this one when it's idle"; fi
   halted && echo "HALTED: $(jq -r .reason "$HALT_FILE" 2>/dev/null)"
   if [ $frozen = 1 ]; then
-    echo "FROZEN: the kit $(frozen_text); the watch moves no station onto a newer kit$([ "$kit" = "$(frozen_field version)" ] || echo " (a newer kit is available)")"
+    echo "FROZEN: the kit $(frozen_text); stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit$([ "$kit" = "$(frozen_field version)" ] || echo " (a newer kit is available)")"
   fi
   local wp; if wp=$(watch_pid); then echo "watch: running (pid $wp), it revives any station that stops and gives one a permission you allowed in Tares; log in $WATCH_LOG"
   else echo "watch: not running; $ME crew up starts it (or run $ME crew watch yourself)"; fi

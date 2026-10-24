@@ -14,7 +14,7 @@ unset TARES_URL TARES_AUTH_TOKEN TARES_FACTORY_URL TARES_FACTORY_TOKEN_FILE FACT
 mkdir -p "$HOME"
 chmod +x "$CLAUDE_BIN"
 WATCH=""
-trap '[ -n "$WATCH" ] && kill "$WATCH" 2>/dev/null; stop_tares; rm -rf "$T"' EXIT
+trap '[ -n "$WATCH" ] && kill "$WATCH" 2>/dev/null; [ -n "$STUB" ] && kill "$STUB" 2>/dev/null; stop_tares; rm -rf "$T"' EXIT
 fail=0
 check() { if eval "$2"; then :; else echo "FAIL $1"; fail=1; fi; }
 st() { jq -r --arg s "$1" ".[\$s]$2 // empty" "$FACTORY_CREW_HOME/stations.json"; }
@@ -30,12 +30,17 @@ change_kit() { echo "<!-- $1 -->" >> "$T/kit-under-test/skills/factory-protocol/
 stopped() { local tmp; tmp=$(mktemp); jq --arg id "$(st "$1" .id)" 'map(if .id == $id then .state = "stopped" | del(.pid) else . end)' "$FAKE_CLAUDE_STATE/agents.json" > "$tmp" && mv "$tmp" "$FAKE_CLAUDE_STATE/agents.json"; }
 wait_for() { local _; for _ in $(seq 40); do eval "$1" && return 0; sleep 0.5; done; return 1; }
 SNAP="$FACTORY_CREW_HOME/frozen-kit"
+CHECKOUT=$(cd -P "$T/kit-under-test" && pwd)
+STUB=""
 
 start_tares "$T/tares"
 trust "$FACTORY_CREW_HOME"
 api PUT /api/crew/settings '{"autonomy": "L3-review", "releaser": false, "challenger": false, "builders_max": 2}' >/dev/null
 "$F" crew up --yes >"$T/up.out" 2>&1 || { echo "FAIL crew up"; cat "$T/up.out"; exit 1; }
 for s in crew-orchestrator crew-reviewer; do agent $s '.state = "done"'; done
+# From here on the crew home is reached through a link; stations record the real path of the copy.
+ln -s "$T/crew" "$T/crewlink"; export FACTORY_CREW_HOME="$T/crewlink"
+SNAP="$T/crew/frozen-kit"
 
 # Not frozen: nothing says so, the setting is null and there is no copy.
 "$F" crew status >"$T/status0.out" 2>&1
@@ -54,7 +59,7 @@ check "the copy is the kit as it was" 'diff -r "$T/kit-under-test" "$SNAP" >/dev
 check "freeze is in the events" '[ "$(events freeze)" = 1 ]'
 V0=$(frozen .version | tr -d '"'); AT0=$(frozen .at)
 "$F" crew status >"$T/status1.out" 2>&1
-check "status shows the freeze, when and by whom" 'grep -q "^FROZEN: the kit since .* by $(id -un); the watch moves no station onto a newer kit\$" "$T/status1.out"'
+check "status shows the freeze, when and by whom" 'grep -q "^FROZEN: the kit since .* by $(id -un); stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit\$" "$T/status1.out"'
 "$F" doctor >"$T/doctor1.out" 2>&1
 check "doctor shows the freeze" 'grep -q "ok    the kit is frozen since .* by $(id -un); the checkout has nothing newer" "$T/doctor1.out"'
 sleep 1
@@ -102,16 +107,17 @@ check "the revive resumed its conversation, and nothing else moved" '[ "$(resume
 agent crew-reviewer '.state = "done"'
 "$F" crew unfreeze >"$T/unfreeze.out" 2>&1; rc=$?
 check "unfreeze exits 0 and clears the setting" '[ $rc = 0 ] && [ "$(frozen "")" = null ] && [ "$(events unfreeze)" = 1 ]'
-check "the copy stays while a station runs from it" '[ -d "$SNAP" ] && grep -q "removes $SNAP once none runs from it" "$T/unfreeze.out"'
+check "the copy stays while a station runs from it" '[ -d "$SNAP" ] && grep -q "frozen-kit once none runs from it" "$T/unfreeze.out"'
 "$F" crew status >"$T/status3.out" 2>&1
 check "an unfrozen crew's status has no FROZEN line, and the watch moves the stations again" '! grep -q "^FROZEN" "$T/status3.out" && grep -q "^plugin: 2 station(s) run an older version; .*crew watch moves each onto this one" "$T/status3.out"'
 orch_session=$(st crew-orchestrator .sessionId)
 "$F" crew watch --once >"$T/up1.out" 2>&1
 check "unfrozen: one station moves onto the new kit" '[ "$(events upgraded)" = 1 ] && [ "$(st crew-orchestrator .id)" != "$o" ] && [ "$(st crew-reviewer .id)" != "" ]'
-check "in the same conversation, from the checkout" 'last crew-orchestrator | jq -e --arg s "$orch_session" "index(\"--resume\") as \$i | \$i != null and .[\$i+1] == \$s" >/dev/null && [ "$(plugin_dir crew-orchestrator)" = "$(cd -P "$T/kit-under-test" && pwd)" ]'
+check "in the same conversation, from the checkout" 'last crew-orchestrator | jq -e --arg s "$orch_session" "index(\"--resume\") as \$i | \$i != null and .[\$i+1] == \$s" >/dev/null && [ "$(plugin_dir crew-orchestrator)" = "$CHECKOUT" ]'
+check "the copy stays while another station still runs from it" '[ -d "$SNAP" ]'
 agent crew-orchestrator '.state = "done"'
 "$F" crew watch --once >"$T/up2.out" 2>&1
-check "the next round moves the other, off the frozen copy" '[ "$(events upgraded)" = 2 ] && [ "$(plugin_dir crew-reviewer)" = "$(cd -P "$T/kit-under-test" && pwd)" ]'
+check "the next round moves the other, off the frozen copy" '[ "$(events upgraded)" = 2 ] && [ "$(plugin_dir crew-reviewer)" = "$CHECKOUT" ]'
 "$F" crew watch --once >"$T/up3.out" 2>&1
 check "the copy is removed once no station runs from it" '[ ! -e "$SNAP" ]'
 
@@ -123,19 +129,86 @@ check "frozen again: a station revived on the new copy" '[ "$(st crew-reviewer .
 agent crew-reviewer '.state = "done"'
 "$F" crew status >"$T/status4.out" 2>&1
 check "with nothing newer, the freeze holds no station back" 'grep -q "^FROZEN: the kit since " "$T/status4.out" && ! grep -q "newer kit is available" "$T/status4.out" && ! grep -q "^plugin:" "$T/status4.out"'
+V1=$(frozen .version | tr -d '"')
+
+# Unfrozen with a station still on the copy, and a factory run from that copy: it means the checkout.
 "$F" crew unfreeze >/dev/null 2>&1
-up0=$(events upgraded)
+check "the copy stays for the station on it" '[ -d "$SNAP" ] && [ "$(st crew-reviewer .plugin)" = "$SNAP" ]'
+stopped crew-orchestrator
+"$SNAP/bin/factory" crew watch --once >"$T/fromcopy.out" 2>&1
+check "a start by the copy's own factory uses the checkout, not the copy" '[ "$(plugin_dir crew-orchestrator)" = "$CHECKOUT" ] && [ "$(st crew-orchestrator .plugin)" = "$CHECKOUT" ]'
+agent crew-orchestrator '.state = "done"'
+
+# Freezing while a station still runs from the copy: the copy stays if it is still the checkout's kit.
+touch "$SNAP/.kept"
+"$F" crew freeze >"$T/refreeze.out" 2>&1; rc=$?
+check "freeze keeps a copy in use when it is still the checkout's kit" '[ $rc = 0 ] && [ -e "$SNAP/.kept" ] && [ "$(frozen .version | tr -d \")" = "$V1" ] && [ ! -e "$T/crew/freezing" ]'
+"$F" crew unfreeze >/dev/null 2>&1
+change_kit v3
+"$F" crew freeze >"$T/refuse.out" 2>&1; rc=$?
+check "freeze refuses while a station runs from a copy that is not the checkout's kit" '[ $rc != 0 ] && grep -q "still run from the kit copy" "$T/refuse.out" && [ -e "$SNAP/.kept" ] && [ "$(frozen "")" = null ] && [ ! -e "$T/crew/freezing" ]'
+
+# The watch moves the stations off the copy; a freeze under way keeps the copy, a stale marker does not.
+for _ in 1 2 3 4; do
+  [ "$(st crew-reviewer .plugin)" != "$SNAP" ] && break
+  for s in crew-orchestrator crew-reviewer; do agent $s '.state = "done"'; done
+  "$F" crew watch --once >/dev/null 2>&1
+done
+check "the stations left the copy" '[ "$(st crew-reviewer .plugin)" = "$CHECKOUT" ]'
+touch "$T/crew/freezing"
 "$F" crew watch --once >/dev/null 2>&1
-check "unfrozen with the same kit: it still moves off the copy that is going away" '[ "$(events upgraded)" = $((up0 + 1)) ] && [ "$(st crew-reviewer .plugin)" = "$(cd -P "$T/kit-under-test" && pwd)" ]'
+check "a copy nothing runs from stays while a freeze is under way" '[ -d "$SNAP" ]'
+touch -t 200001010000 "$T/crew/freezing"
 "$F" crew watch --once >/dev/null 2>&1
-check "and the copy goes" '[ ! -e "$SNAP" ]'
+check "a marker that old is ignored and the copy goes" '[ ! -e "$SNAP" ] && [ ! -e "$T/crew/kit-checkout" ]'
+rm -f "$T/crew/freezing"
 
 # With no station on the copy, unfreeze removes it at once; a freeze of a crew with no Tares is refused.
 "$F" crew freeze >/dev/null 2>&1
+check "freeze after that takes a fresh copy" '[ -x "$SNAP/bin/factory" ] && [ ! -e "$SNAP/.kept" ] && diff -r "$T/kit-under-test" "$SNAP" >/dev/null'
 "$F" crew unfreeze >/dev/null 2>&1
 check "unfreeze removes a copy nothing runs from" '[ ! -e "$SNAP" ] && [ "$(frozen "")" = null ]'
 TARESD_URL=http://127.0.0.1:9 "$F" crew freeze >"$T/notares.out" 2>&1; rc=$?
-check "freeze needs Tares" '[ $rc != 0 ] && grep -q "no Tares answers" "$T/notares.out" && [ ! -e "$SNAP" ]'
+check "freeze needs Tares" '[ $rc != 0 ] && grep -q "no Tares answers\|could not read the crew settings" "$T/notares.out" && [ ! -e "$SNAP" ]'
+
+# A Tares that answers the freeze without keeping it: freeze dies and leaves nothing behind.
+api GET /api/crew/settings | jq 'del(.kit)' > "$T/stub-settings.json"
+cat >"$T/stub.py" <<'PY'
+import http.server, os, sys
+body = open(sys.argv[2]).read().encode()
+class H(http.server.BaseHTTPRequestHandler):
+    def reply(self, b):
+        self.send_response(200); self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def do_GET(self):
+        if self.path == "/health": self.reply(b'{"ok": true}')
+        elif os.path.exists(sys.argv[3]): self.send_error(500)
+        else: self.reply(body)
+    def do_PUT(self): self.rfile.read(int(self.headers.get("Content-Length", 0))); self.reply(body)
+    def log_message(self, *a): pass
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PY
+sp=$("$PY" -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+"$PY" "$T/stub.py" "$sp" "$T/stub-settings.json" "$T/stub-fail" >/dev/null 2>&1 &
+STUB=$!
+wait_for "curl -sf http://127.0.0.1:$sp/health >/dev/null"
+TARESD_URL=http://127.0.0.1:$sp "$F" crew freeze >"$T/nokeep.out" 2>&1; rc=$?
+check "freeze dies when Tares does not keep the setting" '[ $rc != 0 ] && grep -q "did not keep the freeze" "$T/nokeep.out"'
+check "and leaves no copy, marker or setting behind" '[ ! -e "$SNAP" ] && [ ! -e "$SNAP.new" ] && [ ! -e "$T/crew/freezing" ] && [ ! -e "$T/crew/kit-checkout" ] && [ "$(frozen "")" = null ]'
+
+# Tares answers but cannot give its settings (the blip upgrades_frozen guards): the copy on disk still
+# means frozen, so nothing moves, and status does not print blank fields.
+"$F" crew freeze >/dev/null 2>&1
+change_kit v4
+for s in crew-orchestrator crew-reviewer; do agent $s '.state = "done"'; done
+launches1=$(launches)
+touch "$T/stub-fail"
+TARESD_URL=http://127.0.0.1:$sp "$F" crew watch --once >"$T/blip.out" 2>&1
+TARESD_URL=http://127.0.0.1:$sp "$F" crew status >"$T/status5.out" 2>&1
+rm -f "$T/stub-fail"
+check "with the settings unreadable and the copy there, the watch does not try to move a station" '! grep -q "could not restart\|moves onto the new version once it does" "$T/blip.out" && [ "$(launches)" = "$launches1" ]'
+check "and status says frozen, without blank fields" 'grep -q "^FROZEN: the kit (Tares does not say since when);" "$T/status5.out"'
+"$F" crew unfreeze >/dev/null 2>&1
 
 [ $fail = 0 ] && echo "freeze: all cases pass"
 exit $fail

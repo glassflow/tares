@@ -236,7 +236,9 @@ async def main():
                                ("a frozen kit without a version", {"frozen": {"at": "x", "by": "y"}}),
                                ("a frozen kit with a number for a time", {"frozen": {"at": 5, "by": "y", "version": "1"}}),
                                ("a frozen kit with a blank who", {"frozen": {"at": "x", "by": " ", "version": "1"}}),
-                               ("an unknown kit field", {"frozen": None, "pinned": "abc"})):
+                               ("an unknown kit field", {"frozen": None, "pinned": "abc"}),
+                               ("an empty kit", {}),
+                               ("a frozen kit with a time that is no time", {"frozen": {"at": "yesterday", "by": "y", "version": "1"}})):
                 r = await cx.put("/api/crew/settings", json={"kit": junk})
                 ck(f"{name} is refused", r.status_code == 400, r.text)
             s = (await cx.get("/api/crew/settings")).json()

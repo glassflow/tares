@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+from datetime import datetime
 
 from .docs import DocError, title_ok
 
@@ -678,7 +679,7 @@ CREW_DEFAULTS = {"autonomy": None, "releaser": None, "release_profile": None,
 def kit_ok(v) -> dict:
     """The kit setting: `frozen` is null (the crew follows the checkout) or when, by whom and
     which kit version `factory crew freeze` froze it at; DocError on anything else."""
-    if not isinstance(v, dict) or set(v) - {"frozen"}:
+    if not isinstance(v, dict) or set(v) != {"frozen"}:
         raise DocError("kit is an object with one field, frozen")
     f = v.get("frozen")
     if f is None:
@@ -694,6 +695,10 @@ def kit_ok(v) -> dict:
         if len(x) > 100:
             raise DocError(f"kit.frozen.{k} is {len(x)} characters; keep it to 100")
         out[k] = x
+    try:
+        datetime.fromisoformat(out["at"].replace("Z", "+00:00"))
+    except ValueError:
+        raise DocError("kit.frozen.at is a time such as 2026-10-25T10:00:00Z") from None
     return {"frozen": out}
 
 
