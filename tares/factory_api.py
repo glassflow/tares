@@ -972,7 +972,9 @@ def register(app, store, h: SimpleNamespace) -> None:
             dpr = d["pr"] or {}
             L += [f"- {factory_mod.label(d)} {d['title']}: {d['stage'] or d['status']}"
                   + (f", {dpr['url']}" if dpr.get("url") else "")
-                  + ("" if factory_mod.finished(d) else " (NOT DONE: it blocks this ticket)")]
+                  + ("" if factory_mod.delivered(d) else
+                     " (CANCELED: it delivered nothing and still blocks this ticket)"
+                     if d["status"] == "canceled" else " (NOT DONE: it blocks this ticket)")]
         L.append("")
         # 5. the rules: the project's AGENTS.md wins over the generic flow, then the shared one
         gids = h.global_ids(False) or {}

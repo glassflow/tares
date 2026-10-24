@@ -177,6 +177,13 @@ async def main():
         await mf.builder_brief("T4", start=True, project="Shop")
         ck("start leaves a ticket that is already done alone",
            json.loads(await m.get_ticket("T4", project="Shop"))["stage"] in (None, "todo", "merged"))
+        as_station("crew-orchestrator", "orchestrator")
+        await m.write_ticket("Dropped", status="canceled", project="Shop")
+        await m.write_ticket("After dropped", depends_on=["T5"], project="Shop")
+        out = await mf.builder_brief("T6", project="Shop")
+        ck("a canceled dependency is named, not counted as done",
+           "T5 Dropped: " in out and "CANCELED" in out and "NOT DONE" not in out, out[:400])
+        as_station("shop-build-m2", "builder", "crew-orchestrator")
         bad = await mf.builder_brief("T99", project="Shop")
         ck("an unknown ticket is an error, not a crash", "brief" not in bad.lower() or "T99" in bad, bad)
 
