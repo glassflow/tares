@@ -205,7 +205,7 @@ async def main():
         s = json.loads(await mf.get_crew_settings())
         ck("settings start unset", s == {"autonomy": None, "releaser": None, "release_profile": None,
                                          "prod_pattern": None, "challenger": None,
-                                         "builders_max": None}, s)
+                                         "builders_max": None, "kit": {"frozen": None}}, s)
         s = json.loads(await mf.set_crew_settings(autonomy="L4-ship", release_profile="kind",
                                                   prod_pattern="prod-*", challenger=True))
         ck("the person's session saves them", s["autonomy"] == "L4-ship" and s["challenger"] is True, s)
@@ -220,6 +220,29 @@ async def main():
            and s["autonomy"] == "L4-ship", s)
         s = json.loads(await mf.set_crew_settings(builders_max=2))
         ck("a later change keeps the rest", s["autonomy"] == "L4-ship" and s["builders_max"] == 2, s)
+        frozen = {"at": "2026-10-25T10:00:00Z", "by": "kiran", "version": "123456"}
+        async with mk() as cx:
+            r = await cx.put("/api/crew/settings", json={"kit": {"frozen": frozen}})
+            ck("the kit can be frozen: when, by whom, at which version",
+               r.status_code == 200 and r.json()["kit"] == {"frozen": frozen}, r.text)
+            s = json.loads(await mf.get_crew_settings())
+            ck("the MCP tool reads it, and the rest is kept", s["kit"] == {"frozen": frozen}
+               and s["autonomy"] == "L4-ship" and s["builders_max"] == 2, s)
+            r = await cx.put("/api/crew/settings", json={"builders_max": 3})
+            ck("another change keeps the freeze", r.json()["kit"] == {"frozen": frozen}, r.text)
+            await cx.put("/api/crew/settings", json={"builders_max": 2})
+            for name, junk in (("a kit that is not an object", "frozen"),
+                               ("a frozen kit that is not an object", {"frozen": "yes"}),
+                               ("a frozen kit without a version", {"frozen": {"at": "x", "by": "y"}}),
+                               ("a frozen kit with a number for a time", {"frozen": {"at": 5, "by": "y", "version": "1"}}),
+                               ("a frozen kit with a blank who", {"frozen": {"at": "x", "by": " ", "version": "1"}}),
+                               ("an unknown kit field", {"frozen": None, "pinned": "abc"})):
+                r = await cx.put("/api/crew/settings", json={"kit": junk})
+                ck(f"{name} is refused", r.status_code == 400, r.text)
+            s = (await cx.get("/api/crew/settings")).json()
+            ck("a refused kit changes nothing", s["kit"] == {"frozen": frozen}, s)
+            r = await cx.put("/api/crew/settings", json={"kit": {"frozen": None}})
+            ck("unfreezing clears it", r.status_code == 200 and r.json()["kit"] == {"frozen": None}, r.text)
         as_station("crew-reviewer", "reviewer")
         bad = await mf.set_crew_settings(autonomy="L3-review")
         ck("a reviewer may not change them", "only the orchestrator" in bad, bad)
