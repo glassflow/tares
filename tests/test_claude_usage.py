@@ -131,6 +131,8 @@ def units():
     ck("no status line yet: the /context reading stands in", now["used"] == 95300 and now["size"] == 200000
        and now["pct"] == 48 and now["at"] == "t", now)
     ck("neither: nothing", cu.context_now({"status": None, "context": None}) is None)
+    ck("the Claude Code version comes from the status line", cu.code_version({"status": s}) == "2.1.296")
+    ck("no status line yet: no version", cu.code_version({"status": None}) is None and cu.code_version(None) is None)
     c = cu.compact_context(CONTEXT)
     ck("context: MCP tools summed by server, largest first",
        c["mcp_servers"] == [{"name": "slack", "tools": 1, "tokens": 400}, {"name": "tares", "tools": 2, "tokens": 150}], c["mcp_servers"])
@@ -226,6 +228,7 @@ async def main():
             u = (await cx.get("/api/claude-code/usage")).json()
         ck("the station shows its context window", b["context"]["pct"] == 48 and b["context"]["size"] == 200000
            and b["context"]["model"] == "Opus 5.5", b["context"])
+        ck("and the Claude Code version it runs", b["claude_version"] == "2.1.296", b.get("claude_version"))
         ck("and what its sessions spent", b["usage"]["replies"] == 2 and b["usage"]["output_tokens"] == 60, b["usage"])
         ck("the plan's limits come from the status line",
            [(x["kind"], x["percent"], x["from"]) for x in u["plan"]["limits"]] ==

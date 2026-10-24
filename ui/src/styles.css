@@ -2098,6 +2098,7 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 .crew-role, .crew-proj { font-size: 12px; color: var(--ink-soft); }
 .crew-side { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
 .crew-side small { color: var(--ink-soft); font-size: 12px; }
+.crew-side .crew-cc.is-older { color: var(--warn); font-weight: 600; }
 .crew-what { grid-column: 1 / -1; margin: 0; color: var(--ink-soft); font-size: 13px; }
 .crew-earlier { grid-column: 1 / -1; font-size: 12px; color: var(--ink-soft); }
 .crew-earlier summary { cursor: pointer; }

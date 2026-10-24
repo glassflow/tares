@@ -132,7 +132,7 @@ check "builders_max is honoured" 'grep -q "builders_max is 3" "$T/max.out"'
 hand_over "Crew Tools" "$repo3" >/dev/null
 "$F" spawn builder "Crew Tools" m1 "$repo3" "x" >"$T/crewname.out" 2>&1
 check "a project can't be named like the crew" 'grep -q "can.t start with" "$T/crewname.out" && [ -z "$(st crew-tools-build-m1 .role)" ]'
-check "roster lists project" '"$F" roster | grep -q "^links-app-build-m1	builder	Links App	working$"'
+check "roster lists project" '"$F" roster | grep -q "^links-app-build-m1	builder	Links App	working"'
 "$F" projects >"$T/projects.out" 2>&1
 check "projects lists each handed-over project with its builders and repos" 'grep -E "^Links App +0/0 +- +1 +.*$repo" "$T/projects.out" >/dev/null && grep -E "^shop +0/0 +- +2 " "$T/projects.out" >/dev/null'
 # A helper keeps the parent's project and works under its role.
@@ -232,7 +232,7 @@ wait "$racer"
 # A dead station reads as gone, so the orchestrator's roster check revives it even with no watch running.
 agent_gone() { local tmp; tmp=$(mktemp); jq --arg id "$(st "$1" .id)" 'map(if .id == $id then .state = "done" | del(.pid) else . end)' "$FAKE_CLAUDE_STATE/agents.json" > "$tmp" && mv "$tmp" "$FAKE_CLAUDE_STATE/agents.json"; }
 agent_gone crew-reviewer
-check "roster shows a finished station with no process as gone" '"$F" roster | grep -q "^crew-reviewer	reviewer		gone$"'
+check "roster shows a finished station with no process as gone" '"$F" roster | grep -q "^crew-reviewer	reviewer		gone"'
 "$F" revive crew-reviewer >/dev/null 2>&1
 dup=$(st crew-reviewer .id)
 tmp=$(mktemp); jq --arg id "$dup" '. + [(.[] | select(.id == $id) | .id = "0000dup1")]' "$FAKE_CLAUDE_STATE/agents.json" > "$tmp" && mv "$tmp" "$FAKE_CLAUDE_STATE/agents.json"
@@ -248,7 +248,7 @@ before=$(launches)
 FAKE_CLAUDE_STOP_KEEPS_STATE=1 FACTORY_STOP_WAIT=2 "$F" restart crew-orchestrator >"$T/cron-restart.out" 2>&1
 check "restart of a station with a schedule armed goes through" '[ $(( $(launches) - before )) = 1 ] && ! grep -q "did not stop" "$T/cron-restart.out"'
 tmp=$(mktemp); jq --arg id "$(st crew-orchestrator .id)" 'map(if .id == $id then .state = "working" | del(.pid, .status) else . end)' "$FAKE_CLAUDE_STATE/agents.json" > "$tmp" && mv "$tmp" "$FAKE_CLAUDE_STATE/agents.json"
-check "listed as working with no process: roster says gone" '"$F" roster | grep -q "^crew-orchestrator	orchestrator		gone$"'
+check "listed as working with no process: roster says gone" '"$F" roster | grep -q "^crew-orchestrator	orchestrator		gone"'
 before=$(launches)
 "$F" crew watch --once >/dev/null 2>&1
 check "listed as working with no process: revived" '[ $(( $(launches) - before )) = 1 ]'

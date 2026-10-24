@@ -217,7 +217,8 @@ def register(app, store, h: SimpleNamespace) -> None:
     async def get_crew_settings():
         """The crew's settings for every project: autonomy (L3-review, L4-ship), whether it runs
         a releaser, release profile, prod pattern, challenger on builders, most builders at
-        once. Unset ones are null."""
+        once, whether the watch moves stations onto a new Claude Code (claude_update, on unless
+        false). Unset ones are null."""
         return {**settings(), "autonomy_levels": factory_mod.AUTONOMY}
 
     @app.put("/api/crew/settings")
@@ -356,6 +357,7 @@ def register(app, store, h: SimpleNamespace) -> None:
             st["children"] = sorted(x["name"] for x in out if x["parent"] == st["name"])
             # the context window from the station's status line, and what all its sessions spent
             st["context"] = claude_usage.context_now(meters.get(st["session"]))
+            st["claude_version"] = claude_usage.code_version(meters.get(st["session"]))
             mine = [spent[s] for s in [st["session"], *(e["session"] for e in st["earlier"])]
                     if s in spent]
             st["usage"] = ({k: sum(x[k] for x in mine) for k in mine[0]} if mine else None)
