@@ -369,7 +369,7 @@ async def list_decisions(project: str = "") -> str:
 # ── the crew (TR-419, TR-420, TR-425) ─────────────────────────────────────────
 
 SETTING_KEYS = ("autonomy", "releaser", "release_profile", "prod_pattern", "challenger",
-                "builders_max")
+                "builders_max", "claude_update")
 
 @mcp.tool()
 async def get_crew_settings() -> str:
@@ -377,7 +377,8 @@ async def get_crew_settings() -> str:
     approves each merge; L4-ship: a builder merges after the reviewer's pass and green CI),
     `releaser` (whether the crew runs a releaser; without one a ticket ends at merged),
     `release_profile`, `prod_pattern` (what counts as prod), `challenger` (builders run the
-    Codex challenger), `builders_max`. Unset ones are null: ask the person, one at a time, with
+    Codex challenger), `builders_max`, `claude_update` (whether the watch moves stations onto a
+    new Claude Code; on unless false). Unset ones are null: ask the person, one at a time, with
     a recommendation."""
     async with _cx(10) as cx:
         r = await cx.get(f"{TARESD}/api/crew/settings")
@@ -388,12 +389,13 @@ async def get_crew_settings() -> str:
 async def set_crew_settings(autonomy: str = "", release_profile: str | None = None,
                             prod_pattern: str | None = None, challenger: bool | None = None,
                             builders_max: int | None = None,
-                            releaser: bool | None = None) -> str:
+                            releaser: bool | None = None,
+                            claude_update: bool | None = None) -> str:
     """Save the crew's settings the person chose (only the ones given change). Only the person's
     own session or the orchestrator may."""
     body = {"autonomy": autonomy or None, "release_profile": release_profile,
             "prod_pattern": prod_pattern, "challenger": challenger, "builders_max": builders_max,
-            "releaser": releaser}
+            "releaser": releaser, "claude_update": claude_update}
     async with _cx(10) as cx:
         r = await cx.put(f"{TARESD}/api/crew/settings", json=body)
     return _out(r, SETTING_KEYS)

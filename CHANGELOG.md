@@ -5,6 +5,19 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- The tares-factory crew moves onto a new Claude Code by itself. Claude Code installs by swapping a
+  symlink, so a station kept the version it started on until someone restarted it. `tares factory
+  crew watch` now sees a newer `claude --version` that has held for a whole round and restarts
+  one idle station a round, in the same conversation, the orchestrator last; a busy or attached
+  station waits. `tares factory crew update` (or `crew restart`) does every station right away,
+  waits for each to be idle, and checks there is one session per station name. A restarted station
+  is checked to run the new version: Claude Code's daemon keeps pre-warmed spares of the old
+  version that a restart could claim, so those are stopped and the restart is tried again.
+  `factory roster`, `factory doctor` and the Crew page show each station's Claude Code version and
+  flag older ones. The crew setting `claude_update` (on by default) switches the watch's part off
+  for people who pin a version (TR-669).
+
 ### Fixed
 - "Raise the limit" on an agent that stopped at the daily run cap opened the agent's own page,
   which has no cap field. It now opens Settings, Limits, with the daily cap in view and marked
