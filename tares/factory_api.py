@@ -814,6 +814,67 @@ def register(app, store, h: SimpleNamespace) -> None:
         the longest waiting (TR-444)."""
         return {"queue": queue(), "now": now_utc()}
 
+    # ── the repo map (TR-681): one per GitHub repo, shared by every project that names it ──
+    def repo_of(uid: str, t: dict) -> str | None:
+        """The repo a ticket changes: its own, its PR's, else the project's only named repo."""
+        repo = t.get("repo") or (t.get("pr") or {}).get("repo")
+        if repo:
+            return repo
+        named = [r["name"] for r in (store.get_handover(uid) or {}).get("repos") or [] if r.get("name")]
+        return named[0] if len(named) == 1 else None
+
+    def repo_map_md(repo: str | None, builder: bool) -> list[str]:
+        if not repo:
+            return []
+        m = store.get_repo_map(repo)
+        if not m:
+            if not builder:
+                return []
+            return [f"## Repo map: {repo}",
+                    "There is none yet, and you are the first builder here. Once you know the layout, "
+                    "write it with write_repo_map (layout, entry points, how to install, build, test "
+                    f"and lint, conventions, the files tickets touch most, known traps; at most "
+                    f"{factory_mod.MAP_MAX_CHARS} characters). Every project on this repo then starts "
+                    "from it.", ""]
+        L = [f"## Repo map: {repo} (shared by every project on it; changed {str(m['updated_at'])[:10]} "
+             f"by {m['updated_by']})", m["body"].strip()]
+        recent = store.repo_map_history(repo, 3)
+        if recent:
+            L += ["Recent changes to the map:"] + [f"- {str(x['at'])[:10]} {x['by']}: {x['note']}"
+                                                   for x in recent]
+        if builder:
+            L += ["If your pull request changes the layout or the build, test or lint commands, "
+                  "update the map with write_repo_map after it merges."]
+        return L + [""]
+
+    @app.get("/api/repo-map")
+    async def get_repo_map(repo: str):
+        try:
+            name = factory_mod.repo_ok(repo)
+        except docs_mod.DocError as e:
+            h.err(e)
+        m = store.get_repo_map(name) if name else None
+        return {"repo": name, "map": m, "history": store.repo_map_history(name, 10) if m else [],
+                "max_chars": factory_mod.MAP_MAX_CHARS}
+
+    @app.put("/api/repo-map")
+    async def put_repo_map(request: Request, body: dict = Body(...)):
+        """{repo, body, note, project?}: replace the repo's map. Builders (and a person's own
+        session) write it; `note` becomes a dated line in the map's history."""
+        deny(request, "repo_map")
+        try:
+            name = factory_mod.repo_ok(body.get("repo"))
+            if not name:
+                raise docs_mod.DocError("say which repo the map is for (owner/name)")
+            text, note = factory_mod.map_ok(body.get("body"), body.get("note"))
+        except docs_mod.DocError as e:
+            h.err(e)
+        by, _ = who(request, body)
+        changed = store.set_repo_map(name, text, note, by, str(body.get("project") or "") or None,
+                                     now_utc())
+        return {"repo": name, "changed": changed, "chars": len(text),
+                "max_chars": factory_mod.MAP_MAX_CHARS, "history": store.repo_map_history(name, 5)}
+
     @app.get("/api/projects/{uid}/tickets/{ref}/brief")
     async def review_brief(uid: str, ref: str, head: str = ""):
         """Everything the reviewer needs for one review, as markdown (TR-445)."""
@@ -905,6 +966,8 @@ def register(app, store, h: SimpleNamespace) -> None:
                 L += [f"## What keeps coming back in {pr['repo']} (check these first)"]
                 L += [f"- {r['kind']}: {r['count']} tickets ({', '.join(r['tickets'][:5])})" for r in rec]
                 L.append("")
+        # 8. the repo map: read it instead of exploring the repo
+        L += repo_map_md(repo_of(p["id"], t), builder=False)
         # 8. links, not inlined
         L += ["## Read as needed",
               "- The spec, AGENTS.md (the project's and the shared one) and the project memory: "
@@ -933,7 +996,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         uid, lab = p["id"], factory_mod.label(t)
         full = h.ticket_out(uid, t, with_doc=True)
         pr = t["pr"] or {}
-        repo = t.get("repo") or pr.get("repo")
+        repo = repo_of(uid, t)
         L = [f"# Builder brief: {lab} {t['title']} ({p['name']})", ""]
         # 1. where it stands
         L += ["## Where it stands",
@@ -987,6 +1050,7 @@ def register(app, store, h: SimpleNamespace) -> None:
                 L += [f"## {title}", (store.get_doc(uid, d["id"])["body"] or "").strip(), ""]
         if not (mine or shared):
             L += ["## AGENTS.md", "This project has none.", ""]
+        L += repo_map_md(repo, builder=True)
         # 6. what is open on it: assumptions to honour, questions waiting for the person
         asm = [a for a in full.get("assumptions") or [] if a["state"] != "kept"]
         if asm:

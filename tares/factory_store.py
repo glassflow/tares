@@ -137,6 +137,21 @@ FACTORY_SCHEMA = [
       created_at  TIMESTAMPTZ,
       decided_at  TIMESTAMPTZ
     )""",
+    # A map of one GitHub repo (TR-681), shared by every project that names it, with a dated line
+    # for each change.
+    """CREATE TABLE IF NOT EXISTS repo_maps (
+      repo        TEXT PRIMARY KEY,
+      body        TEXT,
+      updated_at  TIMESTAMPTZ,
+      updated_by  TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS repo_map_history (
+      repo        TEXT,
+      changed_at  TIMESTAMPTZ,
+      by_station  TEXT,
+      project     TEXT,
+      note        TEXT
+    )""",
     # The desk (TR-449): questions for the person, one numbering for the cell (D1, D2...), written
     # only by the orchestrator. A batch of assumptions to confirm is a desk item too (TR-452).
     """CREATE TABLE IF NOT EXISTS desk_items (
@@ -717,6 +732,41 @@ class FactoryStore:
             r = results.get(tid) or {"output": "", "is_error": False}
             out.append({**u, **r})
         return sorted(out, key=lambda x: x["at"])
+
+    # ── repo maps (TR-681) ────────────────────────────────────────────────────
+    def get_repo_map(self, repo: str) -> dict | None:
+        repo = repo.lower()   # GitHub names a repo the same whatever the case
+        with self._lock:
+            r = self.con.execute("SELECT body, updated_at, updated_by FROM repo_maps WHERE repo = ?",
+                                 [repo]).fetchone()
+        return {"repo": repo, "body": r[0], "updated_at": r[1], "updated_by": r[2]} if r else None
+
+    def set_repo_map(self, repo: str, body: str, note: str, by: str, project: str | None,
+                     at) -> bool:
+        """Replace the repo's map and add a line to its history. False, and nothing written, when
+        the map is the one already there."""
+        repo = repo.lower()
+        with self._lock:
+            cur = self.con.execute("SELECT body FROM repo_maps WHERE repo = ?", [repo]).fetchone()
+            if cur and cur[0] == body:
+                return False
+            self.con.execute(
+                "INSERT INTO repo_maps (repo, body, updated_at, updated_by) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT (repo) DO UPDATE SET body = excluded.body, "
+                "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+                [repo, body, at, by])
+            self.con.execute("INSERT INTO repo_map_history (repo, changed_at, by_station, project, note) "
+                             "VALUES (?, ?, ?, ?, ?)", [repo, at, by, project, note])
+        return True
+
+    def repo_map_history(self, repo: str, limit: int = 10) -> list[dict]:
+        """Newest first."""
+        repo = repo.lower()
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT changed_at, by_station, project, note FROM repo_map_history WHERE repo = ? "
+                "ORDER BY changed_at DESC LIMIT ?", [repo, limit]).fetchall()
+        return [{"at": r[0], "by": r[1], "project": r[2], "note": r[3]} for r in rows]
 
     # ── rule proposals (TR-443) ───────────────────────────────────────────────
     def upsert_rule_proposal(self, repo: str, kind: str, project: str | None, scope: str,

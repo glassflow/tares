@@ -275,6 +275,24 @@ async def builder_brief(ticket: str, start: bool = False, project: str = "") -> 
 
 
 @mcp.tool()
+async def write_repo_map(repo: str, body: str, note: str, project: str = "") -> str:
+    """Write the map of a GitHub repo (owner/name) that the builder and reviewer briefs serve:
+    layout, entry points, how to install, build, test and lint, conventions, the files tickets
+    touch most, known traps. One map per repo, shared by every project on it, at most 8,000
+    characters (about 2,000 tokens). `body` replaces the whole map, so start from the one in your
+    brief; `note` says what changed and becomes a dated line in its history. Write it when the
+    brief says the repo has none; update it when a merged PR changes the layout or the build, test
+    or lint commands."""
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.put(f"{TARESD}/api/repo-map",
+                         json={"repo": repo, "body": body, "note": note, "project": uid})
+    return _out(r)
+
+
+@mcp.tool()
 async def recurring_findings(repo: str) -> str:
     """Kinds of finding that came back in several tickets of a repo (owner/name) in the last
     30 days, with the tickets and examples. Check these first in a review."""

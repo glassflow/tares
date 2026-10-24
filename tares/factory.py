@@ -154,6 +154,28 @@ def handover_repos(repos) -> list[dict]:
     return out
 
 
+MAP_MAX_CHARS = 8000   # about 2,000 tokens
+MAP_NOTE_MAX = 200
+
+
+def map_ok(body, note) -> tuple[str, str]:
+    """A repo map and the line that says what changed in it, or DocError. The cap keeps every
+    brief that carries the map small: a longer map has to lose something first."""
+    text, why = str(body or "").strip(), " ".join(str(note or "").split())
+    if not text:
+        raise DocError("the map is empty: write the layout, entry points, how to install, build, "
+                       "test and lint, conventions, the files tickets touch most and known traps")
+    if len(text) > MAP_MAX_CHARS:
+        raise DocError(f"the map is {len(text)} characters; the most is {MAP_MAX_CHARS} (about "
+                       f"2,000 tokens). Cut {len(text) - MAP_MAX_CHARS}: keep what a builder needs "
+                       "on its first day, and point to files for the rest")
+    if not why:
+        raise DocError("say what changed in the map (note): it becomes a dated line in its history")
+    if len(why) > MAP_NOTE_MAX:
+        raise DocError(f"the note is {len(why)} characters; the most is {MAP_NOTE_MAX}")
+    return text, why
+
+
 def merge_repos(old: list[dict], new: list[dict]) -> list[dict]:
     """A later hand-over adds its repos to the ones already handed over, never replaces them."""
     return handover_repos([*(old or []), *(new or [])])
@@ -700,13 +722,15 @@ ONLY = {
     "review": ("reviewer",),
     "shipped": ("releaser",),
     "end_station": ("orchestrator",),
+    "repo_map": ("builder", "helper"),
 }
 WHO = {"grants": "the orchestrator", "global_docs": "the orchestrator",
        "assign": "the orchestrator", "desk": "the orchestrator", "finish": "the orchestrator",
        "release": "the orchestrator",
        "takeover": "the person, in their own terminal (tares factory session <project>)",
        "assumption_state": "the orchestrator", "review": "the reviewer",
-       "shipped": "the releaser", "end_station": "the orchestrator, or the person"}
+       "shipped": "the releaser", "end_station": "the orchestrator, or the person",
+       "repo_map": "a builder"}
 
 
 def may(caller: dict, action: str) -> str | None:
