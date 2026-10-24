@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 
 from .envelope import now_utc
-from .pricing import (CACHE_READ_MULT, CACHE_WRITE_1H_MULT, CACHE_WRITE_MULT, MODEL_PRICING,
+from .pricing import (CACHE_WRITE_1H_MULT, CACHE_WRITE_MULT, MODEL_PRICING, NEXT_VERSION_SQL,
                       cost_usd)
 
 CLAUDE_USAGE_SCHEMA = [
@@ -108,17 +108,19 @@ class ClaudeUsageStore:
             "AND (CAST(? AS TIMESTAMPTZ) IS NULL OR e.event_time >= ?) "
             "GROUP BY 1, 2 ON CONFLICT DO NOTHING", [SYNTHETIC, since, since])
         self.con.execute("DELETE FROM session_usage WHERE model = ?", [SYNTHETIC])
-        # priced by family as pricing.cost_usd prices them
-        for prefix, p_in, p_out in MODEL_PRICING:
+        # priced by family as pricing.cost_usd prices them; MODEL_PRICING is longest prefix first, so a
+        # row a longer prefix already priced is not touched again by a shorter one
+        for prefix, p_in, p_out, p_read in MODEL_PRICING:
             self.con.execute(
                 "UPDATE session_usage SET cost_usd = (coalesce(input_tokens, 0) * ? "
                 "+ coalesce(output_tokens, 0) * ? "
                 "+ (coalesce(cache_write_tokens, 0) - coalesce(cache_write_1h_tokens, 0)) * ? "
                 "+ coalesce(cache_write_1h_tokens, 0) * ? "
                 "+ coalesce(cache_read_tokens, 0) * ?) / 1e6 "
-                "WHERE cost_usd IS NULL AND starts_with(model, ?)",
+                "WHERE cost_usd IS NULL AND starts_with(model, ?) "
+                "AND NOT regexp_matches(substr(model, ?), ?)",
                 [p_in, p_out, p_in * CACHE_WRITE_MULT, p_in * CACHE_WRITE_1H_MULT,
-                 p_in * CACHE_READ_MULT, prefix])
+                 p_read, prefix, len(prefix) + 1, NEXT_VERSION_SQL])
 
     def _usage_forget_project(self, uid: str) -> None:
         """A project is deleted: its replies stay, counted as the session's own. Lock held."""
