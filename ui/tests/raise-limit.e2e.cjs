@@ -22,6 +22,8 @@ const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
 const PORT = Number(process.env.TARES_E2E_PORT || 8813);
 const BASE = `http://127.0.0.1:${PORT}`;
 const SHOTS = process.env.SHOTS_DIR;
+// short enough that the cap field starts below the fold, so "in view" needs the scroll (TR-671)
+const VIEW_H = 400;
 
 let pass = 0, fail = 0;
 const ck = (label, cond, detail = "") => {
@@ -56,7 +58,7 @@ async function waitFor(url, tries = 100) {
   try {
     ck("daemon up", await waitFor(`${BASE}/health`));
     browser = await chromium.launch(process.env.TARES_E2E_CHROME ? { executablePath: process.env.TARES_E2E_CHROME } : {});
-    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    const page = await browser.newPage({ viewport: { width: 1280, height: VIEW_H } });
     await page.goto(`${BASE}/projects/${project}`, { waitUntil: "networkidle" });
     const raise = page.getByRole("button", { name: "Raise the limit" }).or(page.getByRole("link", { name: "Raise the limit" })).first();
     await raise.waitFor();
@@ -72,10 +74,13 @@ async function waitFor(url, tries = 100) {
     const field = page.getByTestId("daily-cap-field");
     await field.waitFor();
     ck("the daily cap field is shown", (await field.locator("input").inputValue()) === "1");
-    ck("it says who it is for", (await field.innerText()).includes("watcher stopped at this limit"));
+    const said = (await field.innerText()).replace(/\s+/g, " ");
+    ck("it says who it is for", said.includes("watcher stopped at this limit"));
+    ck("and that an agent with its own limit is exempt", said.includes("every agent without its own limit"), said);
     await page.waitForTimeout(500);   // let the scroll settle
     const box = await field.boundingBox();
-    ck("the field is in view", !!box && box.y >= 0 && box.y + box.height <= 720, JSON.stringify(box));
+    ck("the field is in view", !!box && box.y >= 0 && box.y + box.height <= VIEW_H, JSON.stringify(box));
+    ck("the page scrolled to it", (await page.evaluate(() => window.scrollY)) > 0);
     ck("the field is marked", /field-focus/.test(await field.getAttribute("class")));
     if (SHOTS) await page.screenshot({ path: path.join(SHOTS, "2-settings-limits.png") });
 

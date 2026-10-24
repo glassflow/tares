@@ -814,7 +814,7 @@ function ProvidersPanel() {
 // Runs per agent per day (TR-325). A guard against a runaway trigger, not a bill: spend is bounded
 // by each agent's budget. Saved here it replaces the deployment's value; cleared, that comes back.
 // `agent` is who the person came for (a project's "Raise the limit", TR-670): the field is scrolled
-// into view and marked, since the one number applies to every agent.
+// into view and marked, since the one number applies to every agent without its own limit.
 function AgentLimitsPanel({ agent }: { agent?: string }) {
   const [st, setSt] = useState<AgentLimits>();
   const field = useRef<HTMLLabelElement>(null);
@@ -864,7 +864,8 @@ function AgentLimitsPanel({ agent }: { agent?: string }) {
           <span className="help">now {st.daily_cap}, {from}</span>
           {agent && (
             <span className="help">{agent} stopped at this limit. Raise it here and {agent} runs
-              again on its next trigger; the number applies to every agent.</span>
+              again on its next trigger; the number applies to every agent
+              without its own limit.</span>
           )}
         </label>
       </div>

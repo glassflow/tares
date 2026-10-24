@@ -40,6 +40,9 @@ class Store:
     def agent_runs_today(self, *a, **k):
         return self.runs_today
 
+    def agent_cap_frees_at(self, *a, **k):
+        return None
+
     def agent_cost_total(self, *a):
         return self.spent
 
