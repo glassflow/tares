@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test:e2e": "vite build && node tests/login-handoff.e2e.cjs",
     "test:picker": "vite build && node tests/session-picker.e2e.cjs",
+    "test:capped-runs": "vite build && node tests/capped-runs.e2e.cjs",
     "test:raise-limit": "vite build && node tests/raise-limit.e2e.cjs"
   },
   "dependencies": {

@@ -466,12 +466,23 @@ export function RunsTable({ runs, runsError, agent, emptyText, focusDispatch, fo
 }) {
   // a folded group is keyed by its newest run, which stays put while older ones are paged in
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
+  const isFocused = (r: AgentRun) =>
+    (!!focusDispatch && r.dispatch_id === focusDispatch) || (!!focusRun && r.id === focusRun);
+  // A deep link to a run inside a folded group opens that group once, when the run first shows up
+  // in the list; after that the header toggles it like any other group.
+  const focusId = focusRun ?? focusDispatch;
+  const [openedFor, setOpenedFor] = useState<string | undefined>();
+  if (runs && focusId && openedFor !== focusId) {
+    const hit = collapseCapped(runs).find((i): i is { capped: AgentRun[] } => "capped" in i && i.capped.some(isFocused));
+    if (hit) {
+      setOpenedFor(focusId);
+      setOpenGroups((g) => new Set(g).add(hit.capped[0].id));
+    }
+  }
   if (runsError) return <ErrorState error={runsError} what="this agent’s runs" />;
   if (!runs?.length) {
     return <div className="empty">{emptyText ?? (agent.trigger ? <>no runs yet; this agent runs when <span className="mono">{agent.trigger}</span> fires</> : <>no runs yet; a handoff starts this agent</>)}</div>;
   }
-  const isFocused = (r: AgentRun) =>
-    (!!focusDispatch && r.dispatch_id === focusDispatch) || (!!focusRun && r.id === focusRun);
   // an agent that concludes: how each run ended gets a column, so nobody reads the text for it
   const outcomes = !!agent.offers_conclude;
   const row = (r: AgentRun) => {
@@ -497,8 +508,7 @@ export function RunsTable({ runs, runsError, agent, emptyText, focusDispatch, fo
           if ("run" in item) return row(item.run);
           const group = item.capped;
           const key = group[0].id;
-          // a deep link to a run inside a folded group opens the group
-          const open = openGroups.has(key) || group.some(isFocused);
+          const open = openGroups.has(key);
           return (
             <Fragment key={key}>
               <tr className="clickable" data-testid="capped-group"

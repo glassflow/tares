@@ -18,6 +18,9 @@ the project follows [Semantic Versioning](https://semver.org/).
   `skipped` write-back with reason `in_flight`. Since 1.51.0 it was sent only when the duplicate
   slipped past the first dedupe; the common case, caught when the firing is delivered, sent
   nothing, and Rius kept the firing queued (RIUS-1103).
+- A link to a refused run inside a folded group of capped runs opened the group, but clicking
+  the group's line could not close it again. The link now opens the group once, and the line
+  toggles it like any other (TR-678).
 
 ## [1.51.1] - 2026-10-21
 
