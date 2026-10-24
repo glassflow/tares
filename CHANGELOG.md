@@ -14,8 +14,6 @@ the project follows [Semantic Versioning](https://semver.org/).
   banner and in the capped run's error. An agent's run list folds the runs the cap refused into
   one line ("50 runs skipped, capped") that opens to list them. The Limits help line names who the
   number applies to: every agent without its own limit (TR-671).
-
-### Fixed
 - A firing that arrives while its agent is already running for the same key now gets the
   `skipped` write-back with reason `in_flight`. Since 1.51.0 it was sent only when the duplicate
   slipped past the first dedupe; the common case, caught when the firing is delivered, sent

@@ -502,7 +502,7 @@ export function RunsTable({ runs, runsError, agent, emptyText, focusDispatch, fo
           return (
             <Fragment key={key}>
               <tr className="clickable" data-testid="capped-group"
-                  title="runs the daily cap or the agent's budget refused; no model call was made"
+                  title="runs refused before any model call: the daily cap, the agent's budget, a handoff stop or a run already in progress"
                   onClick={() => setOpenGroups((g) => { const n = new Set(g); n.has(key) ? n.delete(key) : n.add(key); return n; })}>
                 <td colSpan={outcomes ? 9 : 8}>
                   {group.length} runs skipped, capped
