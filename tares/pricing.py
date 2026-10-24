@@ -2,9 +2,9 @@
 
 Cost is computed at write time and stored with the run, never recomputed later: prices change,
 and the history must keep the cost that was true when the tokens were bought. Model ids are
-matched by family prefix (first match wins) so dated snapshots like claude-haiku-4-5-20251001
-price the same as their family; anything unmatched costs None: the caller records the tokens
-and leaves cost NULL rather than guess.
+matched by prefix, longest first, so claude-opus-5-5 is not priced as claude-opus-5 and dated
+snapshots like claude-haiku-4-5-20251001 price the same as their family; anything unmatched costs
+None: the caller records the tokens and leaves cost NULL rather than guess.
 
 Two tables, because the two wire formats count cached input differently (TR-304):
 - Anthropic's `input_tokens` EXCLUDES cache reads and writes, so the three input buckets add.
@@ -14,17 +14,45 @@ A provider that reports its own cost (OpenRouter, LiteLLM with cost tracking) wi
 """
 from __future__ import annotations
 
-# (model id prefix, USD per Mtok input, USD per Mtok output); first match wins.
+import re
+
+# (model id prefix, USD per Mtok input, USD per Mtok output, USD per Mtok cache read), from
+# Anthropic's pricing page. A cache read is a price per model, not a share of input: it is 0.025x
+# of input for Fable 5.1, 0.05x for Sonnet 5.5 and 0.10x for most of the rest.
+# Matched longest prefix first (sorted below), so list order does not matter.
+# Haiku 5.5 bills 0.50 / 2.50 / 0.05 for a prompt over 100K tokens; usage here is summed per
+# call with no prompt length, so it is priced at the up-to-100K rate.
 MODEL_PRICING = [
-    ("claude-fable-5", 10.0, 50.0),
-    ("claude-opus-", 5.0, 25.0),
-    ("claude-sonnet-", 3.0, 15.0),
-    ("claude-haiku-", 1.0, 5.0),
+    ("claude-fable-5-1", 10.0, 50.0, 0.25),
+    ("claude-fable-5", 10.0, 50.0, 1.00),
+    ("claude-opus-5-5", 4.0, 20.0, 0.20),
+    ("claude-opus-5", 5.0, 25.0, 0.50),
+    ("claude-opus-4-8", 5.0, 25.0, 0.50),
+    ("claude-opus-4-7", 5.0, 25.0, 0.50),
+    ("claude-opus-4-6", 5.0, 25.0, 0.50),
+    ("claude-opus-4-5", 5.0, 25.0, 0.50),
+    ("claude-opus-4-1", 15.0, 75.0, 1.50),
+    ("claude-opus-4-0", 15.0, 75.0, 1.50),
+    ("claude-opus-4", 15.0, 75.0, 1.50),
+    ("claude-sonnet-5-5", 2.0, 10.0, 0.10),
+    ("claude-sonnet-5", 2.0, 10.0, 0.20),
+    ("claude-sonnet-4-6", 3.0, 15.0, 0.30),
+    ("claude-sonnet-4-5", 3.0, 15.0, 0.30),
+    ("claude-sonnet-4-0", 3.0, 15.0, 0.30),
+    ("claude-sonnet-4", 3.0, 15.0, 0.30),
+    ("claude-haiku-5-5", 0.10, 0.50, 0.01),
+    ("claude-haiku-4-5", 1.0, 5.0, 0.10),
+    ("claude-haiku-3-5", 0.80, 4.0, 0.08),
 ]
-# Cache write bills at 1.25x the input rate (2x for a write kept an hour), cache read at 0.10x.
+MODEL_PRICING.sort(key=lambda row: -len(row[0]))
+# What may follow a prefix: nothing, a date snapshot (-20251001) or an alias suffix. Another
+# version number (claude-opus-4-2, claude-opus-5-6) is a model this table does not list, so it
+# is unpriced instead of borrowing the family's rate. The same test is SQL in claude_usage_store.
+NEXT_VERSION_SQL = "^-[0-9]{1,2}([^0-9]|$)"
+_NEXT_VERSION = re.compile(r"-\d{1,2}(?!\d)")
+# Cache write bills at 1.25x the input rate (2x for a write kept an hour).
 CACHE_WRITE_MULT = 1.25
 CACHE_WRITE_1H_MULT = 2.0
-CACHE_READ_MULT = 0.10
 
 # OpenAI: (prefix, USD per Mtok input, USD per Mtok output, cached-input multiplier).
 # List prices at the time of writing; a wrong or missing family costs None, never a guess.
@@ -42,12 +70,20 @@ OPENAI_PRICING = [
 ]
 
 
+def price_row(model: str) -> tuple[float, float, float] | None:
+    """(usd_per_mtok_in, usd_per_mtok_out, usd_per_mtok_cache_read) for an Anthropic model id,
+    or None when unknown."""
+    model = model or ""
+    for prefix, p_in, p_out, p_read in MODEL_PRICING:
+        if model.startswith(prefix) and not _NEXT_VERSION.match(model, len(prefix)):
+            return p_in, p_out, p_read
+    return None
+
+
 def price_for(model: str) -> tuple[float, float] | None:
     """(usd_per_mtok_in, usd_per_mtok_out) for an Anthropic model id, or None when unknown."""
-    for prefix, p_in, p_out in MODEL_PRICING:
-        if (model or "").startswith(prefix):
-            return p_in, p_out
-    return None
+    row = price_row(model)
+    return None if row is None else row[:2]
 
 
 def openai_price_for(model: str) -> tuple[float, float, float] | None:
@@ -67,16 +103,16 @@ def cost_usd(model: str, input_tokens: int, output_tokens: int,
     """USD cost of summed Anthropic-format usage, or None when the model is unpriced.
     `cache_creation_1h_input_tokens` is the part of the cache writes kept for an hour (Claude
     Code's default on a subscription), which bills at the higher rate."""
-    p = price_for(model)
+    p = price_row(model)
     if p is None:
         return None
-    p_in, p_out = p
+    p_in, p_out, p_read = p
     hour = min(max(int(cache_creation_1h_input_tokens or 0), 0), int(cache_creation_input_tokens or 0))
     return (input_tokens * p_in
             + output_tokens * p_out
             + (cache_creation_input_tokens - hour) * p_in * CACHE_WRITE_MULT
             + hour * p_in * CACHE_WRITE_1H_MULT
-            + cache_read_input_tokens * p_in * CACHE_READ_MULT) / 1e6
+            + cache_read_input_tokens * p_read) / 1e6
 
 
 def openai_cost_usd(model: str, input_tokens: int, output_tokens: int,

@@ -155,8 +155,8 @@ def units():
 
     print("== cost ==")
     ck("an hour's cache writes bill at twice the input rate",
-       abs(cost_usd("claude-opus-5-5", 0, 0, 1_000_000, 0, 1_000_000) - 10.0) < 1e-9
-       and abs(cost_usd("claude-opus-5-5", 0, 0, 1_000_000, 0) - 6.25) < 1e-9)
+       abs(cost_usd("claude-opus-5-5", 0, 0, 1_000_000, 0, 1_000_000) - 8.0) < 1e-9
+       and abs(cost_usd("claude-opus-5-5", 0, 0, 1_000_000, 0) - 5.0) < 1e-9)
 
 
 async def main():
@@ -283,6 +283,15 @@ async def main():
             store._claude_usage_fill()
             again = store.con.execute("SELECT count(*) FROM session_usage").fetchone()[0]
         ck("a gap left by a version that did not count is filled at the next start", again == 6, again)
+        from datetime import datetime, timezone
+        store.record_reply_usage("b1", "mx", datetime.now(timezone.utc), "claude-opus-5-6", None, None,
+                                 {"input_tokens": 5, "output_tokens": 5})
+        with store._lock:
+            store._claude_usage_fill()
+            unlisted = store.con.execute(
+                "SELECT cost_usd FROM session_usage WHERE message = 'mx'").fetchone()[0]
+            store.con.execute("DELETE FROM session_usage WHERE message = 'mx'")
+        ck("a model version the table does not list stays unpriced through the fill", unlisted is None, unlisted)
 
         print("== a project delete ==")
         async with mk() as cx:
