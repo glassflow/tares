@@ -161,11 +161,19 @@ async def main():
         ck("start moves it to doing and still returns the brief", g["stage"] == "doing"
            and out.startswith("# Builder brief: T2"), (g["stage"], out[:80]))
         as_station("shop-build-m2", "builder", "crew-orchestrator")
-        out = await mf.builder_brief("T2", start=True, project="Shop")
+        out = await mf.builder_brief("T1", start=True, project="Shop")
         ck("a builder that does not hold it gets the refusal and the brief",
-           out.startswith("Could not move the ticket to doing") and "# Builder brief: T2" in out, out[:300])
-        ck("and the ticket did not move", json.loads(await m.get_ticket("T2", project="Shop"))["holder"]
-           == "shop-build-m1")
+           out.startswith("Could not move the ticket to doing") and "# Builder brief: T1" in out, out[:300])
+        g = json.loads(await m.get_ticket("T1", project="Shop"))
+        ck("and the ticket did not move", g["holder"] == "shop-build-m1" and g["stage"] in (None, "todo"),
+           (g["holder"], g["stage"]))
+        await m.write_ticket("Old", status="done", project="Shop")
+        as_station("crew-orchestrator", "orchestrator")
+        await mf.assign_ticket("T4", "shop-build-m1", project="Shop")
+        as_station("shop-build-m1", "builder", "crew-orchestrator")
+        await mf.builder_brief("T4", start=True, project="Shop")
+        ck("start leaves a ticket that is already done alone",
+           json.loads(await m.get_ticket("T4", project="Shop"))["stage"] in (None, "todo", "merged"))
         bad = await mf.builder_brief("T99", project="Shop")
         ck("an unknown ticket is an error, not a crash", "brief" not in bad.lower() or "T99" in bad, bad)
 
@@ -196,6 +204,10 @@ async def main():
         bad = await mf.set_stage("T2", "review", checks=[{"command": "c"}], project="Shop")
         g = json.loads(await m.get_ticket("T2", project="Shop"))
         ck("a bad check stops the stage change", "what it showed" in bad and len(g["checks"]) == 3, (bad, g["checks"]))
+        out = await mf.builder_brief("T2", start=True, project="Shop")
+        g = json.loads(await m.get_ticket("T2", project="Shop"))
+        ck("start on a ticket already in review leaves it there", g["stage"] == "review"
+           and "Could not move" not in out, (g["stage"], out[:120]))
         again = await mf.builder_brief("T2", project="Shop")
         ck("after a revive the brief says where it left off",
            "## Where you left off" in again and "`pytest -q` -> 14 passed (broke test_cart)" in again

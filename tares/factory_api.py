@@ -14,7 +14,7 @@ import re
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
-from fastapi import Body, Request
+from fastapi import Body, HTTPException, Request
 
 from . import claude_usage
 from . import docs as docs_mod
@@ -913,10 +913,20 @@ def register(app, store, h: SimpleNamespace) -> None:
 
     # ── the builder brief: one read at the start of a ticket and after a revive (TR-683) ──
     @app.get("/api/projects/{uid}/tickets/{ref}/builder-brief")
-    async def builder_brief(uid: str, ref: str):
-        """Everything a builder needs to start or resume one ticket, as markdown."""
+    async def builder_brief(uid: str, ref: str, request: Request, start: bool = False):
+        """Everything a builder needs to start or resume one ticket, as markdown. `start` also
+        moves a ticket that has not been started (no stage, or todo, and not done or canceled) to doing; a ticket already
+        past that (review, changes, blocked, merged) keeps its stage."""
         p = h.project_or_404(uid)
-        return {"brief": builder_brief_md(p, ticket_or_404(uid, ref))}
+        t = ticket_or_404(uid, ref)
+        note = ""
+        if start and (t["stage"] or "todo") == "todo" and not factory_mod.finished(t):
+            try:
+                await set_stage(uid, ref, request, {"stage": "doing"})
+            except HTTPException as e:
+                note = f"Could not move the ticket to doing: {e.detail}\n\n"
+            t = ticket_or_404(uid, ref)
+        return {"brief": note + builder_brief_md(p, t)}
 
     def builder_brief_md(p: dict, t: dict) -> str:
         uid, lab = p["id"], factory_mod.label(t)
