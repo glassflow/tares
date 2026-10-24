@@ -352,6 +352,7 @@ def register(app, store, h: SimpleNamespace) -> None:
                         "projects": sorted({s["project"] for s in ss if s["project"]})})
         meters = store.session_meters([st["session"] for st in out])
         spent = store.usage_by_session([s["session"] for s in rows])
+        coord = store.coordination_calls(h.cc_source(), [s["session"] for s in rows])
         for st in out:
             st["children"] = sorted(x["name"] for x in out if x["parent"] == st["name"])
             # the context window from the station's status line, and what all its sessions spent
@@ -359,6 +360,8 @@ def register(app, store, h: SimpleNamespace) -> None:
             mine = [spent[s] for s in [st["session"], *(e["session"] for e in st["earlier"])]
                     if s in spent]
             st["usage"] = ({k: sum(x[k] for x in mine) for k in mine[0]} if mine else None)
+            st["coordination_calls"] = sum(coord.get(s, 0) for s in
+                                           [st["session"], *(e["session"] for e in st["earlier"])])
         if project:
             out = [s for s in out if project in s["projects"]]
         order = {r: i for i, r in enumerate(factory_mod.ROLES)}
@@ -478,8 +481,21 @@ def register(app, store, h: SimpleNamespace) -> None:
         """The stations that worked on this project (builders started for it among them), and
         when it was handed to the crew."""
         h.project_or_404(uid)
-        return {"stations": stations(uid), "handover": store.get_handover(uid),
-                "now": now_utc()}
+        ss = stations(uid)
+        return {"stations": ss, "handover": store.get_handover(uid),
+                "coordination": coordination_summary(uid, ss), "now": now_utc()}
+
+    def coordination_summary(uid: str, ss: list[dict]) -> dict:
+        """Coordination calls of the project's builders and helpers (the always-on stations
+        serve every project, so their calls are not the project's) against its merged pull
+        requests (TR-683)."""
+        mine = {s["name"]: s["coordination_calls"] for s in ss
+                if s["role"] in ("builder", "helper") and s["project"] == uid}
+        merged = sum(1 for t in store.list_tickets(uid)
+                     if (t["pr"] or {}).get("merged") or (t["stage"] in ("merged", "shipped") and t["pr"]))
+        calls = sum(mine.values())
+        return {"calls": calls, "merged_prs": merged,
+                "per_merged_pr": round(calls / merged, 1) if merged else None, "stations": mine}
 
     # ── the ledger (TR-427, TR-428, TR-410, TR-429) ───────────────────────────
     def ticket_or_404(uid: str, ref: str) -> dict:
@@ -512,9 +528,10 @@ def register(app, store, h: SimpleNamespace) -> None:
 
     @app.post("/api/projects/{uid}/tickets/{ref}/stage")
     async def set_stage(uid: str, ref: str, request: Request, body: dict = Body(...)):
-        """{stage, reason?, pr?}: move the ticket. Only the station holding it (or a helper it
-        started) moves it; only the releaser marks it shipped; a person's own session may do
-        anything. `pr` (a PR URL or owner/repo#12) links the ticket to its pull request, read
+        """{stage, reason?, pr?, checks?}: move the ticket. Only the station holding it (or a helper
+        it started) moves it; only the releaser marks it shipped; a person's own session may do
+        anything. `checks` ({command, result, commit?, broke_test?} each) are recorded in the same
+        call, so a builder asking for review need not record them one by one. `pr` (a PR URL or owner/repo#12) links the ticket to its pull request, read
         from GitHub from then on. A Tares ticket's status follows its stage; a Linear or GitHub
         ticket's status stays its home's."""
         h.project_or_404(uid)
@@ -526,6 +543,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         why = factory_mod.may_move(caller(request), t, stage)
         if why:
             h.err(PermissionError(why), 403)
+        checks = parse_checks(body) if body.get("checks") else []
         fields: dict = {"stage": stage, "stage_reason": reason or None}
         if t["owner"] == "tares":
             fields["status"] = factory_mod.STATUS_OF_STAGE[stage]
@@ -537,6 +555,9 @@ def register(app, store, h: SimpleNamespace) -> None:
                                  "or o/r#12"))
             prev = t["pr"] if t["pr"] and (t["pr"].get("repo"), t["pr"].get("number")) == parsed else None
             fields["pr"] = await factory_github.read_pr(store, parsed[0], parsed[1], prev)
+        if checks:
+            record_checks(uid, t, request, body, checks)
+            t = ticket_or_404(uid, t["id"])
         store.update_ticket(t["id"], **fields)
         by, role = who(request, body)
         store.add_ticket_history(t["id"], uid, "stage", stage, reason, by, role or None, now_utc())
@@ -630,30 +651,53 @@ def register(app, store, h: SimpleNamespace) -> None:
                                 now_utc() if st != "open" else None)
         return assumption_out(uid, store.get_assumption(uid, a["id"]))
 
-    @app.post("/api/projects/{uid}/tickets/{ref}/checks", status_code=201)
-    async def add_check(uid: str, ref: str, request: Request, body: dict = Body(...)):
-        """{command, result, commit?, broke_test?}: a check run on the ticket. Kept, and added as
-        one line to the Checks part of the ticket's working doc (made when there is none)."""
-        p = h.project_or_404(uid)
-        t = ticket_or_404(uid, ref)
+    def parse_checks(body: dict) -> list[tuple[str, str, str, str]]:
+        """The checks a body carries: {command, result, commit?, broke_test?} itself, and `checks`,
+        a list of the same, for the ones recorded together (TR-683)."""
+        items = ([body] if body.get("command") is not None or body.get("result") is not None else [])
+        more = body.get("checks")
+        if more is not None and not isinstance(more, list):
+            h.err(ValueError("checks is a list of {command, result, commit?, broke_test?}"))
+        items += [x if isinstance(x, dict) else {} for x in more or []]
+        if not items:
+            h.err(ValueError("say the command you ran"))
         try:
-            cmd, result, commit, broke = factory_mod.check_ok(
-                body.get("command"), body.get("result"), body.get("commit"), body.get("broke_test"))
+            return [factory_mod.check_ok(x.get("command"), x.get("result"), x.get("commit"),
+                                         x.get("broke_test")) for x in items]
         except docs_mod.DocError as e:
             h.err(e)
+
+    def record_checks(uid: str, t: dict, request: Request, body: dict,
+                      checks: list[tuple[str, str, str, str]]) -> tuple[list[str], str]:
         by, _ = who(request, body)
-        store.add_check(uid, t["id"], cmd, result, commit, broke, caller(request)["station"],
-                        "", now_utc())
-        line = factory_mod.check_line(cmd, result, commit, broke)
+        lines = []
+        for cmd, result, commit, broke in checks:
+            store.add_check(uid, t["id"], cmd, result, commit, broke, caller(request)["station"],
+                            "", now_utc())
+            lines.append(factory_mod.check_line(cmd, result, commit, broke))
         doc_id = t["working_doc"]
         if doc_id and store.get_doc(uid, doc_id):
             body_now = store.get_doc(uid, doc_id)["body"]
-            store.update_doc(doc_id, body=factory_mod.add_check_to_doc(body_now, line), by=by)
+            for line in lines:
+                body_now = factory_mod.add_check_to_doc(body_now, line)
+            store.update_doc(doc_id, body=body_now, by=by)
         else:
-            doc_id = store.create_doc(uid, "working", f"Working: {t['title']}",
-                                      factory_mod.add_check_to_doc(f"# {t['title']}\n", line), by=by)
+            body_now = f"# {t['title']}\n"
+            for line in lines:
+                body_now = factory_mod.add_check_to_doc(body_now, line)
+            doc_id = store.create_doc(uid, "working", f"Working: {t['title']}", body_now, by=by)
             store.update_ticket(t["id"], working_doc=doc_id)
-        return {"line": line, "working_doc": doc_id,
+        return lines, doc_id
+
+    @app.post("/api/projects/{uid}/tickets/{ref}/checks", status_code=201)
+    async def add_check(uid: str, ref: str, request: Request, body: dict = Body(...)):
+        """{command, result, commit?, broke_test?}: a check run on the ticket, and `checks`, more
+        of the same recorded in this call. Kept, and added as one line each to the Checks part of
+        the ticket's working doc (made when there is none)."""
+        p = h.project_or_404(uid)
+        t = ticket_or_404(uid, ref)
+        lines, doc_id = record_checks(uid, t, request, body, parse_checks(body))
+        return {"line": lines[0], "lines": lines, "working_doc": doc_id,
                 "checks": store.ticket_checks(t["id"], 10), "project": p["name"]}
 
     # the project's own memory (TR-436): what builders learned about this project
@@ -865,6 +909,107 @@ def register(app, store, h: SimpleNamespace) -> None:
         L += ["## Read as needed",
               "- The spec, AGENTS.md (the project's and the shared one) and the project memory: "
               "list_docs, then get_doc(id).", "- The crew's messages about it: get_ticket."]
+        return "\n".join(L)
+
+    # ── the builder brief: one read at the start of a ticket and after a revive (TR-683) ──
+    @app.get("/api/projects/{uid}/tickets/{ref}/builder-brief")
+    async def builder_brief(uid: str, ref: str):
+        """Everything a builder needs to start or resume one ticket, as markdown."""
+        p = h.project_or_404(uid)
+        return {"brief": builder_brief_md(p, ticket_or_404(uid, ref))}
+
+    def builder_brief_md(p: dict, t: dict) -> str:
+        uid, lab = p["id"], factory_mod.label(t)
+        full = h.ticket_out(uid, t, with_doc=True)
+        pr = t["pr"] or {}
+        repo = t.get("repo") or pr.get("repo")
+        L = [f"# Builder brief: {lab} {t['title']} ({p['name']})", ""]
+        # 1. where it stands
+        L += ["## Where it stands",
+              f"Stage {t['stage'] or 'none'}" + (f" ({t['stage_reason']})" if t.get("stage_reason") else "")
+              + f". Held by {t['holder'] or 'nobody'}." + (f" Repo: {repo}." if repo else "")
+              + (f" Link: {t['url']}." if t.get("url") else "")]
+        if pr.get("url"):
+            L += [f"- Pull request {pr['url']}, head {str(pr.get('head') or '?')[:12]}, "
+                  f"CI {pr.get('ci') or 'unknown'}" + (", merged" if pr.get("merged") else "")]
+        if full.get("pr_note"):
+            L += [f"- {full['pr_note']}"]
+        v = full.get("verdict") or {}
+        if v.get("verdict"):
+            L += [f"- Reviewer's verdict: {v['verdict']}" + (f". {v['note']}" if v.get("note") else "")]
+        L.append("")
+        # 2. what was asked: the ticket's working doc
+        L += ["## The ticket and its working doc",
+              (full.get("working_doc_body") or "(no working doc)").strip(), ""]
+        # 3. the milestone it belongs to and the checks that close it
+        ms = store.get_milestone(uid, t["milestone"]) if t.get("milestone") else None
+        L += [f"## Milestone: {ms['name']}" if ms else "## Milestone", ]
+        if ms:
+            L += ([ms["goal"]] if ms["goal"] else [])
+            L += [f"- Acceptance check: `{c.get('check')}` should show: {c.get('expect')}"
+                  for c in ms["checks"]] or ["No acceptance checks written."]
+        else:
+            L += ["The ticket is in no milestone."]
+        L.append("")
+        # 4. what it depends on
+        by_id = {x["id"]: x for x in store.list_tickets(uid)}
+        deps = [by_id[d] for d in t["depends_on"] if d in by_id]
+        L += ["## Dependencies"]
+        if not deps:
+            L += ["None."]
+        for d in deps:
+            dpr = d["pr"] or {}
+            L += [f"- {factory_mod.label(d)} {d['title']}: {d['stage'] or d['status']}"
+                  + (f", {dpr['url']}" if dpr.get("url") else "")
+                  + ("" if factory_mod.finished(d) else " (NOT DONE: it blocks this ticket)")]
+        L.append("")
+        # 5. the rules: the project's AGENTS.md wins over the generic flow, then the shared one
+        gids = h.global_ids(False) or {}
+        agents = store.list_docs(uid, "agents")
+        mine = [d for d in agents if d["id"] not in gids.values()]
+        shared = [d for d in agents if d["id"] == gids.get("agents")]
+        for title, docs in (("AGENTS.md of this project (wins over the generic flow)", mine),
+                            ("AGENTS.md shared by every project", shared)):
+            for d in docs:
+                L += [f"## {title}", (store.get_doc(uid, d["id"])["body"] or "").strip(), ""]
+        if not (mine or shared):
+            L += ["## AGENTS.md", "This project has none.", ""]
+        # 6. what is open on it: assumptions to honour, questions waiting for the person
+        asm = [a for a in full.get("assumptions") or [] if a["state"] != "kept"]
+        if asm:
+            L += ["## Assumptions on this ticket (open, or overturned: follow the person's words)"]
+            L += [f"- {a['label']} ({a['state']}): {a['question']} -> {a['choice']}"
+                  + (f". The person: \"{a['words']}\"" if a.get("words") else "") for a in asm] + [""]
+        desk = [d for d in store.list_desk("open", uid) if lab in (d.get("tickets") or [])]
+        if desk:
+            L += ["## Questions on the desk about this ticket"]
+            L += [f"- {d['label']}{' (blocking)' if d['blocking'] else ''}: {d['question']}. "
+                  f"Recommended: {d['recommendation']}" for d in desk] + [""]
+        # 7. where you left off: for a revive, and a ticket sent back
+        checks = full.get("checks") or []
+        layer = full.get("challenger") or {}
+        reviews = full.get("reviews") or []
+        if checks or layer.get("rounds") or reviews:
+            L += ["## Where you left off"]
+            L += [f"- Check recorded: `{c['command']}` -> {c['result']}"
+                  + (f" (broke {c['broke_test']})" if c.get("broke_test") else "") for c in checks[-8:]]
+            if layer.get("rounds"):
+                L += [f"- Codex: {layer['rounds']} rounds, last {layer.get('verdict')}, "
+                      f"{len(layer.get('open') or [])} open, {len(layer.get('waived') or [])} waived"]
+            for r in reviews[-2:]:
+                L += [f"- Review round {r['round']} on {r['head'][:7]}: {r['verdict']}"]
+                L += [f"  - {f['label']} [{f['severity']}] {f['state']}: {f['text']}"
+                      for f in r["findings"] if f["state"] == "open"]
+            L.append("")
+        msgs = messages_for(p, t)[-5:]
+        if msgs:
+            L += ["## The crew's latest messages about it"]
+            L += [f"- {m['from'] or '?'} -> {m['to']}: [TF:{m['type']}] {m['first_line']}" for m in msgs]
+            L.append("")
+        # 8. links, not inlined
+        L += ["## Read as needed",
+              "- The spec, plan and the project memory: list_docs, then get_doc(id).",
+              "- The ticket's full history: get_ticket."]
         return "\n".join(L)
 
     # ── recurring findings and rules offered from them (TR-443) ───────────────
