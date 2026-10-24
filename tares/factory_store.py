@@ -224,6 +224,14 @@ FACTORY_SCHEMA = [
 ]
 
 
+class MapChanged(Exception):
+    """A repo map was written since the writer read it; `.current` is the map now (None: none)."""
+
+    def __init__(self, current: dict | None):
+        super().__init__("the repo map changed since it was read")
+        self.current = current
+
+
 class FactoryStore:
     """Methods Store gains for the factory. Expects self.con and self._lock."""
 
@@ -483,11 +491,17 @@ class FactoryStore:
             return {}
         marks = ", ".join("?" for _ in sessions)
         with self._lock:
-            sizes = dict(self.con.execute(
-                f"SELECT key_value, count(*) FROM events WHERE source = ? AND event_type = 'tool_use' "
-                f"AND key_value IN ({marks}) GROUP BY key_value", [source, *sessions]).fetchall())
+            # count and newest call together: a prune that drops old calls while new ones arrive
+            # leaves the count alone but moves the newest
+            sizes = {sid: (n, newest) for sid, n, newest in self.con.execute(
+                f"SELECT key_value, count(*), max(event_time) FROM events WHERE source = ? AND "
+                f"event_type = 'tool_use' AND key_value IN ({marks}) GROUP BY key_value",
+                [source, *sessions]).fetchall()}
             cache = self.__dict__.setdefault("_coord_cache", {})
-            fresh = [sid for sid in sessions if sizes.get(sid) and cache.get((source, sid), (None,))[0] != sizes[sid]]
+            for sid in sessions:
+                if sid not in sizes:   # every call of it is gone (pruned): forget its count
+                    cache.pop((source, sid), None)
+            fresh = [sid for sid in sizes if cache.get((source, sid), (None,))[0] != sizes[sid]]
             rows = []
             if fresh:
                 fmarks = ", ".join("?" for _ in fresh)
@@ -742,21 +756,34 @@ class FactoryStore:
         return {"repo": repo, "body": r[0], "updated_at": r[1], "updated_by": r[2]} if r else None
 
     def set_repo_map(self, repo: str, body: str, note: str, by: str, project: str | None,
-                     at) -> bool:
-        """Replace the repo's map and add a line to its history. False, and nothing written, when
-        the map is the one already there."""
+                     at, base: str = "") -> bool:
+        """Replace the repo's map and add a line to its history, as one write. `base` is the
+        version of the map the writer read (factory.map_version, "" when there was none): another
+        version in place raises MapChanged, so a stale copy cannot overwrite a newer map. False,
+        and nothing written, when the map is the one already there."""
+        from .factory import map_version
         repo = repo.lower()
         with self._lock:
-            cur = self.con.execute("SELECT body FROM repo_maps WHERE repo = ?", [repo]).fetchone()
+            cur = self.con.execute("SELECT body, updated_at, updated_by FROM repo_maps WHERE repo = ?",
+                                   [repo]).fetchone()
             if cur and cur[0] == body:
                 return False
-            self.con.execute(
-                "INSERT INTO repo_maps (repo, body, updated_at, updated_by) VALUES (?, ?, ?, ?) "
-                "ON CONFLICT (repo) DO UPDATE SET body = excluded.body, "
-                "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
-                [repo, body, at, by])
-            self.con.execute("INSERT INTO repo_map_history (repo, changed_at, by_station, project, note) "
-                             "VALUES (?, ?, ?, ?, ?)", [repo, at, by, project, note])
+            if map_version(cur[0] if cur else None) != (base or ""):
+                raise MapChanged({"repo": repo, "body": cur[0], "updated_at": cur[1],
+                                  "updated_by": cur[2]} if cur else None)
+            self.con.execute("BEGIN TRANSACTION")
+            try:
+                self.con.execute(
+                    "INSERT INTO repo_maps (repo, body, updated_at, updated_by) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT (repo) DO UPDATE SET body = excluded.body, "
+                    "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+                    [repo, body, at, by])
+                self.con.execute("INSERT INTO repo_map_history (repo, changed_at, by_station, project, note) "
+                                 "VALUES (?, ?, ?, ?, ?)", [repo, at, by, project, note])
+                self.con.execute("COMMIT")
+            except Exception:
+                self.con.execute("ROLLBACK")
+                raise
         return True
 
     def repo_map_history(self, repo: str, limit: int = 10) -> list[dict]:
