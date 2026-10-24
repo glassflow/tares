@@ -2,8 +2,11 @@
  * Browser e2e for TR-671: an agent at its daily run cap says when its next run is allowed, and its
  * run list folds the runs the cap refused into one line.
  *
- * Seeds a scratch cell (tests/seed-capped-agent.py: one run 22h48m ago, then 8 refused ones), then
- * runs the real daemon on it, serving the built console.
+ * Seeds a scratch cell (tests/seed-capped-agent.py: one run 22h48m ago, then 8 refused ones, and
+ * older still an ok run, a lone refused run and an ok run), then runs the real daemon on it,
+ * serving the built console.
+ * TR-678: a lone capped run stays a plain row, and a deep link to a run inside the folded group
+ * opens the group once, which its header can then close.
  * Run:  npm run build && node tests/capped-runs.e2e.cjs     (from ui/, tares installed in ../.venv)
  * Set SHOTS_DIR to keep a screenshot of the banner and of the run list.
  * TARES_E2E_CHROME points Playwright at another Chrome binary when its own download is missing.
@@ -72,14 +75,32 @@ async function waitFor(url, tries = 100) {
     const group = page.getByTestId("capped-group");
     ck("the refused runs are one line", (await group.count()) === 1, `${await group.count()} groups`);
     ck("it counts them", /8 runs skipped, capped/.test(await group.first().innerText().catch(() => "")));
-    ck("the list is that line and the run that did happen", (await rows.count()) === 2, `${await rows.count()} rows`);
+    ck("the list is that line, the run that did happen, the lone refused run and the one before",
+       (await rows.count()) === 4, `${await rows.count()} rows`);
+    const capped = page.locator("table tbody tr.clickable", { hasText: "capped" });
+    ck("the lone refused run is a plain row, not a group of one",
+       (await capped.count()) === 2 && !/1 runs? skipped/.test((await rows.allInnerTexts()).join("\n")),
+       `${await capped.count()} capped rows`);
     if (SHOTS) await page.screenshot({ path: path.join(SHOTS, "2-runs.png"), fullPage: true });
 
     await group.first().click();
-    ck("opening it lists each refused run", (await rows.count()) === 2 + 8, `${await rows.count()} rows`);
+    ck("opening it lists each refused run", (await rows.count()) === 4 + 8, `${await rows.count()} rows`);
     if (SHOTS) await page.screenshot({ path: path.join(SHOTS, "3-runs-open.png"), fullPage: true });
     await group.first().click();
-    ck("closing it folds them again", (await rows.count()) === 2, `${await rows.count()} rows`);
+    ck("closing it folds them again", (await rows.count()) === 4, `${await rows.count()} rows`);
+
+    // TR-678: a deep link to a refused run inside the group opens it; the header then closes it
+    const runs = await (await fetch(`${BASE}/api/agents/builtin/watcher/runs?status=capped&limit=50`)).json();
+    const inGroup = runs.filter((r) => r.dispatch_id !== "old1")[3];   // not the lone one, not the newest
+    await page.goto(`${BASE}/agents/watcher?run=${inGroup.id}`, { waitUntil: "networkidle" });
+    await page.getByTestId("capped-group").waitFor();
+    ck("a deep link opens the group its run is in", (await rows.count()) === 4 + 8, `${await rows.count()} rows`);
+    if (SHOTS) await page.screenshot({ path: path.join(SHOTS, "4-deeplink-open.png"), fullPage: true });
+    await group.first().click();
+    ck("its header closes it again", (await rows.count()) === 4, `${await rows.count()} rows`);
+    if (SHOTS) await page.screenshot({ path: path.join(SHOTS, "5-deeplink-closed.png"), fullPage: true });
+    await group.first().click();
+    ck("and opens it again", (await rows.count()) === 4 + 8, `${await rows.count()} rows`);
   } finally {
     if (browser) await browser.close();
     daemon.kill();
