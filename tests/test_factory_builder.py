@@ -273,6 +273,28 @@ async def main():
         listed = json.loads(await mf.list_crew())
         ck("list_crew shows it", next(s for s in listed if s["name"] == "shop-build-m1")["coordination_calls"] == 5, listed)
 
+    print("== a session is parsed again only when it has new tool calls (TR-683 review) ==")
+    parsed = []
+    real = factory.is_coordination
+    factory.is_coordination = lambda tool: (parsed.append(tool), real(tool))[1]
+    try:
+        await ingest([
+            {"type": "session_station", "sessionId": "b2", "cwd": "/w/shop", "timestamp": ago(30),
+             "station": "shop-build-m2", "role": "builder", "parent": "crew-orchestrator", "tares_project": "Shop"},
+            tool_line("b2", "mcp__tares__get_ticket", {"ticket": "T3"}, 10),
+        ])
+        both = store.coordination_calls("claude_code", ["b1", "b2"])
+        ck("both sessions counted", both == {"b1": 5, "b2": 1}, both)
+        parsed.clear()
+        ck("a different list of sessions reuses the counts",
+           store.coordination_calls("claude_code", ["b1"]) == {"b1": 5} and not parsed, parsed)
+        await ingest([tool_line("b2", "SendMessage", {"to": "crew-reviewer", "message": "[TF:REVIEW] T3"}, 5)])
+        parsed.clear()
+        again = store.coordination_calls("claude_code", ["b1", "b2"])
+        ck("a new call re-reads only its own session", again == {"b1": 5, "b2": 2} and len(parsed) == 2, (again, parsed))
+    finally:
+        factory.is_coordination = real
+
     print("== the builder manual: start is one Tares read (TR-683) ==")
     manual = open(os.path.join(ROOT, "claude-plugin", "skills", "station-builder", "SKILL.md")).read()
     start = re.search(r"\n1\. \*\*Start\.\*\*(.*?)\n2\. ", manual, re.S).group(1)
