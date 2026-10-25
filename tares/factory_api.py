@@ -863,13 +863,16 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "max_chars": factory_mod.MAP_MAX_CHARS}
 
     def named_repos() -> set[str]:
-        """Every GitHub repo some project names: on its hand-over or on one of its tickets."""
+        """Every GitHub repo some project names: on its hand-over, or on a ticket (its repo, else its PR's)."""
         out: set[str] = set()
         for p in store.list_projects():
             for r in (store.get_handover(p["id"]) or {}).get("repos") or []:
                 if r.get("name"):
                     out.add(r["name"].lower())
-            out.update(t["repo"].lower() for t in store.list_tickets(p["id"]) if t.get("repo"))
+            for t in store.list_tickets(p["id"]):
+                repo = t.get("repo") or (t.get("pr") or {}).get("repo")
+                if repo:
+                    out.add(repo.lower())
         return out
 
     @app.put("/api/repo-map")
@@ -891,7 +894,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         by, _ = who(request, body)
         try:
             changed = store.set_repo_map(name, text, note, by, str(body.get("project") or "") or None,
-                                         now_utc(), str(body.get("base") or ""))
+                                         now_utc(), str(body.get("base") or "").strip())
         except MapChanged as e:
             cur = e.current
             if not cur:
