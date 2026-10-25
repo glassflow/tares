@@ -1155,7 +1155,7 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
           [ $rc = 0 ] || say "could not restart $s; will try again next round"
         elif ! halted && between_turns "$s" && regrant_due "$s"; then
           regrant_station "$s"
-        elif idle_wake_station "$s"; then :   # woken: one restart a station a round (TR-673)
+        elif idle_wake_plan "$s"; then idle_wake_send   # woken: one restart a station a round (TR-673)
         elif [ -z "$candidate" ] && ! upgrades_frozen && movable "$s" "$kit"; then
           candidate=$s
         fi
@@ -1319,17 +1319,23 @@ iw_scan_releaser() { # RELEASE lines under Undelivered in the orchestrator's rep
   done < <(awk '/^## /{u = ($0 ~ /^## Undelivered/)} u && /(^|[^A-Za-z])RELEASE([^A-Za-z]|$)/' "$f") | jq -cs '{pending: ., live: true}'
 }
 iw_scan_orchestrator() { # desk answers closed, and projects handed over, since the baseline; the first look only sets it
-  local desk projs base
+  local desk projs base act
   desk=$(tares_http GET '/api/desk?state=answered') || return 1
   projs=$(tares_http GET /api/crew/projects) || return 1
   base=$(wake_read crew-orchestrator | jq -c '.baseline')
-  jq -cn --argjson d "$desk" --argjson p "$projs" --argjson b "$base" '
+  act=$(station_updated crew-orchestrator); act=${act:-null}   # an answer the orchestrator itself recorded is not news to it
+  jq -cn --argjson d "$desk" --argjson p "$projs" --argjson b "$base" --argjson act "$act" '
+    def secs: (capture("^(?<t>[0-9T:-]+)(\\.[0-9]+)?(?<z>Z|[+-][0-9]{2}:[0-9]{2})?$")
+               | ((.t + "Z" | fromdateiso8601)
+                  - (if (.z // "Z") == "Z" then 0
+                     else ((.z[0:1] + "1" | tonumber) * ((.z[1:3] | tonumber) * 3600 + (.z[4:6] | tonumber) * 60)) end))) ? // null;
     [($d.desk // [])[] | select(.command == null and .closed_at != null)] as $ans
     | ([$ans[].closed_at] | max // "") as $dmax
     | [($p.projects // [])[].id] as $ids
     | if $b == null then {first: true, pending: [], live: true, baseline: {desk: $dmax, projects: $ids}}
       else {live: true,
-            pending: ([$ans[] | select(.closed_at > ($b.desk // "")) | {key: "dk:\(.id)", text: "desk answer \(.label // .id) is closed"}]
+            pending: ([$ans[] | select(.closed_at > ($b.desk // ""))
+                        | select($act == null or ((.closed_at | secs) // ($act + 1)) > $act) | {key: "dk:\(.id)", text: "desk answer \(.label // .id) is closed"}]
                     + [($p.projects // [])[] | select(.id as $i | (($b.projects // []) | index($i)) | not)
                        | {key: "ph:\(.id)", text: "project \(.name // .id) was handed over"}]),
             baseline: {desk: ([$dmax, ($b.desk // "")] | max), projects: ((($b.projects // []) + $ids) | unique)}}
@@ -1345,13 +1351,14 @@ iw_work_prompt() { # role items
   esac
 }
 
-idle_wake_station() { # station → 0 when it woke the station (a restart in the same conversation), else 1
+# Two steps, so the restart runs as a plain statement (errexit works there) and not inside a condition:
+# idle_wake_plan decides (0 = wake it, with the what and why in IW_*), idle_wake_send does the restart.
+idle_wake_plan() { # station → 0 when the station is to be woken now, else 1
   local s=$1 role st
   role=$(stations_get "$s" '.role')
   case "$role" in orchestrator|reviewer|releaser|builder) ;; *) return 1 ;; esac
   halted && return 1
   [ -n "$(stations_get "$s" '.sessionId')" ] || return 1
-  [ ! -f "$CREW_HOME/stations/$s.done" ] || return 1
   st=$(idle_wake_state)
   case "$st" in
     on) ;;
@@ -1400,7 +1407,12 @@ idle_wake_station() { # station → 0 when it woke the station (a restart in the
       return 1
     fi
   fi
+  IW_S=$s IW_ST=$st IW_NOW=$now IW_REASON=$reason IW_PROMPT=$prompt IW_KEYS=$keys IW_BASELINE=$baseline IW_N=$n IW_WORK=$work
+  return 0
+}
 
+idle_wake_send() { # the station idle_wake_plan chose: restart it in the same conversation; always returns 0
+  local s=$IW_S st=$IW_ST now=$IW_NOW reason=$IW_REASON prompt=$IW_PROMPT keys=$IW_KEYS baseline=$IW_BASELINE n=$IW_N work=$IW_WORK
   local rc
   set +e
   ( set -e; TARES_STATE=""; SETTINGS=""; CREW_PROJECTS=""
@@ -1419,11 +1431,13 @@ idle_wake_station() { # station → 0 when it woke the station (a restart in the
          | (if $work then .seen = $keys else . end) | (if $b != null then .baseline = $b else . end)' \
          --argjson now "$now" --argjson n "$n" --argjson rel "$([ "$st" = on ] && echo true || echo false)" \
          --argjson work "$([ $work = 1 ] && echo true || echo false)" --argjson keys "$keys" --argjson b "$baseline" || true
-       return 0 ;;
-    3|4) return 1 ;;
-    *) say "could not wake $s; will try again next round"; return 1 ;;
+       ;;
+    3|4) ;;
+    *) say "could not wake $s; will try again next round" ;;
   esac
+  return 0
 }
+
 
 stale_kit() { # station kit → 0 when it runs another version, or from a frozen copy that is going away
   [ "$(stations_get "$1" '.kit')" != "$2" ] || { ! upgrades_frozen && on_frozen_copy "$1"; }
@@ -2107,7 +2121,10 @@ cmd_doctor() {
       local raw missing; raw=$(settings_raw 2>/dev/null || echo '{}'); missing=$(settings_missing "$raw")
       [ -z "$missing" ] && ok "crew settings on Tares: $(crew_settings | jq -c 'del(.kit)')" || warn "crew settings not answered yet ($(echo $missing)); $ME crew up asks them"
       doctor_kit
-      idle_wake_on && ok "idle_wake is on: the watch wakes stations when they have work and holds their ticks"
+      if idle_wake_on; then
+        if [ -n "$(watch_pid)" ]; then ok "idle_wake is on: the watch wakes stations when they have work and holds their ticks"
+        else warn "idle_wake is on but the watch is not running: nothing wakes the stations and they hold no tick ($ME crew watch)"; fi
+      fi
       if [ -z "$missing" ] && releaser_on && [ "$(setting release_profile)" = kind ]; then
         command -v docker >/dev/null && ok "docker" || no "docker not installed (release profile kind)"
         command -v kind >/dev/null && ok "kind" || no "kind not installed (release profile kind): brew install kind"

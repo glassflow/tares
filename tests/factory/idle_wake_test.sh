@@ -57,6 +57,10 @@ touched() { # station seconds-since-N0: the session did something then (its job 
   local f="$HOME/.claude/jobs/$(st "$1" .id)/state.json" tmp; tmp=$(mktemp)
   jq --arg u "$(iso $((N0 + $2)))" '.updatedAt = $u' "$f" > "$tmp" && mv "$tmp" "$f"
 }
+touched_at() { # station iso-time: the session's job file says it last did something then
+  local f="$HOME/.claude/jobs/$(st "$1" .id)/state.json" tmp; tmp=$(mktemp)
+  jq --arg u "$2" '.updatedAt = $u' "$f" > "$tmp" && mv "$tmp" "$f"
+}
 set_idle_wake() { api PUT /api/crew/settings "$(jq -cn --argjson v "$1" '{idle_wake: $v}')" >/dev/null; }
 
 start_tares "$T/tares"
@@ -93,7 +97,12 @@ check "setup: the queue is empty" '[ "$(api GET /api/review-queue | jq ".queue |
 set_idle_wake true
 check "the setting reads back true" '[ "$(api GET /api/crew/settings | jq -c .idle_wake)" = true ]'
 "$F" status >"$T/status-on.out" 2>&1; "$F" doctor >"$T/doctor-on.out" 2>&1
-check "on: status and doctor say so" 'grep -q "^idle_wake: on" "$T/status-on.out" && grep -q "ok    idle_wake is on" "$T/doctor-on.out"'
+check "on: status says so, and doctor warns that no watch is running" 'grep -q "^idle_wake: on" "$T/status-on.out" && grep -q "warn  idle_wake is on but the watch is not running" "$T/doctor-on.out" && ! grep -q "ok    idle_wake is on" "$T/doctor-on.out"'
+bash -c "exec -a 'tares factory crew watch' sleep 300" & WPID=$!
+echo "$WPID" > "$FACTORY_CREW_HOME/watch.pid"; sleep 1
+"$F" doctor >"$T/doctor-on2.out" 2>&1
+check "with the watch running, doctor says ok" 'grep -q "ok    idle_wake is on" "$T/doctor-on2.out" && ! grep -q "idle_wake is on but" "$T/doctor-on2.out"'
+kill "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null; rm -f "$FACTORY_CREW_HOME/watch.pid"
 SEC=28800; N0=$((N0 + SEC)); SEC=0
 round 0
 check "switched on under running stations: the first round tells each one that holds a tick to drop it, once (the builder has no ticket in review, so no tick)" '[ "$(allwakes)" = 3 ] && [ "$(wakes crew-reviewer release)" = 1 ] && [ "$(wakes crew-orchestrator release)" = 1 ] && [ "$(wakes crew-releaser release)" = 1 ] && [ "$(wakes $B)" = 0 ] && [ -f "$(wakefile $B)" ]'
@@ -211,11 +220,30 @@ printf '%s\n' "{\"type\":\"user\",\"sessionId\":\"o1\",\"cwd\":\"/w\",\"timestam
 sleep 2
 api POST /api/desk/D1/answer '{"words": "Keep it, please", "choice": "keep it"}' >"$T/answer.out"
 check "setup: the question is answered" '[ "$(api GET "/api/desk?state=answered" | jq ".desk | length")" = 1 ]'
+touched_at crew-orchestrator 2020-01-01T00:00:00Z   # it did nothing since the answer was closed: someone else closed it
 a2=$(allwakes)
 round 900
 check "a desk answer wakes the orchestrator, and only it" '[ "$(wakes crew-orchestrator work)" = 1 ] && [ "$(allwakes)" = $((a2 + 1)) ] && lastprompt crew-orchestrator | grep -q "desk answer D1 is closed"'
 round 960
 check "once" '[ "$(wakes crew-orchestrator work)" = 1 ]'
+api POST /api/desk "$(jq -cn --arg p "$P" '{question: "Ship the cache?", recommendation: "yes", why: "tested", options: ["yes", "no"], project: $p}')" >/dev/null
+ts=$("$PY" -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z")')
+printf '%s\n' "{\"type\":\"user\",\"sessionId\":\"o1\",\"cwd\":\"/w\",\"timestamp\":\"$ts\",\"message\":{\"role\":\"user\",\"content\":\"Yes, ship it\"}}" |
+  curl -sf -X POST -H 'Content-Type: application/x-ndjson' --data-binary @- "$TARESD_URL/ingest/claude_code" >/dev/null
+sleep 2
+api POST /api/desk/D2/answer '{"words": "Yes, ship it", "choice": "yes"}' >"$T/answer2.out" 2>&1
+check "setup: a second question is answered" '[ "$(api GET "/api/desk?state=answered" | jq ".desk | length")" = 2 ] || { cat "$T/answer2.out" >&2; false; }'
+touched_at crew-orchestrator 2099-01-01T00:00:00Z   # it was active after the answer was closed: it recorded the answer itself
+round 1000
+check "an answer the orchestrator recorded itself is no news to it" '[ "$(wakes crew-orchestrator work)" = 1 ]'
+mid=$("$PY" -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))'); sleep 2   # after the answer above, before the one below
+api POST /api/desk "$(jq -cn --arg p "$P" '{question: "Allow crew-reviewer to run gh?", recommendation: "allow", why: "needed", station: "crew-reviewer", command: "gh pr view 1", project: $p}')" >/dev/null
+api POST /api/desk/D3/allow '{"scope": "all", "words": "crew-reviewer may run gh pr view"}' >"$T/allow.out"
+check "setup: a permission request is allowed in the console" '[ "$(api GET "/api/desk?state=answered" | jq "[.desk[] | select(.command != null)] | length")" = 1 ]'
+round 1010   # the grant it made is handed to each station first (a regrant restart, not a wake)
+touched_at crew-orchestrator "$mid"   # active since the second answer was closed, not the third
+round 1015
+check "an allowed permission request is the watch's to act on, not a wake for the orchestrator" '[ "$(wakes crew-orchestrator work)" = 1 ]'
 repo2="$T/blog"; mkdir -p "$repo2"; git -C "$repo2" init -q
 hand_over "Blog" "$(git -C "$repo2" rev-parse --show-toplevel)" >/dev/null
 round 1020
@@ -273,11 +301,16 @@ kill "$ATT" 2>/dev/null; wait "$ATT" 2>/dev/null; ATT=""
 round 11400
 check "it is, once they leave" '[ "$(wakes crew-reviewer)" = $((rw + 1)) ]'
 touch "$FACTORY_CREW_HOME/stations/$B.done"
-api POST "/api/projects/$P/tickets/T1/stage" '{"stage": "changes"}' >/dev/null
-n=$(launches); bw=$(wakes $B)
+echo 6666666ffffffff > "$T/gh/head"; echo success > "$T/gh/ci"; pr_to review
+api POST "/api/projects/$P/tickets/T1/reviews" '{"head": "6666666ffffffff", "verdict": "changes", "verified": "read the diff", "findings": [{"text": "name the flag", "blocking": true}]}' >/dev/null
+check "setup: a head nobody has seen yet, with a current verdict" '[ "$(api GET /api/review-queue | jq -r ".queue[0].head")" = 6666666ffffffff ] && [ "$(api GET /api/review-queue | jq -r ".queue[0].verdict.current")" = true ]'
+n=$(launches); bw=$(wakes $B); rw=$(wakes crew-reviewer work)
 round 12000
 check "a builder that is done is not woken, whatever its ticket says" '[ "$(wakes $B)" = "$bw" ]'
+check "a head that already has a current verdict is no work for the reviewer, even though it was never seen" '[ "$(wakes crew-reviewer work)" = "$rw" ]'
 rm -f "$FACTORY_CREW_HOME/stations/$B.done"
+round 12060
+check "(the ticket was real work: once it is not done, the builder is woken for it)" '[ "$(wakes $B)" = $((bw + 1)) ] && lastprompt $B | grep -q "T1 (verdict changes)"'
 "$F" spawn helper "$B" probe "look at T1" >/dev/null 2>&1
 h=$B-probe; hs=$(jq -r 'to_entries[] | select(.value.role == "helper") | .key' "$FACTORY_CREW_HOME/stations.json" | head -1)
 check "setup: a helper is running" '[ -n "$hs" ]'
@@ -285,6 +318,27 @@ STATIONS="$STATIONS $hs"; idle_all
 round 40000
 check "a helper is never woken" '[ "$(wakes $hs)" = 0 ]'
 STATIONS="crew-orchestrator crew-reviewer crew-releaser $B"
+
+# ---- a restart that fails is not a delivered wake ----
+echo 7777777aaaaaaaa > "$T/gh/head"; pr_to review
+rw=$(wakes crew-reviewer work)
+FAKE_CLAUDE_FAIL_RESUME=1 round 40050
+check "a wake whose restart fails sends no wake event and marks nothing told" '[ "$(wakes crew-reviewer work)" = "$rw" ] && ! wk crew-reviewer ".seen[]" | grep -q 7777777 && grep -q "could not wake crew-reviewer" "$T/watch.log"'
+round 40060; round 40120   # the first of these revives the station the failed restart left stopped
+check "once it runs again the wake is delivered" '[ "$(wakes crew-reviewer work)" = $((rw + 1)) ] && wk crew-reviewer ".seen[]" | grep -q 7777777'
+
+# a bare failure deep in the restart (here, the grants file of the new session cannot be written) must stop it just the same
+api POST /api/grants '{"words": "the reviewer may label pull requests", "scope": "all"}' >/dev/null
+round 40150; round 40160   # the watch hands the new grant to each station first
+echo 8888888bbbbbbbb > "$T/gh/head"; pr_to review
+gf="$FACTORY_CREW_HOME/stations/crew-reviewer.grants"
+rw=$(wakes crew-reviewer work)
+rm -f "$gf"; mkdir "$gf"
+round 40200
+rmdir "$gf"
+check "a restart that fails midway is not marked delivered either" '[ "$(wakes crew-reviewer work)" = "$rw" ] && ! wk crew-reviewer ".seen[]" | grep -q 8888888 && grep -q "could not wake crew-reviewer" "$T/watch.log"'
+round 40260; round 40320
+check "and it is sent once the failure is gone" '[ "$(wakes crew-reviewer work)" = $((rw + 1)) ]'
 
 # ---- turning it off: each station that gave up its tick is told once to take it back ----
 api POST "/api/projects/$P/tickets/T1/stage" '{"stage": "doing"}' >/dev/null
