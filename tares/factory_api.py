@@ -816,10 +816,16 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {"queue": queue(), "now": now_utc()}
 
     # ── the repo map (TR-681): one per GitHub repo, shared by every project that names it ──
+    def pr_repo(t: dict) -> str | None:
+        """The repo of a ticket's PR, once GitHub has answered for it: a repo typed into a PR link is
+        not yet a repo anyone has seen."""
+        pr = t.get("pr") or {}
+        return pr.get("repo") if pr.get("checked_at") and not pr.get("error") else None
+
     def repo_of(uid: str, t: dict) -> str | None:
         """The repo a ticket changes: its own, its PR's, else the project's only repo (when it has a
         GitHub name). With several repos, or one without a name, a ticket that names none has none."""
-        repo = t.get("repo") or (t.get("pr") or {}).get("repo")
+        repo = t.get("repo") or pr_repo(t)
         if repo:
             return repo
         repos = (store.get_handover(uid) or {}).get("repos") or []
@@ -870,7 +876,7 @@ def register(app, store, h: SimpleNamespace) -> None:
                 if r.get("name"):
                     out.add(r["name"].lower())
             for t in store.list_tickets(p["id"]):
-                repo = t.get("repo") or (t.get("pr") or {}).get("repo")
+                repo = t.get("repo") or pr_repo(t)
                 if repo:
                     out.add(repo.lower())
         return out
