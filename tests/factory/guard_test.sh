@@ -60,6 +60,12 @@ t builder Bash 'factory crew freeze' deny
 t builder Bash 'factory crew unfreeze' deny
 t orchestrator Bash 'factory crew freeze' allow
 t orchestrator Bash 'factory crew unfreeze' allow
+t builder Bash 'factory crew update' deny
+t builder Bash 'tares factory crew update --wait 60' deny
+t reviewer Bash 'factory crew restart' deny
+t releaser Bash 'tares factory crew restart' deny
+t orchestrator Bash 'factory crew update' allow
+t orchestrator Bash 'tares factory crew restart' allow
 # A quoted message is prose, but a command substituted inside it runs.
 t reviewer Bash 'git commit -m "$(gh pr merge 1)"' deny
 t reviewer Bash 'git commit -m "notes `gh pr merge 1`"' deny

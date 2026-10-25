@@ -218,7 +218,8 @@ def register(app, store, h: SimpleNamespace) -> None:
     async def get_crew_settings():
         """The crew's settings for every project: autonomy (L3-review, L4-ship), whether it runs
         a releaser, release profile, prod pattern, challenger on builders, most builders at
-        once. Unset ones are null. `kit.frozen` says when `factory crew freeze` froze the
+        once, whether the watch moves stations onto a new Claude Code (claude_update, on unless
+        false). Unset ones are null. `kit.frozen` says when `factory crew freeze` froze the
         crew's plugin kit, and by whom, or is null while the crew follows the checkout. `idle_wake`
         (true or false; null counts as false) makes the watch wake an idle station with a message
         when it has work, and hold the station's liveness tick, instead of each station ticking
@@ -363,6 +364,7 @@ def register(app, store, h: SimpleNamespace) -> None:
             st["children"] = sorted(x["name"] for x in out if x["parent"] == st["name"])
             # the context window from the station's status line, and what all its sessions spent
             st["context"] = claude_usage.context_now(meters.get(st["session"]))
+            st["claude_version"] = claude_usage.code_version(meters.get(st["session"]))
             mine = [spent[s] for s in [st["session"], *(e["session"] for e in st["earlier"])]
                     if s in spent]
             st["usage"] = ({k: sum(x[k] for x in mine) for k in mine[0]} if mine else None)

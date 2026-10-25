@@ -468,6 +468,8 @@ export interface CrewStation {
   lines: number;
   earlier: { session: string; started_at: string | null; last_at: string | null; lines: number; state: "replaced" }[];
   children: string[];
+  /** the Claude Code version the station runs, from its status line; null before it reported */
+  claude_version: string | null;
   /** the context window from the station's status line, null before it reported */
   context: StationContext | null;
   /** what all the station's sessions spent, null before any reply */
@@ -520,6 +522,7 @@ export interface CrewSettings {
   kit: { frozen: { at: string; by: string; version: string } | null };
   idle_wake?: boolean | null;
   pace?: boolean | null;
+  claude_update: boolean | null;
 }
 /** The crew's pace before the plan's limits (/api/crew/pace, TR-674). */
 export interface CrewPace {

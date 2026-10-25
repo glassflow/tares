@@ -20,6 +20,19 @@ the project follows [Semantic Versioning](https://semver.org/).
   a limit was full is not revived into it; after the reset the watch revives it in its own
   conversation, and starts a new one only when that fails. The Crew page and
   `factory crew status` say when the crew is pacing and until when (TR-674).
+- The tares-factory crew moves onto a new Claude Code by itself. Claude Code installs by swapping a
+  symlink, so a station kept the version it started on until someone restarted it. `tares factory
+  crew watch` now sees a newer `claude --version` that has held for a whole round and restarts
+  one idle station a round, in the same conversation, the orchestrator last; a busy or attached
+  station waits. `tares factory crew update` (or `crew restart`) does every station right away,
+  waits for each to be idle, and checks there is one session per station name. A restarted station
+  is checked to run the new version: Claude Code's daemon keeps pre-warmed spares of the old
+  version that a restart could claim, so those are stopped and the restart is tried again.
+  `factory roster`, `factory doctor` and the Crew page show each station's Claude Code version and
+  flag older ones. The crew setting `claude_update` (on by default) switches the watch's part off
+  for people who pin a version. A frozen crew (`crew freeze`) moves no station onto a newer Claude
+  Code either; the watch says there is one, once for each version, and `crew update` still works
+  (TR-669).
 
 ### Fixed
 - "Raise the limit" on an agent that stopped at the daily run cap opened the agent's own page,
