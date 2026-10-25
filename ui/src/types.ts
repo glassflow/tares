@@ -518,6 +518,7 @@ export interface CrewSettings {
   challenger: boolean | null;
   builders_max: number | null;
   kit: { frozen: { at: string; by: string; version: string } | null };
+  idle_wake?: boolean | null;
 }
 export interface HandoverRepo { path: string | null; name: string | null }
 export interface ProjectFinished { at: string; words: string; decision: string | null; by: string | null }

@@ -205,7 +205,8 @@ async def main():
         s = json.loads(await mf.get_crew_settings())
         ck("settings start unset", s == {"autonomy": None, "releaser": None, "release_profile": None,
                                          "prod_pattern": None, "challenger": None,
-                                         "builders_max": None, "kit": {"frozen": None}}, s)
+                                         "builders_max": None, "idle_wake": None,
+                                         "kit": {"frozen": None}}, s)
         s = json.loads(await mf.set_crew_settings(autonomy="L4-ship", release_profile="kind",
                                                   prod_pattern="prod-*", challenger=True))
         ck("the person's session saves them", s["autonomy"] == "L4-ship" and s["challenger"] is True, s)
@@ -220,6 +221,18 @@ async def main():
            and s["autonomy"] == "L4-ship", s)
         s = json.loads(await mf.set_crew_settings(builders_max=2))
         ck("a later change keeps the rest", s["autonomy"] == "L4-ship" and s["builders_max"] == 2, s)
+        s = json.loads(await mf.set_crew_settings(idle_wake=True))
+        ck("idle_wake is a setting of its own, off until the person turns it on",
+           s["idle_wake"] is True and s["builders_max"] == 2, s)
+        s = json.loads(await mf.get_crew_settings())
+        ck("the MCP tool reads idle_wake back", s["idle_wake"] is True, s)
+        async with mk() as cx:
+            for junk in ("maybe", "false", 1, [True]):
+                r = await cx.put("/api/crew/settings", json={"idle_wake": junk})
+                ck(f"idle_wake {junk!r} is refused: it is true or false", r.status_code == 400, r.text)
+            r = await cx.put("/api/crew/settings", json={"builders_max": 3})
+            ck("another change keeps idle_wake", r.json()["idle_wake"] is True, r.text)
+            await cx.put("/api/crew/settings", json={"builders_max": 2})
         frozen = {"at": "2026-10-25T10:00:00Z", "by": "kiran", "version": "123456"}
         async with mk() as cx:
             r = await cx.put("/api/crew/settings", json={"kit": {"frozen": frozen}})

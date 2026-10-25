@@ -219,7 +219,10 @@ def register(app, store, h: SimpleNamespace) -> None:
         """The crew's settings for every project: autonomy (L3-review, L4-ship), whether it runs
         a releaser, release profile, prod pattern, challenger on builders, most builders at
         once. Unset ones are null. `kit.frozen` says when `factory crew freeze` froze the
-        crew's plugin kit, and by whom, or is null while the crew follows the checkout."""
+        crew's plugin kit, and by whom, or is null while the crew follows the checkout. `idle_wake`
+        (true or false; null counts as false) makes the watch wake an idle station with a message
+        when it has work, and hold the station's liveness tick, instead of each station ticking
+        on its own."""
         return {**settings(), "autonomy_levels": factory_mod.AUTONOMY}
 
     @app.put("/api/crew/settings")

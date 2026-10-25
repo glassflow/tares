@@ -416,6 +416,8 @@ function Settings({ st, grants }: { st: CrewSettings; grants: string }) {
           <dt>Builders at once</dt><dd>{st.builders_max ?? <span className="dim">not set</span>}</dd>
           <dt>Kit</dt>
           <dd>{st.kit?.frozen ? <>frozen since {new Date(st.kit.frozen.at).toLocaleString()} by {st.kit.frozen.by}: stations that start or revive use the frozen kit, running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit</> : "following the checkout"}</dd>
+          <dt>Wake on events</dt>
+          <dd>{st.idle_wake ? "on: the watch wakes an idle station when it has work and holds its liveness tick (15 to 30 minutes, backing off to 45 while nothing happens)" : "off: each station ticks on its own schedule"}</dd>
         </dl>
         <h2>Grants for every project</h2>
         {lines.length ? <ul className="crew-grants">{lines.map((g, i) => <li key={i}>{g}</li>)}</ul>

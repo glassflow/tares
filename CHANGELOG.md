@@ -5,6 +5,14 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Factory: the crew setting `idle_wake` (off by default) wakes stations on events instead of fixed
+  ticks. The watch asks Tares what each station has to do and restarts an idle station with one
+  message only when there is work (a PR without a verdict, changes asked for, a `RELEASE`, a desk
+  answer, a new project), and otherwise sends a liveness wake after 15 to 30 minutes, then 30, then
+  every 45, so an empty crew costs a few model turns an hour instead of one every 15 to 30 minutes
+  per station (TR-673).
+
 ### Fixed
 - "Raise the limit" on an agent that stopped at the daily run cap opened the agent's own page,
   which has no cap field. It now opens Settings, Limits, with the daily cap in view and marked

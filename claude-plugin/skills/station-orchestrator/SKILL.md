@@ -16,7 +16,7 @@ Every Tares call names its project (`project=`).
 3. Run `factory roster` (and `list_crew`). Expect `READY` from `crew-reviewer` (and `crew-releaser` when the crew has one), and from any builder still recorded as active.
 4. **Your work list is Tares.** Call `crew_projects`: every project handed to the crew, with its repos (`path` on this machine, GitHub `name`), progress and the milestone it is on. For each, re-read where it stands (`list_milestones`, `list_tickets`) and handle any project with work left and no active builder as in "Starting a project" below.
 5. **Re-ask the desk.** `desk_list(state="open")`: if items are open, ask the one your report says you were asking (else the top one) now, as in "The desk" below. The person may be attached right after a revive.
-6. Arm your schedule with `CronCreate`: every 20 minutes, with the prompt `Orchestrator tick: follow the Tick section of the station-orchestrator skill.` Check `CronList` first so you never hold two.
+6. Arm your schedule with `CronCreate`: every 20 minutes, with the prompt `Orchestrator tick: follow the Tick section of the station-orchestrator skill.` Check `CronList` first so you never hold two. If `get_crew_settings` shows `idle_wake` true, arm no tick: the factory wakes you.
 
 ## Starting a project
 
