@@ -673,7 +673,8 @@ def attach_command(station: str) -> str:
 
 CREW_DEFAULTS = {"autonomy": None, "releaser": None, "release_profile": None,
                  "prod_pattern": None, "challenger": None, "builders_max": None,
-                 "kit": {"frozen": None}, "idle_wake": None, "pace": None}
+                 "kit": {"frozen": None}, "idle_wake": None, "pace": None,
+                 "claude_update": None}
 
 
 def kit_ok(v) -> dict:
@@ -716,7 +717,7 @@ def crew_settings_ok(body: dict, cur: dict) -> dict:
             if len(v) > 300:
                 raise DocError(f"{k} is {len(v)} characters; keep it to 300")
             out[k] = v or None
-    for k in ("challenger", "releaser"):
+    for k in ("challenger", "releaser", "claude_update"):
         if body.get(k) is not None:
             out[k] = bool(body[k])
     if body.get("idle_wake") is not None:

@@ -206,7 +206,12 @@ async def main():
         ck("settings start unset", s == {"autonomy": None, "releaser": None, "release_profile": None,
                                          "prod_pattern": None, "challenger": None,
                                          "builders_max": None, "idle_wake": None, "pace": None,
-                                         "kit": {"frozen": None}}, s)
+                                         "kit": {"frozen": None}, "claude_update": None}, s)
+        s = json.loads(await mf.set_crew_settings(claude_update=False))
+        ck("the Claude Code update switch is a setting of its own", s["claude_update"] is False
+           and s["autonomy"] is None, s)
+        s = json.loads(await mf.set_crew_settings(claude_update=True))
+        ck("and switches back on", s["claude_update"] is True, s)
         s = json.loads(await mf.set_crew_settings(autonomy="L4-ship", release_profile="kind",
                                                   prod_pattern="prod-*", challenger=True))
         ck("the person's session saves them", s["autonomy"] == "L4-ship" and s["challenger"] is True, s)

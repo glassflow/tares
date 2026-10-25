@@ -34,12 +34,14 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
   tares factory crew watch [--once]         (crew up runs it in the background) revive stations
                                             that stopped, under the same name; start
                                             fresh any that Claude Code stopped for thrashing on
-                                            autocompact; after an update, move each station onto it
-                                            when it's idle (same conversation); restart a station
+                                            autocompact; after an update of the plugin or of Claude
+                                            Code, move each station onto it when it's idle (same
+                                            conversation, the orchestrator last; the crew setting
+                                            claude_update off stops this move); restart a station
                                             between its turns when you allow it something new in
                                             Tares (same conversation, its fresh settings have it);
-                                            a frozen crew keeps its kit and is only told of a newer
-                                            one; between rounds, read the plan's limits and the context
+                                            a frozen crew's watch moves no station onto a newer kit
+                                            or Claude Code and is only told of one; between rounds, read the plan's limits and the context
                                             the Crew page asks for
                                             with the idle_wake setting on, wake an idle station only
                                             when Tares has work for it (and after a quiet spell, to
@@ -48,12 +50,21 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
                                             plan's limits (no new builders, longest ticks, builders
                                             wait), and revive a station that stopped at the limit in
                                             its own conversation once the limit has reset
+  tares factory crew update [--wait <s>]    move every station onto the Claude Code installed now,
+                                            right away: each when it is idle (one someone has open
+                                            waits), the orchestrator last, same conversation; then
+                                            checks each runs it, one session per name; gives up on a
+                                            busy one after --wait seconds (default 1800, 0 = never);
+                                            run from a station, it leaves that station to the watch;
+                                            a frozen crew moves too, since you asked
+  tares factory crew restart [--wait <s>]   the same, for stations that already run it too
   tares factory crew halt ["<reason>"]      stop risky actions on every station until resume
   tares factory crew resume                 lift a halt
   tares factory crew freeze                 keep the crew on today's plugin kit: a station that starts
                                             or revives uses a copy of it, a running one keeps reading
                                             the checkout until it restarts, and the watch moves none
-                                            onto a newer kit (it still tells you one is there)
+                                            onto a newer kit or Claude Code (it still tells you one
+                                            is there)
   tares factory crew unfreeze               lift the freeze; the watch moves each station onto the
                                             checkout's kit when it's idle
   tares factory crew down                   stop the watch and every station (Tares keeps the record)
@@ -81,7 +92,7 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
   tares factory settings <station> [role]   print the settings a station launches with
 
   used by the orchestrator (as `factory`, inside its session):
-  factory roster                            stations, roles, projects, states (tab separated)
+  factory roster                            stations, roles, projects, states, Claude Code version (tab separated)
   factory spawn builder [--autonomy L3-review] <project> <slug> <repo path> "<task>"
                                             one builder per milestone and repo of a project
   factory spawn helper <parent-station> <slug> "<task>"
@@ -129,6 +140,7 @@ HALT_FILE="$CREW_HOME/HALT"
 FROZEN_KIT="$CREW_HOME/frozen-kit"   # the kit as `crew freeze` found it, while the crew is frozen
 NEWER_FILE="$CREW_HOME/kit-newer"    # the newer kit the watch last told the person about
 FREEZING="$CREW_HOME/freezing"       # present while `crew freeze` has the copy but Tares not yet the setting
+CC_NEWER_FILE="$CREW_HOME/claude-newer"   # the newer Claude Code the watch last told the person about while frozen
 CHECKOUT_FILE="$CREW_HOME/kit-checkout"   # the checkout the frozen copy was taken from
 # The frozen copy as stations record it: physical, so a symlinked crew home still matches.
 frozen_phys() { echo "$(cd -P "$CREW_HOME" 2>/dev/null && pwd || echo "$CREW_HOME")/frozen-kit"; }
@@ -313,7 +325,8 @@ all_repos() { crew_projects | jq -r '[.[] | .repos[] | .path | select(. != null)
 settings_defaults() {
   jq -n '{autonomy: "L4-ship", releaser: false, release_profile: "kind",
           prod_pattern: "(^|[-_.])(prod|production)([-_.]|$)", challenger: false, builders_max: 2,
-          kit: {frozen: null}, idle_wake: false, pace: false}'
+          kit: {frozen: null}, idle_wake: false, pace: false,
+          claude_update: true}'
 }
 settings_raw() {
   local s; s=$(tares_http GET /api/crew/settings) || die "could not read the crew settings from Tares at $TARES$(no_key_hint)"
@@ -1112,13 +1125,14 @@ cmd_down() {
   say "all stations stopped. Tares keeps the projects, tickets and the desk; $ME crew up starts fresh sessions."
 }
 
-cmd_watch() { # every interval: revive stopped stations, restart stuck ones fresh, restart idle ones with new grants, move idle ones onto an updated plugin; readings between
+cmd_watch() { # every interval: revive stopped stations, restart stuck ones fresh, restart idle ones with new grants, move idle ones onto an updated plugin or Claude Code; readings between
   require_crew
   local once=0 interval=${FACTORY_WATCH_INTERVAL:-180}
   while [ $# -gt 0 ]; do
     case "$1" in --once) once=1; shift ;; --interval) interval=$2; shift 2 ;; *) die "unknown option $1" ;; esac
   done
   local kit_start seen said_dirty=0; kit_start=$(kit_version); seen=$kit_start
+  local cc_seen; cc_seen=$(claude_version)
   [ $once = 1 ] || say "watching the crew every ${interval}s (it revives stations that stop, and gives one a permission you allowed in Tares); Ctrl-C to stop"
   while :; do
     local s kit settled=0 down=0 candidate=""; kit=$(kit_version)
@@ -1133,6 +1147,11 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
       said_dirty=1
     fi
     seen=$kit
+    # A new Claude Code counts once `claude --version` has said the same for a whole round: the installer
+    # swaps a symlink, and a version that flips back and forth is not a release.
+    local cc_now cc_settled=0; cc_now=$(claude_version)
+    [ -n "$cc_now" ] && [ "$cc_now" = "$cc_seen" ] && cc_settled=1
+    cc_seen=$cc_now
     if upgrades_frozen; then
       [ $settled = 0 ] || tell_newer_kit "$kit"
     elif [ $settled = 1 ] && [ "$kit" != "$kit_start" ] && [ $once = 0 ]; then
@@ -1199,7 +1218,17 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
     done
     # One station a round moves onto an updated plugin, and only while every station is up, so a
     # version that can't start a station never takes the crew down one station at a time.
-    if [ -n "$candidate" ] && [ $settled = 1 ] && [ $down = 0 ] && ! halted && ! upgrades_frozen; then upgrade_station "$candidate" "$kit"; fi
+    if [ -n "$candidate" ] && [ $settled = 1 ] && [ $down = 0 ] && ! halted && ! upgrades_frozen; then upgrade_station "$candidate" "$kit"
+    elif [ $cc_settled = 1 ] && [ $down = 0 ] && ! halted && claude_auto; then
+      # the same, for Claude Code itself: one idle station a round, the orchestrator last; a frozen crew
+      # only hears that there is a newer one
+      if upgrades_frozen; then tell_newer_claude "$cc_now"
+      else
+        rm -f "$CC_NEWER_FILE"
+        candidate=$(cc_pick "$cc_now")
+        [ -z "$candidate" ] || watch_claude_move "$candidate" "$cc_now"
+      fi
+    fi
     [ $once = 1 ] && return 0
     nap "$interval"
   done
@@ -1666,6 +1695,242 @@ upgrade_station() { # station kit: restart it on the new version, in the same co
   esac
 }
 
+# ---------- Claude Code updates ----------
+# A new Claude Code is installed by swapping a symlink, and a running station keeps the version it
+# started on. The watch moves each station onto the new one like a plugin update: one idle station a
+# round, in the same conversation, the orchestrator last. Claude Code's daemon also keeps pre-warmed
+# spare sessions, and a restart can claim one of an older version, so a station is only counted as
+# moved once its process is seen running the new version (TR-669).
+claude_version() { # → the version `claude` on PATH is now (2.1.310); empty when it can't be read
+  "$CLAUDE" --version 2>/dev/null | head -1 | grep -Eo '^[0-9]+(\.[0-9]+)+[^ ]*' || true
+}
+
+older_than() { # version target → 0 when version is a lower Claude Code version than target; unknown is never older
+  [ -n "$1" ] && [ -n "$2" ] && [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$1" ]
+}
+
+# The version a session's process runs. Claude Code's list may give it; if not, a station's pid is a
+# `bg-spare` process under a pty host whose command line names the binary it runs (.../versions/<v>).
+running_version() { # session id [agents json] → its version; empty when it can't be told
+  local agents=${2:-} e v pid p
+  [ -n "$1" ] || return 0
+  [ -n "$agents" ] || agents=$(active_json) || return 0
+  e=$(jq -r --arg id "$1" '.[] | select(.id == $id) | [(.version // ""), ((.pid // "") | tostring)] | join(" ")' <<<"$agents" | head -1) || return 0
+  v=${e%% *}; pid=${e#* }
+  if [ -n "$v" ]; then echo "$v"; return 0; fi
+  [ -n "$pid" ] || return 0
+  for p in "$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')" "$pid"; do
+    [ -n "$p" ] || continue
+    v=$(ps -o command= -p "$p" 2>/dev/null | grep -Eo '/versions/[0-9][^ /]*' | head -1 | cut -d/ -f3) || true
+    if [ -n "$v" ]; then echo "$v"; return 0; fi
+  done
+  return 0
+}
+station_cc() { running_version "$(stations_get "$1" '.id')" "${2:-}"; } # station [agents json] → its version
+
+# The pre-warmed spares of an older version that nobody has claimed yet (their claim socket is still
+# there): stopped before a restart, so the restart can't land on one.
+prune_spares() { # target version
+  local pid cmd sock v
+  while read -r pid cmd; do
+    case "$cmd" in *bg-pty-host*--bg-spare*.claim.sock*) ;; *) continue ;; esac
+    sock=$(grep -Eo -- '--bg-spare [^ ]+\.claim\.sock' <<<"$cmd" | cut -d' ' -f2) || continue
+    [ -e "$sock" ] || continue   # claimed: a session runs in it
+    v=$(grep -Eo '/versions/[0-9][^ /]*' <<<"$cmd" | head -1 | cut -d/ -f3) || true
+    older_than "$v" "$1" || continue
+    [ -e "$sock" ] || continue   # claimed since the listing: leave it
+    kill "$pid" 2>/dev/null && event spare-pruned "" "$v"
+  done < <(ps -axo pid=,command= 2>/dev/null)
+  return 0
+}
+
+duplicate_sessions() { # → a line "name: id, id" for each station that more than one live session answers to
+  [ -f "$STATIONS" ] || return 0
+  active_json | jq -r --argjson names "$(jq -c 'keys' "$STATIONS")" "$GONE"'
+    map(select((.name // "") as $n | ($names | index($n)) and (gone | not))) | group_by(.name)[] | select(length > 1)
+    | "\(.[0].name): \(map(.id) | join(", "))"'
+}
+
+# Whether the watch may move stations onto a new Claude Code: the crew setting claude_update (default
+# on), for people who pin a version. Tares not answering counts as off for this round.
+claude_auto() {
+  local s; s=$(SETTINGS=""; crew_settings 2>/dev/null) || return 1
+  [ "$(jq -r '.claude_update' <<<"$s")" != false ]
+}
+
+cc_behind() { # target [agents json] → how many stations that matter run an older Claude Code
+  local target=$1 agents=${2:-} s n=0
+  [ -n "$agents" ] || agents=$(active_json) || { echo 0; return 0; }
+  for s in $(jq -r 'to_entries[] | select(.value.status == "active" and .value.role != "helper") | .key' "$STATIONS" 2>/dev/null); do
+    [ -f "$CREW_HOME/stations/$s.done" ] && continue
+    older_than "$(station_cc "$s" "$agents")" "$target" && n=$((n + 1))
+  done
+  echo "$n"
+}
+
+# A frozen crew moves no station onto a newer Claude Code either, but says so: once for each version.
+tell_newer_claude() { # live Claude Code version
+  local n; n=$(cc_behind "$1")
+  if [ "$n" = 0 ]; then rm -f "$CC_NEWER_FILE"; return 0; fi
+  [ "$(cat "$CC_NEWER_FILE" 2>/dev/null)" != "$1" ] || return 0
+  say "Claude Code $1 is newer than the one $n station(s) run; not moving stations while the kit is frozen ($ME crew unfreeze lets them follow it)"
+  event claude-newer "" "$1"
+  echo "$1" > "$CC_NEWER_FILE"
+}
+
+cc_movable() { # station target → 0 when the watch may restart it now: conversation to resume, quiet, nobody attached
+  [ -n "$(stations_get "$1" '.sessionId')" ] && [ "$(stations_get "$1" '.cc_failed')" != "$2" ] && ! attached "$1" && quiet "$1"
+}
+
+# The one station to move this round: a station on an older Claude Code that is idle, the orchestrator
+# only once no other station is behind. Helpers are short-lived and finished builders stay stopped.
+cc_pick() { # target → a station name, or nothing
+  local target=$1 s agents others_behind=0 orch="" v
+  agents=$(active_json) || return 0
+  for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS" 2>/dev/null); do
+    [ "$(stations_get "$s" '.role')" != helper ] && [ ! -f "$CREW_HOME/stations/$s.done" ] || continue
+    v=$(station_cc "$s" "$agents"); older_than "$v" "$target" || continue
+    if [ "$(stations_get "$s" '.role')" = orchestrator ]; then orch=$s; continue; fi
+    [ "$(stations_get "$s" '.cc_failed')" != "$target" ] || continue   # given up on until the next version: it must not hold the orchestrator back
+    others_behind=1
+    if cc_movable "$s" "$target"; then echo "$s"; return 0; fi
+  done
+  if [ $others_behind = 0 ] && [ -n "$orch" ] && cc_movable "$orch" "$target"; then echo "$orch"; fi
+  return 0
+}
+
+# Restart a station on the Claude Code now on PATH, in the same conversation, and check its process
+# runs it; an older spare from the pool is stopped and the restart tried again. Exit status: 0 it runs
+# the new version (or its version can't be told), 3 Tares doesn't answer, 4 it isn't idle any more or
+# the crew is halted, 5 an older spare came back every time, 1 anything else. It runs in a subshell with
+# its own errexit, so the caller turns errexit off around the call (`set +e; claude_move ...; rc=$?; set -e`):
+# `claude_move ... && ... || ...` would turn it off inside the subshell too.
+claude_move() { # station target
+  local s=$1 target=$2
+  set +e
+  ( set -e; TARES_STATE=""; SETTINGS=""; CREW_PROJECTS=""
+    tares_on || exit 3   # without Tares there are no settings to restart it with
+    crew_settings >/dev/null
+    ! halted || exit 4
+    { quiet "$s" && ! attached "$s"; } || exit 4   # it started something, or someone opened it, since the first check
+    local skill try=0 tries=${FACTORY_CC_TRIES:-3} v prompt
+    skill=$(stations_get "$s" '.role'); [ "$skill" != helper ] || skill=$(parent_role "$(stations_get "$s" '.parent')")
+    prompt="Claude Code was updated to $target, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-$skill, re-read your report, $(rearm_text), then carry on where you were."
+    while [ $try -lt "$tries" ]; do
+      try=$((try + 1))
+      if [ $try -gt 1 ]; then ! halted && ! attached "$s" || exit 4; fi   # the first restart started it on the prompt, so only a halt or someone opening it stops a retry
+      prune_spares "$target"
+      cmd_restart "$s" "$prompt"
+      v=""; for _ in 1 2 3 4 5 6; do v=$(station_cc "$s"); [ -n "$v" ] && break; sleep "${FACTORY_PAUSE:-2}"; done
+      if ! older_than "$v" "$target"; then
+        [ -n "$v" ] || say "could not tell which Claude Code $s runs; taking it for $target"
+        stations_put "$s" '{"cc_failed": null}'
+        event claude-updated "$s" "${v:-$target}"
+        exit 0
+      fi
+      say "$s came back on Claude Code $v, an older spare from Claude Code's pool, not $target; stopping it and starting it again"
+      event stale-spare "$s" "$v"
+    done
+    stations_put "$s" "$(jq -n --arg t "$target" '{cc_failed: $t}')"
+    exit 5 )
+  return $?
+}
+
+watch_claude_move() { # station target: the watch's turn at claude_move, with what it says
+  local s=$1 target=$2 rc dup
+  SETTINGS=""; ! upgrades_frozen || return 0   # frozen since the round began: the freeze wins
+  say "$s runs an older Claude Code than $target; restarting it on $target now that it's idle, in the same conversation"
+  set +e; claude_move "$s" "$target"; rc=$?; set -e
+  case $rc in
+    0) say "$s runs Claude Code $target"
+       dup=$(duplicate_sessions) || dup=""
+       [ -z "$dup" ] || { say "TWO SESSIONS named $dup; stop the one stations.json does not list (factory roster)"; event two-sessions "$s" "$dup"; } ;;
+    3) say "Tares doesn't answer; $s moves onto Claude Code $target once it does" ;;
+    4) ;;
+    5) say "$s keeps coming back on an older Claude Code than $target (an old pre-warmed spare in Claude Code's pool); the watch leaves it until the next Claude Code version. $ME crew update tries again now" ;;
+    *) say "could not restart $s on Claude Code $target; the watch revives it as before, and no other station moves until it is up" ;;
+  esac
+}
+
+cmd_crew_update() { # [--force] [--wait seconds]: every station onto the Claude Code now on PATH, each when idle, the orchestrator last
+  require_crew
+  local force=0 limit=1800 self="" mine=${FACTORY_STATION:-}
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force) force=1; shift ;;
+      --wait) [ $# -ge 2 ] || die "--wait takes a number of seconds"
+              limit=$2
+              case $limit in ''|*[!0-9]*) die "--wait takes a number of seconds, not '$limit'" ;; esac
+              while [ ${#limit} -gt 1 ] && [ "${limit#0}" != "$limit" ]; do limit=${limit#0}; done   # 00 is 0, no deadline
+              [ ${#limit} -le 9 ] || die "--wait takes a number of seconds, at most 9 digits, not '$limit'"
+              shift 2 ;;
+      *) die "usage: $ME crew update [--force] [--wait <seconds>]" ;;
+    esac
+  done
+  halted && die "the crew is halted ($(jq -r .reason "$HALT_FILE" 2>/dev/null)); $ME crew resume first"
+  local target; target=$(claude_version); [ -n "$target" ] || die "could not read the Claude Code version ($CLAUDE --version)"
+  [ -f "$STATIONS" ] || { say "no stations recorded"; return 0; }
+  local agents; agents=$(active_json) || die "$UNREAD"
+  local s v others="" orch="" failed=""
+  for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS"); do
+    if [ -n "$mine" ] && [ "$s" = "$mine" ]; then   # the station running this command can't wait for itself
+      v=$(station_cc "$s" "$agents")
+      if [ $force = 1 ] || [ -z "$v" ] || older_than "$v" "$target"; then self=$s; else say "$s already runs Claude Code $v"; fi
+      continue
+    fi
+    if [ -f "$CREW_HOME/stations/$s.done" ] || ! is_alive "$s"; then say "$s is stopped; it starts on Claude Code $target when the watch revives it"; continue; fi
+    if [ -z "$(stations_get "$s" '.sessionId')" ]; then say "$s has no conversation to resume; $ME restart $s --fresh starts it again"; failed="$failed $s"; continue; fi
+    v=$(station_cc "$s" "$agents")
+    if [ $force = 0 ] && [ -n "$v" ] && ! older_than "$v" "$target"; then say "$s already runs Claude Code $v"; continue; fi
+    if [ "$(stations_get "$s" '.role')" = orchestrator ]; then orch="$orch $s"; else others="$others $s"; fi
+  done
+  local deadline=0; [ "$limit" = 0 ] || deadline=$(( $(date +%s) + limit ))
+  local group left still rc told dup
+  for group in "$others" "$orch"; do
+    left=$group; told=""
+    while [ -n "${left// /}" ]; do
+      halted && die "the crew was halted; nothing more was restarted ($ME crew resume, then crew update again)"
+      still=""
+      for s in $left; do
+        if ! quiet "$s" || attached "$s"; then still="$still $s"; continue; fi
+        say "restarting $s on Claude Code $target, in the same conversation"
+        set +e; claude_move "$s" "$target"; rc=$?; set -e
+        case $rc in
+          0) say "$s runs Claude Code $target" ;;
+          4) still="$still $s" ;;
+          5) say "$s came back on an older Claude Code each time (an old pre-warmed spare in Claude Code's pool); try $ME crew update again"; failed="$failed $s" ;;
+          3) die "Tares doesn't answer; nothing more was restarted" ;;
+          *) say "could not restart $s on Claude Code $target"; failed="$failed $s" ;;
+        esac
+      done
+      left=$still
+      [ -n "${left// /}" ] || break
+      if [ $deadline != 0 ] && [ "$(date +%s)" -ge $deadline ]; then
+        say "gave up waiting for$left to be idle"; failed="$failed$left"; break
+      fi
+      for s in $left; do
+        case " $told " in *" $s "*) ;; *) say "waiting for $s to be idle ($(attached "$s" && echo "someone has it open" || echo "it is working"))"; told="$told $s" ;; esac
+      done
+      sleep "${FACTORY_UPDATE_POLL:-5}"
+    done
+  done
+  dup=$(duplicate_sessions) || die "$UNREAD; could not check for two sessions under one station name"
+  if [ -n "$dup" ]; then
+    echo "$dup" | while IFS= read -r s; do say "TWO SESSIONS named $s; stop the one stations.json does not list (factory roster)"; done
+    failed="$failed two-sessions"
+  fi
+  local selfnote="$self, which ran this command, moves when $ME crew watch finds it idle, or run $ME restart $self from another session"
+  if [ -n "${failed// /}" ]; then
+    [ -z "$self" ] || say "$selfnote"
+    die "not every station runs Claude Code $target:$failed"
+  fi
+  if [ -n "$self" ]; then
+    say "every other station runs Claude Code $target, one session each; $selfnote"
+  else
+    say "every station runs Claude Code $target, one session each"
+  fi
+}
+
 cmd_halt() {
   require_crew
   jq -cn --arg r "${1:-halted by the human}" '{at: (now | todate), reason: $r}' > "$HALT_FILE"
@@ -1694,7 +1959,7 @@ tell_newer_kit() { # live kit
 freezing() { [ -n "$(find "$FREEZING" -mmin -5 2>/dev/null)" ]; }
 reap_frozen_copy() {
   [ -d "$FROZEN_KIT" ] && ! frozen_copy_in_use && ! freezing || return 0
-  rm -rf "$FROZEN_KIT" "$NEWER_FILE" "$CHECKOUT_FILE"
+  rm -rf "$FROZEN_KIT" "$NEWER_FILE" "$CC_NEWER_FILE" "$CHECKOUT_FILE"
 }
 
 freeze_fail() { # made-a-copy message: nothing of a freeze that did not happen stays behind
@@ -1724,7 +1989,7 @@ cmd_freeze() {
     || freeze_fail $made "Tares at $TARES did not keep the freeze; it needs a newer version"
   rm -f "$FREEZING"
   SETTINGS=""; crew_settings >/dev/null || true
-  rm -f "$NEWER_FILE"
+  rm -f "$NEWER_FILE" "$CC_NEWER_FILE"
   event freeze "" "$version"
   say "kit frozen $(frozen_text): stations that start or revive use this kit; running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit. $ME crew unfreeze lifts it."
 }
@@ -1735,7 +2000,7 @@ cmd_unfreeze() {
   upgrades_frozen || { say "the kit is not frozen"; return 0; }
   tares_http PUT /api/crew/settings '{"kit": {"frozen": null}}' >/dev/null || die "could not lift the freeze on Tares at $TARES$(no_key_hint)"
   SETTINGS=""
-  rm -f "$NEWER_FILE"
+  rm -f "$NEWER_FILE" "$CC_NEWER_FILE"
   event unfreeze
   if frozen_copy_in_use; then
     say "kit unfrozen: the watch moves each station onto the checkout's kit when it's idle, and removes $FROZEN_KIT once none runs from it"
@@ -1805,6 +2070,10 @@ cmd_status() {
   if [ $old = 0 ]; then :
   elif [ $frozen = 1 ]; then echo "plugin: $old station(s) run an older version; the freeze holds them ($ME crew unfreeze lets the watch move each onto the checkout's)"
   else echo "plugin: $old station(s) run an older version; $ME crew watch moves each onto this one when it's idle"; fi
+  local cc_target cc_old; cc_target=$(claude_version); cc_old=$(cc_behind "$cc_target" "$agents")
+  if [ "$cc_old" = 0 ]; then :
+  elif [ $frozen = 1 ]; then echo "claude code: $cc_old station(s) run an older Claude Code than $cc_target; the freeze stops the watch moving them ($ME crew unfreeze lets it; $ME crew update does it now; one that restarts starts on $cc_target)"
+  else echo "claude code: $cc_old station(s) run an older Claude Code than $cc_target; $ME crew watch moves each onto it when it's idle ($ME crew update does it now; $ME roster shows each version)"; fi
   halted && echo "HALTED: $(jq -r .reason "$HALT_FILE" 2>/dev/null)"
   if [ $frozen = 1 ]; then
     echo "FROZEN: the kit $(frozen_text); stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit$([ "$kit" = "$(frozen_field version)" ] || echo " (a newer kit is available)")"
@@ -1966,8 +2235,18 @@ cmd_roster() { # compact, for stations
   adopt_unrecorded
   [ -f "$STATIONS" ] || { echo "no stations"; return; }
   local agents; agents=$(active_json) || die "$UNREAD"
-  jq -r --argjson a "$agents" "$GONE $TURN"' to_entries[] | select(.value.status == "active") |
-    "\(.key)\t\(.value.role)\t\(.value.project // "")\t\((.value.id) as $id | ([$a[] | select(.id == $id and (gone | not)) | turn][0] // "gone"))"' "$STATIONS"
+  # the fifth column is the Claude Code each station's process runs, flagged when it is older than the one installed
+  local target s v row rows out=""; target=$(claude_version)
+  rows=$(jq -r --argjson a "$agents" "$GONE $TURN"' to_entries[] | select(.value.status == "active") |
+    "\(.key)\t\(.value.role)\t\(.value.project // "")\t\((.value.id) as $id | ([$a[] | select(.id == $id and (gone | not)) | turn][0] // "gone"))"' "$STATIONS")
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    s=${row%%$'\t'*}
+    v=$(station_cc "$s" "$agents")
+    if older_than "$v" "$target"; then v="$v (older than $target)"; fi
+    out="$out$row"$'\t'"$v"$'\n'
+  done <<<"$rows"
+  printf '%s' "$out"   # in one write, so a reader that stops early never breaks a pipe
 }
 
 cmd_attach() { require_crew; local id; id=$(stations_get "$(station_name "${1:?usage: $ME crew attach <role|station>}")" '.id'); [ -n "$id" ] || die "unknown station $1"; exec "$CLAUDE" attach "$id"; }
@@ -1995,7 +2274,9 @@ cmd_crew() {
     resume) cmd_resume ;;
     freeze) cmd_freeze ;;
     unfreeze) cmd_unfreeze ;;
-    *) die "$ME crew takes up, down, status, desk, attach, logs, watch, halt, resume, freeze or unfreeze" ;;
+    update) cmd_crew_update "$@" ;;
+    restart) cmd_crew_update --force "$@" ;;
+    *) die "$ME crew takes up, down, status, desk, attach, logs, watch, halt, resume, freeze, unfreeze, update or restart" ;;
   esac
 }
 
@@ -2330,6 +2611,7 @@ cmd_doctor() {
         command -v kind >/dev/null && ok "kind" || no "kind not installed (release profile kind): brew install kind"
         command -v kubectl >/dev/null && ok "kubectl" || no "kubectl not installed (release profile kind)"
       fi
+      [ "$(setting claude_update)" = false ] && warn "crew setting claude_update is off: the watch does not move stations onto a new Claude Code (one that restarts for another reason starts on it); $ME crew update moves them"
       [ -z "$missing" ] && [ "$(setting challenger)" = true ] && { command -v codex >/dev/null && ok "codex (challenger on)" || no "challenger is on but the Codex CLI is not installed"; }
       local p repo gh_line perm
       while IFS=$'\t' read -r p repo; do
@@ -2355,6 +2637,16 @@ cmd_doctor() {
     gh auth status >/dev/null 2>&1 && ok "gh signed in" || no "gh not signed in: gh auth login"
   else
     no "gh not installed (needed for PRs, reviews and merges): brew install gh"
+  fi
+  if [ -f "$STATIONS" ] && [ -n "${list:-}" ]; then
+    local cc_target cc_s cc_v; cc_target=$(claude_version)
+    for cc_s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS"); do
+      [ -f "$CREW_HOME/stations/$cc_s.done" ] && continue
+      cc_v=$(station_cc "$cc_s" "$list")
+      if older_than "$cc_v" "$cc_target"; then warn "$cc_s runs Claude Code $cc_v, older than the $cc_target installed; $ME crew update moves it when it's idle"
+      elif [ -n "$cc_v" ]; then ok "$cc_s runs Claude Code $cc_v"
+      else warn "could not tell which Claude Code $cc_s runs"; fi
+    done
   fi
   if [ -f "$STATIONS" ]; then
     local id

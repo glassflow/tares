@@ -171,6 +171,12 @@ def plan_now(report: dict | None, report_at, status: tuple | None, now=None) -> 
             "at": max(ats) if ats else None}
 
 
+def code_version(meters: dict | None) -> str | None:
+    """The Claude Code version a session runs, from its latest status line report."""
+    v = _dict((meters or {}).get("status")).get("version")
+    return str(v) if v else None
+
+
 def context_now(meters: dict | None) -> dict | None:
     """A station's context window from its latest status line report, else from its latest /context
     reading (a station started before it had the status line)."""

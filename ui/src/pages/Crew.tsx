@@ -148,6 +148,31 @@ function withHelpers(s: CrewStation, all: CrewStation[]): CrewStation[] {
 
 // ── the member list ─────────────────────────────────────────────────────────
 
+/** Whether version a is lower than b, comparing the numbers part by part (2.1.9 before 2.1.10). */
+function versionBefore(a: string, b: string): boolean {
+  const n = (v: string) => v.split(/[.-]/).map((p) => parseInt(p, 10) || 0);
+  const [x, y] = [n(a), n(b)];
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d !== 0) return d < 0;
+  }
+  return false;
+}
+
+/** The Claude Code a station runs; flagged when another station runs a newer one, since the factory moves
+ *  stations onto a new version one at a time (or `tares factory crew update` does all of them). */
+function CodeVersion({ s, all }: { s: CrewStation; all: CrewStation[] }) {
+  if (!s.claude_version) return null;
+  const newest = all.reduce((m, x) => (x.claude_version && (!m || versionBefore(m, x.claude_version)) ? x.claude_version : m), "");
+  const older = !!newest && versionBefore(s.claude_version, newest);
+  return (
+    <small className={`crew-cc${older ? " is-older" : ""}`}
+      title={older ? `Claude Code ${s.claude_version}; ${newest} runs on another station. It moves when idle, or run tares factory crew update.` : `Claude Code ${s.claude_version}`}>
+      {s.claude_version}{older ? " · older" : ""}
+    </small>
+  );
+}
+
 function MemberRow({ s, all, selected, depth = 0 }: { s: CrewStation; all: CrewStation[]; selected: string; depth?: number }) {
   const [, setParams] = useSearchParams();
   const kids = all.filter((x) => x.parent === s.name && x.role === "helper");
@@ -160,6 +185,7 @@ function MemberRow({ s, all, selected, depth = 0 }: { s: CrewStation; all: CrewS
           <span className="crew-role">{s.role ?? "station"}</span>
         </button>
         <span className="crew-side">
+          <CodeVersion s={s} all={all} />
           <ContextBadge ctx={s.context} />
           <small>{s.last_at ? <TimeAgo ts={s.last_at} /> : "silent"}</small>
           <CrewState s={s} />
@@ -435,6 +461,8 @@ function Settings({ st, grants, onChange }: { st: CrewSettings; grants: string; 
           <dd>{st.pace ? "on: at 85% of the 5-hour window or 90% of the week no new builder starts and stations tick every 45 minutes; at 95% builders finish their step and wait; after the reset the watch resumes them" : "off: the crew runs until a limit stops it"}{" "}
             <button type="button" onClick={togglePace}>{st.pace ? "Turn off" : "Turn on"}</button>
             {err && <span className="dim"> {err}</span>}</dd>
+          <dt>Claude Code updates</dt>
+          <dd>{st.claude_update === false ? "off: the watch does not restart stations onto a new Claude Code (one that restarts for another reason starts on it); run tares factory crew update to move them" : "on: the watch restarts idle stations on a new Claude Code, one at a time"}</dd>
         </dl>
         <h2>Grants for every project</h2>
         {lines.length ? <ul className="crew-grants">{lines.map((g, i) => <li key={i}>{g}</li>)}</ul>
