@@ -816,10 +816,16 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {"queue": queue(), "now": now_utc()}
 
     # ── the repo map (TR-681): one per GitHub repo, shared by every project that names it ──
+    def pr_repo(t: dict) -> str | None:
+        """The repo of a ticket's PR, once GitHub has answered for it: a repo typed into a PR link is
+        not yet a repo anyone has seen."""
+        pr = t.get("pr") or {}
+        return pr.get("repo") if pr.get("checked_at") and not pr.get("error") else None
+
     def repo_of(uid: str, t: dict) -> str | None:
         """The repo a ticket changes: its own, its PR's, else the project's only repo (when it has a
         GitHub name). With several repos, or one without a name, a ticket that names none has none."""
-        repo = t.get("repo") or (t.get("pr") or {}).get("repo")
+        repo = t.get("repo") or pr_repo(t)
         if repo:
             return repo
         repos = (store.get_handover(uid) or {}).get("repos") or []
@@ -863,13 +869,16 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "max_chars": factory_mod.MAP_MAX_CHARS}
 
     def named_repos() -> set[str]:
-        """Every GitHub repo some project names: on its hand-over or on one of its tickets."""
+        """Every GitHub repo some project names: on its hand-over, or on a ticket (its repo, else its PR's)."""
         out: set[str] = set()
         for p in store.list_projects():
             for r in (store.get_handover(p["id"]) or {}).get("repos") or []:
                 if r.get("name"):
                     out.add(r["name"].lower())
-            out.update(t["repo"].lower() for t in store.list_tickets(p["id"]) if t.get("repo"))
+            for t in store.list_tickets(p["id"]):
+                repo = t.get("repo") or pr_repo(t)
+                if repo:
+                    out.add(repo.lower())
         return out
 
     @app.put("/api/repo-map")
@@ -891,7 +900,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         by, _ = who(request, body)
         try:
             changed = store.set_repo_map(name, text, note, by, str(body.get("project") or "") or None,
-                                         now_utc(), str(body.get("base") or ""))
+                                         now_utc(), str(body.get("base") or "").strip())
         except MapChanged as e:
             cur = e.current
             if not cur:

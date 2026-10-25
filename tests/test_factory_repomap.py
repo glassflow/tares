@@ -222,6 +222,26 @@ async def main():
         brief = await mf.builder_brief("T2", project="Shop")
         ck("with one repo and no GitHub name, no map", "## Repo map" not in brief, brief)
 
+        print("== a ticket's PR repo is a named repo, and base is trimmed (TR-685) ==")
+        as_station("crew-orchestrator", "orchestrator")
+        await m.write_ticket("Lands in another repo", project="Shop")
+        pr_t = store.get_ticket(shop, "T3")
+        pr_link = {"repo": "Acme/Landed", "url": "https://github.com/acme/landed/pull/9", "number": 9}
+        store.update_ticket(pr_t["id"], pr=pr_link)
+        as_station("shop-build-m1", "builder", "crew-orchestrator")
+        unread = await mf.write_repo_map("acme/landed", MAP, "map for a PR GitHub has not answered for", "", project="Shop")
+        ck("a PR repo GitHub has not answered for is not yet named", unread.startswith("error 404") and store.get_repo_map("acme/landed") is None, unread)
+        store.update_ticket(pr_t["id"], pr={**pr_link, "checked_at": "2026-10-25T01:00:00+00:00", "error": "no credential"})
+        failed = await mf.write_repo_map("acme/landed", MAP, "map for a PR whose read failed", "", project="Shop")
+        ck("nor is one whose read failed", failed.startswith("error 404"), failed)
+        store.update_ticket(pr_t["id"], pr={**pr_link, "checked_at": "2026-10-25T01:00:00+00:00", "error": None})
+        landed = await mf.write_repo_map("acme/landed", MAP, "map for the PR's repo", "", project="Shop")
+        ck("a repo only a ticket's PR names is accepted once GitHub has answered", landed.startswith("{") and json.loads(landed)["changed"], landed)
+        version = store.get_repo_map("acme/landed") and factory.map_version(store.get_repo_map("acme/landed")["body"])
+        spaced = await mf.write_repo_map("acme/landed", MAP + " More.", "base with a stray space", f" {version}\n", project="Shop")
+        ck("a base with a stray space or newline still matches", spaced.startswith("{") and json.loads(spaced)["changed"], spaced)
+        store.update_ticket(pr_t["id"], pr={})
+
         print("== the map and its history are one write (TR-684) ==")
         before = store.get_repo_map("acme/api")["body"]
         store.con.execute("ALTER TABLE repo_map_history RENAME TO repo_map_history_away")
@@ -245,6 +265,9 @@ async def main():
     ck("write it when the brief says there is none", "write_repo_map" in manual and "no map" in manual, manual[:100])
     ck("update it after a merge that changes layout or commands", re.search(
         r"layout.{0,80}(build|test|lint)", manual, re.S) is not None and "update" in manual.lower())
+    steps = {n: line for line in manual.splitlines() for n in ("6", "10") if line.startswith(n + ". ")}
+    ck("step 6 writes a new map with an empty base", "write_repo_map" in steps["6"] and "empty `base`" in steps["6"], steps["6"][-300:])
+    ck("step 10 passes the brief's version as base (TR-685)", "write_repo_map" in steps["10"] and "`version` as `base`" in steps["10"], steps["10"][-300:])
 
 
 async def store_handover(app, uid, repos):
