@@ -367,6 +367,34 @@ check "(and revived with the usual prompt)" 'lastprompt links-app-build-m2 | gre
 "$F" retire links-app-build-m2 >/dev/null 2>&1
 idle_all
 
+# ---- the tidy: a new limit episode says so again, and a builder that finished while it waited leaves the list ----
+: > "$T/watch.log"
+set_pace true; plan 100 10
+agent crew-reviewer '.state = "stopped" | del(.pid)'
+rr
+check "(a limit episode with a station waiting: said once)" '[ "$(grep -c "the plan.s limit is full" "$T/watch.log")" = 1 ] && jq -e ".stopped | index(\"crew-reviewer\")" "$FACTORY_CREW_HOME/pace.json" >/dev/null'
+plan 100 90 -60
+FAKE_CLAUDE_FAIL_RESUME=1 rr
+check "(the window reset but the resume failed: the station is still in the pace file)" 'jq -e ".stopped | index(\"crew-reviewer\")" "$FACTORY_CREW_HOME/pace.json" >/dev/null'
+plan 100 10
+rr
+check "a new limit episode says the limit is full again" '[ "$(grep -c "the plan.s limit is full" "$T/watch.log")" = 2 ]'
+plan 100 90 -60
+rr
+check "(and once it is over the station is revived and the pace file goes)" '[ ! -f "$FACTORY_CREW_HOME/pace.json" ]'
+idle_all
+plan 100 10
+agent $B '.state = "stopped" | del(.pid)'
+rr
+check "(a builder that stopped at the limit is in the pace file)" 'jq -e ".stopped | index(\"$B\")" "$FACTORY_CREW_HOME/pace.json" >/dev/null'
+touch "$FACTORY_CREW_HOME/stations/$B.done"
+rr
+check "a builder that finished while it waited is not waited for" '! jq -e ".stopped | index(\"$B\")" "$FACTORY_CREW_HOME/pace.json" >/dev/null'
+rm -f "$FACTORY_CREW_HOME/stations/$B.done"
+plan 10 10
+rr; rr
+idle_all
+
 # ---- a note whose restart fails ----
 set_pace true; plan 10 10
 rr

@@ -318,7 +318,7 @@ crew_projects_or_die() {
 }
 project_row() { crew_projects | jq -c --arg p "$1" --arg s "$(slugify "$1")" \
   '[.[] | select(.name == $p or .id == $p or ((.name | ascii_downcase | gsub("[^a-z0-9]+"; "-") | gsub("^-|-$"; "")) == $s))][0] // empty'; }
-project_repo_rows() { crew_projects | jq -r '.[] | .name as $n | .repos[] | select(.path != null) | [$n, .path] | @tsv'; }
+project_repo_rows() { crew_projects | jq -r '.[] | .name as $n | (.repos // [])[] | select(.path != null) | [$n, .path] | @tsv'; }
 all_repos() { crew_projects | jq -r '[.[] | .repos[] | .path | select(. != null)] | unique | .[]'; }
 
 # ---------- crew settings and grants ----------
@@ -943,6 +943,7 @@ cmd_crew_up() {
   keep_token
   ensure_settings
   prime
+  lsp_offer
   [ -n "${roles// /}" ] || roles=$(crew_roles)
   # Orchestrator first so the others can check in with it.
   local ordered="" r
@@ -2535,6 +2536,129 @@ cmd_projects() { # every project handed to the crew: progress, milestone, builde
   done < <(jq -c '.[]' <<<"$rows")
 }
 
+# ---------- code intelligence (TR-682) ----------
+# Claude Code's LSP tool (definitions, references, callers) answers only where a language server is wired
+# in, and only a plugin wires one. Per language: the manifests that show it, the official plugin, the
+# server binary the plugin needs on PATH, and the command that installs that binary. One server can serve
+# two languages (typescript-language-server reads JavaScript too): a repo is listed once per plugin, by the
+# first language that shows it, so tsconfig.json says TypeScript and a package.json alone says JavaScript.
+LSP_MARKETPLACE=claude-plugins-official
+lsp_langs() { # language|manifest file names|plugin|binary|install command
+  cat <<'EOF'
+Python|pyproject.toml,setup.py,setup.cfg,Pipfile,requirements.txt|pyright-lsp|pyright-langserver|npm install -g pyright
+TypeScript|tsconfig.json|typescript-lsp|typescript-language-server|npm install -g typescript-language-server typescript
+JavaScript|package.json|typescript-lsp|typescript-language-server|npm install -g typescript-language-server typescript
+Go|go.mod|gopls-lsp|gopls|go install golang.org/x/tools/gopls@latest
+Rust|Cargo.toml|rust-analyzer-lsp|rust-analyzer|rustup component add rust-analyzer
+EOF
+}
+
+lsp_detect() { # repo → the languages its manifests show (at the root or one folder down), one per line
+  local lang names plugin _b _i f seen=" "
+  while IFS='|' read -r lang names plugin _b _i; do
+    case "$seen" in *" $plugin "*) continue ;; esac
+    local -a match=()
+    for f in ${names//,/ }; do [ ${#match[@]} = 0 ] || match+=(-o); match+=(-name "$f"); done
+    [ -n "$(find "$1" -maxdepth 2 \( -name node_modules -o -name .git -o -name .factory -o -name .venv -o -name venv \) -prune \
+      -o -type f \( "${match[@]}" \) -print -quit 2>/dev/null)" ] && { echo "$lang"; seen="$seen$plugin "; }
+  done < <(lsp_langs)
+  return 0
+}
+
+LSP_ENABLED=""   # "<id>\t<projectPath>" of each enabled plugin; LSP_LISTED=1 once read, 0 when claude could not list them
+lsp_read_plugins() {
+  [ -z "${LSP_LISTED:-}" ] || return 0
+  if LSP_ENABLED=$("$CLAUDE" plugin list --json 2>/dev/null | jq -r '.[] | select(.enabled == true) | [.id, (.projectPath // "")] | @tsv' 2>/dev/null); then LSP_LISTED=1
+  else LSP_ENABLED=""; LSP_LISTED=0; fi
+}
+
+lsp_have_bin() { PATH="${FACTORY_LSP_PATH:-$PATH}" command -v "$1" >/dev/null 2>&1; }   # FACTORY_LSP_PATH: look in these folders instead of PATH (tests)
+
+lsp_state() { # repo plugin binary → ready | no-plugin | no-binary | neither | unknown (claude could not list its plugins)
+  lsp_read_plugins
+  [ "$LSP_LISTED" = 1 ] || { echo unknown; return 0; }
+  local have_plugin=0 have_bin=0
+  awk -F'\t' -v id="$2@$LSP_MARKETPLACE" -v repo="$1" '$1 == id && ($2 == "" || $2 == repo) { f = 1 } END { exit !f }' <<<"$LSP_ENABLED" && have_plugin=1
+  lsp_have_bin "$3" && have_bin=1
+  case "$have_plugin$have_bin" in 11) echo ready ;; 10) echo no-binary ;; 01) echo no-plugin ;; *) echo neither ;; esac
+}
+
+lsp_fix() { # state plugin binary install → the commands that make the language server work, one per line
+  case "$1" in no-binary|neither) echo "$4" ;; esac
+  case "$1" in no-plugin|neither) echo "claude plugin install $2@$LSP_MARKETPLACE" ;; esac
+}
+
+lsp_missing() { # → "language|plugin|binary|install|state|repo" for each repo language with no working server
+  local project repo lang plugin bin inst state _n _m
+  lsp_read_plugins
+  while IFS=$'\t' read -r project repo; do
+    [ -d "$repo" ] || continue
+    while IFS= read -r lang; do
+      IFS='|' read -r _n _m plugin bin inst < <(lsp_langs | awk -F'|' -v l="$lang" '$1 == l')
+      state=$(lsp_state "$repo" "$plugin" "$bin")
+      case "$state" in ready|unknown) ;; *) printf '%s|%s|%s|%s|%s|%s\n' "$lang" "$plugin" "$bin" "$inst" "$state" "$repo" ;; esac
+    done < <(lsp_detect "$repo")
+  done < <(project_repo_rows 2>/dev/null || true)
+}
+
+doctor_lsp() { # per handed-over repo and language: has Claude Code a language server (ok), or what to run (warn)
+  local project repo lang plugin bin inst state _n _m cmds
+  [ -n "$(project_repo_rows 2>/dev/null)" ] || return 0
+  lsp_read_plugins
+  while IFS=$'\t' read -r project repo; do
+    [ -d "$repo" ] || continue
+    while IFS= read -r lang; do
+      IFS='|' read -r _n _m plugin bin inst < <(lsp_langs | awk -F'|' -v l="$lang" '$1 == l')
+      state=$(lsp_state "$repo" "$plugin" "$bin")
+      if [ "$state" = ready ]; then
+        ok "project $project: $lang in $repo has a language server for Claude Code ($plugin plugin, $bin on PATH)"
+      elif [ "$state" = unknown ]; then
+        warn "project $project: $lang in $repo: cannot tell whether Claude Code has a language server, because claude plugin list --json failed"
+      else
+        cmds=$(lsp_fix "$state" "$plugin" "$bin" "$inst" | sed 's/.*/`&`/' | paste -sd ' ' - | sed 's/` `/` then `/')
+        warn "project $project: $lang in $repo has no language server for Claude Code, so the LSP tool cannot answer for it ($(case "$state" in no-binary) echo "the $plugin plugin is on, $bin is not on PATH" ;; no-plugin) echo "$bin is installed, the $plugin plugin is not on" ;; *) echo "neither the $plugin plugin nor $bin is there" ;; esac)). Run $cmds; $ME crew up offers it"
+      fi
+    done < <(lsp_detect "$repo")
+  done < <(project_repo_rows 2>/dev/null)
+  return 0
+}
+
+lsp_offer() { # crew up: recommend the missing language servers of the handed-over repos; install only on a yes
+  local missing; missing=$(lsp_missing)
+  [ -n "$missing" ] || return 0
+  local lang plugin bin inst state repo cmds
+  {
+    printf '\nCode intelligence: Claude Code can find a definition, its references and its callers through a language server,\nso builders and the reviewer search less and read less. These repos have none wired in yet:\n'
+    while IFS='|' read -r lang plugin bin inst state repo; do
+      printf '  %s in %s\n' "$lang" "$repo"
+      lsp_fix "$state" "$plugin" "$bin" "$inst" | sed 's/^/      /'
+    done <<<"$missing"
+  } >&2
+  if [ "$ASSUME_YES" = 1 ]; then
+    say "not installing language servers without a yes: run the commands above yourself, or run crew up without --yes"
+    return 0
+  fi
+  printf 'Run these now?\n  recommended: yes\n  press enter to take it, or type no\n> ' >&2
+  local ans; IFS= read -r ans || ans=no   # no answer at all (a closed input) is a no
+  case "${ans:-yes}" in
+    y|Y|yes|Yes) ;;
+    *) say "no language servers installed; $ME doctor lists what is missing"; return 0 ;;
+  esac
+  local seen=""
+  while IFS='|' read -r lang plugin bin inst state repo; do
+    case " $seen " in *" $plugin "*) continue ;; esac
+    seen="$seen $plugin"
+    case "$state" in no-binary|neither)
+      say "installing $bin: $inst"
+      bash -c "$inst" >&2 || { say "could not install $bin; install it yourself ($inst)"; continue; } ;;
+    esac
+    case "$state" in no-plugin|neither)
+      say "installing the $plugin plugin"
+      "$CLAUDE" plugin install "$plugin@$LSP_MARKETPLACE" >&2 || say "could not install the $plugin plugin; run: claude plugin install $plugin@$LSP_MARKETPLACE" ;;
+    esac
+  done <<<"$missing"
+}
+
 # Which key each place holds, by id, so a stale one shows (TR-560): this terminal's key against the
 # saved login, then the crew file the stations read.
 doctor_keys() {
@@ -2641,6 +2765,7 @@ cmd_doctor() {
   else
     warn "no crew yet in $CREW_HOME: $ME crew up creates it"
   fi
+  tares_on && doctor_lsp
   if command -v gh >/dev/null; then
     gh auth status >/dev/null 2>&1 && ok "gh signed in" || no "gh not signed in: gh auth login"
   else

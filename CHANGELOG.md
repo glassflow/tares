@@ -6,6 +6,14 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Factory: `factory doctor` reads each handed-over repo's languages from its manifests (Python,
+  TypeScript, JavaScript, Go, Rust, at the repo root or one folder down) and says whether Claude Code has a
+  language server for each: the plugin enabled and its binary on your PATH. For a missing one it
+  prints the install command and the plugin that wires it in (`npm install -g pyright`, then
+  `claude plugin install pyright-lsp@claude-plugins-official`). `factory crew up` offers the same
+  install and runs it only on a yes; `--yes` and a closed input install nothing. The builder and
+  reviewer manuals say to prefer the LSP tool over grep for definitions, references and callers
+  when it answers. Without a server the tool has nothing to answer with (TR-682).
 - Factory: the crew setting `idle_wake` (off by default) wakes stations on events instead of fixed
   ticks. The watch asks Tares what each station has to do and restarts an idle station with one
   message only when there is work (a PR without a verdict, changes asked for, a `RELEASE`, a desk

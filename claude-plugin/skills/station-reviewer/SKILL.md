@@ -29,7 +29,7 @@ On every `REVIEW` message and every tick, `review_queue()` lists tickets in stag
    - Run the tests and linters from the agents doc (in the brief, or `list_docs(kind="agents")` then `get_doc(id)`) on the branch. Quote the command and the result. Disable test caches where they exist (`go test -count=1`).
    - For each new or changed test: break the code it is meant to cover, run it, confirm it fails, restore it. A test that passes against broken code is a finding.
    - Check the premise, not only the logic: if the change reads a field, config key or event, find where it is produced.
-   - Check the blast radius outside the diff: callers, stored config, migrations, other open PRs touching the same files.
+   - Check the blast radius outside the diff: callers, stored config, migrations, other open PRs touching the same files. When the LSP tool answers for the file type, use it for definitions, references and callers instead of grep; fall back to grep when it returns nothing, the file type has no language server (`factory doctor` lists the missing ones) or the text is not a symbol (a string, a config key).
    - Say what you did **not** verify and why.
 6. **Second-model challenge.** Give a subagent on a different Claude model from yours (`model: "sonnet"` if you run on Opus, `"opus"` if you run on Sonnet) the diff, the ticket and your draft findings, and ask it to find what you missed and to argue against each finding. Keep what survives. `crew.json` → `review.challenge = false` skips this for trivial PRs.
 7. **Decide.** `pass` (no blocking findings), `changes` (fix and re-review) or `block` (wrong approach, needs the orchestrator). Each finding has a severity (P1, P2, P3) and says whether it blocks.
