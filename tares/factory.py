@@ -673,7 +673,7 @@ def attach_command(station: str) -> str:
 
 CREW_DEFAULTS = {"autonomy": None, "releaser": None, "release_profile": None,
                  "prod_pattern": None, "challenger": None, "builders_max": None,
-                 "kit": {"frozen": None}}
+                 "kit": {"frozen": None}, "idle_wake": None}
 
 
 def kit_ok(v) -> dict:
@@ -719,6 +719,10 @@ def crew_settings_ok(body: dict, cur: dict) -> dict:
     for k in ("challenger", "releaser"):
         if body.get(k) is not None:
             out[k] = bool(body[k])
+    if body.get("idle_wake") is not None:
+        if not isinstance(body["idle_wake"], bool):
+            raise DocError("idle_wake is true or false")
+        out["idle_wake"] = body["idle_wake"]
     if body.get("builders_max") is not None:
         try:
             n = int(body["builders_max"])

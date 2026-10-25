@@ -29,7 +29,7 @@ context="You are the ${FACTORY_ROLE} station \`${FACTORY_STATION:-?}\` of the ta
 context="$context The plan, tickets, assumptions, checks, reviews and the desk are on Tares (${TARES_FACTORY_URL:-the crew Tares}), through the Tares MCP tools."
 context="$context Your rules are in the skills \`factory-protocol\` and \`station-${skill}\`."
 if [ "$source_kind" != "startup" ]; then
-  context="$context This session was ${source_kind}d: load both skills again, re-read your report and your work on Tares, check CronList and re-arm your schedule if it is missing, then carry on where your report left off."
+  context="$context This session was ${source_kind}d: load both skills again, re-read your report and your work on Tares, check CronList and re-arm your schedule if it is missing (if get_crew_settings shows idle_wake true, arm none: the factory wakes you), then carry on where your report left off."
 fi
 if [ -n "${FACTORY_HOME:-}" ] && [ -f "$FACTORY_HOME/HALT" ]; then
   context="$context The crew is halted ($(jq -r '.reason // ""' "$FACTORY_HOME/HALT" 2>/dev/null)): start nothing new until it is resumed."

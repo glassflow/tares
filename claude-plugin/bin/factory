@@ -41,6 +41,9 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
                                             a frozen crew keeps its kit and is only told of a newer
                                             one; between rounds, read the plan's limits and the context
                                             the Crew page asks for
+                                            with the idle_wake setting on, wake an idle station only
+                                            when Tares has work for it (and after a quiet spell, to
+                                            check), and hold its tick instead of the station
   tares factory crew halt ["<reason>"]      stop risky actions on every station until resume
   tares factory crew resume                 lift a halt
   tares factory crew freeze                 keep the crew on today's plugin kit: a station that starts
@@ -144,6 +147,8 @@ export -n TARES_AUTH_TOKEN TARES_FACTORY_SOURCE TARES_FACTORY_KEY_SOURCE 2>/dev/
 
 ccfg() { jq -r "$1" "$CREW_CFG" 2>/dev/null || true; }
 slugify() { tr '[:upper:]' '[:lower:]' <<<"$1" | tr -c 'a-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//'; echo; }
+# The time the idle wake works by: epoch seconds. FACTORY_NOW stands in for it in tests.
+now_s() { echo "${FACTORY_NOW:-$(date +%s)}"; }
 event() { [ -d "$CREW_HOME" ] && jq -cn --arg e "$1" --arg s "${2:-}" --arg d "${3:-}" \
   '{at: (now | todate), station: $s, event: $e, detail: $d}' >> "$EVENTS" 2>/dev/null || true; }
 
@@ -304,7 +309,7 @@ all_repos() { crew_projects | jq -r '[.[] | .repos[] | .path | select(. != null)
 settings_defaults() {
   jq -n '{autonomy: "L4-ship", releaser: false, release_profile: "kind",
           prod_pattern: "(^|[-_.])(prod|production)([-_.]|$)", challenger: false, builders_max: 2,
-          kit: {frozen: null}}'
+          kit: {frozen: null}, idle_wake: false}'
 }
 settings_raw() {
   local s; s=$(tares_http GET /api/crew/settings) || die "could not read the crew settings from Tares at $TARES$(no_key_hint)"
@@ -827,6 +832,7 @@ launch() { # station role parent project repo cwd model effort prompt [resume-se
       model: $model, effort: $effort, settings: $settings, kit: $kit, plugin: $plugin, grants: $grants, grants_tried: null,
       status: "active", startedAt: (now | todate)}')"
   [ -z "$gsum" ] || printf '%s\n' "$grants" > "$CREW_HOME/stations/$station.grants"
+  iw_launch_note "$station" || true
   event started "$station" "$id"
   echo "  ✓ started $station ($model, $effort)" >&2
 }
@@ -834,6 +840,7 @@ launch() { # station role parent project repo cwd model effort prompt [resume-se
 boot_prompt() { # role [task]
   local p="Boot as the $1 station: load the skills factory-protocol and station-$1, follow their Boot sections, and send crew-orchestrator READY when you are set."
   [ "$1" = orchestrator ] && p="Boot as the orchestrator station: load the skills factory-protocol and station-orchestrator, then follow the Boot section. The other stations will send you READY."
+  idle_wake_on && p="$p $(idle_wake_note)"
   [ -n "${2:-}" ] && p="$p
 
 Your task:
@@ -1017,7 +1024,7 @@ cmd_revive() { # station [--fresh] [prompt]: same name, same env; the conversati
   old_id=$(stations_get "$station" '.id')
   local skill=$role; [ "$role" = helper ] && skill=$(parent_role "$parent")
   local prompt=${1:-}
-  local again="Reload the skills factory-protocol and station-$skill, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."
+  local again="Reload the skills factory-protocol and station-$skill, re-read your report and your work on Tares, $(rearm_text), then carry on where your report left off."
   if [ -z "$prompt" ] && [ $fresh = 1 ]; then
     prompt="You were started again under the same name, in a new conversation: the last one kept refilling its context right after each compaction, so Claude Code stopped it. Nothing from it carries over except your report and what is on Tares. $again Read big files, logs and diffs in parts."
   fi
@@ -1148,6 +1155,7 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
           [ $rc = 0 ] || say "could not restart $s; will try again next round"
         elif ! halted && between_turns "$s" && regrant_due "$s"; then
           regrant_station "$s"
+        elif idle_wake_plan "$s"; then idle_wake_send   # woken: one restart a station a round (TR-673)
         elif [ -z "$candidate" ] && ! upgrades_frozen && movable "$s" "$kit"; then
           candidate=$s
         fi
@@ -1214,9 +1222,9 @@ regrant_station() { # station: restart it with its new grants, in the same conve
     if [ -n "$rules" ]; then
       prompt="$human allowed new permissions in Tares, so the factory restarted you in this same conversation with fresh settings. These are in your settings now:
 $rules
-If something you tried was refused for want of one of these and is still needed, run it again now. Then re-read your report, re-arm your schedule if you have one, and carry on where you were."
+If something you tried was refused for want of one of these and is still needed, run it again now. Then re-read your report, $(rearm_text), and carry on where you were."
     else
-      prompt="$human changed what the crew is allowed in Tares, so the factory restarted you in this same conversation with fresh settings that have the change (read_grants shows them). Re-read your report, re-arm your schedule if you have one, then carry on where you were."
+      prompt="$human changed what the crew is allowed in Tares, so the factory restarted you in this same conversation with fresh settings that have the change (read_grants shows them). Re-read your report, $(rearm_text), then carry on where you were."
     fi
     say "$s has new permissions from Tares; restarting it with them now that it's between turns, in the same conversation"
     cmd_restart "$s" "$prompt"
@@ -1228,6 +1236,208 @@ If something you tried was refused for want of one of these and is still needed,
     *) say "could not restart $s with its new permissions; it gets them when it next starts ($ME restart $s)" ;;
   esac
 }
+
+# ---------- idle wake (TR-673) ----------
+# With the crew setting idle_wake on, a station holds no tick of its own. The watch (bash, no model
+# call) looks at Tares and wakes an idle station with one message when it has something to do, and
+# sends a liveness wake when nothing has happened for a while: after 15 minutes (reviewer), 20
+# (orchestrator) or 30 (builder, releaser), then 30, then 45 and every 45 after, so a quiet crew costs
+# a few turns an hour instead of one per tick. A wake is a restart in the same conversation, the way
+# the watch hands a station new grants. What a wake has already told a station lives in
+# stations/<station>.wake. With the setting off none of this runs and no file is written.
+idle_wake_on() { crew_settings >/dev/null 2>&1 && jq -e '.idle_wake == true' <<<"$SETTINGS" >/dev/null; }
+idle_wake_state() { # → on, off, or unknown (Tares gave no settings: nothing changes on a blip)
+  if ! crew_settings >/dev/null 2>&1; then echo unknown
+  elif jq -e '.idle_wake == true' <<<"$SETTINGS" >/dev/null; then echo on
+  else echo off; fi
+}
+idle_wake_note() {
+  echo "idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete)."
+}
+rearm_text() { # what a restart tells a station about its schedule
+  if idle_wake_on; then echo "arm no tick of your own (idle_wake is on: the factory wakes you when there is work and holds your tick; if you hold one, delete it with CronList and CronDelete)"
+  else echo "re-arm your schedule if you have one"; fi
+}
+
+WAKE_DEFAULT='{"seen":[],"n":0,"last_wake":null,"clock":null,"baseline":null,"released":false}'
+wake_file() { echo "$CREW_HOME/stations/$1.wake"; }
+wake_read() { # station → its wake state, the defaults under whatever the file has
+  local f; f=$(wake_file "$1")
+  if [ -f "$f" ] && jq -e . "$f" >/dev/null 2>&1; then jq -c --argjson d "$WAKE_DEFAULT" '$d + .' "$f"
+  else echo "$WAKE_DEFAULT"; fi
+}
+wake_update() { # station jq-filter [jq args]: apply the filter to the wake state, written whole
+  local s=$1 filter=$2 f tmp; shift 2
+  f=$(wake_file "$s"); mkdir -p "$(dirname "$f")"
+  tmp=$(mktemp "$f.XXXXXX") || return 1
+  if wake_read "$s" | jq -c "$@" "$filter" > "$tmp"; then mv "$tmp" "$f"; else rm -f "$tmp"; return 1; fi
+}
+iw_launch_note() { # station: a start with idle_wake on is a start with its tick released; off, with it back
+  case "$(stations_get "$1" '.role')" in orchestrator|reviewer|releaser|builder) ;; *) return 0 ;; esac
+  case "$(idle_wake_state)" in
+    on) wake_update "$1" '.released = true | .n = 0 | .clock = $now' --argjson now "$(now_s)" ;;
+    off) [ ! -f "$(wake_file "$1")" ] || wake_update "$1" '.released = false' ;;
+  esac
+}
+
+wake_base_min() { case "$1" in reviewer) echo 15 ;; orchestrator) echo 20 ;; *) echo 30 ;; esac; }
+station_updated() { # station → when its session last did anything, epoch seconds; empty when unknown
+  job_state "$(stations_get "$1" '.id')" | jq -r '((.updatedAt // "") | sub("\\.[0-9]+"; "") | fromdateiso8601?) // empty'
+}
+
+# What each role has to do, as {pending: [{key, text}], live: bool} (the orchestrator's also carries
+# the baseline it compares with). A key names one thing to do once. Fails when Tares can't be read.
+iw_scan_reviewer() { # the review queue's PRs without a current verdict, once per head
+  local q; q=$(tares_http GET /api/review-queue) || return 1
+  jq -c '[(.queue // [])[] | select(.verdict == null or ((.verdict.current // false) | not))
+      | {key: "rv:\(.project)/\(.ticket)@\(.head // "")",
+         text: "\(.project_name // .project) \(.ticket) at \((.head // "")[0:7])"}]
+    | {pending: ., live: true}' <<<"$q"
+}
+iw_scan_builder() { # the tickets it holds that need it: changes asked for, a verdict, or failed CI
+  local s=$1 project uid tickets
+  project=$(stations_get "$s" '.project')
+  uid=$(tares_http GET /api/crew/projects | jq -r --arg p "$project" '[(.projects // [])[] | select(.name == $p or .id == $p)][0].id // empty') || return 1
+  [ -n "$uid" ] || { echo '{"pending":[],"live":false}'; return 0; }
+  tickets=$(tares_http GET "/api/projects/$(uri "$uid")/tickets") || return 1
+  jq -c --arg s "$s" '[(.tickets // [])[] | select(.holder == $s and (.stage | IN("review", "changes")))] as $mine
+    | {live: (($mine | length) > 0),
+       pending: [$mine[] | . as $t | ($t.pr // {}) as $pr
+         | (if ($t.verdict // null) != null and ($t.verdict.current // false) and ($t.verdict.verdict | IN("pass", "changes", "block"))
+            then $t.verdict.verdict else "" end) as $vd
+         | select($t.stage == "changes" or $vd != "" or $pr.ci == "failure")
+         | {key: "bd:\($t.label)@\($pr.head // "")|\($vd)|\($pr.ci // "")",
+            text: "\($t.label) (\(if $vd != "" then "verdict \($vd)" elif $pr.ci == "failure" then "CI failed" else "changes asked for" end))"}]}' <<<"$tickets"
+}
+iw_scan_releaser() { # RELEASE lines under Undelivered in the orchestrator's report, once per line
+  local f="$CREW_HOME/reports/crew-orchestrator.md" line key
+  if [ ! -f "$f" ]; then echo '{"pending":[],"live":true}'; return 0; fi
+  while IFS= read -r line; do
+    line=$(sed 's/^[[:space:]]*//; s/[[:space:]]*$//' <<<"$line"); [ -n "$line" ] || continue
+    key="rl:$(printf '%s' "$line" | cksum | cut -d' ' -f1)"
+    jq -cn --arg k "$key" --arg t "$line" '{key: $k, text: $t}'
+  done < <(awk '/^## /{u = ($0 ~ /^## Undelivered/)} u && /(^|[^A-Za-z])RELEASE([^A-Za-z]|$)/' "$f") | jq -cs '{pending: ., live: true}'
+}
+iw_scan_orchestrator() { # desk answers closed, and projects handed over, since the baseline; the first look only sets it
+  local desk projs base act
+  desk=$(tares_http GET '/api/desk?state=answered') || return 1
+  projs=$(tares_http GET /api/crew/projects) || return 1
+  base=$(wake_read crew-orchestrator | jq -c '.baseline')
+  act=$(station_updated crew-orchestrator); act=${act:-null}   # an answer the orchestrator itself recorded is not news to it
+  jq -cn --argjson d "$desk" --argjson p "$projs" --argjson b "$base" --argjson act "$act" '
+    def secs: (capture("^(?<t>[0-9T:-]+)(\\.[0-9]+)?(?<z>Z|[+-][0-9]{2}:[0-9]{2})?$")
+               | ((.t + "Z" | fromdateiso8601)
+                  - (if (.z // "Z") == "Z" then 0
+                     else ((.z[0:1] + "1" | tonumber) * ((.z[1:3] | tonumber) * 3600 + (.z[4:6] | tonumber) * 60)) end))) ? // null;
+    [($d.desk // [])[] | select(.command == null and .closed_at != null)] as $ans
+    | ([$ans[].closed_at] | max // "") as $dmax
+    | [($p.projects // [])[].id] as $ids
+    | if $b == null then {first: true, pending: [], live: true, baseline: {desk: $dmax, projects: $ids}}
+      else {live: true,
+            pending: ([$ans[] | select(.closed_at > ($b.desk // ""))
+                        | select($act == null or ((.closed_at | secs) // ($act + 1)) > $act) | {key: "dk:\(.id)", text: "desk answer \(.label // .id) is closed"}]
+                    + [($p.projects // [])[] | select(.id as $i | (($b.projects // []) | index($i)) | not)
+                       | {key: "ph:\(.id)", text: "project \(.name // .id) was handed over"}]),
+            baseline: {desk: ([$dmax, ($b.desk // "")] | max), projects: ((($b.projects // []) + $ids) | unique)}}
+      end'
+}
+
+iw_work_prompt() { # role items
+  case "$1" in
+    reviewer) echo "There is work in the review queue: $2 have no current verdict. Work the queue." ;;
+    builder) echo "Your tickets changed: $2. Read the reviewer's verdict and CI on the current head and act on it, as your manual says." ;;
+    releaser) echo "A RELEASE is waiting for you in the orchestrator's report under Undelivered: $2. Take it as your manual says." ;;
+    *) echo "Something is waiting for you: $2. Follow the Tick section of your manual." ;;
+  esac
+}
+
+# Two steps, so the restart runs as a plain statement (errexit works there) and not inside a condition:
+# idle_wake_plan decides (0 = wake it, with the what and why in IW_*), idle_wake_send does the restart.
+idle_wake_plan() { # station → 0 when the station is to be woken now, else 1
+  local s=$1 role st
+  role=$(stations_get "$s" '.role')
+  case "$role" in orchestrator|reviewer|releaser|builder) ;; *) return 1 ;; esac
+  halted && return 1
+  [ -n "$(stations_get "$s" '.sessionId')" ] || return 1
+  st=$(idle_wake_state)
+  case "$st" in
+    on) ;;
+    off) [ "$(wake_read "$s" | jq -r '.released')" = true ] || return 1 ;;
+    *) return 1 ;;
+  esac
+  ! attached "$s" || return 1
+  between_turns "$s" || return 1
+
+  local now reason prompt keys="[]" baseline=null n=0 work=0
+  now=$(now_s)
+  if [ "$st" = off ]; then
+    reason=rearm; prompt="idle_wake is off again: re-arm your tick as your manual says."
+  else
+    local w scan upd plan
+    w=$(wake_read "$s")
+    scan=$(iw_scan_"$role" "$s") || return 1
+    upd=$(station_updated "$s")
+    plan=$(jq -cn --argjson w "$w" --argjson sc "$scan" --argjson now "$now" --argjson upd "${upd:-null}" \
+      --argjson settle "${FACTORY_WAKE_SETTLE:-600}" --argjson base "$(wake_base_min "$role")" '
+      def after($n): (if $n == 0 then $base * 60 elif $n == 1 then 1800 else 2700 end);
+      ($w.clock // $now) as $c0
+      | (if $upd != null and $upd > (($w.last_wake // $c0) + $settle) then {n: 0, clock: $upd} else {n: $w.n, clock: $c0} end) as $r
+      | (if $sc.live then $r else {n: 0, clock: $now} end) as $r
+      | [$sc.pending[] | select(.key as $k | ($w.seen | index($k)) | not)] as $new
+      | {n: $r.n, clock: $r.clock, keys: [$sc.pending[].key], new: $new, baseline: ($sc.baseline // null), first: ($sc.first // false),
+         live: $sc.live, due: ($sc.live and ($now - $r.clock) >= after($r.n))}')
+    keys=$(jq -c '.keys' <<<"$plan"); baseline=$(jq -c '.baseline' <<<"$plan"); n=$(jq '.n' <<<"$plan")
+    wake_update "$s" '.clock = $p.clock | .n = $p.n | .seen = [.seen[] | select(. as $k | $p.keys | index($k))]
+      | (if $p.first then .baseline = $p.baseline else . end)
+      | (if $p.live then . else .released = true end)' --argjson p "$plan" || true   # a builder with no PR holds no tick
+    if [ "$(jq '.new | length' <<<"$plan")" -gt 0 ]; then
+      work=1; reason="work: $(jq -r '[.new[].text] | join("; ")' <<<"$plan")"
+      prompt="$(iw_work_prompt "$role" "$(jq -r '[.new[].text] | join("; ")' <<<"$plan")") $(idle_wake_note) Carry on from your report."
+      n=0
+    elif [ "$(jq -r '.live' <<<"$plan")" = true ] && [ "$(jq -r '.released' <<<"$w")" != true ]; then
+      # Switched on under a running station: it still holds the tick it armed itself, so tell it now.
+      reason="release: idle_wake was switched on, telling the station to drop its tick"
+      prompt="idle_wake was switched on. $(idle_wake_note) Carry on from your report."
+      n=0
+    elif [ "$(jq '.due' <<<"$plan")" = true ]; then
+      reason="liveness: wake $((n + 1)) with nothing pending"
+      prompt="Liveness check, nothing is known to be pending: check your queue once, then end the turn. $(idle_wake_note) Carry on from your report."
+      n=$((n + 1))
+    else
+      return 1
+    fi
+  fi
+  IW_S=$s IW_ST=$st IW_NOW=$now IW_REASON=$reason IW_PROMPT=$prompt IW_KEYS=$keys IW_BASELINE=$baseline IW_N=$n IW_WORK=$work
+  return 0
+}
+
+idle_wake_send() { # the station idle_wake_plan chose: restart it in the same conversation; always returns 0
+  local s=$IW_S st=$IW_ST now=$IW_NOW reason=$IW_REASON prompt=$IW_PROMPT keys=$IW_KEYS baseline=$IW_BASELINE n=$IW_N work=$IW_WORK
+  local rc
+  set +e
+  ( set -e; TARES_STATE=""; SETTINGS=""; CREW_PROJECTS=""
+    tares_on || exit 3
+    [ "$(idle_wake_state)" = "$st" ] || exit 4   # the setting changed since the round began
+    ! halted || exit 4
+    ! attached "$s" || exit 4
+    between_turns "$s" || exit 4   # it started something since the first check
+    say "waking $s (${reason%%:*}); restarting it in the same conversation"
+    cmd_restart "$s" "$prompt"
+    event idle_wake "$s" "$reason" )
+  rc=$?
+  set -e
+  case $rc in
+    0) wake_update "$s" '.last_wake = $now | .clock = $now | .n = $n | .released = $rel
+         | (if $work then .seen = $keys else . end) | (if $b != null then .baseline = $b else . end)' \
+         --argjson now "$now" --argjson n "$n" --argjson rel "$([ "$st" = on ] && echo true || echo false)" \
+         --argjson work "$([ $work = 1 ] && echo true || echo false)" --argjson keys "$keys" --argjson b "$baseline" || true
+       ;;
+    3|4) ;;
+    *) say "could not wake $s; will try again next round" ;;
+  esac
+  return 0
+}
+
 
 stale_kit() { # station kit → 0 when it runs another version, or from a frozen copy that is going away
   [ "$(stations_get "$1" '.kit')" != "$2" ] || { ! upgrades_frozen && on_frozen_copy "$1"; }
@@ -1246,7 +1456,7 @@ upgrade_station() { # station kit: restart it on the new version, in the same co
     ! upgrades_frozen || exit 4   # frozen since the round began
     quiet "$s" || exit 4   # it started something since the first check
     say "$s runs an older version of the plugin; restarting it on this one now that it's idle, in the same conversation"
-    cmd_restart "$s" "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-$skill (they may have changed), re-read your report, re-arm your schedule if you have one, then carry on where you were."
+    cmd_restart "$s" "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-$skill (they may have changed), re-read your report, $(rearm_text), then carry on where you were."
     event upgraded "$s" "$kit" )
   rc=$?
   set -e
@@ -1400,6 +1610,7 @@ cmd_status() {
   if [ $frozen = 1 ]; then
     echo "FROZEN: the kit $(frozen_text); stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit$([ "$kit" = "$(frozen_field version)" ] || echo " (a newer kit is available)")"
   fi
+  idle_wake_on && echo "idle_wake: on, the watch wakes a station when it has work and holds its tick (a liveness wake after 15, 20 or 30 minutes of quiet, then 30, then every 45)"
   local wp; if wp=$(watch_pid); then echo "watch: running (pid $wp), it revives any station that stops and gives one a permission you allowed in Tares; log in $WATCH_LOG"
   else echo "watch: not running; $ME crew up starts it (or run $ME crew watch yourself)"; fi
   local items n; items=$(desk_json)
@@ -1910,6 +2121,10 @@ cmd_doctor() {
       local raw missing; raw=$(settings_raw 2>/dev/null || echo '{}'); missing=$(settings_missing "$raw")
       [ -z "$missing" ] && ok "crew settings on Tares: $(crew_settings | jq -c 'del(.kit)')" || warn "crew settings not answered yet ($(echo $missing)); $ME crew up asks them"
       doctor_kit
+      if idle_wake_on; then
+        if [ -n "$(watch_pid)" ]; then ok "idle_wake is on: the watch wakes stations when they have work and holds their ticks"
+        else warn "idle_wake is on but the watch is not running: nothing wakes the stations and they hold no tick ($ME crew watch)"; fi
+      fi
       if [ -z "$missing" ] && releaser_on && [ "$(setting release_profile)" = kind ]; then
         command -v docker >/dev/null && ok "docker" || no "docker not installed (release profile kind)"
         command -v kind >/dev/null && ok "kind" || no "kind not installed (release profile kind): brew install kind"

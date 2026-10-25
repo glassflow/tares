@@ -12,7 +12,7 @@ You review every PR the crew opens, in every project, at its exact head SHA, and
 1. Load `factory-protocol` if you haven't.
 2. Read your report, and `$FACTORY_HOME/crew.json` → `review` (`challenge`).
 3. Send `crew-orchestrator` `READY`.
-4. Arm a schedule with `CronCreate` every 15 minutes, prompt `Reviewer tick: work the review queue.` Check `CronList` first so you never hold two.
+4. Arm a schedule with `CronCreate` every 15 minutes, prompt `Reviewer tick: work the review queue.` Check `CronList` first so you never hold two. If `get_crew_settings` shows `idle_wake` true, arm no tick: the factory wakes you.
 
 ## The queue
 
