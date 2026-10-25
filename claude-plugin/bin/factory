@@ -2579,7 +2579,7 @@ lsp_state() { # repo plugin binary → ready | no-plugin | no-binary | neither |
   [ "$LSP_LISTED" = 1 ] || { echo unknown; return 0; }
   local have_plugin=0 have_bin=0
   # Only a user-scope plugin (no projectPath) counts: stations run in the crew home and in worktrees, never in the repo path itself.
-  awk -F'\t' -v id="$2@$LSP_MARKETPLACE" -v repo="$1" '$1 == id && $2 == "" { f = 1 } END { exit !f }' <<<"$LSP_ENABLED" && have_plugin=1
+  awk -F'\t' -v id="$2@$LSP_MARKETPLACE" '$1 == id && $2 == "" { f = 1 } END { exit !f }' <<<"$LSP_ENABLED" && have_plugin=1
   lsp_have_bin "$3" && have_bin=1
   case "$have_plugin$have_bin" in 11) echo ready ;; 10) echo no-binary ;; 01) echo no-plugin ;; *) echo neither ;; esac
 }

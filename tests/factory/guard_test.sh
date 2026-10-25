@@ -99,12 +99,28 @@ t builder Bash './claude-plugin/bin/factory crew freeze' deny
 t builder Bash 'cd x && /abs/bin/factory crew halt "y"' deny
 t builder Bash '$HOME/x/factory crew down' deny
 t builder Bash '/abs/bin/factory finish p' deny
+# ... and however the command is ended, wrapped or quoted.
+t builder Bash 'factory crew down; ls' deny
+t builder Bash 'factory crew down&&ls' deny
+t builder Bash 'factory crew down|cat' deny
+t builder Bash '(factory crew down)' deny
+t builder Bash '$(/abs/bin/factory crew up)' deny
+t builder Bash '"/abs/bin/factory" crew up' deny
+t builder Bash 'bash -c "factory crew down"' deny
+t builder Bash "bash -c 'factory crew halt'" deny
+t builder Bash 'factory halt; true' deny
+t builder Bash 'factory finish p;' deny
+t orchestrator Bash 'factory crew down; ls' allow
+t orchestrator Bash '(factory crew down)' allow
+t orchestrator Bash '"/abs/bin/factory" crew up' allow
+t builder Bash 'factory crew updated' allow
+t builder Bash 'factory roster' allow
 t builder Bash 'factory finish p' deny
 t builder Bash 'ls /opt/glass0/tares/.factory/worktrees && cat .factory/halt.md' allow
 t builder Bash '/opt/glass0/tares/.factory/halt crew' allow
 # A halted crew refuses a new session however the CLI is spelled.
 H=$(mktemp -d); echo '{"reason":"test"}' > "$H/HALT"
-for c in 'factory spawn x' '/abs/bin/factory spawn x' '/abs/bin/factory revive x'; do
+for c in 'factory spawn x' '/abs/bin/factory spawn x' '/abs/bin/factory revive x' 'factory spawn;ls' '(factory revive x)'; do
   out=$(jq -n --arg c "$c" '{tool_name: "Bash", tool_input: {command: $c}}' | FACTORY_HOME=$H FACTORY_ROLE=orchestrator bash "$G")
   grep -q 'crew is halted' <<<"$out" || { echo "FAIL halted | $c | expected the halt to refuse it"; fail=1; }
 done
