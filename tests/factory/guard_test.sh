@@ -56,6 +56,10 @@ t orchestrator mcp__plugin_tares_tares__desk_add '' allow
 t orchestrator mcp__plugin_slack_slack__slack_send_message '' deny
 t orchestrator Bash 'factory crew down' allow
 t reviewer Bash 'factory crew halt "x"' deny
+t builder Bash 'factory crew freeze' deny
+t builder Bash 'factory crew unfreeze' deny
+t orchestrator Bash 'factory crew freeze' allow
+t orchestrator Bash 'factory crew unfreeze' allow
 # A quoted message is prose, but a command substituted inside it runs.
 t reviewer Bash 'git commit -m "$(gh pr merge 1)"' deny
 t reviewer Bash 'git commit -m "notes `gh pr merge 1`"' deny
