@@ -123,6 +123,11 @@ t builder Bash 'ls -la ~/factory halt' allow
 t builder Bash 'ls ~/factory; /abs/bin/factory crew down' deny
 t builder Bash 'ls x;/abs/bin/factory crew down' deny
 t builder Bash 'find . -exec /abs/bin/factory crew down {} \;' deny
+t builder Bash 'echo /abs/bin/factory crew down | sh' deny
+t builder Bash 'echo factory crew halt | bash' deny
+t builder Bash 'printf "%s\n" /abs/bin/factory crew down | sh' deny
+t builder Bash 'rg --pre /abs/bin/factory crew down x' deny
+t builder Bash 'rg --hostname-bin /abs/bin/factory crew down x' deny
 t orchestrator Bash 'factory crew down; ls' allow
 t orchestrator Bash '(factory crew down)' allow
 t orchestrator Bash '"/abs/bin/factory" crew up' allow

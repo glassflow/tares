@@ -50,8 +50,9 @@ scan=$(perl -0777 -pe '
     "$c$rest"
   }ge;
   # A folder named factory handed to a reader (`ls ~/factory down`) is an argument, not the CLI. Only commands
-  # that cannot run their arguments are listed: find, xargs, env and the shells are not.
-  s{((?:^|[;&|(`\n])[ \t]*(?:ls|cd|pushd|cat|head|tail|less|more|wc|stat|file|du|tree|grep|rg|echo|printf|test|realpath)(?:[ \t]+[^\s;&|()`]+)*?[ \t]+)(?:[^\s;&|()`"\x27]*/)?factory(?=[ \t])}{$1_}gm;
+  # that neither run their arguments nor print text for a shell to run are listed: find, xargs, env, the
+  # shells, echo, printf and rg (--pre) are not.
+  s{((?:^|[;&|(`\n])[ \t]*(?:ls|cd|pushd|cat|head|tail|less|more|wc|stat|file|du|tree|grep|test|realpath)(?:[ \t]+[^\s;&|()`]+)*?[ \t]+)(?:[^\s;&|()`"\x27]*/)?factory(?=[ \t])}{$1_}gm;
 ' <<<"$cmd")
 
 # The factory CLI by its name, whatever its path or quoting: `factory x`, `/abs/path/bin/factory x`,
