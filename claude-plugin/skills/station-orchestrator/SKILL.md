@@ -31,6 +31,7 @@ A project reaches you two ways: a `[TF:SHIP]` message from the spec session (sta
    ```
 
    With one repo, the slug is just `m<k>`. It starts `<project>-build-<slug>` in that repo with `TARES_PROJECT` set. The project's autonomy (from its hand-over) sticks to its builders by itself; pass `--autonomy L3-review` only when the person asked for a stricter one after the hand-over. A looser one needs the person to change the crew setting. Never more than `builders_max` builders across all projects: start the rest when one finishes.
+   While the factory paces the crew (a note from it, or `factory crew status` saying `pace: slow` or `pace: hold`), start no new builder: `factory spawn builder` refuses until the plan has room. Helpers are fine. Leave the tickets ready and spawn the builder after.
 4. Give each builder its tickets: `assign_ticket(ticket, holder="<project>-build-<slug>", project=...)`, only the tickets of its repo, only ones that are ready.
 5. Reply to the sender (if it was a message) with one line: what you started, for which tickets. Write it to your report.
 

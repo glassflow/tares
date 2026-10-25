@@ -7,7 +7,7 @@ import { ContextBadge, PlanPanel, StationUsage } from "../components/ClaudeUsage
 import ConfirmDialog from "../components/ConfirmDialog";
 import { ProgressRing } from "../components/ProgressRing";
 import StandupSheet from "../components/Standup";
-import type { CrewProject, CrewSettings, CrewStation, DeskAllowed, DeskItem, ProjectUsage } from "../types";
+import type { CrewPace, CrewProject, CrewSettings, CrewStation, DeskAllowed, DeskItem, ProjectUsage } from "../types";
 
 // The crew of a tares-factory (M3, M8): one always-on crew (orchestrator, reviewer, and a releaser
 // when the person asked for one) serves every project handed to it, and builders come and go per
@@ -71,10 +71,18 @@ function useDismissed() {
 
 interface Notice { id: string; sig: string; tone: "waiting" | "silent"; title: React.ReactNode; body: React.ReactNode }
 
-function Notices({ stations, desk }: { stations: CrewStation[]; desk: DeskItem[] }) {
+function Notices({ stations, desk, pace }: { stations: CrewStation[]; desk: DeskItem[]; pace?: CrewPace }) {
   const { shown, dismiss } = useDismissed();
   const d = useDesk(desk);
   const notices: Notice[] = [];
+  if (pace && pace.level >= 1) {
+    const until = pace.until ? ` until ${new Date(pace.until).toLocaleString()}` : "";
+    notices.push({
+      id: "pace", sig: `${pace.state}:${pace.until ?? ""}`, tone: "silent",
+      title: <>Pacing: {pace.state === "limit" ? "at the plan's limit" : pace.state}{until}</>,
+      body: <p className="help" style={{ margin: 0 }}>{pace.note}</p>,
+    });
+  }
   if (d.items.length) {
     notices.push({
       id: "desk", sig: desk.map((x) => x.label).sort().join(","), tone: "waiting",
@@ -401,7 +409,12 @@ function MemberDetail({ name, crewSide, onChanged }: { name: string; crewSide: b
   );
 }
 
-function Settings({ st, grants }: { st: CrewSettings; grants: string }) {
+function Settings({ st, grants, onChange }: { st: CrewSettings; grants: string; onChange: () => void }) {
+  const [err, setErr] = useState("");
+  const togglePace = () => {
+    setErr("");
+    api.setCrewSettings({ pace: !st.pace }).then(onChange, (e) => setErr(String(e?.message ?? e)));
+  };
   const lines = grants.split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
   return (
     <details className="fo-panel crew-fold">
@@ -418,6 +431,10 @@ function Settings({ st, grants }: { st: CrewSettings; grants: string }) {
           <dd>{st.kit?.frozen ? <>frozen since {new Date(st.kit.frozen.at).toLocaleString()} by {st.kit.frozen.by}: stations that start or revive use the frozen kit, running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit</> : "following the checkout"}</dd>
           <dt>Wake on events</dt>
           <dd>{st.idle_wake ? "on: the watch wakes an idle station when it has work and holds its liveness tick (15 to 30 minutes, backing off to 45 while nothing happens)" : "off: each station ticks on its own schedule"}</dd>
+          <dt>Pace before the plan's limits</dt>
+          <dd>{st.pace ? "on: at 85% of the 5-hour window or 90% of the week no new builder starts and stations tick every 45 minutes; at 95% builders finish their step and wait; after the reset the watch resumes them" : "off: the crew runs until a limit stops it"}{" "}
+            <button type="button" onClick={togglePace}>{st.pace ? "Turn off" : "Turn on"}</button>
+            {err && <span className="dim"> {err}</span>}</dd>
         </dl>
         <h2>Grants for every project</h2>
         {lines.length ? <ul className="crew-grants">{lines.map((g, i) => <li key={i}>{g}</li>)}</ul>
@@ -469,7 +486,7 @@ export default function Crew() {
       </div>
       {standup && <StandupSheet onClose={closeStandup} />}
 
-      <Notices stations={stations} desk={desk} />
+      <Notices stations={stations} desk={desk} pace={data?.pace} />
 
       {data === undefined ? <div className="dim">loading…</div> : stations.length === 0 && projects.length === 0 && finished.length === 0 ? (
         <section className="fo-next fo-next-empty">
@@ -529,7 +546,7 @@ export default function Crew() {
       <ReviewQueue />
       <RuleProposals />
 
-      {data && <Settings st={data.settings} grants={data.grants} />}
+      {data && <Settings st={data.settings} grants={data.grants} onChange={reload} />}
     </div>
   );
 }

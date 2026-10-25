@@ -12,6 +12,14 @@ the project follows [Semantic Versioning](https://semver.org/).
   answer, a new project), and otherwise sends a liveness wake after 15 to 30 minutes, then 30, then
   every 45, so an empty crew costs a few model turns an hour instead of one every 15 to 30 minutes
   per station (TR-673).
+- Factory: the crew setting `pace` (off by default) slows the crew before the plan's limit instead
+  of hitting it and restarting every station at once. From the plan usage Tares already keeps: at
+  85% of the 5-hour window or 90% of the week no new builder starts (`factory spawn builder`
+  says why) and each station is told once to tick every 45 minutes; at 95% of the window a builder
+  also finishes its step, pushes, writes down where it is and waits. A station that stopped while
+  a limit was full is not revived into it; after the reset the watch revives it in its own
+  conversation, and starts a new one only when that fails. The Crew page and
+  `factory crew status` say when the crew is pacing and until when (TR-674).
 
 ### Fixed
 - "Raise the limit" on an agent that stopped at the daily run cap opened the agent's own page,

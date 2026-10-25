@@ -49,6 +49,10 @@ working doc's `## Progress` what is done, what is next and how to run it. Leave 
 request and the worktree as they are. `CronDelete` your tick, reply `DONE` to the orchestrator with
 each ticket's branch and pull request, and start nothing new.
 
+## When the factory says to hold (pace)
+
+A note from the factory that the plan's limit is nearly full and builders hold means: finish the step you are in, never leave a half-applied change, commit and push what you have, write in your report where you are and what comes next, and wait without starting new work until the factory says the plan has room again. Then pick up where your report says you stopped. Keep your tick at 45 minutes while the factory still paces the crew.
+
 ## Assumptions and learnings
 
 - An unknown you decide yourself: `assume(question, choice, why, tickets=[ref], affects="<who>")`, then tell the orchestrator `A<n>` in one line (protocol rule 5).

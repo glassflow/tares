@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .docs import DocError, title_ok
 
@@ -673,7 +673,7 @@ def attach_command(station: str) -> str:
 
 CREW_DEFAULTS = {"autonomy": None, "releaser": None, "release_profile": None,
                  "prod_pattern": None, "challenger": None, "builders_max": None,
-                 "kit": {"frozen": None}, "idle_wake": None}
+                 "kit": {"frozen": None}, "idle_wake": None, "pace": None}
 
 
 def kit_ok(v) -> dict:
@@ -723,6 +723,10 @@ def crew_settings_ok(body: dict, cur: dict) -> dict:
         if not isinstance(body["idle_wake"], bool):
             raise DocError("idle_wake is true or false")
         out["idle_wake"] = body["idle_wake"]
+    if body.get("pace") is not None:
+        if not isinstance(body["pace"], bool):
+            raise DocError("pace is true or false")
+        out["pace"] = body["pace"]
     if body.get("builders_max") is not None:
         try:
             n = int(body["builders_max"])
@@ -733,6 +737,77 @@ def crew_settings_ok(body: dict, cur: dict) -> dict:
         out["builders_max"] = n
     if body.get("kit") is not None:
         out["kit"] = kit_ok(body["kit"])
+    return out
+
+
+PACE_SLOW = {"session": 85, "weekly_all": 90}   # percent of a limit at which the crew slows
+PACE_HOLD = 95                                  # percent of the 5-hour window at which builders wait
+PACE_NAME = {"session": "5-hour window", "weekly_all": "weekly limit"}
+
+
+def _pace_when(v) -> datetime | None:
+    """A limit's reset time (ISO 8601 as plan_now carries it) as an aware datetime, or None."""
+    if not isinstance(v, str) or not v:
+        return None
+    try:
+        t = datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
+def pace_now(settings: dict, plan: dict | None, now: datetime) -> dict:
+    """How hard the plan's limits press on the crew (TR-674). `level` is 0 (ok), 1 (slow: the 5-hour
+    window at 85% or the weekly limit at 90%: no new builders, every station on its longest tick) or
+    2 (hold: the window at 95%: builders finish their step, push, report and wait). `at_limit` is
+    true while any limit is full and has not reset. A limit whose reset time has passed counts as 0.
+    With the crew setting `pace` off the state is "off" and the level 0 whatever the plan says;
+    `known` is false while no plan reading exists. `until` is when the limits behind the level reset."""
+    on = bool((settings or {}).get("pace"))
+    out = {"on": on, "known": False, "level": 0, "at_limit": False, "state": "off" if not on else "ok",
+           "until": None, "session_pct": None, "weekly_pct": None, "note": "Pacing is off."}
+    if not on:
+        return out
+    limits = [x for x in ((plan or {}).get("limits") or []) if isinstance(x, dict)]
+    if not limits:
+        out["note"] = "Pacing is on, and no reading of the plan's limits has arrived yet."
+        return out
+    out["known"] = True
+    pct = {}
+    causes = []   # (limit, percent) of each limit that sets the level
+    level = 0
+    for x in limits:
+        t = _pace_when(x.get("resets_at"))
+        p = x.get("percent")
+        p = 0 if x.get("reset") or (t and t <= now) or isinstance(p, bool) or not isinstance(p, (int, float)) else p
+        kind = x.get("kind")
+        if kind in PACE_SLOW:
+            pct[kind] = max(p, pct.get(kind, 0))
+        if p >= 100:
+            out["at_limit"] = True
+        if p >= 100 or p >= PACE_SLOW.get(kind, 101):
+            causes.append((kind, p, t))
+        if kind == "session" and p >= PACE_HOLD:
+            level = 2
+        elif p >= PACE_SLOW.get(kind, 101):
+            level = max(level, 1)
+    out["level"] = level
+    out["session_pct"], out["weekly_pct"] = pct.get("session"), pct.get("weekly_all")
+    if out["at_limit"]:
+        out["state"] = "limit"
+    elif level:
+        out["state"] = "hold" if level == 2 else "slow"
+    ends = [t for _, _, t in causes if t]
+    if ends:
+        out["until"] = max(ends).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    if not causes:
+        out["note"] = "Pacing is on, and the plan has room."
+        return out
+    what = " and ".join(f"the {PACE_NAME.get(k, k)} is at {p:g}%" for k, p, _ in causes)
+    do = ("builders finish their step, push, report and wait, and no new builder starts" if level == 2 else
+          "no new builder starts and every station ticks every 45 minutes")
+    when = f" until {max(ends).astimezone(timezone.utc):%Y-%m-%d %H:%M} UTC" if ends else ""
+    out["note"] = f"Pacing: {what}, so {do}{when}."
     return out
 
 

@@ -205,7 +205,7 @@ async def main():
         s = json.loads(await mf.get_crew_settings())
         ck("settings start unset", s == {"autonomy": None, "releaser": None, "release_profile": None,
                                          "prod_pattern": None, "challenger": None,
-                                         "builders_max": None, "idle_wake": None,
+                                         "builders_max": None, "idle_wake": None, "pace": None,
                                          "kit": {"frozen": None}}, s)
         s = json.loads(await mf.set_crew_settings(autonomy="L4-ship", release_profile="kind",
                                                   prod_pattern="prod-*", challenger=True))
@@ -233,6 +233,26 @@ async def main():
             r = await cx.put("/api/crew/settings", json={"builders_max": 3})
             ck("another change keeps idle_wake", r.json()["idle_wake"] is True, r.text)
             await cx.put("/api/crew/settings", json={"builders_max": 2})
+        s = json.loads(await mf.set_crew_settings(pace=True))
+        ck("pace is a setting of its own, off until the person turns it on",
+           s["pace"] is True and s["idle_wake"] is True and s["builders_max"] == 2, s)
+        s = json.loads(await mf.get_crew_settings())
+        ck("the MCP tool reads pace back", s["pace"] is True, s)
+        async with mk() as cx:
+            for junk in ("maybe", "false", 1, [True]):
+                r = await cx.put("/api/crew/settings", json={"pace": junk})
+                ck(f"pace {junk!r} is refused: it is true or false", r.status_code == 400, r.text)
+            r = await cx.put("/api/crew/settings", json={"builders_max": 3})
+            ck("another change keeps pace", r.json()["pace"] is True, r.text)
+            await cx.put("/api/crew/settings", json={"builders_max": 2})
+            r = await cx.get("/api/crew/pace")
+            ck("/api/crew/pace answers with the setting on and no plan reading yet",
+               r.status_code == 200 and r.json()["on"] is True and r.json()["known"] is False
+               and r.json()["level"] == 0, r.text)
+            ck("/api/crew carries the same", (await cx.get("/api/crew")).json()["pace"]["on"] is True)
+            await cx.put("/api/crew/settings", json={"pace": False})
+            ck("turned off again, the state is off",
+               (await cx.get("/api/crew/pace")).json()["state"] == "off")
         frozen = {"at": "2026-10-25T10:00:00Z", "by": "kiran", "version": "123456"}
         async with mk() as cx:
             r = await cx.put("/api/crew/settings", json={"kit": {"frozen": frozen}})
@@ -348,6 +368,50 @@ async def main():
             r = await cx.post("/api/crew/noreason-build/end", json={})
             ck("with no reason it says marked ended", r.json()["state_reason"] == "marked ended", r.text)
 
+def pace():
+    print("== pace_now: the plan's limits against the thresholds (TR-674) ==")
+    from tares.factory import pace_now
+    now = datetime(2026, 10, 25, 12, 0, tzinfo=timezone.utc)
+    later, soon = "2026-10-25T15:00:00+00:00", "2026-10-30T00:00:00+00:00"
+    past = "2026-10-25T11:00:00+00:00"
+
+    def plan(session=0, weekly=0, sr=later, wr=soon, **extra):
+        return {"limits": [{"kind": "session", "percent": session, "resets_at": sr, **extra},
+                           {"kind": "weekly_all", "percent": weekly, "resets_at": wr}]}
+
+    on = {"pace": True}
+    table = [("84% of the window", plan(84), 0, "ok", False, None),
+             ("85% of the window", plan(85), 1, "slow", False, "2026-10-25T15:00:00Z"),
+             ("94% of the window", plan(94), 1, "slow", False, "2026-10-25T15:00:00Z"),
+             ("95% of the window", plan(95), 2, "hold", False, "2026-10-25T15:00:00Z"),
+             ("100% of the window", plan(100), 2, "limit", True, "2026-10-25T15:00:00Z"),
+             ("89% of the week", plan(10, 89), 0, "ok", False, None),
+             ("90% of the week", plan(10, 90), 1, "slow", False, "2026-10-30T00:00:00Z"),
+             ("100% of the week", plan(10, 100), 1, "limit", True, "2026-10-30T00:00:00Z"),
+             ("both limits high: until the later reset", plan(96, 91), 2, "hold", False, "2026-10-30T00:00:00Z"),
+             ("a window that reset (flagged by Tares)", plan(99, reset=True), 0, "ok", False, None),
+             ("a window whose time has passed", plan(99, sr=past), 0, "ok", False, None),
+             ("a full window that reset, a weekly limit that did not", plan(100, 91, sr=past), 1, "slow", False, "2026-10-30T00:00:00Z"),
+             ("a limit that is neither (a scoped week) at 100%",
+              {"limits": [{"kind": "weekly_scoped", "percent": 100, "resets_at": later}]}, 0, "limit", True, "2026-10-25T15:00:00Z")]
+    for name, pl, level, state, at_limit, until in table:
+        r = pace_now(on, pl, now)
+        ck(f"{name}: level {level}, {state}", (r["level"], r["state"], r["at_limit"], r["until"]) == (level, state, at_limit, until), r)
+    r = pace_now(on, plan(87, 12), now)
+    ck("the percents and a plain note are there",
+       (r["session_pct"], r["weekly_pct"]) == (87, 12) and r["note"].startswith("Pacing: the 5-hour window is at 87%")
+       and "2026-10-25 15:00 UTC" in r["note"] and "\u2014" not in r["note"], r)
+    r = pace_now(on, plan(99, reset=True), now)
+    ck("a reset limit counts as 0", r["session_pct"] == 0, r)
+    for name, settings in (("unset", {}), ("false", {"pace": False}), ("null", {"pace": None})):
+        r = pace_now(settings, plan(99, 99), now)
+        ck(f"the setting {name}: state off, level 0, whatever the plan says",
+           (r["on"], r["state"], r["level"], r["at_limit"], r["until"]) == (False, "off", 0, False, None), r)
+    r = pace_now(on, None, now)
+    ck("on with no plan reading: nothing known, level 0", (r["known"], r["level"], r["state"]) == (False, 0, "ok"), r)
+
+
+pace()
 plugin()
 asyncio.run(main())
 print(f"\n{P} passed, {F} failed")

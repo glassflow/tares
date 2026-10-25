@@ -44,6 +44,10 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
                                             with the idle_wake setting on, wake an idle station only
                                             when Tares has work for it (and after a quiet spell, to
                                             check), and hold its tick instead of the station
+                                            with the pace setting on, slow the crew before the
+                                            plan's limits (no new builders, longest ticks, builders
+                                            wait), and revive a station that stopped at the limit in
+                                            its own conversation once the limit has reset
   tares factory crew halt ["<reason>"]      stop risky actions on every station until resume
   tares factory crew resume                 lift a halt
   tares factory crew freeze                 keep the crew on today's plugin kit: a station that starts
@@ -309,7 +313,7 @@ all_repos() { crew_projects | jq -r '[.[] | .repos[] | .path | select(. != null)
 settings_defaults() {
   jq -n '{autonomy: "L4-ship", releaser: false, release_profile: "kind",
           prod_pattern: "(^|[-_.])(prod|production)([-_.]|$)", challenger: false, builders_max: 2,
-          kit: {frozen: null}, idle_wake: false}'
+          kit: {frozen: null}, idle_wake: false, pace: false}'
 }
 settings_raw() {
   local s; s=$(tares_http GET /api/crew/settings) || die "could not read the crew settings from Tares at $TARES$(no_key_hint)"
@@ -833,6 +837,7 @@ launch() { # station role parent project repo cwd model effort prompt [resume-se
       status: "active", startedAt: (now | todate)}')"
   [ -z "$gsum" ] || printf '%s\n' "$grants" > "$CREW_HOME/stations/$station.grants"
   iw_launch_note "$station" || true
+  pace_launch_note "$station" || true
   event started "$station" "$id"
   echo "  ✓ started $station ($model, $effort)" >&2
 }
@@ -960,6 +965,9 @@ cmd_spawn() {
     builder)
       if [ "${1:-}" = --autonomy ]; then autonomy=${2:-}; shift 2 || true; fi
       [ $# -ge 4 ] || die "usage: factory spawn builder [--autonomy L3-review] <project> <slug> <repo path> \"<task>\""
+      if pace_read && [ "$PACE_LEVEL" -ge 1 ]; then   # the plan is nearly full (TR-674); a reading that fails lets it through
+        die "no new builder starts now. $(jq -r .note <<<"$PACE") Spawn it after that, or when the plan has room. Helpers are not affected."
+      fi
       if [ -n "$autonomy" ]; then
         # A project may be stricter than the crew, never looser: a looser level is a new grant from the person.
         local want have
@@ -1114,6 +1122,7 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
   while :; do
     local s kit settled=0 down=0 candidate=""; kit=$(kit_version)
     TARES_STATE=""; SETTINGS=""; tares_on || true   # this round's Tares and settings; one that doesn't answer changes no grants
+    pace_read || true   # the plan's pace, once a round (TR-674); a reading that is missing changes nothing
     # An update counts once it has held for a whole round in a clean checkout: a pull or an edit in
     # progress is not a release.
     [ "$kit" = "$seen" ] && kit_clean && settled=1
@@ -1145,6 +1154,7 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
       esac
       local up; up=$(is_alive "$s" && echo yes || echo no) || { say "skipping $s this round"; down=1; continue; }
       if [ "$up" = yes ]; then
+        [ ! -f "$PACE_FILE" ] || pace_revived "$s"   # it runs again: nothing left to carry out for it
         if stuck_on_context "$s"; then
           say "$s is stuck: Claude Code stopped it for thrashing on autocompact; starting it fresh under the same name"
           event thrashing "$s"
@@ -1156,21 +1166,31 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
         elif ! halted && between_turns "$s" && regrant_due "$s"; then
           regrant_station "$s"
         elif idle_wake_plan "$s"; then idle_wake_send   # woken: one restart a station a round (TR-673)
+        elif pace_plan "$s"; then pace_send             # told to stretch its tick, hold or go back (TR-674)
         elif [ -z "$candidate" ] && ! upgrades_frozen && movable "$s" "$kit"; then
           candidate=$s
         fi
         continue
       fi
       down=1
-      local fresh=""; stuck_on_context "$s" && fresh=--fresh
-      say "$s stopped; reviving it under the same name${fresh:+, in a new conversation since its last one thrashed}"
+      if pace_closed; then pace_hold_down "$s"; continue; fi   # the plan's limit is full: no reviving into a closed door (TR-674)
+      local fresh="" pprompt=""; stuck_on_context "$s" && fresh=--fresh
+      if [ -z "$fresh" ] && pace_stopped "$s"; then
+        # It stopped while the limit was full, and the limit has reset: back in its own conversation,
+        # and only when that fails, a new one.
+        if pace_tried "$s"; then fresh=--fresh; pprompt=$(pace_fresh_prompt "$s"); else pprompt=$(pace_resume_prompt); fi
+        pace_mark_tried "$s"
+        say "$s stopped while the plan's limit was full, which has reset; reviving it under the same name${fresh:+, in a new conversation since its own could not be resumed}"
+      else
+        say "$s stopped; reviving it under the same name${fresh:+, in a new conversation since its last one thrashed}"
+      fi
       # Each revive in its own shell with errexit on, so a failure stops that revive (never a station
       # started with half-made settings) and not the watcher. Tares and the settings are re-read each time.
       set +e
-      ( set -e; TARES_STATE=""; SETTINGS=""; CREW_PROJECTS=""; prime; cmd_revive "$s" $fresh )
+      ( set -e; TARES_STATE=""; SETTINGS=""; CREW_PROJECTS=""; prime; cmd_revive "$s" $fresh "$pprompt" )
       local rc=$?
       set -e
-      [ $rc = 0 ] || say "could not revive $s; will try again next round"
+      if [ $rc = 0 ]; then pace_revived "$s"; else say "could not revive $s; will try again next round"; fi
     done
     # One station a round moves onto an updated plugin, and only while every station is up, so a
     # version that can't start a station never takes the crew down one station at a time.
@@ -1255,8 +1275,168 @@ idle_wake_note() {
   echo "idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete)."
 }
 rearm_text() { # what a restart tells a station about its schedule
+  [ "$PACE_READ" = 1 ] || pace_read || true   # a command other than the watch has not read the pace yet (TR-674)
   if idle_wake_on; then echo "arm no tick of your own (idle_wake is on: the factory wakes you when there is work and holds your tick; if you hold one, delete it with CronList and CronDelete)"
+  elif [ "$PACE_STATE" = active ] && [ "$PACE_LEVEL" -ge 1 ]; then echo "re-arm your schedule if you have one, at 45 minutes while the factory paces the crew before the plan's limit"
   else echo "re-arm your schedule if you have one"; fi
+}
+
+# ---------- pace (TR-674) ----------
+# With the crew setting pace on, the watch reads how full the plan's limits are (Tares keeps the reading
+# the usage meter takes; GET /api/crew/pace) once a round and slows the crew before the limit instead of
+# hitting it. At 85% of the 5-hour window or 90% of the week no new builder starts and every station
+# ticks at its longest interval; at 95% of the window builders also finish their step, push, write
+# down where they are and wait. A station that stopped while a limit was full is not revived into it,
+# and once it has reset it is revived in its own conversation (a new one only when that fails). A
+# reading that is missing changes nothing. With the setting off none of this runs and no file is written.
+# Per station: stations/<station>.pace ({stretched, held}); crew-wide: pace.json (the stopped ones).
+PACE_FILE="$CREW_HOME/pace.json"
+PACE=""; PACE_STATE=unknown; PACE_LEVEL=0; PACE_AT_LIMIT=false; PACE_UNTIL=""; PACE_READ=0
+pace_read() { # → 0 with PACE_* set when pace is on and Tares has a reading of the limits; else 1, and nothing is paced
+  PACE=""; PACE_STATE=unknown; PACE_LEVEL=0; PACE_AT_LIMIT=false; PACE_UNTIL=""; PACE_READ=1
+  local p
+  tares_on || return 1
+  p=$(tares_http GET /api/crew/pace 2>/dev/null) && jq -e 'type == "object"' <<<"$p" >/dev/null 2>&1 || return 1
+  if [ "$(jq -r '.on // false' <<<"$p")" != true ]; then PACE_STATE=off; return 1; fi
+  [ "$(jq -r '.known // false' <<<"$p")" = true ] || return 1
+  PACE=$p; PACE_STATE=active
+  PACE_LEVEL=$(jq -r '.level // 0' <<<"$p"); PACE_AT_LIMIT=$(jq -r '.at_limit // false' <<<"$p"); PACE_UNTIL=$(jq -r '.until // ""' <<<"$p")
+  return 0
+}
+pace_closed() { [ "$PACE_STATE" = active ] && [ "$PACE_AT_LIMIT" = true ]; }   # a limit is full and has not reset
+
+PACE_DEFAULT='{"limit_since":null,"until":null,"said":false,"stopped":[],"tried":[]}'
+pace_json() { # the crew-wide pace file, the defaults under whatever it has
+  if [ -f "$PACE_FILE" ] && jq -e . "$PACE_FILE" >/dev/null 2>&1; then jq -c --argjson d "$PACE_DEFAULT" '$d + .' "$PACE_FILE"
+  else echo "$PACE_DEFAULT"; fi
+}
+pace_json_update() { # jq-filter [jq args]: apply the filter to the pace file, written whole
+  local filter=$1 tmp; shift
+  tmp=$(mktemp "$PACE_FILE.XXXXXX") || return 1
+  if pace_json | jq -c "$@" "$filter" > "$tmp"; then mv "$tmp" "$PACE_FILE"; else rm -f "$tmp"; return 1; fi
+}
+pace_stopped() { [ "$PACE_STATE" != unknown ] && pace_json | jq -e --arg s "$1" '.stopped | index($s)' >/dev/null; }   # it stopped while a limit was full
+pace_tried() { pace_json | jq -e --arg s "$1" '.tried | index($s)' >/dev/null; }                                    # its resume was tried and failed
+pace_mark_tried() { pace_json_update '.tried = ((.tried + [$s]) | unique)' --arg s "$1" || true; }
+pace_hold_down() { # station: it is down while a limit is full; remember it, and say so once per episode
+  local said; said=$(pace_json | jq -r '.said')
+  pace_json_update '.stopped = ((.stopped + [$s]) | unique) | .limit_since = (.limit_since // $now) | .["until"] = $up | .said = true' \
+    --arg s "$1" --argjson now "$(now_s)" --arg up "$PACE_UNTIL" || true
+  [ "$said" = true ] || say "the plan's limit is full${PACE_UNTIL:+ until $PACE_UNTIL}, so a stopped station is not revived now ($1 is the first); the watch revives each one in its own conversation after the reset"
+  return 0
+}
+pace_revived() { # station: it runs again (revived, or by hand): forget it; the file goes when nothing is left to carry out
+  [ -f "$PACE_FILE" ] || return 0
+  pace_json_update '.stopped -= [$s] | .tried -= [$s]' --arg s "$1" || true
+  if [ "$(pace_json | jq '(.stopped | length) == 0')" = true ] && ! pace_closed; then rm -f "$PACE_FILE"; fi
+  return 0
+}
+pace_resume_prompt() { # a short one: the conversation is its own, so it needs no reload of the skills
+  echo "The plan's limit was reset. Carry on from where you stopped: re-read your report and your work on Tares, $(rearm_text), then continue."
+}
+pace_fresh_prompt() { # station: its conversation could not be resumed
+  echo "The plan's limit was reset, but your last conversation could not be resumed, so this is a new one under the same name. Nothing from it carries over except your report and what is on Tares. Reload the skills factory-protocol and station-$(stations_get "$1" '.role'), re-read your report and your work on Tares, $(rearm_text), then carry on where your report left off."
+}
+
+pace_station_file() { echo "$CREW_HOME/stations/$1.pace"; }
+pace_station_read() { # station → {stretched, held}
+  local f; f=$(pace_station_file "$1")
+  if [ -f "$f" ] && jq -e . "$f" >/dev/null 2>&1; then jq -c '{stretched: false, held: false} + .' "$f"
+  else echo '{"stretched":false,"held":false}'; fi
+}
+pace_station_put() { # station stretched held (true|false): what the station has been told; nothing told, no file
+  local f tmp; f=$(pace_station_file "$1")
+  if [ "$2" = false ] && [ "$3" = false ]; then rm -f "$f"; return 0; fi
+  mkdir -p "$(dirname "$f")"
+  tmp=$(mktemp "$f.XXXXXX") || return 1
+  if jq -cn --argjson st "$2" --argjson h "$3" '{stretched: $st, held: $h}' > "$tmp"; then mv "$tmp" "$f"; else rm -f "$tmp"; return 1; fi
+}
+pace_launch_note() { # station: a start while the crew is paced is a start with the stretched tick (rearm_text says so)
+  case "$(stations_get "$1" '.role')" in orchestrator|reviewer|releaser|builder) ;; *) return 0 ;; esac
+  [ "$PACE_STATE" = active ] && [ "$PACE_LEVEL" -ge 1 ] && [ "$(idle_wake_state)" = off ] || return 0
+  pace_station_put "$1" true false
+}
+
+# Two steps, like the idle wake: pace_plan decides (0 = tell it now, the what in PACE_*), pace_send does
+# the restart as a plain statement. Only with idle_wake off: with it on the station holds no tick of its
+# own and the wake machinery already waits the longest and sends a builder no work at the hold.
+pace_plan() { # station → 0 when the station is to be restarted with a pace note now, else 1
+  local s=$1 role st cur stretched held want="" note
+  [ "$PACE_STATE" != unknown ] || return 1
+  role=$(stations_get "$s" '.role')
+  case "$role" in orchestrator|reviewer|releaser|builder) ;; *) return 1 ;; esac
+  st=$(idle_wake_state)
+  case "$st" in
+    off) ;;
+    on) rm -f "$(pace_station_file "$s")"; return 1 ;;   # a released tick is not stretched
+    *) return 1 ;;
+  esac
+  cur=$(pace_station_read "$s"); stretched=$(jq -r .stretched <<<"$cur"); held=$(jq -r .held <<<"$cur")
+  if [ "$PACE_STATE" = off ] || [ "$PACE_LEVEL" -eq 0 ]; then
+    if [ "$stretched" = true ] || [ "$held" = true ]; then want=release; fi
+  elif [ "$stretched" != true ]; then want=stretch
+  elif [ "$role" = builder ] && [ "$PACE_LEVEL" -ge 2 ] && [ "$held" != true ]; then want=hold
+  elif [ "$held" = true ] && [ "$PACE_LEVEL" -lt 2 ]; then want=unhold
+  fi
+  [ -n "$want" ] || return 1
+  halted && return 1
+  [ -n "$(stations_get "$s" '.sessionId')" ] || return 1
+  ! attached "$s" || return 1
+  between_turns "$s" || return 1
+
+  note=$(jq -r '.note // ""' <<<"$PACE")
+  local stretch_text="Stretch your tick to 45 minutes: if you hold a CronCreate tick, delete it (CronList, then CronDelete) and create it again at 45 minutes, and keep it there until the factory tells you otherwise."
+  local hold_text="Finish the step you are on, push, write in your report where you are and what comes next, then wait without starting new work until the factory tells you the plan has room again."
+  PACE_S=$s PACE_WANT=$want PACE_NEW_STRETCHED=true PACE_NEW_HELD=false
+  case "$want" in
+    stretch)
+      PACE_PROMPT="$note $stretch_text Carry on from your report."
+      if [ "$role" = builder ] && [ "$PACE_LEVEL" -ge 2 ]; then PACE_PROMPT="$note $stretch_text $hold_text"; PACE_NEW_HELD=true; fi ;;
+    hold)
+      PACE_PROMPT="$note $hold_text"; PACE_NEW_HELD=true ;;
+    unhold)
+      PACE_PROMPT="The plan's limit has room for builders again: pick up where your report says you stopped. Keep your tick at 45 minutes while the factory still paces the crew." ;;
+    release)
+      PACE_PROMPT="The factory has stopped pacing the crew (the plan has room, or pace was turned off). Put your tick back to its normal interval: delete the 45-minute CronCreate tick and create it again as your manual says. Then carry on from your report, including anything you held back."
+      PACE_NEW_STRETCHED=false ;;
+  esac
+  return 0
+}
+
+pace_send() { # the station pace_plan chose: restart it in the same conversation with the note; always returns 0
+  local s=$PACE_S want=$PACE_WANT prompt=$PACE_PROMPT rc
+  set +e
+  ( set -e; TARES_STATE=""; SETTINGS=""; CREW_PROJECTS=""
+    tares_on || exit 3
+    [ "$(idle_wake_state)" = off ] || exit 4   # the setting changed since the round began
+    ! halted || exit 4
+    ! attached "$s" || exit 4
+    between_turns "$s" || exit 4   # it started something since the first check
+    say "pacing: telling $s ($want) in the same conversation"
+    cmd_restart "$s" "$prompt"
+    event pace "$s" "$want" )
+  rc=$?
+  set -e
+  case $rc in
+    0) pace_station_put "$s" "$PACE_NEW_STRETCHED" "$PACE_NEW_HELD" || true ;;
+    3|4) ;;
+    *) say "could not tell $s about the pace; will try again next round" ;;
+  esac
+  return 0
+}
+
+pace_status_line() { # the pace in one line for crew status; nothing when it is off
+  tares_on || return 0
+  local p; p=$(tares_http GET /api/crew/pace 2>/dev/null) || return 0
+  jq -r '
+    def pc: if . == null then "-" else "\(.)%" end;
+    if .on != true then empty
+    elif .known != true then "pace: on, no reading of the plan limits yet"
+    else "pace: \(if .state == "ok" then "ok"
+                  elif .state == "slow" then "slow, no new builders and the longest ticks, until \(.["until"] // "the reset")"
+                  elif .state == "hold" then "hold, builders finish their step and wait, until \(.["until"] // "the reset")"
+                  else "at the limit, stopped stations wait for the reset, until \(.["until"] // "the reset")" end) (5-hour \(.session_pct | pc), week \(.weekly_pct | pc))"
+    end' <<<"$p" 2>/dev/null || true
 }
 
 WAKE_DEFAULT='{"seen":[],"n":0,"last_wake":null,"clock":null,"baseline":null,"released":false}'
@@ -1378,12 +1558,13 @@ idle_wake_plan() { # station → 0 when the station is to be woken now, else 1
     scan=$(iw_scan_"$role" "$s") || return 1
     upd=$(station_updated "$s")
     plan=$(jq -cn --argjson w "$w" --argjson sc "$scan" --argjson now "$now" --argjson upd "${upd:-null}" \
-      --argjson settle "${FACTORY_WAKE_SETTLE:-600}" --argjson base "$(wake_base_min "$role")" '
-      def after($n): (if $n == 0 then $base * 60 elif $n == 1 then 1800 else 2700 end);
+      --argjson settle "${FACTORY_WAKE_SETTLE:-600}" --argjson base "$(wake_base_min "$role")" \
+      --argjson pace "$PACE_LEVEL" --argjson hold "$([ "$role" = builder ] && [ "$PACE_LEVEL" -ge 2 ] && echo true || echo false)" '
+      def after($n): (if $pace >= 1 then 2700 elif $n == 0 then $base * 60 elif $n == 1 then 1800 else 2700 end);   # pacing (TR-674): the longest wait at once
       ($w.clock // $now) as $c0
       | (if $upd != null and $upd > (($w.last_wake // $c0) + $settle) then {n: 0, clock: $upd} else {n: $w.n, clock: $c0} end) as $r
       | (if $sc.live then $r else {n: 0, clock: $now} end) as $r
-      | [$sc.pending[] | select(.key as $k | ($w.seen | index($k)) | not)] as $new
+      | (if $hold then [] else [$sc.pending[] | select(.key as $k | ($w.seen | index($k)) | not)] end) as $new   # a builder told to hold gets no work wake
       | {n: $r.n, clock: $r.clock, keys: [$sc.pending[].key], new: $new, baseline: ($sc.baseline // null), first: ($sc.first // false),
          live: $sc.live, due: ($sc.live and ($now - $r.clock) >= after($r.n))}')
     keys=$(jq -c '.keys' <<<"$plan"); baseline=$(jq -c '.baseline' <<<"$plan"); n=$(jq '.n' <<<"$plan")
@@ -1611,6 +1792,7 @@ cmd_status() {
     echo "FROZEN: the kit $(frozen_text); stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit$([ "$kit" = "$(frozen_field version)" ] || echo " (a newer kit is available)")"
   fi
   idle_wake_on && echo "idle_wake: on, the watch wakes a station when it has work and holds its tick (a liveness wake after 15, 20 or 30 minutes of quiet, then 30, then every 45)"
+  pace_status_line
   local wp; if wp=$(watch_pid); then echo "watch: running (pid $wp), it revives any station that stops and gives one a permission you allowed in Tares; log in $WATCH_LOG"
   else echo "watch: not running; $ME crew up starts it (or run $ME crew watch yourself)"; fi
   local items n; items=$(desk_json)
