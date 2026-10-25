@@ -416,7 +416,7 @@ async def list_decisions(project: str = "") -> str:
 # ── the crew (TR-419, TR-420, TR-425) ─────────────────────────────────────────
 
 SETTING_KEYS = ("autonomy", "releaser", "release_profile", "prod_pattern", "challenger",
-                "builders_max", "kit", "idle_wake")
+                "builders_max", "kit", "idle_wake", "pace")
 
 @mcp.tool()
 async def get_crew_settings() -> str:
@@ -429,7 +429,9 @@ async def get_crew_settings() -> str:
     when and by whom the person froze it (`tares factory crew freeze`): the watch then moves no
     station onto a newer kit. Read only here; the person freezes and unfreezes from the CLI.
     `idle_wake` (null or false: off): when true the factory's watch wakes you with a message when
-    you have work and holds your liveness tick, so you arm no schedule of your own."""
+    you have work and holds your liveness tick, so you arm no schedule of your own. `pace` (null or
+    false: off): when true the watch slows the crew before the plan's limits: no new builders, a
+    45-minute tick, and builders wait near the 5-hour limit; its notes to you say what to do."""
     async with _cx(10) as cx:
         r = await cx.get(f"{TARESD}/api/crew/settings")
     return _out(r, SETTING_KEYS)
@@ -440,13 +442,15 @@ async def set_crew_settings(autonomy: str = "", release_profile: str | None = No
                             prod_pattern: str | None = None, challenger: bool | None = None,
                             builders_max: int | None = None,
                             releaser: bool | None = None,
-                            idle_wake: bool | None = None) -> str:
+                            idle_wake: bool | None = None,
+                            pace: bool | None = None) -> str:
     """Save the crew's settings the person chose (only the ones given change). Only the person's
     own session or the orchestrator may. `idle_wake` true has the watch wake idle stations when
-    they have work, instead of each ticking on its own."""
+    they have work, instead of each ticking on its own. `pace` true slows the crew before the plan's
+    limits are hit."""
     body = {"autonomy": autonomy or None, "release_profile": release_profile,
             "prod_pattern": prod_pattern, "challenger": challenger, "builders_max": builders_max,
-            "releaser": releaser, "idle_wake": idle_wake}
+            "releaser": releaser, "idle_wake": idle_wake, "pace": pace}
     async with _cx(10) as cx:
         r = await cx.put(f"{TARESD}/api/crew/settings", json=body)
     return _out(r, SETTING_KEYS)

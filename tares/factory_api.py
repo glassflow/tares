@@ -222,7 +222,8 @@ def register(app, store, h: SimpleNamespace) -> None:
         crew's plugin kit, and by whom, or is null while the crew follows the checkout. `idle_wake`
         (true or false; null counts as false) makes the watch wake an idle station with a message
         when it has work, and hold the station's liveness tick, instead of each station ticking
-        on its own."""
+        on its own. `pace` (true or false; null counts as false) makes the crew slow down before
+        the plan's limits: see GET /api/crew/pace."""
         return {**settings(), "autonomy_levels": factory_mod.AUTONOMY}
 
     @app.put("/api/crew/settings")
@@ -373,12 +374,26 @@ def register(app, store, h: SimpleNamespace) -> None:
         out.sort(key=lambda s: (order.get(s["role"] or "", 99), s["name"]))
         return out
 
+    def pace() -> dict:
+        return factory_mod.pace_now(settings(), claude_usage.plan(store), now_utc())
+
     @app.get("/api/crew")
     async def get_crew():
         """The crew: one row per station (its current session and state, the earlier sessions
-        that played it, the stations it started), the crew's settings, and the shared grants."""
+        that played it, the stations it started), the crew's settings, the shared grants, and the
+        crew's `pace` (as GET /api/crew/pace gives it)."""
         return {"stations": stations(), "settings": settings(), "grants": grants_out(None)["all"],
-                "now": now_utc()}
+                "pace": pace(), "now": now_utc()}
+
+    @app.get("/api/crew/pace")
+    async def get_crew_pace():
+        """Whether the crew is pacing itself before the plan's limits (the crew setting `pace`),
+        worked out from the plan usage Tares keeps. `level` is 0 (ok), 1 (slow: the 5-hour window
+        at 85% or the weekly limit at 90%) or 2 (hold: the window at 95%); `at_limit` is true while
+        a limit is full and has not reset; `state` is off, ok, slow, hold or limit; `until` is when
+        the limits behind it reset; `known` is false when no plan reading has arrived. The factory
+        watch reads this (TR-674)."""
+        return pace()
 
     @app.get("/api/crew/projects")
     async def crew_projects():

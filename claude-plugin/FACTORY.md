@@ -107,6 +107,17 @@ station with nothing to do gets a liveness wake after 15 minutes (reviewer), 20 
 that did something itself starts the count over. A busy or attached station and a halted crew are
 not woken. Turn the setting off and each station is told once to arm its tick again.
 
+The crew setting `pace` (off by default; `set_crew_settings(pace=True)` or the Crew page) slows the crew before the plan's
+limit instead of hitting it and restarting every station at once. The watch reads the plan usage Tares keeps
+(`GET /api/claude-code/usage`, through `GET /api/crew/pace`) once a round. At 85% of the 5-hour window or 90% of the week no new
+builder starts (`factory spawn builder` refuses and says until when; helpers are not affected) and every station ticks every
+45 minutes: each is told once, in its own conversation (with `idle_wake` on the liveness wake simply waits 45 minutes). At 95% of
+the window a builder also finishes the step it is on, pushes, writes in its report where it is and waits; with `idle_wake` on it
+gets no work wakes meanwhile. A station that stopped while a limit was full is not revived into it; after the reset the watch
+revives it in the same conversation with a short prompt, and starts it fresh only when that resume failed. Back below the
+thresholds each station is told once to go back to its normal tick. A reading that cannot be had changes nothing. `factory crew
+status` and the Crew page say when the crew is pacing and until when.
+
 ## 3. Plan a project
 
 In the repo the project builds on, or in a folder that holds its repos:

@@ -519,6 +519,13 @@ export interface CrewSettings {
   builders_max: number | null;
   kit: { frozen: { at: string; by: string; version: string } | null };
   idle_wake?: boolean | null;
+  pace?: boolean | null;
+}
+/** The crew's pace before the plan's limits (/api/crew/pace, TR-674). */
+export interface CrewPace {
+  on: boolean; known: boolean; level: 0 | 1 | 2; at_limit: boolean;
+  state: "off" | "ok" | "slow" | "hold" | "limit";
+  until: string | null; session_pct: number | null; weekly_pct: number | null; note: string;
 }
 export interface HandoverRepo { path: string | null; name: string | null }
 export interface ProjectFinished { at: string; words: string; decision: string | null; by: string | null }

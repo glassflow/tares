@@ -8,7 +8,7 @@ import type {
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults,
   Skill, SkillSummary,
-  Assumption, ClaudeCodeUsage, CrewMessage, CrewProject, CrewSettings, CrewStation, Decision, DeskAllowed, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, LinearLink, LinearStatus, Milestone,
+  Assumption, ClaudeCodeUsage, CrewMessage, CrewPace, CrewProject, CrewSettings, CrewStation, Decision, DeskAllowed, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, LinearLink, LinearStatus, Milestone,
   ProjectSession, Ticket, TicketStatus,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, ModelProvider, ModelProviders, Standup,
@@ -584,7 +584,9 @@ export const api = {
   ticketMessages: (id: string, ref: string) =>
     request<{ messages: CrewMessage[] }>(
       `/api/projects/${encodeURIComponent(id)}/tickets/${encodeURIComponent(ref)}/messages`),
-  crew: () => request<{ stations: CrewStation[]; settings: CrewSettings; grants: string; now: string }>("/api/crew"),
+  crew: () => request<{ stations: CrewStation[]; settings: CrewSettings; grants: string; pace?: CrewPace; now: string }>("/api/crew"),
+  setCrewSettings: (body: Partial<Pick<CrewSettings, "pace" | "idle_wake">>) =>
+    request<CrewSettings>("/api/crew/settings", { method: "PUT", body: JSON.stringify(body) }),
   crewProjects: () => request<{ projects: CrewProject[]; finished?: (Pick<CrewProject, "id" | "name" | "tickets_done" | "tickets_total" | "progress"> & { finished: ProjectFinished | null })[]; now: string }>("/api/crew/projects"),
   standup: (since: string, until: string) =>
     request<Standup>(`/api/crew/standup?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}`),
