@@ -67,6 +67,11 @@ the project follows [Semantic Versioning](https://semver.org/).
 - Factory: `factory doctor` and `crew up` counted a language server plugin enabled only for the
   repo's own folder as ready. Stations run in the crew home and in worktrees, never in that
   folder, so they had no server. Only a plugin enabled for you (user scope) counts now (TR-686).
+- Factory: the guard still let a builder run an orchestrator-only command when the verb was
+  followed by a backtick, `>`, `}` or `#` (`` x=`factory crew down` ``, `factory crew down>log`). A
+  verb now ends at anything but a letter, digit, `_` or `-`. `ls ~/factory down`, a folder named
+  factory handed to `ls`, `cat` and the other readers, was refused as if it were the CLI; it now
+  runs (TR-688).
 
 ## [1.51.1] - 2026-10-21
 
