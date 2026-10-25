@@ -92,6 +92,13 @@ same questions come as numbered prompts. The Crew page
 Code stops idle sessions after about an hour) and gives a station a permission you allowed in
 Tares; its log is `~/factory/watch.log`, and `crew down` stops it. `tares factory doctor` checks everything the crew needs.
 
+Claude Code has a built-in LSP tool (go to definition, references, callers) that answers only where a language server is wired in, and
+only a plugin wires one. `doctor` reads each handed-over repo's languages (Python, TypeScript, JavaScript, Go, Rust) from its manifests (`pyproject.toml`, `package.json`,
+`tsconfig.json`, `go.mod`, `Cargo.toml` and the like, at the repo root or one folder down) and says for each whether Claude Code has a server:
+the plugin enabled and its binary on your PATH. For a missing one it prints the install command and the plugin that wires it in, for example
+`npm install -g pyright` then `claude plugin install pyright-lsp@claude-plugins-official`. `crew up` shows the same list and installs it only
+when you answer yes; `--yes` and a closed input install nothing. Builders and the reviewer prefer the LSP tool over grep when it answers.
+
 `tares factory crew freeze` keeps the crew on today's plugin kit: the watch still tells you when the
 checkout has a newer one, but moves no station onto it. A station that starts or revives uses a copy
 of the kit as it was frozen; a station already running keeps reading the checkout until it restarts.

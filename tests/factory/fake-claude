@@ -43,6 +43,13 @@ case "${1:-}" in
   stop) sleep "${FAKE_CLAUDE_STOP_DELAY:-0}"
     if [ "${FAKE_CLAUDE_STOP_KEEPS_STATE:-}" = 1 ]; then set_agents --arg id "$2" 'map(if .id == $id then del(.pid, .status) else . end)'
     else set_agents --arg id "$2" 'map(if .id == $id then .state = "stopped" | del(.pid) else . end)'; fi ;;
+  # The plugins installed: `plugin list --json` serves plugins.json, `plugin install <id>` adds an enabled one.
+  plugin)
+    [ -f "$S/plugins.json" ] || echo '[]' > "$S/plugins.json"
+    case "${2:-}" in
+      list) [ "${FAKE_CLAUDE_PLUGIN_FAIL:-}" = 1 ] && { echo "plugin list failed (fake)" >&2; exit 1; }; cat "$S/plugins.json" ;;
+      install) tmp=$(mktemp); jq --arg id "$3" '. + [{id: $id, version: "1.0.0", scope: "user", enabled: true}]' "$S/plugins.json" > "$tmp" && mv "$tmp" "$S/plugins.json" ;;
+    esac ;;
   rm) set_agents --arg id "$2" 'map(select(.id != $id))' ;;
   # Print mode reads /context of a session and /usage without a model call; it prints what Claude Code
   # prints with --output-format stream-json --verbose, and keeps the settings it was given.
