@@ -49,13 +49,16 @@ scan=$(perl -0777 -pe '
     $rest =~ s{("(?:[^"\\]|\\.)*"|\x27[^\x27]*\x27)}{my $q = $1; ($q =~ /^"/ && $q =~ /\$\(|`/) ? $q : "_"}ge;
     "$c$rest"
   }ge;
+  # A folder named factory handed to a reader (`ls ~/factory down`) is an argument, not the CLI. Only commands
+  # that cannot run their arguments are listed: find, xargs, env and the shells are not.
+  s{((?:^|[;&|(`\n])[ \t]*(?:ls|cd|pushd|cat|head|tail|less|more|wc|stat|file|du|tree|grep|rg|echo|printf|test|realpath)(?:[ \t]+[^\s;&|()`]+)*?[ \t]+)(?:[^\s;&|()`"\x27]*/)?factory(?=[ \t])}{$1_}gm;
 ' <<<"$cmd")
 
 # The factory CLI by its name, whatever its path or quoting: `factory x`, `/abs/path/bin/factory x`,
 # `(factory x)`, `$(factory x)`, `"factory" x`, `bash -c "factory x"`. A leading dot (`.factory`) is a
-# folder, not the command. FACTORY_END closes a verb: a space, a separator, a bracket, a quote or the end.
+# folder, not the command. FACTORY_END closes a verb: anything but a letter, digit, `_` or `-`, or the end.
 FACTORY_CLI='(^|[;&|[:space:](`])["'"'"']?([^[:space:];&|"'"'"']*/)?factory["'"'"']?[[:space:]]+'
-FACTORY_END='([[:space:];&|)"'"'"']|$)'
+FACTORY_END='([^[:alnum:]_-]|$)'
 
 # While the crew is halted (factory crew halt), nothing risky starts: merges, pushes, deploys, tags, sessions.
 if [ -n "${FACTORY_HOME:-}" ] && [ -f "$FACTORY_HOME/HALT" ]; then

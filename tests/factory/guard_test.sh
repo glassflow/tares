@@ -110,6 +110,19 @@ t builder Bash 'bash -c "factory crew down"' deny
 t builder Bash "bash -c 'factory crew halt'" deny
 t builder Bash 'factory halt; true' deny
 t builder Bash 'factory finish p;' deny
+# A verb closed by a backtick, >, } or # is still the verb.
+t builder Bash 'x=`factory crew down`' deny
+t builder Bash 'factory crew down>/dev/null' deny
+t builder Bash '{ factory crew down}' deny
+t builder Bash 'factory crew down#x' deny
+t orchestrator Bash 'x=`factory crew down`' allow
+t orchestrator Bash 'factory crew down>/dev/null' allow
+# A folder named factory given to a reader is an argument; a command that runs its arguments is not a reader.
+t builder Bash 'ls ~/factory down' allow
+t builder Bash 'ls -la ~/factory halt' allow
+t builder Bash 'ls ~/factory; /abs/bin/factory crew down' deny
+t builder Bash 'ls x;/abs/bin/factory crew down' deny
+t builder Bash 'find . -exec /abs/bin/factory crew down {} \;' deny
 t orchestrator Bash 'factory crew down; ls' allow
 t orchestrator Bash '(factory crew down)' allow
 t orchestrator Bash '"/abs/bin/factory" crew up' allow
