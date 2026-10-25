@@ -392,8 +392,11 @@ def pace():
              ("a window that reset (flagged by Tares)", plan(99, reset=True), 0, "ok", False, None),
              ("a window whose time has passed", plan(99, sr=past), 0, "ok", False, None),
              ("a full window that reset, a weekly limit that did not", plan(100, 91, sr=past), 1, "slow", False, "2026-10-30T00:00:00Z"),
-             ("a limit that is neither (a scoped week) at 100%",
-              {"limits": [{"kind": "weekly_scoped", "percent": 100, "resets_at": later}]}, 0, "limit", True, "2026-10-25T15:00:00Z")]
+             ("a per-model week at 100% stops that model, not the crew",
+              {"limits": [{"kind": "weekly_scoped", "percent": 100, "resets_at": later}]}, 0, "ok", False, None),
+             ("a per-model week at 100% beside a window at 86%",
+              {"limits": [{"kind": "session", "percent": 86, "resets_at": later},
+                          {"kind": "weekly_scoped", "percent": 100, "resets_at": soon}]}, 1, "slow", False, "2026-10-25T15:00:00Z")]
     for name, pl, level, state, at_limit, until in table:
         r = pace_now(on, pl, now)
         ck(f"{name}: level {level}, {state}", (r["level"], r["state"], r["at_limit"], r["until"]) == (level, state, at_limit, until), r)

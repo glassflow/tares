@@ -1074,6 +1074,7 @@ cmd_retire() { # station
   "$CLAUDE" stop "$id" >/dev/null 2>&1 || true
   "$CLAUDE" rm "$id" >/dev/null 2>&1 || true
   stations_put "$station" '{"status": "retired"}'
+  rm -f "$CREW_HOME/stations/$station.pace"   # what the pace told it (TR-674)
   event retired "$station" "$id"
   tell_tares_ended "$station"
   say "retired $station"
@@ -1123,6 +1124,7 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
     local s kit settled=0 down=0 candidate=""; kit=$(kit_version)
     TARES_STATE=""; SETTINGS=""; tares_on || true   # this round's Tares and settings; one that doesn't answer changes no grants
     pace_read || true   # the plan's pace, once a round (TR-674); a reading that is missing changes nothing
+    pace_tidy || true
     # An update counts once it has held for a whole round in a clean checkout: a pull or an edit in
     # progress is not a release.
     [ "$kit" = "$seen" ] && kit_clean && settled=1
@@ -1179,7 +1181,6 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
         # It stopped while the limit was full, and the limit has reset: back in its own conversation,
         # and only when that fails, a new one.
         if pace_tried "$s"; then fresh=--fresh; pprompt=$(pace_fresh_prompt "$s"); else pprompt=$(pace_resume_prompt); fi
-        pace_mark_tried "$s"
         say "$s stopped while the plan's limit was full, which has reset; reviving it under the same name${fresh:+, in a new conversation since its own could not be resumed}"
       else
         say "$s stopped; reviving it under the same name${fresh:+, in a new conversation since its last one thrashed}"
@@ -1190,7 +1191,11 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
       ( set -e; TARES_STATE=""; SETTINGS=""; CREW_PROJECTS=""; prime; cmd_revive "$s" $fresh "$pprompt" )
       local rc=$?
       set -e
-      if [ $rc = 0 ]; then pace_revived "$s"; else say "could not revive $s; will try again next round"; fi
+      if [ $rc = 0 ]; then pace_revived "$s"
+      else
+        say "could not revive $s; will try again next round"
+        [ -z "$pprompt" ] || [ -n "$fresh" ] || pace_mark_tried "$s"   # a resume that failed; two in a row and the next is a new conversation
+      fi
     done
     # One station a round moves onto an updated plugin, and only while every station is up, so a
     # version that can't start a station never takes the crew down one station at a time.
@@ -1316,11 +1321,11 @@ pace_json_update() { # jq-filter [jq args]: apply the filter to the pace file, w
   if pace_json | jq -c "$@" "$filter" > "$tmp"; then mv "$tmp" "$PACE_FILE"; else rm -f "$tmp"; return 1; fi
 }
 pace_stopped() { [ "$PACE_STATE" != unknown ] && pace_json | jq -e --arg s "$1" '.stopped | index($s)' >/dev/null; }   # it stopped while a limit was full
-pace_tried() { pace_json | jq -e --arg s "$1" '.tried | index($s)' >/dev/null; }                                    # its resume was tried and failed
-pace_mark_tried() { pace_json_update '.tried = ((.tried + [$s]) | unique)' --arg s "$1" || true; }
-pace_hold_down() { # station: it is down while a limit is full; remember it, and say so once per episode
+pace_tried() { pace_json | jq -e --arg s "$1" '[.tried[] | select(. == $s)] | length >= 2' >/dev/null; }          # its resume failed twice in a row
+pace_mark_tried() { pace_json_update '.tried += [$s]' --arg s "$1" || true; }
+pace_hold_down() { # station: it is down while a limit is full; remember it, and say so once per episode; a full limit again starts its failed resumes over
   local said; said=$(pace_json | jq -r '.said')
-  pace_json_update '.stopped = ((.stopped + [$s]) | unique) | .limit_since = (.limit_since // $now) | .["until"] = $up | .said = true' \
+  pace_json_update '.tried -= [$s] | .stopped = ((.stopped + [$s]) | unique) | .limit_since = (.limit_since // $now) | .["until"] = $up | .said = true' \
     --arg s "$1" --argjson now "$(now_s)" --arg up "$PACE_UNTIL" || true
   [ "$said" = true ] || say "the plan's limit is full${PACE_UNTIL:+ until $PACE_UNTIL}, so a stopped station is not revived now ($1 is the first); the watch revives each one in its own conversation after the reset"
   return 0
@@ -1328,6 +1333,19 @@ pace_hold_down() { # station: it is down while a limit is full; remember it, and
 pace_revived() { # station: it runs again (revived, or by hand): forget it; the file goes when nothing is left to carry out
   [ -f "$PACE_FILE" ] || return 0
   pace_json_update '.stopped -= [$s] | .tried -= [$s]' --arg s "$1" || true
+  if [ "$(pace_json | jq '(.stopped | length) == 0')" = true ] && ! pace_closed; then rm -f "$PACE_FILE"; fi
+  return 0
+}
+pace_tidy() { # once a round: forget stations that will not be revived (retired, done, a helper) and a pace file with nothing left to carry out
+  [ -f "$PACE_FILE" ] && [ "$PACE_STATE" != unknown ] || return 0   # a reading that is missing changes nothing
+  if [ "$PACE_STATE" = off ]; then rm -f "$PACE_FILE"; return 0; fi
+  local n live="[]"
+  for n in $(jq -r 'to_entries[] | select(.value.status == "active" and .value.role != "helper") | .key' "$STATIONS" 2>/dev/null); do
+    [ "$(stations_get "$n" '.role')" = builder ] && [ -f "$CREW_HOME/stations/$n.done" ] && continue
+    live=$(jq -c --arg n "$n" '. + [$n]' <<<"$live")
+  done
+  pace_json_update '.stopped |= map(select(. as $x | $live | index($x))) | .tried |= map(select(. as $x | $live | index($x)))
+                    | if $closed then . else .said = false end' --argjson live "$live" --argjson closed "$(pace_closed && echo true || echo false)" || return 0
   if [ "$(pace_json | jq '(.stopped | length) == 0')" = true ] && ! pace_closed; then rm -f "$PACE_FILE"; fi
   return 0
 }

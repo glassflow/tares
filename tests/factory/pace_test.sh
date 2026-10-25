@@ -261,12 +261,38 @@ rr
 check "the limit again: the stopped station waits" '[ "$(launches_of crew-reviewer)" = "$rl" ] && [ "$(grep -c "the plan.s limit is full" "$T/watch.log")" = 1 ] && jq -e ".stopped | index(\"crew-reviewer\")" "$FACTORY_CREW_HOME/pace.json" >/dev/null'
 plan 100 90 -60   # the window reset, the week is at 90%: slow, not the limit, so no one else is told anything
 FAKE_CLAUDE_FAIL_RESUME=1 rr
-check "the resume fails: said, its conversation is untouched, and it is marked tried" 'grep -q "could not revive crew-reviewer" "$T/watch.log" && [ "$(st crew-reviewer .sessionId)" = "$sidR2" ] && jq -e ".tried | index(\"crew-reviewer\")" "$FACTORY_CREW_HOME/pace.json" >/dev/null'
+check "the resume fails: said, its conversation is untouched, and marked tried once" 'grep -q "could not revive crew-reviewer" "$T/watch.log" && [ "$(st crew-reviewer .sessionId)" = "$sidR2" ] && jq -e ".tried | length == 1" "$FACTORY_CREW_HOME/pace.json" >/dev/null'
+FAKE_CLAUDE_FAIL_RESUME=1 rr
+check "one failure does not make the next fresh: it is tried in its own conversation again, and fails again" '[ "$(st crew-reviewer .sessionId)" = "$sidR2" ] && jq -e ".tried | length == 2" "$FACTORY_CREW_HOME/pace.json" >/dev/null'
 rl=$(launches_of crew-reviewer)
 rr
-check "the next round starts it fresh, not in the old conversation" '! last crew-reviewer | jq -e "index(\"--resume\") != null" >/dev/null && [ "$(launches_of crew-reviewer)" = $((rl + 1)) ] && [ "$(st crew-reviewer .sessionId)" != "$sidR2" ]'
+check "the next round, after two failures in a row, starts it fresh, not in the old conversation" '! last crew-reviewer | jq -e "index(\"--resume\") != null" >/dev/null && [ "$(launches_of crew-reviewer)" = $((rl + 1)) ] && [ "$(st crew-reviewer .sessionId)" != "$sidR2" ]'
 check "and says why, and to reload the skills" 'p=$(lastprompt crew-reviewer); grep -q "could not be resumed" <<<"$p" && grep -q "Reload the skills factory-protocol and station-reviewer" <<<"$p"'
 check "then nothing is left to carry out" '[ ! -f "$FACTORY_CREW_HOME/pace.json" ]'
+# one failed resume, then the station comes up: it stays in its own conversation
+plan 100 10
+agent crew-reviewer '.state = "stopped" | del(.pid)'
+sidR3=$(st crew-reviewer .sessionId)
+rr
+plan 100 90 -60
+FAKE_CLAUDE_FAIL_RESUME=1 rr
+rr
+check "a single failed resume does not make the next one fresh" 'resumed crew-reviewer "$sidR3" && p=$(lastprompt crew-reviewer) && grep -q "^The plan.s limit was reset" <<<"$p" && ! grep -q "could not be resumed" <<<"$p" && [ ! -f "$FACTORY_CREW_HOME/pace.json" ]'
+# two failed resumes, then the limit fills again: the next recovery starts its count over
+plan 100 10
+agent crew-reviewer '.state = "stopped" | del(.pid)'
+sidR4=$(st crew-reviewer .sessionId)
+rr
+plan 100 90 -60
+FAKE_CLAUDE_FAIL_RESUME=1 rr
+FAKE_CLAUDE_FAIL_RESUME=1 rr
+plan 100 10
+rr
+check "the limit filling again forgets the failed resumes" 'jq -e ".tried | length == 0" "$FACTORY_CREW_HOME/pace.json" >/dev/null'
+plan 100 90 -60
+FAKE_CLAUDE_FAIL_RESUME=1 rr
+rr
+check "so one failed resume in the new recovery is still tried in its own conversation" 'resumed crew-reviewer "$sidR4" && ! lastprompt crew-reviewer | grep -q "could not be resumed"'
 rm -f "$FACTORY_CREW_HOME/stations/$B.done"
 idle_all
 
@@ -300,6 +326,70 @@ rr; rr
 check "and then nothing" '[ "$(allpace)" = "$a1" ]'
 spawn_m2; rc=$?
 check "off: a builder can be spawned at 85%" '[ $rc = 0 ]'
+
+"$F" retire links-app-build-m2 >/dev/null 2>&1
+
+# ---- the pace file forgets a station that will not be revived ----
+spawn_m2; rc=$?
+check "(a second builder is up while the pace is off)" '[ $rc = 0 ]'
+set_pace true; plan 85 10
+agent links-app-build-m2 '.state = "done"'
+rr
+check "(it was told to stretch its tick, so it has a pace file)" '[ "$(pfv links-app-build-m2 .stretched)" = true ]'
+"$F" retire links-app-build-m2 >/dev/null 2>&1
+check "retiring a station removes the pace file it had" '[ ! -f "$(pf links-app-build-m2)" ]'
+set_pace false; plan 10 10
+rr
+spawn_m2; rc=$?
+set_pace true; plan 100 10
+rr
+agent links-app-build-m2 '.state = "stopped" | del(.pid)'
+rr
+check "a builder that stopped at the limit is remembered" 'jq -e ".stopped | index(\"links-app-build-m2\")" "$FACTORY_CREW_HOME/pace.json" >/dev/null'
+"$F" retire links-app-build-m2 >/dev/null 2>&1
+check "retiring it removes what the pace told it" '[ ! -f "$(pf links-app-build-m2)" ]'
+rr
+check "the next round forgets it" '! jq -e ".stopped | index(\"links-app-build-m2\")" "$FACTORY_CREW_HOME/pace.json" >/dev/null'
+plan 10 10
+rr
+check "with the limit gone and no one left, the pace file is gone" '[ ! -f "$FACTORY_CREW_HOME/pace.json" ]'
+spawn_m2; rc=$?
+plan 100 10
+rr
+agent links-app-build-m2 '.state = "stopped" | del(.pid)'
+rr
+check "(a builder stopped at the limit again)" 'jq -e ".stopped | index(\"links-app-build-m2\")" "$FACTORY_CREW_HOME/pace.json" >/dev/null'
+set_pace false
+rr
+check "turning the pace off drops the pace file, so it is revived as today" '[ ! -f "$FACTORY_CREW_HOME/pace.json" ]'
+rr
+check "(and revived with the usual prompt)" 'lastprompt links-app-build-m2 | grep -q "^You were revived by the factory under the same name."'
+"$F" retire links-app-build-m2 >/dev/null 2>&1
+idle_all
+
+# ---- a note whose restart fails ----
+set_pace true; plan 10 10
+rr
+a0=$(allpace); c0=$(pacen crew-reviewer stretch)
+plan 85 10
+FAKE_CLAUDE_FAIL_RESUME=1 rr
+check "a note whose restart fails sends no event and marks nothing told" '[ "$(allpace)" = "$a0" ] && [ "$(pacefiles)" = 0 ] && grep -q "could not tell crew-reviewer about the pace" "$T/watch.log"'
+rr; rr
+check "the stations a failed restart left stopped come back already on the stretched tick, with no second note" '[ "$(pacen crew-reviewer stretch)" = "$c0" ] && [ "$(allpace)" = "$a0" ] && ( for s in $STATIONS; do [ "$(pfv $s .stretched)" = true ] || exit 1; done )'
+plan 10 10
+rr
+# a bare failure deep in the restart (the grants file of the new session cannot be written) stops it just the same
+api POST /api/grants '{"words": "the reviewer may label pull requests", "scope": "all"}' >/dev/null
+rr; rr   # the watch hands the new grant to each station first
+gf="$FACTORY_CREW_HOME/stations/crew-reviewer.grants"
+c1=$(pacen crew-reviewer stretch)
+plan 85 10
+rm -f "$gf"; mkdir "$gf"
+rr
+rmdir "$gf"
+check "a restart that fails midway is not marked told either" '[ "$(pacen crew-reviewer stretch)" = "$c1" ] && [ ! -f "$(pf crew-reviewer)" ]'
+rr; rr
+check "and the note is sent once the failure is gone" '[ "$(pacen crew-reviewer stretch)" = $((c1 + 1)) ] && [ "$(pfv crew-reviewer .stretched)" = true ]'
 
 [ $fail = 0 ] && echo "pace: all cases pass"
 exit $fail

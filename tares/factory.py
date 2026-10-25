@@ -781,11 +781,12 @@ def pace_now(settings: dict, plan: dict | None, now: datetime) -> dict:
         p = x.get("percent")
         p = 0 if x.get("reset") or (t and t <= now) or isinstance(p, bool) or not isinstance(p, (int, float)) else p
         kind = x.get("kind")
-        if kind in PACE_SLOW:
-            pct[kind] = max(p, pct.get(kind, 0))
+        if kind not in PACE_SLOW:
+            continue   # a per-model week or any other limit stops that model only, not the crew
+        pct[kind] = max(p, pct.get(kind, 0))
         if p >= 100:
             out["at_limit"] = True
-        if p >= 100 or p >= PACE_SLOW.get(kind, 101):
+        if p >= PACE_SLOW[kind]:
             causes.append((kind, p, t))
         if kind == "session" and p >= PACE_HOLD:
             level = 2
