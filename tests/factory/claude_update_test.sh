@@ -5,7 +5,7 @@
 # off, or while the version flips back and forth; an old pre-warmed spare is stopped and the restart
 # tried again; `crew update` and `crew restart` do every station and check there is one session each;
 # roster, status and doctor show the versions; a frozen crew (TR-676) hears of a newer Claude Code and
-# moves nothing.
+# moves nothing; a full plan limit (pace, TR-674) holds a move back until it has reset.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/lib.sh"
@@ -323,6 +323,41 @@ watch1; rm -f "$FAKE_CLAUDE_STATE/on-agents"
 out crew status
 check "frozen in the middle of the round: nothing moves onto the newer Claude Code" '[ "$(launches)" = "$before" ] && grep -q "^FROZEN" "$T/cmd.out"'
 "$F" crew unfreeze >/dev/null 2>&1; for _ in 1 2 3 4; do all_idle; watch1; done
+
+# Pace (TR-674): a Claude Code move is a restart, a model turn, so it never goes into a plan limit that is full
+# and has not reset (the watch moves nothing, `crew update` says why and restarts nothing), and moves again
+# once the limit has reset. Below the limit the restart prompt says the schedule is re-armed at 45 minutes.
+iso_in() { "$PY" -c 'import sys, datetime; print((datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=int(sys.argv[1]))).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$1"; }
+planbody() { # session% weekly% nonce
+  jq -cn --arg at "$(iso_in 0)" --arg sr "$(iso_in 10800)" --arg wr "$(iso_in 259200)" --argjson s "$1" --argjson w "$2" --argjson n "$3" \
+    '{type: "claude_plan", timestamp: $at, nonce: $n, usage_report: {rate_limits: {limits: [
+       {kind: "session", percent: $s, resets_at: $sr, scope: null, is_active: true},
+       {kind: "weekly_all", percent: $w, resets_at: $wr, scope: null, is_active: false}]}}}'
+}
+plan() { api POST /ingest/claude_code "$(planbody "$1" "$2" "$RANDOM")" >/dev/null; }
+rounds() { local _; for _ in $(seq "$1"); do all_idle; watch1; done; }
+api PUT /api/crew/settings '{"pace": true, "idle_wake": false}' >/dev/null
+plan 100 10; rounds 3   # the notes pace sends to a crew at its limit are restarts too; let them go first
+v0=$(runs crew-reviewer); newcc 1.11.0; before=$(launches)
+rounds 4
+check "limit full: the watch moves no station onto the newer Claude Code" '[ "$(launches)" = "$before" ] && [ "$(runs crew-reviewer)" = "$v0" ]'
+"$F" crew update --wait 5 >"$T/pace-update.out" 2>&1; rc=$?
+check "limit full: crew update says so and restarts nothing" '[ $rc != 0 ] && grep -q "the plan.s limit is full until 20" "$T/pace-update.out" && [ "$(launches)" = "$before" ]'
+plan 10 10; rounds 4
+check "the limit has reset: the watch moves a station again" '[ "$(launches)" -gt "$before" ] && [ "$(runs "$(launched 1)")" = 1.11.0 ]'
+"$F" crew update --wait 5 >/dev/null 2>&1; all_idle
+# the limit fills in the middle of a round (the watch read the plan before it did): the move waits
+newcc 1.11.1; before=$(launches)
+echo "curl -sS -X POST -H 'Content-Type: application/json' --data '$(planbody 100 10 424242)' \"$TARESD_URL/ingest/claude_code\"" > "$FAKE_CLAUDE_STATE/on-agents"
+echo 1 > "$FAKE_CLAUDE_STATE/on-agents-at"; rm -f "$FAKE_CLAUDE_STATE/on-agents-reads"
+watch1; rm -f "$FAKE_CLAUDE_STATE/on-agents"
+check "the limit fills in the middle of the round: nothing is restarted onto the newer Claude Code" '[ "$(api GET /api/crew/pace | jq -r .at_limit)" = true ] && ! grep -q "restarting .* on 1.11.1" "$T/watch.out" && [ "$(launches)" = "$before" ]'
+plan 90 10; rounds 3   # slow, not the limit: the stations are told to tick every 45 minutes
+newcc 1.11.2
+"$F" crew update --wait 5 >"$T/pace-slow.out" 2>&1; rc=$?
+check "below the limit, crew update moves them" '[ $rc = 0 ] && for s in crew-orchestrator crew-reviewer crew-releaser; do [ "$(runs $s)" = 1.11.2 ] || exit 1; done'
+check "and the restart says to re-arm at 45 minutes" 'for s in crew-orchestrator crew-reviewer crew-releaser; do last $s | grep -q "re-arm your schedule if you have one, at 45 minutes while the factory paces the crew" || exit 1; done'
+api PUT /api/crew/settings '{"pace": false}' >/dev/null; rounds 3; rm -f "$FACTORY_CREW_HOME"/stations/*.pace "$FACTORY_CREW_HOME/pace.json"
 
 # A version nobody can read, or one that is older than a station's, never moves anything.
 echo "" > "$FAKE_CLAUDE_STATE/version"; all_idle; before=$(launches)

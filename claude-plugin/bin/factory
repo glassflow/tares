@@ -56,7 +56,8 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
                                             checks each runs it, one session per name; gives up on a
                                             busy one after --wait seconds (default 1800, 0 = never);
                                             run from a station, it leaves that station to the watch;
-                                            a frozen crew moves too, since you asked
+                                            a frozen crew moves too, since you asked; with pace
+                                            on, neither moves one while a plan limit is full
   tares factory crew restart [--wait <s>]   the same, for stations that already run it too
   tares factory crew halt ["<reason>"]      stop risky actions on every station until resume
   tares factory crew resume                 lift a halt
@@ -1223,6 +1224,7 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
       # the same, for Claude Code itself: one idle station a round, the orchestrator last; a frozen crew
       # only hears that there is a newer one
       if upgrades_frozen; then tell_newer_claude "$cc_now"
+      elif pace_closed; then :   # the plan's limit is full: a restart is a model turn into it, so the move waits for the reset (TR-674)
       else
         rm -f "$CC_NEWER_FILE"
         candidate=$(cc_pick "$cc_now")
@@ -1802,7 +1804,8 @@ cc_pick() { # target → a station name, or nothing
 # Restart a station on the Claude Code now on PATH, in the same conversation, and check its process
 # runs it; an older spare from the pool is stopped and the restart tried again. Exit status: 0 it runs
 # the new version (or its version can't be told), 3 Tares doesn't answer, 4 it isn't idle any more or
-# the crew is halted, 5 an older spare came back every time, 1 anything else. It runs in a subshell with
+# the crew is halted, 5 an older spare came back every time, 6 the plan's limit is full (pace, TR-674:
+# a restart is a model turn into a limit that has not reset), 1 anything else. It runs in a subshell with
 # its own errexit, so the caller turns errexit off around the call (`set +e; claude_move ...; rc=$?; set -e`):
 # `claude_move ... && ... || ...` would turn it off inside the subshell too.
 claude_move() { # station target
@@ -1812,13 +1815,14 @@ claude_move() { # station target
     tares_on || exit 3   # without Tares there are no settings to restart it with
     crew_settings >/dev/null
     ! halted || exit 4
+    pace_read || true; ! pace_closed || exit 6   # also the reading the restart prompt's schedule wording comes from
     { quiet "$s" && ! attached "$s"; } || exit 4   # it started something, or someone opened it, since the first check
     local skill try=0 tries=${FACTORY_CC_TRIES:-3} v prompt
     skill=$(stations_get "$s" '.role'); [ "$skill" != helper ] || skill=$(parent_role "$(stations_get "$s" '.parent')")
     prompt="Claude Code was updated to $target, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-$skill, re-read your report, $(rearm_text), then carry on where you were."
     while [ $try -lt "$tries" ]; do
       try=$((try + 1))
-      if [ $try -gt 1 ]; then ! halted && ! attached "$s" || exit 4; fi   # the first restart started it on the prompt, so only a halt or someone opening it stops a retry
+      if [ $try -gt 1 ]; then ! halted && ! attached "$s" || exit 4; pace_read || true; ! pace_closed || exit 6; fi   # the first restart started it on the prompt, so only a halt or someone opening it stops a retry
       prune_spares "$target"
       cmd_restart "$s" "$prompt"
       v=""; for _ in 1 2 3 4 5 6; do v=$(station_cc "$s"); [ -n "$v" ] && break; sleep "${FACTORY_PAUSE:-2}"; done
@@ -1839,6 +1843,7 @@ claude_move() { # station target
 watch_claude_move() { # station target: the watch's turn at claude_move, with what it says
   local s=$1 target=$2 rc dup
   SETTINGS=""; ! upgrades_frozen || return 0   # frozen since the round began: the freeze wins
+  pace_read || true; ! pace_closed || return 0   # the plan's limit filled since the round began: wait for the reset (TR-674)
   say "$s runs an older Claude Code than $target; restarting it on $target now that it's idle, in the same conversation"
   set +e; claude_move "$s" "$target"; rc=$?; set -e
   case $rc in
@@ -1846,7 +1851,7 @@ watch_claude_move() { # station target: the watch's turn at claude_move, with wh
        dup=$(duplicate_sessions) || dup=""
        [ -z "$dup" ] || { say "TWO SESSIONS named $dup; stop the one stations.json does not list (factory roster)"; event two-sessions "$s" "$dup"; } ;;
     3) say "Tares doesn't answer; $s moves onto Claude Code $target once it does" ;;
-    4) ;;
+    4|6) ;;
     5) say "$s keeps coming back on an older Claude Code than $target (an old pre-warmed spare in Claude Code's pool); the watch leaves it until the next Claude Code version. $ME crew update tries again now" ;;
     *) say "could not restart $s on Claude Code $target; the watch revives it as before, and no other station moves until it is up" ;;
   esac
@@ -1869,6 +1874,8 @@ cmd_crew_update() { # [--force] [--wait seconds]: every station onto the Claude 
   done
   halted && die "the crew is halted ($(jq -r .reason "$HALT_FILE" 2>/dev/null)); $ME crew resume first"
   local target; target=$(claude_version); [ -n "$target" ] || die "could not read the Claude Code version ($CLAUDE --version)"
+  pace_read || true
+  ! pace_closed || die "the plan's limit is full${PACE_UNTIL:+ until $PACE_UNTIL}, and a restart is a model turn into it; $ME crew update again after it resets"
   [ -f "$STATIONS" ] || { say "no stations recorded"; return 0; }
   local agents; agents=$(active_json) || die "$UNREAD"
   local s v others="" orch="" failed=""
@@ -1898,6 +1905,7 @@ cmd_crew_update() { # [--force] [--wait seconds]: every station onto the Claude 
         case $rc in
           0) say "$s runs Claude Code $target" ;;
           4) still="$still $s" ;;
+          6) die "the plan's limit is full${PACE_UNTIL:+ until $PACE_UNTIL}, and a restart is a model turn into it; nothing more was restarted ($ME crew update again after it resets)" ;;
           5) say "$s came back on an older Claude Code each time (an old pre-warmed spare in Claude Code's pool); try $ME crew update again"; failed="$failed $s" ;;
           3) die "Tares doesn't answer; nothing more was restarted" ;;
           *) say "could not restart $s on Claude Code $target"; failed="$failed $s" ;;
