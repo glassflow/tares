@@ -15,7 +15,7 @@ mkdir -p "$HOME" "$T/bin"
 chmod +x "$CLAUDE_BIN"
 trap 'stop_tares; rm -rf "$T"' EXIT
 fail=0
-check() { if eval "$2"; then :; else echo "FAIL $1"; fail=1; fi; }
+check() { if ( eval "$2" ); then :; else echo "FAIL $1"; fail=1; fi; }
 calls() { grep -c "$1" "$FAKE_CLAUDE_STATE/calls.jsonl" 2>/dev/null; true; }
 plugins() { echo "$1" > "$FAKE_CLAUDE_STATE/plugins.json"; }
 mkdir -p "$FAKE_CLAUDE_STATE"
@@ -82,6 +82,9 @@ check "a disabled plugin is not a server, and doctor says the binary is the part
 plugins '[{"id":"pyright-lsp@claude-plugins-official","enabled":true,"scope":"local","projectPath":"/somewhere/else"}]'
 "$F" doctor >"$T/doc3.out" 2>&1
 check "a plugin enabled for another project is not a server here" 'grep -q "Python in $A has no language server" "$T/doc3.out"'
+plugins '[{"id":"pyright-lsp@claude-plugins-official","enabled":true,"scope":"local","projectPath":"'"$A"'"}]'
+"$F" doctor >"$T/doc3b.out" 2>&1
+check "a plugin enabled for the repo path only is not a server for the crew, whose stations run elsewhere" 'grep -q "Python in $A has no language server" "$T/doc3b.out" && grep -q "claude plugin install pyright-lsp@claude-plugins-official" "$T/doc3b.out"'
 rm -f "$T/bin/typescript-language-server"
 plugins '[{"id":"typescript-lsp@claude-plugins-official","enabled":true,"scope":"user"}]'
 "$F" doctor >"$T/doc4.out" 2>&1

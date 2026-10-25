@@ -58,6 +58,15 @@ the project follows [Semantic Versioning](https://semver.org/).
 - A link to a refused run inside a folded group of capped runs opened the group, but clicking
   the group's line could not close it again. The link now opens the group once, and the line
   toggles it like any other (TR-678).
+- Factory: a `crew watch` started from the frozen kit copy and left running past an unfreeze
+  restarted itself, on a kit change, from the copy it came from. By then the copy was removed, so
+  the watch died. It now restarts from the checkout's `factory` (TR-686).
+- Factory: the guard let a builder or reviewer run `/path/to/bin/factory crew freeze`, `up`,
+  `down`, `halt` and the other orchestrator-only commands, and `factory finish`, by spelling the
+  CLI with a path. It now matches the command by its name, whatever the path (TR-686).
+- Factory: `factory doctor` and `crew up` counted a language server plugin enabled only for the
+  repo's own folder as ready. Stations run in the crew home and in worktrees, never in that
+  folder, so they had no server. Only a plugin enabled for you (user scope) counts now (TR-686).
 
 ## [1.51.1] - 2026-10-21
 

@@ -210,5 +210,27 @@ check "with the settings unreadable and the copy there, the watch does not try t
 check "and status says frozen, without blank fields" 'grep -q "^FROZEN: the kit (Tares does not say since when);" "$T/status5.out"'
 "$F" crew unfreeze >/dev/null 2>&1
 
+# A watch started from the frozen copy and left running past the unfreeze: once the copy is gone, a kit
+# change restarts it on the checkout's CLI, not on the copy it came from (TR-686).
+for _ in 1 2 3 4; do
+  for s in crew-orchestrator crew-reviewer; do agent $s '.state = "done"'; done
+  "$F" crew watch --once >/dev/null 2>&1
+done
+"$F" crew freeze >/dev/null 2>&1
+agent crew-reviewer '.state = "done"'; stopped crew-reviewer
+"$F" crew watch --once >/dev/null 2>&1
+"$F" crew unfreeze >/dev/null 2>&1
+check "setup: a station is on the copy, which is kept after the unfreeze" '[ -x "$SNAP/bin/factory" ] && [ "$(st crew-reviewer .plugin)" = "$SNAP" ]'
+agent crew-reviewer '.state = "done"'
+"$SNAP/bin/factory" crew watch --interval 1 >"$T/copywatch.out" 2>&1 &
+WATCH=$!
+check "the watch moves the station off the copy and removes it" 'wait_for "[ ! -e \"\$SNAP\" ]"'
+check "setup: the watch still runs, from the copy it started on" 'kill -0 "$WATCH" 2>/dev/null && ps -p "$WATCH" -o command= | grep -q "$SNAP/bin/factory"'
+change_kit v5
+check "the watch restarts on the new version" 'wait_for "grep -q \"the watch restarts on the new version\" \"\$T/copywatch.out\"" && sleep 2'
+check "and it keeps running, on the checkout's CLI, not the copy that is gone" \
+  'kill -0 "$WATCH" 2>/dev/null && ps -p "$WATCH" -o command= | grep -q "$CHECKOUT/bin/factory" && ! ps -p "$WATCH" -o command= | grep -q "$SNAP" && ! grep -q "No such file" "$T/copywatch.out"'
+kill "$WATCH" 2>/dev/null; wait "$WATCH" 2>/dev/null; WATCH=""
+
 [ $fail = 0 ] && echo "freeze: all cases pass"
 exit $fail
