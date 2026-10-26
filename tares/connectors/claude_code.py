@@ -96,6 +96,7 @@ class ClaudeCodeConnector(Connector):
     # `challenge` object: {verdict, sha?, plan?, findings: [{priority, title, waived}],
     # finding_count, blocking_count, waived_count, round?, duration_seconds, prose}.
     CHALLENGE_TYPES = ("challenge_plan", "challenge_commit", "challenge_waived")
+    USER_TURN_CAP = 20000
     # Push-only: the Claude Code plugin POSTs transcript lines to /ingest/claude_code; events are
     # mapped by map_payload(). There is no local file tail.
     ACCEPTS_PUSH = True
@@ -255,7 +256,11 @@ class ClaudeCodeConnector(Connector):
 
         # challenge events carry the whole review; chopping them mid-finding is what the 500-char
         # cap would do, and the summarizer reads this text
-        cap = 4000 if o.get("type") in self.CHALLENGE_TYPES else 500
+        # a person's turn is what a desk answer is matched against line by line (TR-697), so a long
+        # paste is kept whole
+        etype = self._event_type(o, msg)
+        cap = (4000 if o.get("type") in self.CHALLENGE_TYPES
+               else self.USER_TURN_CAP if etype == "user" else 500)
         text = self._render_text(o, msg, include_thinking)[:cap]
         if redact:
             text = _redact(text)
@@ -266,7 +271,7 @@ class ClaudeCodeConnector(Connector):
             source=self.cfg.name,
             source_type=self.cfg.type,
             key_value=str(sid),
-            event_type=self._event_type(o, msg),
+            event_type=etype,
             text=text,
             event_time=self._ts(o),
             payload=payload,

@@ -62,6 +62,19 @@ def unit():
     ck("nor a word hidden in another", factory.words_match("ok", [{"text": "token"}]) is None)
     ck("a paraphrase is not", factory.words_match("Go with Stripe", turns) is None)
     ck("one character is not an answer", factory.words_match("y", turns) is None)
+    print("== a long pasted reply (TR-697) ==")
+    lines = [f"A{n}: line {n} of the reply, " + "word " * 25 for n in (2, 3, 5, 6, 7, 10)]
+    pasted = '\n\n<pasted_content id="964c">\nKeep A1, A4. Change the others as below.\n' \
+        + "\n".join(lines) + '\n</pasted_content id="964c">\n'
+    pt = [{"session": "o1", "text": pasted}]
+    ck("the paste is long enough to matter", len(pasted) > 1000, len(pasted))
+    ck("every line of it matches, the last too",
+       all(factory.words_match(x, pt) is not None for x in lines))
+    ck("the first line matches without the tag", factory.words_match("Keep A1, A4.", pt) is not None)
+    ck("the whole paste matches without its tags",
+       factory.words_match(pasted.split(">", 1)[1].rsplit("</", 1)[0], pt) is not None)
+    ck("and with them", factory.words_match(pasted, pt) is not None)
+    ck("a tag alone is not an answer", factory.words_match('<pasted_content id="964c">', pt) is None)
     print("== an option's letter (TR-475) ==")
     ck("B, b, B), (B) and B. name the second option",
        [factory.option_letter(w) for w in ("B", "b", "B)", "(B)", "B.", " b ")] == [1] * 6)
@@ -443,6 +456,17 @@ async def main():
         out = json.loads(await mf.desk_answer(dq["label"], "yeah releaser can do reads on prod thats fine"))
         ck("a reply typed mid-turn answers, word for word",
            out["recorded"] and out["matches_what_they_typed"], out)
+
+        print("== a long pasted reply is kept whole (TR-697) ==")
+        dp = json.loads(await mf.desk_add("Which of these?", "A2", "default", project="Shop"))["label"]
+        rows = [f"A{n}: line {n} of the reply, " + "word " * 30 for n in (2, 3, 5, 6, 7, 10)]
+        paste = '<pasted_content id="964c">\nKeep A1, A4.\n' + "\n".join(rows) \
+            + '\n</pasted_content id="964c">\n'
+        await ingest([{"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": now_plus(5),
+                       "message": {"role": "user", "content": paste}}])
+        out = json.loads(await mf.desk_answer(dp, rows[-1]))
+        ck("the last line of a paste over 1000 characters answers", len(paste) > 1000
+           and out["recorded"] and out["matches_what_they_typed"], (len(paste), out))
 
 
 unit()
