@@ -5,6 +5,19 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- Console: the Projects list reads as a work queue (TR-689). It hides done projects by default, with
+  Active, Done and All tabs that show their counts, and a line saying how many are hidden. A
+  filter box matches names and goals, and the sort offers recently active, most work pending, least
+  work pending and name. The name is the link, so the Open button is gone, and so is the Objects
+  column. Goals are a tooltip on the name, or on every row with the Goals toggle. A project's
+  status is a colored dot (yellow active, green done) beside the progress ring and its count; the
+  Active and Done words are gone. A Pending column shows the work left, with what is in progress
+  and blocked. Updated now follows a project's newest ticket update, not only edits to the project
+  itself (`/api/projects` gains `activity_at`). The software factory tag is a small icon chip with
+  a legend, and the table keeps its layout at narrow widths. The view lives in the address
+  (`?show=`, `?sort=`, `?q=`, `?goals=1`), so a link or a reload keeps it.
+
 ### Added
 - Factory: `factory doctor` reads each handed-over repo's languages from its manifests (Python,
   TypeScript, JavaScript, Go, Rust, at the repo root or one folder down) and says whether Claude Code has a

@@ -3305,10 +3305,15 @@ def make_app() -> FastAPI:
         pk = _pk(request)
         if pk:
             return {"projects": [_project_card(pk)]}
-        # a software factory project carries its tickets' progress, for the list's ring
-        return {"projects": [
-            {**p, "progress": factory_mod.progress(store.list_tickets(p["id"]))}
-            if p.get("kind") == "software_factory" else p for p in projects.list()]}
+        # a software factory project carries its tickets' progress, for the list's ring, and
+        # `activity_at`, when it last moved (its newest ticket counts), for the Updated column
+        def card(p: dict) -> dict:
+            if p.get("kind") != "software_factory":
+                return {**p, "activity_at": p["updated_at"]}
+            tickets = store.list_tickets(p["id"])
+            return {**p, "progress": factory_mod.progress(tickets),
+                    "activity_at": factory_mod.activity_at(p["updated_at"], tickets)}
+        return {"projects": [card(p) for p in projects.list()]}
 
     @app.post("/api/projects", status_code=201)
     async def create_project(body: ProjectIn):

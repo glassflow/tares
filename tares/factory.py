@@ -264,6 +264,14 @@ def progress(tickets: list[dict]) -> dict:
     return {**n, "total": n["done"] + n["doing"] + n["blocked"] + n["todo"]}
 
 
+def activity_at(updated_at, tickets: list[dict]):
+    """When a project last moved: its own update or its newest ticket's (a stage change, a new
+    PR and a sync all touch the ticket), whichever is later. The Projects list shows this as
+    Updated, so a project the crew is working on reads as fresh without anyone editing it."""
+    stamps = [t for t in [updated_at, *(x.get("updated_at") for x in tickets)] if t]
+    return max(stamps) if stamps else None
+
+
 # ── the ledger (M4): who holds a ticket and where it stands ───────────────────
 
 STAGES = ("todo", "doing", "review", "changes", "merged", "shipped", "blocked")
