@@ -489,4 +489,11 @@ check "a mark for an older version is listed on Tares before the round" '[ "$(ap
 watch1; watch1
 check "a mark for an older version: the next settled round drops it from Tares" '[ "$(api GET /api/crew | jq -r ".claude_retry | has(\"crew-reviewer\")")" = false ]'
 
+# crew update on a helper whose restart fails: it says the watch does not revive helpers, not that it revives it
+echo 0 > "$FAKE_CLAUDE_STATE/stale-left"; all_idle
+"$F" spawn helper crew-reviewer probe2 "look at something else" >"$T/helper2.out" 2>&1; h2=crew-reviewer-probe2
+newcc 1.12.8; all_idle; idle $h2
+FAKE_CLAUDE_FAIL_RESUME=1 "$F" crew update --wait 5 >"$T/update-helper-down.out" 2>&1 || true
+check "crew update, a helper that could not be restarted: the watch is not said to revive it" 'grep -q "could not restart $h2 on Claude Code 1.12.8; the watch does not revive helpers, so ask crew-reviewer to spawn it again" "$T/update-helper-down.out" && ! grep "$h2" "$T/update-helper-down.out" | grep -q "revives it"'
+
 [ $fail = 0 ] && echo "claude update tests passed" || { echo "claude update tests FAILED"; exit 1; }
