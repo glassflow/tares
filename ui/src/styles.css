@@ -2267,12 +2267,15 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 .pj-goal { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pj-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 10.5px; font-weight: 600; color: var(--ink-soft); border: 1px solid var(--border-strong); padding: 1px 6px; white-space: nowrap; }
 .pj-chip .ico { width: 11px; height: 11px; color: var(--accent); }
+.pj-emoji { font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif; font-size: 11px; line-height: 1; }
 .pj-status { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
 .pj-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-faint); flex: none; }
 .pj-status.s-active .pj-dot { background: var(--sand-300); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sand-300) 25%, transparent); }
 .pj-status.s-done .pj-dot { background: var(--ok); }
 .pj-status.s-active .pj-count { color: var(--warn); }
 .pj-status.s-done .pj-count { color: var(--ok); }
+.pj-tag { font-size: 11px; color: var(--ink-faint); }
+.pj-status.s-error .pj-tag { color: var(--err); }
 .pj-status.s-error .pj-dot { background: var(--err); }
 .pj-status.s-paused .pj-dot { background: var(--ink-faint); }
 .pj-status.s-draft .pj-dot { background: transparent; border: 1.5px solid var(--ink-faint); }   /* hollow: not started, apart from the filled grey of paused */

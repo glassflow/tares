@@ -1,7 +1,10 @@
 /*
  * Browser e2e for TR-689: the Projects list hides finished projects, sorts by work pending, opens a
  * project from its title (no Open button), has no Objects column, keeps the factory chip small at a
- * narrow width, and shows when a project last moved from its tickets.
+ * narrow width, and shows when a project last moved from its tickets. TR-692 (D135): the status cell is
+ * the ring and its count alone, a dot only where there is no ring, a word for paused, error and draft.
+ * TR-692: the factory chip is the factory emoji,
+ * every other project carries an AI SRE chip with an icon, and the legend names both.
  *
  * Seeds a scratch cell (tests/seed-projects-list.py: 16 projects, done and active), then runs the
  * real daemon on it, serving the built console.
@@ -135,21 +138,50 @@ async function waitFor(url, tries = 100) {
     await page.waitForURL(`**/projects/${ids["vetme-desktop"]}`);
     ck("and it opens the project", true);
 
-    // 5. status: a ring and a count, no Active/Done words, colour by state
+    // 5. status: the ring and its count alone when there are tickets; a dot only where no ring can show;
+    //    a short word for paused, error and draft; colour by state (D135)
     await open("?show=all");
+    const cell = (name) => rows.filter({ hasText: name }).locator(".pj-status");
     const texts = await rows.evaluateAll((r) => r.map((x) => x.querySelectorAll("td")[1].innerText.trim()));
-    ck("the status cell has no Active or Done text", !texts.some((t) => /active|done|paused|draft/i.test(t)), texts.join(" | "));
-    ck("it names the status for screen readers", (await rows.filter({ hasText: "Rius Bugs Auto" }).locator(".pj-status").getAttribute("aria-label")).startsWith("Active"));
-    const dot = (name) => rows.filter({ hasText: name }).locator(".pj-dot").evaluate((e) => getComputedStyle(e).backgroundColor);
-    const [active, done] = [await dot("Rius Bugs Auto"), await dot("link-click-counter")];
-    ck("active and done have different colours", active !== done, `${active} ${done}`);
+    ck("active and done rows show no word", !(await rows.evaluateAll((r) => r.filter((x) => ["active", "done"].includes(x.dataset.status))
+       .some((x) => /[a-z]/i.test(x.querySelectorAll("td")[1].innerText)))), texts.join(" | "));
+    ck("it names the status for screen readers", (await cell("Rius Bugs Auto").getAttribute("aria-label")).startsWith("Active"));
+    ck("a row never shows a ring and a dot together", await rows.evaluateAll((r) => r.every((x) =>
+       x.querySelectorAll(".pj-status svg").length + x.querySelectorAll(".pj-dot").length === 1)));
+    ck("a project with tickets shows the ring and its count, no dot",
+       (await cell("Rius Bugs Auto").locator("svg").count()) === 1 && (await cell("Rius Bugs Auto").locator(".pj-dot").count()) === 0
+       && (await cell("Rius Bugs Auto").locator(".pj-count").innerText()) === "6/6");
+    ck("a project with no tickets keeps the plain dot, not an empty ring",
+       (await cell("Challenger workflow").locator(".pj-dot").count()) === 1 && (await cell("Challenger workflow").locator("svg").count()) === 0);
+    ck("paused, error and draft say so in a word", (await cell("Checkout latency watch").innerText()).trim() === "paused"
+       && (await cell("Billing webhooks").innerText()).trim() === "error" && (await cell("New idea").innerText()).trim() === "draft");
+    ck("and keep the full status in the label", /^Paused/.test(await cell("Checkout latency watch").getAttribute("aria-label")));
+    const dot = (name) => cell(name).locator(".pj-dot").evaluate((e) => getComputedStyle(e).backgroundColor);
     const token = (v) => page.evaluate((x) => { const e = document.createElement("i"); e.style.background = `var(${x})`;
       document.body.appendChild(e); const c = getComputedStyle(e).backgroundColor; e.remove(); return c; }, v);
-    ck("done is the success green", done === (await token("--ok")), `${done} vs ${await token("--ok")}`);
-    ck("active is the warm yellow", active === (await token("--sand-300")), `${active} vs ${await token("--sand-300")}`);
+    const countColor = (name) => cell(name).locator(".pj-count").evaluate((e) => getComputedStyle(e).color);
+    ck("a done count is the success green", (await countColor("link-click-counter")) === (await token("--ok")), `${await countColor("link-click-counter")}`);
+    ck("an active count is the warm colour, not the done green", (await countColor("Rius Bugs Auto")) !== (await countColor("link-click-counter")));
+    ck("an active project's dot is the warm yellow", (await dot("Challenger workflow")) === (await token("--sand-300")), await dot("Challenger workflow"));
+    ck("an error project's dot is red", (await dot("Billing webhooks")) === (await token("--err")), await dot("Billing webhooks"));
+    ck("the ring and the word fit on one line with a paused project that has tickets", await (async () => {
+      await page.route("**/api/projects", async (route) => {
+        const res = await route.fetch(), body = await res.json();
+        for (const p of body.projects) if (p.name === "Checkout latency watch") p.progress = { done: 1, doing: 0, blocked: 0, todo: 2, canceled: 0, total: 3 };
+        await route.fulfill({ response: res, json: body });
+      });
+      await open("?show=all");
+      const c = cell("Checkout latency watch");
+      const ok = (await c.locator("svg").count()) === 1 && (await c.locator(".pj-dot").count()) === 0
+        && (await c.locator(".pj-count").innerText()) === "1/3" && (await c.innerText()).includes("paused")
+        && (await rows.filter({ hasText: "Checkout latency watch" }).evaluate((e) => e.getBoundingClientRect().height)) < 60;
+      await page.unroute("**/api/projects");
+      return ok;
+    })());
     const blocked = await rows.filter({ hasText: "Rius: Cursor Codex Gaps" }).locator(".pj-pending").innerText();
     ck("pending shows what is in progress and blocked", /7/.test(blocked) && /1 in progress/.test(blocked) && /2 blocked/.test(blocked), blocked);
 
+    await open("?show=all");
     const ring = (name) => rows.filter({ hasText: name }).locator(".pj-dot").evaluate((e) => getComputedStyle(e).borderTopWidth);
     ck("a draft's dot is hollow, a paused one's is filled", (await ring("New idea")) !== (await ring("Checkout latency watch")),
        `${await ring("New idea")} vs ${await ring("Checkout latency watch")}`);
@@ -171,12 +203,38 @@ async function waitFor(url, tries = 100) {
     ck("and keeps it in the address", /goals=1/.test(page.url()), page.url());
     await shot("2-desktop-goals.png");
 
-    // 7. the factory chip is compact and legended
+    // 7. each project carries a kind chip: the factory emoji, or the AI SRE pulse icon; both compact and legended
     await open("?show=all");
-    ck("factory projects carry a chip", (await page.getByTestId("factory-chip").count()) === 13, `${await page.getByTestId("factory-chip").count()}`);
-    const chipH = await page.getByTestId("factory-chip").first().evaluate((e) => e.getBoundingClientRect().height);
-    ck("the chip is one line", chipH < 30, String(chipH));
-    ck("a legend explains it", /Factory/.test(await page.locator(".pj-foot").innerText()));
+    const fchip = page.getByTestId("factory-chip"), schip = page.getByTestId("sre-chip");
+    ck("factory projects carry a chip", (await fchip.count()) === 13, `${await fchip.count()}`);
+    ck("the factory chip is the factory emoji", (await fchip.first().locator(".pj-emoji").allInnerTexts()).join() === "\u{1F3ED}"
+       && (await fchip.first().locator("svg").count()) === 0);
+    ck("the factory chip names itself", /Factory$/.test((await fchip.first().innerText()).trim()) && (await fchip.first().getAttribute("aria-label")) === "Software factory");
+    ck("every other project carries an AI SRE chip", (await schip.count()) === 3, `${await schip.count()}`);
+    ck("the AI SRE chip is an icon, not the emoji", (await schip.first().locator("svg.ico").count()) === 1
+       && (await schip.first().locator(".pj-emoji").count()) === 0);
+    ck("the AI SRE chip says AI SRE", (await schip.first().innerText()).trim() === "AI SRE" && (await schip.first().getAttribute("aria-label")) === "AI SRE");
+    ck("no row carries both chips or neither", (await rows.evaluateAll((r) => r.every((x) =>
+       x.querySelectorAll("[data-testid=factory-chip], [data-testid=sre-chip]").length === 1))));
+    ck("the chips are one line", (await fchip.first().evaluate((e) => e.getBoundingClientRect().height)) < 30
+       && (await schip.first().evaluate((e) => e.getBoundingClientRect().height)) < 30);
+    const foot = await page.locator(".pj-foot").innerText();
+    ck("a legend explains the factory chip", /Factory\s+a software factory project/.test(foot), foot);
+    ck("and the AI SRE chip", /AI SRE\s+an AI SRE project/.test(foot), foot);
+    ck("the legend draws the emoji and the icon", (await page.locator(".pj-legend .pj-emoji").count()) === 1
+       && (await page.locator(".pj-legend svg.ico").count()) === 1);
+    await q.fill("Checkout");
+    ck("the legend lists only the kinds on show", /AI SRE\s+an AI SRE project/.test(await page.locator(".pj-foot").innerText())
+       && !/software factory project/.test(await page.locator(".pj-foot").innerText()), await page.locator(".pj-foot").innerText());
+    await shot("5-desktop-chips.png");
+    await q.fill("Tares Bugs");
+    ck("and only the factory kind when only factory projects show", /software factory project/.test(await page.locator(".pj-foot").innerText())
+       && !/AI SRE project/.test(await page.locator(".pj-foot").innerText()), await page.locator(".pj-foot").innerText());
+    await q.fill("zzzz");
+    ck("an empty filter result has no legend or hover hint", (await page.locator(".pj-legend").count()) === 0);
+    await q.fill("");
+    ck("the chips name themselves to screen readers", (await page.getByRole("img", { name: "AI SRE" }).count()) === 3
+       && (await page.getByRole("img", { name: "Software factory" }).count()) === 13);
 
     // 8. narrow: the factory chip shrinks to an icon, rows stay one line, the title stays readable, nothing scrolls the page
     for (const width of [640, 390]) {
@@ -184,8 +242,15 @@ async function waitFor(url, tries = 100) {
       await open("?show=all");
       const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       ck(`no horizontal scroll at ${width}px`, over <= 0, `${over}px over`);
-      const chipW = await page.getByTestId("factory-chip").first().evaluate((e) => e.getBoundingClientRect().width);
-      ck(`the chip is an icon at ${width}px`, chipW < 40, String(chipW));
+      for (const id of ["factory-chip", "sre-chip"]) {
+        const chip = page.getByTestId(id).first();
+        const chipW = await chip.evaluate((e) => e.getBoundingClientRect().width);
+        ck(`the ${id} is an icon at ${width}px`, chipW < 40, String(chipW));
+        ck(`its label is hidden but its name stays at ${width}px`, !(await chip.locator(".pj-chip-label").isVisible())
+           && !!(await chip.getAttribute("aria-label")) && !!(await chip.getAttribute("title")));
+      }
+      ck(`the legend keeps its labels at ${width}px`, /Factory\s+a software factory project/.test(await page.locator(".pj-foot").innerText())
+         && /AI SRE\s+an AI SRE project/.test(await page.locator(".pj-foot").innerText()));
       const rowH = await rows.first().evaluate((e) => e.getBoundingClientRect().height);
       ck(`rows stay compact at ${width}px`, rowH < 60, String(rowH));
       if (width === 640) {
