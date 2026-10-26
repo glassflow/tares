@@ -450,7 +450,7 @@ export interface Milestone {
   finished: boolean;
 }
 // The tares-factory crew (M3): stations are roles with stable names, played by a chain of sessions
-export type CrewState = "working" | "waiting" | "quiet" | "ended";
+export type CrewState = "working" | "idle" | "waiting" | "quiet" | "ended";
 export interface CrewStation {
   name: string;
   role: string | null;
@@ -586,7 +586,7 @@ export interface ProjectSession {
   session: string; repo: string | null; linked_at: string;
   started_at: string | null; last_at: string | null; lines: number;
   // what it is doing now, from the plugin; null before the plugin reported a state
-  state: "working" | "waiting" | "quiet" | "ended" | "replaced" | null;   // replaced: a fresh session picked up; quiet: silent past its window (TR-473)
+  state: "working" | "idle" | "waiting" | "quiet" | "ended" | "replaced" | null;   // idle: a turn ended, the person is not needed; replaced: a fresh session picked up; quiet: silent past its window (TR-473)
   state_reason: string | null;
   state_at: string | null;
   last_said?: string;   // a waiting session: the last thing it wrote

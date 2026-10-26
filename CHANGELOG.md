@@ -13,6 +13,15 @@ the project follows [Semantic Versioning](https://semver.org/).
   The status cell is now the progress ring and its count alone: the dot beside it is gone for a
   project with tickets. A project with no tickets keeps the dot, and a paused, error or draft
   project adds a short word ("paused", "error", "draft").
+- Console: the project page says a build station "is waiting for you" only when it needs you
+  (TR-693, TR-616). Before, every turn end showed the banner, even when the builder was waiting on
+  its own Monitor or on the reviewer and would resume by itself. The plugin now reports a new
+  session state, `idle`, for a turn that ended (the Stop hook and Claude Code's idle notice), and
+  keeps `waiting` for a permission request or prompt, an elicitation dialog or an AskUserQuestion
+  (new PermissionRequest and PreToolUse hooks). An idle session shows no banner, and still turns
+  quiet after 90 minutes. The crew list labels the two states "Idle" and "Waiting for you". Rows
+  from the old plugin keep working. Restart `tares up` first, then reload the plugin on a running crew: an old daemon
+  drops the `idle` lines, so a session would stay `working`.
 - Console: the Projects list reads as a work queue (TR-689). It hides done projects by default, with
   Active, Done and All tabs that show their counts, and a line saying how many are hidden. A
   filter box matches names and goals, and the sort offers recently active, most work pending, least

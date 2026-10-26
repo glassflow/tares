@@ -687,19 +687,50 @@ def main() -> None:
         write_flow(data_dir, session_id, "")
 
 
-# ── the session's state (working / waiting / ended), from the hook that fired ─
-# Sent as a `session_state` line when it changes, so Tares can say a session stopped and is
-# waiting for the person, even when its last turn ran no tool. A crash sends nothing; Tares
-# notices that from the silence.
+# ── the session's state (working / idle / waiting / ended), from the hook that fired ─
+# Sent as a `session_state` line when it changes, so Tares can say a session stopped, even when
+# its last turn ran no tool. `waiting` means the person is needed: a permission prompt, a
+# question or an elicitation. A turn that ended (Stop, and Claude Code's idle notice ~60s later)
+# is only `idle`: the session may be waiting on its own Monitor or on a peer, and resumes by
+# itself. A crash sends nothing; Tares notices that from the silence.
+
+IDLE_REASON = "the turn ended"
+NEEDS_PERSON = ("permission_prompt", "elicitation_dialog", "elicitation_url_dialog")
+
+
+def notification_type(hook: dict) -> str:
+    """The Notification's type. Older Claude Code versions send none; their message says it."""
+    kind = str(hook.get("notification_type") or "")
+    if kind:
+        return kind
+    message = str(hook.get("message") or "").lower()
+    if "needs your permission" in message:
+        return "permission_prompt"
+    if "waiting for your input" in message:
+        return "idle_prompt"
+    return ""
+
 
 def state_for(event: str, hook: dict) -> tuple:
     """(state, reason) a hook event means, or (None, None) when it says nothing new."""
     if event in ("UserPromptSubmit", "PostToolUse"):
         return "working", ""
+    if event == "PreToolUse" and hook.get("tool_name") == "AskUserQuestion":
+        return "waiting", "asking you a question"
+    if event == "PermissionRequest":
+        # fires the moment Claude asks; the permission_prompt Notification comes ~6 s later, and a
+        # background session may not get it at all
+        tool = str(hook.get("tool_name") or "a tool")
+        return "waiting", f"Claude Code needs your permission to use {tool}"[:300]
     if event == "Stop":
-        return "waiting", "the turn ended; the session waits for input"
+        return "idle", IDLE_REASON
     if event == "Notification":
-        return "waiting", str(hook.get("message") or "Claude Code needs your attention")[:300]
+        kind = notification_type(hook)
+        if kind in NEEDS_PERSON:
+            return "waiting", str(hook.get("message") or "Claude Code needs your attention")[:300]
+        if kind == "idle_prompt":
+            return "idle", IDLE_REASON
+        return None, None
     if event == "SessionEnd":
         return "ended", str(hook.get("reason") or "")[:100]
     return None, None

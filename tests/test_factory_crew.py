@@ -315,6 +315,12 @@ async def main():
             pc = (await cx.get(f"/api/projects/{shop}/crew")).json()
         ck("the project says when it was handed to the crew", pc["handover"]["repo"] == "/w/shop", pc)
         async with mk() as cx:
+            await cx.post("/ingest/claude_code", content=json.dumps(state("o1", "idle", 0.5)) + "\n",
+                          headers={"Content-Type": "application/x-ndjson"})
+        out = await mf.hand_over(project="Shop", repo="/w/shop")
+        ck("an orchestrator between turns (idle) still counts as running",
+           "crew-orchestrator" in out and "[TF:SHIP]" in out, out)
+        async with mk() as cx:
             await cx.post("/ingest/claude_code", content=json.dumps(state("o1", "ended", 0)) + "\n",
                           headers={"Content-Type": "application/x-ndjson"})
         out = await mf.hand_over(project="Shop", repo="/w/shop")
