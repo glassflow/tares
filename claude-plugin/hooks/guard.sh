@@ -51,8 +51,11 @@ scan=$(perl -0777 -pe '
   }ge;
   # A folder named factory handed to a reader (`ls ~/factory down`) is an argument, not the CLI. Only commands
   # that neither run their arguments nor print text for a shell to run are listed: find, xargs, env, the
-  # shells, echo, printf and rg (--pre) are not.
-  s{((?:^|[;&|(`\n])[ \t]*(?:ls|cd|pushd|cat|head|tail|less|more|wc|stat|file|du|tree|grep|test|realpath)(?:[ \t]+[^\s;&|()`]+)*?[ \t]+)(?:[^\s;&|()`"\x27]*/)?factory(?=[ \t])}{$1_}gm;
+  # shells, echo, printf and rg (--pre) are not. The reader must sit at the start of a command outside any
+  # quote, and its arguments are plain words or whole quoted strings: a quoted string is skipped as a unit,
+  # so `X="` NL `ls a" factory down` (the quote ends before factory, which then runs) is not blanked.
+  my $q = qr/"(?:[^"\\]|\\.)*"|\x27[^\x27]*\x27/s;
+  s{($q)|((?:^|[;&|(`\n])[ \t]*(?:ls|cd|pushd|cat|head|tail|less|more|wc|stat|file|du|tree|grep|test|realpath)(?:[ \t]+(?:[^\s;&|()`"\x27\\]|\\.|$q)+)*?[ \t]+)(?:[^\s;&|()`"\x27]*/)?factory(?=[ \t])}{defined $1 ? $1 : "$2_"}gme;
 ' <<<"$cmd")
 
 # The factory CLI by its name, whatever its path or quoting: `factory x`, `/abs/path/bin/factory x`,
