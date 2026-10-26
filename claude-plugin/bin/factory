@@ -2714,15 +2714,15 @@ lsp_missing() { # → "language|plugin|binary|install|state|repo" for each repo 
 # notice, and cmux reads this option globally from the person's own file, so doctor reads it and says
 # what to set; the factory never writes it (TR-694).
 cmux_config() { echo "$HOME/.config/cmux/cmux.json"; }
-cmux_idle_reminder() { # → on, off or unreadable; empty when cmux has no config here
+cmux_idle_reminder() { # → on, off or unreadable (JSONC: whole-line comments and trailing commas are fine); empty when cmux has no config here
   local f; f=$(cmux_config); [ -f "$f" ] || return 0
-  grep -v '^[[:space:]]*//' "$f" | jq -r 'if .notifications.agentIdleReminder == false then "off" else "on" end' 2>/dev/null || echo unreadable
+  grep -v '^[[:space:]]*//' "$f" | perl -0pe 's/,(\s*[}\]])/$1/g' | jq -r 'if .notifications.agentIdleReminder == false then "off" else "on" end' 2>/dev/null || echo unreadable
 }
 doctor_cmux() {
   case "$(cmux_idle_reminder)" in
     on) warn "cmux shows \"Waiting for you\" about a minute after every station's turn ends, with nothing for you to do. To stop it and keep the permission alerts, set \"notifications\": {\"agentIdleReminder\": false} in $(cmux_config) (it applies to all your cmux agents; $ME never edits it)" ;;
     off) ok "cmux's idle reminder is off, so a station between turns does not ask for you; permission alerts stay on" ;;
-    unreadable) warn "could not read $(cmux_config); set \"notifications\": {\"agentIdleReminder\": false} there so cmux stops saying \"Waiting for you\" after every station turn" ;;
+    unreadable) warn "could not parse $(cmux_config); set \"notifications\": {\"agentIdleReminder\": false} there so cmux stops saying \"Waiting for you\" after every station turn" ;;
   esac
   return 0
 }
