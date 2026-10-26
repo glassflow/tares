@@ -67,6 +67,7 @@ case "${1:-}" in
     echo '{"type":"result","subtype":"success"}' ;;
   --bg)
     if [ "${FAKE_CLAUDE_FAIL_RESUME:-}" = 1 ] && printf '%s\n' "$@" | grep -qx -- --resume; then echo "resume failed (fake)"; exit 1; fi
+    if [ "${FAKE_CLAUDE_FAIL_FRESH:-}" = 1 ] && ! printf '%s\n' "$@" | grep -qx -- --resume; then echo "new conversation failed (fake)"; exit 1; fi
     sleep "${FAKE_CLAUDE_BG_DELAY:-0}" # Claude Code takes a moment to register a new session
     name=""; prev=""
     for a in "$@"; do [ "$prev" = "-n" ] && name=$a; prev=$a; done

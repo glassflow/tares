@@ -346,8 +346,18 @@ async def main():
                                ("a row without a target", {"stations": {"crew-reviewer": {"fails": 1}}})):
                 r = await cx.put("/api/crew/claude-retry", json=junk)
                 ck(f"{name} is refused", r.status_code == 400, r.text)
+            for name, junk in (("too many stations", {"stations": {f"s{i}": {"target": "2.1.9"} for i in range(201)}}),
+                               ("a name of 129 characters", {"stations": {"n" * 129: {"target": "2.1.9"}}}),
+                               ("an empty name", {"stations": {"": {"target": "2.1.9"}}})):
+                r = await cx.put("/api/crew/claude-retry", json=junk)
+                ck(f"{name} is refused", r.status_code == 400, r.text)
             rows = {x["name"]: x for x in (await cx.get("/api/crew")).json()["stations"]}
             ck("a refused report changes nothing", rows["crew-reviewer"]["claude_retry"]["fails"] == 2, rows)
+            r = await cx.put("/api/crew/claude-retry", json={"stations": {
+                "crew-reviewer": {"target": "2.1.9", "fails": True, "next_at": -5}}})
+            ck("a boolean or out-of-range count falls back to the default, not stored as given",
+               r.status_code == 200 and "true" not in r.text
+               and r.json()["stations"]["crew-reviewer"] == {"target": "2.1.9", "fails": 1, "next_at": 0}, r.text)
             await cx.put("/api/crew/claude-retry", json={"stations": {}})
             ck("an empty list clears every mark",
                all(r["claude_retry"] is None for r in (await cx.get("/api/crew")).json()["stations"]))

@@ -45,11 +45,12 @@ the project follows [Semantic Versioning](https://semver.org/).
   onto a new Claude Code with the watch, like its station, after the other stations and before the
   orchestrator; a busy helper does not hold the orchestrator back. A station whose restart keeps
   landing on an old pre-warmed spare is no longer parked on the old version: after three tries in
-  its conversation it is started again in a new conversation on the new version, and if that fails
-  too the watch tries again after a pause that doubles (10 minutes, up to 4 hours; `crew update`
-  tries at once). `factory roster`, `crew status`, `factory doctor` and the Crew page show it as
+  its conversation it is started again in a new conversation on the new version (a helper is not,
+  since its task lives only in its conversation), and if that fails too the watch tries again after
+  a pause that doubles (10 minutes, up to 4 hours; `crew update` tries at once). `factory roster`, `crew status`, `factory doctor` and the Crew page show it as
   retrying. `crew update --wait 00` waits without a deadline, and the message for a caller that is
-  not behind no longer promises a move by the watch (TR-687).
+  not behind, or whose watch will not move it (`claude_update` off, a frozen crew), no longer
+  promises a move by the watch (TR-687).
 
 ### Fixed
 - "Raise the limit" on an agent that stopped at the daily run cap opened the agent's own page,

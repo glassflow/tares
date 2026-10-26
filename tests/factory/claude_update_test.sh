@@ -434,6 +434,46 @@ all_idle; idle $hn; watch1
 check "once the helper is idle it moves too" '[ "$(runs $hn)" = 1.12.1 ]'
 newcc 1.12.2
 check "the roster flags an old helper" '"$F" roster 2>&1 | grep "$hn" | grep -q "older than 1.12.2"'
+
+# A helper's task lives only in its spawn prompt, so it is never started in a new conversation (review of
+# TR-687, F1): where every try lands on an old spare it is marked and retried after a backoff, resumed each time.
+newcc 1.12.2; echo 1.12.0 > "$FAKE_CLAUDE_STATE/spawn-version"; echo all > "$FAKE_CLAUDE_STATE/stale-left"
+for _ in 1 2; do all_idle; idle $hn; watch1; done   # the reviewer and the releaser go first and back off
+all_idle; idle $hn; before=$(launches); watch1
+check "a helper behind on old spares: three resumed tries, no new conversation" '[ "$(launches)" = $((before + 3)) ] && [ "$(resumed "$hn" 3)" = 3 ] && ! last $hn | grep -q "started you again"'
+check "it is marked for a retry, with no new conversation recorded" '[ "$(st $hn .cc_failed)" = 1.12.2 ] && [ -z "$(st $hn .cc_fresh)" ] && grep -q "a helper keeps its conversation" "$T/watch.out"'
+# A helper whose restart fails is not revived by the watch, and the message does not say it is (F5)
+retry_due $hn; all_idle; idle $hn
+FAKE_CLAUDE_FAIL_RESUME=1 watch1
+check "a helper that could not be restarted: the message says the watch does not revive helpers" 'grep -q "could not restart $hn on Claude Code 1.12.2; the watch does not revive helpers, so ask crew-reviewer to spawn it again" "$T/watch.out" && ! grep "$hn" "$T/watch.out" | grep -q "revives it as before"'
 "$F" retire $hn >/dev/null 2>&1
+echo 0 > "$FAKE_CLAUDE_STATE/stale-left"; for _ in 1 2 3 4; do all_idle; watch1; done
+
+# The new conversation is recorded only once its restart has returned (F3): one that dies leaves it to a later round
+newcc 1.12.3; echo all > "$FAKE_CLAUDE_STATE/stale-left"; all_idle
+FAKE_CLAUDE_FAIL_FRESH=1 watch1; x=$(launched 1)
+check "the new conversation could not be started: it is not recorded as done, nor marked as failed" '[ -n "$x" ] && [ "$(st $x .cc_fresh)" != 1.12.3 ] && [ "$(st $x .cc_failed)" != 1.12.3 ]'
+echo 0 > "$FAKE_CLAUDE_STATE/stale-left"; for _ in 1 2 3 4; do all_idle; watch1; done
+check "the stations all run 1.12.3 after it" 'for s in crew-orchestrator crew-reviewer crew-releaser; do [ "$(runs $s)" = 1.12.3 ] || exit 1; done'
+
+# Tares hears only of stations still retrying the version now installed (F4): one that moved some other way, or
+# a mark for an older version, drops off the list at the next round
+newcc 1.12.4; echo all > "$FAKE_CLAUDE_STATE/stale-left"; all_idle; watch1; x=$(launched 1)
+check "a station that exhausted its tries is listed on Tares" '[ "$(st $x .cc_failed)" = 1.12.4 ] && [ "$(api GET /api/crew | jq -r --arg x "$x" ".claude_retry[\$x].target")" = 1.12.4 ]'
+echo 0 > "$FAKE_CLAUDE_STATE/stale-left"; "$F" restart "$x" >/dev/null 2>&1; all_idle
+check "it moved by a manual restart and the mark is still there" '[ "$(runs $x)" = 1.12.4 ] && [ "$(st $x .cc_failed)" = 1.12.4 ]'
+watch1
+check "the next round drops it from Tares" '[ "$(api GET /api/crew | jq -r --arg x "$x" ".claude_retry | has(\$x)")" = false ]'
+for _ in 1 2 3 4; do all_idle; watch1; done
+
+# The note for the caller promises a move by the watch only when the watch makes one (F7)
+newcc 1.12.5; all_idle; api PUT /api/crew/settings '{"claude_update": false}' >/dev/null
+bounded 40 env FACTORY_STATION=crew-orchestrator "$F" crew update --wait 5 >"$T/self-off.out" 2>&1; rc=$bounded_rc
+check "claude_update off: the caller is told to restart itself from another session, not that the watch moves it" '[ $rc = 0 ] && grep -q "crew-orchestrator, which ran this command, can only be restarted from another session" "$T/self-off.out" && ! grep -q "moves when" "$T/self-off.out"'
+api PUT /api/crew/settings '{"claude_update": true}' >/dev/null
+newcc 1.12.6; all_idle; "$F" crew freeze >/dev/null 2>&1
+bounded 40 env FACTORY_STATION=crew-orchestrator "$F" crew update --wait 5 >"$T/self-frozen.out" 2>&1; rc=$bounded_rc
+check "a frozen crew: the same" '[ $rc = 0 ] && grep -q "crew-orchestrator, which ran this command, can only be restarted from another session" "$T/self-frozen.out" && ! grep -q "moves when" "$T/self-frozen.out"'
+"$F" crew unfreeze >/dev/null 2>&1
 
 [ $fail = 0 ] && echo "claude update tests passed" || { echo "claude update tests FAILED"; exit 1; }

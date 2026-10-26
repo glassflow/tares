@@ -410,13 +410,19 @@ def register(app, store, h: SimpleNamespace) -> None:
         rows = body.get("stations")
         if not isinstance(rows, dict):
             h.err(ValueError("stations must be an object of station name to {target, fails, next_at}"))
+        if len(rows) > 200:
+            h.err(ValueError("at most 200 stations"))
+        def num(v, lo: int, hi: int, default: int) -> int:
+            return v if isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi else default
         out = {}
         for name, r in rows.items():
+            if not isinstance(name, str) or not 0 < len(name) <= 128:
+                h.err(ValueError("a station name is 1 to 128 characters"))
             if not isinstance(r, dict) or not isinstance(r.get("target"), str) or not r["target"]:
                 h.err(ValueError(f"{name}: target must be the Claude Code version it is moving to"))
-            out[str(name)] = {"target": r["target"][:40],
-                              "fails": r["fails"] if isinstance(r.get("fails"), int) else 1,
-                              "next_at": r["next_at"] if isinstance(r.get("next_at"), int) else 0}
+            out[name] = {"target": r["target"][:40],
+                         "fails": num(r.get("fails"), 0, 1_000_000, 1),
+                         "next_at": num(r.get("next_at"), 0, 4_102_444_800, 0)}
         store.set_setting(CLAUDE_RETRY_SETTING, json.dumps(out))
         return {"stations": out}
 
