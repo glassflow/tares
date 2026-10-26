@@ -442,6 +442,10 @@ for _ in 1 2; do all_idle; idle $hn; watch1; done   # the reviewer and the relea
 all_idle; idle $hn; before=$(launches); watch1
 check "a helper behind on old spares: three resumed tries, no new conversation" '[ "$(launches)" = $((before + 3)) ] && [ "$(resumed "$hn" 3)" = 3 ] && ! last $hn | grep -q "started you again"'
 check "it is marked for a retry, with no new conversation recorded" '[ "$(st $hn .cc_failed)" = 1.12.2 ] && [ -z "$(st $hn .cc_fresh)" ] && grep -q "a helper keeps its conversation" "$T/watch.out"'
+# crew update does not promise a helper a new conversation either (F9)
+retry_due $hn; all_idle; idle $hn
+"$F" crew update --wait 5 >"$T/update-helper.out" 2>&1 || true
+check "crew update on a helper that keeps landing on old spares: no new conversation promised" 'grep "$hn came back" "$T/update-helper.out" | grep -q "a helper keeps its conversation" && ! grep "$hn came back" "$T/update-helper.out" | grep -q "even in a new conversation"'
 # A helper whose restart fails is not revived by the watch, and the message does not say it is (F5)
 retry_due $hn; all_idle; idle $hn
 FAKE_CLAUDE_FAIL_RESUME=1 watch1
@@ -475,5 +479,14 @@ newcc 1.12.6; all_idle; "$F" crew freeze >/dev/null 2>&1
 bounded 40 env FACTORY_STATION=crew-orchestrator "$F" crew update --wait 5 >"$T/self-frozen.out" 2>&1; rc=$bounded_rc
 check "a frozen crew: the same" '[ $rc = 0 ] && grep -q "crew-orchestrator, which ran this command, can only be restarted from another session" "$T/self-frozen.out" && ! grep -q "moves when" "$T/self-frozen.out"'
 "$F" crew unfreeze >/dev/null 2>&1
+
+# A mark for an older version is dropped from Tares, not carried over to the new one (F8): the station is still
+# behind (busy here, so not moved this round), but it has not failed for the version now installed
+newcc 1.12.7; echo all > "$FAKE_CLAUDE_STATE/stale-left"; all_idle; busy crew-reviewer
+jq '.["crew-reviewer"].cc_failed = "1.12.6" | .["crew-reviewer"].cc_fails = 2 | .["crew-reviewer"].cc_retry_at = 4102444800' "$FACTORY_CREW_HOME/stations.json" > "$T/st.json" && mv "$T/st.json" "$FACTORY_CREW_HOME/stations.json"
+api PUT /api/crew/claude-retry '{"stations":{"crew-reviewer":{"target":"1.12.6","fails":2,"next_at":4102444800}}}' >/dev/null
+check "a mark for an older version is listed on Tares before the round" '[ "$(api GET /api/crew | jq -r ".claude_retry[\"crew-reviewer\"].target")" = 1.12.6 ]'
+watch1; watch1
+check "a mark for an older version: the next settled round drops it from Tares" '[ "$(api GET /api/crew | jq -r ".claude_retry | has(\"crew-reviewer\")")" = false ]'
 
 [ $fail = 0 ] && echo "claude update tests passed" || { echo "claude update tests FAILED"; exit 1; }

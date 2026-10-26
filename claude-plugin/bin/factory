@@ -1994,9 +1994,19 @@ cmd_crew_update() { # [--force] [--wait seconds]: every station onto the Claude 
           4) still="$still $s" ;;
           6) pace_read || true
              die "the plan's limit is full${PACE_UNTIL:+ until $PACE_UNTIL}, and a restart is a model turn into it; nothing more was restarted ($ME crew update again after it resets)" ;;
-          5) say "$s came back on an older Claude Code each time, even in a new conversation (an old pre-warmed spare in Claude Code's pool); the watch tries again in $(cc_retry_in "$s"), or run $ME crew update again"; failed="$failed $s" ;;
+          5) if [ "$(stations_get "$s" '.role')" = helper ]; then
+               say "$s came back on an older Claude Code each time (an old pre-warmed spare in Claude Code's pool); a helper keeps its conversation, since its task is only there; the watch tries again in $(cc_retry_in "$s"), or run $ME crew update again"
+             else
+               say "$s came back on an older Claude Code each time, even in a new conversation (an old pre-warmed spare in Claude Code's pool); the watch tries again in $(cc_retry_in "$s"), or run $ME crew update again"
+             fi
+             failed="$failed $s" ;;
           3) die "Tares doesn't answer; nothing more was restarted" ;;
-          *) say "could not restart $s on Claude Code $target"; failed="$failed $s" ;;
+          *) if [ "$(stations_get "$s" '.role')" = helper ]; then
+               say "could not restart $s on Claude Code $target; the watch does not revive helpers, so ask $(stations_get "$s" '.parent') to spawn it again if it is down"
+             else
+               say "could not restart $s on Claude Code $target"
+             fi
+             failed="$failed $s" ;;
         esac
       done
       left=$still
