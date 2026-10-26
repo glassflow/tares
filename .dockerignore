@@ -1,9 +1,0 @@
-.git
-.venv
-ui/node_modules
-ui/dist
-**/__pycache__
-*.duckdb
-*.duckdb.wal
-NEXT.md
-deployment.md

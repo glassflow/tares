@@ -1,6 +1,0 @@
-# Override for working on the demo from a checkout — build api-server from source instead of
-# pulling the published image:
-#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
-services:
-  api-server:
-    build: ./api-server
