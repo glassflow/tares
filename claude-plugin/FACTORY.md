@@ -92,6 +92,11 @@ same questions come as numbered prompts. The Crew page
 Code stops idle sessions after about an hour) and gives a station a permission you allowed in
 Tares; its log is `~/factory/watch.log`, and `crew down` stops it. `tares factory doctor` checks everything the crew needs.
 
+If you run the crew in cmux, cmux says "Waiting for you" about a minute after every station's turn ends, with nothing for you to do. Claude
+Code has no setting that drops only that notice and keeps the permission one, so the switch is cmux's own: set
+`"notifications": {"agentIdleReminder": false}` in `~/.config/cmux/cmux.json`. Permission alerts stay on. It applies to all your cmux
+agents, so the factory never writes it; `tares factory doctor` reads the file and tells you when it is still on.
+
 Claude Code has a built-in LSP tool (go to definition, references, callers) that answers only where a language server is wired in, and
 only a plugin wires one. `doctor` reads each handed-over repo's languages (Python, TypeScript, JavaScript, Go, Rust) from its manifests (`pyproject.toml`, `package.json`,
 `tsconfig.json`, `go.mod`, `Cargo.toml` and the like, at the repo root or one folder down) and says for each whether Claude Code has a server:

@@ -94,6 +94,37 @@ jq --arg v "$mine" '.plugins["tares@tares"][0].version = $v' "$HOME/.claude/plug
 check "the same version installed is fine" '! grep -q "another version of the tares plugin" <<<"$("$F" doctor 2>&1)"'
 rm -f "$HOME/.claude/plugins/installed_plugins.json"
 
+# cmux says "Waiting for you" about a minute after any station's turn ends (its agentIdleReminder, on by
+# default). Claude Code has no setting for dropping only that notice, so doctor reads the person's cmux
+# file and says what to set; it never edits it, and the stations' settings keep cmux's permission alerts.
+cmuxf="$HOME/.config/cmux/cmux.json"
+"$F" doctor >"$T/cmux0.out" 2>&1
+check "no cmux, nothing said about it" '! grep -qi cmux "$T/cmux0.out"'
+mkdir -p "$HOME/.config/cmux"
+# cmux's own file shape: a $schema URL, a trailing comma after the last key, then only comment lines.
+cmuxfile() { # $1 = extra line(s) before the trailing comments, or empty
+  printf '{\n  "$schema": "https://raw.githubusercontent.com/manaflow-ai/cmux/main/web/data/cmux.schema.json",\n  "schemaVersion": 1,\n%s\n  // This file uses JSON with comments (JSONC).\n  //   "app" : {\n  //     "language" : "system"\n  //   },\n}\n' "$1" > "$cmuxf"
+}
+cmuxfile ''
+"$F" doctor >"$T/cmux1.out" 2>&1
+check "cmux with its default file (trailing comma): doctor says what to set" 'grep -q "warn  cmux shows \"Waiting for you\" about a minute after every station.s turn ends" "$T/cmux1.out" && grep -q "agentIdleReminder\": false} in $cmuxf" "$T/cmux1.out" && ! grep -q "could not parse" "$T/cmux1.out"'
+cmuxfile '  "notifications": {"agentIdleReminder": false},'
+"$F" doctor >"$T/cmux2.out" 2>&1
+check "cmux idle reminder off in cmux's file shape: doctor is content" 'grep -q "ok    cmux.s idle reminder is off" "$T/cmux2.out" && ! grep -q "Waiting for you" "$T/cmux2.out"'
+cmuxfile '  "notifications": {"agentIdleReminder": true},'
+"$F" doctor >"$T/cmux3.out" 2>&1
+check "cmux idle reminder on: doctor warns" 'grep -q "warn  cmux shows" "$T/cmux3.out"'
+printf '{"notifications": {"agentIdleReminder": false}}\n' > "$cmuxf"
+"$F" doctor >"$T/cmux5.out" 2>&1
+check "cmux file without a trailing comma still reads" 'grep -q "ok    cmux.s idle reminder is off" "$T/cmux5.out"'
+printf '{not json' > "$cmuxf"
+"$F" doctor >"$T/cmux4.out" 2>&1
+check "an unparseable cmux file is said, not guessed" 'grep -q "warn  could not parse $cmuxf" "$T/cmux4.out"'
+check "doctor never edits the cmux file" '[ "$(cat "$cmuxf")" = "{not json" ]'
+"$F" settings crew-builder-x builder >"$T/station-settings.json"; srt=$?
+check "stations leave cmux hooks on, so its permission alerts stay" '[ $srt = 0 ] && jq -e ".env | has(\"CMUX_CLAUDE_HOOKS_DISABLED\") | not" "$T/station-settings.json" >/dev/null'
+rm -rf "$HOME/.config/cmux"
+
 # A second run asks nothing and starts nothing new.
 "$F" crew up </dev/null >"$T/up2.out" 2>&1
 check "second crew up asks nothing" '! grep -q "Choice \[" "$T/up2.out"'
