@@ -1,7 +1,8 @@
 /*
  * Browser e2e for TR-689: the Projects list hides finished projects, sorts by work pending, opens a
  * project from its title (no Open button), has no Objects column, keeps the factory chip small at a
- * narrow width, and shows when a project last moved from its tickets.
+ * narrow width, and shows when a project last moved from its tickets. TR-692: the factory chip is the
+ * factory emoji, every other project carries an AI SRE chip with an icon, and the legend names both.
  *
  * Seeds a scratch cell (tests/seed-projects-list.py: 16 projects, done and active), then runs the
  * real daemon on it, serving the built console.
@@ -171,12 +172,30 @@ async function waitFor(url, tries = 100) {
     ck("and keeps it in the address", /goals=1/.test(page.url()), page.url());
     await shot("2-desktop-goals.png");
 
-    // 7. the factory chip is compact and legended
+    // 7. each project carries a kind chip: the factory emoji, or the AI SRE pulse icon; both compact and legended
     await open("?show=all");
-    ck("factory projects carry a chip", (await page.getByTestId("factory-chip").count()) === 13, `${await page.getByTestId("factory-chip").count()}`);
-    const chipH = await page.getByTestId("factory-chip").first().evaluate((e) => e.getBoundingClientRect().height);
-    ck("the chip is one line", chipH < 30, String(chipH));
-    ck("a legend explains it", /Factory/.test(await page.locator(".pj-foot").innerText()));
+    const fchip = page.getByTestId("factory-chip"), schip = page.getByTestId("sre-chip");
+    ck("factory projects carry a chip", (await fchip.count()) === 13, `${await fchip.count()}`);
+    ck("the factory chip is the factory emoji", (await fchip.first().locator(".pj-emoji").allInnerTexts()).join() === "\u{1F3ED}"
+       && (await fchip.first().locator("svg").count()) === 0);
+    ck("the factory chip names itself", /Factory$/.test((await fchip.first().innerText()).trim()) && (await fchip.first().getAttribute("aria-label")) === "Software factory");
+    ck("every other project carries an AI SRE chip", (await schip.count()) === 3, `${await schip.count()}`);
+    ck("the AI SRE chip is an icon, not the emoji", (await schip.first().locator("svg.ico").count()) === 1
+       && (await schip.first().locator(".pj-emoji").count()) === 0);
+    ck("the AI SRE chip says AI SRE", (await schip.first().innerText()).trim() === "AI SRE" && (await schip.first().getAttribute("aria-label")) === "AI SRE");
+    ck("no row carries both chips or neither", (await rows.evaluateAll((r) => r.every((x) =>
+       x.querySelectorAll("[data-testid=factory-chip], [data-testid=sre-chip]").length === 1))));
+    ck("the chips are one line", (await fchip.first().evaluate((e) => e.getBoundingClientRect().height)) < 30
+       && (await schip.first().evaluate((e) => e.getBoundingClientRect().height)) < 30);
+    const foot = await page.locator(".pj-foot").innerText();
+    ck("a legend explains the factory chip", /Factory\s+a software factory project/.test(foot), foot);
+    ck("and the AI SRE chip", /AI SRE\s+an AI SRE project/.test(foot), foot);
+    ck("the legend draws the emoji and the icon", (await page.locator(".pj-legend .pj-emoji").count()) === 1
+       && (await page.locator(".pj-legend svg.ico").count()) === 1);
+    await q.fill("Checkout");
+    ck("the legend lists only the kinds on show", /AI SRE\s+an AI SRE project/.test(await page.locator(".pj-foot").innerText())
+       && !/software factory project/.test(await page.locator(".pj-foot").innerText()), await page.locator(".pj-foot").innerText());
+    await shot("5-desktop-chips.png");
 
     // 8. narrow: the factory chip shrinks to an icon, rows stay one line, the title stays readable, nothing scrolls the page
     for (const width of [640, 390]) {
@@ -184,8 +203,15 @@ async function waitFor(url, tries = 100) {
       await open("?show=all");
       const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       ck(`no horizontal scroll at ${width}px`, over <= 0, `${over}px over`);
-      const chipW = await page.getByTestId("factory-chip").first().evaluate((e) => e.getBoundingClientRect().width);
-      ck(`the chip is an icon at ${width}px`, chipW < 40, String(chipW));
+      for (const id of ["factory-chip", "sre-chip"]) {
+        const chip = page.getByTestId(id).first();
+        const chipW = await chip.evaluate((e) => e.getBoundingClientRect().width);
+        ck(`the ${id} is an icon at ${width}px`, chipW < 40, String(chipW));
+        ck(`its label is hidden but its name stays at ${width}px`, !(await chip.locator(".pj-chip-label").isVisible())
+           && !!(await chip.getAttribute("aria-label")) && !!(await chip.getAttribute("title")));
+      }
+      ck(`the legend keeps its labels at ${width}px`, /Factory\s+a software factory project/.test(await page.locator(".pj-foot").innerText())
+         && /AI SRE\s+an AI SRE project/.test(await page.locator(".pj-foot").innerText()));
       const rowH = await rows.first().evaluate((e) => e.getBoundingClientRect().height);
       ck(`rows stay compact at ${width}px`, rowH < 60, String(rowH));
       if (width === 640) {
