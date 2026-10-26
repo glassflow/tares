@@ -4649,7 +4649,7 @@ def make_app() -> FastAPI:
     @app.get("/api/projects/{uid}/sessions")
     async def list_project_sessions(uid: str):
         """The sessions that worked in the project (the spec session among them), newest activity
-        first, each with its state (working, waiting for the person, ended) and, for a waiting
+        first, each with its state (working, idle between turns, waiting for the person, ended) and, for a waiting
         one, the last thing it said (`last_said`)."""
         _project_or_404(uid)
         src = next((n for n, c in runtime.catalog.sources.items()
@@ -4720,7 +4720,7 @@ def make_app() -> FastAPI:
         if prev:
             now = now_utc()
             quiet = int((now - prev["last_at"]).total_seconds() // 60) if prev["last_at"] else None
-            open_ = prev["state"] == "waiting" or (
+            open_ = prev["state"] in ("idle", "waiting") or (
                 prev["state"] in (None, "working") and quiet is not None and quiet < _QUIET_MIN)
             src = _cc_source()
             out["previous_session"] = {

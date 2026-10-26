@@ -101,12 +101,14 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
     .filter((s) => s.state !== "replaced" && ms(s.started_at) <= lastDone && ms(s.last_at) >= lastDone)
     .sort((a, b) => ms(b.last_at) - ms(a.last_at))[0]?.session;
   const shownState = (s: ProjectSession, _now?: string): Shown =>
-    building ? null : s.session === finisher ? "finished" : s.state === "waiting" ? "idle" : null;
+    building ? null : s.session === finisher ? "finished" : s.state === "waiting" || s.state === "idle" ? "idle" : null;
   // no session on the ticket: the person picks it up (the crew's orchestrator does it for a crew)
   const attention: AttentionKind | null = !building ? null
     : !active || active.state === "ended" ? (byCrew ? null : "orphan")
     : active.state === "waiting" ? "waiting"
-    : active.state === "quiet" || quietMin >= SILENT_MIN ? "silent" : null;
+    // an idle session rests between turns (its own Monitor, a peer): only the quiet window, not
+    // the working one, says it is gone
+    : active.state === "quiet" || (active.state !== "idle" && quietMin >= SILENT_MIN) ? "silent" : null;
   const prompt = `Work on Tares project "${ctx.s.name}": read its starting prompt and begin.`;
   const where = tk?.linear ? <>in Linear project <a href={tk.linear.url} target="_blank" rel="noreferrer">{tk.linear.name}</a></>
     : tk?.github ? <>in GitHub <a href={tk.github.url} target="_blank" rel="noreferrer">{tk.github.repo}</a></> : "in Tares";
@@ -519,6 +521,7 @@ function Fold({ id, title, icon, meta, pinnedByDefault, children }: {
 function StateBadge({ s, now, shown }: { s: ProjectSession; now?: string; shown?: Shown }) {
   if (shown === "finished") return <span className="fo-st fo-st-done" title="it finished the last ticket">finished</span>;
   if (shown === "idle") return <span className="fo-st" title={`waiting at its prompt; nothing is in progress${s.state_reason ? ` (${s.state_reason})` : ""}`}>idle</span>;
+  if (s.state === "idle") return <span className="fo-st" title="between turns; it resumes on its own (a Monitor, a peer's reply)">idle</span>;
   if (s.state === "waiting") return <span className="fo-st fo-st-wait" title={s.state_reason ?? undefined}>waiting</span>;
   if (s.state === "ended") return <span className="fo-st">ended</span>;
   if (s.state === "quiet") return <span className="fo-st fo-st-quiet" title="nothing heard from it for a long while; it has most likely ended">quiet</span>;

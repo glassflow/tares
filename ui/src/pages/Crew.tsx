@@ -383,7 +383,7 @@ function MemberDetail({ name, crewSide, onChanged }: { name: string; crewSide: b
       <div className="crew-detail-body">
         {s.role && ROLE_TEXT[s.role] && <p className="dim" style={{ margin: 0 }}>{ROLE_TEXT[s.role]}</p>}
         <p style={{ margin: 0 }}>
-          {s.state === "working" ? "Working" : s.state === "waiting" ? "Waiting" : s.state === "quiet" ? `No word for ${s.quiet_minutes} min` : "Ended"}
+          {s.state === "working" ? "Working" : s.state === "waiting" ? "Waiting for you" : s.state === "idle" ? "Idle" : s.state === "quiet" ? `No word for ${s.quiet_minutes} min` : "Ended"}
           {s.state_reason && <>: {s.state_reason.replace(/[.!]+$/, "")}</>}
           {s.last_at && <>; last spoke <TimeAgo ts={s.last_at} /></>}.
           {!crewSide && s.project_name && <> Works on <Link to={`/projects/${encodeURIComponent(s.project ?? "")}`}>{s.project_name}</Link>.</>}

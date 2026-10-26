@@ -498,7 +498,7 @@ def _station_line(s: dict) -> dict:
 @mcp.tool()
 async def list_crew() -> str:
     """The crew as Tares sees it: one row per station (orchestrator, reviewer, releaser,
-    builders, helpers) with its state (working, waiting, quiet, ended), the project it is on,
+    builders, helpers) with its state (working, idle, waiting, quiet, ended), the project it is on,
     when it last spoke, the stations it started, and how many earlier sessions played it."""
     async with _cx(10) as cx:
         r = await cx.get(f"{TARESD}/api/crew")
@@ -525,7 +525,7 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
     them. `autonomy` only when the person wants this project stricter than the crew
     (L3-review: every merge waits for their yes). `repo` (one path) is the older form. Then
     send `crew-orchestrator` a `[TF:SHIP]` message with SendMessage so it starts now rather than
-    on its tick. If no crew is running (list_crew shows no orchestrator working or waiting),
+    on its tick. If no crew is running (list_crew shows no orchestrator working, idle or waiting),
     tell the person to run `tares factory crew up` first."""
     body: dict = {"repos": repos or [], "by": "claude code session"}
     if repo:
@@ -546,7 +546,7 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
     if ho.get("autonomy"):
         lines.append(f"autonomy: {ho['autonomy']}")
     orch = [s for s in (crew.json().get("stations") or []) if s.get("role") == "orchestrator"
-            and s.get("state") in ("working", "waiting", "quiet")] if crew.status_code == 200 else []
+            and s.get("state") in ("working", "idle", "waiting", "quiet")] if crew.status_code == 200 else []
     if not orch:
         return ("Recorded as handed to the crew with:\n" + "\n".join(lines) + "\nNo orchestrator "
                 "is running: tell the person to run `tares factory crew up` in a terminal. The "

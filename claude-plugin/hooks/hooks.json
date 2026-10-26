@@ -5,7 +5,8 @@
       { "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\"", "timeout": 5 }] }
     ],
     "PreToolUse": [
-      { "matcher": "Bash|mcp__.*", "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.sh\"", "timeout": 5 }] }
+      { "matcher": "Bash|mcp__.*", "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.sh\"", "timeout": 5 }] },
+      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"], "async": true }] }
     ],
     "UserPromptSubmit": [
       { "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"], "async": true }] }
@@ -20,6 +21,9 @@
       { "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"], "async": true }] }
     ],
     "SubagentStop": [
+      { "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"], "async": true }] }
+    ],
+    "PermissionRequest": [
       { "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"], "async": true }] }
     ],
     "Notification": [

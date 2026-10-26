@@ -325,7 +325,7 @@ CREATE TABLE IF NOT EXISTS project_sessions (
   PRIMARY KEY (project, session)
 );
 -- What a Claude Code session is doing now (TR-405 follow-up), from the plugin's session_state
--- lines: working, waiting (for the person, `reason` says why) or ended. One row per session.
+-- lines: working, idle (a turn ended), waiting (for the person, `reason` says why) or ended. One row per session.
 CREATE TABLE IF NOT EXISTS session_states (
   session    TEXT PRIMARY KEY,
   state      TEXT,
@@ -2682,7 +2682,7 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def project_sessions(self, project: str) -> list[dict]:
         """The sessions that worked in the project, newest activity first, with when they started
-        and last did something, how many lines they have, and their state (working, waiting,
+        and last did something, how many lines they have, and their state (working, idle, waiting,
         ended; None before the plugin reported one) with its reason and time."""
         with self._lock:
             rows = self.con.execute(

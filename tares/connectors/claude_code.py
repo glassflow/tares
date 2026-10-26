@@ -209,11 +209,11 @@ class ClaudeCodeConnector(Connector):
             str(o.get("subagent") or o.get("agentId") or "") or None
             if o.get("isSidechain") or o.get("subagent") else None, usage)
 
-    STATES = ("working", "waiting", "ended")
+    STATES = ("working", "idle", "waiting", "ended")
 
     def _record_state(self, o: dict) -> None:
-        """A `session_state` line: the plugin saw the session start working, stop and wait for
-        the person (a turn ended, a notification), or end. Kept as the session's state now."""
+        """A `session_state` line: the plugin saw the session start working, end a turn (idle),
+        need the person (a permission prompt, a question: waiting), or end. Kept as the session's state now."""
         sid, state = str(o.get("sessionId") or ""), str(o.get("state") or "")
         if not sid or state not in self.STATES or self.store is None:
             return
