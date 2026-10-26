@@ -75,6 +75,9 @@ def unit():
        factory.words_match(pasted.split(">", 1)[1].rsplit("</", 1)[0], pt) is not None)
     ck("and with them", factory.words_match(pasted, pt) is not None)
     ck("a tag alone is not an answer", factory.words_match('<pasted_content id="964c">', pt) is None)
+    glued = [{"session": "o1", "text": 'abc<pasted_content id="1">foo</pasted_content id="1">'}]
+    ck("a tag does not glue its neighbours into a word they never typed",
+       factory.words_match("abcfoo", glued) is None and factory.words_match("foo", glued) is not None)
     print("== an option's letter (TR-475) ==")
     ck("B, b, B), (B) and B. name the second option",
        [factory.option_letter(w) for w in ("B", "b", "B)", "(B)", "B.", " b ")] == [1] * 6)
@@ -467,6 +470,18 @@ async def main():
         out = json.loads(await mf.desk_answer(dp, rows[-1]))
         ck("the last line of a paste over 1000 characters answers", len(paste) > 1000
            and out["recorded"] and out["matches_what_they_typed"], (len(paste), out))
+        print("== lines Claude Code writes for itself are not what they typed (TR-697) ==")
+        for n, flag in enumerate(("isCompactSummary", "isMeta")):
+            words = f"Go with Adyen for the {flag} line, said a peer"
+            dm = json.loads(await mf.desk_add(f"Which gateway {n}?", "Adyen", "default",
+                                              project="Shop"))["label"]
+            body = ("This session is being continued from a previous conversation. " * 12
+                    + "\n" + words + "\n")
+            await ingest([{"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": now_plus(6 + n),
+                           flag: True, "message": {"role": "user", "content": body}}])
+            out = json.loads(await mf.desk_answer(dm, words))
+            ck(f"a {flag} line, even a long one, does not answer", len(body) > 600
+               and out["recorded"] is False, (len(body), out))
 
 
 unit()

@@ -577,7 +577,7 @@ _PASTE_TAG = re.compile(r"</?pasted_content\b[^>]*>")
 def _pieces(text: str) -> list[str]:
     """A turn, each of its lines, and each sentence of each line, in plain form. Claude Code wraps
     a paste in <pasted_content> tags; the person typed what is inside them (TR-697)."""
-    text = _PASTE_TAG.sub("", str(text or ""))
+    text = _PASTE_TAG.sub("\n", str(text or ""))
     out = [_plain(text)]
     for line in text.splitlines():
         if line.strip():
@@ -591,7 +591,7 @@ def words_match(words: str, turns: list[dict]) -> dict | None:
     spacing and quote marks aside), or None. Not a fragment: "ok" is not found in "token", nor
     "ship it" in "I don't want to ship it". An answer recorded as the person's must be what
     they typed (TR-450)."""
-    w = _plain(_PASTE_TAG.sub("", str(words or "")))
+    w = _plain(_PASTE_TAG.sub("\n", str(words or "")))
     if len(w) < 2:
         return None
     return next((t for t in turns if w in _pieces(t["text"])), None)

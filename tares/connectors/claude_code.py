@@ -236,6 +236,7 @@ class ClaudeCodeConnector(Connector):
                 "model": str(msg["model"]) if msg.get("model") else None,
                 "type": str(o.get("type")) if o.get("type") else None,
                 "sidechain": "true" if o.get("isSidechain") else "false",
+                "meta": "true" if o.get("isMeta") or o.get("isCompactSummary") else None,
                 "flow": str(o["flow"]) if o.get("flow") else None,
                 "tares_project": str(o["tares_project"]) if o.get("tares_project") else None,
                 "station": str(o["factory_station"]) if o.get("factory_station") else None,

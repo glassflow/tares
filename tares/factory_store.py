@@ -934,11 +934,13 @@ class FactoryStore:
                  "label": f"D{r[13]}" if r[13] else None, "via": r[14]} for r in rows]
 
     def person_turns(self, source: str, sessions: list[str] | None, since) -> list[dict]:
-        """What a person typed (user turns that are not tool results, not a subagent's) in
+        """What a person typed (user turns that are not tool results, not a subagent's, not a
+        compaction summary or other line Claude Code writes for itself) in
         `sessions` (every session when None) since `since`, newest first (TR-450)."""
         q = ("SELECT key_value, event_time, text FROM events WHERE source = ? AND "
              "event_type = 'user' AND event_time >= ? AND "
-             "coalesce(json_extract_string(labels, '$.sidechain'), 'false') <> 'true'")
+             "coalesce(json_extract_string(labels, '$.sidechain'), 'false') <> 'true' AND "
+             "coalesce(json_extract_string(labels, '$.meta'), 'false') <> 'true'")
         vals: list = [source, since]
         if sessions is not None:
             if not sessions:
