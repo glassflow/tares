@@ -2274,6 +2274,8 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 .pj-status.s-done .pj-dot { background: var(--ok); }
 .pj-status.s-active .pj-count { color: var(--warn); }
 .pj-status.s-done .pj-count { color: var(--ok); }
+.pj-tag { font-size: 11px; color: var(--ink-faint); }
+.pj-status.s-error .pj-tag { color: var(--err); }
 .pj-status.s-error .pj-dot { background: var(--err); }
 .pj-status.s-paused .pj-dot { background: var(--ink-faint); }
 .pj-status.s-draft .pj-dot { background: transparent; border: 1.5px solid var(--ink-faint); }   /* hollow: not started, apart from the filled grey of paused */

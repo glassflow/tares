@@ -32,18 +32,27 @@ function pick<T extends string>(value: string | null, allowed: readonly T[], fal
   return allowed.find((a) => a === value) ?? fallback;
 }
 
+// Active and done need no word: the ring says it. The others the ring cannot show.
+const STATUS_TAG: Partial<Record<Project["status"], string>> = {
+  paused: "paused", error: "error", draft: "draft",
+};
+
 function StatusCell({ u }: { u: Project }) {
   const word = STATUS_WORD[u.status];
+  const ring = !!u.progress && u.progress.total > 0;
+  const tag = STATUS_TAG[u.status];
   const missing = u.objects.filter((o) => o.missing).length;
   const label = [word, u.progress && progressText(u.progress), missing > 0 && `${missing} missing`]
     .filter(Boolean).join(". ");
   return (
     <span className={`pj-status s-${u.status}`} role="img" aria-label={label} title={label}>
-      <span className="pj-dot" />
-      {u.progress && <ProgressRing progress={u.progress} />}
-      {u.progress && u.progress.total > 0 && (
-        <span className="pj-count" aria-hidden="true">{u.progress.done}/{u.progress.total}</span>
-      )}
+      {ring && u.progress ? (
+        <>
+          <ProgressRing progress={u.progress} />
+          <span className="pj-count" aria-hidden="true">{u.progress.done}/{u.progress.total}</span>
+        </>
+      ) : <span className="pj-dot" />}
+      {tag && <span className="pj-tag" aria-hidden="true">{tag}</span>}
       {missing > 0 && <span className="help" aria-hidden="true">{missing} missing</span>}
     </span>
   );
@@ -56,7 +65,7 @@ function KindChip({ factory, legend }: { factory: boolean; legend?: boolean }) {
   if (legend) return <span className="pj-chip">{icon}<span>{label}</span></span>;
   const what = factory ? "Software factory project: a crew builds it from tickets" : "AI SRE project: agents watch your systems";
   return (
-    <span className="pj-chip" title={what} aria-label={factory ? "Software factory" : "AI SRE"}
+    <span className="pj-chip" role="img" title={what} aria-label={factory ? "Software factory" : "AI SRE"}
           data-testid={factory ? "factory-chip" : "sre-chip"}>
       {icon}<span className="pj-chip-label">{label}</span>
     </span>
@@ -227,11 +236,11 @@ export default function Projects() {
                 </button>.{" "}
               </>
             )}
-            <span className="pj-legend">
+            {shown.length > 0 && <span className="pj-legend">
               {factory && <span><KindChip factory legend /> a software factory project, built by the crew from tickets.</span>}
               {sre && <span><KindChip factory={false} legend /> an AI SRE project, watching your systems.</span>}
               <span>Hover a name for its goal.</span>
-            </span>
+            </span>}
           </p>
         </>
       )}

@@ -10,6 +10,9 @@ the project follows [Semantic Versioning](https://semver.org/).
   project shows the factory emoji instead of the bolt, and every other project now shows an AI SRE
   chip with a heartbeat icon. Both fold to the icon alone at 720px and below, keeping the name in
   the tooltip and screen reader label, and the legend under the list explains each kind on show.
+  The status cell is now the progress ring and its count alone: the dot beside it is gone for a
+  project with tickets. A project with no tickets keeps the dot, and a paused, error or draft
+  project adds a short word ("paused", "error", "draft").
 - Console: the Projects list reads as a work queue (TR-689). It hides done projects by default, with
   Active, Done and All tabs that show their counts, and a line saying how many are hidden. A
   filter box matches names and goals, and the sort offers recently active, most work pending, least
