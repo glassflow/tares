@@ -808,6 +808,7 @@ export interface Project {
   goal?: string | null; // what the project should achieve, one line (<= 200 chars); null = not set yet
   kind?: "software_factory" | null;   // its own page and tag; null = an ordinary project
   progress?: TicketProgress;           // a software factory project's tickets (GET /api/projects only)
+  activity_at?: string;                // when it last moved: its own update or its newest ticket's (GET /api/projects only)
 }
 // a software factory project's tickets as its progress ring shows them (tares/factory.py
 // `progress`): total is done + doing + blocked + todo; canceled ones stay out of it
