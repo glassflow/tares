@@ -2275,6 +2275,8 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 .pj-status.s-active .pj-count { color: var(--warn); }
 .pj-status.s-done .pj-count { color: var(--ok); }
 .pj-tag { font-size: 11px; color: var(--ink-faint); }
+.pj-tag-narrow { display: none; }
+.pj-status.s-done .pj-tag { color: var(--ok); }
 .pj-status.s-error .pj-tag { color: var(--err); }
 .pj-status.s-error .pj-dot { background: var(--err); }
 .pj-status.s-paused .pj-dot { background: var(--ink-faint); }
@@ -2299,6 +2301,7 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
   .pj-table th:nth-child(3), .pj-table td:nth-child(3), .pj-table th:nth-child(4), .pj-table td:nth-child(4) { display: none; }
   .pj-table tbody td { padding: 9px 8px; }
   .pj-count { display: none; }
+  .pj-tag-narrow { display: inline; }
   .pj-actions .btn { padding: 3px 8px; font-size: 12px; }
 }
 @media (max-width: 480px) {

@@ -6,6 +6,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- Console: on the Projects list at 720px and below, a done project now says "done" after its ring
+  (TR-696). The count folds away there, so a project with every ticket closed but still active and
+  a done project looked alike apart from a shade of colour. A wide screen is unchanged.
 - Console: the Projects list marks each project's kind with an icon (TR-692). A software factory
   project shows the factory emoji instead of the bolt, and every other project now shows an AI SRE
   chip with a heartbeat icon. Both fold to the icon alone at 720px and below, keeping the name in

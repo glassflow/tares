@@ -155,6 +155,7 @@ async function waitFor(url, tries = 100) {
        (await cell("Challenger workflow").locator(".pj-dot").count()) === 1 && (await cell("Challenger workflow").locator("svg").count()) === 0);
     ck("paused, error and draft say so in a word", (await cell("Checkout latency watch").innerText()).trim() === "paused"
        && (await cell("Billing webhooks").innerText()).trim() === "error" && (await cell("New idea").innerText()).trim() === "draft");
+    ck("a done project has no visible word at desktop width", (await cell("link-click-counter").innerText()).trim() === "2/2");
     ck("and keep the full status in the label", /^Paused/.test(await cell("Checkout latency watch").getAttribute("aria-label")));
     const dot = (name) => cell(name).locator(".pj-dot").evaluate((e) => getComputedStyle(e).backgroundColor);
     const token = (v) => page.evaluate((x) => { const e = document.createElement("i"); e.style.background = `var(${x})`;
@@ -251,6 +252,10 @@ async function waitFor(url, tries = 100) {
       }
       ck(`the legend keeps its labels at ${width}px`, /Factory\s+a software factory project/.test(await page.locator(".pj-foot").innerText())
          && /AI SRE\s+an AI SRE project/.test(await page.locator(".pj-foot").innerText()));
+      const closed = (await cell("Rius Bugs Auto").innerText()).trim();
+      const done = (await cell("link-click-counter").innerText()).trim();
+      ck(`a done project says done in a word at ${width}px`, done === "done", done);
+      ck(`a closed active project has no word, so it differs from done by more than colour at ${width}px`, closed === "", closed);
       const rowH = await rows.first().evaluate((e) => e.getBoundingClientRect().height);
       ck(`rows stay compact at ${width}px`, rowH < 60, String(rowH));
       if (width === 640) {
