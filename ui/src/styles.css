@@ -2274,12 +2274,14 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 .pj-status.s-active .pj-count { color: var(--warn); }
 .pj-status.s-done .pj-count { color: var(--ok); }
 .pj-status.s-error .pj-dot { background: var(--err); }
-.pj-status.s-paused .pj-dot, .pj-status.s-draft .pj-dot { background: var(--ink-faint); }
+.pj-status.s-paused .pj-dot { background: var(--ink-faint); }
+.pj-status.s-draft .pj-dot { background: transparent; border: 1.5px solid var(--ink-faint); }   /* hollow: not started, apart from the filled grey of paused */
 .pj-pending { display: inline-flex; align-items: baseline; gap: 8px; white-space: nowrap; }
 .pj-n { font-weight: 600; font-variant-numeric: tabular-nums; }
 .pj-sub { font-size: 12px; color: var(--ink-soft); }
 .pj-sub.doing { color: var(--warn); }
 .pj-sub.blocked { color: var(--err); }
+.pj-cue { display: none; margin-top: 1px; font-size: 11px; color: var(--ink-faint); white-space: nowrap; }
 .pj-updated { white-space: nowrap; color: var(--ink-soft); }
 .pj-actions { text-align: right; white-space: nowrap; }
 .pj-actions:empty { padding: 0; }
@@ -2290,6 +2292,7 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
   .pj-search { flex: 1 1 160px; }
   .pj-search input { width: 100%; }
   .pj-chip-label, .pj-sub { display: none; }
+  .pj-cue { display: block; }
   .pj-table th:nth-child(3), .pj-table td:nth-child(3), .pj-table th:nth-child(4), .pj-table td:nth-child(4) { display: none; }
   .pj-table tbody td { padding: 9px 8px; }
   .pj-count { display: none; }

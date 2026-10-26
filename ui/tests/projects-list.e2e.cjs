@@ -150,10 +150,19 @@ async function waitFor(url, tries = 100) {
     const blocked = await rows.filter({ hasText: "Rius: Cursor Codex Gaps" }).locator(".pj-pending").innerText();
     ck("pending shows what is in progress and blocked", /7/.test(blocked) && /1 in progress/.test(blocked) && /2 blocked/.test(blocked), blocked);
 
+    const ring = (name) => rows.filter({ hasText: name }).locator(".pj-dot").evaluate((e) => getComputedStyle(e).borderTopWidth);
+    ck("a draft's dot is hollow, a paused one's is filled", (await ring("New idea")) !== (await ring("Checkout latency watch")),
+       `${await ring("New idea")} vs ${await ring("Checkout latency watch")}`);
+    const draft = rows.filter({ hasText: "New idea" });
+    ck("a draft's title opens its setup", (await draft.getByRole("link").first().getAttribute("href")) === `/projects/${ids["New idea"]}/setup`);
+    ck("a draft can be deleted from its row", (await draft.getByRole("button", { name: "Delete draft" }).count()) === 1);
+    ck("no other row offers Delete draft", (await page.getByRole("button", { name: "Delete draft" }).count()) === 1);
+
     // 6. goals: a tooltip, or all of them on request; rows stay one line tall by default
     await open();
     const h0 = await rows.first().evaluate((e) => e.getBoundingClientRect().height);
     ck("a row is a single line tall", h0 < 60, String(h0));
+    ck("the narrow sort cue stays hidden at desktop width", !(await page.locator(".pj-cue").first().isVisible()));
     ck("goals are not printed in the rows", (await page.getByTestId("goal-line").count()) === 0);
     const title = await rows.filter({ hasText: "Checkout latency watch" }).getByRole("link").first().getAttribute("title");
     ck("hovering a name gives the goal", /Close the loop on every alert/.test(title ?? ""), title ?? "");
@@ -185,6 +194,16 @@ async function waitFor(url, tries = 100) {
         const sw = await page.locator(".pj-scroll").evaluate((e) => e.scrollWidth - e.clientWidth);
         ck("the table fits at 640px without its own scroll", sw <= 0, `${sw}px`);
       }
+      const cues = page.locator(".pj-cue");
+      await open("?show=all&sort=most");
+      const cue = await rows.filter({ hasText: "Rius: Cursor Codex Gaps" }).locator(".pj-cue").innerText();
+      ck(`a pending sort says its order by under the name at ${width}px`,
+         /^7 pending$/.test(cue.trim()) && await rows.filter({ hasText: "Rius: Cursor Codex Gaps" }).locator(".pj-cue").isVisible(), cue);
+      await open("?show=all");
+      ck(`the recent sort shows when at ${width}px`, await cues.first().isVisible() && /ago|now/.test(await cues.first().innerText()), await cues.first().innerText());
+      await open("?show=all&sort=name");
+      ck(`the name sort needs no cue at ${width}px`, (await cues.first().isVisible().catch(() => false)) === false);
+      await open("?show=all");
       await shot(`3-narrow-${width}.png`);
       await open();
       await shot(`4-narrow-${width}-active.png`);

@@ -93,7 +93,69 @@ async def api():
            "progress" in rows[shop] and "progress" not in rows[blog], [list(rows[shop]), list(rows[blog])])
 
 
+async def reread():
+    """A PR read again with nothing new is not activity (the reviewer's probe on TR-689):
+    `stale()` re-reads every unmerged PR each minute, which stamps a new `checked_at`."""
+    from tares import factory_api, factory_github
+    from tares.daemon import make_app
+    app = make_app()
+    store = app.state.store
+    m.TARESD = mf.TARESD = "http://t"
+    m._cx = mf._cx = lambda timeout=10: httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://t",
+        headers={"Authorization": f"Bearer {TOKEN}"})
+    print("== a re-read of an unchanged pull request ==")
+
+    async with app.router.lifespan_context(app):
+        uid = json.loads(await m.create_project("Reread", "Keep the date honest"))["id"]
+        await m.write_ticket("Catalog", project="Reread")
+        await mf.hand_over(project="Reread", repo="/w/reread")
+        tid = store.list_tickets(uid)[0]["id"]
+        old = datetime.now(timezone.utc) - timedelta(days=9)
+        pr = {"repo": "o/r", "number": 5, "url": "https://github.com/o/r/pull/5", "state": "open",
+              "merged": False, "head": "abc", "ci": "pending", "verdict": None,
+              "checked_at": old.isoformat(), "error": None}
+        store.update_ticket(tid, pr=pr)
+        store.con.execute("UPDATE tickets SET updated_at = ? WHERE id = ?", [old, tid])
+        store.con.execute("UPDATE usecases SET updated_at = ? WHERE id = ?", [old, uid])
+        reads = []
+
+        async def same(_store, repo, number, prev=None, **changes):
+            reads.append(1)
+            return {**prev, "checked_at": datetime.now(timezone.utc).isoformat(), **changes}
+
+        real = factory_github.read_pr
+        factory_github.read_pr = same
+        try:
+            await factory_api._refresh(store, uid)
+            ck("the pull request was read again", len(reads) == 1, reads)
+            t = store.list_tickets(uid)[0]
+            ck("and its new checked_at was kept", when(t["pr"]["checked_at"]) > old + timedelta(days=8), t["pr"])
+            ck("the ticket did not move", when(t["updated_at"]) == old, t["updated_at"])
+            ck("so the project did not either",
+               when(factory_mod.activity_at(old, store.list_tickets(uid))) == old)
+
+            reads.clear()
+            store.update_ticket(tid, pr={**t["pr"], "checked_at": old.isoformat()}, touch=False)
+            factory_github.read_pr = lambda *a, **k: same(*a, error="GitHub answered 404", **k)
+            await factory_api._refresh(store, uid)
+            t = store.list_tickets(uid)[0]
+            ck("a read that failed is not activity either",
+               t["pr"]["error"] == "GitHub answered 404" and when(t["updated_at"]) == old, t)
+
+            reads.clear()
+            store.update_ticket(tid, pr={**t["pr"], "checked_at": old.isoformat(), "error": None}, touch=False)
+            factory_github.read_pr = lambda *a, **k: same(*a, ci="success", **k)
+            await factory_api._refresh(store, uid)
+            t = store.list_tickets(uid)[0]
+            ck("a pull request that changed is", t["pr"]["ci"] == "success"
+               and when(t["updated_at"]) > old + timedelta(days=8), t["updated_at"])
+        finally:
+            factory_github.read_pr = real
+
+
 rules()
 asyncio.run(api())
+asyncio.run(reread())
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

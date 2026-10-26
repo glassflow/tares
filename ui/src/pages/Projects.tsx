@@ -35,7 +35,8 @@ function pick<T extends string>(value: string | null, allowed: readonly T[], fal
 function StatusCell({ u }: { u: Project }) {
   const word = STATUS_WORD[u.status];
   const missing = u.objects.filter((o) => o.missing).length;
-  const label = u.progress ? `${word}. ${progressText(u.progress)}` : word;
+  const label = [word, u.progress && progressText(u.progress), missing > 0 && `${missing} missing`]
+    .filter(Boolean).join(". ");
   return (
     <span className={`pj-status s-${u.status}`} role="img" aria-label={label} title={label}>
       <span className="pj-dot" />
@@ -46,6 +47,15 @@ function StatusCell({ u }: { u: Project }) {
       {missing > 0 && <span className="help" aria-hidden="true">{missing} missing</span>}
     </span>
   );
+}
+
+// Under 720px the Pending and Updated columns are hidden; when the list is ordered by one of them,
+// this short cue on the name line says what the order is by.
+function SortCue({ u, sort }: { u: Project; sort: Sort }) {
+  if (sort === "name") return null;
+  if (sort === "recent") return <div className="pj-cue"><TimeAgo ts={u.activity_at ?? u.updated_at} /></div>;
+  if (u.status === "draft" || !u.progress || u.progress.total === 0) return null;
+  return <div className="pj-cue">{pendingWork(u)} pending</div>;
 }
 
 function PendingCell({ u }: { u: Project }) {
@@ -181,6 +191,7 @@ export default function Projects() {
                             </span>
                           )}
                         </div>
+                        <SortCue u={u} sort={sort} />
                         {goals && <div className="pj-goal help" data-testid="goal-line">{goal}</div>}
                       </td>
                       <td><StatusCell u={u} /></td>

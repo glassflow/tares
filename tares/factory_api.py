@@ -69,6 +69,15 @@ def merged_fields(t: dict, pr: dict) -> dict:
     return out
 
 
+def _reread_only(cur: dict, fields: dict) -> bool:
+    """The PR was read again and nothing but when (or whether the read failed) differs: that is
+    not ticket activity, and the Projects list's Updated column must not move for it."""
+    if set(fields) != {"pr"} or not cur["pr"]:
+        return False
+    volatile = {"checked_at": None, "error": None}
+    return {**cur["pr"], **volatile} == {**fields["pr"], **volatile}
+
+
 async def _refresh(store, uid: str) -> None:
     """A linked PR read again when its last read is stale; a ticket in the work with no PR linked
     by a `factory/<ref>` branch in the project's repos, only when no other project has a ticket
@@ -109,7 +118,7 @@ async def _refresh(store, uid: str) -> None:
                                      "new commits pushed after the verdict", "github", "github",
                                      now_utc())
         if fields:
-            store.update_ticket(cur["id"], **fields)
+            store.update_ticket(cur["id"], touch=not _reread_only(cur, fields), **fields)
         if fields.get("stage") == "merged":
             store.add_ticket_history(cur["id"], uid, "stage", "merged",
                                      "GitHub shows the pull request merged", "github", "github",

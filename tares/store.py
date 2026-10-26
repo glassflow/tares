@@ -2609,14 +2609,15 @@ class Store(FactoryStore, ClaudeUsageStore):
                  repo])
         return tid
 
-    def update_ticket(self, tid: str, **fields) -> None:
+    def update_ticket(self, tid: str, touch: bool = True, **fields) -> None:
         """Set the given columns (title, status, position, working_doc, identifier, url,
         external_id, milestone, depends_on); None clears working_doc or milestone only when passed
-        explicitly."""
+        explicitly. `touch=False` leaves updated_at alone: a re-read that found nothing new is
+        not activity."""
         allowed = {"title", "status", "position", "working_doc", "identifier", "url",
                    "external_id", "milestone", "depends_on", "holder", "stage", "stage_reason",
                    "pr", "repo"}
-        sets, vals = ["updated_at = ?"], [now_utc()]
+        sets, vals = (["updated_at = ?"], [now_utc()]) if touch else ([], [])
         for col, v in fields.items():
             if col == "depends_on":
                 v = json.dumps(v) if v else None
