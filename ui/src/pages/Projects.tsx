@@ -32,7 +32,8 @@ function pick<T extends string>(value: string | null, allowed: readonly T[], fal
   return allowed.find((a) => a === value) ?? fallback;
 }
 
-// Active and done need no word: the ring says it. The others the ring cannot show.
+// Active and done need no word on a wide screen: the ring and its count say it. The others the ring cannot show.
+// Under 720px the count folds away, so a done project says "done" there (a closed active one has no word).
 const STATUS_TAG: Partial<Record<Project["status"], string>> = {
   paused: "paused", error: "error", draft: "draft",
 };
@@ -53,6 +54,7 @@ function StatusCell({ u }: { u: Project }) {
         </>
       ) : <span className="pj-dot" />}
       {tag && <span className="pj-tag" aria-hidden="true">{tag}</span>}
+      {u.status === "done" && <span className="pj-tag pj-tag-narrow" aria-hidden="true">done</span>}
       {missing > 0 && <span className="help" aria-hidden="true">{missing} missing</span>}
     </span>
   );
