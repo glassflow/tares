@@ -328,6 +328,40 @@ async def main():
         ck("the crew's session states survive another project's delete",
            {s["name"]: s["state"] for s in crew["stations"]}.get("crew-reviewer") == "working", crew["stations"])
 
+        print("== a station the watch is retrying onto a new Claude Code (TR-687) ==")
+        async with mk() as cx:
+            ck("no station is retrying until the factory CLI says so",
+               all(r["claude_retry"] is None for r in (await cx.get("/api/crew")).json()["stations"]))
+            r = await cx.put("/api/crew/claude-retry", json={"stations": {
+                "crew-reviewer": {"target": "2.1.9", "fails": 2, "next_at": 1790000000}}})
+            ck("the CLI reports a retrying station", r.status_code == 200, r.text)
+            ck("/api/crew lists them too, for a client that has no row for the station",
+               (await cx.get("/api/crew")).json()["claude_retry"]
+               == {"crew-reviewer": {"target": "2.1.9", "fails": 2, "next_at": 1790000000}})
+            rows = {x["name"]: x for x in (await cx.get("/api/crew")).json()["stations"]}
+            ck("the Crew page row carries target, failed moves and the next try",
+               rows["crew-reviewer"]["claude_retry"] == {"target": "2.1.9", "fails": 2, "next_at": 1790000000}
+               and all(x["claude_retry"] is None for n, x in rows.items() if n != "crew-reviewer"), rows)
+            for name, junk in (("a list", {"stations": []}), ("no stations", {}),
+                               ("a row without a target", {"stations": {"crew-reviewer": {"fails": 1}}})):
+                r = await cx.put("/api/crew/claude-retry", json=junk)
+                ck(f"{name} is refused", r.status_code == 400, r.text)
+            for name, junk in (("too many stations", {"stations": {f"s{i}": {"target": "2.1.9"} for i in range(201)}}),
+                               ("a name of 129 characters", {"stations": {"n" * 129: {"target": "2.1.9"}}}),
+                               ("an empty name", {"stations": {"": {"target": "2.1.9"}}})):
+                r = await cx.put("/api/crew/claude-retry", json=junk)
+                ck(f"{name} is refused", r.status_code == 400, r.text)
+            rows = {x["name"]: x for x in (await cx.get("/api/crew")).json()["stations"]}
+            ck("a refused report changes nothing", rows["crew-reviewer"]["claude_retry"]["fails"] == 2, rows)
+            r = await cx.put("/api/crew/claude-retry", json={"stations": {
+                "crew-reviewer": {"target": "2.1.9", "fails": True, "next_at": -5}}})
+            ck("a boolean or out-of-range count falls back to the default, not stored as given",
+               r.status_code == 200 and "true" not in r.text
+               and r.json()["stations"]["crew-reviewer"] == {"target": "2.1.9", "fails": 1, "next_at": 0}, r.text)
+            await cx.put("/api/crew/claude-retry", json={"stations": {}})
+            ck("an empty list clears every mark",
+               all(r["claude_retry"] is None for r in (await cx.get("/api/crew")).json()["stations"]))
+
 
         print("== ending a station ==")
         nd = {"Content-Type": "application/x-ndjson"}

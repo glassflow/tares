@@ -160,15 +160,21 @@ function versionBefore(a: string, b: string): boolean {
 }
 
 /** The Claude Code a station runs; flagged when another station runs a newer one, since the factory moves
- *  stations onto a new version one at a time (or `tares factory crew update` does all of them). */
+ *  stations onto a new version one at a time (or `tares factory crew update` does all of them). A station
+ *  whose restarts kept landing on an old pre-warmed spare is flagged as retrying: the factory starts it again
+ *  in a new conversation, then tries again after a pause. */
 function CodeVersion({ s, all }: { s: CrewStation; all: CrewStation[] }) {
   if (!s.claude_version) return null;
   const newest = all.reduce((m, x) => (x.claude_version && (!m || versionBefore(m, x.claude_version)) ? x.claude_version : m), "");
   const older = !!newest && versionBefore(s.claude_version, newest);
+  const retry = s.claude_retry && versionBefore(s.claude_version, s.claude_retry.target) ? s.claude_retry : null;
+  const next = retry && retry.next_at ? new Date(retry.next_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
   return (
-    <small className={`crew-cc${older ? " is-older" : ""}`}
-      title={older ? `Claude Code ${s.claude_version}; ${newest} runs on another station. It moves when idle, or run tares factory crew update.` : `Claude Code ${s.claude_version}`}>
-      {s.claude_version}{older ? " · older" : ""}
+    <small className={`crew-cc${older || retry ? " is-older" : ""}`}
+      title={retry
+        ? `Claude Code ${s.claude_version}; ${retry.target} is installed, but restarts keep coming back on an old pre-warmed spare (${retry.fails} failed). The factory tries again${next ? ` at ${next}` : " soon"}, or run tares factory crew update.`
+        : older ? `Claude Code ${s.claude_version}; ${newest} runs on another station. It moves when idle, or run tares factory crew update.` : `Claude Code ${s.claude_version}`}>
+      {s.claude_version}{retry ? " · older, retrying" : older ? " · older" : ""}
     </small>
   );
 }

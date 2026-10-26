@@ -470,6 +470,8 @@ export interface CrewStation {
   children: string[];
   /** the Claude Code version the station runs, from its status line; null before it reported */
   claude_version: string | null;
+  /** Set while the factory retries moving the station onto a newer Claude Code: the version, failed moves, unix time of the next try. */
+  claude_retry: { target: string; fails: number; next_at: number } | null;
   /** the context window from the station's status line, null before it reported */
   context: StationContext | null;
   /** what all the station's sessions spent, null before any reply */

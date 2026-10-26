@@ -24,6 +24,7 @@ from .envelope import now_utc
 from .factory_store import MapChanged
 
 CREW_SETTING = "crew_settings"
+CLAUDE_RETRY_SETTING = "crew_claude_retry"   # stations the watch is retrying onto a new Claude Code
 GRANTS_SETTING = "global_grants"   # the id of the cell's "Grants (all projects)" doc
 
 
@@ -337,6 +338,13 @@ def register(app, store, h: SimpleNamespace) -> None:
     def _ts(v) -> float:
         return v.timestamp() if isinstance(v, datetime) else 0.0
 
+    def claude_retry() -> dict:
+        try:
+            cur = json.loads(store.get_setting(CLAUDE_RETRY_SETTING) or "{}")
+        except ValueError:
+            cur = {}
+        return cur if isinstance(cur, dict) else {}
+
     def stations(project: str | None = None) -> list[dict]:
         rows = store.station_sessions(h.cc_source())
         names = {p["id"]: p["name"] for p in store.list_projects()}
@@ -368,12 +376,14 @@ def register(app, store, h: SimpleNamespace) -> None:
                         "projects": sorted({s["project"] for s in ss if s["project"]})})
         meters = store.session_meters([st["session"] for st in out])
         spent = store.usage_by_session([s["session"] for s in rows])
+        retry = claude_retry()
         coord = store.coordination_calls(h.cc_source(), [s["session"] for s in rows])
         for st in out:
             st["children"] = sorted(x["name"] for x in out if x["parent"] == st["name"])
             # the context window from the station's status line, and what all its sessions spent
             st["context"] = claude_usage.context_now(meters.get(st["session"]))
             st["claude_version"] = claude_usage.code_version(meters.get(st["session"]))
+            st["claude_retry"] = retry.get(st["name"])   # set while the watch retries its move, else null
             mine = [spent[s] for s in [st["session"], *(e["session"] for e in st["earlier"])]
                     if s in spent]
             st["usage"] = ({k: sum(x[k] for x in mine) for k in mine[0]} if mine else None)
@@ -392,9 +402,38 @@ def register(app, store, h: SimpleNamespace) -> None:
     async def get_crew():
         """The crew: one row per station (its current session and state, the earlier sessions
         that played it, the stations it started), the crew's settings, the shared grants, and the
-        crew's `pace` (as GET /api/crew/pace gives it)."""
+        crew's `pace` (as GET /api/crew/pace gives it). `claude_retry` maps each station the
+        watch is retrying onto a newer Claude Code to {target, fails, next_at}; the row of each
+        shows its own as `claude_retry`."""
         return {"stations": stations(), "settings": settings(), "grants": grants_out(None)["all"],
-                "pace": pace(), "now": now_utc()}
+                "pace": pace(), "claude_retry": claude_retry(), "now": now_utc()}
+
+    @app.put("/api/crew/claude-retry")
+    async def put_claude_retry(body: dict = Body(...)):
+        """{stations: {name: {target, fails, next_at}}}: the stations the factory watch is retrying
+        onto a new Claude Code, after a restart kept landing on an older pre-warmed spare. It
+        replaces the whole list; a station left out is not retrying. `target` is the version it
+        is moving to, `fails` the failed moves so far and `next_at` the unix time of the next try.
+        Each row of /api/crew shows its entry as `claude_retry`, or null. The factory CLI sends
+        this; it is only information for the Crew page."""
+        rows = body.get("stations")
+        if not isinstance(rows, dict):
+            h.err(ValueError("stations must be an object of station name to {target, fails, next_at}"))
+        if len(rows) > 200:
+            h.err(ValueError("at most 200 stations"))
+        def num(v, lo: int, hi: int, default: int) -> int:
+            return v if isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi else default
+        out = {}
+        for name, r in rows.items():
+            if not isinstance(name, str) or not 0 < len(name) <= 128:
+                h.err(ValueError("a station name is 1 to 128 characters"))
+            if not isinstance(r, dict) or not isinstance(r.get("target"), str) or not r["target"]:
+                h.err(ValueError(f"{name}: target must be the Claude Code version it is moving to"))
+            out[name] = {"target": r["target"][:40],
+                         "fails": num(r.get("fails"), 0, 1_000_000, 1),
+                         "next_at": num(r.get("next_at"), 0, 4_102_444_800, 0)}
+        store.set_setting(CLAUDE_RETRY_SETTING, json.dumps(out))
+        return {"stations": out}
 
     @app.get("/api/crew/pace")
     async def get_crew_pace():
