@@ -35,13 +35,17 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
                                             that stopped, under the same name; start
                                             fresh any that Claude Code stopped for thrashing on
                                             autocompact; after an update of the plugin or of Claude
-                                            Code, move each station onto it when it's idle (same
-                                            conversation, the orchestrator last; the crew setting
+                                            Code, move each station, helpers too, onto it when
+                                            it's idle (same conversation, the orchestrator last; a
+                                            station that keeps coming back on an old spare is
+                                            started again in a new conversation, then retried
+                                            after a pause, and shows as retrying; the crew setting
                                             claude_update off stops this move); restart a station
                                             between its turns when you allow it something new in
                                             Tares (same conversation, its fresh settings have it);
                                             a frozen crew's watch moves no station onto a newer kit
-                                            or Claude Code and is only told of one; between rounds, read the plan's limits and the context
+                                            or Claude Code and is only told of one; between
+                                            rounds, read the plan's limits and the context
                                             the Crew page asks for
                                             with the idle_wake setting on, wake an idle station only
                                             when Tares has work for it (and after a quiet spell, to
@@ -55,7 +59,8 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
                                             waits), the orchestrator last, same conversation; then
                                             checks each runs it, one session per name; gives up on a
                                             busy one after --wait seconds (default 1800, 0 = never);
-                                            run from a station, it leaves that station to the watch;
+                                            run from a station, it leaves that station to the watch
+                                            when that station is behind, else to restart;
                                             a frozen crew moves too, since you asked; with pace
                                             on, neither moves one while a plan limit is full
   tares factory crew restart [--wait <s>]   the same, for stations that already run it too
@@ -1764,7 +1769,7 @@ claude_auto() {
 cc_behind() { # target [agents json] → how many stations that matter run an older Claude Code
   local target=$1 agents=${2:-} s n=0
   [ -n "$agents" ] || agents=$(active_json) || { echo 0; return 0; }
-  for s in $(jq -r 'to_entries[] | select(.value.status == "active" and .value.role != "helper") | .key' "$STATIONS" 2>/dev/null); do
+  for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS" 2>/dev/null); do
     [ -f "$CREW_HOME/stations/$s.done" ] && continue
     older_than "$(station_cc "$s" "$agents")" "$target" && n=$((n + 1))
   done
@@ -1781,34 +1786,80 @@ tell_newer_claude() { # live Claude Code version
   echo "$1" > "$CC_NEWER_FILE"
 }
 
-cc_movable() { # station target → 0 when the watch may restart it now: conversation to resume, quiet, nobody attached
-  [ -n "$(stations_get "$1" '.sessionId')" ] && [ "$(stations_get "$1" '.cc_failed')" != "$2" ] && ! attached "$1" && quiet "$1"
+# A station whose move onto $2 kept landing on an older spare waits out a backoff before the watch tries
+# again (cc_failed names the version it failed for, cc_retry_at is when the next try is due).
+cc_backoff() { # station target → 0 while the station is waiting out the backoff after a failed move onto target
+  [ "$(stations_get "$1" '.cc_failed')" = "$2" ] && [ "$(date +%s)" -lt "$(stations_get "$1" '.cc_retry_at')" ] 2>/dev/null
 }
 
-# The one station to move this round: a station on an older Claude Code that is idle, the orchestrator
-# only once no other station is behind. Helpers are short-lived and finished builders stay stopped.
+cc_movable() { # station target → 0 when the watch may restart it now: conversation to resume, quiet, nobody attached
+  [ -n "$(stations_get "$1" '.sessionId')" ] && ! cc_backoff "$1" "$2" && ! attached "$1" && quiet "$1"
+}
+
+# The one station to move this round: a station on an older Claude Code that is idle, then a helper, the
+# orchestrator only once no other station is behind. A helper never holds the orchestrator back, since a
+# helper can work for a long time; finished builders stay stopped, and a station backing off after a failed
+# move does not hold the orchestrator back either. A station that is not running shows no version, so is not behind.
 cc_pick() { # target → a station name, or nothing
-  local target=$1 s agents others_behind=0 orch="" v
+  local target=$1 s agents others_behind=0 orch="" helper="" v role
   agents=$(active_json) || return 0
   for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS" 2>/dev/null); do
-    [ "$(stations_get "$s" '.role')" != helper ] && [ ! -f "$CREW_HOME/stations/$s.done" ] || continue
+    role=$(stations_get "$s" '.role')
+    [ "$role" = helper ] || [ ! -f "$CREW_HOME/stations/$s.done" ] || continue
     v=$(station_cc "$s" "$agents"); older_than "$v" "$target" || continue
-    if [ "$(stations_get "$s" '.role')" = orchestrator ]; then orch=$s; continue; fi
-    [ "$(stations_get "$s" '.cc_failed')" != "$target" ] || continue   # given up on until the next version: it must not hold the orchestrator back
+    case "$role" in
+      orchestrator) orch=$s; continue ;;
+      helper) [ -n "$helper" ] || ! cc_movable "$s" "$target" || helper=$s; continue ;;
+    esac
+    cc_backoff "$s" "$target" && continue
     others_behind=1
     if cc_movable "$s" "$target"; then echo "$s"; return 0; fi
   done
+  if [ -n "$helper" ]; then echo "$helper"; return 0; fi
   if [ $others_behind = 0 ] && [ -n "$orch" ] && cc_movable "$orch" "$target"; then echo "$orch"; fi
   return 0
 }
 
+# The seconds a station waits before the watch tries to move it again, after $1 failed moves onto the same
+# version: FACTORY_CC_BACKOFF, doubling each time, never past FACTORY_CC_BACKOFF_MAX.
+cc_delay() { # failed moves so far → seconds
+  local n=$1 d=${FACTORY_CC_BACKOFF:-600} max=${FACTORY_CC_BACKOFF_MAX:-14400}
+  while [ "$n" -gt 1 ] && [ "$d" -lt "$max" ]; do d=$((d * 2)); n=$((n - 1)); done
+  [ "$d" -le "$max" ] || d=$max
+  echo "$d"
+}
+
+cc_retry_in() { # station → how long until the watch tries it again: "10 min", "3 h"
+  local at n; at=$(stations_get "$1" '.cc_retry_at'); case $at in ''|*[!0-9]*) at=0 ;; esac
+  n=$(( (at - $(date +%s) + 59) / 60 )); [ $n -ge 1 ] || n=1
+  if [ $n -ge 120 ]; then echo "$(( (n + 59) / 60 )) h"; else echo "$n min"; fi
+}
+
+cc_retrying() { # station target → 0 when a move of the station onto target failed and the watch is retrying it
+  [ "$(stations_get "$1" '.cc_failed')" = "$2" ]
+}
+
+# Tell Tares which stations are retrying a move, so the Crew page can flag them: the CLI is the only
+# one that knows (the marks are in stations.json). Best effort; the roster has the same marks.
+cc_retry_sync() {
+  tares_on || return 0
+  local tok body; tok=$(tares_token)
+  body=$(jq -c '{stations: (to_entries | map(select(.value.status == "active" and (.value.cc_failed // "") != ""))
+    | map({key: .key, value: {target: .value.cc_failed, fails: (.value.cc_fails // 1), next_at: (.value.cc_retry_at // 0)}}) | from_entries)}' "$STATIONS" 2>/dev/null) || return 0
+  { [ -n "$tok" ] && printf 'Authorization: Bearer %s\n' "$tok"; true; } | curl -sS -o /dev/null --max-time 3 -X PUT -H @- \
+    -H 'Content-Type: application/json' --data "$body" "$TARES/api/crew/claude-retry" 2>/dev/null || true
+}
+
 # Restart a station on the Claude Code now on PATH, in the same conversation, and check its process
-# runs it; an older spare from the pool is stopped and the restart tried again. Exit status: 0 it runs
-# the new version (or its version can't be told), 3 Tares doesn't answer, 4 it isn't idle any more or
-# the crew is halted, 5 an older spare came back every time, 6 the plan's limit is full (pace, TR-674:
-# a restart is a model turn into a limit that has not reset), 1 anything else. It runs in a subshell with
-# its own errexit, so the caller turns errexit off around the call (`set +e; claude_move ...; rc=$?; set -e`):
-# `claude_move ... && ... || ...` would turn it off inside the subshell too.
+# runs it; an older spare from the pool is stopped and the restart tried again. When the tries keep
+# landing on an old spare, the last one starts the station in a new conversation (once per version), so
+# the station is never left on the old version. Exit status: 0 it runs the new version (or its version
+# can't be told), 3 Tares doesn't answer, 4 it isn't idle any more or the crew is halted, 5 an older
+# spare came back every time (the station is marked cc_failed with a retry time, and the watch tries
+# again after a backoff), 6 the plan's limit is full (pace, TR-674: a restart is a model turn into a limit
+# that has not reset), 1 anything else. It runs in a subshell with its own errexit, so the caller turns
+# errexit off around the call (`set +e; claude_move ...; rc=$?; set -e`): `claude_move ... && ... || ...`
+# would turn it off inside the subshell too.
 claude_move() { # station target
   local s=$1 target=$2
   set +e
@@ -1818,25 +1869,39 @@ claude_move() { # station target
     ! halted || exit 4
     pace_read || true; ! pace_closed || exit 6   # also the reading the restart prompt's schedule wording comes from
     { quiet "$s" && ! attached "$s"; } || exit 4   # it started something, or someone opened it, since the first check
-    local skill try=0 tries=${FACTORY_CC_TRIES:-3} v prompt
+    local skill try=0 tries=${FACTORY_CC_TRIES:-3} total v prompt fresh_prompt fails at
     skill=$(stations_get "$s" '.role'); [ "$skill" != helper ] || skill=$(parent_role "$(stations_get "$s" '.parent')")
     prompt="Claude Code was updated to $target, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-$skill, re-read your report, $(rearm_text), then carry on where you were."
-    while [ $try -lt "$tries" ]; do
+    fresh_prompt="Claude Code was updated to $target, but your old conversation kept coming back on an older Claude Code, so the factory started you again under the same name, in a new conversation, on $target. Nothing from the old one carries over except your report and what is on Tares. Reload the skills factory-protocol and station-$skill, re-read your report and your work on Tares, $(rearm_text), then carry on where your report left off."
+    total=$tries; [ "$(stations_get "$s" '.cc_fresh')" = "$target" ] || total=$((tries + 1))   # one new conversation per version
+    while [ $try -lt "$total" ]; do
       try=$((try + 1))
       if [ $try -gt 1 ]; then ! halted && ! attached "$s" || exit 4; pace_read || true; ! pace_closed || exit 6; fi   # the first restart started it on the prompt, so only a halt or someone opening it stops a retry
       prune_spares "$target"
-      cmd_restart "$s" "$prompt"
+      if [ $try -gt "$tries" ]; then
+        say "$s still comes back on an older Claude Code after $tries tries; starting it again in a new conversation on $target"
+        stations_put "$s" "$(jq -n --arg t "$target" '{cc_fresh: $t}')"
+        cmd_restart "$s" --fresh "$fresh_prompt"
+      else
+        cmd_restart "$s" "$prompt"
+      fi
       v=""; for _ in 1 2 3 4 5 6; do v=$(station_cc "$s"); [ -n "$v" ] && break; sleep "${FACTORY_PAUSE:-2}"; done
       if ! older_than "$v" "$target"; then
         [ -n "$v" ] || say "could not tell which Claude Code $s runs; taking it for $target"
-        stations_put "$s" '{"cc_failed": null}'
+        stations_put "$s" '{"cc_failed": null, "cc_fails": null, "cc_retry_at": null, "cc_fresh": null}'
+        cc_retry_sync || true
         event claude-updated "$s" "${v:-$target}"
         exit 0
       fi
       say "$s came back on Claude Code $v, an older spare from Claude Code's pool, not $target; stopping it and starting it again"
       event stale-spare "$s" "$v"
     done
-    stations_put "$s" "$(jq -n --arg t "$target" '{cc_failed: $t}')"
+    fails=0; [ "$(stations_get "$s" '.cc_failed')" != "$target" ] || fails=$(stations_get "$s" '.cc_fails')
+    case $fails in ''|*[!0-9]*) fails=0 ;; esac
+    fails=$((fails + 1)); at=$(( $(date +%s) + $(cc_delay "$fails") ))
+    stations_put "$s" "$(jq -n --arg t "$target" --argjson n "$fails" --argjson at "$at" '{cc_failed: $t, cc_fails: $n, cc_retry_at: $at}')"
+    cc_retry_sync || true
+    event claude-retry "$s" "$target"
     exit 5 )
   return $?
 }
@@ -1853,7 +1918,7 @@ watch_claude_move() { # station target: the watch's turn at claude_move, with wh
        [ -z "$dup" ] || { say "TWO SESSIONS named $dup; stop the one stations.json does not list (factory roster)"; event two-sessions "$s" "$dup"; } ;;
     3) say "Tares doesn't answer; $s moves onto Claude Code $target once it does" ;;
     4|6) ;;
-    5) say "$s keeps coming back on an older Claude Code than $target (an old pre-warmed spare in Claude Code's pool); the watch leaves it until the next Claude Code version. $ME crew update tries again now" ;;
+    5) say "$s keeps coming back on an older Claude Code than $target (an old pre-warmed spare in Claude Code's pool), even in a new conversation; the watch tries again in $(cc_retry_in "$s"), and $ME crew update tries again now" ;;
     *) say "could not restart $s on Claude Code $target; the watch revives it as before, and no other station moves until it is up" ;;
   esac
 }
@@ -1906,8 +1971,9 @@ cmd_crew_update() { # [--force] [--wait seconds]: every station onto the Claude 
         case $rc in
           0) say "$s runs Claude Code $target" ;;
           4) still="$still $s" ;;
-          6) die "the plan's limit is full${PACE_UNTIL:+ until $PACE_UNTIL}, and a restart is a model turn into it; nothing more was restarted ($ME crew update again after it resets)" ;;
-          5) say "$s came back on an older Claude Code each time (an old pre-warmed spare in Claude Code's pool); try $ME crew update again"; failed="$failed $s" ;;
+          6) pace_read || true
+             die "the plan's limit is full${PACE_UNTIL:+ until $PACE_UNTIL}, and a restart is a model turn into it; nothing more was restarted ($ME crew update again after it resets)" ;;
+          5) say "$s came back on an older Claude Code each time, even in a new conversation (an old pre-warmed spare in Claude Code's pool); the watch tries again in $(cc_retry_in "$s"), or run $ME crew update again"; failed="$failed $s" ;;
           3) die "Tares doesn't answer; nothing more was restarted" ;;
           *) say "could not restart $s on Claude Code $target"; failed="$failed $s" ;;
         esac
@@ -1928,7 +1994,10 @@ cmd_crew_update() { # [--force] [--wait seconds]: every station onto the Claude 
     echo "$dup" | while IFS= read -r s; do say "TWO SESSIONS named $s; stop the one stations.json does not list (factory roster)"; done
     failed="$failed two-sessions"
   fi
-  local selfnote="$self, which ran this command, moves when $ME crew watch finds it idle, or run $ME restart $self from another session"
+  local selfnote="$self, which ran this command, can only be restarted from another session: run $ME restart $self there"
+  if [ -n "$self" ] && older_than "$(station_cc "$self" "$agents")" "$target"; then   # the watch moves a station that is behind; one that is not, or whose version can't be read, stays
+    selfnote="$self, which ran this command, moves when $ME crew watch finds it idle, or run $ME restart $self from another session"
+  fi
   if [ -n "${failed// /}" ]; then
     [ -z "$self" ] || say "$selfnote"
     die "not every station runs Claude Code $target:$failed"
@@ -2079,10 +2148,13 @@ cmd_status() {
   if [ $old = 0 ]; then :
   elif [ $frozen = 1 ]; then echo "plugin: $old station(s) run an older version; the freeze holds them ($ME crew unfreeze lets the watch move each onto the checkout's)"
   else echo "plugin: $old station(s) run an older version; $ME crew watch moves each onto this one when it's idle"; fi
-  local cc_target cc_old; cc_target=$(claude_version); cc_old=$(cc_behind "$cc_target" "$agents")
+  local cc_target cc_old cc_retry=0 cc_s; cc_target=$(claude_version); cc_old=$(cc_behind "$cc_target" "$agents")
+  for cc_s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS" 2>/dev/null); do
+    cc_retrying "$cc_s" "$cc_target" && older_than "$(station_cc "$cc_s" "$agents")" "$cc_target" && cc_retry=$((cc_retry + 1))
+  done
   if [ "$cc_old" = 0 ]; then :
   elif [ $frozen = 1 ]; then echo "claude code: $cc_old station(s) run an older Claude Code than $cc_target; the freeze stops the watch moving them ($ME crew unfreeze lets it; $ME crew update does it now; one that restarts starts on $cc_target)"
-  else echo "claude code: $cc_old station(s) run an older Claude Code than $cc_target; $ME crew watch moves each onto it when it's idle ($ME crew update does it now; $ME roster shows each version)"; fi
+  else echo "claude code: $cc_old station(s) run an older Claude Code than $cc_target; $ME crew watch moves each onto it when it's idle ($ME crew update does it now; $ME roster shows each version)$([ "$cc_retry" = 0 ] || echo "; $cc_retry retrying after coming back on an old spare")"; fi
   halted && echo "HALTED: $(jq -r .reason "$HALT_FILE" 2>/dev/null)"
   if [ $frozen = 1 ]; then
     echo "FROZEN: the kit $(frozen_text); stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit$([ "$kit" = "$(frozen_field version)" ] || echo " (a newer kit is available)")"
@@ -2252,7 +2324,11 @@ cmd_roster() { # compact, for stations
     [ -n "$row" ] || continue
     s=${row%%$'\t'*}
     v=$(station_cc "$s" "$agents")
-    if older_than "$v" "$target"; then v="$v (older than $target)"; fi
+    if older_than "$v" "$target"; then
+      v="$v (older than $target"
+      if cc_retrying "$s" "$target"; then v="$v, retrying in $(cc_retry_in "$s")"; fi
+      v="$v)"
+    fi
     out="$out$row"$'\t'"$v"$'\n'
   done <<<"$rows"
   printf '%s' "$out"   # in one write, so a reader that stops early never breaks a pipe
@@ -2777,7 +2853,8 @@ cmd_doctor() {
     for cc_s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS"); do
       [ -f "$CREW_HOME/stations/$cc_s.done" ] && continue
       cc_v=$(station_cc "$cc_s" "$list")
-      if older_than "$cc_v" "$cc_target"; then warn "$cc_s runs Claude Code $cc_v, older than the $cc_target installed; $ME crew update moves it when it's idle"
+      if older_than "$cc_v" "$cc_target" && cc_retrying "$cc_s" "$cc_target"; then warn "$cc_s runs Claude Code $cc_v, older than the $cc_target installed, and keeps coming back on an old spare; the watch retries in $(cc_retry_in "$cc_s"), or $ME crew update now"
+      elif older_than "$cc_v" "$cc_target"; then warn "$cc_s runs Claude Code $cc_v, older than the $cc_target installed; $ME crew update moves it when it's idle"
       elif [ -n "$cc_v" ]; then ok "$cc_s runs Claude Code $cc_v"
       else warn "could not tell which Claude Code $cc_s runs"; fi
     done

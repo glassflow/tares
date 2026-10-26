@@ -149,24 +149,56 @@ check "a claimed one (a session runs in it) and a new one were left" 'kill -0 "$
 check "the move succeeded in the end" 'grep -q "crew-reviewer runs Claude Code 1.2.0" "$T/watch.out"'
 kill $claimed $fresh 2>/dev/null; KEEP=""; : > "$FAKE_CLAUDE_STATE/ps-list"
 
-# Every launch lands on an old spare: three tries, then the watch leaves that station until the next
-# version, and the orchestrator is not held back for ever by it. `crew update` tries again.
+# Every resumed launch lands on an old spare (TR-687, D129 A3 overturned): three tries in the same
+# conversation, then the station is started again in a new conversation, once per version, so it is not left
+# on the old version. Where that lands on an old spare too, the station is flagged as retrying and the watch
+# tries it again after a backoff that doubles; the orchestrator is not held back by it. `crew update` tries
+# at once, whatever the backoff says.
+cc_marks() { jq -c --arg s "$1" '.[$s] | {cc_failed, cc_fails, cc_retry_at, cc_fresh}' "$FACTORY_CREW_HOME/stations.json"; }
+resumed() { # station n → how many of its last n launches resumed a conversation
+  jq -c "select(.args[0] == \"--bg\" and .args[2] == \"$1\") | .args" "$FAKE_CLAUDE_STATE/calls.jsonl" | tail -n "$2" | grep -c -- '"--resume"'
+}
+newcc 1.2.1; echo 3 > "$FAKE_CLAUDE_STATE/stale-left"
+all_idle; before=$(launches)
+watch1; x=$(launched 1)
+check "three resumed tries land on old spares, the fourth is a new conversation on 1.2.1" '[ "$(launches)" = $((before + 4)) ] && [ "$(resumed "$x" 4)" = 3 ] && ! last "$x" | grep -q -- "--resume" && [ "$(runs "$x")" = 1.2.1 ]'
+check "it is told it was started again, and the event is recorded" 'last "$x" | grep -q "started you again under the same name, in a new conversation" && grep -q "starting it again in a new conversation on 1.2.1" "$T/watch.out" && grep -q "\"station\":\"$x\",\"event\":\"restarted-fresh\"" "$FACTORY_CREW_HOME/events.jsonl"'
+check "a station that got there is not marked: no failure, no retry" '[ "$(cc_marks "$x")" = "{\"cc_failed\":null,\"cc_fails\":null,\"cc_retry_at\":null,\"cc_fresh\":null}" ]'
 echo all > "$FAKE_CLAUDE_STATE/stale-left"
 all_idle; before=$(launches)
+watch1; y=$(launched 1)
+check "old spares every time: three tries, the new conversation, then it stops and says it will retry" '[ "$y" != "$x" ] && [ "$(launches)" = $((before + 4)) ] && [ "$(resumed "$y" 4)" = 3 ] && grep -q "keeps coming back on an older Claude Code than 1.2.1" "$T/watch.out" && grep -q "the watch tries again in 10 min" "$T/watch.out"'
+check "it is marked: the version, one failed move, a retry time ten minutes on, the new conversation done" '[ "$(st "$y" .cc_failed)" = 1.2.1 ] && [ "$(st "$y" .cc_fails)" = 1 ] && [ "$(st "$y" .cc_fresh)" = 1.2.1 ] && d=$(( $(st "$y" .cc_retry_at) - $(date +%s) )) && [ $d -gt 540 ] && [ $d -le 600 ]'
+out roster
+check "roster flags it as retrying" 'grep "^$y" "$T/cmd.out" | grep -q "1.1.0 (older than 1.2.1, retrying in 10 min)"'
+out crew status
+check "status counts it as retrying" 'grep -q "^claude code: 2 station(s) run an older Claude Code than 1.2.1.*1 retrying after coming back on an old spare" "$T/cmd.out"'
+out doctor
+check "doctor says it keeps coming back and when the watch retries" 'grep "$y runs Claude Code 1.1.0" "$T/cmd.out" | grep -q "keeps coming back on an old spare; the watch retries in 10 min"'
+check "Tares has it, for the Crew page" '[ "$(api GET /api/crew | jq -r --arg y "$y" ".claude_retry[\$y] | [.target, .fails] | join(\" \")")" = "1.2.1 1" ]'
+all_idle; before=$(launches)
+watch1; o_=$(launched 1)
+check "the station backing off is not tried again, and does not hold the orchestrator back" '[ "$o_" = crew-orchestrator ] && [ "$(launches)" = $((before + 4)) ] && [ "$(st crew-orchestrator .cc_failed)" = 1.2.1 ] && [ "$(st "$y" .cc_fails)" = 1 ]'
+all_idle; before=$(launches); watch1
+check "everyone is backing off: nothing more is tried" '[ "$(launches)" = "$before" ]'
+check "Tares lists both" '[ "$(api GET /api/crew | jq -r ".claude_retry | keys | join(\" \")")" = "$(printf "%s\n" "$y" crew-orchestrator | sort | paste -sd" " -)" ]'
+# the backoff is over: the watch tries again in the same conversation, with no second new conversation, and waits twice as long
+retry_due() { local tmp; tmp=$(mktemp); jq --arg s "$1" '.[$s].cc_retry_at = 1' "$FACTORY_CREW_HOME/stations.json" > "$tmp" && mv "$tmp" "$FACTORY_CREW_HOME/stations.json"; }
+retry_due "$y"; all_idle; before=$(launches)
 watch1
-check "three tries, then it gives up" '[ "$(launches)" = $((before + 3)) ] && [ "$(st crew-releaser .cc_failed)" = 1.2.0 ] && grep -q "keeps coming back on an older Claude Code than 1.2.0" "$T/watch.out"'
-all_idle; before=$(launches); watch1
-check "the failed station is not tried again; the orchestrator is" '[ "$(launches)" = $((before + 3)) ] && [ "$(launched 3)" = "crew-orchestrator crew-orchestrator crew-orchestrator" ] && [ "$(st crew-orchestrator .cc_failed)" = 1.2.0 ]'
-all_idle; before=$(launches); watch1
-check "nothing more this version" '[ "$(launches)" = "$before" ]'
+check "after the backoff: three more tries, no second new conversation, the wait doubles" '[ "$(launches)" = $((before + 3)) ] && [ "$(resumed "$y" 3)" = 3 ] && [ "$(st "$y" .cc_fails)" = 2 ] && d=$(( $(st "$y" .cc_retry_at) - $(date +%s) )) && [ $d -gt 1140 ] && [ $d -le 1200 ]'
+retry_due "$y"; echo 0 > "$FAKE_CLAUDE_STATE/stale-left"; all_idle; before=$(launches)
+watch1
+check "once a spare is not in the way it moves, and every mark is cleared" '[ "$(launches)" = $((before + 1)) ] && [ "$(runs "$y")" = 1.2.1 ] && [ "$(cc_marks "$y")" = "{\"cc_failed\":null,\"cc_fails\":null,\"cc_retry_at\":null,\"cc_fresh\":null}" ]'
+echo all > "$FAKE_CLAUDE_STATE/stale-left"
 all_idle; before=$(launches)
 "$F" crew update --wait 5 >"$T/update-fail.out" 2>&1; rc=$?
-check "crew update tries the failed ones again and says so" '[ $rc != 0 ] && grep -q "not every station runs Claude Code 1.2.0" "$T/update-fail.out" && [ "$(launches)" -ge $((before + 6)) ]'
+check "crew update ignores the backoff, tries the orchestrator again and says the watch retries" '[ $rc != 0 ] && grep -q "not every station runs Claude Code 1.2.1" "$T/update-fail.out" && grep -q "the watch tries again in" "$T/update-fail.out" && [ "$(launches)" -ge $((before + 3)) ] && [ "$(st crew-orchestrator .cc_fails)" = 2 ]'
 echo 0 > "$FAKE_CLAUDE_STATE/stale-left"
 all_idle; before=$(launches)
 "$F" crew update --wait 5 >"$T/update.out" 2>&1; rc=$?
-check "crew update, once the spares are gone: every station on 1.2.0" '[ $rc = 0 ] && for s in crew-orchestrator crew-reviewer crew-releaser; do [ "$(runs $s)" = 1.2.0 ] || exit 1; done && grep -q "every station runs Claude Code 1.2.0, one session each" "$T/update.out"'
-check "the failure mark is cleared" '[ -z "$(st crew-releaser .cc_failed)" ] && [ -z "$(st crew-orchestrator .cc_failed)" ]'
+check "crew update, once the spares are gone: every station on 1.2.1" '[ $rc = 0 ] && for s in crew-orchestrator crew-reviewer crew-releaser; do [ "$(runs $s)" = 1.2.1 ] || exit 1; done && grep -q "every station runs Claude Code 1.2.1, one session each" "$T/update.out"'
+check "the failure marks are cleared, here and on Tares" '[ -z "$(st crew-releaser .cc_failed)" ] && [ -z "$(st crew-orchestrator .cc_failed)" ] && [ -z "$(st crew-orchestrator .cc_retry_at)" ] && [ "$(api GET /api/crew | jq -c .claude_retry)" = "{}" ]'
 
 # The retries look again at what the first restart left: a halt, or someone opening the station, stops
 # them (the restart put the station on the update prompt, so it is not quiet, and only these two matter).
@@ -253,14 +285,27 @@ for w in abc 1e3 -5 "" 99999999999999999999; do
 done
 "$F" crew update --wait >"$T/wait.out" 2>&1; rc=$?
 check "--wait with no value is refused with the usage line, nothing restarted" '[ $rc != 0 ] && grep -q "takes a number of seconds" "$T/wait.out" && [ "$(launches)" = "$before" ]'
-"$F" crew update --wait 00 >"$T/wait0.out" 2>&1; rc=$?
-check "--wait 00 is 0: no deadline, the stations move" '[ $rc = 0 ] && for s in crew-orchestrator crew-reviewer crew-releaser; do [ "$(runs $s)" = 1.5.7 ] || exit 1; done'
+# 00 is 0, no deadline: crew update waits for the busy reviewer however long it takes. Read as a deadline
+# of now (no zero strip), it gave up at once; 08 read as an octal number is an error, not 8 seconds.
+busy crew-reviewer
+( sleep 4; idle crew-reviewer ) & wp=$!
+bounded 40 "$F" crew update --wait 00 >"$T/wait0.out" 2>&1; rc=$bounded_rc; wait "$wp" 2>/dev/null
+check "--wait 00 is 0: it waits for the busy reviewer, then every station moves" '[ $rc = 0 ] && grep -q "waiting for crew-reviewer to be idle" "$T/wait0.out" && ! grep -q "gave up waiting" "$T/wait0.out" && for s in crew-orchestrator crew-reviewer crew-releaser; do [ "$(runs $s)" = 1.5.7 ] || exit 1; done'
 
 # The station that runs crew update is left to the watch only when it is behind, and the way out is said
 # even when another station fails.
 before=$(launches); all_idle
 bounded 40 env FACTORY_STATION=crew-orchestrator "$F" crew update >"$T/self2.out" 2>&1; rc=$bounded_rc
 check "the caller already runs the version: nothing restarted, nothing said about its move" '[ $rc = 0 ] && [ "$(launches)" = "$before" ] && grep -q "crew-orchestrator already runs Claude Code 1.5.7" "$T/self2.out" && ! grep -q "which ran this command" "$T/self2.out"'
+# The caller that is not behind is not promised a move by the watch: crew update --force restarts the others and
+# says the caller can only be restarted from another session (the watch moves a station only when it is behind).
+all_idle
+bounded 40 env FACTORY_STATION=crew-orchestrator "$F" crew update --force >"$T/self2f.out" 2>&1; rc=$bounded_rc
+check "a caller that is not behind: it is told to restart itself from another session, not that the watch moves it" '[ $rc = 0 ] && grep -q "crew-orchestrator, which ran this command, can only be restarted from another session: run .* restart crew-orchestrator there" "$T/self2f.out" && ! grep -q "moves when" "$T/self2f.out"'
+newcc 1.5.7.1; all_idle; busy crew-reviewer
+( sleep 3; idle crew-reviewer ) & wp=$!
+bounded 40 "$F" crew update --wait 08 >"$T/wait8.out" 2>&1; rc=$bounded_rc; wait "$wp" 2>/dev/null
+check "--wait 08 is 8 seconds, not an octal error: the busy reviewer is waited for" '[ $rc = 0 ] && ! grep -q "value too great" "$T/wait8.out" && grep -q "waiting for crew-reviewer to be idle" "$T/wait8.out" && [ "$(runs crew-reviewer)" = 1.5.7.1 ]'
 newcc 1.5.8; echo 1.1.0 > "$FAKE_CLAUDE_STATE/spawn-version"; echo all > "$FAKE_CLAUDE_STATE/stale-left"; all_idle
 bounded 40 env FACTORY_STATION=crew-orchestrator "$F" crew update --wait 5 >"$T/self3.out" 2>&1; rc=$bounded_rc
 check "another station fails: the caller's way out is still said" '[ $rc != 0 ] && [ $rc != 137 ] && grep -q "crew-orchestrator, which ran this command, moves when" "$T/self3.out" && grep -q "not every station runs Claude Code 1.5.8" "$T/self3.out"'
@@ -357,6 +402,14 @@ newcc 1.11.2
 "$F" crew update --wait 5 >"$T/pace-slow.out" 2>&1; rc=$?
 check "below the limit, crew update moves them" '[ $rc = 0 ] && for s in crew-orchestrator crew-reviewer crew-releaser; do [ "$(runs $s)" = 1.11.2 ] || exit 1; done'
 check "and the restart says to re-arm at 45 minutes" 'for s in crew-orchestrator crew-reviewer crew-releaser; do last $s | grep -q "re-arm your schedule if you have one, at 45 minutes while the factory paces the crew" || exit 1; done'
+# the plan's limit fills while crew update waits for a busy station: the move behind it is not made, and the
+# message says when the limit resets (the limit was open when crew update started, so it reads the plan again)
+newcc 1.11.3; all_idle; busy crew-reviewer; plan 10 10
+r=$(st crew-reviewer .id); o=$(st crew-orchestrator .id)
+( sleep 3; plan 100 10; idle crew-reviewer ) & pp=$!
+bounded 40 "$F" crew update --wait 30 >"$T/pace-fills.out" 2>&1; rc=$bounded_rc; wait "$pp" 2>/dev/null
+check "the limit fills while crew update waits: it stops, says until when, and restarts nothing more" '[ $rc != 0 ] && [ $rc != 137 ] && grep -q "the plan.s limit is full until 20" "$T/pace-fills.out" && grep -q "nothing more was restarted" "$T/pace-fills.out" && [ "$(st crew-reviewer .id)" = "$r" ] && [ "$(st crew-orchestrator .id)" = "$o" ]'
+plan 10 10; all_idle; "$F" crew update --wait 5 >/dev/null 2>&1
 api PUT /api/crew/settings '{"pace": false}' >/dev/null; rounds 3; rm -f "$FACTORY_CREW_HOME"/stations/*.pace "$FACTORY_CREW_HOME/pace.json"
 
 # A version nobody can read, or one that is older than a station's, never moves anything.
@@ -365,5 +418,22 @@ echo "" > "$FAKE_CLAUDE_STATE/version"; all_idle; before=$(launches)
 check "no readable version: crew update stops plainly" '[ $rc != 0 ] && grep -q "could not read the Claude Code version" "$T/nover.out" && [ "$(launches)" = "$before" ]'
 newcc 1.0.0; watch1
 check "a station on a newer version than installed is left" '[ "$(launches)" = "$before" ]'
+
+# A helper follows its station onto a new Claude Code (TR-687, D129 A2 overturned): after the other stations,
+# before the orchestrator, in the same conversation. A helper that is busy does not hold the orchestrator back.
+newcc 1.11.2; "$F" spawn helper crew-reviewer probe "look at something" >"$T/helper.out" 2>&1; hn=crew-reviewer-probe
+check "a helper is running, on the installed version" '[ -n "$(st $hn .id)" ] && [ "$(runs $hn)" = 1.11.2 ]'
+newcc 1.12.0; s0=$(st $hn .sessionId); before=$(launches)
+for _ in 1 2 3 4; do all_idle; idle $hn; watch1; done
+check "the helper moves with the watch: four restarts, the helper before the orchestrator, which is last" '[ "$(launches)" = $((before + 4))  ] && set -- $(launched 4) && [ "$4" = crew-orchestrator ] && launched 4 | grep -q "$hn" && [ "$(runs $hn)" = 1.12.0 ] && [ "$(runs crew-orchestrator)" = 1.12.0 ]'
+check "the helper keeps its conversation and is told to load its parent role skill" 'last $hn | jq -e --arg s "$s0" "index(\"--resume\") as \$i | \$i != null and .[\$i+1] == \$s" >/dev/null && last $hn | grep -q "station-reviewer"'
+newcc 1.12.1; before=$(launches)
+for _ in 1 2 3; do all_idle; busy $hn; watch1; done
+check "a busy helper is left alone, and does not hold the orchestrator back" '[ "$(runs crew-orchestrator)" = 1.12.1 ] && [ "$(runs crew-reviewer)" = 1.12.1 ] && [ "$(runs $hn)" = 1.12.0 ]'
+all_idle; idle $hn; watch1
+check "once the helper is idle it moves too" '[ "$(runs $hn)" = 1.12.1 ]'
+newcc 1.12.2
+check "the roster flags an old helper" '"$F" roster 2>&1 | grep "$hn" | grep -q "older than 1.12.2"'
+"$F" retire $hn >/dev/null 2>&1
 
 [ $fail = 0 ] && echo "claude update tests passed" || { echo "claude update tests FAILED"; exit 1; }
