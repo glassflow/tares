@@ -9,6 +9,13 @@ the project follows [Semantic Versioning](https://semver.org/).
 - Console: on the Projects list at 720px and below, a done project now says "done" after its ring
   (TR-696). The count folds away there, so a project with every ticket closed but still active and
   a done project looked alike apart from a shade of colour. A wide screen is unchanged.
+- Factory: cmux says "Waiting for you" about a minute after every crew station's turn ends, even
+  though a station between ticks needs nothing (TR-694). The notice is cmux's own, not Claude
+  Code's, and Claude Code has no setting that drops it while keeping permission prompts. The fix
+  is a cmux option on your side: set `"notifications": {"agentIdleReminder": false}` in
+  `~/.config/cmux/cmux.json`. `tares factory doctor` now reads that file and says when the option
+  is still on, with the exact line to add. It never edits your cmux file, and the stations' own
+  settings leave cmux's permission alerts alone.
 - Console: the Projects list marks each project's kind with an icon (TR-692). A software factory
   project shows the factory emoji instead of the bolt, and every other project now shows an AI SRE
   chip with a heartbeat icon. Both fold to the icon alone at 720px and below, keeping the name in

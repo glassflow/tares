@@ -2709,6 +2709,24 @@ lsp_missing() { # → "language|plugin|binary|install|state|repo" for each repo 
   done < <(project_repo_rows 2>/dev/null || true)
 }
 
+# cmux shows its own "Waiting for you" notice about a minute after any Claude Code turn ends (its
+# notifications.agentIdleReminder, on by default). Claude Code has no setting that drops only its idle
+# notice, and cmux reads this option globally from the person's own file, so doctor reads it and says
+# what to set; the factory never writes it (TR-694).
+cmux_config() { echo "$HOME/.config/cmux/cmux.json"; }
+cmux_idle_reminder() { # → on, off or unreadable; empty when cmux has no config here
+  local f; f=$(cmux_config); [ -f "$f" ] || return 0
+  grep -v '^[[:space:]]*//' "$f" | jq -r 'if .notifications.agentIdleReminder == false then "off" else "on" end' 2>/dev/null || echo unreadable
+}
+doctor_cmux() {
+  case "$(cmux_idle_reminder)" in
+    on) warn "cmux shows \"Waiting for you\" about a minute after every station's turn ends, with nothing for you to do. To stop it and keep the permission alerts, set \"notifications\": {\"agentIdleReminder\": false} in $(cmux_config) (it applies to all your cmux agents; $ME never edits it)" ;;
+    off) ok "cmux's idle reminder is off, so a station between turns does not ask for you; permission alerts stay on" ;;
+    unreadable) warn "could not read $(cmux_config); set \"notifications\": {\"agentIdleReminder\": false} there so cmux stops saying \"Waiting for you\" after every station turn" ;;
+  esac
+  return 0
+}
+
 doctor_lsp() { # per handed-over repo and language: has Claude Code a language server (ok), or what to run (warn)
   local project repo lang plugin bin inst state _n _m cmds
   [ -n "$(project_repo_rows 2>/dev/null)" ] || return 0
@@ -2873,6 +2891,7 @@ cmd_doctor() {
   else
     warn "no crew yet in $CREW_HOME: $ME crew up creates it"
   fi
+  doctor_cmux
   tares_on && doctor_lsp
   if command -v gh >/dev/null; then
     gh auth status >/dev/null 2>&1 && ok "gh signed in" || no "gh not signed in: gh auth login"

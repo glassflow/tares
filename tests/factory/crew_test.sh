@@ -94,6 +94,29 @@ jq --arg v "$mine" '.plugins["tares@tares"][0].version = $v' "$HOME/.claude/plug
 check "the same version installed is fine" '! grep -q "another version of the tares plugin" <<<"$("$F" doctor 2>&1)"'
 rm -f "$HOME/.claude/plugins/installed_plugins.json"
 
+# cmux says "Waiting for you" about a minute after any station's turn ends (its agentIdleReminder, on by
+# default). Claude Code has no setting for dropping only that notice, so doctor reads the person's cmux
+# file and says what to set; it never edits it, and the stations' settings keep cmux's permission alerts.
+cmuxf="$HOME/.config/cmux/cmux.json"
+"$F" doctor >"$T/cmux0.out" 2>&1
+check "no cmux, nothing said about it" '! grep -qi cmux "$T/cmux0.out"'
+mkdir -p "$HOME/.config/cmux"
+printf '// a comment cmux writes\n{\n  "schemaVersion": 1\n}\n' > "$cmuxf"
+"$F" doctor >"$T/cmux1.out" 2>&1
+check "cmux with its default idle reminder: doctor says what to set" 'grep -q "warn  cmux shows \"Waiting for you\" about a minute after every station.s turn ends" "$T/cmux1.out" && grep -q "agentIdleReminder\": false} in $cmuxf" "$T/cmux1.out"'
+printf '{"notifications": {"agentIdleReminder": false}}\n' > "$cmuxf"
+"$F" doctor >"$T/cmux2.out" 2>&1
+check "cmux idle reminder off: doctor is content" 'grep -q "ok    cmux.s idle reminder is off" "$T/cmux2.out" && ! grep -q "Waiting for you" "$T/cmux2.out"'
+printf '{"notifications": {"agentIdleReminder": true}}\n' > "$cmuxf"
+"$F" doctor >"$T/cmux3.out" 2>&1
+check "cmux idle reminder on: doctor warns" 'grep -q "warn  cmux shows" "$T/cmux3.out"'
+printf '{not json' > "$cmuxf"
+"$F" doctor >"$T/cmux4.out" 2>&1
+check "an unreadable cmux file is said, not guessed" 'grep -q "warn  could not read $cmuxf" "$T/cmux4.out"'
+check "doctor never edits the cmux file" '[ "$(cat "$cmuxf")" = "{not json" ]'
+check "stations leave cmux hooks on, so its permission alerts stay" '[ -z "$("$F" settings crew-builder-x builder | jq -r ".env | keys[] | select(test(\"CMUX\"))")" ]'
+rm -rf "$HOME/.config/cmux"
+
 # A second run asks nothing and starts nothing new.
 "$F" crew up </dev/null >"$T/up2.out" 2>&1
 check "second crew up asks nothing" '! grep -q "Choice \[" "$T/up2.out"'
