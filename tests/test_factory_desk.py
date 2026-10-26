@@ -471,17 +471,26 @@ async def main():
         ck("the last line of a paste over 1000 characters answers", len(paste) > 1000
            and out["recorded"] and out["matches_what_they_typed"], (len(paste), out))
         print("== lines Claude Code writes for itself are not what they typed (TR-697) ==")
-        for n, flag in enumerate(("isCompactSummary", "isMeta")):
+        for n, flag in enumerate(("isCompactSummary", "isMeta", "origin", "origin-string")):
             words = f"Go with Adyen for the {flag} line, said a peer"
             dm = json.loads(await mf.desk_add(f"Which gateway {n}?", "Adyen", "default",
                                               project="Shop"))["label"]
             body = ("This session is being continued from a previous conversation. " * 12
                     + "\n" + words + "\n")
+            mark = {"origin": {"kind": "task-notification"}} if flag == "origin" \
+                else {"origin": "task-notification"} if flag == "origin-string" else {flag: True}
             await ingest([{"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": now_plus(6 + n),
-                           flag: True, "message": {"role": "user", "content": body}}])
+                           **mark, "message": {"role": "user", "content": body}}])
             out = json.loads(await mf.desk_answer(dm, words))
             ck(f"a {flag} line, even a long one, does not answer", len(body) > 600
                and out["recorded"] is False, (len(body), out))
+        dh = json.loads(await mf.desk_add("Which gateway, typed?", "Adyen", "default",
+                                          project="Shop"))["label"]
+        typed = "Go with Adyen, said the person, origin human"
+        await ingest([{"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": now_plus(10),
+                       "origin": {"kind": "human"}, "message": {"role": "user", "content": typed}}])
+        out = json.loads(await mf.desk_answer(dh, typed))
+        ck("a line whose origin is human still answers", out["recorded"], out)
 
 
 unit()

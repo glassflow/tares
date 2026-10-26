@@ -75,6 +75,8 @@ class ClaudeCodeConnector(Connector):
         {"name": "model", "help": "model on assistant turns"},
         {"name": "type", "help": "message type (user / assistant / tool_use / …)"},
         {"name": "sidechain", "help": "sub-agent (sidechain) message"},
+        {"name": "meta", "help": "a user line Claude Code wrote itself (compaction summary, skill "
+                                 "body, peer message, task notification), not typed by the person"},
         {"name": "flow", "help": "session flow set from inside Claude Code (e.g. challenger); "
                                  "the plugin stamps it on every line of a marked session"},
         {"name": "tares_project", "help": "the Tares project the session works in; the plugin "
@@ -236,12 +238,23 @@ class ClaudeCodeConnector(Connector):
                 "model": str(msg["model"]) if msg.get("model") else None,
                 "type": str(o.get("type")) if o.get("type") else None,
                 "sidechain": "true" if o.get("isSidechain") else "false",
-                "meta": "true" if o.get("isMeta") or o.get("isCompactSummary") else None,
+                "meta": "true" if self._written_by_harness(o) else None,
                 "flow": str(o["flow"]) if o.get("flow") else None,
                 "tares_project": str(o["tares_project"]) if o.get("tares_project") else None,
                 "station": str(o["factory_station"]) if o.get("factory_station") else None,
                 "subagent": str(o.get("subagent") or o.get("agentId") or "") or None
                 if o.get("isSidechain") or o.get("subagent") else None}
+
+    @staticmethod
+    def _written_by_harness(o: dict) -> bool:
+        """A `user` line the person did not type: a compaction summary, a skill body, a peer
+        message, a task notification. Any origin but a human one counts, so a new kind Claude
+        Code adds stays out by default (TR-697)."""
+        if o.get("isMeta") or o.get("isCompactSummary"):
+            return True
+        origin = o.get("origin")
+        kind = origin.get("kind") if isinstance(origin, dict) else origin
+        return bool(origin) and kind != "human"
 
     # ── mapping: one JSONL object → one Envelope ───────────────────────────────
     def _obj_to_envelope(self, o: dict, redact: bool, include_thinking: bool):
