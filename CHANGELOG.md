@@ -72,6 +72,11 @@ the project follows [Semantic Versioning](https://semver.org/).
   verb now ends at anything but a letter, digit, `_` or `-`. `ls ~/factory down`, a folder named
   factory handed to `ls`, `cat` and the other readers, was refused as if it were the CLI; it now
   runs (TR-688).
+- Factory: the folder-named-factory rule above could be turned into a bypass. A reader written
+  inside a quote (`` X='; ls a' factory down `` or a quote opened on the line before) made the guard
+  blank the word `factory`, although the quote ends before it and the CLI runs. The rule now skips
+  quoted strings as a unit, so a reader only owns the word when it starts a command outside any
+  quote; quoted arguments to a real reader (`ls "my dir" ~/factory down`) still work (TR-690).
 
 ## [1.51.1] - 2026-10-21
 

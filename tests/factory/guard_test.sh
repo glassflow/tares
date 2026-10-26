@@ -120,6 +120,21 @@ t orchestrator Bash 'factory crew down>/dev/null' allow
 # A folder named factory given to a reader is an argument; a command that runs its arguments is not a reader.
 t builder Bash 'ls ~/factory down' allow
 t builder Bash 'ls -la ~/factory halt' allow
+t builder Bash 'ls "my dir" ~/factory down' allow
+t builder Bash "cat 'a b' ~/factory halt" allow
+# A reader inside a quote owns nothing: the quote ends before factory, which then runs with the assignment prefix.
+t builder Bash 'X="
+ls a" factory down' deny
+t builder Bash "X='; ls a' factory down" deny
+t builder Bash "X='
+ls a' factory down" deny
+t builder Bash 'FOO="x
+cat a" factory restart crew-reviewer' deny
+t builder Bash 'env FOO="
+cat a" /abs/bin/factory crew down' deny
+t builder Bash 'X="$(ls a)" factory down' deny
+t orchestrator Bash 'X="
+ls a" factory crew down' allow
 t builder Bash 'ls ~/factory; /abs/bin/factory crew down' deny
 t builder Bash 'ls x;/abs/bin/factory crew down' deny
 t builder Bash 'find . -exec /abs/bin/factory crew down {} \;' deny
