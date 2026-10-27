@@ -686,6 +686,25 @@ async def main():
         ck("and through the MCP tool", not out.startswith("error")
            and json.loads(out)["signoffs"][0]["signed_off"] is True, out)
 
+        print("== only those two routes take an ordinary key; the rest of a project stays admin ==")
+        for label, method, path, body in (
+            ("asking an area owner", "POST", f"/api/projects/{pl}/questions", {"repo": "acme/plain", "text": "x"}),
+            ("handing over", "POST", f"/api/projects/{pl}/handover", {}),
+            ("changing the project", "PATCH", f"/api/projects/{pl}", {"scope": "private"}),
+        ):
+            r = await call("ashish_plain", method, path, body)
+            ck(f"a plain key bound to the lead cannot do {label}: 403 on the admin scope",
+               r.status_code == 403 and "admin" in r.text, f"{r.status_code} {r.text}")
+        pp = await make_project("ashish", "signoff-plain-private")
+        await ticket("ashish", pp, "private work", "acme/plain")
+        await call("ashish", "POST", f"/api/projects/{pp}/questions", {"repo": "acme/plain", "text": "Which port?"})
+        r = await call("ashish", "PATCH", f"/api/projects/{pp}", {"scope": "private"})
+        ck("set up: a private project", r.status_code < 300, r.text)
+        r = await call("lee_plain", "POST", f"/api/projects/{pp}/questions/Q1/answer", {"answer": "x"})
+        ck("a plain key of a non-member gets 404 on answering", r.status_code == 404, f"{r.status_code} {r.text}")
+        r = await call("lee_plain", "POST", f"/api/projects/{pp}/signoffs", {"repo": "acme/plain"})
+        ck("and 404 on signing off", r.status_code == 404, f"{r.status_code} {r.text}")
+
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
 
