@@ -98,12 +98,16 @@ async def _refresh(store, uid: str) -> None:
                            "linked_by": "branch"}
                 store.update_ticket(t["id"], pr=t["pr"])
     sem = asyncio.Semaphore(_READS_AT_ONCE)
+    linked = [t for t in tickets if t["pr"] and t["pr"].get("repo")]
+    lasts = store.last_reviews([t["id"] for t in linked])
 
     async def one(t: dict) -> None:
         pr = t["pr"]
         if factory_github.stale(pr):
             async with sem:
                 pr = await factory_github.read_pr(store, pr["repo"], int(pr["number"]), pr)
+        elif not _follows(t, pr, lasts.get(t["id"])):
+            return               # not read again and nothing to write: skip the re-read below
         cur = store.get_ticket(uid, t["id"])   # re-read: a set_stage may have run meanwhile
         if cur is None or not cur["pr"] or (cur["pr"].get("repo"), cur["pr"].get("number")) != (
                 pr.get("repo"), pr.get("number")):
@@ -125,8 +129,16 @@ async def _refresh(store, uid: str) -> None:
                                      "GitHub shows the pull request merged", "github", "github",
                                      now_utc())
 
-    await asyncio.gather(*(one(t) for t in tickets if t["pr"] and t["pr"].get("repo")),
-                         return_exceptions=True)
+    await asyncio.gather(*(one(t) for t in linked), return_exceptions=True)
+
+
+def _follows(t: dict, pr: dict, last: dict | None) -> bool:
+    """Whether a PR that was not read again still changes the ticket: a merge it does not show
+    yet, or new commits after the verdict that asked for changes (the same tests `one` makes)."""
+    if merged_fields(t, pr):
+        return True
+    return bool(t["stage"] == "changes" and last and pr.get("head")
+                and not verdict_now({"pr": pr}, last)["current"])
 
 
 def verdict_now(t: dict, last: dict | None) -> dict | None:
@@ -185,11 +197,12 @@ def pr_note(t: dict) -> str | None:
     return None
 
 
-def project_progress(store, uid: str) -> dict:
+def project_progress(store, uid: str, tickets: list[dict] | None = None) -> dict:
     """Tickets done of all, by stage, and the first milestone with work left: what the crew's
     project list shows (canceled tickets count as done here), and `progress`, the same tickets
-    as the console's ring counts them (canceled kept out, tares/factory.py `progress`)."""
-    tickets = store.list_tickets(uid)
+    as the console's ring counts them (canceled kept out, tares/factory.py `progress`). `tickets`
+    is the project's tickets when the caller already read them."""
+    tickets = store.list_tickets(uid) if tickets is None else tickets
     done = [t for t in tickets if (t["stage"] in ("merged", "shipped")
                                    or t["status"] in factory_mod.DONE_STATUSES)]
     stages: dict[str, int] = {}
@@ -452,21 +465,25 @@ def register(app, store, h: SimpleNamespace) -> None:
         when stricter than the crew's, its tickets by stage, the milestone it is on, and which
         tickets each repo has. The orchestrator works from this list (TR-462)."""
         names = {p["id"]: p["name"] for p in store.list_projects()}
+        active = store.handed_over_projects(finished=False, taken=False)
+        finished = store.handed_over_projects(finished=True)
+        # every listed project's tickets in one query, shared by progress and repos
+        tk = store.tickets_by_project(sorted({u for u in [*active, *finished] if u in names}))
         out = []
-        for uid in store.handed_over_projects(finished=False, taken=False):
+        for uid in active:
             if uid not in names:
                 continue
             ho = store.get_handover(uid) or {}
-            out.append({"id": uid, "name": names[uid], **project_progress(store, uid),
-                        "repos": repo_rows(uid, ho.get("repos") or []),
+            out.append({"id": uid, "name": names[uid], **project_progress(store, uid, tk[uid]),
+                        "repos": repo_rows(uid, ho.get("repos") or [], tk[uid]),
                         "autonomy": ho.get("autonomy"), "handed_over_at": ho.get("at"),
                         "handed_over_by": ho.get("by")})
         out.sort(key=lambda p: str(p["handed_over_at"] or ""))
         done = []
-        for uid in store.handed_over_projects(finished=True):
+        for uid in finished:
             if uid in names:
                 ho = store.get_handover(uid) or {}
-                done.append({"id": uid, "name": names[uid], **project_progress(store, uid),
+                done.append({"id": uid, "name": names[uid], **project_progress(store, uid, tk[uid]),
                              "finished": ho.get("finished")})
         done.sort(key=lambda p: str((p["finished"] or {}).get("at") or ""), reverse=True)
         releasing = []
@@ -674,8 +691,9 @@ def register(app, store, h: SimpleNamespace) -> None:
             h.err(e)
         return [ticket_or_404(uid, r)["id"] for r in refs]
 
-    def assumption_out(uid: str, a: dict) -> dict:
-        by_id = {t["id"]: t for t in store.list_tickets(uid)}
+    def assumption_out(uid: str, a: dict, by_id: dict | None = None) -> dict:
+        if by_id is None:
+            by_id = {t["id"]: t for t in store.list_tickets(uid)}
         return {**a, "tickets": [factory_mod.label(by_id[t]) for t in a["tickets"] if t in by_id]}
 
     @app.post("/api/projects/{uid}/assumptions", status_code=201)
@@ -699,7 +717,9 @@ def register(app, store, h: SimpleNamespace) -> None:
         st = state.strip().lower() or None
         if st and st not in factory_mod.ASSUMPTION_STATES:
             h.err(ValueError("state is one of: " + ", ".join(factory_mod.ASSUMPTION_STATES)))
-        return {"assumptions": [assumption_out(uid, a) for a in store.list_assumptions(uid, st)]}
+        by_id = {t["id"]: t for t in store.list_tickets(uid)}
+        return {"assumptions": [assumption_out(uid, a, by_id)
+                                for a in store.list_assumptions(uid, st)]}
 
     @app.post("/api/projects/{uid}/assumptions/{ref}/state")
     async def decide_assumption(uid: str, ref: str, request: Request, body: dict = Body(...)):
@@ -1578,12 +1598,12 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {"project": uid, "name": p["name"],
                 "takeover": store.get_handover(uid)["takeover"]}
 
-    def pr_row(t: dict) -> dict:
+    def pr_row(t: dict, last: dict | None) -> dict:
         """A ticket's pull request as the GitHub section shows it: what GitHub said when Tares last
-        read it (title, CI, the factory/review status), and the crew's own last verdict."""
+        read it (title, CI, the factory/review status), and the crew's own last verdict (`last`,
+        its latest review round)."""
         pr = t["pr"] or {}
-        last = store.ticket_reviews(t["id"])[-1:]
-        v = verdict_now(t, last[0] if last else None)
+        v = verdict_now(t, last)
         return {"url": pr["url"], "ticket": factory_mod.label(t), "number": pr.get("number"),
                 "title": pr.get("title") or t["title"], "branch": pr.get("branch"),
                 "head": (pr.get("head") or "")[:7] or None, "ci": pr.get("ci"),
@@ -1593,11 +1613,13 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "merged_at": pr.get("merged_at"), "checked_at": pr.get("checked_at"),
                 "error": pr.get("error")}
 
-    def repo_rows(uid: str, repos: list[dict]) -> list[dict]:
+    def repo_rows(uid: str, repos: list[dict], tickets: list[dict] | None = None) -> list[dict]:
         """Each hand-over repo with the tickets that change it, their open pull requests (newest
         first) and the ones merged. A ticket with no repo belongs to the first one; a repo only
-        tickets name is added. `github_error` says when Tares could not read GitHub for it."""
-        tickets = store.list_tickets(uid)
+        tickets name is added. `github_error` says when Tares could not read GitHub for it.
+        `tickets` is the project's tickets when the caller already read them."""
+        tickets = store.list_tickets(uid) if tickets is None else tickets
+        lasts = store.last_reviews([t["id"] for t in tickets if (t["pr"] or {}).get("url")])
         rows = [{**r, "tickets": [], "open_prs": [], "merged_prs": [], "github_error": None}
                 for r in repos]
         for t in tickets:
@@ -1622,9 +1644,9 @@ def register(app, store, h: SimpleNamespace) -> None:
             if pr.get("error"):
                 row["github_error"] = pr["error"]
             if pr.get("merged") or (done and pr.get("state") != "closed"):
-                row["merged_prs"].append(pr_row(t))
+                row["merged_prs"].append(pr_row(t, lasts.get(t["id"])))
             elif pr.get("state") != "closed":
-                row["open_prs"].append(pr_row(t))
+                row["open_prs"].append(pr_row(t, lasts.get(t["id"])))
         for row in rows:
             row["open_prs"].sort(key=lambda p: -(p["number"] or 0))
             row["merged_prs"].sort(key=lambda p: -(p["number"] or 0))
