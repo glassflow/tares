@@ -108,7 +108,6 @@ the project follows [Semantic Versioning](https://semver.org/).
 - `TARES_METRICS_TOKEN` closes `/metrics`: when set, a scrape needs `Authorization: Bearer <token>`
   and anything else gets 401. Unset, `/metrics` stays public as before (TR-653).
 
-
 ### Fixed
 - Factory: `desk_answer` finds every line of a long pasted reply (TR-697). A reply of more than
   about 500 characters was stored cut off, so its later lines were "not found" and only the first
