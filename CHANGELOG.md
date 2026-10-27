@@ -48,6 +48,13 @@ the project follows [Semantic Versioning](https://semver.org/).
   itself (`/api/projects` gains `activity_at`). The software factory tag is a small icon chip with
   a legend, and the table keeps its layout at narrow widths. The view lives in the address
   (`?show=`, `?sort=`, `?q=`, `?goals=1`), so a link or a reload keeps it.
+- A factory project's tickets list reads every working doc's title and every ticket's last review
+  in one query each, instead of a few queries per ticket (TR-657).
+- The review queue reads the tickets in review across every project, when each went to review and
+  its last review in one query each, instead of every project's whole ticket list and a few
+  queries per ticket (TR-648).
+- The projects list reads the catalog once and every software factory project's tickets in one
+  query, instead of both once per project (TR-659).
 
 ### Added
 - Factory: `factory doctor` reads each handed-over repo's languages from its manifests (Python,
@@ -95,6 +102,10 @@ the project follows [Semantic Versioning](https://semver.org/).
   retrying. `crew update --wait 00` waits without a deadline, and the message for a caller that is
   not behind, or whose watch will not move it (`claude_update` off, a frozen crew), no longer
   promises a move by the watch (TR-687).
+- `/metrics` times every HTTP request: `tares_http_request_duration_seconds{route, method, status}`,
+  labelled by route template (such as `/api/projects/{uid}/tickets`), never by a raw path or ID
+  (TR-652).
+
 
 ### Fixed
 - Factory: `desk_answer` finds every line of a long pasted reply (TR-697). A reply of more than

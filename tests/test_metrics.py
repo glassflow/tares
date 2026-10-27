@@ -131,6 +131,28 @@ async def main():
             body = (await cx.get("/metrics")).text
             ck("a blocked loop counts as a stall", (sample(body, "tares_event_loop_stalls_total") or 0) >= 1, str(sample(body, "tares_event_loop_stalls_total")))
 
+            print("== request timing per route (TR-652) ==")
+            auth = {"Authorization": "Bearer metrics-test-token"}
+            for pid in ("uc_routeone1", "uc_routetwo2"):
+                await cx.get(f"/api/projects/{pid}/tickets", headers=auth)
+            await cx.get("/some/console/page")
+            await cx.get("/api/no/such/route", headers=auth)
+            body = (await cx.get("/metrics")).text
+            ck("one series per route template, both requests in it",
+               sample(body, "tares_http_request_duration_seconds_count",
+                      route="/api/projects/{uid}/tickets", method="GET", status="4xx") == 2.0,
+               str(sample(body, "tares_http_request_duration_seconds_count",
+                          route="/api/projects/{uid}/tickets")))
+            ck("no ID in any label", "uc_routeone1" not in body and "uc_routetwo2" not in body)
+            ck("a path outside the API is labelled static, not by its path",
+               "/some/console/page" not in body
+               and (sample(body, "tares_http_request_duration_seconds_count", route="static") or 0) >= 1)
+            ck("an unknown API path is labelled unmatched",
+               "/api/no/such/route" not in body
+               and (sample(body, "tares_http_request_duration_seconds_count", route="unmatched") or 0) >= 1)
+            ck("/metrics itself is not timed",
+               sample(body, "tares_http_request_duration_seconds_count", route="/metrics") is None)
+
             print("== nothing sensitive in the body ==")
             ck("no entity keys or payload text", "checkout" not in body and "e0" not in body.split("tares_")[0])
 
