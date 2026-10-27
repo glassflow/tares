@@ -694,10 +694,11 @@ async def main():
         ):
             r = await call("ashish_plain", method, path, body)
             ck(f"a plain key bound to the lead cannot do {label}: 403 on the admin scope",
-               r.status_code == 403 and "admin" in r.text, f"{r.status_code} {r.text}")
+               r.status_code == 403 and "lacks the 'admin' scope" in r.text, f"{r.status_code} {r.text}")
         pp = await make_project("ashish", "signoff-plain-private")
         await ticket("ashish", pp, "private work", "acme/plain")
-        await call("ashish", "POST", f"/api/projects/{pp}/questions", {"repo": "acme/plain", "text": "Which port?"})
+        r = await call("ashish", "POST", f"/api/projects/{pp}/questions", {"repo": "acme/plain", "text": "Which port?"})
+        ck("set up: a question on the private project", r.status_code == 201, f"{r.status_code} {r.text}")
         r = await call("ashish", "PATCH", f"/api/projects/{pp}", {"scope": "private"})
         ck("set up: a private project", r.status_code < 300, r.text)
         r = await call("lee_plain", "POST", f"/api/projects/{pp}/questions/Q1/answer", {"answer": "x"})

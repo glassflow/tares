@@ -317,8 +317,9 @@ in every call, and the person's own words in anything you write.
    edit where the ticket lives: `write_ticket` (and `write_doc` for its working doc) for Tares
    tickets, Linear's `save_issue` for Linear ones, `gh issue edit` for GitHub ones. A ticket that
    changes a repo this person does not own is not theirs to edit: tell the lead instead. Editing a
-   ticket or its working doc needs a key with the `admin` scope, and an ordinary key (read and
-   ingest) is refused with 403 "this credential lacks the 'admin' scope". On that 403, do not retry
+   Tares ticket or its working doc (`write_ticket`, `write_doc`) needs a key with the `admin`
+   scope, and an ordinary key (read and ingest) is refused with 403 "this credential lacks the
+   'admin' scope". Linear and GitHub edits do not go through the Tares key. On that 403, do not retry
    and do not go around it: write the change the person wants, ticket by ticket, in your reply and
    tell the user to pass it to <lead>, who makes it. Answering and signing off still work.
 5. For each repo the user says is right ("yes, acme/web is good"), call `sign_off(repo, project)`.

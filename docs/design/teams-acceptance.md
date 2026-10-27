@@ -140,10 +140,9 @@ scope", the cell image is older than the fix and Before you start was not finish
 On the project page, Q1 shows as answered and `factory-test-web` shows **Signed off**.
 
 Then Kiran closes this terminal. That is not enough on its own: the session wrote the narrow key to
-`~/factory/.tares-token`, and `tares factory roster` or `crew down` from a terminal with
-`TARES_AUTH_TOKEN` set writes it again. The crew falls back to that file when the saved login is not
-used. To be sure, Kiran runs `tares factory crew up` from a clean terminal (no `TARES_AUTH_TOKEN`, no
-`TARESD_URL`), which rewrites the file from the login.
+`~/factory/.tares-token`, and the crew's stations read only that file. The next step, Build, runs
+`tares factory crew up` from a clean terminal (no `TARES_AUTH_TOKEN`, no `TARESD_URL`), which copies
+the saved login key over it. Do not start a crew from the contributor terminal before that.
 
 Ashish then hands over from the spec session. The hand-over is refused while Kiran's repo has no
 sign-off, and goes through once it has one. `factory-test-api` is Ashish's own repo and needs no
