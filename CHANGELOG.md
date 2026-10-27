@@ -105,6 +105,8 @@ the project follows [Semantic Versioning](https://semver.org/).
 - `/metrics` times every HTTP request: `tares_http_request_duration_seconds{route, method, status}`,
   labelled by route template (such as `/api/projects/{uid}/tickets`), never by a raw path or ID
   (TR-652).
+- `TARES_METRICS_TOKEN` closes `/metrics`: when set, a scrape needs `Authorization: Bearer <token>`
+  and anything else gets 401. Unset, `/metrics` stays public as before (TR-653).
 
 
 ### Fixed

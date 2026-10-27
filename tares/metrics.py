@@ -6,6 +6,9 @@ its limit, trigger evaluations and how long they take, the event loop's lag, and
 HTTP route takes (`tares_http_request_duration_seconds`, TR-652). Labels name the source, agent,
 provider, route template or status; never an entity key, an ID or anything from a payload.
 
+The endpoint is public unless TARES_METRICS_TOKEN is set; then it wants
+`Authorization: Bearer <token>` (TR-653).
+
 Every hook here is a no-op when the client library is missing, so nothing else in the daemon
 guards its calls. The endpoint answers 404 in that case.
 """
