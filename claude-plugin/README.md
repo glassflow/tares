@@ -10,8 +10,8 @@ One install wires Claude Code to Tares in **both directions**:
   `{tares_url}/ingest/claude_code`.
 
 Both wires are configured once on install (`tares_url`, `mcp_url`, optional auth `access_token`,
-and a `stream_sessions` toggle). Challenger sessions (below) add `challenger_mode`, `codex_bin` and
-`codex_sandbox`.
+and a `stream_sessions` toggle). Challenger sessions (below) add `challenger_mode`, `challenger_backend`,
+`codex_bin`, `codex_sandbox`, `xai_api_key` and `grok_model`.
 
 ## Prerequisites
 
@@ -68,7 +68,7 @@ Say "make this a challenger session" (or type `/tares:challenger`) at the start 
 Claude calls the `set_session_flow` MCP tool; the shipper sees that call in the transcript, marks
 the session locally and on Tares, and from then on:
 
-- when Claude leaves plan mode, the OpenAI Codex CLI on your laptop critiques the plan and Claude
+- when Claude leaves plan mode, the OpenAI Codex CLI on your laptop (or Grok, below) critiques the plan and Claude
   gets the findings before you see the plan (advisory; only `[P1]` counts as blocking on a plan);
 - after every `git commit` Claude makes, Codex reviews the commit. `[P1]`/`[P2]` findings block
   Claude until it fixes and amends (strict, the default) or come back as context (`challenger_mode`
@@ -85,6 +85,15 @@ history live under `.git/` (`tares-challenger-*`), never in the working tree.
 Needs `codex` on PATH (`npm install -g @openai/codex && codex login`) or the `codex_bin` option;
 reviews are billed to your OpenAI account and Tares never calls Codex. If reviews come back
 INCONCLUSIVE inside an already sandboxed session, set `codex_sandbox` to `danger-full-access`.
+
+To have Grok challenge instead of Codex, set `challenger_backend` to `grok` and give it an xAI key
+(`xai_api_key`, or `XAI_API_KEY` in the environment). Grok gets one API call per review: the
+commit's patch plus the full text of each changed file, or the plan. It cannot run the project's
+commands, so it reasons from the code only. A reply has to end on `VERDICT: CLEAN` to pass; one
+without findings or a verdict line is INCONCLUSIVE. `grok_model` defaults to `grok-4.6`; a
+non-reasoning model invents findings, so keep a reasoning one. Reviews are billed to your xAI
+account (about 2 US cents for a small commit). Grok raises real but minor `[P2]` findings often
+enough that `challenger_mode` = `advise` is the calmer start.
 
 The mechanism follows [andreidavid/codex-review](https://github.com/andreidavid/codex-review)
 (MIT): post-commit review, priority-tagged findings, the blocking fix loop, plan critique, state in

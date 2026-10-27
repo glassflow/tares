@@ -5,6 +5,16 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Plugin: Grok can be the challenger's second model instead of Codex. Set `challenger_backend` to
+  `grok` and give the plugin an xAI key (`xai_api_key`, or `XAI_API_KEY`). Each plan or commit is
+  reviewed in one xAI API call over the patch and the changed files, with the same priority tags,
+  fix loop, waivers and Tares record as Codex. A reply passes only when it ends on an explicit
+  `VERDICT: CLEAN`; one that names nothing and gives no verdict is inconclusive. The challenge line
+  shipped to Tares now names the `reviewer` (codex or grok) and, for Grok, the `model`. Codex stays
+  the default. Running Codex itself against xAI does not work: xAI rejects Codex's second turn
+  ("Could not decode the compaction blob").
+
 ## [1.52.0] - 2026-10-27
 
 The Projects list reads as a work queue, the software factory crew paces itself and moves onto

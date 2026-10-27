@@ -1,9 +1,9 @@
 """The plugin side of the challenger workflow (TR-198, TR-199, TR-200): the shipper marks a
 session when it sees the set_session_flow call, stamps flow on every line and writes the
-session_flow / session_end lines; the challenger hooks review plans and commits with a fake Codex,
-block and loop like codex-review, ship challenge events to a fake Tares, and stay inert for an
+session_flow / session_end lines; the challenger hooks review plans and commits with a fake Codex
+(and with Grok against a fake xAI endpoint), block and loop like codex-review, ship challenge events to a fake Tares, and stay inert for an
 unmarked session; SessionStart hands accepted memory to Claude.
-Run: .venv/bin/python tests/test_plugin_challenger.py   (no Codex, no daemon, no network)
+Run: .venv/bin/python tests/test_plugin_challenger.py   (no Codex, no xAI, no daemon, no network)
 """
 import json
 import os
@@ -37,6 +37,9 @@ INGESTED = []
 MEMORY = [{"key": "shop", "event_type": "decision", "text": "The shop repo runs tests with make test."},
           {"key": "other", "event_type": "decision", "text": "not this repo"},
           {"key": "shop", "event_type": "observation", "text": "not accepted memory"}]
+# ── and a fake xAI chat-completions endpoint for the Grok backend ────────────
+XAI = []                                   # (path, authorization, request body) per call
+GROK = {"status": 200, "reply": ""}
 
 
 class FakeTares(BaseHTTPRequestHandler):
@@ -54,6 +57,16 @@ class FakeTares(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("content-length") or 0)
         raw = self.rfile.read(n).decode()
+        if self.path == "/v1/chat/completions":
+            XAI.append((self.path, self.headers.get("authorization"), json.loads(raw)))
+            if GROK["status"] != 200:
+                self.send_response(GROK["status"]); self.end_headers(); self.wfile.write(b'{"error":"down"}')
+                return
+            body = json.dumps({"choices": [{"message": {"role": "assistant", "content": GROK["reply"]}}],
+                               "usage": {"prompt_tokens": 10, "completion_tokens": 5}}).encode()
+            self.send_response(200); self.send_header("content-type", "application/json")
+            self.end_headers(); self.wfile.write(body)
+            return
         if self.path == "/api/sources":
             self.send_response(409); self.end_headers(); return
         if self.path == "/ingest/claude_code":
@@ -119,7 +132,9 @@ def main():
 
     env = clean_env(CLAUDE_PLUGIN_OPTION_TARES_URL=base, CLAUDE_PLUGIN_DATA=data_dir,
                     CLAUDE_PLUGIN_OPTION_CODEX_BIN=codex, FAKE_CODEX_MODE=mode_file,
-                    FAKE_CODEX_LOG=log_file, TARES_CHALLENGER_MAX_LOOPS="3")
+                    FAKE_CODEX_LOG=log_file, TARES_CHALLENGER_MAX_LOOPS="3",
+                    TARES_CHALLENGER_BACKEND=None, XAI_API_KEY=None, XAI_BASE_URL=None,
+                    TARES_GROK_MODEL=None)
     sid = "sess-abc"
     hook = {"session_id": sid, "transcript_path": transcript, "cwd": repo}
 
@@ -257,6 +272,76 @@ def main():
     o, _ = run(CHAL, commit("v8"), {**env, "CLAUDE_PLUGIN_OPTION_CHALLENGER_MODE": "advise"})
     ctx = o.get("hookSpecificOutput", {}).get("additionalContext", "")
     check("advise mode never blocks", "decision" not in o and "Advise mode" in ctx, str(o)[:200])
+
+    print("== grok backend ==")
+    genv = {**env, "CLAUDE_PLUGIN_OPTION_CHALLENGER_BACKEND": "grok", "XAI_API_KEY": "test-key",
+            "XAI_BASE_URL": base + "/v1"}
+    before = len(codex_calls())
+    GROK["reply"] = ("Reviewed.\n[P1] Clicks counted before the 404 check\n  a.txt:3 counts a miss\n"
+                     "[P3] Naming nit\nVERDICT: FINDINGS")
+    o, p = run(CHAL, commit("grok v1"), genv)
+    check("grok findings block in strict mode, named as Grok",
+          isinstance(o, dict) and o.get("decision") == "block" and o.get("reason", "").startswith("Grok review")
+          and "[P1] Clicks counted" in o.get("reason", ""), str(o)[:300] + p.stderr[:300])
+    path, auth, body = XAI[-1]
+    user = body["messages"][-1]["content"]
+    check("one xAI call with the key, the default model and temperature 0",
+          auth == "Bearer test-key" and body["model"] == "grok-4.6" and body["temperature"] == 0, str(body)[:200])
+    check("grok is handed the commit message, the patch and the changed file at that commit",
+          "grok v1" in user and "+grok v1" in user and "===== a.txt at " in user, user[:400])
+    check("codex never ran on the grok backend", len(codex_calls()) == before)
+    ev = INGESTED[-1]
+    check("challenge_commit names the reviewer and model",
+          ev["type"] == "challenge_commit" and ev["challenge"]["verdict"] == "FAIL"
+          and ev["challenge"]["reviewer"] == "grok" and ev["challenge"]["model"] == "grok-4.6"
+          and ev["challenge"]["blocking_count"] == 1 and ev["challenge"]["finding_count"] == 2, json.dumps(ev)[:300])
+
+    GROK["reply"] = "Every hunk read; nothing wrong.\nVERDICT: CLEAN"
+    o, _ = run(CHAL, commit("grok v2"), genv)
+    ctx = o.get("hookSpecificOutput", {}).get("additionalContext", "")
+    check("an explicit VERDICT: CLEAN passes", "decision" not in o and "passed" in ctx, str(o)[:200])
+    o, _ = run(CHAL, {**hook, "hook_event_name": "Stop", "stop_hook_active": False}, genv)
+    check("stop free after a grok pass", o == {}, str(o))
+
+    GROK["reply"] = "Looks fine to me."
+    o, _ = run(CHAL, commit("grok v3"), genv)
+    ctx = o.get("hookSpecificOutput", {}).get("additionalContext", "")
+    check("no findings and no verdict line is INCONCLUSIVE, never a pass",
+          "decision" not in o and "INCONCLUSIVE" in ctx and INGESTED[-1]["challenge"]["verdict"] == "INCONCLUSIVE",
+          str(o)[:200])
+
+    GROK["status"] = 500
+    o, _ = run(CHAL, commit("grok v4"), genv)
+    ctx = o.get("hookSpecificOutput", {}).get("additionalContext", "")
+    check("an xAI error comes back as context, not a block", "decision" not in o and "xAI answered 500" in ctx,
+          str(o)[:200])
+    GROK["status"] = 200
+
+    GROK["reply"] = "[P1] No migration for the new column\nVERDICT: FINDINGS"
+    o, p = run(CHAL, {**hook, "hook_event_name": "PostToolUse", "tool_name": "ExitPlanMode",
+                      "tool_input": {"plan": "# Plan\n1. add clicks"}}, genv)
+    ctx = o.get("hookSpecificOutput", {}).get("additionalContext", "") if isinstance(o, dict) else ""
+    check("grok plan review is advisory context with the finding",
+          "decision" not in o and ctx.startswith("Grok challenged the plan") and "[P1] No migration" in ctx,
+          str(o)[:300] + p.stderr[:300])
+    check("the plan text reached grok", "1. add clicks" in XAI[-1][2]["messages"][-1]["content"])
+    ev = INGESTED[-1]
+    check("challenge_plan names the reviewer", ev["type"] == "challenge_plan" and ev["challenge"]["reviewer"] == "grok")
+
+    calls = len(XAI)
+    nokey = {k: v for k, v in genv.items() if k != "XAI_API_KEY"}
+    o, _ = run(CHAL, {**hook, "hook_event_name": "PostToolUse", "tool_name": "ExitPlanMode",
+                      "tool_input": {"plan": "# Plan"}}, nokey)
+    ctx = o.get("hookSpecificOutput", {}).get("additionalContext", "")
+    check("no xAI key: the plan hook says so instead of calling xAI", "xAI key is not set" in ctx and len(XAI) == calls,
+          str(o)[:200])
+    o, _ = run(CHAL, commit("grok v5"), nokey)
+    check("no xAI key: commits are not reviewed", o == {} and len(XAI) == calls, str(o)[:200])
+
+    set_mode("pass")
+    o, _ = run(CHAL, commit("codex again"), env)
+    check("without the option codex stays the reviewer",
+          len(codex_calls()) == before + 1 and INGESTED[-1]["challenge"]["reviewer"] == "codex", str(o)[:200])
 
     print("== session end ==")
     run(SHIP, {**hook, "hook_event_name": "SessionEnd"}, env)
