@@ -255,6 +255,34 @@ FACTORY_SCHEMA = [
       UNIQUE (person_id, name, machine)
     )""",
     "ALTER TABLE session_stations ADD COLUMN IF NOT EXISTS crew_id TEXT",
+    # Questions a spec asks of the owner of a repo (TR-636): numbered Q1, Q2... per project, asked
+    # by a person and addressed to a person; state open until the addressee answers.
+    """CREATE TABLE IF NOT EXISTS spec_questions (
+      project       TEXT,
+      id            TEXT,
+      to_person_id  TEXT,
+      repo          TEXT,
+      text          TEXT,
+      asked_by      TEXT,
+      asked_at      TIMESTAMPTZ,
+      answer        TEXT,
+      answered_by   TEXT,
+      answered_at   TIMESTAMPTZ,
+      state         TEXT,
+      PRIMARY KEY (project, id)
+    )""",
+    # The owner of a repo saying the tickets in their repo are right (TR-636); the hand-over waits
+    # for one per repo. One row per repo and project: signing again keeps the first.
+    """CREATE TABLE IF NOT EXISTS signoffs (
+      project    TEXT,
+      repo       TEXT,
+      person_id  TEXT,
+      "at"       TIMESTAMPTZ,
+      PRIMARY KEY (project, repo)
+    )""",
+    # A hand-over the project lead pushed through without every sign-off, and why (TR-636).
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS override_reason TEXT",
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS override_at TIMESTAMPTZ",
 ]
 
 # Words that say "a session" and not a station: shown without parentheses next to a person's name.
@@ -344,6 +372,8 @@ class FactoryStore:
         self.con.execute("DELETE FROM grants WHERE project = ?", [uid])
         self.con.execute("DELETE FROM decisions WHERE project = ?", [uid])
         self.con.execute("DELETE FROM handovers WHERE project = ?", [uid])
+        self.con.execute("DELETE FROM spec_questions WHERE project = ?", [uid])
+        self.con.execute("DELETE FROM signoffs WHERE project = ?", [uid])
 
     # ── milestones (TR-411) ───────────────────────────────────────────────────
     _MS_COLS = "id, project, owner, external_id, name, goal, checks, position, created_at, updated_at"
@@ -1006,25 +1036,31 @@ class FactoryStore:
     # ── hand-over to the crew (TR-425) ────────────────────────────────────────
     def set_handover(self, project: str, repos: list[dict], autonomy: str | None,
                      by: str | None, at, person_id: str | None = None,
-                     crew: str | None = None) -> None:
+                     crew: str | None = None, override_reason: str | None = None) -> None:
         """Record the hand-over: `repos` is the whole list (the caller merges it with the one
         already kept); `repo` keeps the first path for older readers. `crew` is the name of the
-        crew of whoever handed it over (TR-633)."""
+        crew of whoever handed it over (TR-633). `override_reason` is why the project lead handed
+        it over without every area owner's sign-off (TR-636); a later hand-over with none keeps it."""
         first = next((r["path"] for r in repos if r.get("path")), None)
         with self._lock:
             self.con.execute(
                 "INSERT INTO handovers (project, repo, handed_by, handed_at, repos, autonomy, "
-                "person_id, crew) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "person_id, crew, override_reason, override_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (project) DO UPDATE SET "
                 "repo = excluded.repo, handed_by = excluded.handed_by, "
-                "person_id = excluded.person_id, crew = excluded.crew, finished_person_id = NULL, "
+                "person_id = excluded.person_id, crew = excluded.crew, "
+                "override_reason = COALESCE(excluded.override_reason, handovers.override_reason), "
+                "override_at = COALESCE(excluded.override_at, handovers.override_at), "
+                "finished_person_id = NULL, "
                 "taken_person_id = NULL, "
                 "handed_at = excluded.handed_at, repos = excluded.repos, "
                 "autonomy = excluded.autonomy, finished_at = NULL, finished_words = NULL, "
                 "finished_decision = NULL, finished_by = NULL, taken_at = NULL, "
                 "taken_words = NULL, taken_by = NULL, released_at = NULL",
                 [project, first, by or None, at, json.dumps(repos), autonomy or None,
-                 person_id or None, crew or None])
+                 person_id or None, crew or None, override_reason or None,
+                 at if override_reason else None])
 
     def handed_over_projects(self, finished: bool | None = None,
                              taken: bool | None = None) -> list[str]:
@@ -1073,8 +1109,8 @@ class FactoryStore:
             r = self.con.execute("SELECT repo, handed_by, handed_at, repos, autonomy, "
                                  "finished_at, finished_words, finished_decision, finished_by, "
                                  "taken_at, taken_words, taken_by, released_at, person_id, "
-                                 "finished_person_id, taken_person_id, crew "
-                                 "FROM handovers WHERE project = ?", [project]).fetchone()
+                                 "finished_person_id, taken_person_id, crew, override_reason, "
+                                 "override_at FROM handovers WHERE project = ?", [project]).fetchone()
         if not r:
             return None
         repos = json.loads(r[3]) if r[3] else ([{"path": r[0], "name": None}] if r[0] else [])
@@ -1082,6 +1118,8 @@ class FactoryStore:
         out = {"repo": r[0], "repos": repos, "autonomy": r[4], "by": r[1], "at": r[2],
                "person": refs.get(r[13]), "by_label": by_label(refs.get(r[13]), r[1]),
                "handed_by_person": refs.get(r[13]), "crew": r[16],
+               "override": ({"reason": r[17], "at": r[18], "person": refs.get(r[13]),
+                             "by_label": by_label(refs.get(r[13]), r[1])} if r[17] else None),
                "finished": ({"at": r[5], "words": r[6], "decision": r[7], "by": r[8],
                              "person": refs.get(r[14]), "by_label": by_label(refs.get(r[14]), r[8])}
                             if r[5] else None),
@@ -1089,6 +1127,93 @@ class FactoryStore:
                              "person": refs.get(r[15]), "by_label": by_label(refs.get(r[15]), r[11])}
                             if r[9] else None)}
         return out
+
+    # ── questions to an area owner and their sign-offs (TR-636) ───────────────
+    _SQ_COLS = ("project, id, to_person_id, repo, text, asked_by, asked_at, answer, answered_by, "
+                "answered_at, state")
+
+    def _sq_rows(self, rows) -> list[dict]:
+        out = [{"project": r[0], "id": r[1], "to_person_id": r[2], "repo": r[3], "text": r[4],
+                "asked_by": r[5], "asked_at": r[6], "answer": r[7], "answered_by": r[8],
+                "answered_at": r[9], "state": r[10]} for r in rows]
+        refs = self._person_refs([x for r in out for x in (r["to_person_id"], r["asked_by"],
+                                                           r["answered_by"])])
+        for r in out:
+            r["to_person"] = refs.get(r["to_person_id"])
+            r["asked_by_person"] = refs.get(r["asked_by"])
+            r["answered_by_person"] = refs.get(r["answered_by"])
+        return out
+
+    def add_spec_question(self, project: str, to_person_id: str, repo: str, text: str,
+                          asked_by: str | None, at) -> dict:
+        """Q<n>, n one past the project's highest, chosen and inserted in one transaction under
+        the lock, so parallel asks never share a number."""
+        with self._lock:
+            self.con.execute("BEGIN TRANSACTION")
+            try:
+                top = self.con.execute(
+                    "SELECT max(CAST(substr(id, 2) AS INTEGER)) FROM spec_questions "
+                    "WHERE project = ?", [project]).fetchone()[0] or 0
+                qid = f"Q{top + 1}"
+                self.con.execute(
+                    f"INSERT INTO spec_questions ({self._SQ_COLS}) VALUES "
+                    "(?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'open')",
+                    [project, qid, to_person_id, repo, text, asked_by or None, at])
+                self.con.execute("COMMIT")
+            except Exception:
+                self.con.execute("ROLLBACK")
+                raise
+        return self.get_spec_question(project, qid)
+
+    def get_spec_question(self, project: str, ref: str) -> dict | None:
+        """The project's question by id (Q3, any case, or 3)."""
+        m = re.match(r"^[Qq]?(\d{1,6})$", (ref or "").strip())
+        if not m:
+            return None
+        with self._lock:
+            r = self.con.execute(f"SELECT {self._SQ_COLS} FROM spec_questions WHERE project = ? "
+                                 "AND id = ?", [project, f"Q{int(m.group(1))}"]).fetchone()
+        return self._sq_rows([r])[0] if r else None
+
+    def list_spec_questions(self, project: str | None = None, state: str | None = None,
+                            to_person_id: str | None = None) -> list[dict]:
+        q, vals = f"SELECT {self._SQ_COLS} FROM spec_questions WHERE 1 = 1", []
+        for col, v in (("project", project), ("state", state), ("to_person_id", to_person_id)):
+            if v:
+                q += f" AND {col} = ?"
+                vals.append(v)
+        with self._lock:
+            rows = self.con.execute(
+                q + " ORDER BY asked_at, project, CAST(substr(id, 2) AS INTEGER)", vals).fetchall()
+        return self._sq_rows(rows)
+
+    def answer_spec_question(self, project: str, qid: str, answer: str, by: str | None,
+                             at) -> bool:
+        """Record the answer of an open question; False when it was not open."""
+        with self._lock:
+            hit = self.con.execute(
+                "UPDATE spec_questions SET answer = ?, answered_by = ?, answered_at = ?, "
+                "state = 'answered' WHERE project = ? AND id = ? AND state = 'open' RETURNING id",
+                [answer, by or None, at, project, qid]).fetchone()
+        return hit is not None
+
+    def add_signoff(self, project: str, repo: str, person_id: str, at) -> None:
+        """The area owner's sign-off for a repo. Signing again keeps the first time; when the
+        area has a new owner, their sign-off replaces the old owner's."""
+        with self._lock:
+            self.con.execute("INSERT INTO signoffs (project, repo, person_id, \"at\") "
+                             "VALUES (?, ?, ?, ?) ON CONFLICT (project, repo) DO UPDATE SET "
+                             "person_id = excluded.person_id, \"at\" = excluded.\"at\" "
+                             "WHERE signoffs.person_id <> excluded.person_id",
+                             [project, repo, person_id, at])
+
+    def list_signoffs(self, project: str) -> list[dict]:
+        with self._lock:
+            rows = self.con.execute("SELECT repo, person_id, \"at\" FROM signoffs WHERE project = ? "
+                                    "ORDER BY \"at\", repo", [project]).fetchall()
+        refs = self._person_refs(r[1] for r in rows)
+        return [{"repo": r[0], "person_id": r[1], "person": refs.get(r[1]), "at": r[2]}
+                for r in rows]
 
     def delete_milestone(self, mid: str) -> None:
         """The milestone goes; its tickets stay, without a milestone."""

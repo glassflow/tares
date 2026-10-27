@@ -839,7 +839,8 @@ def register(app, store, h: SimpleNamespace) -> None:
         hand-over and that the caller can see: `ready` (their tickets that can start),
         `in_progress` (their tickets a station holds), and `led_projects` with the milestones
         whose tickets are all delivered. `desk` is the open desk items addressed to them (TR-634);
-        `spec_questions` is filled by later work."""
+        `spec_questions` is the open questions a spec asked of them (TR-636), in any project they
+        can see, finished or not."""
         me = work_person(request)
         try:
             crew_name = crew_name_of(request, crew)
@@ -875,8 +876,14 @@ def register(app, store, h: SimpleNamespace) -> None:
                                    "why", "context", "blocks", "tickets", "blocking", "created_at")}
                 for d in map(desk_out, store.list_desk("open"))
                 if d["project"] not in hidden and desk_is_mine(d, me["id"])]
+        names = {x["id"]: x["name"] for x in store.list_projects()}
+        asked = [{"project": names[q["project"]], "id": q["id"], "repo": q["repo"],
+                  "text": q["text"], "asked_by": (q["asked_by_person"] or {}).get("name"),
+                  "asked_at": q["asked_at"]}
+                 for q in store.list_spec_questions(state="open", to_person_id=me["id"])
+                 if q["project"] in names and q["project"] not in hidden]
         return {"person": me, "crew": crew_name, "ready": ready, "in_progress": doing,
-                "led_projects": led, "desk": desk, "spec_questions": []}
+                "led_projects": led, "desk": desk, "spec_questions": asked}
 
     @app.get("/api/crew/projects")
     async def crew_projects(request: Request):
@@ -1830,16 +1837,149 @@ def register(app, store, h: SimpleNamespace) -> None:
         h.project_or_404(uid)
         return {"decisions": store.list_decisions(uid)}
 
+    # ── questions to an area owner, and their sign-offs (TR-636) ──────────────
+    QUESTION_STATES = ("open", "answered")
+
+    def ticket_repos(uid: str) -> list[str]:
+        """The repos (owner/name, lowercase) the project's tickets are in, canceled ones left out."""
+        out = []
+        for t in store.list_tickets(uid):
+            if t["status"] == "canceled":
+                continue
+            try:
+                out.append(areas_mod.norm_repo(t.get("repo")))
+            except ValueError:
+                pass
+        return sorted(set(out))
+
+    def signoff_state(uid: str, p: dict) -> list[dict]:
+        """One row per repo with tickets: its area owner (None when nobody owns it), whether the
+        owner is the project's lead (no sign-off needed) and whether the owner has signed off."""
+        signed = {x["repo"]: x for x in store.list_signoffs(uid)}
+        lead = p.get("lead_person_id")
+        out = []
+        for repo in ticket_repos(uid):
+            o = h.area_owner(repo)
+            row = signed.get(repo)
+            out.append({"repo": repo, "owner": {"id": o["id"], "name": o["name"]} if o else None,
+                        "is_lead": bool(o and lead and o["id"] == lead),
+                        "signed_off": bool(o and row and row["person_id"] == o["id"]),
+                        "at": row["at"] if row else None})
+        return out
+
+    def signoff_gaps(uid: str, p: dict) -> list[str]:
+        """What the hand-over still waits for, one sentence each; empty when nothing. A cell of
+        one person (only `local`) waits for nothing."""
+        if store.only_local_person():
+            return []
+        gaps = []
+        for r in signoff_state(uid, p):
+            if r["owner"] is None:
+                gaps.append(f"{r['repo']} has tickets but no area owner")
+            elif not (r["is_lead"] or r["signed_off"]):
+                gaps.append(f"{r['repo']}: {r['owner']['name']} (not signed off)")
+        return gaps
+
+    @app.post("/api/projects/{uid}/questions", status_code=201)
+    async def ask_area(uid: str, request: Request, body: dict = Body(...)):
+        """{repo, text}: a question from the spec for the person who owns the repo (owner/name),
+        numbered Q1, Q2... in the project. It shows in the owner's my_work until they answer.
+        Anyone who can see the project may ask. A repo nobody owns is refused."""
+        project = h.project_or_404(uid)
+        me = work_person(request)
+        try:
+            repo = areas_mod.norm_repo(body.get("repo"))
+        except ValueError as e:
+            h.err(e)
+        text = str(body.get("text") or "").strip()
+        if not text:
+            h.err(ValueError("text: the question for the area owner"))
+        if len(text) > 4000:
+            h.err(ValueError("keep the question to 4000 characters"))
+        owner = h.area_owner(repo)
+        if owner is None:
+            h.err(ValueError(f"{repo} has no area owner; set one with set_area"), 409)
+        if project.get("scope") == "private" and not store.is_project_member(uid, owner["id"]):
+            h.err(PermissionError(f"{owner['name']} owns {repo} but is not on this private "
+                                  "project: ask the project lead to add them"), 403)
+        return store.add_spec_question(uid, owner["id"], repo, text, me["id"], now_utc())
+
+    @app.get("/api/projects/{uid}/questions")
+    async def list_questions(uid: str, state: str = ""):
+        """The project's questions to area owners, oldest first; `state` open or answered."""
+        h.project_or_404(uid)
+        st = state.strip().lower()
+        if st and st not in QUESTION_STATES:
+            h.err(ValueError("state is one of: " + ", ".join(QUESTION_STATES)))
+        return {"questions": store.list_spec_questions(uid, st or None)}
+
+    @app.post("/api/projects/{uid}/questions/{qid}/answer")
+    async def answer_question(uid: str, qid: str, request: Request, body: dict = Body(...)):
+        """{answer}: the person the question is addressed to answers it. Anyone else is refused."""
+        h.project_or_404(uid)
+        me = work_person(request)
+        q = store.get_spec_question(uid, qid)
+        if q is None:
+            h.err(KeyError(f"project has no question {qid!r}"), 404)
+        if q["to_person_id"] != me["id"]:
+            who = (q["to_person"] or {}).get("name") or q["to_person_id"]
+            h.err(PermissionError(f"{q['id']} is for {who}: only they answer it"), 403)
+        if q["state"] != "open":
+            h.err(ValueError(f"{q['id']} is already answered"), 409)
+        answer = str(body.get("answer") or "").strip()
+        if not answer:
+            h.err(ValueError("answer: your reply to the question"))
+        if len(answer) > 4000:
+            h.err(ValueError("keep the answer to 4000 characters"))
+        if not store.answer_spec_question(uid, q["id"], answer, me["id"], now_utc()):
+            h.err(ValueError(f"{q['id']} is already answered"), 409)
+        return store.get_spec_question(uid, q["id"])
+
+    @app.post("/api/projects/{uid}/signoffs", status_code=201)
+    async def sign_off(uid: str, request: Request, body: dict = Body(...)):
+        """{repo}: the owner of the repo says the tickets in it are right. Only that owner may,
+        and only for a repo the project has tickets in. Signing again changes nothing. The
+        hand-over waits for one per repo."""
+        p = h.project_or_404(uid)
+        me = work_person(request)
+        try:
+            repo = areas_mod.norm_repo(body.get("repo"))
+        except ValueError as e:
+            h.err(e)
+        owner = h.area_owner(repo)
+        if owner is None:
+            h.err(ValueError(f"{repo} has no area owner; set one with set_area"), 409)
+        if owner["id"] != me["id"]:
+            h.err(PermissionError(f"{repo} is {owner['name']}'s: only the area owner signs off"),
+                  403)
+        if repo not in ticket_repos(uid):
+            h.err(ValueError(f"the project has no tickets in {repo}"), 409)
+        store.add_signoff(uid, repo, me["id"], now_utc())
+        return {"signoffs": signoff_state(uid, p)}
+
+    @app.get("/api/projects/{uid}/signoffs")
+    async def list_signoffs(uid: str):
+        """Each repo the project has tickets in: its area owner, whether that is the lead and
+        whether the owner has signed off, and `waiting_for` what the hand-over still lacks."""
+        p = h.project_or_404(uid)
+        return {"signoffs": signoff_state(uid, p), "waiting_for": signoff_gaps(uid, p)}
+
     @app.post("/api/projects/{uid}/handover")
     async def hand_over(uid: str, request: Request, body: dict = Body(default={})):
-        """{repos?: [{path, name}], repo?, autonomy?}: the spec session hands the project to the
-        crew. Each repo is the folder it is checked out in on the crew's machine and its GitHub
-        name (owner/name). A later hand-over adds repos, never replaces them. `autonomy` only
-        when the person wants this project stricter than the crew (L3-review). Recorded with
-        the time, the person and the crew (`crew`, else X-Tares-Crew, else `crew`); the
-        orchestrator finds it in /api/crew/projects. A key with no person is refused (TR-633)."""
-        h.project_or_404(uid)
-        work_person(request)
+        """{repos?: [{path, name}], repo?, autonomy?, override_reason?}: the spec session hands
+        the project to the crew. Each repo is the folder it is checked out in on the crew's
+        machine and its GitHub name (owner/name). A later hand-over adds repos, never replaces
+        them. `autonomy` only when the person wants this project stricter than the crew
+        (L3-review). Recorded with the time, the person and the crew (`crew`, else X-Tares-Crew,
+        else `crew`); the orchestrator finds it in /api/crew/projects. A key with no person is
+        refused (TR-633).
+
+        On a cell with more than one person, every repo the tickets are in needs an area owner,
+        and that owner (unless they lead the project) has to have signed off (TR-636); otherwise
+        it is refused with the list. The project's lead may hand over anyway with
+        `override_reason`, which is kept on the hand-over and shown on the project's timeline."""
+        p = h.project_or_404(uid)
+        me = work_person(request)
         try:
             crew = crew_name_of(request, body.get("crew"))
             new = factory_mod.handover_repos(body.get("repos"))
@@ -1851,11 +1991,25 @@ def register(app, store, h: SimpleNamespace) -> None:
                                         + ", ".join(factory_mod.AUTONOMY))
         except (docs_mod.DocError, ValueError) as e:
             h.err(e)
+        override = None
+        gaps = signoff_gaps(uid, p)
+        if gaps:
+            reason = " ".join(str(body.get("override_reason") or "").split())[:500]
+            if not reason:
+                h.err(ValueError(
+                    "The hand-over waits for the area owners: " + "; ".join(gaps) + ". Ask them "
+                    "with ask_area and have them sign_off, or the project lead hands over anyway "
+                    "with override_reason."), 409)
+            lead = p.get("lead_person_id")
+            if not (lead == me["id"] or (not lead and h.is_admin(request))):
+                h.err(PermissionError("only the project's lead overrides the area owners' "
+                                      "sign-off; waiting for: " + "; ".join(gaps)), 403)
+            override = reason
         old = store.get_handover(uid) or {}
         repos = factory_mod.merge_repos(old.get("repos") or [], new)
         autonomy = autonomy or old.get("autonomy")
         store.set_handover(uid, repos, autonomy, by_of(request, body), now_utc(),
-                           person_of(request), crew)
+                           person_of(request), crew, override)
         if old.get("finished"):   # more work on a finished project: it is open again
             store.update_project(uid, status="active")
         include_shared_grants(uid)   # a crew-built project shows the grants it is built under
