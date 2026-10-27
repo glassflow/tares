@@ -12,7 +12,9 @@ the project follows [Semantic Versioning](https://semver.org/).
   owner in Tares, Linear or GitHub, and stops before the hand-over while sign-offs are missing.
   `tares factory spec --project <name>` run by someone who is not that project's lead opens a
   contributor session: it asks them the open questions, shows the tickets in their repos and signs
-  off on their yes. It needs no git repo in the folder. The lead's `tares factory spec` is unchanged.
+  off on their yes. It needs no git repo in the folder. That session is marked `TARES_SESSION_KIND=contributor`,
+  so its start-up reminder points at the Contributor section and never says to build. The lead's
+  `tares factory spec` is unchanged.
 - Questions to an area owner while a spec is written, and their sign-off before the hand-over.
   `ask_area(repo, text)` puts a question to the person who owns that repo, numbered Q1, Q2 in the
   project, and it shows in their `my_work` under `spec_questions` until they answer; a repo nobody owns

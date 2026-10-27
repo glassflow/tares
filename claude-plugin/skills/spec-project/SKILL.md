@@ -54,13 +54,18 @@ when you could explain the project to a new engineer. Cover:
 
 **Area owners.** Once you know which repos the project changes, call `list_areas` and note the
 owner of each one (`{repo, person: {id, name}}`). If a repo has none, ask the user who owns it
-(one question, recommending a person from `list_people`) and call `set_area(repo, person)`. Tickets
-go to these owners (step 6), and each owner other than the user signs off before the hand-over.
+(one question, recommending a person from `list_people`) and call `set_area(repo, person)`. Setting
+the owner of a repo that has one, or of a repo for someone else, needs an admin: when you are not
+one, tell the user an admin sets the owner. Tickets go to these owners (step 6), and each owner
+other than the user signs off before the hand-over.
 
 When a question is about a repo whose area owner is not the user (what a module does, whether a
-change is acceptable, how it is deployed), do not guess and do not make the user relay it: call
+change is acceptable, how it is deployed), do not guess and do not make the user relay it. Once the
+project exists (after `create_project`, below), call
 `ask_area(repo, text, project)` with the question written so the owner can answer without this
-conversation, tell the user "waiting for <name>", and carry on with the other questions. Before
+conversation. On a private project, first put the other owners on it with
+`set_project_access(project, add_members=[<their emails>])`, because `ask_area` is refused (403) for
+an owner who is not on the project. Tell the user "waiting for <name>", and carry on with the other questions. Before
 you plan (step 3), call `list_questions(project=<name>)`, fold each answered one into the spec
 (name the answerer: "Kiran said ..."), and say which are still open. Plan around an open one only
 as an explicit assumption in the spec.
@@ -171,7 +176,9 @@ Write for a reader who was not here: no "as discussed", no references to this co
         again. If the answer shows `github.error` naming the rate limit, the link is saved: wait
         about 5 minutes and check `list_tickets`.
      6. `gh issue edit <n> --repo R --add-assignee <login>` for each issue, the login of its repo's
-        area owner (`github` in `list_people`; skip it when the owner has none and say so). Then
+        area owner (`github` in `list_people`; skip it when the owner has none and say so, and when
+        `gh` fails because the owner is not a collaborator on the repo, say so and leave that ticket
+        unassigned, the same way). Then
         `write_ticket(id=<GH-n>, repo="owner/name", title="")` for each ticket.
    - **Tares only:** `write_ticket` once per ticket with `milestone`, `depends_on` (the
      tickets' labels, `T1`, `T2`, ...), `repo` (the GitHub `owner/name` it changes) and `assignee`
@@ -250,9 +257,11 @@ missing. Then tell the user, briefly:
 - the project name and what it holds (counts, not a dump), and the assumptions worth a glance
 - where the tickets live, with the Linear or GitHub link if any
 - **the pending sign-offs.** For each repo the tickets name, whose area owner (`list_areas`) is not
-  the user, say "acme/web: Kiran, not signed off", and a repo with no owner as "acme/ghost: no
-  area owner". No tool lists sign-offs; the hand-over (step 9) is what checks them. Tell the user
-  each owner signs off from their own machine with `tares factory spec <project>`, and **stop
+  the user, say "acme/web: Kiran, sign-off status unknown", and a repo with no owner as "acme/ghost: no
+  area owner". No tool reads sign-offs, so the owners' status is unknown until the user reports
+  back; do not say "not signed off", say "sign-off status unknown" for each. The hand-over (step 9)
+  is what checks them. Tell the user each owner signs off from their own machine with
+  `tares factory spec "<project>"` (the exact project name, in quotes), and **stop
   before step 9** until the user says they have, or tells you to hand over anyway. Their own
   repos need no sign-off.
 - the next step:
@@ -292,20 +301,22 @@ as an area owner and to check and sign off the tickets in their repos. Use `<pro
 in every call, and the person's own words in anything you write.
 
 1. Call `read_global_docs`, then `get_doc` for the `spec` and the `plan`, and read them.
-2. Call `list_questions(state="open", project=<project>)` and keep the ones addressed to this
-   person. Ask the user each one, one at a time, with your recommended answer and why, so they can
-   say yes.
+2. Call `my_work` and read `person` (who this is) and `spec_questions` (the open questions
+   addressed to this person; they are already filtered to the caller). Do not match people by
+   display name. Ask the user each one, one at a time, with your recommended answer and why, so
+   they can say yes.
 3. On their answer, call `answer_question(id, answer, project)` with their words. Say which
    questions are left.
-4. Call `list_tickets(project=<project>)` and keep the tickets whose `repo` is one this person
-   owns (`list_areas`). Show them (title, milestone, depends on, a line from the working doc) and
-   ask what to change. Apply each edit where the ticket lives: `write_ticket` (and `write_doc` for
+4. Call `list_tickets(project=<project>)` and keep the tickets whose `repo` is one that `list_areas`
+   gives to the `person` from `my_work` (match by `person.id`, not by name). Show them (title, milestone, depends on, a line from the
+   working doc) and ask what to change. Apply each edit where the ticket lives: `write_ticket` (and `write_doc` for
    its working doc) for Tares tickets, Linear's `save_issue` for Linear ones, `gh issue edit` for
    GitHub ones. A ticket that changes a repo this person does not own is not theirs to edit: tell
    the lead instead.
 5. For each repo the user says is right ("yes, acme/web is good"), call `sign_off(repo, project)`.
    Never sign off on your own judgment, and never for a repo the user has not answered for. Then
-   say what is signed and what is not, and that the lead can now hand over.
+   say what is signed and what is not, and that the lead can now hand over. If `sign_off` answers
+   409 "the project has no tickets in <repo>", the lead is still planning: tell the user, and stop.
 
 ## Light mode: plan a small project and build it in this session
 

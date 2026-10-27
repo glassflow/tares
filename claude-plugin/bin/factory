@@ -1646,7 +1646,7 @@ $ME: opening Claude as $slug-spec in $here, as a contributor to $cproject, which
 SPEC
     person_claude "$here" "$slug-spec" spec \
       "You are contributing to $cproject led by $clead. Load the spec-project skill, section Contributor." \
-      TARES_PROJECT="$cproject"
+      TARES_PROJECT="$cproject" TARES_SESSION_KIND=contributor
     return
   fi
   cat >&2 <<SPEC
