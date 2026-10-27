@@ -8,7 +8,7 @@ source_kind=$(jq -r '.source // "startup"' 2>/dev/null || echo startup)
 
 if [ -z "${FACTORY_ROLE:-}" ]; then
   [ -n "${TARES_PROJECT:-}" ] || exit 0
-  context="This session works on the Tares project \`${TARES_PROJECT}\` by itself (tares factory session), on ${TARES_FACTORY_URL:-the Tares} through the Tares MCP tools. Follow the \`session\` skill."
+  context="This session works on the Tares project \`${TARES_PROJECT_NAME:-$TARES_PROJECT}\` (id \`${TARES_PROJECT}\`) by itself (tares factory session), on ${TARES_FACTORY_URL:-the Tares} through the Tares MCP tools. Follow the \`session\` skill."
   if [ "$source_kind" = "startup" ]; then
     [ -n "${TARES_SESSION_TAKEOVER:-}" ] && context="$context The person took this project over from the crew: do the skill's \"Taking over\" steps first."
   else
@@ -24,7 +24,7 @@ if [ "$skill" = helper ]; then
 fi
 
 context="You are the ${FACTORY_ROLE} station \`${FACTORY_STATION:-?}\` of the tares-factory crew."
-[ -n "${TARES_PROJECT:-}" ] && context="$context You work on project \`${TARES_PROJECT}\` in ${FACTORY_REPO:-?}."
+[ -n "${TARES_PROJECT:-}" ] && context="$context You work on project \`${TARES_PROJECT_NAME:-$TARES_PROJECT}\` (id \`${TARES_PROJECT}\`) in ${FACTORY_REPO:-?}."
 [ -n "${FACTORY_PARENT:-}" ] && context="$context You were started by \`${FACTORY_PARENT}\`."
 context="$context The plan, tickets, assumptions, checks, reviews and the desk are on Tares (${TARES_FACTORY_URL:-the crew Tares}), through the Tares MCP tools."
 context="$context Your rules are in the skills \`factory-protocol\` and \`station-${skill}\`."

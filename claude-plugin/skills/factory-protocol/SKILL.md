@@ -12,7 +12,7 @@ You are one station in the **tares-factory crew**: one team of Claude Code sessi
 | `FACTORY_STATION` | your name, e.g. `crew-reviewer` or `shop-build-m1-api`. Peers address you by it |
 | `FACTORY_ROLE` | `orchestrator`, `reviewer`, `releaser`, `builder` or `helper` |
 | `FACTORY_PARENT` | the station that started you (builders: `crew-orchestrator`; helpers: their station). Empty for crew stations |
-| `TARES_PROJECT` | builders and their helpers: the project you work on. Crew stations serve all projects and pass `project=` on every Tares call |
+| `TARES_PROJECT` | builders and their helpers: the id of the project you work on (its name is in `TARES_PROJECT_NAME`). Crew stations serve all projects and pass `project=` on every Tares call |
 | `TARES_FACTORY_URL` | the Tares the crew uses; your Tares tools reach the same one |
 | `FACTORY_HOME` | the crew home (default `~/factory`): reports, `stations.json`, events |
 | `FACTORY_REPO` | builders only: the git root of the one repo you work in. A project may span several repos; each gets its own builder |
