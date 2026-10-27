@@ -75,6 +75,8 @@ class ClaudeCodeConnector(Connector):
         {"name": "model", "help": "model on assistant turns"},
         {"name": "type", "help": "message type (user / assistant / tool_use / …)"},
         {"name": "sidechain", "help": "sub-agent (sidechain) message"},
+        {"name": "meta", "help": "a user line Claude Code wrote itself (compaction summary, skill "
+                                 "body, peer message, task notification), not typed by the person"},
         {"name": "flow", "help": "session flow set from inside Claude Code (e.g. challenger); "
                                  "the plugin stamps it on every line of a marked session"},
         {"name": "tares_project", "help": "the Tares project the session works in; the plugin "
@@ -96,6 +98,7 @@ class ClaudeCodeConnector(Connector):
     # `challenge` object: {verdict, sha?, plan?, findings: [{priority, title, waived}],
     # finding_count, blocking_count, waived_count, round?, duration_seconds, prose}.
     CHALLENGE_TYPES = ("challenge_plan", "challenge_commit", "challenge_waived")
+    USER_TURN_CAP = 20000
     # Push-only: the Claude Code plugin POSTs transcript lines to /ingest/claude_code; events are
     # mapped by map_payload(). There is no local file tail.
     ACCEPTS_PUSH = True
@@ -235,11 +238,23 @@ class ClaudeCodeConnector(Connector):
                 "model": str(msg["model"]) if msg.get("model") else None,
                 "type": str(o.get("type")) if o.get("type") else None,
                 "sidechain": "true" if o.get("isSidechain") else "false",
+                "meta": "true" if self._written_by_harness(o) else None,
                 "flow": str(o["flow"]) if o.get("flow") else None,
                 "tares_project": str(o["tares_project"]) if o.get("tares_project") else None,
                 "station": str(o["factory_station"]) if o.get("factory_station") else None,
                 "subagent": str(o.get("subagent") or o.get("agentId") or "") or None
                 if o.get("isSidechain") or o.get("subagent") else None}
+
+    @staticmethod
+    def _written_by_harness(o: dict) -> bool:
+        """A `user` line the person did not type: a compaction summary, a skill body, a peer
+        message, a task notification. Any origin but a human one counts, so a new kind Claude
+        Code adds stays out by default (TR-697)."""
+        if o.get("isMeta") or o.get("isCompactSummary"):
+            return True
+        origin = o.get("origin")
+        kind = origin.get("kind") if isinstance(origin, dict) else origin
+        return bool(origin) and kind != "human"
 
     # ── mapping: one JSONL object → one Envelope ───────────────────────────────
     def _obj_to_envelope(self, o: dict, redact: bool, include_thinking: bool):
@@ -255,7 +270,11 @@ class ClaudeCodeConnector(Connector):
 
         # challenge events carry the whole review; chopping them mid-finding is what the 500-char
         # cap would do, and the summarizer reads this text
-        cap = 4000 if o.get("type") in self.CHALLENGE_TYPES else 500
+        # a person's turn is what a desk answer is matched against line by line (TR-697), so a long
+        # paste is kept whole
+        etype = self._event_type(o, msg)
+        cap = (4000 if o.get("type") in self.CHALLENGE_TYPES
+               else self.USER_TURN_CAP if etype == "user" else 500)
         text = self._render_text(o, msg, include_thinking)[:cap]
         if redact:
             text = _redact(text)
@@ -266,7 +285,7 @@ class ClaudeCodeConnector(Connector):
             source=self.cfg.name,
             source_type=self.cfg.type,
             key_value=str(sid),
-            event_type=self._event_type(o, msg),
+            event_type=etype,
             text=text,
             event_time=self._ts(o),
             payload=payload,

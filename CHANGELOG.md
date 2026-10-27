@@ -92,6 +92,11 @@ the project follows [Semantic Versioning](https://semver.org/).
   promises a move by the watch (TR-687).
 
 ### Fixed
+- Factory: `desk_answer` finds every line of a long pasted reply (TR-697). A reply of more than
+  about 500 characters was stored cut off, so its later lines were "not found" and only the first
+  lines matched. A person's turn is now kept up to 20000 characters, and the `<pasted_content>`
+  tags Claude Code wraps a paste in are ignored, so a whole paste matches with or without them.
+  Replies already stored stay cut; paste or resend the missing lines once.
 - "Raise the limit" on an agent that stopped at the daily run cap opened the agent's own page,
   which has no cap field. It now opens Settings, Limits, with the daily cap in view and marked
   for that agent; an agent with its own cap in its project still opens its own page (TR-670).
