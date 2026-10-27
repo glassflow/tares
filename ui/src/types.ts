@@ -569,7 +569,17 @@ export interface CrewSettingsView extends CrewSettings { autonomy_levels?: Recor
 export type CrewSettingField = "autonomy" | "challenger" | "builders_max" | "releaser" | "release_profile" | "prod_pattern";
 export interface HandoverRepo { path: string | null; name: string | null }
 export interface ProjectFinished { at: string; words: string; decision: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null }
-export interface Handover { repo: string | null; repos: HandoverRepo[]; autonomy: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null; at: string; finished?: ProjectFinished | null }
+// A hand-over the project lead pushed through without every area owner's sign-off, and why (TR-636)
+export interface HandoverOverride { reason: string; at: string; person?: PersonRef | null; by_label?: string | null }
+// A question from a spec to the owner of a repo, and the answer once they give it (TR-636)
+export interface SpecQuestion {
+  id: string; to_person_id: string; to_person?: PersonRef | null; repo: string; text: string;
+  asked_by: string | null; asked_at: string; answer: string | null; answered_by: string | null;
+  answered_by_person?: PersonRef | null; answered_at: string | null; state: "open" | "answered";
+}
+// One repo a project has tickets in: who owns its area, and whether they signed off (TR-636)
+export interface SignoffRow { repo: string; owner: PersonRef | null; is_lead: boolean; signed_off: boolean; at: string | null }
+export interface Handover { override?: HandoverOverride | null; overrides?: HandoverOverride[]; repo: string | null; repos: HandoverRepo[]; autonomy: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null; at: string; finished?: ProjectFinished | null }
 // A repo a project touches, with the tickets that change it and their open pull requests (TR-463)
 export interface RepoPR {
   url: string; ticket: string; number: number | null; title: string; branch: string | null;

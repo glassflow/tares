@@ -56,6 +56,15 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const { data: asm } = usePolling(() => api.assumptions(ctx.id), 15000);
   const { data: decisions, reload: reloadDecisions } = usePolling(() => api.projectDecisions(ctx.id), 15000);
   const { data: rp } = usePolling(() => api.projectRepos(ctx.id), 30000);
+  const { data: qs } = usePolling(() => api.projectQuestions(ctx.id), 15000);
+  const { data: so } = usePolling(() => api.projectSignoffs(ctx.id), 15000);
+  // open questions first, each group oldest first (the API already orders by when it was asked)
+  const questionRows = [...(qs?.questions ?? [])].sort((a, b) => (a.state === "open" ? 0 : 1) - (b.state === "open" ? 0 : 1));
+  const openQuestions = questionRows.filter((q) => q.state === "open").length;
+  const signoffRows = so?.signoffs ?? [];
+  const signed = signoffRows.filter((r) => r.is_lead || r.signed_off).length;
+  const overrides = crew?.handover?.overrides?.length ? crew.handover.overrides
+    : crew?.handover?.override ? [crew.handover.override] : [];
   // the repos the project touches (TR-463); picking one narrows the ticket list to its tickets
   const repos = rp?.repos ?? [];
   const [repoKey, setRepoKey] = useState<string | null>(null);
@@ -252,6 +261,61 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
           <div className="fo-foot"><VLink v={{ kind: "tickets" }} className="fo-link">All tickets</VLink></div>
         </Fold>
       </div>
+
+      {questionRows.length > 0 && (
+        <Fold id="questions" title="Questions for the team" pinnedByDefault
+              meta={`${openQuestions} open · ${questionRows.length - openQuestions} answered`}>
+          <ul className="fo-docs">
+            {questionRows.map((q) => (
+              <li key={q.id} style={{ display: "block" }}>
+                <b>{q.id}</b> For {q.to_person?.name ?? "the area owner"} · <span className="mono">{q.repo}</span>
+                <div>{q.text}</div>
+                {q.state === "answered" ? (
+                  <small style={{ display: "block" }}>
+                    Answered by {q.answered_by_person?.name ?? q.answered_by ?? "the area owner"}
+                    {q.answered_at && <> <TimeAgo ts={q.answered_at} /></>}: {q.answer}
+                  </small>
+                ) : (
+                  <small style={{ display: "block" }}>Asked <TimeAgo ts={q.asked_at} /></small>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Fold>
+      )}
+
+      {(signoffRows.length > 0 || overrides.length > 0) && (
+        <Fold id="signoffs" title="Sign-offs" pinnedByDefault
+              meta={signoffRows.length ? `${signed} of ${signoffRows.length} repos ready` : ""}>
+          {signoffRows.length > 0 && (
+            <ul className="fo-docs">
+              {signoffRows.map((r) => (
+                <li key={r.repo} style={{ display: "block" }}>
+                  <span className="mono">{r.repo}</span>
+                  {r.owner ? <> · {r.owner.name}</> : null}
+                  {" "}
+                  {!r.owner ? <><span className="fo-st fo-st-wait">No area owner</span> <Link to="/settings?tab=areas">Set one under Settings, Areas</Link></>
+                    : r.is_lead ? <span className="fo-st fo-st-done">Project lead, no sign-off needed</span>
+                    : r.signed_off ? <span className="fo-st fo-st-done" title={r.at ? new Date(r.at).toLocaleString() : undefined}>Signed off {r.at ? new Date(r.at).toLocaleDateString() : ""}</span>
+                    : <span className="fo-st fo-st-wait">Waiting</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+          {overrides.length > 0 && (
+            <ul className="fo-docs">
+              {overrides.map((o, i) => (
+                <li key={`${o.at}-${i}`} style={{ display: "block" }}>
+                  Handed over without all sign-offs: {o.reason}
+                  <small style={{ display: "block" }}>
+                    {o.by_label ?? o.person?.name ?? "the project lead"} · <TimeAgo ts={o.at} />
+                  </small>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Fold>
+      )}
 
       {repos.length > 0 && (
         <Fold id="github" title="GitHub" icon={<GitHubMark />}
