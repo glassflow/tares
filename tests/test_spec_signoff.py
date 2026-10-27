@@ -18,7 +18,7 @@ import os
 import sys
 import tempfile
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _env import scrub_os_environ
@@ -331,6 +331,76 @@ async def main():
         ck("and so is the timeline event", len(ev) == 1 and ev[0]["kind"] == "handover_override"
            and why2 in ev[0]["text"], r.text)
 
+        print("== an override stays with the person who made it (TR-640) ==")
+        f6 = await make_project("ashish", "signoff-f6")
+        await ticket("ashish", f6, "web f6", "acme/web")
+        r = await handover("ashish", f6, override_reason="kiran is away")
+        ck("the lead overrides", r.status_code == 200, r.text)
+        r = await call("kiran", "POST", f"/api/projects/{f6}/signoffs", {"repo": "acme/web"})
+        ck("kiran signs afterwards", r.status_code == 201, r.text)
+        r = await handover("lee", f6)
+        ck("lee hands over again, with no reason", r.status_code == 200
+           and (r.json()["handover"]["person"] or {}).get("id") == pid["lee"], r.text)
+        ho = store.get_handover(f6)
+        ck("the override is still ashish's, not lee's", (ho["override"]["person"] or {}).get("id")
+           == pid["ashish"] and "ashish" in (ho["override"]["by_label"] or ""), str(ho["override"]))
+        row = store.con.execute("SELECT override_person_id FROM handovers WHERE project = ?",
+                                [f6]).fetchone()
+        ck("override_person_id is stored", row[0] == pid["ashish"], row)
+        r = await call("ashish", "GET", f"/api/projects/{f6}/timeline")
+        ev = (r.json() or {}).get("events") or []
+        ck("and the timeline event names ashish", len(ev) == 1 and "ashish" in (ev[0]["by"] or "")
+           and "lee" not in (ev[0]["by"] or ""), r.text)
+        store.con.execute("UPDATE handovers SET override_person_id = NULL WHERE project = ?", [f6])
+        ck("a row from before the column falls back to the handing person",
+           (store.get_handover(f6)["override"]["person"] or {}).get("id") == pid["lee"])
+
+        print("== every override is listed, once, across timeline pages (TR-640) ==")
+        ov = await make_project("ashish", "signoff-overrides")
+        await ticket("ashish", ov, "web ov", "acme/web")
+        t0 = datetime.now(timezone.utc) - timedelta(days=10)
+        hours = lambda n: t0 + timedelta(hours=n)
+        for i, h in enumerate((10, 20, 30)):   # three threads: runs started at +10h, +20h, +30h
+            rid = f"ov-run-{i}"
+            store.start_agent_run(rid, "watcher", "t", "", "k", "h", project=ov)
+            store.con.execute("UPDATE agent_runs SET started_at = ? WHERE id = ?", [hours(h), rid])
+        repos = [{"path": os.path.join(_TMP, "r"), "name": "acme/api"}]
+        # +5h older than every thread, +15h and +25h between them, +35h newer than all
+        for h, who, why_ in ((5, "ashish", "first, old"), (15, "lee", "second, by lee"),
+                             (25, "ashish", "third"), (35, "lee", "fourth, newest")):
+            store.set_handover(ov, repos, None, "", hours(h), pid[who], None, why_)
+        listed = store.list_handover_overrides(ov)
+        ck("the log keeps all four, oldest first", [o["reason"] for o in listed]
+           == ["first, old", "second, by lee", "third", "fourth, newest"], str(listed))
+        ck("with the person of each", [(o["person"] or {}).get("id") for o in listed]
+           == [pid["ashish"], pid["lee"], pid["ashish"], pid["lee"]], str(listed))
+        ck("the hand-over itself shows them all, its own override being the latest",
+           [o["reason"] for o in store.get_handover(ov)["overrides"]] == [o["reason"] for o in listed]
+           and store.get_handover(ov)["override"]["reason"] == "fourth, newest")
+        r = await call("ashish", "GET", f"/api/projects/{ov}/timeline")
+        ev = r.json().get("events") or []
+        ck("one page with room for all threads carries all four events", [e["reason"] for e in ev]
+           == ["first, old", "second, by lee", "third", "fourth, newest"]
+           and "lee" in (ev[1]["by"] or "") and "ashish" in (ev[0]["by"] or ""), r.text)
+        pages, before, seen_ev = [], None, []
+        for _ in range(8):
+            params = {"limit": 1}
+            if before:
+                params["before"] = before
+            r = await call("ashish", "GET", f"/api/projects/{ov}/timeline", **params)
+            body = r.json()
+            pages.append(([t["id"] for t in body["threads"]], [e["reason"] for e in body.get("events") or []]))
+            seen_ev += [e["reason"] for e in body.get("events") or []]
+            before = body["next_before"]
+            if not before:
+                break
+        ck("paged one thread at a time: three threads then an empty last page", len(pages) == 4
+           and [len(t) for t, _ in pages] == [1, 1, 1, 0], str(pages))
+        ck("each event sits on the page whose window holds it", [e for _, e in pages] ==
+           [["fourth, newest"], ["third"], ["second, by lee"], ["first, old"]], str(pages))
+        ck("none repeats and none is lost across the pages", sorted(seen_ev) == sorted(
+            ["first, old", "second, by lee", "third", "fourth, newest"]), str(seen_ev))
+
         print("== canceled tickets do not hold the hand-over ==")
         cp = await make_project("ashish", "signoff-canceled")
         await ticket("ashish", cp, "api part", "acme/api")
@@ -376,11 +446,26 @@ async def main():
         ck("a question on it", r.status_code == 201, r.text)
         r = await call("kiran", "POST", f"/api/projects/{dp}/signoffs", {"repo": "acme/web"})
         ck("a sign-off on it", r.status_code == 201, r.text)
+        store.set_handover(dp, [{"path": "/w/x"}], None, "", datetime.now(timezone.utc), pid["ashish"],
+                           None, "doomed override")
         count = lambda t: store.con.execute(f"SELECT COUNT(*) FROM {t} WHERE project = ?", [dp]).fetchone()[0]
-        ck("both tables hold a row", count("spec_questions") == 1 and count("signoffs") == 1)
+        ck("all three tables hold a row", count("spec_questions") == 1 and count("signoffs") == 1
+           and count("handover_overrides") == 1)
         r = await call("ashish", "DELETE", f"/api/projects/{dp}")
         ck("the project is deleted", r.status_code < 300, r.text)
-        ck("its questions and sign-offs are gone", count("spec_questions") == 0 and count("signoffs") == 0)
+        ck("its questions, sign-offs and overrides are gone", count("spec_questions") == 0
+           and count("signoffs") == 0 and count("handover_overrides") == 0)
+
+        print("== an override kept before the log existed becomes its first entry ==")
+        old = await make_project("ashish", "signoff-legacy")
+        store.set_handover(old, [{"path": "/w/x"}], None, "", datetime.now(timezone.utc), pid["lee"],
+                           None, "legacy reason")
+        store.con.execute("DELETE FROM handover_overrides WHERE project = ?", [old])
+        store._factory_upgrade()
+        store._factory_upgrade()
+        lg = store.list_handover_overrides(old)
+        ck("one entry, once, with its person", len(lg) == 1 and lg[0]["reason"] == "legacy reason"
+           and (lg[0]["person"] or {}).get("id") == pid["lee"], str(lg))
 
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)

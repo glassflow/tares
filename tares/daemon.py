@@ -3962,13 +3962,12 @@ def make_app() -> FastAPI:
         out = await asyncio.to_thread(
             timeline.project_timeline, store, uid, limit=limit, before=at, trigger=trigger,
             agent=agent, outcome=outcome, entity=entity, scheduled=scheduled)
-        ov = (store.get_handover(uid) or {}).get("override")
-        if ov and not before:
-            # a hand-over the lead pushed through without every sign-off (TR-636), on the first page
-            out["events"] = [{"kind": "handover_override", "at": ov["at"], "reason": ov["reason"],
-                              "by": ov["by_label"] or (ov["person"] or {}).get("name"),
-                              "text": "Handed to the crew without every area owner's sign-off: "
-                                      + ov["reason"]}]
+        events = timeline.override_events(store.list_handover_overrides(uid), at,
+                                          out.get("next_before"))
+        if events:
+            # every hand-over the lead pushed through without every sign-off (TR-636), on the page
+            # whose window holds its time, so across pages none repeats and none is lost
+            out["events"] = events
         if _pk(request):
             # a webhook URL can carry its receiver's secret: a project key sees it masked,
             # like the agents roster shows it

@@ -6,6 +6,13 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- The software-factory project page shows the questions put to area owners (open ones first, then
+  the answered ones with who answered) and the sign-off of each repo with tickets: its area owner and
+  "Signed off" or "Waiting", with a link to Settings, Areas for a repo nobody owns. A hand-over the
+  lead pushed through without every sign-off is listed with its reason, who and when. Every override
+  is kept, not only the latest: the project timeline carries each one once, on the page whose time
+  window holds it, and an override stays attributed to the lead who made it when someone else hands
+  over again later. The page is read-only; answering and signing off happen in Claude sessions.
 - Questions to an area owner while a spec is written, and their sign-off before the hand-over.
   `ask_area(repo, text)` puts a question to the person who owns that repo, numbered Q1, Q2 in the
   project, and it shows in their `my_work` under `spec_questions` until they answer; a repo nobody owns
