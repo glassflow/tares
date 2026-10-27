@@ -860,8 +860,6 @@ def register(app, store, h: SimpleNamespace) -> None:
             blocks = bool(t["milestone"]) and all(
                 x["status"] in factory_mod.DONE_STATUSES for x in others)
             since = entered.get(t["id"], t["updated_at"])
-            layer = factory_mod.challenger_layer(
-                store.challenge_events(h.cc_source(), uid, factory_mod.label(t)))
             v = verdict_now(t, lasts.get(t["id"]))
             out.append({"project": uid, "project_name": pname, "ticket": factory_mod.label(t),
                         "title": t["title"], "holder": t["holder"],
@@ -869,7 +867,8 @@ def register(app, store, h: SimpleNamespace) -> None:
                         "pr": (t["pr"] or {}).get("url"), "head": (t["pr"] or {}).get("head"),
                         "waiting_since": since,
                         "blocks_milestone": blocks,
-                        "layer1_clean": layer["clean"],
+                        # experiment: no Codex challenger lookup here, so no "Codex open" chip
+                        "layer1_clean": True,
                         "verdict": v})
         now = now_utc()
         for q in out:
