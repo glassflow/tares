@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 # Reminds a tares-factory crew station who it is on start, resume and after compaction, and a
 # person's own session bound to a project (`tares factory session`, TARES_PROJECT set) which project
-# it works on. Silent in every other session.
+# it works on (or, with TARES_SESSION_KIND=contributor, that it only contributes to it).
+# Silent in every other session.
 set -euo pipefail
 
 source_kind=$(jq -r '.source // "startup"' 2>/dev/null || echo startup)
 
 if [ -z "${FACTORY_ROLE:-}" ]; then
   [ -n "${TARES_PROJECT:-}" ] || exit 0
+  if [ "${TARES_SESSION_KIND:-}" = contributor ]; then
+    # `tares factory spec <project>` run by someone who does not lead it: answer, check, sign off; never build
+    context="This session contributes to the Tares project \`${TARES_PROJECT}\` led by someone else, on ${TARES_FACTORY_URL:-the Tares} through the Tares MCP tools. Follow the \`spec-project\` skill, section Contributor. Do not build tickets."
+    [ "$source_kind" = "startup" ] || context="$context This session was resumed or compacted: load the \`spec-project\` skill again, section Contributor, and carry on from its steps."
+    jq -n --arg c "$context" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}'
+    exit 0
+  fi
   context="This session works on the Tares project \`${TARES_PROJECT}\` by itself (tares factory session), on ${TARES_FACTORY_URL:-the Tares} through the Tares MCP tools. Follow the \`session\` skill."
   if [ "$source_kind" = "startup" ]; then
     [ -n "${TARES_SESSION_TAKEOVER:-}" ] && context="$context The person took this project over from the crew: do the skill's \"Taking over\" steps first."

@@ -58,5 +58,104 @@ mkdir -p "$T/fresh" && git -C "$T/fresh" init -q
 (cd "$T/fresh" && "$F" spec "x" >"$T/fresh.out" 2>&1); rc=$?
 check "a repo with no commit is refused plainly" '[ $rc != 0 ] && grep -q "has no commit yet" "$T/fresh.out"'
 
+# A project that already exists, led by someone else: a contributor session. (Auth off: the one person
+# is `local`, who leads what they make, so this is the lead's own flow, unchanged.)
+api POST /api/projects '{"template": "custom", "kind": "software_factory", "name": "Lead case", "objects": []}' >/dev/null
+(cd "$T/shop/src" && "$F" spec --project "Lead case" >"$T/leadcase.out" 2>&1)
+check "the lead of an existing project gets the usual prompt" '[ "$(last | jq -r ".args[-1]")" = "/tares:spec (project name: Lead case)" ] && [ "$(last | jq -r .cwd)" = "$T/shop" ] && ! grep -q "^TARES_PROJECT=" "$FAKE_CLAUDE_STATE/last.env" && ! grep -q contributor "$T/leadcase.out"'
+
+# Auth on, three people with a key each: Ashish leads "Acme web", Kiran does not, the root token is no person.
+start_tares "$T/tares2" root-tok
+root_tok=$TARES_AUTH_TOKEN
+for who in Ashish Kiran; do
+  low=$(tr '[:upper:]' '[:lower:]' <<<"$who")
+  r=$(api POST /api/keys "$(jq -cn --arg n "$who" --arg e "$low@example.com" '{name: ($n + "-laptop"), scopes: ["admin"], person: {email: $e, name: $n}}')")
+  eval "${low}_tok=$(jq -r .secret <<<"$r")"
+done
+mkproj() { # token name
+  TARES_AUTH_TOKEN=$1 api POST /api/projects "$(jq -cn --arg n "$2" '{template: "custom", kind: "software_factory", name: $n, objects: []}')" >/dev/null
+}
+mkproj "$ashish_tok" "Acme web"
+mkproj "$root_tok" "Nobody leads"
+check "fixture: Ashish leads Acme web, Nobody leads has no lead" '[ "$(api GET /api/projects | jq -r ".projects[] | select(.name == \"Acme web\") | .lead.name")" = Ashish ] && [ "$(api GET /api/projects | jq -r ".projects[] | select(.name == \"Nobody leads\") | .lead // \"none\"")" = none ]'
+mkdir -p "$T/plain"
+want="You are contributing to Acme web led by Ashish. Load the spec-project skill, section Contributor."
+
+(cd "$T/plain" && TARES_AUTH_TOKEN=$kiran_tok "$F" spec --project "Acme web" >"$T/contrib.out" 2>&1); rc=$?
+check "a contributor gets the contributor prompt, naming the project and its lead" '[ $rc = 0 ] && [ "$(last | jq -r ".args[-1]")" = "$want" ] && last | jq -r ".args[-1]" | grep -q "contributing to"'
+check "the contributor session is bound to the project" 'grep -qx "TARES_PROJECT=Acme web" "$FAKE_CLAUDE_STATE/last.env"'
+check "a contributor needs no git repo: it opens in the current folder, named for the project" '[ "$(last | jq -r .cwd)" = "$T/plain" ] && [ "$(last | jq -r ".args[1]")" = acme-web-spec ]'
+check "the contributor session carries the contributor marker, so its hook does not say to build" 'grep -qx "TARES_SESSION_KIND=contributor" "$FAKE_CLAUDE_STATE/last.env" && ! grep -q "^FACTORY_ROLE=" "$FAKE_CLAUDE_STATE/last.env"'
+check "a contributor is told it is a contributor session" 'grep -q "as a contributor to Acme web, which Ashish leads" "$T/contrib.out"'
+check "a contributor session does not run /tares:spec" '! last | jq -r ".args[-1]" | grep -q "/tares:spec"'
+check "it loads this plugin and turns it on" '[ "$(last | jq -r ".args | index(\"--plugin-dir\") as \$i | .[\$i+1]")" = "$plugin" ] && jq -e ".enabledPlugins[\"tares@inline\"] == true" "$(last | jq -r ".args | index(\"--settings\") as \$i | .[\$i+1]")" >/dev/null'
+(cd "$T/shop/src" && TARES_AUTH_TOKEN=$kiran_tok "$F" spec "acme web" >/dev/null 2>&1)
+check "the idea text finds the project too, and a contributor inside a repo opens at its root" '[ "$(last | jq -r ".args[-1]")" = "$want" ] && [ "$(last | jq -r .cwd)" = "$T/shop" ]'
+check "a contributor session writes nothing into the repo" '[ -z "$(git -C "$T/shop" status --porcelain)" ]'
+
+(cd "$T/shop/src" && TARES_AUTH_TOKEN=$ashish_tok "$F" spec --project "Acme web" >"$T/lead.out" 2>&1)
+check "the lead's session has no contributor marker" '! grep -q "^TARES_SESSION_KIND=" "$FAKE_CLAUDE_STATE/last.env"'
+check "the lead keeps today's prompt" '[ "$(last | jq -r ".args[-1]")" = "/tares:spec (project name: Acme web)" ] && [ "$(last | jq -r .cwd)" = "$T/shop" ] && ! grep -q "^TARES_PROJECT=" "$FAKE_CLAUDE_STATE/last.env" && ! grep -q contributor "$T/lead.out"'
+(cd "$T/plain" && TARES_AUTH_TOKEN=$ashish_tok "$F" spec --project "Acme web" >"$T/leadplain.out" 2>&1); rc=$?
+check "the lead outside a repo is still refused as today" '[ $rc != 0 ] && grep -q "inside the git repo the project builds on" "$T/leadplain.out"'
+
+(cd "$T/shop/src" && TARES_AUTH_TOKEN=$kiran_tok "$F" spec --project "No such project" >/dev/null 2>&1)
+check "an unknown project name stays today's flow" '[ "$(last | jq -r ".args[-1]")" = "/tares:spec (project name: No such project)" ] && ! grep -q "^TARES_PROJECT=" "$FAKE_CLAUDE_STATE/last.env"'
+(cd "$T/shop/src" && TARES_AUTH_TOKEN=$kiran_tok "$F" spec --project "Nobody leads" >/dev/null 2>&1)
+check "a project with no lead stays today's flow" '[ "$(last | jq -r ".args[-1]")" = "/tares:spec (project name: Nobody leads)" ] && ! grep -q "^TARES_PROJECT=" "$FAKE_CLAUDE_STATE/last.env"'
+(cd "$T/shop/src" && TARES_AUTH_TOKEN=$root_tok "$F" spec --project "Acme web" >/dev/null 2>&1)
+check "a caller with no person (the root token) stays today's flow" '[ "$(last | jq -r ".args[-1]")" = "/tares:spec (project name: Acme web)" ] && ! grep -q "^TARES_PROJECT=" "$FAKE_CLAUDE_STATE/last.env"'
+
+# Only a software factory project, and only one the caller can see, makes a contributor session.
+TARES_AUTH_TOKEN=$ashish_tok api POST /api/projects '{"template": "custom", "name": "Plain notes", "objects": []}' >/dev/null
+mkproj "$ashish_tok" "Secret plan"
+hid=$(api GET /api/projects | jq -r '.projects[] | select(.name == "Secret plan") | .id')
+TARES_AUTH_TOKEN=$ashish_tok api PATCH "/api/projects/$hid" '{"scope": "private"}' >/dev/null
+check "fixture: Plain notes is led by Ashish and is not a software factory project" '[ "$(api GET /api/projects | jq -r ".projects[] | select(.name == \"Plain notes\") | .lead.name + \"/\" + (.kind // \"none\")" | cut -d/ -f1)" = Ashish ] && [ "$(api GET /api/projects | jq -r ".projects[] | select(.name == \"Plain notes\") | .kind")" != software_factory ]'
+check "fixture: Kiran's list shows Ashish's private project only as a hidden row with a lead and no kind" '[ "$(TARES_AUTH_TOKEN=$kiran_tok api GET /api/projects | jq -r ".projects[] | select(.name == \"Secret plan\") | [.hidden, .lead.name, (.kind // \"none\")] | join(\",\")")" = true,Ashish,none ] && [ "$(TARES_AUTH_TOKEN=$ashish_tok api GET /api/projects | jq -r ".projects[] | select(.name == \"Secret plan\") | .kind")" = software_factory ]'
+(cd "$T/shop/src" && TARES_AUTH_TOKEN=$kiran_tok "$F" spec --project "Plain notes" >"$T/plainnotes.out" 2>&1)
+check "a project that is not a software factory one, led by someone else, keeps the lead's flow" '[ "$(last | jq -r ".args[-1]")" = "/tares:spec (project name: Plain notes)" ] && ! grep -q "^TARES_PROJECT=" "$FAKE_CLAUDE_STATE/last.env" && ! grep -q "^TARES_SESSION_KIND=" "$FAKE_CLAUDE_STATE/last.env" && ! grep -q contributor "$T/plainnotes.out"'
+(cd "$T/shop/src" && TARES_AUTH_TOKEN=$kiran_tok "$F" spec --project "Secret plan" >"$T/secret.out" 2>&1)
+check "a private project the caller is not on keeps the lead's flow" '[ "$(last | jq -r ".args[-1]")" = "/tares:spec (project name: Secret plan)" ] && ! grep -q "^TARES_PROJECT=" "$FAKE_CLAUDE_STATE/last.env" && ! grep -q "^TARES_SESSION_KIND=" "$FAKE_CLAUDE_STATE/last.env" && ! grep -q contributor "$T/secret.out"'
+
+# The session-start hook of a contributor session says to follow the Contributor section, never the
+# `session` skill (which would have it build the project); a plain bound session still says `session`.
+hook="$here/../../claude-plugin/hooks/session-start.sh"
+hookctx() { # source, then VAR=value... for the hook
+  local src=$1; shift
+  echo "{\"source\": \"$src\"}" | env -u FACTORY_ROLE -u TARES_PROJECT -u TARES_SESSION_KIND -u TARES_SESSION_TAKEOVER "$@" bash "$hook" | jq -r '.hookSpecificOutput.additionalContext'
+}
+for src in startup compact resume; do
+  ctx=$(hookctx $src TARES_PROJECT="Acme web" TARES_SESSION_KIND=contributor)
+  check "contributor hook ($src): spec-project, section Contributor, no building" 'grep -q "contributes to the Tares project .Acme web. led by someone else" <<<"$ctx" && grep -q "spec-project. skill, section Contributor" <<<"$ctx" && grep -q "Do not build tickets" <<<"$ctx" && ! grep -q "\`session\` skill" <<<"$ctx" && ! grep -q "re-read the project.s tickets" <<<"$ctx"'
+done
+ctx=$(hookctx startup TARES_PROJECT="Acme web" TARES_SESSION_KIND=contributor)
+check "contributor hook: no resume text on a fresh start" '! grep -q "resumed or compacted" <<<"$ctx"'
+ctx=$(hookctx compact TARES_PROJECT="Acme web" TARES_SESSION_KIND=contributor)
+check "contributor hook: after compaction it says to load the skill again" 'grep -q "resumed or compacted: load the .spec-project. skill again, section Contributor" <<<"$ctx"'
+for src in startup compact; do
+  ctx=$(hookctx $src TARES_PROJECT="Acme web")
+  check "a plain bound session ($src) still follows the session skill" 'grep -q "Follow the .session. skill\|load the .session. skill again" <<<"$ctx" && ! grep -q "Contributor" <<<"$ctx"'
+done
+check "a marker without a project: the hook is silent" '[ -z "$(echo "{\"source\": \"startup\"}" | env -u FACTORY_ROLE -u TARES_PROJECT TARES_SESSION_KIND=contributor bash "$hook")" ]'
+skill="$here/../../claude-plugin/skills/spec-project/SKILL.md"
+check "the Contributor section keeps only this project's questions (Q numbers restart per project)" 'sed -n "/^## Contributor/,/^## Light mode/p" "$skill" | tr -s " \n" " " | grep -q "Keep only the entries whose .project. is .<project>."'
+
+# A lookup that fails must not block the normal flow: a curl that fails for one route.
+mkdir -p "$T/shim"
+real_curl=$(command -v curl)
+cat > "$T/shim/curl" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do case "\$a" in *"\$SHIM_FAIL") exit 22 ;; esac; done
+exec "$real_curl" "\$@"
+SHIM
+chmod +x "$T/shim/curl"
+for route in /api/whoami /api/projects; do
+  (cd "$T/shop/src" && PATH="$T/shim:$PATH" SHIM_FAIL=$route TARES_AUTH_TOKEN=$kiran_tok "$F" spec --project "Acme web" >/dev/null 2>&1)
+  check "a failed $route lookup stays today's flow" '[ "$(last | jq -r ".args[-1]")" = "/tares:spec (project name: Acme web)" ] && ! grep -q "^TARES_PROJECT=" "$FAKE_CLAUDE_STATE/last.env"'
+done
+(cd "$T/plain" && PATH="$T/shim:$PATH" SHIM_FAIL=/api/whoami TARES_AUTH_TOKEN=$kiran_tok "$F" spec --project "Acme web" >"$T/failplain.out" 2>&1); rc=$?
+check "and a failed lookup outside a repo is refused as today, not opened as a contributor" '[ $rc != 0 ] && grep -q "inside the git repo the project builds on" "$T/failplain.out"'
+
 [ $fail = 0 ] && echo "spec: all cases pass"
 exit $fail
