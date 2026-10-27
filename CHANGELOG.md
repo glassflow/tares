@@ -5,6 +5,11 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.52.0] - 2026-10-27
+
+The Projects list reads as a work queue, the software factory crew paces itself and moves onto
+new Claude Code versions on its own, and cells time every request and can close `/metrics`.
+
 ### Changed
 - Console: the Projects list no longer marks the Challenger workflow and Default projects as AI SRE
   (TR-698). The chip went to every project that was not a software factory, but a project of no
