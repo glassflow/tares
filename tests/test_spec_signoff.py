@@ -632,6 +632,60 @@ async def main():
         ck("a second run changes nothing and adds no second entry", store.get_handover(lo) == ho
            and store.list_handover_overrides(lo) == first and len(first) == 1, str(first))
 
+        print("== an area owner answers and signs off with an ordinary person key (no admin scope) ==")
+        for who in ("ashish", "kiran", "lee"):
+            r = await call("root", "POST", "/api/keys", {"name": f"{who}-plain", "scopes": ["read", "ingest"],
+                                                         "person_id": pid[who]})
+            keys[who + "_plain"] = {"Authorization": f"Bearer {r.json()['secret']}"}
+        r = await call("root", "POST", "/api/keys", {"name": "kiran-readonly", "scopes": ["read"],
+                                                     "person_id": pid["kiran"]})
+        keys["kiran_ro"] = {"Authorization": f"Bearer {r.json()['secret']}"}
+        r = await call("root", "POST", "/api/keys", {"name": "nobody-plain", "scopes": ["read", "ingest"]})
+        keys["nobody"] = {"Authorization": f"Bearer {r.json()['secret']}"}
+        r = await call("ashish", "PUT", "/api/areas/acme/plain", {"person_id": pid["kiran"]})
+        ck("set up: acme/plain is kiran's", r.status_code < 300, r.text)
+        pl = await make_project("ashish", "signoff-plain-keys")
+        await ticket("ashish", pl, "plain work", "acme/plain")
+        await call("ashish", "POST", f"/api/projects/{pl}/questions", {"repo": "acme/plain", "text": "Which port?"})
+        r = await call("lee_plain", "POST", f"/api/projects/{pl}/questions/Q1/answer", {"answer": "x"})
+        ck("lee's plain key cannot answer kiran's question: 403", r.status_code == 403, r.text)
+        r = await call("nobody", "POST", f"/api/projects/{pl}/questions/Q1/answer", {"answer": "x"})
+        ck("a plain key with no person cannot answer: 403", r.status_code == 403, r.text)
+        r = await call("kiran_ro", "POST", f"/api/projects/{pl}/questions/Q1/answer", {"answer": "x"})
+        ck("kiran's read-only key cannot answer: 403", r.status_code == 403, r.text)
+        r = await call("root", "POST", "/api/keys", {"name": "pl-project-key", "project": pl})
+        keys["projkey"] = {"Authorization": f"Bearer {r.json()['secret']}"}
+        r = await call("projkey", "POST", f"/api/projects/{pl}/questions/Q1/answer", {"answer": "x"})
+        ck("a project key cannot answer: 403", r.status_code == 403, r.text)
+        r = await call("projkey", "POST", f"/api/projects/{pl}/signoffs", {"repo": "acme/plain"})
+        ck("nor sign off: 403", r.status_code == 403, r.text)
+        ck("still open after those", store.get_spec_question(pl, "Q1")["state"] == "open")
+        r = await call("kiran_plain", "POST", f"/api/projects/{pl}/questions/Q1/answer", {"answer": "8080"})
+        ck("kiran answers with his plain key (REST)", r.status_code == 200 and r.json()["state"] == "answered"
+           and r.json()["answer"] == "8080", r.text)
+        await call("ashish", "POST", f"/api/projects/{pl}/questions", {"repo": "acme/plain", "text": "Which host?"})
+        as_(keys["kiran_plain"])
+        out = await mf.answer_question("Q2", "localhost", project="signoff-plain-keys")
+        ck("and answers the second through the MCP tool", not out.startswith("error")
+           and json.loads(out)["state"] == "answered", out)
+        r = await call("lee_plain", "POST", f"/api/projects/{pl}/signoffs", {"repo": "acme/plain"})
+        ck("lee's plain key cannot sign off kiran's repo: 403", r.status_code == 403, r.text)
+        r = await call("ashish_plain", "POST", f"/api/projects/{pl}/signoffs", {"repo": "acme/plain"})
+        ck("nor the lead's plain key: 403", r.status_code == 403, r.text)
+        r = await call("nobody", "POST", f"/api/projects/{pl}/signoffs", {"repo": "acme/plain"})
+        ck("nor a plain key with no person: 403", r.status_code == 403, r.text)
+        r = await call("kiran_ro", "POST", f"/api/projects/{pl}/signoffs", {"repo": "acme/plain"})
+        ck("nor kiran's read-only key: 403", r.status_code == 403, r.text)
+        ck("no sign-off row yet", store.list_signoffs(pl) == [])
+        r = await call("kiran_plain", "POST", f"/api/projects/{pl}/signoffs", {"repo": "acme/plain"})
+        ck("kiran signs off with his plain key (REST)", r.status_code == 201
+           and r.json()["signoffs"][0]["signed_off"] is True, r.text)
+        store.con.execute("DELETE FROM signoffs WHERE project = ?", [pl])
+        as_(keys["kiran_plain"])
+        out = await mf.sign_off("acme/plain", project="signoff-plain-keys")
+        ck("and through the MCP tool", not out.startswith("error")
+           and json.loads(out)["signoffs"][0]["signed_off"] is True, out)
+
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
 

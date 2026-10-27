@@ -302,7 +302,9 @@ in every call, and the person's own words in anything you write.
 
 1. Call `read_global_docs`, then `get_doc` for the `spec` and the `plan`, and read them.
 2. Call `my_work(project=<project>)` and read `person` (who this is) and `spec_questions` (the
-   open questions addressed to this person in this project only). Question numbers (Q1, Q2)
+   open questions addressed to this person in this project only). An error 404 ("no project you
+   can see") means the name or id is wrong or the project is not shared with this person: stop
+   and tell the user, do not retry with another spelling. Question numbers (Q1, Q2)
    restart in each project, so never answer a question from a list that was not asked for this
    project. Do not match people by display name. Ask the user each one, one at a time, with your
    recommended answer and why, so they can say yes.
