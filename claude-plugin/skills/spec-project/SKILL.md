@@ -301,19 +301,19 @@ as an area owner and to check and sign off the tickets in their repos. Use `<pro
 in every call, and the person's own words in anything you write.
 
 1. Call `read_global_docs`, then `get_doc` for the `spec` and the `plan`, and read them.
-2. Call `my_work` and read `person` (who this is) and `spec_questions` (the open questions
-   addressed to this person, across every project they can see). Keep only the entries whose
-   `project` is `<project>`: question numbers (Q1, Q2) restart in each project, so another
-   project's Q1 must never be answered here. Do not match people by display name. Ask the user each one, one at a time, with your recommended answer and why, so
-   they can say yes.
+2. Call `my_work(project=<project>)` and read `person` (who this is) and `spec_questions` (the
+   open questions addressed to this person in this project only). Question numbers (Q1, Q2)
+   restart in each project, so never answer a question from a list that was not asked for this
+   project. Do not match people by display name. Ask the user each one, one at a time, with your
+   recommended answer and why, so they can say yes.
 3. On their answer, call `answer_question(id, answer, project)` with their words. Say which
    questions are left.
 4. Call `list_tickets(project=<project>)` and keep the tickets whose `repo` is one that
    `list_areas` gives to the `person` from `my_work` (match by `person.id`, not by name). Show them
    (title, milestone, depends on, a line from the working doc) and ask what to change. Apply each
-   edit where the ticket lives: `write_ticket` (and `write_doc` for its working doc) for Tares tickets, Linear's `save_issue` for Linear ones, `gh issue edit` for
-   GitHub ones. A ticket that changes a repo this person does not own is not theirs to edit: tell
-   the lead instead.
+   edit where the ticket lives: `write_ticket` (and `write_doc` for its working doc) for Tares
+   tickets, Linear's `save_issue` for Linear ones, `gh issue edit` for GitHub ones. A ticket that
+   changes a repo this person does not own is not theirs to edit: tell the lead instead.
 5. For each repo the user says is right ("yes, acme/web is good"), call `sign_off(repo, project)`.
    Never sign off on your own judgment, and never for a repo the user has not answered for. Then
    say what is signed and what is not, and that the lead can now hand over. If `sign_off` answers

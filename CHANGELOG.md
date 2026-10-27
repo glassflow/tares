@@ -198,6 +198,12 @@ the project follows [Semantic Versioning](https://semver.org/).
   crew has a station of the same name.
 
 ### Fixed
+- The sign-off section of the project page: a cell of one person no longer shows its own repos as
+  "No area owner" or "Waiting" (they read "Lead's own repo, no sign-off needed" and count as ready).
+  `hand_over` no longer says "handed over without every sign-off" after a later hand-over that needed
+  no override. A hand-over and its entry in the override log are now saved together, and the one-time
+  copy of an older override that has no time takes the hand-over's. `my_work` takes `project` (a name or an id) and then lists only that project's questions,
+  because question numbers restart in each project; the contributor session uses it.
 - Opening another person's station on the Crew page no longer asks their machine for a context reading
   (the page says only its owner can), and the server refuses that ask with a 403. When the page
   cannot tell who you are, it says so and offers Retry instead of treating you as `local`.
