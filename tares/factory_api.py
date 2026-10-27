@@ -840,9 +840,9 @@ def register(app, store, h: SimpleNamespace) -> None:
         `in_progress` (their tickets a station holds), and `led_projects` with the milestones
         whose tickets are all delivered. `desk` is the open desk items addressed to them (TR-634);
         `spec_questions` is the open questions a spec asked of them (TR-636), in any project they
-        can see, finished or not; `project` (an id or a name) keeps only that project's, and a
-        project that does not exist keeps none. Question numbers restart per project, so a caller
-        working on one project asks for it by name."""
+        can see, finished or not; `project` (an id or a name) keeps only that project's, and one
+        that does not exist, or that the caller cannot see, answers 404. Question numbers restart
+        per project, so a caller working on one project asks for it by name."""
         me = work_person(request)
         try:
             crew_name = crew_name_of(request, crew)
@@ -880,12 +880,19 @@ def register(app, store, h: SimpleNamespace) -> None:
                 if d["project"] not in hidden and desk_is_mine(d, me["id"])]
         names = {x["id"]: x["name"] for x in store.list_projects()}
         want = (project or "").strip()
+        if want:
+            # an id or an exact name; a project the caller cannot see is as unknown as a mistyped one
+            wp = store.get_project(want) or store.get_project_by_name(want)
+            if wp is None or wp["id"] in hidden:
+                h.err(ValueError(f"no project {want!r} you can see: use a project id or its exact "
+                               "name"), 404)
+            want = wp["id"]
         asked = [{"project": names[q["project"]], "id": q["id"], "repo": q["repo"],
                   "text": q["text"], "asked_by": (q["asked_by_person"] or {}).get("name"),
                   "asked_at": q["asked_at"]}
                  for q in store.list_spec_questions(state="open", to_person_id=me["id"])
                  if q["project"] in names and q["project"] not in hidden
-                 and (not want or want in (q["project"], names[q["project"]]))]
+                 and (not want or q["project"] == want)]
         return {"person": me, "crew": crew_name, "ready": ready, "in_progress": doing,
                 "led_projects": led, "desk": desk, "spec_questions": asked}
 

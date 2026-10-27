@@ -318,6 +318,59 @@ async def main():
             ck(f"the override at cursor {n + 1} sits on the page whose next_before it is",
                landed.get(f"at {n + 2}") == [c], str(landed))
 
+        print("== a before with no zone is UTC, whatever the host's time zone is ==")
+        import time
+        # the same instant, with and without a zone, on a host and a database session that are
+        # not on UTC: the two must page alike
+        was_tz, was_db_tz = os.environ.get("TZ"), store.con.execute("SELECT current_setting('TimeZone')").fetchone()[0]
+        os.environ["TZ"] = "America/Los_Angeles"
+        time.tzset()
+        store.con.execute("SET TimeZone = 'America/Los_Angeles'")
+        try:
+            p1 = (await cx.get(f"/api/projects/{a}/timeline", params={"limit": 2})).json()
+            nb = datetime.fromisoformat(p1["next_before"])
+            aware = nb.astimezone(timezone.utc).isoformat()
+            naive = nb.astimezone(timezone.utc).replace(tzinfo=None).isoformat()
+            ck("the cursor is the same instant with and without a zone, and has a zone to drop",
+               nb.tzinfo is not None and datetime.fromisoformat(naive) == nb.astimezone(timezone.utc).replace(tzinfo=None), naive)
+            # an override a microsecond before the cursor belongs on the page that starts there
+            store.con.execute("INSERT INTO handover_overrides (project, \"at\", reason, handed_by) "
+                              "VALUES (?, ?, 'zone check', 'lead')", [a, nb - timedelta(microseconds=1)])
+            pa = (await cx.get(f"/api/projects/{a}/timeline", params={"limit": 2, "before": aware})).json()
+            pn = (await cx.get(f"/api/projects/{a}/timeline", params={"limit": 2, "before": naive})).json()
+            ck("a naive before pages like the same instant with a zone: same threads, same next_before",
+               [x["id"] for x in pn["threads"]] == [x["id"] for x in pa["threads"]]
+               and pn["next_before"] == pa["next_before"] and pa["threads"], f"{naive} {pn['next_before']} {pa['next_before']}")
+            ck("and no thread of the first page comes back",
+               not {x["id"] for x in pn["threads"]} & {x["id"] for x in p1["threads"]})
+            ck("the override lands on the same page either way, and not on the first",
+               pn.get("events") == pa.get("events") and [e["reason"] for e in pa.get("events") or []] == ["zone check"]
+               and "zone check" not in str(p1.get("events")), str(pa.get("events")))
+            r1 = (await cx.get(f"/api/projects/{a}/results", params={"limit": 1})).json()
+            rnb = datetime.fromisoformat(r1["next_before"]).astimezone(timezone.utc)
+            ra = await cx.get(f"/api/projects/{a}/results", params={"limit": 1, "before": rnb.isoformat()})
+            rn = await cx.get(f"/api/projects/{a}/results",
+                              params={"limit": 1, "before": rnb.replace(tzinfo=None).isoformat()})
+            ck("results read a naive before as UTC too", ra.status_code == rn.status_code == 200
+               and ra.json()["results"] and rn.json() == ra.json(), rn.text[:200])
+        finally:
+            if was_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = was_tz
+            time.tzset()
+            store.con.execute(f"SET TimeZone = '{was_db_tz}'")
+
+        print("== a filtered timeline leaves out the hand-over override events ==")
+        full = (await cx.get(f"/api/projects/{a}/timeline", params={"limit": 200})).json()
+        ck("unfiltered, the page carries the override", [e["reason"] for e in full.get("events") or []] == ["zone check"],
+           str(full.get("events")))
+        for name, val in (("trigger", "watch"), ("agent", "watcher"), ("outcome", "finding"),
+                          ("entity", "checkout")):
+            fp = (await cx.get(f"/api/projects/{a}/timeline", params={"limit": 200, name: val})).json()
+            ck(f"{name}= has threads and no events key", fp["threads"] and "events" not in fp,
+               str(fp.get("events")))
+
     print("== upgrade of an old database ==")
     old = Store(OLD_DB)
     old.upsert_catalog_source("evt", "webhook", "webhook", "5s", {})

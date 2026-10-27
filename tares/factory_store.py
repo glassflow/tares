@@ -353,6 +353,10 @@ class FactoryStore:
             "COALESCE(override_person_id, person_id), "
             "handed_by FROM handovers WHERE override_reason IS NOT NULL AND project NOT IN "
             "(SELECT project FROM handover_overrides)")
+        # an override with no time of its own is stamped with its hand-over's, so get_handover
+        # reads that hand-over as overridden (its rule compares the two times)
+        self.con.execute("UPDATE handovers SET override_at = COALESCE(handed_at, now()) "
+                         "WHERE override_reason IS NOT NULL AND override_at IS NULL")
         rows = self.con.execute("SELECT DISTINCT project FROM tickets WHERE number IS NULL"
                                 ).fetchall()
         for (project,) in rows:

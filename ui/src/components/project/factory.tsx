@@ -294,7 +294,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
                   <span className="mono">{r.repo}</span>
                   {r.owner ? <> · {r.owner.name}</> : null}
                   {" "}
-                  {r.exempt === "solo" ? <span className="fo-st fo-st-done">Lead's own repo, no sign-off needed</span>
+                  {r.exempt === "solo" ? <><span className="fo-st fo-st-done">Lead's own repo, no sign-off needed</span>{!r.owner && <> <Link to="/settings?tab=areas">Set one under Settings, Areas</Link></>}</>
                     : !r.owner ? <><span className="fo-st fo-st-wait">No area owner</span> <Link to="/settings?tab=areas">Set one under Settings, Areas</Link></>
                     : r.exempt === "lead" || r.is_lead ? <span className="fo-st fo-st-done">Project lead, no sign-off needed</span>
                     : r.signed_off ? <span className="fo-st fo-st-done" title={r.at ? new Date(r.at).toLocaleString() : undefined}>Signed off {r.at ? new Date(r.at).toLocaleDateString() : ""}</span>
