@@ -8,7 +8,7 @@ import type {
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults, ProjectScope,
   Skill, SkillSummary,
-  Area, Assumption, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, GrantKind, Grant, GrantsView, PersonalDoc, PersonalDocs, CrewMessage, CrewProject, CrewGroup, CrewSettings, CrewStation, Decision, DeskAllowed, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, LinearLink, LinearStatus, Milestone,
+  Area, Assumption, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, GrantKind, Grant, GrantsView, PersonalDoc, PersonalDocs, CrewMessage, CrewProject, CrewGroup, CrewSettings, CrewStation, Decision, DeskAllowed, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, SignoffRow, SpecQuestion, LinearLink, LinearStatus, Milestone,
   ProjectSession, Ticket, TicketStatus,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, ModelProvider, ModelProviders, Standup,
@@ -648,6 +648,10 @@ export const api = {
   projectCrew: (id: string) =>
     request<{ stations: CrewStation[]; handover: Handover | null; now: string }>(
       `/api/projects/${encodeURIComponent(id)}/crew`),
+  projectQuestions: (id: string) =>
+    request<{ questions: SpecQuestion[] }>(`/api/projects/${encodeURIComponent(id)}/questions`),
+  projectSignoffs: (id: string) =>
+    request<{ signoffs: SignoffRow[]; waiting_for: string[] }>(`/api/projects/${encodeURIComponent(id)}/signoffs`),
   projectSessions: (id: string) =>
     request<{ sessions: ProjectSession[]; now: string }>(`/api/projects/${encodeURIComponent(id)}/sessions`),
   projectSession: (id: string, sid: string, offset = 0) =>
