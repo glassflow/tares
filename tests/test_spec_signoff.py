@@ -96,6 +96,11 @@ async def main():
         r = await call("root", "GET", f"/api/projects/{solo}/signoffs")
         ck("signoffs still lists the repo, with no owner", r.status_code == 200
            and r.json()["signoffs"][0]["owner"] is None and r.json()["waiting_for"] == [], r.text)
+        row = r.json()["signoffs"][0]
+        ck("and says the repo needs no sign-off, so the page does not read 'No area owner' or "
+           "'Waiting'", row["exempt"] == "solo" and row["signed_off"] is False, r.text)
+        ck("the repos ready count counts it as ready", sum(
+            1 for x in r.json()["signoffs"] if x["exempt"] or x["signed_off"]) == 1, r.text)
         r = await handover("root", solo)
         ck("hand-over with an unowned repo and no sign-off: accepted", r.status_code == 200
            and r.json()["handover"]["override"] is None, r.text)
@@ -118,6 +123,16 @@ async def main():
         ck("ashish leads the project", store.get_project(uid)["lead_person_id"] == pid["ashish"])
         await ticket("ashish", uid, "api work", "acme/api")
         await ticket("ashish", uid, "web work", "acme/web")
+
+        r = await call("ashish", "GET", f"/api/projects/{uid}/signoffs")
+        rows_ = {x["repo"]: x for x in r.json()["signoffs"]}
+        ck("the lead's own repo needs no sign-off", rows_["acme/api"]["exempt"] == "lead"
+           and rows_["acme/api"]["is_lead"] is True, r.text)
+        ck("another person's repo is waiting: owner kiran, not exempt, not signed",
+           rows_["acme/web"]["exempt"] is None and rows_["acme/web"]["owner"]["name"] == "kiran"
+           and rows_["acme/web"]["signed_off"] is False, r.text)
+        ck("the ready count is 1 of 2", sum(1 for x in r.json()["signoffs"]
+                                            if x["exempt"] or x["signed_off"]) == 1, r.text)
 
         print("== ask_area goes to the owner of the repo ==")
         as_(keys["ashish"])
@@ -158,6 +173,18 @@ async def main():
            and q["answered_at"] is not None)
         r = await call("kiran", "POST", f"/api/projects/{uid}/questions/Q1/answer", {"answer": "again"})
         ck("answering twice: 409", r.status_code == 409, r.text)
+        r = await call("ashish", "GET", f"/api/projects/{uid}/questions")
+        q1 = r.json()["questions"][0]
+        ck("the questions route gives the answerer's name, not only the id",
+           (q1["answered_by_person"] or {}).get("name") == "kiran" and q1["answered_by"] == pid["kiran"]
+           and (q1["to_person"] or {}).get("name") == "kiran", r.text)
+        store.con.execute("UPDATE spec_questions SET answered_by = 'p_gone' WHERE project = ? AND id = 'Q1'",
+                          [uid])
+        q1 = (await call("ashish", "GET", f"/api/projects/{uid}/questions")).json()["questions"][0]
+        ck("a person who is gone has no name, and the raw id is all there is", q1["answered_by_person"] is None
+           and q1["answered_by"] == "p_gone", str(q1))
+        store.con.execute("UPDATE spec_questions SET answered_by = ? WHERE project = ? AND id = 'Q1'",
+                          [pid["kiran"], uid])
         ck("it leaves kiran's my_work", (await call("kiran", "GET", "/api/crew/my-work")
                                          ).json()["spec_questions"] == [])
         as_(keys["ashish"])
@@ -202,6 +229,11 @@ async def main():
         await ticket("ashish", blocked, "web work", "acme/web")
         r = await call("kiran", "POST", f"/api/projects/{blocked}/signoffs", {"repo": "acme/web"})
         ck("kiran signs acme/web there too", r.status_code == 201, r.text)
+        r = await call("ashish", "GET", f"/api/projects/{blocked}/signoffs")
+        rows_ = {x["repo"]: x for x in r.json()["signoffs"]}
+        ck("on a cell of several people a repo with no owner is not exempt (reads 'No area owner')",
+           rows_["acme/db"]["owner"] is None and rows_["acme/db"]["exempt"] is None
+           and rows_["acme/db"]["signed_off"] is False, r.text)
         r = await handover("ashish", blocked)
         ck("refused: acme/db has tickets but no area owner", r.status_code == 409
            and "acme/db has tickets but no area owner" in r.text and "acme/web" not in
@@ -466,6 +498,105 @@ async def main():
         lg = store.list_handover_overrides(old)
         ck("one entry, once, with its person", len(lg) == 1 and lg[0]["reason"] == "legacy reason"
            and (lg[0]["person"] or {}).get("id") == pid["lee"], str(lg))
+
+        print("== my_work keeps the questions of the project asked for (Q numbers restart per project) ==")
+        mp = [await make_project("ashish", f"signoff-mw{i}") for i in (1, 2)]
+        for u in mp:
+            await ticket("ashish", u, "web mw", "acme/web")
+            r = await call("ashish", "POST", f"/api/projects/{u}/questions",
+                           {"repo": "acme/web", "text": f"Q for {u}"})
+            ck("a Q1 for kiran", r.status_code == 201 and r.json()["id"] == "Q1", r.text)
+        mine = lambda out, name: [q for q in out["spec_questions"] if q["project"] == name]
+        as_(keys["kiran"])
+        out = json.loads(await mf.my_work(project="signoff-mw1"))
+        ck("my_work(project=p1) returns only p1's questions, by name", out["spec_questions"] and all(
+            q["project"] == "signoff-mw1" for q in out["spec_questions"])
+           and [q["id"] for q in out["spec_questions"]] == ["Q1"], str(out["spec_questions"]))
+        out = json.loads(await mf.my_work(project=mp[1]))
+        ck("an id works too, and returns p2's", [(q["project"], q["id"]) for q in out["spec_questions"]]
+           == [("signoff-mw2", "Q1")], str(out["spec_questions"]))
+        out = json.loads(await mf.my_work())
+        ck("with no project both Q1s come back, as before", len(mine(out, "signoff-mw1")) == 1
+           and len(mine(out, "signoff-mw2")) == 1, str(out["spec_questions"])[:300])
+        out = json.loads(await mf.my_work(project="signoff-nope"))
+        ck("an unknown project returns no questions", out["spec_questions"] == [], str(out))
+        r = await call("kiran", "GET", "/api/crew/my-work", project="signoff-mw2")
+        ck("the route filters the same way", [q["project"] for q in r.json()["spec_questions"]]
+           == ["signoff-mw2"], r.text)
+
+        print("== hand_over says 'without every sign-off' only for the hand-over that was overridden ==")
+        hv = await make_project("ashish", "signoff-says")
+        await ticket("ashish", hv, "web says", "acme/web")
+        as_(keys["ashish"])
+        repos_ = [{"path": os.path.join(_TMP, "r"), "name": "acme/api"}]
+        out = await mf.hand_over(project="signoff-says", repos=repos_, override_reason="kiran is away")
+        ck("the overridden hand-over says so, with the reason",
+           "handed over without every sign-off: kiran is away" in out, out)
+        ck("get_handover marks it overridden", store.get_handover(hv)["overridden"] is True)
+        r = await call("kiran", "POST", f"/api/projects/{hv}/signoffs", {"repo": "acme/web"})
+        ck("kiran signs afterwards", r.status_code == 201, r.text)
+        out = await mf.hand_over(project="signoff-says", repos=repos_)
+        ck("a later clean hand-over does not say it", out.startswith("Recorded")
+           and "without every sign-off" not in out, out)
+        ho = store.get_handover(hv)
+        ck("it is not overridden, though the page still lists the earlier override",
+           ho["overridden"] is False and ho["override"]["reason"] == "kiran is away"
+           and len(ho["overrides"]) == 1, str(ho))
+        out = await mf.hand_over(project="signoff-says", repos=repos_, override_reason="again, still away")
+        ck("an override on a hand-over that needed none is not stored", "without every sign-off" not in out
+           and store.get_handover(hv)["overridden"] is False and len(store.get_handover(hv)["overrides"]) == 1,
+           out)
+
+        print("== the hand-over and its override log entry are saved together ==")
+        tx = await make_project("ashish", "signoff-txn")
+        t1 = datetime.now(timezone.utc) - timedelta(hours=2)
+        store.set_handover(tx, [{"path": "/w/one"}], "L3-review", "first", t1, pid["ashish"], "crewA")
+        before_ho = store.get_handover(tx)
+        store.con.execute("ALTER TABLE handover_overrides RENAME TO handover_overrides_off")
+        try:
+            store.set_handover(tx, [{"path": "/w/two"}], None, "second", datetime.now(timezone.utc),
+                               pid["lee"], "crewB", "pushed through")
+            failed = False
+        except Exception:   # noqa: BLE001
+            failed = True
+        finally:
+            store.con.execute("ALTER TABLE handover_overrides_off RENAME TO handover_overrides")
+        after_ho = store.get_handover(tx)
+        ck("a failing log insert makes the hand-over fail", failed)
+        ck("and leaves the hand-over row as it was", after_ho == before_ho and after_ho["override"] is None
+           and after_ho["by"] == "first" and after_ho["repos"] == [{"path": "/w/one"}], str(after_ho))
+        ck("with no log entry", store.list_handover_overrides(tx) == [])
+        store.set_handover(tx, [{"path": "/w/two"}], None, "second", datetime.now(timezone.utc), pid["lee"],
+                           "crewB", "pushed through")
+        ck("the connection is usable after the rollback: the next save lands, with its entry",
+           store.get_handover(tx)["by"] == "second"
+           and [o["reason"] for o in store.list_handover_overrides(tx)] == ["pushed through"])
+
+        print("== the one-time backfill copes with an override that has no time ==")
+        for name, drop_handed in (("signoff-nullat", False), ("signoff-nullboth", True)):
+            nu = await make_project("ashish", name)
+            hat = datetime.now(timezone.utc) - timedelta(days=1)
+            store.set_handover(nu, [{"path": "/w/x"}], None, "", hat, pid["lee"], None, "no time kept")
+            store.con.execute("UPDATE handovers SET override_at = NULL WHERE project = ?", [nu])
+            if drop_handed:
+                store.con.execute("UPDATE handovers SET handed_at = NULL WHERE project = ?", [nu])
+            store.con.execute("DELETE FROM handover_overrides WHERE project = ?", [nu])
+            try:
+                store._factory_upgrade()
+                raised = None
+            except Exception as e:   # noqa: BLE001
+                raised = repr(e)
+            lg = store.list_handover_overrides(nu)
+            ck(f"{name}: the upgrade does not raise and makes one entry", raised is None and len(lg) == 1
+               and lg[0]["at"] is not None and lg[0]["reason"] == "no time kept", f"{raised} {lg}")
+            if not drop_handed:
+                ck(f"{name}: the entry takes the hand-over's own time", lg[0]["at"] == hat, str(lg))
+            else:
+                ck(f"{name}: with no hand-over time either it is stamped now",
+                   abs((lg[0]["at"] - datetime.now(timezone.utc)).total_seconds()) < 120, str(lg))
+            r = await call("ashish", "GET", f"/api/projects/{nu}/timeline")
+            ck(f"{name}: the project timeline loads and carries it", r.status_code == 200
+               and [e["reason"] for e in r.json().get("events") or []] == ["no time kept"], r.text)
 
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)

@@ -62,7 +62,7 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const questionRows = [...(qs?.questions ?? [])].sort((a, b) => (a.state === "open" ? 0 : 1) - (b.state === "open" ? 0 : 1));
   const openQuestions = questionRows.filter((q) => q.state === "open").length;
   const signoffRows = so?.signoffs ?? [];
-  const signed = signoffRows.filter((r) => r.is_lead || r.signed_off).length;
+  const signed = signoffRows.filter((r) => r.exempt || r.is_lead || r.signed_off).length;
   const overrides = crew?.handover?.overrides?.length ? crew.handover.overrides
     : crew?.handover?.override ? [crew.handover.override] : [];
   // the repos the project touches (TR-463); picking one narrows the ticket list to its tickets
@@ -294,8 +294,9 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
                   <span className="mono">{r.repo}</span>
                   {r.owner ? <> · {r.owner.name}</> : null}
                   {" "}
-                  {!r.owner ? <><span className="fo-st fo-st-wait">No area owner</span> <Link to="/settings?tab=areas">Set one under Settings, Areas</Link></>
-                    : r.is_lead ? <span className="fo-st fo-st-done">Project lead, no sign-off needed</span>
+                  {r.exempt === "solo" ? <span className="fo-st fo-st-done">Lead's own repo, no sign-off needed</span>
+                    : !r.owner ? <><span className="fo-st fo-st-wait">No area owner</span> <Link to="/settings?tab=areas">Set one under Settings, Areas</Link></>
+                    : r.exempt === "lead" || r.is_lead ? <span className="fo-st fo-st-done">Project lead, no sign-off needed</span>
                     : r.signed_off ? <span className="fo-st fo-st-done" title={r.at ? new Date(r.at).toLocaleString() : undefined}>Signed off {r.at ? new Date(r.at).toLocaleDateString() : ""}</span>
                     : <span className="fo-st fo-st-wait">Waiting</span>}
                 </li>

@@ -577,9 +577,10 @@ export interface SpecQuestion {
   asked_by: string | null; asked_at: string; answer: string | null; answered_by: string | null;
   answered_by_person?: PersonRef | null; answered_at: string | null; state: "open" | "answered";
 }
-// One repo a project has tickets in: who owns its area, and whether they signed off (TR-636)
-export interface SignoffRow { repo: string; owner: PersonRef | null; is_lead: boolean; signed_off: boolean; at: string | null }
-export interface Handover { override?: HandoverOverride | null; overrides?: HandoverOverride[]; repo: string | null; repos: HandoverRepo[]; autonomy: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null; at: string; finished?: ProjectFinished | null }
+// One repo a project has tickets in: who owns its area, and whether they signed off (TR-636).
+// `exempt` says why it needs no sign-off: a cell of one person ("solo") or the owner leads the project.
+export interface SignoffRow { repo: string; owner: PersonRef | null; is_lead: boolean; exempt?: "solo" | "lead" | null; signed_off: boolean; at: string | null }
+export interface Handover { override?: HandoverOverride | null; overridden?: boolean; overrides?: HandoverOverride[]; repo: string | null; repos: HandoverRepo[]; autonomy: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null; at: string; finished?: ProjectFinished | null }
 // A repo a project touches, with the tickets that change it and their open pull requests (TR-463)
 export interface RepoPR {
   url: string; ticket: string; number: number | null; title: string; branch: string | null;

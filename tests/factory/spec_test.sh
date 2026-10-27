@@ -139,7 +139,7 @@ for src in startup compact; do
 done
 check "a marker without a project: the hook is silent" '[ -z "$(echo "{\"source\": \"startup\"}" | env -u FACTORY_ROLE -u TARES_PROJECT TARES_SESSION_KIND=contributor bash "$hook")" ]'
 skill="$here/../../claude-plugin/skills/spec-project/SKILL.md"
-check "the Contributor section keeps only this project's questions (Q numbers restart per project)" 'sed -n "/^## Contributor/,/^## Light mode/p" "$skill" | tr -s " \n" " " | grep -q "Keep only the entries whose .project. is .<project>."'
+check "the Contributor section asks my_work for this project's questions (Q numbers restart per project)" 'sed -n "/^## Contributor/,/^## Light mode/p" "$skill" | tr -s " \n" " " | grep -q "Call .my_work(project=<project>). and read .person. (who this is) and .spec_questions." && sed -n "/^## Contributor/,/^## Light mode/p" "$skill" | tr -s " \n" " " | grep -q "restart in each project"'
 
 # A lookup that fails must not block the normal flow: a curl that fails for one route.
 mkdir -p "$T/shim"

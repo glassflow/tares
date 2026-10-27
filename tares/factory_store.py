@@ -345,10 +345,12 @@ class FactoryStore:
             cid = self._crew_id("crew", "local", "", now_utc())
             self.con.execute("UPDATE session_stations SET crew_id = ? WHERE crew_id IS NULL",
                              [cid])
-        # an override kept before the log existed is its first entry (TR-640)
+        # an override kept before the log existed is its first entry (TR-640); one with no time of
+        # its own takes the hand-over's, else now, so a log entry always has a time
         self.con.execute(
             "INSERT INTO handover_overrides (project, \"at\", reason, person_id, handed_by) "
-            "SELECT project, override_at, override_reason, COALESCE(override_person_id, person_id), "
+            "SELECT project, COALESCE(override_at, handed_at, now()), override_reason, "
+            "COALESCE(override_person_id, person_id), "
             "handed_by FROM handovers WHERE override_reason IS NOT NULL AND project NOT IN "
             "(SELECT project FROM handover_overrides)")
         rows = self.con.execute("SELECT DISTINCT project FROM tickets WHERE number IS NULL"
@@ -1061,33 +1063,40 @@ class FactoryStore:
         stays attributed to `person_id` of the hand-over that gave it. Every override is also
         appended to a log (`list_handover_overrides`), so a later one does not replace it."""
         first = next((r["path"] for r in repos if r.get("path")), None)
+        # the hand-over and its entry in the override log are saved together or not at all
         with self._lock:
-            self.con.execute(
-                "INSERT INTO handovers (project, repo, handed_by, handed_at, repos, autonomy, "
-                "person_id, crew, override_reason, override_at, override_person_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT (project) DO UPDATE SET "
-                "repo = excluded.repo, handed_by = excluded.handed_by, "
-                "person_id = excluded.person_id, crew = excluded.crew, "
-                "override_reason = COALESCE(excluded.override_reason, handovers.override_reason), "
-                "override_at = COALESCE(excluded.override_at, handovers.override_at), "
-                "override_person_id = COALESCE(excluded.override_person_id, "
-                "handovers.override_person_id), "
-                "finished_person_id = NULL, "
-                "taken_person_id = NULL, "
-                "handed_at = excluded.handed_at, repos = excluded.repos, "
-                "autonomy = excluded.autonomy, finished_at = NULL, finished_words = NULL, "
-                "finished_decision = NULL, finished_by = NULL, taken_at = NULL, "
-                "taken_words = NULL, taken_by = NULL, released_at = NULL",
-                [project, first, by or None, at, json.dumps(repos), autonomy or None,
-                 person_id or None, crew or None, override_reason or None,
-                 at if override_reason else None,
-                 (person_id or None) if override_reason else None])
-            if override_reason:
+            self.con.execute("BEGIN TRANSACTION")
+            try:
                 self.con.execute(
-                    "INSERT INTO handover_overrides (project, \"at\", reason, person_id, handed_by) "
-                    "VALUES (?, ?, ?, ?, ?)", [project, at, override_reason, person_id or None,
-                                               by or None])
+                    "INSERT INTO handovers (project, repo, handed_by, handed_at, repos, autonomy, "
+                    "person_id, crew, override_reason, override_at, override_person_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT (project) DO UPDATE SET "
+                    "repo = excluded.repo, handed_by = excluded.handed_by, "
+                    "person_id = excluded.person_id, crew = excluded.crew, "
+                    "override_reason = COALESCE(excluded.override_reason, handovers.override_reason), "
+                    "override_at = COALESCE(excluded.override_at, handovers.override_at), "
+                    "override_person_id = COALESCE(excluded.override_person_id, "
+                    "handovers.override_person_id), "
+                    "finished_person_id = NULL, "
+                    "taken_person_id = NULL, "
+                    "handed_at = excluded.handed_at, repos = excluded.repos, "
+                    "autonomy = excluded.autonomy, finished_at = NULL, finished_words = NULL, "
+                    "finished_decision = NULL, finished_by = NULL, taken_at = NULL, "
+                    "taken_words = NULL, taken_by = NULL, released_at = NULL",
+                    [project, first, by or None, at, json.dumps(repos), autonomy or None,
+                     person_id or None, crew or None, override_reason or None,
+                     at if override_reason else None,
+                     (person_id or None) if override_reason else None])
+                if override_reason:
+                    self.con.execute(
+                        "INSERT INTO handover_overrides (project, \"at\", reason, person_id, "
+                        "handed_by) VALUES (?, ?, ?, ?, ?)",
+                        [project, at, override_reason, person_id or None, by or None])
+                self.con.execute("COMMIT")
+            except Exception:
+                self.con.execute("ROLLBACK")
+                raise
 
     def list_handover_overrides(self, project: str) -> list[dict]:
         """Every hand-over the lead pushed through without all sign-offs, oldest first:
@@ -1161,6 +1170,9 @@ class FactoryStore:
                "handed_by_person": refs.get(r[13]), "crew": r[16],
                "override": ({"reason": r[17], "at": r[18], "person": refs.get(op),
                              "by_label": by_label(refs.get(op), oby)} if r[17] else None),
+               # true only when the latest hand-over itself carried the override: a later clean
+               # one leaves `override` (the latest ever) in place but is not overridden
+               "overridden": bool(r[17] and r[18] is not None and r[18] == r[2]),
                "overrides": self.list_handover_overrides(project) if r[17] else [],
                "finished": ({"at": r[5], "words": r[6], "decision": r[7], "by": r[8],
                              "person": refs.get(r[14]), "by_label": by_label(refs.get(r[14]), r[8])}

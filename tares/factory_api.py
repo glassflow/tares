@@ -834,13 +834,15 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "now": now_utc()}
 
     @app.get("/api/crew/my-work")
-    async def my_work(request: Request, crew: str | None = None):
+    async def my_work(request: Request, crew: str | None = None, project: str | None = None):
         """What belongs to the caller's person (TR-633), across the projects that have an open
         hand-over and that the caller can see: `ready` (their tickets that can start),
         `in_progress` (their tickets a station holds), and `led_projects` with the milestones
         whose tickets are all delivered. `desk` is the open desk items addressed to them (TR-634);
         `spec_questions` is the open questions a spec asked of them (TR-636), in any project they
-        can see, finished or not."""
+        can see, finished or not; `project` (an id or a name) keeps only that project's, and a
+        project that does not exist keeps none. Question numbers restart per project, so a caller
+        working on one project asks for it by name."""
         me = work_person(request)
         try:
             crew_name = crew_name_of(request, crew)
@@ -877,11 +879,13 @@ def register(app, store, h: SimpleNamespace) -> None:
                 for d in map(desk_out, store.list_desk("open"))
                 if d["project"] not in hidden and desk_is_mine(d, me["id"])]
         names = {x["id"]: x["name"] for x in store.list_projects()}
+        want = (project or "").strip()
         asked = [{"project": names[q["project"]], "id": q["id"], "repo": q["repo"],
                   "text": q["text"], "asked_by": (q["asked_by_person"] or {}).get("name"),
                   "asked_at": q["asked_at"]}
                  for q in store.list_spec_questions(state="open", to_person_id=me["id"])
-                 if q["project"] in names and q["project"] not in hidden]
+                 if q["project"] in names and q["project"] not in hidden
+                 and (not want or want in (q["project"], names[q["project"]]))]
         return {"person": me, "crew": crew_name, "ready": ready, "in_progress": doing,
                 "led_projects": led, "desk": desk, "spec_questions": asked}
 
@@ -1854,29 +1858,34 @@ def register(app, store, h: SimpleNamespace) -> None:
 
     def signoff_state(uid: str, p: dict) -> list[dict]:
         """One row per repo with tickets: its area owner (None when nobody owns it), whether the
-        owner is the project's lead (no sign-off needed) and whether the owner has signed off."""
+        owner is the project's lead and whether the owner has signed off. `exempt` says why the
+        repo needs no sign-off: "solo" on a cell of one person (only `local`: the lead owns every
+        area), "lead" when the owner leads the project, else None. The hand-over waits only for
+        the rows with no `exempt`."""
         signed = {x["repo"]: x for x in store.list_signoffs(uid)}
         lead = p.get("lead_person_id")
+        solo = store.only_local_person()
         out = []
         for repo in ticket_repos(uid):
             o = h.area_owner(repo)
             row = signed.get(repo)
+            is_lead = bool(o and lead and o["id"] == lead)
             out.append({"repo": repo, "owner": {"id": o["id"], "name": o["name"]} if o else None,
-                        "is_lead": bool(o and lead and o["id"] == lead),
+                        "is_lead": is_lead, "exempt": "solo" if solo else "lead" if is_lead else None,
                         "signed_off": bool(o and row and row["person_id"] == o["id"]),
                         "at": row["at"] if row else None})
         return out
 
     def signoff_gaps(uid: str, p: dict) -> list[str]:
-        """What the hand-over still waits for, one sentence each; empty when nothing. A cell of
-        one person (only `local`) waits for nothing."""
-        if store.only_local_person():
-            return []
+        """What the hand-over still waits for, one sentence each; empty when nothing. A repo
+        that needs no sign-off (`exempt`) waits for nothing."""
         gaps = []
         for r in signoff_state(uid, p):
+            if r["exempt"]:
+                continue
             if r["owner"] is None:
                 gaps.append(f"{r['repo']} has tickets but no area owner")
-            elif not (r["is_lead"] or r["signed_off"]):
+            elif not r["signed_off"]:
                 gaps.append(f"{r['repo']}: {r['owner']['name']} (not signed off)")
         return gaps
 

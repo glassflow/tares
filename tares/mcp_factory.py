@@ -685,7 +685,7 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
              for x in ho.get("repos") or []] or ["repo: (none given: pass repos=[{path, name}])"]
     if ho.get("autonomy"):
         lines.append(f"autonomy: {ho['autonomy']}")
-    if ho.get("override"):
+    if ho.get("overridden") and ho.get("override"):   # this hand-over, not an earlier one
         lines.append(f"handed over without every sign-off: {ho['override']['reason']}")
     others = "Other people's crews pick up their own tickets on their next tick."
     orch = [s for s in (crew.json().get("stations") or []) if s.get("role") == "orchestrator"
@@ -708,7 +708,7 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
 
 
 @mcp.tool()
-async def my_work(crew: str = "") -> str:
+async def my_work(crew: str = "", project: str = "") -> str:
     """What belongs to the person whose key this is, across the projects handed to a crew that
     they can see: `ready` (their tickets that can start: nothing they wait on is open), `in_progress`
     (their tickets a station holds, with the holder and stage), `led_projects` (projects they
@@ -716,9 +716,14 @@ async def my_work(crew: str = "") -> str:
     `desk` (the open desk items addressed to them) and `spec_questions` (the open questions a
     spec asked them as the owner of a repo: answer each with answer_question). `crew`
     names your crew; empty means the crew this session belongs to. The orchestrator of a crew works from this, so it starts
-    only its own person's tickets. Needs a key with a person."""
+    only its own person's tickets. `project` (a name or an id) keeps `spec_questions` to that
+    project: question numbers restart in each project, so name it when you work on one. Empty
+    lists the questions of every project. Needs a key with a person."""
+    params = {"crew": crew or _caller("crew")}
+    if project.strip():
+        params["project"] = project.strip()
     async with _cx(15) as cx:
-        r = await cx.get(f"{TARESD}/api/crew/my-work", params={"crew": crew or _caller("crew")})
+        r = await cx.get(f"{TARESD}/api/crew/my-work", params=params)
     return _out(r)
 
 
