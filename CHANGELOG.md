@@ -204,6 +204,12 @@ the project follows [Semantic Versioning](https://semver.org/).
   no override. A hand-over and its entry in the override log are now saved together, and the one-time
   copy of an older override that has no time takes the hand-over's. `my_work` takes `project` (a name or an id) and then lists only that project's questions,
   because question numbers restart in each project; the contributor session uses it.
+- Follow-ups to the sign-off work: an older override that has no time of its own now reads as
+  overridden after the upgrade. A cell of one person still shows "Set one under Settings, Areas" next
+  to an unowned repo. `my_work` with a `project` that does not exist, or that you cannot see, answers
+  404 and names it, instead of an empty list. A `before` without a zone on the project timeline and
+  results is read as UTC, not as the host's time. A timeline filtered by `trigger`, `agent`, `outcome`
+  or `entity` leaves out the hand-over override events, which match none of them.
 - Opening another person's station on the Crew page no longer asks their machine for a context reading
   (the page says only its owner can), and the server refuses that ask with a 403. When the page
   cannot tell who you are, it says so and offers Retry instead of treating you as `local`.

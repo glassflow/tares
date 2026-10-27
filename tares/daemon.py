@@ -3945,7 +3945,9 @@ def make_app() -> FastAPI:
                                entity: str = ""):
         """Everything that happened in the project, newest first, one thread per firing or
         unprompted run, with what each led to nested inside (TR-331). Page with `before` =
-        the previous page's `next_before`."""
+        the previous page's `next_before`; a `before` without a zone is UTC. Any of `trigger`,
+        `agent`, `outcome`, `entity` shows only the threads that match, so the hand-overs pushed
+        through without every sign-off (`events`) are left out: they have none of those."""
         _project_or_404(uid)
         if projects.get(uid) is None:
             _err(KeyError(f"unknown project {uid!r}"), 404)
@@ -3953,6 +3955,8 @@ def make_app() -> FastAPI:
         if before:
             try:
                 at = datetime.fromisoformat(before.replace("Z", "+00:00"))
+                if at.tzinfo is None:   # no zone means UTC, not the host's time
+                    at = at.replace(tzinfo=timezone.utc)
             except ValueError:
                 _err(ValueError("before must be an ISO timestamp, as next_before gives it"))
         if outcome and outcome not in timeline.OUTCOMES:
@@ -3962,8 +3966,9 @@ def make_app() -> FastAPI:
         out = await asyncio.to_thread(
             timeline.project_timeline, store, uid, limit=limit, before=at, trigger=trigger,
             agent=agent, outcome=outcome, entity=entity, scheduled=scheduled)
-        events = timeline.override_events(store.list_handover_overrides(uid), at,
-                                          out.get("next_before"))
+        filtered = bool(trigger or agent or outcome or entity)
+        events = [] if filtered else timeline.override_events(
+            store.list_handover_overrides(uid), at, out.get("next_before"))
         if events:
             # every hand-over the lead pushed through without every sign-off (TR-636), on the page
             # whose window holds its time, so across pages none repeats and none is lost
@@ -3999,13 +4004,16 @@ def make_app() -> FastAPI:
     @app.get("/api/projects/{uid}/results")
     async def project_results(uid: str, limit: int = 20, before: str = "", show: str = ""):
         """What the agents concluded, newest first: one result per chain of runs. Page with
-        `before` = the previous page's `next_before`. `show`: "findings" leaves out the runs that
-        had nothing to report, "agent:<name>" keeps that agent's conclusions."""
+        `before` = the previous page's `next_before`; a `before` without a zone is UTC. `show`:
+        "findings" leaves out the runs that had nothing to report, "agent:<name>" keeps that
+        agent's conclusions."""
         _project_or_404(uid)
         at = None
         if before:
             try:
                 at = datetime.fromisoformat(before.replace("Z", "+00:00"))
+                if at.tzinfo is None:   # no zone means UTC, not the host's time
+                    at = at.replace(tzinfo=timezone.utc)
             except ValueError:
                 _err(ValueError("before must be an ISO timestamp, as next_before gives it"))
         if show and show != "findings" and not show.startswith("agent:"):

@@ -518,8 +518,26 @@ async def main():
         out = json.loads(await mf.my_work())
         ck("with no project both Q1s come back, as before", len(mine(out, "signoff-mw1")) == 1
            and len(mine(out, "signoff-mw2")) == 1, str(out["spec_questions"])[:300])
-        out = json.loads(await mf.my_work(project="signoff-nope"))
-        ck("an unknown project returns no questions", out["spec_questions"] == [], str(out))
+        out = await mf.my_work(project="signoff-nope")
+        ck("an unknown project is a clear error naming it, not an empty list",
+           out.startswith("error 404:") and "no project 'signoff-nope' you can see" in out
+           and "project id or its exact name" in out, out)
+        r = await call("kiran", "GET", "/api/crew/my-work", project="signoff-nope")
+        ck("the route answers 404 with that message", r.status_code == 404
+           and "no project 'signoff-nope' you can see" in r.json()["detail"], r.text)
+        r = await call("kiran", "GET", "/api/crew/my-work", project=mp[1])
+        ck("an id still works on the route, and a name too", r.status_code == 200
+           and [q["id"] for q in r.json()["spec_questions"]] == ["Q1"]
+           and (await call("kiran", "GET", "/api/crew/my-work", project="signoff-mw1")).status_code == 200,
+           r.text)
+        r = await call("kiran", "GET", "/api/crew/my-work", project="signoff-private")
+        r2 = await call("kiran", "GET", "/api/crew/my-work", project="signoff-nope-either")
+        ck("a project hidden from the caller is the same 404, naming only what was typed",
+           r.status_code == 404 and r.json()["detail"].replace("signoff-private", "X")
+           == r2.json()["detail"].replace("signoff-nope-either", "X") and "private question" not in r.text,
+           r.text)
+        r = await call("kiran", "GET", "/api/crew/my-work", project=" ")
+        ck("a blank project keeps today's behaviour", r.status_code == 200, r.text)
         r = await call("kiran", "GET", "/api/crew/my-work", project="signoff-mw2")
         ck("the route filters the same way", [q["project"] for q in r.json()["spec_questions"]]
            == ["signoff-mw2"], r.text)
@@ -597,6 +615,22 @@ async def main():
             r = await call("ashish", "GET", f"/api/projects/{nu}/timeline")
             ck(f"{name}: the project timeline loads and carries it", r.status_code == 200
                and [e["reason"] for e in r.json().get("events") or []] == ["no time kept"], r.text)
+
+        print("== a legacy override with no time reads as overridden after the upgrade ==")
+        lo = await make_project("ashish", "signoff-legacy-notime")
+        hat = datetime.now(timezone.utc) - timedelta(days=2)
+        store.set_handover(lo, [{"path": "/w/x"}], None, "", hat, pid["lee"], None, "old and untimed")
+        store.con.execute("UPDATE handovers SET override_at = NULL WHERE project = ?", [lo])
+        store.con.execute("DELETE FROM handover_overrides WHERE project = ?", [lo])
+        ck("before the upgrade it reads as not overridden", store.get_handover(lo)["overridden"] is False)
+        store._factory_upgrade()
+        ho = store.get_handover(lo)
+        ck("after it, overridden, with the hand-over's time", ho["overridden"] is True
+           and ho["override"]["at"] == hat, str(ho["override"]))
+        first = store.list_handover_overrides(lo)
+        store._factory_upgrade()
+        ck("a second run changes nothing and adds no second entry", store.get_handover(lo) == ho
+           and store.list_handover_overrides(lo) == first and len(first) == 1, str(first))
 
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
