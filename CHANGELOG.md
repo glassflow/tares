@@ -229,9 +229,10 @@ the project follows [Semantic Versioning](https://semver.org/).
   Tares, and a grant that cannot be settled stays waiting instead of failing the read.
 - Answering a spec question and signing off a repo now work with an ordinary key bound to a
   person (read and ingest scopes, no admin). They were refused with "this credential
-  lacks the 'admin' scope", so an area owner needed an admin key. Still only the person the question
-  is for answers it, and only the repo's current area owner signs off; anyone else gets 403. On a
-  cell with one person, a key bound to nobody acts as that person, so it can do both for them.
+  lacks the 'admin' scope", so an area owner needed an admin key. The same checks apply as before:
+  a question is answered by the person it is addressed to, and a repo is signed off by its current
+  area owner; anyone else gets 403. On a cell with one person, a key bound to nobody acts as that
+  person (`local`), so it can do both for them.
   The contributor part of the spec skill now says what to do when an ordinary key is refused a
   ticket edit (pass it to the lead), and quotes the real 404 text of `my_work`.
 
