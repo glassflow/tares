@@ -302,8 +302,9 @@ in every call, and the person's own words in anything you write.
 
 1. Call `read_global_docs`, then `get_doc` for the `spec` and the `plan`, and read them.
 2. Call `my_work(project=<project>)` and read `person` (who this is) and `spec_questions` (the
-   open questions addressed to this person in this project only). An error 404 ("no project you
-   can see") means the name or id is wrong or the project is not shared with this person: stop
+   open questions addressed to this person in this project only). An error 404 ("no project 'x' you
+   can see: use a project id or its exact name") means the name or id is wrong or the project is
+   not shared with this person: stop
    and tell the user, do not retry with another spelling. Question numbers (Q1, Q2)
    restart in each project, so never answer a question from a list that was not asked for this
    project. Do not match people by display name. Ask the user each one, one at a time, with your
@@ -315,7 +316,11 @@ in every call, and the person's own words in anything you write.
    (title, milestone, depends on, a line from the working doc) and ask what to change. Apply each
    edit where the ticket lives: `write_ticket` (and `write_doc` for its working doc) for Tares
    tickets, Linear's `save_issue` for Linear ones, `gh issue edit` for GitHub ones. A ticket that
-   changes a repo this person does not own is not theirs to edit: tell the lead instead.
+   changes a repo this person does not own is not theirs to edit: tell the lead instead. Editing a
+   ticket or its working doc needs a key with the `admin` scope, and an ordinary key (read and
+   ingest) is refused with 403 "this credential lacks the 'admin' scope". On that 403, do not retry
+   and do not go around it: write the change the person wants, ticket by ticket, in your reply and
+   tell the user to pass it to <lead>, who makes it. Answering and signing off still work.
 5. For each repo the user says is right ("yes, acme/web is good"), call `sign_off(repo, project)`.
    Never sign off on your own judgment, and never for a repo the user has not answered for. Then
    say what is signed and what is not, and that the lead can now hand over. If `sign_off` answers
