@@ -52,6 +52,8 @@ the project follows [Semantic Versioning](https://semver.org/).
   `hand_over` is refused for a key with no person, and `crew_projects` shows a person only the
   projects they lead or hold a ticket in, so the `factory` bash CLI, which reads that list, shows a person
   only their own projects too.
+  A ticket with no assignee counts as its project lead's; only a project with no lead leaves it to
+  `local`, so on a team cell the lead sees it in their `my_work` and `local` no longer does.
 - Crews on the cell: it keeps a record of each crew (the person, the crew's name and the machine it
   runs on) and lists stations by crew, so two crews with the same station names never merge. The
   plugin stamps the machine (`hostname -s`, or `FACTORY_MACHINE`) next to the crew name, and the

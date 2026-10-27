@@ -5,8 +5,9 @@ assigned to them that are ready, the ones a station holds, and the milestones of
 lead whose tickets are all delivered; a ticket that waits on someone else's turns ready once that
 one is merged; a person with no tickets sees empty lists; `desk` and `spec_questions` are always
 there; the route is not taken for a station called `my-work`; a key with no person is refused (also
-for hand_over); the root token is the person `local` and keeps working; the crew name comes from
-`crew`, the X-Tares-Crew header or FACTORY_CREW, else `crew`. The hand-over records who handed it
+for hand_over); the root token is the person `local` and keeps working; a ticket with no assignee
+is its project lead's, and the person `local`'s only in a project with no lead; the crew name comes
+from `crew`, the X-Tares-Crew header or FACTORY_CREW, else `crew`. The hand-over records who handed it
 over and to which crew; the `hand_over` tool names `<crew>-orchestrator` of the caller's own crew
 and never another person's running one; /api/crew/projects narrows to the person's projects and
 the root token still sees them all.
@@ -327,6 +328,30 @@ async def main():
         as_(keys["bot"])
         out = await mf.hand_over(project="Blog", repos=[{"path": "/w/blog"}])
         ck("the tool is refused for a key with no person", NO_PERSON in out, out)
+        as_(root)
+
+        print("== a ticket with no assignee is its project lead's ==")
+        async with mk() as cx:
+            r = await cx.post("/api/projects", json={"template": "custom", "name": "Duty",
+                                                     "objects": [], "kind": "software_factory"})
+            duty = r.json()["id"]
+            store.set_project_lead(duty, pid["P"])
+            r = await cx.post(f"/api/projects/{duty}/tickets", json={"title": "Nobody's yet"})
+            ck("an unassigned ticket is made in a project P leads", r.status_code == 201, r.text)
+            r = await cx.post(f"/api/projects/{duty}/tickets",
+                              json={"title": "Q's own", "assignee": pid["Q"]})
+            r = await cx.post(f"/api/projects/{duty}/handover", json={"repos": [{"path": "/w/d"}]})
+            ck("root hands Duty over", r.status_code == 200, r.text)
+        rows = lambda w: [x for x in w["ready"] if x["project"] == "Duty"]
+        ck("P, who leads Duty, has its unassigned ticket", names(rows((await work("P")).json())) == ["T1"])
+        ck("Q has only the ticket assigned to Q", names(rows((await work("Q")).json())) == ["T2"])
+        ck("R has none of them", rows((await work("R")).json()) == [])
+        ck("the person local, in a team cell, does not get the unassigned ticket of a project with a lead",
+           rows((await work(None)).json()) == [])
+        ck("and the lonely project, with no lead, is still local's",
+           names([x for x in (await work(None)).json()["ready"] if x["project"] == "Lonely"]) == ["T1"])
+        ck("P sees Duty among the crew's projects, R does not",
+           "Duty" in await projects("P") and "Duty" not in await projects("R"))
         as_(root)
 
     print(f"\n{P} passed, {F} failed")
