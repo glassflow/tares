@@ -718,7 +718,8 @@ async def my_work(crew: str = "", project: str = "") -> str:
     names your crew; empty means the crew this session belongs to. The orchestrator of a crew works from this, so it starts
     only its own person's tickets. `project` (a name or an id) keeps `spec_questions` to that
     project: question numbers restart in each project, so name it when you work on one. Empty
-    lists the questions of every project. Needs a key with a person."""
+    lists the questions of every project; a name or id you cannot see is an error 404 ("no
+    project 'x' you can see"), so name it exactly. Needs a key with a person."""
     params = {"crew": crew or _caller("crew")}
     if project.strip():
         params["project"] = project.strip()

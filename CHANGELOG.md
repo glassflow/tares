@@ -227,6 +227,10 @@ the project follows [Semantic Versioning](https://semver.org/).
 - Reading grants settled every waiting grant on the cell, as the reader, including ones on a
   private project the reader cannot see. It now settles only grants the reader may see, recorded as
   Tares, and a grant that cannot be settled stays waiting instead of failing the read.
+- Answering a spec question and signing off a repo now work with an ordinary key bound to a
+  person (read and ingest scopes, no admin). They were refused with "this credential
+  lacks the 'admin' scope", so an area owner needed an admin key. Still only the person the question
+  is for answers it, and only the repo's current area owner signs off; anyone else gets 403.
 
 ## [1.51.1] - 2026-10-21
 

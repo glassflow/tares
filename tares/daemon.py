@@ -703,6 +703,8 @@ def make_app() -> FastAPI:
 
     _AREA_ONE = re.compile(r"^/api/areas/[^/]+/[^/]+$")
     _GRANT_WRITE = re.compile(r"^/api/grants(/[^/]+/(consent|revoke))?$")
+    _ANSWER_WRITE = re.compile(r"^/api/projects/[^/]+/questions/[^/]+/answer$")
+    _SIGNOFF_WRITE = re.compile(r"^/api/projects/[^/]+/signoffs$")
 
     def _required_scope(method: str, path: str) -> str | None:
         """None = public. 'any' = any valid credential. Reads of credentials and every write are
@@ -726,6 +728,9 @@ def make_app() -> FastAPI:
         if method == "POST" and _GRANT_WRITE.match(path):
             return "ingest"   # a lead, an area owner or a person for themselves (TR-630): the
                               # handler decides by kind, it needs the credential's person
+        if method == "POST" and (_ANSWER_WRITE.match(path) or _SIGNOFF_WRITE.match(path)):
+            return "ingest"   # an area owner answering a question addressed to them or signing off
+                              # their repo (TR-636): the handler decides by the credential's person
         if method == "PATCH" and path.startswith("/api/people/"):
             return "read"   # an admin, or a key bound to that person changing their own name:
                             # the handler decides, it needs the credential's person
