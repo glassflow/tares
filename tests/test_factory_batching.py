@@ -30,7 +30,7 @@ import httpx  # noqa: E402
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "factory_batching")
 RECORD = "--record" in sys.argv
 # Keys whose values come from the clock; dropped before comparing.
-VOLATILE = {"updated_at", "created_at", "at", "reviewed_at", "found_at", "checked_at", "now", "waiting_minutes",
+VOLATILE = {"updated_at", "activity_at", "created_at", "at", "reviewed_at", "found_at", "checked_at", "now", "waiting_minutes",
             "waiting_since"}
 # Generated ids, replaced by stable names in order of first appearance.
 ID = re.compile(r"\b(?:tk|doc|ms|rv|rf|uc)_[0-9a-f]{8,12}\b")
