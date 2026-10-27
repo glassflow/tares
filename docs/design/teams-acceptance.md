@@ -22,17 +22,15 @@ This step is Ashish's. The commands are here as text; nobody runs them from this
    `ingest` scopes, bound to a person, can answer a question put to it and sign off its repo.
 2. Deploy the control plane from the `teams` branch of tares-cloud. Cells first, then the control
    plane.
-3. Check the cell reports the new version, and that each person can sign in:
-
-   ```bash
-   curl -s "$TARESD_URL/health"
-   ```
-
+3. Open the cell's address in a browser, add `/health`, and check it reports the new version.
+   Signing in is checked in the next section.
 4. Check that the repos exist and both people can push a branch and open a pull request in each.
    Each repo needs a CI check that passes, or the builders have nothing to merge on.
 5. Clone the repos where the orchestrators find them: both on Ashish's machine, and
-   `glassflow/factory-test-web` on Kiran's. A repo with no clone on a machine makes that machine's
-   orchestrator put a "where is it cloned" question on the desk and leave the repo's tickets alone.
+   `glassflow/factory-test-web` on Kiran's. The hand-over records each repo's folder on Ashish's
+   machine, so clone `factory-test-web` at the same folder path on Kiran's. A repo with no clone
+   there makes Kiran's orchestrator put a "where is it cloned" question on the desk and leave the
+   repo's tickets alone.
 
 Do not go on until the cell runs the `teams` image. The rest of this file fails in confusing ways on
 an older one.
@@ -48,18 +46,27 @@ tares login
 Then, on the console, open **Settings, Access, people and API keys** and check **People** lists
 both, each with an email.
 
+The commands below need the cell's address. Read it from the login file into `CELL`, and do not
+export `TARESD_URL` or `TARES_FACTORY_URL` anywhere: with either set, `tares factory crew up`
+ignores the saved login and runs on whatever key it finds in `~/factory/.tares-token`.
+
+```bash
+CELL=$(jq -r .cell_url ~/.tares/login.json)
+```
+
 Check what each login may do, from each machine:
 
 ```bash
-curl -s "$TARESD_URL/api/whoami" -H "Authorization: Bearer $(jq -r .key ~/.tares/login.json)"
+curl -s "$CELL/api/whoami" -H "Authorization: Bearer $(jq -r .key ~/.tares/login.json)"
 ```
 
 The answer shows the person and the scopes. Each login must be bound to its person and carry the
 `admin` scope: the crew runs on it, and the crew's writes (`assign_ticket`, `set_stage`, the desk)
 need `admin`. Ashish's lead steps need it too.
 
-Ashish then makes two more keys under **API keys** on the same page, each bound to a person by
-the **person** picker:
+Ashish then adds Lee, who is on no project: **Settings, Access, Add person**. The key picker lists
+only people who exist. He then makes two more keys under **API keys** on the same page, each bound
+to a person by the **person** picker:
 
 | Key | Person | Scopes | Used for |
 |---|---|---|---|
@@ -67,7 +74,8 @@ the **person** picker:
 | `lee-outsider` | Lee (a third person, on no project) | `read`, `ingest` | the outsider checks at the end |
 
 Copy each token when it is shown; it is shown once. Keep Lee's in `$OUTSIDER_KEY` and Kiran's in
-`$CONTRIB_KEY`. Run `whoami` with each and check the person and the two scopes.
+`$CONTRIB_KEY`, in Ashish's terminal. Ashish sends Kiran's token to Kiran over a private channel,
+not into the report. Run `whoami` with each and check the person and the two scopes.
 
 ## Areas
 
@@ -115,9 +123,12 @@ tares factory spec --project <project>
 ```
 
 Because Kiran is not the project's lead, this opens a contributor session. It needs no git repo in
-the folder. In it, ask for `whoami` first and check it shows Kiran with only `read` and `ingest`. If
-it shows the login's `admin` instead, stop and note it: the session did not take the narrow key, and
-the next two steps prove nothing. Then Kiran:
+the folder. In it, Kiran first proves the session took the narrow key: ask it to call
+`ask_area(project="<project>", repo="glassflow/factory-test-api", text="test")`. The answer must be
+"this credential lacks the 'admin' scope". If the question is accepted instead, the session is on the
+login's `admin` key: stop and note it, because the next two steps prove nothing. Do not try
+`hand_over` as a probe: on the wrong key it would hand the project over before Ashish does.
+Then Kiran:
 
 1. Answers Q1 (`answer_question`). Only the person a question is addressed to can answer it.
 2. Reads the tickets in `factory-test-web`, and says yes with `sign_off(repo="glassflow/factory-test-web")`.
@@ -126,11 +137,13 @@ the next two steps prove nothing. Then Kiran:
 Both calls must work with this narrow key. If either says "this credential lacks the 'admin'
 scope", the cell image is older than the fix and Before you start was not finished.
 
-Kiran may try one thing more, to see where the line is: `ask_area` or `hand_over` with the same key
-is refused with that same "admin" message. That is expected; a contributor does not do either.
+On the project page, Q1 shows as answered and `factory-test-web` shows **Signed off**.
 
-On the project page, Q1 shows as answered and `factory-test-web` shows **Signed off**. Close this
-terminal, or run `unset TARES_AUTH_TOKEN`, before the crew starts: the crew must run on the login.
+Then Kiran closes this terminal. That is not enough on its own: the session wrote the narrow key to
+`~/factory/.tares-token`, and `tares factory roster` or `crew down` from a terminal with
+`TARES_AUTH_TOKEN` set writes it again. The crew falls back to that file when the saved login is not
+used. To be sure, Kiran runs `tares factory crew up` from a clean terminal (no `TARES_AUTH_TOKEN`, no
+`TARESD_URL`), which rewrites the file from the login.
 
 Ashish then hands over from the spec session. The hand-over is refused while Kiran's repo has no
 sign-off, and goes through once it has one. `factory-test-api` is Ashish's own repo and needs no
@@ -162,8 +175,11 @@ Then wait:
 Nobody tells Kiran's crew that the API is done.
 
 While the API ticket is still open, make the desk item for check 4. In Ashish's orchestrator
-session, ask it to put one question on the desk about the web ticket, addressed to Kiran (`desk_add`
-with `to` set to Kiran), for example "Should the web page show an empty nickname as blank?".
+session, ask it to put one question on the desk about the web ticket, addressed to Kiran: `desk_add`
+with `to` set to Kiran's email (a name is refused), `project` set to `<project>` and `tickets` set to
+the web ticket, for example "Should the web page show an empty nickname as blank?". Do check 4
+before Kiran's orchestrator answers it: an answered item leaves the open desk, and that orchestrator
+ticks every 20 minutes.
 
 ## Expected results
 
@@ -178,16 +194,17 @@ Check each of these and write down pass or fail. Each says where to look.
    not in Kiran's `my_work` `ready` list. After the API pull request merges, it is, and a `kiran-`
    builder holds it after Kiran's next orchestrator tick.
 4. **The desk addresses the right person.** The desk question from Build shows under **For Kiran**
-   in the desk notice at the top of the **Crew** page when Ashish views it, and under **For you** when
-   Kiran does. Ashish's own `desk_list(mine=true)` does not show it, and Kiran's does.
-5. **An outsider cannot see the project.** Lee's key sees a hidden row for the project, with its id
-   and lead and nothing else, and cannot open it. Run these in order:
+   in the desk notice at the top of the **Crew** page when Ashish views it. When Kiran views it, the
+   question is the only one, so there is no heading: the notice reads "1 question waiting for you".
+   Ashish's own `desk_list(mine=true)` does not show it, and Kiran's does.
+5. **An outsider cannot see the project.** Lee's key sees a hidden row for the project (its id, name
+   and lead, marked hidden, and nothing about its tickets), and cannot open it. Run these in order:
 
    ```bash
-   curl -s "$TARESD_URL/api/projects" -H "Authorization: Bearer $OUTSIDER_KEY"
-   curl -s -o /dev/null -w "%{http_code}\n" "$TARESD_URL/api/projects/<project-id>" \
+   curl -s "$CELL/api/projects" -H "Authorization: Bearer $OUTSIDER_KEY"
+   curl -s -o /dev/null -w "%{http_code}\n" "$CELL/api/projects/<project-id>" \
      -H "Authorization: Bearer $OUTSIDER_KEY"
-   curl -s -o /dev/null -w "%{http_code}\n" "$TARESD_URL/api/projects/<project-id>" \
+   curl -s -o /dev/null -w "%{http_code}\n" "$CELL/api/projects/<project-id>" \
      -H "Authorization: Bearer $(jq -r .key ~/.tares/login.json)"
    ```
 
@@ -198,7 +215,7 @@ Check each of these and write down pass or fail. Each says where to look.
    visibility decides:
 
    ```bash
-   curl -s -w "\n%{http_code}\n" -X POST "$TARESD_URL/api/projects/<project-id>/signoffs" \
+   curl -s -w "\n%{http_code}\n" -X POST "$CELL/api/projects/<project-id>/signoffs" \
      -H "Authorization: Bearer $OUTSIDER_KEY" -H "Content-Type: application/json" \
      -d '{"repo": "glassflow/factory-test-web"}'
    ```
@@ -211,16 +228,18 @@ Check each of these and write down pass or fail. Each says where to look.
    and "Ashish (ashish-reviewer)". Lines by `github` ("GitHub shows the pull request merged", "new
    commits pushed after the verdict") have no person; that is expected. No other line shows a bare
    station.
-8. **The hand-over waited for the sign-off.** Get the sign-off time and compare it with the
-   hand-over time:
+8. **The hand-over waited for the sign-off.** The project page shows "Handed to the crew" as a
+   relative time, so compare exact times from the API:
 
    ```bash
-   curl -s "$TARESD_URL/api/projects/<project-id>/signoffs" \
+   curl -s "$CELL/api/projects/<project-id>/signoffs" \
      -H "Authorization: Bearer $(jq -r .key ~/.tares/login.json)"
+   curl -s "$CELL/api/projects/<project-id>/crew" \
+     -H "Authorization: Bearer $(jq -r .key ~/.tares/login.json)" | jq .handover.at
    ```
 
-   The `at` of the `factory-test-web` sign-off is earlier than "Handed to the crew" in the **Crew**
-   fold of the project page. The **Sign-offs** fold shows no override reason.
+   The `at` of the `factory-test-web` sign-off is earlier than `handover.at`. The **Sign-offs** fold
+   of the project page shows no override reason.
 
 If a check fails, copy the exact output, the ticket and the time into the report, and stop there.
 Do not fix anything on the cell while the run is open.
@@ -229,7 +248,8 @@ Do not fix anything on the cell while the run is open.
 
 1. On each machine, stop the crew: `tares factory crew down`.
 2. In a terminal on Ashish's machine, once both tickets are merged: `tares factory finish <project>`.
-   It is refused while a ticket is still open.
+   It is refused while a ticket is still open, and says the project is not one the crew holds if an
+   orchestrator already finished it; that is fine.
 3. In `glassflow/factory-test-api` and `glassflow/factory-test-web`, close any open pull request and
    delete the branches the builders made. Revert the merged change on the default branch if the next
    run needs a clean repo.
