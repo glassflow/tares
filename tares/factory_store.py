@@ -389,6 +389,40 @@ class FactoryStore:
         return [{"at": r[0], "field": r[1], "value": r[2], "reason": r[3], "by": r[4],
                  "role": r[5]} for r in rows]
 
+    def entered_stage(self, tickets: list[str], stage: str) -> dict:
+        """{ticket: when it last moved to `stage`} in one query (TR-648). Tickets that never
+        did are absent."""
+        if not tickets:
+            return {}
+        marks = ", ".join("?" for _ in tickets)
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT ticket, max(changed_at) FROM ticket_history WHERE ticket IN "
+                f"({marks}) AND field = 'stage' AND value = ? GROUP BY ticket",
+                list(tickets) + [stage]).fetchall()
+        return dict(rows)
+
+    def review_tickets(self) -> list[tuple[str, dict]]:
+        """Every ticket in review with its project's name, in the order the projects were made
+        and then the list's own order, in one query (TR-648)."""
+        with self._lock:
+            rows = self.con.execute(
+                f"SELECT {self._TICKET_COLS}, pname FROM (SELECT t.*, u.name AS pname, "
+                "u.created_at AS pcreated FROM tickets t JOIN usecases u ON u.id = t.project "
+                "WHERE t.stage = 'review') ORDER BY pcreated, position, created_at").fetchall()
+        return [(r[-1], self._ticket_row(r)) for r in rows]
+
+    def milestone_statuses(self, milestones: list[str]) -> list[dict]:
+        """Project, milestone, id and status of every ticket in these milestones (TR-648)."""
+        if not milestones:
+            return []
+        marks = ", ".join("?" for _ in milestones)
+        with self._lock:
+            rows = self.con.execute(
+                f"SELECT project, milestone, id, status FROM tickets WHERE milestone IN ({marks})",
+                list(milestones)).fetchall()
+        return [{"project": r[0], "milestone": r[1], "id": r[2], "status": r[3]} for r in rows]
+
     def history_between(self, since, until) -> list[dict]:
         """Every ticket change in [since, until), oldest first, for every project (the standup)."""
         with self._lock:
@@ -653,6 +687,33 @@ class FactoryStore:
                         "verified": r[5], "not_verified": r[6], "by": r[7], "at": r[8],
                         "findings": mine, "fixed": fixed_here})
         return out
+
+    def last_reviews(self, tickets: list[str]) -> dict[str, dict]:
+        """Each ticket's latest review round, shaped like an element of ticket_reviews(), in two
+        queries for any number of tickets (TR-657). Tickets never reviewed are absent."""
+        if not tickets:
+            return {}
+        marks = ", ".join("?" for _ in tickets)
+        with self._lock:
+            revs = self.con.execute(
+                "SELECT id, round, pr, head, verdict, verified, not_verified, by_station, "
+                f"reviewed_at, ticket FROM reviews WHERE ticket IN ({marks}) "
+                "QUALIFY row_number() OVER (PARTITION BY ticket ORDER BY round DESC) = 1",
+                list(tickets)).fetchall()
+            ids = [r[0] for r in revs]
+            fs = self.con.execute(
+                "SELECT id, review, number, severity, file, line, blocking, text, kind, state, "
+                f"fixed_in FROM review_findings WHERE review IN ({', '.join('?' for _ in ids)}) "
+                f"OR fixed_in IN ({', '.join('?' for _ in ids)}) ORDER BY number",
+                ids + ids).fetchall() if ids else []
+        finds = [{"id": f[0], "review": f[1], "label": f"F{f[2]}", "severity": f[3], "file": f[4],
+                  "line": f[5], "blocking": bool(f[6]), "text": f[7], "kind": f[8],
+                  "state": f[9], "fixed_in": f[10]} for f in fs]
+        return {r[9]: {"id": r[0], "round": r[1], "pr": r[2], "head": r[3], "verdict": r[4],
+                       "verified": r[5], "not_verified": r[6], "by": r[7], "at": r[8],
+                       "findings": [f for f in finds if f["review"] == r[0]],
+                       "fixed": [f["label"] for f in finds if f["fixed_in"] == r[0]]}
+                for r in revs}
 
     def open_findings(self, ticket: str) -> list[dict]:
         return [f for r in self.ticket_reviews(ticket) for f in r["findings"] if f["state"] == "open"]

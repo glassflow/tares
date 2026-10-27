@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import ipaddress
 import os
@@ -847,15 +848,30 @@ def make_app() -> FastAPI:
                 request.state.scopes = sorted(scopes)
             return await call_next(request)
 
+    # per-route timing in /metrics (TR-652): added after every other middleware so it is the
+    # outermost one and times auth rejections too
+    app.add_middleware(_metrics.RequestTiming)
+
     def _err(e: Exception, code: int = 400):
         raise HTTPException(status_code=code, detail=str(e))
 
     # ── agent surface (unchanged contract; queries now logged) ───────────────
+    # A scrape token for /metrics (TR-653), separate from the cell's own auth token on purpose: the
+    # scraper gets only the counters. Read here, not at import, so each app built reads the env.
+    metrics_token = os.getenv("TARES_METRICS_TOKEN", "").strip()
+
     @app.get("/metrics", include_in_schema=False)
-    async def metrics_endpoint():
+    async def metrics_endpoint(request: Request):
         """The daemon's own counters in the Prometheus text format (TR-308): events per source,
         poll outcomes, source state, agent runs, model calls and spend by provider, storage against
-        its limit, trigger evaluation time, event loop lag. Public like /health; counts only."""
+        its limit, trigger evaluation time, event loop lag. Counts only. Public like /health
+        unless TARES_METRICS_TOKEN is set; then it wants `Authorization: Bearer <that token>`
+        (TR-653). The auth guard lets /metrics through either way, so this check decides."""
+        if metrics_token and not hmac.compare_digest(
+                request.headers.get("authorization", "").encode(),
+                f"Bearer {metrics_token}".encode()):
+            return JSONResponse({"detail": "this endpoint needs the metrics scrape token"},
+                                status_code=401, headers={"WWW-Authenticate": "Bearer"})
         try:
             body, ctype = _metrics.render()
         except RuntimeError:
@@ -3306,14 +3322,19 @@ def make_app() -> FastAPI:
         if pk:
             return {"projects": [_project_card(pk)]}
         # a software factory project carries its tickets' progress, for the list's ring, and
-        # `activity_at`, when it last moved (its newest ticket counts), for the Updated column
+        # `activity_at`, when it last moved (its newest ticket counts), for the Updated column;
+        # every factory project's tickets come in one query (TR-659)
+        cards = projects.list()
+        tickets = store.tickets_by_project([p["id"] for p in cards
+                                            if p.get("kind") == "software_factory"])
+
         def card(p: dict) -> dict:
             if p.get("kind") != "software_factory":
                 return {**p, "activity_at": p["updated_at"]}
-            tickets = store.list_tickets(p["id"])
-            return {**p, "progress": factory_mod.progress(tickets),
-                    "activity_at": factory_mod.activity_at(p["updated_at"], tickets)}
-        return {"projects": [card(p) for p in projects.list()]}
+            ts = tickets[p["id"]]
+            return {**p, "progress": factory_mod.progress(ts),
+                    "activity_at": factory_mod.activity_at(p["updated_at"], ts)}
+        return {"projects": [card(p) for p in cards]}
 
     @app.post("/api/projects", status_code=201)
     async def create_project(body: ProjectIn):
@@ -4354,13 +4375,20 @@ def make_app() -> FastAPI:
                  "projects": [{"id": p, "name": names.get(p, p)} for p in d["projects"]]}
                 for d in docs_mod.sort_docs(store.list_cell_docs())]
 
-    def _plan_ctx(uid: str) -> dict:
+    def _plan_ctx(uid: str, listing: bool = False) -> dict:
         """What every ticket's view needs from the rest of the plan: the tickets by id, the
-        milestones' names, and which tickets are ready (TR-411, TR-412)."""
+        milestones' names, and which tickets are ready (TR-411, TR-412). `listing`: also every
+        working doc's title and each staged ticket's last review, fetched once for the whole
+        list instead of per ticket (TR-657)."""
         tickets = store.list_tickets(uid)
-        return {"by_id": {t["id"]: t for t in tickets},
-                "ms": {m["id"]: m["name"] for m in store.list_milestones(uid)},
-                "ready": factory_mod.readiness(tickets)}
+        ctx = {"by_id": {t["id"]: t for t in tickets},
+               "ms": {m["id"]: m["name"] for m in store.list_milestones(uid)},
+               "ready": factory_mod.readiness(tickets)}
+        if listing:
+            ctx["titles"] = store.doc_titles(uid, sorted({t["working_doc"] for t in tickets
+                                                          if t["working_doc"]}))
+            ctx["last_review"] = store.last_reviews([t["id"] for t in tickets if t["stage"]])
+        return ctx
 
     def _ticket_out(uid: str, t: dict, with_doc: bool = False, ctx: dict | None = None) -> dict:
         ctx = ctx or _plan_ctx(uid)
@@ -4374,8 +4402,11 @@ def make_app() -> FastAPI:
                              if d in ctx["by_id"]]
         r = ctx["ready"].get(t["id"]) or {"ready": False, "blocked_by": []}
         out["ready"], out["blocked_by"] = r["ready"], r["blocked_by"]
-        doc = store.get_doc(uid, t["working_doc"]) if t["working_doc"] else None
-        out["working_doc_title"] = doc["title"] if doc else None
+        if "titles" in ctx:
+            out["working_doc_title"] = ctx["titles"].get(t["working_doc"])
+        else:
+            doc = store.get_doc(uid, t["working_doc"]) if t["working_doc"] else None
+            out["working_doc_title"] = doc["title"] if doc else None
         if with_doc:
             out["working_doc_body"] = doc["body"] if doc else None
             out["history"] = store.ticket_history(t["id"])
@@ -4390,14 +4421,16 @@ def make_app() -> FastAPI:
             ds = store.list_decisions(uid, all_=True)
             out["decisions"] = ([d for d in ds if lab in d["tickets"]]
                                 + [d for d in ds if lab not in d["tickets"]])[:10]
+        elif "last_review" in ctx:
+            out["verdict"] = factory_api.verdict_now(t, ctx["last_review"].get(t["id"]))
         else:
             last = store.ticket_reviews(t["id"])[-1:] if t["stage"] else []
             out["verdict"] = factory_api.verdict_now(t, last[0] if last else None)
         return out
 
     def _tickets_out(uid: str) -> list[dict]:
-        ctx = _plan_ctx(uid)
-        return [_ticket_out(uid, t, ctx=ctx) for t in store.list_tickets(uid)]
+        ctx = _plan_ctx(uid, listing=True)
+        return [_ticket_out(uid, t, ctx=ctx) for t in ctx["by_id"].values()]
 
     def _milestone_ref(uid: str, ref) -> str | None:
         """The id of the milestone `ref` names (id or name), None for "" or None; 404 otherwise."""

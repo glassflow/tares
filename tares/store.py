@@ -2514,6 +2514,18 @@ class Store(FactoryStore, ClaudeUsageStore):
                 "ORDER BY usecase_id", [doc_id]).fetchall()]
         return {**self._doc_row(r, r[7]), "projects": users}
 
+    def doc_titles(self, project: str, doc_ids: list[str]) -> dict[str, str]:
+        """The titles of those docs the project includes, in one query (TR-657); a doc the
+        project does not include is absent, as get_doc gives None for it."""
+        if not doc_ids:
+            return {}
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT DISTINCT d.id, d.title FROM docs d JOIN usecase_objects o ON o.kind = 'doc' "
+                f"AND o.name = d.id WHERE o.usecase_id = ? AND d.id IN "
+                f"({', '.join('?' for _ in doc_ids)})", [project, *doc_ids]).fetchall()
+        return {r[0]: r[1] for r in rows}
+
     def list_docs(self, project: str, kind: str | None = None) -> list[dict]:
         """The docs a project includes, without bodies: size in bytes instead."""
         q = (f"SELECT DISTINCT {self._DOC_COLS}, octet_length(encode(d.body)) FROM docs d "
@@ -2640,6 +2652,20 @@ class Store(FactoryStore, ClaudeUsageStore):
             rows = self.con.execute(f"SELECT {self._TICKET_COLS} FROM tickets WHERE project = ? "
                                     "ORDER BY position, created_at", [project]).fetchall()
         return [self._ticket_row(r) for r in rows]
+
+    def tickets_by_project(self, projects: list[str]) -> dict[str, list[dict]]:
+        """{project: its tickets as list_tickets gives them} in one query (TR-659)."""
+        if not projects:
+            return {}
+        marks = ", ".join("?" for _ in projects)
+        with self._lock:
+            rows = self.con.execute(f"SELECT {self._TICKET_COLS} FROM tickets WHERE project IN "
+                                    f"({marks}) ORDER BY position, created_at",
+                                    list(projects)).fetchall()
+        out: dict[str, list[dict]] = {p: [] for p in projects}
+        for r in rows:
+            out[r[1]].append(self._ticket_row(r))
+        return out
 
     def get_ticket(self, project: str, ref: str) -> dict | None:
         """A ticket of the project by its id, Linear identifier (ENG-12, any case), Linear

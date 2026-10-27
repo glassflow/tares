@@ -2,8 +2,12 @@
 
 What a cell is doing, for a fleet dashboard and alerts: events in, poll errors, source health,
 agent runs and their outcomes, model calls, tokens and spend by provider, database size against
-its limit, trigger evaluations and how long they take, and the event loop's lag. Labels name the
-source, agent, provider or status; never an entity key or anything from a payload.
+its limit, trigger evaluations and how long they take, the event loop's lag, and how long each
+HTTP route takes (`tares_http_request_duration_seconds`, TR-652). Labels name the source, agent,
+provider, route template or status; never an entity key, an ID or anything from a payload.
+
+The endpoint is public unless TARES_METRICS_TOKEN is set; then it wants
+`Authorization: Bearer <token>` (TR-653).
 
 Every hook here is a no-op when the client library is missing, so nothing else in the daemon
 guards its calls. The endpoint answers 404 in that case.
@@ -53,6 +57,11 @@ if AVAILABLE:
     LOOP_LAG = Gauge("tares_event_loop_lag_seconds", "How late the event loop ran its last one-second timer")
     LOOP_STALLS = Counter("tares_event_loop_stalls_total", "Timer ticks that ran more than half a second late")
     INFO = Gauge("tares_info", "Build information", ["version"])
+    HTTP_SECONDS = Histogram("tares_http_request_duration_seconds",
+                             "Wall time of an HTTP request until the app returns (the whole body "
+                             "for a streaming response), per route template, method and status class",
+                             ["route", "method", "status"],
+                             buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10))
 
 _storage_probe = None
 
@@ -111,6 +120,51 @@ def trigger_evaluation(seconds: float, fired: list) -> None:
         TRIGGER_EVAL_SECONDS.observe(seconds)
         for name, _key in fired:
             TRIGGER_FIRINGS.labels(trigger=name).inc()
+
+
+def observe_request(route: str, method: str, status: str, seconds: float) -> None:
+    """One HTTP request (TR-652). `route` is a route template or `static`/`unmatched`, never a
+    raw path; `status` is the class (`2xx` .. `5xx`)."""
+    if AVAILABLE:
+        HTTP_SECONDS.labels(route=route, method=method, status=status).observe(seconds)
+
+
+# Path prefixes the API answers under; a request outside them that matched no route is the console
+# (its files and client-side routes), labelled `static` rather than one series per path.
+_CONSOLE_CATCH_ALL = "/{path:path}"   # the daemon's last route, serving the console's index
+_API_PREFIXES = ("/api", "/ingest", "/v1", "/mcp", "/health", "/read", "/subscribe", "/unsubscribe")
+
+
+class RequestTiming:
+    """Pure ASGI middleware timing every HTTP request into tares_http_request_duration_seconds
+    (TR-652). Not Starlette's BaseHTTPMiddleware, which buffers streaming responses. Added last so
+    it is outermost and also times requests the auth guard turns away."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("path") == "/metrics":
+            await self.app(scope, receive, send)
+            return
+        status = 500   # the app raised before it started a response
+        t0 = time.perf_counter()
+
+        async def send_status(message):
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_status)
+        finally:
+            route = getattr(scope.get("route"), "path", None)
+            if route is None or route == _CONSOLE_CATCH_ALL:
+                path = scope.get("path") or ""
+                route = "unmatched" if path.startswith(_API_PREFIXES) else "static"
+            observe_request(route, scope.get("method", ""), f"{status // 100}xx",
+                            time.perf_counter() - t0)
 
 
 RUN_STATUSES = ("ok", "empty", "exhausted", "capped", "failed")
