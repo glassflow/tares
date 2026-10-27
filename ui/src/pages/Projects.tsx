@@ -60,6 +60,11 @@ function StatusCell({ u }: { u: Project }) {
   );
 }
 
+// the templates that make an AI SRE project; kind is null for these as for any ordinary project
+const AI_SRE_TEMPLATES = new Set(["ai_sre_demo", "rius_rca"]);
+const isFactory = (p: Project) => p.kind === "software_factory";
+const isAiSre = (p: Project) => AI_SRE_TEMPLATES.has(p.template);
+
 // in a row the label folds into the title and aria-label at narrow widths (.pj-chip-label); the legend keeps it
 function KindChip({ factory, legend }: { factory: boolean; legend?: boolean }) {
   const label = factory ? "Factory" : "AI SRE";
@@ -119,8 +124,8 @@ export default function Projects() {
   };
   const shown = sortProjects(projects.filter((p) => matchesShow(p, show) && matchesQuery(p, query)), sort);
   const hiddenDone = show === "active" ? counts.done : 0;
-  const factory = shown.some((p) => p.kind === "software_factory");
-  const sre = shown.some((p) => p.kind !== "software_factory");
+  const factory = shown.some(isFactory);
+  const sre = shown.some(isAiSre);
 
   return (
     <>
@@ -210,7 +215,7 @@ export default function Projects() {
                       <td className="pj-name-cell">
                         <div className="pj-name-row">
                           <Link to={to} className="pj-name" title={`${u.name}\n${goal}`}><strong>{u.name}</strong></Link>
-                          <KindChip factory={u.kind === "software_factory"} />
+                          {(isFactory(u) || isAiSre(u)) && <KindChip factory={isFactory(u)} />}
                         </div>
                         <SortCue u={u} sort={sort} />
                         {goals && <div className="pj-goal help" data-testid="goal-line">{goal}</div>}

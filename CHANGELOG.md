@@ -6,6 +6,12 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- Console: the Projects list no longer marks the Challenger workflow and Default projects as AI SRE
+  (TR-698). The chip went to every project that was not a software factory, but a project of no
+  special kind is an ordinary one. Now only a project made from an AI SRE template (`ai_sre_demo`
+  or `rius_rca`) shows the AI SRE chip, a software factory project keeps the factory chip, and
+  every other project shows no kind chip. The legend under the list names a kind only when a row
+  of that kind is on show.
 - Console: on the Projects list at 720px and below, a done project now says "done" after its ring
   (TR-696). The count folds away there, so a project with every ticket closed but still active and
   a done project looked alike apart from a shade of colour. A wide screen is unchanged.
@@ -17,8 +23,8 @@ the project follows [Semantic Versioning](https://semver.org/).
   is still on, with the exact line to add. It never edits your cmux file, and the stations' own
   settings leave cmux's permission alerts alone.
 - Console: the Projects list marks each project's kind with an icon (TR-692). A software factory
-  project shows the factory emoji instead of the bolt, and every other project now shows an AI SRE
-  chip with a heartbeat icon. Both fold to the icon alone at 720px and below, keeping the name in
+  project shows the factory emoji instead of the bolt, and an AI SRE project shows an AI SRE chip
+  with a heartbeat icon (TR-698 narrowed that to projects made from an AI SRE template). Both fold to the icon alone at 720px and below, keeping the name in
   the tooltip and screen reader label, and the legend under the list explains each kind on show.
   The status cell is now the progress ring and its count alone: the dot beside it is gone for a
   project with tickets. A project with no tickets keeps the dot, and a paused, error or draft
@@ -37,8 +43,7 @@ the project follows [Semantic Versioning](https://semver.org/).
   filter box matches names and goals, and the sort offers recently active, most work pending, least
   work pending and name. The name is the link, so the Open button is gone, and so is the Objects
   column. Goals are a tooltip on the name, or on every row with the Goals toggle. A project's
-  status is a colored dot (yellow active, green done) beside the progress ring and its count; the
-  Active and Done words are gone. A Pending column shows the work left, with what is in progress
+  status is the progress ring and its count; the Active and Done words are gone. A Pending column shows the work left, with what is in progress
   and blocked. Updated now follows a project's newest ticket update, not only edits to the project
   itself (`/api/projects` gains `activity_at`). The software factory tag is a small icon chip with
   a legend, and the table keeps its layout at narrow widths. The view lives in the address

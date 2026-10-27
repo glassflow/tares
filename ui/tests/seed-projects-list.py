@@ -1,5 +1,5 @@
 """Seed a scratch Tares for projects-list.e2e.cjs (TR-689): the Projects list as a busy cell shows it.
-16 projects: software factory ones with tickets in every state (done, in progress, blocked, to do),
+16 projects, plus the cell's Default (hidden from the list): software factory ones with tickets in every state (done, in progress, blocked, to do),
 ordinary ones with and without objects, a draft, a paused and a failing one, long names, long goals,
 done and active. Starts a daemon on the scratch data dir, creates the projects through its API,
 stops it, then writes statuses, tickets and timestamps straight into the database. Prints a JSON
@@ -19,6 +19,7 @@ LONG = ("Close the loop on every alert the on-call engineer used to triage by ha
 # name, goal, factory?, (done, in progress, blocked, to do), status, project updated (days ago),
 # newest ticket activity (minutes ago, None = the tickets are as old as the project)
 SPECS = [
+    ("Default", "", False, None, "active", 40, None),   # the cell's Default project: hidden from the list
     ("Rius: Admin delete user", "Admins delete a user from rius-admin; every org they created or administer goes with all its workspaces", True, (32, 0, 0, 0), "done", 6, None),
     ("Rius Bugs Auto", "The crew works every Todo rius-bugs-triage bug in Linear Rius Bugs: reproduce, fix, PR, flag human-review ones", True, (6, 0, 0, 0), "active", 5, None),
     ("Rius: Cursor Codex Gaps", "Close RIUS-1414: make the Rius plugin's Cursor support fully supported and verified in live Cursor", True, (4, 1, 2, 4), "active", 11, None),
@@ -27,7 +28,7 @@ SPECS = [
     ("Tests auto fix", "A continuous loop that finds flaky tests in argus-core CI and fixes them with test-only changes, one PR per test", True, (11, 0, 0, 0), "active", 5, None),
     ("silent-errors-context-rot", "Rius finds runs where an agent silently degrades from context pressure (window nearly full, one tool result too big)", True, (26, 2, 0, 4), "active", 6, None),
     ("link-click-counter", "Count every successful redirect of a short link and return the count at GET /links/{code}/stats", True, (2, 0, 0, 0), "done", 6, None),
-    ("Challenger workflow", "Get a second opinion on Claude Code's plans and commits, and a summary of each session", True, (0, 0, 0, 0), "active", 6, None),
+    ("Challenger workflow", "Get a second opinion on Claude Code's plans and commits, and a summary of each session", False, (0, 0, 0, 0), "active", 6, None),
     ("🔄 Tares Bugs Auto Triage & Fix", "The crew fixes every bug filed in the Linear project Tares Bugs (team Tares): one builder per bug, a regression test, a PR", True, (5, 1, 0, 0), "active", 2, 4),
     ("Claude Code auto-update (TR-669)", "The crew's watch moves idle stations onto a new Claude Code version like a plugin update, with crew-wide pauses", True, (1, 1, 0, 0), "active", 2, None),
     ("Factory optimizations", "Make the crew cheaper per merged PR: idle wake-ups, plan-limit pacing, a kit freeze, doctor language servers", True, (10, 0, 0, 0), "done", 0, 17),
@@ -36,6 +37,15 @@ SPECS = [
     ("Billing webhooks", "Catch failed Stripe webhooks before the customer notices", False, None, "error", 30, None),
     ("New idea", "", False, None, "draft", 1, None),
 ]
+
+# the template a project row reports; any other keeps "custom". Only the AI SRE templates earn a chip (TR-698)
+TEMPLATE_OF = {
+    "Challenger workflow": "challenger_workflow",
+    "Checkout latency watch": "ai_sre_demo",
+    "Billing webhooks": "rius_rca",
+    "Default": "default",
+    "New idea": "default",   # a second default-template row, so the list has one to show
+}
 
 
 def post(path, body):
@@ -75,6 +85,8 @@ con = store.con
 for name, goal, factory, counts, status, days, fresh in SPECS:
     uid = ids[name]
     con.execute("UPDATE usecases SET status = ?, updated_at = now() - to_days(?) WHERE id = ?", [status, days, uid])
+    if name in TEMPLATE_OF:
+        con.execute("UPDATE usecases SET recipe = ? WHERE id = ?", [TEMPLATE_OF[name], uid])
     if not counts:
         continue
     done, doing, blocked, todo = counts

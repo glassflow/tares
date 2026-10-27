@@ -3,8 +3,9 @@
  * project from its title (no Open button), has no Objects column, keeps the factory chip small at a
  * narrow width, and shows when a project last moved from its tickets. TR-692 (D135): the status cell is
  * the ring and its count alone, a dot only where there is no ring, a word for paused, error and draft.
- * TR-692: the factory chip is the factory emoji,
- * every other project carries an AI SRE chip with an icon, and the legend names both.
+ * TR-692: the factory chip is the factory emoji, an AI SRE project carries a chip with an icon, and the
+ * legend names the kinds on show. TR-698: only the AI SRE templates (ai_sre_demo, rius_rca) get that
+ * chip; the Challenger workflow and Default templates, and any other project, carry no kind chip.
  *
  * Seeds a scratch cell (tests/seed-projects-list.py: 16 projects, done and active), then runs the
  * real daemon on it, serving the built console.
@@ -49,7 +50,7 @@ async function waitFor(url, tries = 100) {
   const dist = process.env.TARES_UI_DIST || path.join(UI_DIR, "dist");
   const ids = JSON.parse(execFileSync(python, [path.join(__dirname, "seed-projects-list.py"), home, String(PORT),
     String(PORT + 1), dist, tares], { cwd: REPO, encoding: "utf8" }).trim().split("\n").pop());
-  ck("seeded 16 projects", Object.keys(ids).length === 16, String(Object.keys(ids).length));
+  ck("seeded 16 projects and the Default", Object.keys(ids).length === 17, String(Object.keys(ids).length));
 
   const env = { ...process.env, TARES_HOME: home, TARES_PORT: String(PORT), TARES_MCP_PORT: String(PORT + 1),
                 TARES_UI_DIST: dist, ANTHROPIC_API_KEY: "sk-ant-scratch-not-real",
@@ -207,16 +208,23 @@ async function waitFor(url, tries = 100) {
     // 7. each project carries a kind chip: the factory emoji, or the AI SRE pulse icon; both compact and legended
     await open("?show=all");
     const fchip = page.getByTestId("factory-chip"), schip = page.getByTestId("sre-chip");
-    ck("factory projects carry a chip", (await fchip.count()) === 13, `${await fchip.count()}`);
+    ck("factory projects carry a chip", (await fchip.count()) === 12, `${await fchip.count()}`);
     ck("the factory chip is the factory emoji", (await fchip.first().locator(".pj-emoji").allInnerTexts()).join() === "\u{1F3ED}"
        && (await fchip.first().locator("svg").count()) === 0);
     ck("the factory chip names itself", /Factory$/.test((await fchip.first().innerText()).trim()) && (await fchip.first().getAttribute("aria-label")) === "Software factory");
-    ck("every other project carries an AI SRE chip", (await schip.count()) === 3, `${await schip.count()}`);
+    ck("only the AI SRE templates carry an AI SRE chip", (await schip.count()) === 2, `${await schip.count()}`);
+    const chipsOf = (name) => rows.filter({ hasText: name }).locator("[data-testid=factory-chip], [data-testid=sre-chip]");
+    ck("an AI SRE template row has the sre-chip", (await rows.filter({ hasText: "Checkout latency watch" }).getByTestId("sre-chip").count()) === 1
+       && (await rows.filter({ hasText: "Billing webhooks" }).getByTestId("sre-chip").count()) === 1);
+    ck("a challenger_workflow row has no sre-chip and no kind chip", (await rows.filter({ hasText: "Challenger workflow" }).count()) === 1
+       && (await chipsOf("Challenger workflow").count()) === 0);
+    ck("a default template row has no sre-chip and no kind chip", (await rows.filter({ hasText: "New idea" }).count()) === 1
+       && (await chipsOf("New idea").count()) === 0);
     ck("the AI SRE chip is an icon, not the emoji", (await schip.first().locator("svg.ico").count()) === 1
        && (await schip.first().locator(".pj-emoji").count()) === 0);
     ck("the AI SRE chip says AI SRE", (await schip.first().innerText()).trim() === "AI SRE" && (await schip.first().getAttribute("aria-label")) === "AI SRE");
-    ck("no row carries both chips or neither", (await rows.evaluateAll((r) => r.every((x) =>
-       x.querySelectorAll("[data-testid=factory-chip], [data-testid=sre-chip]").length === 1))));
+    ck("no row carries both chips", (await rows.evaluateAll((r) => r.every((x) =>
+       x.querySelectorAll("[data-testid=factory-chip], [data-testid=sre-chip]").length <= 1))));
     ck("the chips are one line", (await fchip.first().evaluate((e) => e.getBoundingClientRect().height)) < 30
        && (await schip.first().evaluate((e) => e.getBoundingClientRect().height)) < 30);
     const foot = await page.locator(".pj-foot").innerText();
@@ -231,11 +239,14 @@ async function waitFor(url, tries = 100) {
     await q.fill("Tares Bugs");
     ck("and only the factory kind when only factory projects show", /software factory project/.test(await page.locator(".pj-foot").innerText())
        && !/AI SRE project/.test(await page.locator(".pj-foot").innerText()), await page.locator(".pj-foot").innerText());
+    await q.fill("Challenger");
+    ck("the legend lists no kind when no shown row has a chip", !/AI SRE project|software factory project/.test(await page.locator(".pj-foot").innerText())
+       && (await page.locator(".pj-legend .pj-chip").count()) === 0, await page.locator(".pj-foot").innerText());
     await q.fill("zzzz");
     ck("an empty filter result has no legend or hover hint", (await page.locator(".pj-legend").count()) === 0);
     await q.fill("");
-    ck("the chips name themselves to screen readers", (await page.getByRole("img", { name: "AI SRE" }).count()) === 3
-       && (await page.getByRole("img", { name: "Software factory" }).count()) === 13);
+    ck("the chips name themselves to screen readers", (await page.getByRole("img", { name: "AI SRE" }).count()) === 2
+       && (await page.getByRole("img", { name: "Software factory" }).count()) === 12);
 
     // 8. narrow: the factory chip shrinks to an icon, rows stay one line, the title stays readable, nothing scrolls the page
     for (const width of [640, 390]) {
