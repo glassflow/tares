@@ -767,10 +767,11 @@ def register(app, store, h: SimpleNamespace) -> None:
         local = store.get_person("local") or {}
         return {"id": "local", "name": local.get("name") or "You"}
 
-    def is_mine(t: dict, me: str) -> bool:
-        """A ticket is the person's when it is assigned to them; the person `local` (a cell of
-        one) also has the tickets nobody owns."""
-        a = t.get("assignee_person_id")
+    def is_mine(t: dict, me: str, p: dict | None) -> bool:
+        """A ticket is the person's when it is assigned to them. One with no assignee counts as
+        its project's lead's; only when the project has no lead is it the person `local`'s (a
+        cell of one)."""
+        a = t.get("assignee_person_id") or (p or {}).get("lead_person_id")
         return a == me or (me == "local" and not a)
 
     def desk_is_mine(d: dict, me: str) -> bool:
@@ -789,9 +790,12 @@ def register(app, store, h: SimpleNamespace) -> None:
         if h.is_system(request) or not h.current_person(request):
             return None
         me = h.current_person(request)["id"]
-        return {p["id"] for p in store.list_projects()
-                if leads(store.get_project(p["id"]), me)
-                or any(is_mine(t, me) for t in store.list_tickets(p["id"]))}
+        out = set()
+        for row in store.list_projects():
+            p = store.get_project(row["id"])
+            if leads(p, me) or any(is_mine(t, me, p) for t in store.list_tickets(row["id"])):
+                out.add(row["id"])
+        return out
 
     def crews_of(rows: list[dict]) -> list[dict]:
         """The stations (as `stations()` lists them) grouped by crew, the crew seen last first."""
@@ -837,7 +841,8 @@ def register(app, store, h: SimpleNamespace) -> None:
     async def my_work(request: Request, crew: str | None = None, project: str | None = None):
         """What belongs to the caller's person (TR-633), across the projects that have an open
         hand-over and that the caller can see: `ready` (their tickets that can start),
-        `in_progress` (their tickets a station holds), and `led_projects` with the milestones
+        `in_progress` (their tickets a station holds; a ticket with no assignee is its project
+        lead's, or `local`'s when the project has no lead), and `led_projects` with the milestones
         whose tickets are all delivered. `desk` is the open desk items addressed to them (TR-634);
         `spec_questions` is the open questions a spec asked of them (TR-636), in any project they
         can see, finished or not; `project` (an id or a name) keeps only that project's, and one
@@ -857,7 +862,7 @@ def register(app, store, h: SimpleNamespace) -> None:
             tickets = store.list_tickets(uid)
             wait = factory_mod.readiness(tickets)
             for t in tickets:
-                if not is_mine(t, me["id"]) or factory_mod.finished(t):
+                if not is_mine(t, me["id"], p) or factory_mod.finished(t):
                     continue
                 if t["holder"]:
                     doing.append({"project": p["name"], "ticket": factory_mod.label(t),
