@@ -6,6 +6,13 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- The spec skill brings in the area owners. It reads `list_areas`, asks the owner of a repo with
+  `ask_area` instead of guessing, folds the answers into the spec, gives every ticket its `repo`
+  (now also in a single-repo project, so the sign-off check sees it) and assigns it to that repo's
+  owner in Tares, Linear or GitHub, and stops before the hand-over while sign-offs are missing.
+  `tares factory spec --project <name>` run by someone who is not that project's lead opens a
+  contributor session: it asks them the open questions, shows the tickets in their repos and signs
+  off on their yes. It needs no git repo in the folder. The lead's `tares factory spec` is unchanged.
 - Questions to an area owner while a spec is written, and their sign-off before the hand-over.
   `ask_area(repo, text)` puts a question to the person who owns that repo, numbered Q1, Q2 in the
   project, and it shows in their `my_work` under `spec_questions` until they answer; a repo nobody owns

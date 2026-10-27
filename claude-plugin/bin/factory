@@ -45,7 +45,8 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
   tares factory crew down                   stop the watch and every station (Tares keeps the record)
   tares factory spec ["<idea>"]             plan a project with Claude and /tares:spec, in the repo it
                                             builds on or a folder of its repos; it ends with the
-                                            hand-over to the crew
+                                            hand-over to the crew. Name a project someone else leads
+                                            (`--project <name>`) to answer their questions and sign off
   tares factory session [<project> | [--new] "<idea>"]
                                             work on a project in your own Claude session, bound to
                                             it on Tares: a planned one (take it over from the crew
@@ -1584,9 +1585,27 @@ repos_in() { # folder → each git repo directly beneath it that has a commit, o
   return 0
 }
 
+spec_contributor() { # lookup key → "<project name>\t<lead name>" when the caller is a contributor, else nothing
+  # A contributor is a person who is not the lead of a software factory project that matches the key
+  # (its name, id or slug). Any failure of the lookup says nothing, so the normal spec flow runs.
+  local key=$1 all row me lead_id
+  [ -n "$key" ] || return 0
+  all=$(tares_http GET /api/projects 2>/dev/null | jq -c '[(.projects // [])[] | select(.kind == "software_factory")
+    | {id, name, lead_id: (.lead.id // ""), lead_name: (.lead.name // "")}]' 2>/dev/null) || return 0
+  row=$(match_project "$key" "$all" 2>/dev/null) || return 0
+  [ -n "$row" ] || return 0
+  lead_id=$(jq -r '.lead_id' <<<"$row" 2>/dev/null) || return 0
+  [ -n "$lead_id" ] || return 0
+  me=$(tares_http GET /api/whoami 2>/dev/null | jq -r '.person.id // empty' 2>/dev/null) || return 0
+  [ -n "$me" ] && [ "$me" != "$lead_id" ] || return 0
+  jq -r '[.name, (if .lead_name != "" then .lead_name else .lead_id end)] | @tsv' <<<"$row" 2>/dev/null || true
+}
+
 # The spec runs in the person's own Claude Code session, in the repo the project builds on or in a
 # folder that holds its repos, with /tares:spec, which writes the plan on Tares and ends with the
-# hand-over to the crew. Nothing is written into the repos.
+# hand-over to the crew. Nothing is written into the repos. When the project named already exists
+# and someone else leads it, this is a contributor session instead (answer the area owner's
+# questions, check the tickets in your repos, sign off): it needs no repo in the folder.
 cmd_spec() {
   local idea="" name=""
   while [ $# -gt 0 ]; do
@@ -1600,10 +1619,16 @@ cmd_spec() {
   require_mcp
   local clash; clash=$(installed_tares)
   [ -z "$clash" ] || say "warning: $(clash_text "$clash")"
-  local here root list n
+  local here root list n contrib="" cproject="" clead=""
+  contrib=$(spec_contributor "${name:-$idea}") || contrib=""
+  if [ -n "$contrib" ]; then
+    cproject=${contrib%%$'\t'*}; clead=${contrib#*$'\t'}
+  fi
   here=$(pwd -P)
   root=$(git rev-parse --show-toplevel 2>/dev/null || true)
-  if [ -n "$root" ]; then
+  if [ -n "$cproject" ]; then
+    [ -n "$root" ] && here=$root
+  elif [ -n "$root" ]; then
     has_commit "$root" || die "$root has no commit yet. Make a first commit and push it, so builders can branch from it."
     here=$root
     say "planning in the repo $root"
@@ -1614,6 +1639,16 @@ cmd_spec() {
   fi
   local slug; slug=$(slugify "${name:-$(tr -s '[:space:]' ' ' <<<"$idea" | sed 's/^ //' | cut -d' ' -f1-4)}" | cut -c1-40 | sed 's/-$//')
   [ -n "$slug" ] || slug=$(slugify "$(basename "$here")")
+  if [ -n "$cproject" ]; then
+    cat >&2 <<SPEC
+$ME: opening Claude as $slug-spec in $here, as a contributor to $cproject, which $clead leads.
+         It asks you the questions for you, shows the tickets in your repos, and asks for your sign-off.
+SPEC
+    person_claude "$here" "$slug-spec" spec \
+      "You are contributing to $cproject led by $clead. Load the spec-project skill, section Contributor." \
+      TARES_PROJECT="$cproject"
+    return
+  fi
   cat >&2 <<SPEC
 $ME: opening Claude as $slug-spec in $here, with /tares:spec.
          It interviews you, one question at a time, and writes the spec, milestones and tickets
