@@ -142,7 +142,9 @@ On the project page, Q1 shows as answered and `factory-test-web` shows **Signed 
 Then Kiran closes this terminal. That is not enough on its own: the session wrote the narrow key to
 `~/factory/.tares-token`, and the crew's stations read only that file. The next step, Build, runs
 `tares factory crew up` from a clean terminal (no `TARES_AUTH_TOKEN`, no `TARESD_URL`), which copies
-the saved login key over it. Do not start a crew from the contributor terminal before that.
+the saved login key over it. If the cell refuses the login key, `crew up` prints "warning: Tares at
+... refuses key ...; the crew keeps the key it has" and leaves the narrow key in place: run
+`tares login` again and repeat. Do not start a crew from the contributor terminal before that.
 
 Ashish then hands over from the spec session. The hand-over is refused while Kiran's repo has no
 sign-off, and goes through once it has one. `factory-test-api` is Ashish's own repo and needs no
