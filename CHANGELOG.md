@@ -10,7 +10,8 @@ the project follows [Semantic Versioning](https://semver.org/).
   `grok` and give the plugin an xAI key (`xai_api_key`, or `XAI_API_KEY`). Each plan or commit is
   reviewed in one xAI API call over the patch and the changed files, with the same priority tags,
   fix loop, waivers and Tares record as Codex. A reply passes only when it ends on an explicit
-  `VERDICT: CLEAN`; one that names nothing and gives no verdict is inconclusive. The challenge line
+  `VERDICT: CLEAN`; one that names nothing and gives no verdict is inconclusive, and a
+  `VERDICT: FINDINGS` whose findings cannot be read as `[P1]`/`[P2]` lines blocks. The challenge line
   shipped to Tares now names the `reviewer` (codex or grok) and, for Grok, the `model`. Codex stays
   the default. Running Codex itself against xAI does not work: xAI rejects Codex's second turn
   ("Could not decode the compaction blob").

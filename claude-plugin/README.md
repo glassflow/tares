@@ -90,7 +90,9 @@ To have Grok challenge instead of Codex, set `challenger_backend` to `grok` and 
 (`xai_api_key`, or `XAI_API_KEY` in the environment). Grok gets one API call per review: the
 commit's patch plus the full text of each changed file, or the plan. It cannot run the project's
 commands, so it reasons from the code only. A reply has to end on `VERDICT: CLEAN` to pass; one
-without findings or a verdict line is INCONCLUSIVE. `grok_model` defaults to `grok-4.6`; a
+without findings or a verdict line is INCONCLUSIVE, and one that says `VERDICT: FINDINGS` but
+names no `[P1]` or `[P2]` line the plugin can read blocks like a P2, with Grok's text as the
+finding. `grok_model` defaults to `grok-4.6`; a
 non-reasoning model invents findings, so keep a reasoning one. Reviews are billed to your xAI
 account (about 2 US cents for a small commit). Grok raises real but minor `[P2]` findings often
 enough that `challenger_mode` = `advise` is the calmer start.

@@ -317,6 +317,41 @@ def main():
           str(o)[:200])
     GROK["status"] = 200
 
+    # Ashish's review of PR 307: Grok formats findings its own way; none of them may read as clean
+    GROK["reply"] = ("Two problems.\n**[P1]** Clicks counted before the 404 check\n"
+                     "1. [P2] Counter not reset between tests\n### [P2] Race on the counter\n"
+                     "[P1]: Stats leak other links\nVERDICT: FINDINGS")
+    o, _ = run(CHAL, commit("grok v6"), genv)
+    ev = INGESTED[-1]["challenge"]
+    check("bold, numbered, heading and colon findings all parse and block",
+          o.get("decision") == "block" and ev["finding_count"] == 4 and ev["blocking_count"] == 4
+          and ev["findings"][0]["title"] == "Clicks counted before the 404 check", json.dumps(ev)[:400])
+
+    GROK["reply"] = "P1 - Clicks counted before the 404 check\n(a.txt:3)\nVERDICT: FINDINGS"
+    o, _ = run(CHAL, commit("grok v7"), genv)
+    ev = INGESTED[-1]["challenge"]
+    check("VERDICT: FINDINGS with no parsed P1/P2 fails, never a clean pass",
+          o.get("decision") == "block" and ev["verdict"] == "FAIL"
+          and "none of its findings could be read" in o.get("reason", "")
+          and "P1 - Clicks counted" in o.get("reason", ""), str(o)[:300])
+
+    GROK["reply"] = "[P3] Naming nit\nVERDICT: FINDINGS"
+    o, _ = run(CHAL, commit("grok v8"), genv)
+    check("VERDICT: FINDINGS with only a P3 parsed still fails",
+          o.get("decision") == "block" and INGESTED[-1]["challenge"]["verdict"] == "FAIL", str(o)[:300])
+
+    subprocess.run(["git", "-C", repo, "mv", "a.txt", "renamed.txt"], check=True)
+    open(os.path.join(repo, "renamed.txt"), "a").write("edited after the rename\n")
+    GROK["reply"] = "Every hunk read; nothing wrong.\nVERDICT: CLEAN"
+    subprocess.run(["git", "-C", repo, "add", "-A"], check=True)
+    subprocess.run(["git", "-C", repo, "commit", "-qm", "grok rename"], check=True)
+    run(CHAL, {**hook, "hook_event_name": "PostToolUse", "tool_name": "Bash",
+               "tool_input": {"command": "git commit -m 'grok rename'"},
+               "tool_response": {"stdout": "[main abc] grok rename", "stderr": ""}}, genv)
+    user = XAI[-1][2]["messages"][-1]["content"]
+    check("a renamed and edited file is handed over with its body",
+          "===== renamed.txt at " in user and "edited after the rename" in user, user[-600:])
+
     GROK["reply"] = "[P1] No migration for the new column\nVERDICT: FINDINGS"
     o, p = run(CHAL, {**hook, "hook_event_name": "PostToolUse", "tool_name": "ExitPlanMode",
                       "tool_input": {"plan": "# Plan\n1. add clicks"}}, genv)
@@ -325,6 +360,11 @@ def main():
           "decision" not in o and ctx.startswith("Grok challenged the plan") and "[P1] No migration" in ctx,
           str(o)[:300] + p.stderr[:300])
     check("the plan text reached grok", "1. add clicks" in XAI[-1][2]["messages"][-1]["content"])
+    o, _ = run(CHAL, {**hook, "hook_event_name": "PostToolUse", "tool_name": "ExitPlanMode",
+                      "tool_input": {"plan": "# Plan\n" + "x" * 300_000}}, genv)
+    sent = XAI[-1][2]["messages"][-1]["content"]
+    check("a huge plan is capped before it is sent", len(sent) < 130_000 and "[plan truncated at" in sent,
+          str(len(sent)))
     ev = INGESTED[-1]
     check("challenge_plan names the reviewer", ev["type"] == "challenge_plan" and ev["challenge"]["reviewer"] == "grok")
 
@@ -342,6 +382,26 @@ def main():
     o, _ = run(CHAL, commit("codex again"), env)
     check("without the option codex stays the reviewer",
           len(codex_calls()) == before + 1 and INGESTED[-1]["challenge"]["reviewer"] == "codex", str(o)[:200])
+
+    print("== grok timeouts ==")
+    sys.path.insert(0, os.path.dirname(CHAL))
+    import socket
+    import urllib.error
+    import grok
+    real, os.environ["XAI_API_KEY"] = grok.urllib.request.urlopen, "test-key"
+    try:
+        for label, exc in (("a read timeout", TimeoutError("read")),
+                           ("a connect timeout", urllib.error.URLError(socket.timeout("timed out"))),
+                           ("a refused connection", urllib.error.URLError(ConnectionRefusedError(61, "refused")))):
+            def boom(*a, _e=exc, **k):
+                raise _e
+            grok.urllib.request.urlopen = boom
+            r = grok.run_grok("x", 5)
+            want = "ERROR" if "refused" in label else "TIMEOUT"
+            check(f"{label} is reported as {want}", r["verdict"] == want, str(r))
+    finally:
+        grok.urllib.request.urlopen = real
+        os.environ.pop("XAI_API_KEY", None)
 
     print("== session end ==")
     run(SHIP, {**hook, "hook_event_name": "SessionEnd"}, env)

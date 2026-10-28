@@ -23,7 +23,10 @@ MAX_PATCH = 60_000      # chars of `git show`; past this the file bodies are dro
 MAX_FILE = 20_000       # chars per changed file at the commit
 MAX_CONTEXT = 120_000   # chars of patch + files in one request
 
-_FINDING_RE = re.compile(r"^\s*(?:[-*>]\s+)?\[(P[123])\]\s+(\S.*?)\s*$")
+# `[P1] title`, also under a list, number or heading mark, bolded (`**[P1]**`) or with a colon
+# after the tag: a finding the model formats its own way must never read as no finding
+_FINDING_RE = re.compile(r"^\s*(?:(?:[-*+>]|\d+[.)]|#{1,6})\s+)*(?:\*\*|__|\*|_)?\[(P[123])\]"
+                         r"(?:\*\*|__|\*|_)?\s*[:\-]?\s*(\S.*?)\s*$")
 _VERDICT_RE = re.compile(r"^\s*VERDICT:\s*(CLEAN|FINDINGS)\s*$", re.M)
 
 SYSTEM = (
@@ -58,7 +61,8 @@ def commit_material(cwd: str, sha: str) -> str:
         patch = patch[:MAX_PATCH] + f"\n\n[patch truncated at {MAX_PATCH} chars]"
     parts = [patch]
     budget = MAX_CONTEXT - len(patch)
-    files = [f for f in _git(cwd, "show", "--name-only", "--diff-filter=AM", "--format=", sha)
+    # R and C too: a renamed or copied file that was also edited needs its body, not just the hunk
+    files = [f for f in _git(cwd, "show", "--name-only", "--diff-filter=AMRC", "--format=", sha)
              .splitlines() if f.strip()]
     for f in files:
         body = _git(cwd, "show", f"{sha}:{f}")
@@ -97,29 +101,47 @@ def run_grok(user: str, timeout: int) -> dict:
                 "verdict": "ERROR", "exit": 1, "duration_seconds": 0.0, "activity": False}
     try:
         prose, usage = _chat(user, timeout)
-    except TimeoutError:
-        return {"prose": f"(Grok review timed out after {timeout}s)", "findings": [],
-                "verdict": "TIMEOUT", "exit": 124,
-                "duration_seconds": round(time.time() - started, 1), "activity": False}
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")[:1500]
         return {"prose": f"(xAI answered {e.code}: {detail})", "findings": [], "verdict": "ERROR",
                 "exit": 1, "duration_seconds": round(time.time() - started, 1), "activity": False}
+    except (TimeoutError, urllib.error.URLError) as e:
+        # a read timeout raises TimeoutError; a connect timeout arrives wrapped in URLError
+        if not isinstance(e, TimeoutError) and not isinstance(e.reason, TimeoutError):
+            return {"prose": f"(could not reach xAI: {e.reason})", "findings": [], "verdict": "ERROR",
+                    "exit": 1, "duration_seconds": round(time.time() - started, 1), "activity": False}
+        return {"prose": f"(Grok review timed out after {timeout}s)", "findings": [],
+                "verdict": "TIMEOUT", "exit": 124,
+                "duration_seconds": round(time.time() - started, 1), "activity": False}
     except Exception as e:
         return {"prose": f"(could not reach xAI: {type(e).__name__}: {e})", "findings": [],
                 "verdict": "ERROR", "exit": 1,
                 "duration_seconds": round(time.time() - started, 1), "activity": False}
-    findings = [{"priority": m.group(1), "title": m.group(2)}
+    findings = [{"priority": m.group(1), "title": m.group(2).rstrip("*_ ")}
                 for m in (_FINDING_RE.match(l) for l in prose.splitlines()) if m]
-    return {"prose": prose.strip() or "(Grok returned an empty message)", "findings": findings,
-            "verdict": "", "exit": 0, "duration_seconds": round(time.time() - started, 1),
-            "activity": bool(_VERDICT_RE.search(prose)), "model": MODEL, "usage": usage}
+    verdict = _VERDICT_RE.search(prose)
+    # FINDINGS says a P1 or P2 is there; if none parsed, the format beat the regex. Say so, so
+    # that the caller never reads the empty list as clean.
+    unparsed = bool(verdict and verdict.group(1) == "FINDINGS"
+                    and not any(f["priority"] in ("P1", "P2") for f in findings))
+    prose = prose.strip() or "(Grok returned an empty message)"
+    if unparsed:
+        prose = ("(Grok's verdict is FINDINGS, but none of its findings could be read as a [P1] or "
+                 "[P2] line. Read the review below for them.)\n\n" + prose)
+    return {"prose": prose, "findings": findings, "verdict": "", "exit": 0,
+            "duration_seconds": round(time.time() - started, 1), "activity": bool(verdict),
+            "unparsed": unparsed, "model": MODEL, "usage": usage}
 
 
 def review_commit(cwd: str, sha: str, timeout: int) -> dict:
-    return run_grok("Review this commit.\n\n" + commit_material(cwd, sha), timeout)
+    r = run_grok("Review this commit.\n\n" + commit_material(cwd, sha), timeout)
+    if r.get("unparsed"):
+        r["verdict"] = "FAIL"   # Grok found something blocking; an empty list must not pass it
+    return r
 
 
 def review_plan(plan: str, timeout: int) -> dict:
+    if len(plan) > MAX_CONTEXT:
+        plan = plan[:MAX_CONTEXT] + f"\n\n[plan truncated at {MAX_CONTEXT} chars]"
     return run_grok("Challenge this implementation plan before any code is written: what is "
                     "missing, wrong or risky? Only P1 means the plan must change.\n\n" + plan, timeout)
