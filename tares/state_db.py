@@ -16,8 +16,10 @@ PgBouncer in transaction mode; an explicit BEGIN .. COMMIT keeps one connection 
 from __future__ import annotations
 
 import functools
+import os
 import re
 import threading
+import time
 
 EVENT_TABLES = frozenset({"events", "cursors", "source_stats", "entity_counts",
                           "entity_label_state"})
@@ -164,7 +166,7 @@ class _Result:
 class PgState:
     """A DuckDB-connection lookalike over Postgres: one connection per thread."""
 
-    def __init__(self, dsn: str):
+    def __init__(self, dsn: str, wait: float | None = None):
         import psycopg                                     # optional: only a cloud cell needs it
         from psycopg.types.string import TextLoader
         self._psycopg, self._dsn = psycopg, dsn
@@ -172,7 +174,24 @@ class PgState:
         self._adapt = psycopg.adapt.AdaptersMap(psycopg.adapters)
         for name in ("json", "jsonb"):                     # DuckDB hands JSON back as its text
             self._adapt.register_loader(name, TextLoader)
-        self.conn()                                        # fail at startup, not on first read
+        # fail at startup, not on first read; but wait a while first: a new cell's login reaches
+        # PgBouncer a minute or so after its Secret does (the kubelet syncs the user list late);
+        # 120 s stays inside the cloud liveness probe, whose restart then simply tries again
+        if wait is None:
+            wait = float(os.getenv("TARES_STATE_CONNECT_WAIT", "120"))
+        deadline, said = time.monotonic() + wait, False
+        while True:
+            try:
+                self.conn()
+                break
+            except psycopg.OperationalError as e:
+                if time.monotonic() >= deadline:
+                    raise
+                if not said:
+                    print(f"taresd: waiting for the state database: {str(e).strip().splitlines()[0][:120]}",
+                          flush=True)
+                    said = True
+                time.sleep(5)
 
     def conn(self):
         c = getattr(self._local, "c", None)

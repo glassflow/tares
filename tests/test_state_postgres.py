@@ -56,6 +56,18 @@ def translation():
        == ["CREATE TABLE IF NOT EXISTS tickets (a TEXT)"])
 
 
+def waits_for_its_login():
+    print("== at startup, the state database is waited for, then given up on ==")
+    t0 = time.perf_counter()
+    try:
+        state_db.PgState("postgresql://nobody:x@127.0.0.1:1/none?connect_timeout=1", wait=6)
+        ck("an unreachable state database fails the start", False, "it connected")
+    except Exception as e:                     # noqa: BLE001
+        took = time.perf_counter() - t0
+        ck("an unreachable state database fails the start, after the wait",
+           6 <= took < 20 and type(e).__name__ == "OperationalError", f"{took:.1f}s {e!r}")
+
+
 def _schema_dsn(base: str) -> str:
     import psycopg
     schema = "t_" + uuid.uuid4().hex[:12]
@@ -172,6 +184,11 @@ def with_postgres(base: str):
 
 if __name__ == "__main__":
     translation()
+    try:
+        import psycopg  # noqa: F401
+        waits_for_its_login()
+    except ImportError:
+        print("== (no psycopg: the startup wait is skipped) ==")
     base = os.environ.get("TARES_TEST_PG")
     if base:
         with_postgres(base)
