@@ -620,6 +620,7 @@ const PRESETS: { id: string; label: string; kind: ProviderKind; name: string; ba
   { id: "openai", label: "OpenAI", kind: "openai", name: "OpenAI", base_url: "", key: true },
   { id: "litellm", label: "LiteLLM", kind: "openai_compatible", name: "LiteLLM", base_url: "http://localhost:4000/v1", key: true },
   { id: "openrouter", label: "OpenRouter", kind: "openai_compatible", name: "OpenRouter", base_url: "https://openrouter.ai/api/v1", key: true },
+  { id: "xai", label: "xAI (Grok)", kind: "openai_compatible", name: "xAI", base_url: "https://api.x.ai/v1", key: true },
   { id: "ollama", label: "Ollama", kind: "openai_compatible", name: "Ollama", base_url: "http://localhost:11434/v1", key: false },
   { id: "other", label: "Other OpenAI-compatible", kind: "openai_compatible", name: "", base_url: "", key: true },
 ];
