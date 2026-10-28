@@ -694,6 +694,20 @@ class Store(FactoryStore, ClaudeUsageStore):
                     pg.execute(stmt)
                 if state_db.moved(pg):
                     self._use_pg_state(pg)        # upgrades below run on the moved state
+                    if not moved_at:
+                        # the move committed but the start stopped before marking DuckDB: mark
+                        # it now, so a later start without the DSN still refuses
+                        self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
+                                         "('state_moved_to_postgres', ?, now())",
+                                         [now_utc().isoformat()])
+                elif moved_at:
+                    # this cell moved before, yet this database holds none of it (recreated,
+                    # restored from before the move, or the wrong DSN): moving again would put
+                    # the DuckDB copy from the day of the move in place of everything since
+                    raise StoreUnavailable(
+                        f"this cell's state moved to Postgres on {moved_at[0]}, but the database "
+                        "TARES_STATE_DSN points at does not hold it. Point it at the cell's "
+                        "state database and restart.", path)
             self._upgrade()
             if pg is not None and self.sc is self.con:
                 # first start with a state database: the state moves over once, then is read

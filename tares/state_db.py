@@ -184,12 +184,15 @@ class PgState:
 
     def execute(self, sql: str, params=None) -> _Result:
         q = to_pg(sql)
+        c = getattr(self._local, "c", None)
+        # read before the statement: once the connection drops its status is UNKNOWN, not IDLE
+        idle = c is None or c.closed or c.info.transaction_status == c.info.transaction_status.IDLE
         try:
             return self._run(q, params)
         except self._psycopg.OperationalError:
             c = getattr(self._local, "c", None)
-            if c is not None and c.info.transaction_status != c.info.transaction_status.IDLE:
-                raise                                      # mid-transaction: the caller decides
+            if not idle or (c is not None and not c.closed):
+                raise                  # mid-transaction, or the server refused the statement
             self._local.c = None                           # a dropped connection: one retry
             return self._run(q, params)
 

@@ -91,6 +91,46 @@ def with_postgres(base: str):
     except StoreUnavailable as e:
         ck("refuses to serve the stale DuckDB copy", "TARES_STATE_DSN" in e.reason, e.reason)
 
+    print("== pointed at a database without its state, the cell says so ==")
+    try:
+        Store(path, state_dsn=_schema_dsn(base))
+        ck("does not move the old DuckDB copy a second time", False, "it opened")
+    except StoreUnavailable as e:
+        ck("does not move the old DuckDB copy a second time", "does not hold it" in e.reason, e.reason)
+
+    print("== a move that stopped before marking DuckDB is marked on the next start ==")
+    st = Store(path, state_dsn=dsn)
+    st.con.execute("DELETE FROM settings WHERE key = 'state_moved_to_postgres'")
+    st.con.close()
+    st = Store(path, state_dsn=dsn)
+    st.con.close()
+    try:
+        Store(path, state_dsn="")
+        ck("then a start without the DSN still refuses", False, "it opened")
+    except StoreUnavailable:
+        ck("then a start without the DSN still refuses", True)
+
+    print("== a dropped connection is opened again ==")
+    import psycopg
+    st = Store(path, state_dsn=dsn)
+    backend = st.sc.execute("SELECT pg_backend_pid()").fetchone()[0]
+    with psycopg.connect(base, autocommit=True) as c:
+        c.execute("SELECT pg_terminate_backend(%s)", [backend])
+    try:
+        ck("the next read after the drop works", st.get_setting("greeting") == "after the move")
+    except Exception as e:                     # noqa: BLE001
+        ck("the next read after the drop works", False, repr(e))
+    backend = st.sc.execute("SELECT pg_backend_pid()").fetchone()[0]
+    st.sc.execute("BEGIN")
+    with psycopg.connect(base, autocommit=True) as c:
+        c.execute("SELECT pg_terminate_backend(%s)", [backend])
+    try:
+        st.sc.execute("SELECT 1")
+        ck("a drop inside a transaction is not retried", False, "it was retried")
+    except psycopg.OperationalError:
+        ck("a drop inside a transaction is not retried", True)
+    st.con.close()
+
     print("== reads run in parallel, writes stay one at a time ==")
     st = Store(path, state_dsn=dsn)
     done, errs = [], []
