@@ -5,7 +5,13 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.54.0] - 2026-10-28
+
+Grok can review a challenger session instead of Codex, and xAI is one of the model provider
+presets. Claude Code plugin 0.6.0.
+
 ### Added
+- Console: xAI (Grok) is a preset in Settings, Model providers, next to the others.
 - Plugin: Grok can be the challenger's second model instead of Codex. Set `challenger_backend` to
   `grok` and give the plugin an xAI key (`xai_api_key`, or `XAI_API_KEY`). Each plan or commit is
   reviewed in one xAI API call over the patch and the changed files, with the same priority tags,
