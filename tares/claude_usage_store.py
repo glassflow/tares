@@ -82,17 +82,21 @@ class ClaudeUsageStore:
     def _claude_usage_fill(self) -> None:
         """Replies stored as claude_code events without a usage row get one: every one on the
         first start, then those from a day before the newest row on (a version that did not count
-        them may have run in between). Lock not needed (init)."""
-        since = self.con.execute("SELECT max(replied_at) - INTERVAL 1 DAY FROM session_usage"
-                                 ).fetchone()[0]
+        them may have run in between). Lock not needed (init). The usage rows are state and the
+        replies are events, so they are read from DuckDB and written where the state lives."""
+        since = self.sc.execute("SELECT max(replied_at) - INTERVAL 1 DAY FROM session_usage"
+                                ).fetchone()[0]
+        sources = [r[0] for r in self.sc.execute(
+            "SELECT name FROM catalog_sources WHERE connector = 'claude_code'").fetchall()]
+        projects = {}
+        for pid, pname in self.sc.execute("SELECT id, name FROM usecases").fetchall():
+            projects.setdefault(pname, pid)
+            projects[pid] = pid                            # an id wins over a same-named project
         u = "json_extract(e.payload, '$.message.usage')"
-        self.con.execute(
-            "INSERT INTO session_usage (session, message, replied_at, model, project, subagent, "
-            "input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, "
-            "cache_write_1h_tokens) "
+        rows = self.con.execute(
             "SELECT e.key_value, json_extract_string(e.payload, '$.message.id'), min(e.event_time), "
             "any_value(json_extract_string(e.payload, '$.message.model')), "
-            "any_value(coalesce(p.id, p2.id)), "
+            "any_value(json_extract_string(e.payload, '$.tares_project')), "
             "any_value(json_extract_string(e.payload, '$.subagent')), "
             f"max(CAST(json_extract({u}, '$.input_tokens') AS BIGINT)), "
             f"max(CAST(json_extract({u}, '$.output_tokens') AS BIGINT)), "
@@ -100,18 +104,29 @@ class ClaudeUsageStore:
             f"max(CAST(json_extract({u}, '$.cache_read_input_tokens') AS BIGINT)), "
             f"max(CAST(json_extract({u}, '$.cache_creation.ephemeral_1h_input_tokens') AS BIGINT)) "
             "FROM events e "
-            "LEFT JOIN usecases p ON p.id = json_extract_string(e.payload, '$.tares_project') "
-            "LEFT JOIN usecases p2 ON p2.name = json_extract_string(e.payload, '$.tares_project') "
-            "WHERE e.source IN (SELECT name FROM catalog_sources WHERE connector = 'claude_code') "
+            f"WHERE e.source IN ({', '.join('?' * len(sources)) or 'NULL'}) "
             f"AND {u} IS NOT NULL AND json_extract_string(e.payload, '$.message.id') IS NOT NULL "
             "AND coalesce(json_extract_string(e.payload, '$.message.model'), '') <> ? "
             "AND (CAST(? AS TIMESTAMPTZ) IS NULL OR e.event_time >= ?) "
-            "GROUP BY 1, 2 ON CONFLICT DO NOTHING", [SYNTHETIC, since, since])
-        self.con.execute("DELETE FROM session_usage WHERE model = ?", [SYNTHETIC])
+            "GROUP BY 1, 2", [*sources, SYNTHETIC, since, since]).fetchall()
+        rows = [(*r[:4], projects.get(r[4]), *r[5:]) for r in rows]
+        # DuckDB binds an executemany row by row; one big statement is much faster there
+        many = (self.sc.executemany if self.sc is not self.con else
+                lambda sql, chunk: self.con.execute(
+                    sql.split(" VALUES ")[0] + " SELECT * FROM (VALUES " + ", ".join(
+                        ["(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"] * len(chunk)) + ") ON CONFLICT DO NOTHING",
+                    [v for r in chunk for v in r]))
+        for i in range(0, len(rows), 1000):
+            many(
+                "INSERT INTO session_usage (session, message, replied_at, model, project, "
+                "subagent, input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, "
+                "cache_write_1h_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT DO NOTHING", rows[i:i + 1000])
+        self.sc.execute("DELETE FROM session_usage WHERE model = ?", [SYNTHETIC])
         # priced by family as pricing.cost_usd prices them; MODEL_PRICING is longest prefix first, so a
         # row a longer prefix already priced is not touched again by a shorter one
         for prefix, p_in, p_out, p_read in MODEL_PRICING:
-            self.con.execute(
+            self.sc.execute(
                 "UPDATE session_usage SET cost_usd = (coalesce(input_tokens, 0) * ? "
                 "+ coalesce(output_tokens, 0) * ? "
                 "+ (coalesce(cache_write_tokens, 0) - coalesce(cache_write_1h_tokens, 0)) * ? "
@@ -124,7 +139,7 @@ class ClaudeUsageStore:
 
     def _usage_forget_project(self, uid: str) -> None:
         """A project is deleted: its replies stay, counted as the session's own. Lock held."""
-        self.con.execute("UPDATE session_usage SET project = NULL WHERE project = ?", [uid])
+        self.sc.execute("UPDATE session_usage SET project = NULL WHERE project = ?", [uid])
 
     # ── writes, from the claude_code source ───────────────────────────────────
     def record_reply_usage(self, session: str, message: str, at, model: str | None,
@@ -132,8 +147,8 @@ class ClaudeUsageStore:
         """One line of a model reply: keep the largest count seen for the reply, and its cost."""
         i, o, cw, cr, hour = reply_tokens(usage)
         cost = cost_usd(model or "", i, o, cw, cr, hour)
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO session_usage (session, message, replied_at, model, project, subagent, "
                 "input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, "
                 "cache_write_1h_tokens, cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
@@ -154,8 +169,8 @@ class ClaudeUsageStore:
 
     def set_session_status(self, session: str, status: dict, at) -> None:
         """The status line's report; an older one than the one stored does not win."""
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO session_meters (session, status, status_at) VALUES (?, ?, ?) "
                 "ON CONFLICT (session) DO UPDATE SET status = excluded.status, "
                 "status_at = excluded.status_at WHERE session_meters.status_at IS NULL "
@@ -163,8 +178,8 @@ class ClaudeUsageStore:
                 [session, json.dumps(status), at])
 
     def set_session_context(self, session: str, context: dict, at) -> None:
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO session_meters (session, context, context_at) VALUES (?, ?, ?) "
                 "ON CONFLICT (session) DO UPDATE SET context = excluded.context, "
                 "context_at = excluded.context_at WHERE session_meters.context_at IS NULL "
@@ -173,8 +188,8 @@ class ClaudeUsageStore:
 
     def ask_session_context(self, session: str, at) -> None:
         """A person asked for a new /context reading of the session."""
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO session_meters (session, context_asked_at) VALUES (?, ?) "
                 "ON CONFLICT (session) DO UPDATE SET context_asked_at = excluded.context_asked_at",
                 [session, at])
@@ -182,8 +197,8 @@ class ClaudeUsageStore:
     # ── reads ─────────────────────────────────────────────────────────────────
     def context_asks(self, since) -> list[str]:
         """Sessions a person asked a reading of, since `since`, that have none newer yet."""
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT session FROM session_meters WHERE context_asked_at >= ? AND "
                 "(context_at IS NULL OR context_at < context_asked_at) ORDER BY context_asked_at",
                 [since]).fetchall()
@@ -193,8 +208,8 @@ class ClaudeUsageStore:
         if not sessions:
             return {}
         marks = ", ".join("?" for _ in sessions)
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT session, status, status_at, context, context_at, context_asked_at "
                 f"FROM session_meters WHERE session IN ({marks})", list(sessions)).fetchall()
         return {r[0]: {"status": _json(r[1]), "status_at": r[2], "context": _json(r[3]),
@@ -202,8 +217,8 @@ class ClaudeUsageStore:
 
     def latest_rate_limits(self) -> tuple | None:
         """(when, rate_limits) from the newest status line report that carried the plan's limits."""
-        with self._lock:
-            row = self.con.execute(
+        with self._sread:
+            row = self.sc.execute(
                 "SELECT status_at, json_extract(status, '$.rate_limits') FROM session_meters "
                 "WHERE json_extract(status, '$.rate_limits') IS NOT NULL "
                 "AND json_type(json_extract(status, '$.rate_limits')) = 'OBJECT' "
@@ -224,8 +239,8 @@ class ClaudeUsageStore:
         if not sessions:
             return {}
         marks = ", ".join("?" for _ in sessions)
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 f"SELECT session, {self._TOTALS} FROM session_usage WHERE session IN ({marks}) "
                 "GROUP BY session", list(sessions)).fetchall()
         return {r[0]: self._totals(r[1:]) for r in rows}
@@ -237,8 +252,8 @@ class ClaudeUsageStore:
         are the crew's (`kind` crew); anything else unclaimed is `other`."""
         crew = ", ".join(f"'{r}'" for r in CREW_ROLES)
         where, args = ("WHERE u.replied_at >= ?", [since]) if since is not None else ("", [])
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "WITH r AS (SELECT u.*, coalesce(u.project, ss.project, "
                 f"CASE WHEN ss.role IN ({crew}) THEN NULL ELSE ps.project END) AS proj, "
                 f"ss.role IN ({crew}) AS crew FROM session_usage u "
