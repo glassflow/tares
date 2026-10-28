@@ -73,15 +73,59 @@ def _rewrite_calls(sql: str, name: str, fn) -> str:
         pos = end
 
 
+_PATH_STEP = re.compile(r'\."([^"]*)"|\.([^.\["]+)|\[(\d+)\]')
+
+
 def _json_path(p: str) -> str:
-    """'$.a.b' or '$."a b"' -> a Postgres text-array path literal '{a,b}' / '{"a b"}'."""
+    """'$.a.b', '$."a b"' or '$.a[0].b' -> a Postgres path literal '{a,b}' / '{"a b"}' /
+    '{a,0,b}' (Postgres reads a number in the path as an array index). Anything else is refused,
+    not guessed."""
     p = p.strip()
     if not (p.startswith("'$") and p.endswith("'")):
         raise ValueError(f"unsupported JSON path {p!r}")
-    body = p[2:-1]
-    parts = re.findall(r'\."([^"]*)"|\.([^."]+)', body)
-    keys = [a or b for a, b in parts]
+    body, keys, pos = p[2:-1], [], 0
+    for m in _PATH_STEP.finditer(body):
+        if m.start() != pos:
+            break
+        keys.append(m.group(3) if m.group(3) is not None else (m.group(1) if m.group(1) is not None
+                                                                 else m.group(2)))
+        pos = m.end()
+    if pos != len(body):
+        raise ValueError(f"unsupported JSON path {p!r}")
     return "'{" + ",".join('"' + k.replace('"', '\\"') + '"' for k in keys) + "}'"
+
+
+def _strip_comments(sql: str) -> str:
+    """Drop '--' comments outside quoted strings: a quote or '?' in one would otherwise shift the
+    placeholders and the call parsing."""
+    out, quote, i = [], None, 0
+    while i < len(sql):
+        c = sql[i]
+        if quote:
+            out.append(c)
+            if c == quote:
+                quote = None
+        elif c in "'\"":
+            quote = c
+            out.append(c)
+        elif c == "-" and sql.startswith("--", i):
+            j = sql.find("\n", i)
+            i = len(sql) if j < 0 else j
+            continue
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _date_diff(a: list[str]) -> str:
+    unit = a[0].strip().strip("'").lower()
+    start, end = f"CAST({a[1]} AS timestamptz)", f"CAST({a[2]} AS timestamptz)"
+    if unit == "day":          # DuckDB counts the day boundaries crossed, in UTC
+        return f"(CAST(({end}) AT TIME ZONE 'UTC' AS date) - CAST(({start}) AT TIME ZONE 'UTC' AS date))"
+    if unit not in _EPOCH_UNIT:
+        raise ValueError(f"date_diff in {unit!r} is not translated for Postgres (state_db.to_pg)")
+    return f"(EXTRACT(EPOCH FROM ({end} - {start})) * {_EPOCH_UNIT[unit]})"
 
 
 def _placeholders(sql: str) -> str:
@@ -113,7 +157,7 @@ _INTERVAL = re.compile(r"\bINTERVAL\s+(\d+)\s+(MICROSECOND|MILLISECOND|SECOND|MI
 @functools.lru_cache(maxsize=4096)
 def to_pg(sql: str) -> str:
     """DuckDB SQL as the store writes it -> the same statement for Postgres."""
-    s = sql
+    s = _strip_comments(sql)
     s = _rewrite_calls(s, "json_extract_string",
                        lambda a: f"(CAST({a[0]} AS jsonb) #>> {_json_path(a[1])})")
     s = _rewrite_calls(s, "json_extract",
@@ -121,9 +165,7 @@ def to_pg(sql: str) -> str:
     # DuckDB's arg_max skips rows whose ordering value is NULL
     s = _rewrite_calls(s, "arg_max", lambda a: (
         f"(array_agg({a[0]} ORDER BY {a[1]} DESC) FILTER (WHERE ({a[1]}) IS NOT NULL))[1]"))
-    s = _rewrite_calls(s, "date_diff", lambda a: (
-        f"(EXTRACT(EPOCH FROM (CAST({a[2]} AS timestamptz) - CAST({a[1]} AS timestamptz)))"
-        f" * {_EPOCH_UNIT[a[0].strip(chr(39)).lower()]})"))
+    s = _rewrite_calls(s, "date_diff", _date_diff)
     s = _rewrite_calls(s, "octet_length", lambda a: (
         "octet_length(" + re.sub(r"^encode\((.*)\)$", r"\1", a[0], flags=re.I) + ")"))
     s = _rewrite_calls(s, "json_type",                # DuckDB names the types in capitals

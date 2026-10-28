@@ -49,6 +49,23 @@ def translation():
        == "SELECT 1 WHERE a = ANY('{}') AND b <> ALL('{}')")
     ck("DDL: DOUBLE and JSON", t("CREATE TABLE t (a DOUBLE, b JSON)") == "CREATE TABLE t (a DOUBLE PRECISION, b TEXT)")
     ck("not DDL: a JSON word in a query stays", "JSON" in t("SELECT CAST(x AS JSON) FROM t"))
+    ck("json_extract, an array step", t("SELECT json_extract_string(p, '$.a[0].b')")
+       == "SELECT (CAST(p AS jsonb) #>> '{\"a\",\"0\",\"b\"}')", t("SELECT json_extract_string(p, '$.a[0].b')"))
+    try:
+        t("SELECT json_extract_string(p, '$.a[*]')")
+        ck("a JSON path it cannot translate is refused", False, "translated")
+    except ValueError:
+        ck("a JSON path it cannot translate is refused", True)
+    ck("date_diff in days", "AS date) - CAST" in t("SELECT date_diff('day', a, b)"))
+    try:
+        t("SELECT date_diff('quarter', a, b)")
+        ck("date_diff in a unit it does not know is refused", False, "translated")
+    except ValueError:
+        ck("date_diff in a unit it does not know is refused", True)
+    ck("a -- comment with a quote and a ? is dropped",
+       t("SELECT a FROM x -- isn't it? \nWHERE b = ?") == "SELECT a FROM x \nWHERE b = %s",
+       repr(t("SELECT a FROM x -- isn't it? \nWHERE b = ?")))
+    ck("-- inside a string stays", t("SELECT '--x' FROM x WHERE a = ?") == "SELECT '--x' FROM x WHERE a = %s")
     ck("events tables are not state",
        state_db.state_ddl(["CREATE TABLE IF NOT EXISTS events (a TEXT)",
                            "CREATE INDEX IF NOT EXISTS ix ON events(a)",
