@@ -245,7 +245,7 @@ def usage(store, days: int = 7) -> dict:
 
 def register(app, store) -> None:
     @app.get("/api/claude-code/usage")
-    async def get_claude_code_usage(days: int = 7):
+    def get_claude_code_usage(days: int = 7):
         """What the Claude Code sessions reporting here spend: the plan's limits (as the crew's
         machine last read them), the current 5-hour window by project, and tokens and estimated
         cost by project over the last `days` (1 to 90). Cost is at API list prices."""

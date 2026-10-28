@@ -1,6 +1,6 @@
 [project]
 name = "tares"
-version = "1.52.0"
+version = "1.53.0"
 description = "Open-source platform for always-on AI agents: a software factory for Claude Code that takes your projects from tickets to merged pull requests, or an AI SRE that watches your systems."
 readme = "README.md"
 keywords = ["tares", "software-factory", "claude-code", "autonomous-agents", "coding-agents", "multi-agent", "agent-orchestration", "ai-sre", "ai-monitoring", "incident-response", "observability", "mcp"]
@@ -46,6 +46,9 @@ Repository = "https://github.com/glassflow/tares"
 # compiled dep, so the gRPC path stays opt-in. (postgres/agent deps are now base — `tares up`
 # ships a working Postgres connector and Ask agent with no extras.)
 otlp-grpc = ["grpcio>=1.60", "opentelemetry-proto>=1.20"]
+# A cell's state in Postgres (TARES_STATE_DSN, state_db.py): the cloud image installs it; a
+# local install keeps its state in DuckDB and needs none of this.
+postgres-state = ["psycopg[binary]>=3.1"]
 
 [project.scripts]
 tares = "tares.cli:main"

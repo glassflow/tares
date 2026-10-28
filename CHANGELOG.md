@@ -16,6 +16,33 @@ the project follows [Semantic Versioning](https://semver.org/).
   the default. Running Codex itself against xAI does not work: xAI rejects Codex's second turn
   ("Could not decode the compaction blob").
 
+## [1.53.0] - 2026-10-28
+
+A cell serves a page's requests side by side instead of one after another, and a cloud cell keeps
+its state (projects, tickets, agents, settings) in Postgres while its events stay in DuckDB. On
+factory the project page went from 1.2 s to about 0.7 s, and the Crew page from 0.43 s to about
+0.3 s (P-TR-268).
+
+### Added
+- State in Postgres, opt-in with `TARES_STATE_DSN` (install the `postgres-state` extra). A cell
+  started with it the first time copies its 44 state tables out of `tares.duckdb` in one
+  transaction, checks the row counts and records the move. From then on it reads and writes state
+  only there. Without the variable nothing changes: local installs keep everything in DuckDB.
+- A cell that moved refuses to start without `TARES_STATE_DSN`, or with one that points at a
+  database without its state, instead of serving the stale DuckDB copy. At startup it waits up to
+  120 s for its state database (`TARES_STATE_CONNECT_WAIT`), and reconnects once after a dropped
+  connection.
+
+### Changed
+- Request handlers run in worker threads, so the requests a page fires together are served
+  together. Catalog reloads, ingest and poll writes, ticket stage moves and desk answers no longer
+  run their database work on the event loop, so one slow query no longer stalls the rest of the
+  cell.
+- The Crew page's projects, repos, assumptions and pull request refresh are read once per request
+  instead of once per item.
+- Codex challenger results are kept in their own table when the event arrives, so the review
+  queue, the ticket view and the merge gate no longer scan every event. The "Codex open" chip stays.
+
 ## [1.52.0] - 2026-10-27
 
 The Projects list reads as a work queue, the software factory crew paces itself and moves onto

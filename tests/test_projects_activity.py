@@ -73,11 +73,11 @@ async def api():
         await m.write_ticket("Catalog", project="Shop")
         await mf.hand_over(project="Shop", repo="/w/shop")
         old = datetime.now(timezone.utc) - timedelta(days=9)
-        store.con.execute("UPDATE usecases SET updated_at = ? WHERE id IN (?, ?)", [old, shop, blog])
-        store.con.execute("UPDATE tickets SET updated_at = ? WHERE project = ?",
+        store.sc.execute("UPDATE usecases SET updated_at = ? WHERE id IN (?, ?)", [old, shop, blog])
+        store.sc.execute("UPDATE tickets SET updated_at = ? WHERE project = ?",
                           [old + timedelta(days=1), shop])
         newest = old + timedelta(days=3)
-        store.con.execute("UPDATE tickets SET updated_at = ? WHERE project = ? AND number = 1",
+        store.sc.execute("UPDATE tickets SET updated_at = ? WHERE project = ? AND number = 1",
                           [newest, shop])
 
         print("== GET /api/projects ==")
@@ -116,8 +116,8 @@ async def reread():
               "merged": False, "head": "abc", "ci": "pending", "verdict": None,
               "checked_at": old.isoformat(), "error": None}
         store.update_ticket(tid, pr=pr)
-        store.con.execute("UPDATE tickets SET updated_at = ? WHERE id = ?", [old, tid])
-        store.con.execute("UPDATE usecases SET updated_at = ? WHERE id = ?", [old, uid])
+        store.sc.execute("UPDATE tickets SET updated_at = ? WHERE id = ?", [old, tid])
+        store.sc.execute("UPDATE usecases SET updated_at = ? WHERE id = ?", [old, uid])
         reads = []
 
         async def same(_store, repo, number, prev=None, **changes):

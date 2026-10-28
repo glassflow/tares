@@ -446,7 +446,7 @@ async def main():
                                   "next_step": "Roll back the gateway config.",
                                   "summary": "The gateway timed out."}
         # both agents have a write-back webhook: a practice run must not call it
-        store.con.execute("UPDATE catalog_agents SET webhook_url = 'http://127.0.0.1:9/hook' "
+        store.sc.execute("UPDATE catalog_agents SET webhook_url = 'http://127.0.0.1:9/hook' "
                           "WHERE name IN ('checkout-triage', 'checkout-rca')")
         r = await cx.post(f"/api/projects/{uid}/setup/practice")
         ck("practice answers a run id", r.status_code == 200 and r.json().get("run_id"), r.text)
