@@ -98,7 +98,7 @@ def next_run():
         rid = uuid.uuid4().hex
         store.start_agent_run(rid, "watcher", "spike", "d", "k", "h", practice=practice)
         store.finish_agent_run(rid, status)
-        store.con.execute("UPDATE agent_runs SET started_at = now() - ? * INTERVAL 1 MINUTE "
+        store.sc.execute("UPDATE agent_runs SET started_at = now() - ? * INTERVAL 1 MINUTE "
                           "WHERE id = ?", [ago, rid])
         return rid
 

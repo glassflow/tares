@@ -244,7 +244,7 @@ async def main():
 
         print("== the map and its history are one write (TR-684) ==")
         before = store.get_repo_map("acme/api")["body"]
-        store.con.execute("ALTER TABLE repo_map_history RENAME TO repo_map_history_away")
+        store.sc.execute("ALTER TABLE repo_map_history RENAME TO repo_map_history_away")
         try:
             try:
                 store.set_repo_map("acme/api", MAP + " Torn.", "torn", "x", None, datetime.now(timezone.utc),
@@ -253,7 +253,7 @@ async def main():
             except Exception:
                 failed = True
         finally:
-            store.con.execute("ALTER TABLE repo_map_history_away RENAME TO repo_map_history")
+            store.sc.execute("ALTER TABLE repo_map_history_away RENAME TO repo_map_history")
         ck("a history write that fails leaves the map as it was", failed and store.get_repo_map("acme/api")["body"] == before,
            store.get_repo_map("acme/api"))
         retry = store.set_repo_map("acme/api", MAP + " Torn.", "torn", "x", None, datetime.now(timezone.utc),

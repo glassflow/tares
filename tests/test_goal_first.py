@@ -587,9 +587,9 @@ async def main():
         pl = ev[0] if ev else {}
         ck("the finding event carries them", pl.get("headline") == "Payment provider outage"
            and pl.get("next_step") == "Escalate to the payment provider.", str(ev)[:300])
-        store.con.execute("UPDATE agent_runs SET duration_ms = 8000, cost_usd = 0.02 "
+        store.sc.execute("UPDATE agent_runs SET duration_ms = 8000, cost_usd = 0.02 "
                           "WHERE id = ?", [tri[0]["id"]])
-        store.con.execute("UPDATE agent_runs SET duration_ms = 16000, cost_usd = 0.03 "
+        store.sc.execute("UPDATE agent_runs SET duration_ms = 16000, cost_usd = 0.03 "
                           "WHERE id = ?", [rca[0]["id"]])
 
         print("== more results ==")
@@ -759,7 +759,7 @@ async def main():
         eq("the outline says silent too", (ol["watches"][0]["state"], ol["watches"][0]["detail"]),
            ("silent", "Nothing for 3 hours"))
         store.recent_ingest_hours = real_hours
-        store.con.execute("UPDATE catalog_agents SET daily_cap = 2 WHERE name = 'checkout-triage'")
+        store.sc.execute("UPDATE catalog_agents SET daily_cap = 2 WHERE name = 'checkout-triage'")
         h = (await cx.get(f"/api/projects/{a}/health")).json()
         eq("the daily cap", (h["state"], h["issues"]), ("attention", [{
             "severity": "warning",
@@ -768,12 +768,12 @@ async def main():
             "fix": "Raise the limit", "view": "agent:checkout-triage"}]))
         # the cap is a rolling window: at the cap, the message says when the oldest run in it ages
         # out (TR-671); over it, when enough have (above, 5 runs against a cap of 2: 24h)
-        store.con.execute("UPDATE catalog_agents SET daily_cap = ? WHERE name = 'checkout-triage'",
+        store.sc.execute("UPDATE catalog_agents SET daily_cap = ? WHERE name = 'checkout-triage'",
                           [store.agent_runs_today("checkout-triage", include_practice=False)])
-        oldest = store.con.execute("SELECT id FROM agent_runs WHERE agent = 'checkout-triage' "
+        oldest = store.sc.execute("SELECT id FROM agent_runs WHERE agent = 'checkout-triage' "
                                    "AND status <> 'capped' AND NOT COALESCE(practice, FALSE) "
                                    "ORDER BY started_at LIMIT 1").fetchone()[0]
-        store.con.execute("UPDATE agent_runs SET started_at = now() - INTERVAL '22 hours 48 minutes' "
+        store.sc.execute("UPDATE agent_runs SET started_at = now() - INTERVAL '22 hours 48 minutes' "
                           "WHERE id = ?", [oldest])
         h = (await cx.get(f"/api/projects/{a}/health")).json()
         ck("the daily cap says when the next run is allowed",
@@ -781,7 +781,7 @@ async def main():
            h["issues"][0]["message"])
         # the instance-wide cap is a console setting, not a field on the agent's page: its button
         # opens Settings, Limits for this agent (TR-670)
-        store.con.execute("UPDATE catalog_agents SET daily_cap = NULL "
+        store.sc.execute("UPDATE catalog_agents SET daily_cap = NULL "
                           "WHERE name = 'checkout-triage'")
         used = store.agent_runs_today("checkout-triage", include_practice=False)
         r = await cx.put("/api/settings/agents", json={"daily_cap": used})

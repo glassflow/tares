@@ -46,6 +46,9 @@ Repository = "https://github.com/glassflow/tares"
 # compiled dep, so the gRPC path stays opt-in. (postgres/agent deps are now base — `tares up`
 # ships a working Postgres connector and Ask agent with no extras.)
 otlp-grpc = ["grpcio>=1.60", "opentelemetry-proto>=1.20"]
+# A cell's state in Postgres (TARES_STATE_DSN, state_db.py): the cloud image installs it; a
+# local install keeps its state in DuckDB and needs none of this.
+postgres-state = ["psycopg[binary]>=3.1"]
 
 [project.scripts]
 tares = "tares.cli:main"

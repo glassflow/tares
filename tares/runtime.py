@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 
+from . import loop as loop_mod
 from .config import Catalog, SourceCfg, catalog_from_db
 from .connectors import REGISTRY, SPECS, build_connector
 from .envelope import now_utc
@@ -73,7 +74,7 @@ class Runtime:
         elif mode == "push":
             rt.health.status = "push"  # no poll loop; envelopes arrive via /ingest
         else:
-            rt.task = asyncio.create_task(self._loop(rt))
+            rt.task = loop_mod.spawn(self._loop(rt))
         self.sources[cfg.name] = rt
 
     def _materialize(self, rt: SourceRuntime) -> None:

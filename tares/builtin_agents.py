@@ -30,6 +30,7 @@ import uuid
 
 import httpx
 
+from . import loop as loop_mod
 from . import metrics
 from . import results as _results
 from . import skills as _skills
@@ -498,7 +499,7 @@ class AgentRunner:
             self._write_back_in_flight(agent, trigger_name, key, dispatch_id, going)
             return None
         run_id = "run_" + uuid.uuid4().hex[:12]
-        task = asyncio.create_task(self._guarded(agent, subscription_id, trigger_name, key,
+        task = loop_mod.spawn(self._guarded(agent, subscription_id, trigger_name, key,
                                                  payload, dispatch_id, woken_by, run_id=run_id,
                                                  projects=projects))
         self._tasks.add(task)
@@ -734,7 +735,7 @@ class AgentRunner:
 
             await asyncio.gather(*(one(k) for k in keys[:MAX_BOOTSTRAP_KEYS]))
 
-        task = asyncio.create_task(go())
+        task = loop_mod.spawn(go())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -1407,7 +1408,7 @@ class AgentRunner:
         if not dispatch_id or not (agent.get("webhook_url") or "").strip():
             return
         anchor = self._callback_anchor(agent, trigger_name, key)
-        task = asyncio.create_task(self._write_back_skipped(
+        task = loop_mod.spawn(self._write_back_skipped(
             agent, trigger_name, anchor, SKIPPED_IN_FLIGHT,
             "a run of this agent for the same key is already in flight",
             dispatch_id, extra={"in_flight_run_id": going} if going else None))
