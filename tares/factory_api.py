@@ -621,15 +621,21 @@ def register(app, store, h: SimpleNamespace) -> None:
         call, so a builder asking for review need not record them one by one. `pr` (a PR URL or owner/repo#12) links the ticket to its pull request, read
         from GitHub from then on. A Tares ticket's status follows its stage; a Linear or GitHub
         ticket's status stays its home's."""
-        h.project_or_404(uid)
-        t = ticket_or_404(uid, ref)
-        try:
-            stage, reason = factory_mod.stage_ok(body.get("stage"), body.get("reason"))
-        except docs_mod.DocError as e:
-            h.err(e)
-        why = factory_mod.may_move(caller(request), t, stage)
-        if why:
-            h.err(PermissionError(why), 403)
+        # the store work runs in worker threads, before and after the one GitHub read
+
+        def check():
+            h.project_or_404(uid)
+            t = ticket_or_404(uid, ref)
+            try:
+                stage, reason = factory_mod.stage_ok(body.get("stage"), body.get("reason"))
+            except docs_mod.DocError as e:
+                h.err(e)
+            why = factory_mod.may_move(caller(request), t, stage)
+            if why:
+                h.err(PermissionError(why), 403)
+            return t, stage, reason
+
+        t, stage, reason = await asyncio.to_thread(check)
         checks = parse_checks(body) if body.get("checks") else []
         fields: dict = {"stage": stage, "stage_reason": reason or None}
         if t["owner"] == "tares":
@@ -642,21 +648,27 @@ def register(app, store, h: SimpleNamespace) -> None:
                                  "or o/r#12"))
             prev = t["pr"] if t["pr"] and (t["pr"].get("repo"), t["pr"].get("number")) == parsed else None
             fields["pr"] = await factory_github.read_pr(store, parsed[0], parsed[1], prev)
-        if checks:
-            record_checks(uid, t, request, body, checks)
-            t = ticket_or_404(uid, t["id"])
-        store.update_ticket(t["id"], **fields)
-        by, role = who(request, body)
-        store.add_ticket_history(t["id"], uid, "stage", stage, reason, by, role or None, now_utc())
-        if fields.get("pr"):   # a PR GitHub already shows merged makes the ticket merged
-            after = ticket_or_404(uid, t["id"])
-            merged = merged_fields(after, fields["pr"])
-            if merged:
-                store.update_ticket(t["id"], **merged)
-                store.add_ticket_history(t["id"], uid, "stage", "merged",
-                                         "GitHub shows the pull request merged", "github",
-                                         "github", now_utc())
-        return h.ticket_out(uid, ticket_or_404(uid, t["id"]), with_doc=False)
+
+        def write():
+            nonlocal t
+            if checks:
+                record_checks(uid, t, request, body, checks)
+                t = ticket_or_404(uid, t["id"])
+            store.update_ticket(t["id"], **fields)
+            by, role = who(request, body)
+            store.add_ticket_history(t["id"], uid, "stage", stage, reason, by, role or None,
+                                     now_utc())
+            if fields.get("pr"):   # a PR GitHub already shows merged makes the ticket merged
+                after = ticket_or_404(uid, t["id"])
+                merged = merged_fields(after, fields["pr"])
+                if merged:
+                    store.update_ticket(t["id"], **merged)
+                    store.add_ticket_history(t["id"], uid, "stage", "merged",
+                                             "GitHub shows the pull request merged", "github",
+                                             "github", now_utc())
+            return h.ticket_out(uid, ticket_or_404(uid, t["id"]), with_doc=False)
+
+        return await asyncio.to_thread(write)
 
     @app.get("/api/projects/{uid}/tickets/{ref}/messages")
     def ticket_messages(uid: str, ref: str):
@@ -1417,13 +1429,13 @@ def register(app, store, h: SimpleNamespace) -> None:
                         for w in over.values())
             return turns, hit, heard
 
-        turns, hit, heard = look()
+        turns, hit, heard = await asyncio.to_thread(look)  # scans events
         # the session is read a few seconds behind the person: look again before refusing
         waited = 0.0
         while (hit is None or not heard) and waited < factory_mod.MATCH_WAIT_SECONDS:
             await asyncio.sleep(1.0)
             waited += 1.0
-            turns, hit, heard = look()
+            turns, hit, heard = await asyncio.to_thread(look)  # scans events
         # an assumption batch: every listed assumption kept or overturned, with the person's words
         plan = []
         for ref_a, st, w in [(a, "kept", None) for a in kept] + [

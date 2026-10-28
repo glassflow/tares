@@ -1539,7 +1539,7 @@ def make_app() -> FastAPI:
         _err(KeyError(f"unknown source {name!r}"), 404)
 
     @app.post("/api/sources", status_code=201)
-    async def create_source(body: SourceIn):
+    def create_source(body: SourceIn):
         if body.name in runtime.catalog.sources:
             _err(ValueError(f"source {body.name!r} already exists"), 409)
         uid = _resolve_project(body.project)
@@ -1556,7 +1556,7 @@ def make_app() -> FastAPI:
         return {"ok": True, "name": body.name, "ingest_key": cfg.ingest_key if cfg else None}
 
     @app.put("/api/sources/{name}")
-    async def update_source(name: str, body: SourceIn):
+    def update_source(name: str, body: SourceIn):
         existing = {s["name"]: s for s in store.list_catalog_sources()}.get(name)
         if existing is None:
             _err(KeyError(f"unknown source {name!r}"), 404)
@@ -1602,7 +1602,7 @@ def make_app() -> FastAPI:
         return gone
 
     @app.delete("/api/sources/{name}")
-    async def delete_source(name: str, purge_events: bool = False, cascade: bool = False):
+    def delete_source(name: str, purge_events: bool = False, cascade: bool = False):
         """`cascade` takes the triggers that read this source and those triggers' agents with
         it; without it a source that something depends on is refused by name."""
         if name not in {s["name"] for s in store.list_catalog_sources()}:
@@ -1621,7 +1621,7 @@ def make_app() -> FastAPI:
         return {"ok": True, "purged_events": purged, "deleted": gone}
 
     @app.post("/api/sources/{name}/pause")
-    async def pause_source(name: str):
+    def pause_source(name: str):
         if name not in runtime.catalog.sources:
             _err(KeyError(f"unknown source {name!r}"), 404)
         store.set_source_paused(name, True)
@@ -1629,7 +1629,7 @@ def make_app() -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/sources/{name}/resume")
-    async def resume_source(name: str):
+    def resume_source(name: str):
         if name not in runtime.catalog.sources:
             _err(KeyError(f"unknown source {name!r}"), 404)
         store.set_source_paused(name, False)
@@ -2348,7 +2348,7 @@ def make_app() -> FastAPI:
             store.put_in_project("source", src, uid)
 
     @app.post("/api/triggers", status_code=201)
-    async def create_trigger(body: TriggerIn):
+    def create_trigger(body: TriggerIn):
         if body.name in {t.name for t in runtime.catalog.triggers}:
             _err(ValueError(f"trigger {body.name!r} already exists"), 409)
         raw = _check_trigger(body, body.name)
@@ -2362,7 +2362,7 @@ def make_app() -> FastAPI:
         return {"ok": True, "project": uid}
 
     @app.put("/api/triggers/{name}")
-    async def update_trigger(name: str, body: TriggerIn):
+    def update_trigger(name: str, body: TriggerIn):
         current = next((t for t in store.list_catalog_triggers() if t["name"] == name), None)
         if current is None:
             _err(KeyError(f"unknown trigger {name!r}"), 404)
@@ -2381,7 +2381,7 @@ def make_app() -> FastAPI:
         return {"ok": True, "project": uid}
 
     @app.delete("/api/triggers/{name}")
-    async def delete_trigger(name: str):
+    def delete_trigger(name: str):
         if name not in {t.name for t in runtime.catalog.triggers}:
             _err(KeyError(f"unknown trigger {name!r}"), 404)
         # it leaves every project, and the agents it woke stay, without a trigger of their own
@@ -2391,7 +2391,7 @@ def make_app() -> FastAPI:
         return {"ok": True, "agents_without_trigger": cleared}
 
     @app.post("/api/triggers/{name}/pause")
-    async def pause_trigger(name: str):
+    def pause_trigger(name: str):
         if name not in {t.name for t in runtime.catalog.triggers}:
             _err(KeyError(f"unknown trigger {name!r}"), 404)
         store.set_trigger_paused(name, True)
@@ -2399,7 +2399,7 @@ def make_app() -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/triggers/{name}/resume")
-    async def resume_trigger(name: str):
+    def resume_trigger(name: str):
         if name not in {t.name for t in runtime.catalog.triggers}:
             _err(KeyError(f"unknown trigger {name!r}"), 404)
         store.set_trigger_paused(name, False)
@@ -2506,7 +2506,7 @@ def make_app() -> FastAPI:
         return value.strip() if value else value
 
     @app.post("/api/agents/builtin", status_code=201)
-    async def create_builtin_agent(body: AgentIn):
+    def create_builtin_agent(body: AgentIn):
         if not body.name:
             _err(ValueError("name is required"), 400)
         if store.get_catalog_agent(body.name) is not None:
@@ -2529,7 +2529,7 @@ def make_app() -> FastAPI:
                 "note": "agents start disabled; enable it to run on the next firing"}
 
     @app.put("/api/agents/builtin/{name}")
-    async def update_builtin_agent(name: str, body: AgentIn):
+    def update_builtin_agent(name: str, body: AgentIn):
         existing = store.get_catalog_agent(name)
         if existing is None:
             _err(KeyError(f"unknown agent {name!r}"), 404)
@@ -2574,7 +2574,7 @@ def make_app() -> FastAPI:
         return {"ok": True}
 
     @app.delete("/api/agents/builtin/{name}")
-    async def delete_builtin_agent(name: str):
+    def delete_builtin_agent(name: str):
         if store.get_catalog_agent(name) is None:
             _err(KeyError(f"unknown agent {name!r}"), 404)
         # the agents that handed off to it lose that handoff, in every project (the store drops
@@ -2600,7 +2600,7 @@ def make_app() -> FastAPI:
         return uid
 
     @app.post("/api/agents/builtin/{name}/enable")
-    async def enable_builtin_agent(name: str, project: str | None = None):
+    def enable_builtin_agent(name: str, project: str | None = None):
         """On in a project (the one named, else the one that made it): its wake-ups there wake
         it. Idempotent."""
         agent = store.get_catalog_agent(name)
@@ -2615,7 +2615,7 @@ def make_app() -> FastAPI:
         return {"ok": True, "enabled": True, "project": uid}
 
     @app.post("/api/agents/builtin/{name}/disable")
-    async def disable_builtin_agent(name: str, project: str | None = None):
+    def disable_builtin_agent(name: str, project: str | None = None):
         """Off in a project (the one named), or everywhere when none is named."""
         if store.get_catalog_agent(name) is None:
             _err(KeyError(f"unknown agent {name!r}"), 404)
@@ -2625,7 +2625,7 @@ def make_app() -> FastAPI:
         return {"ok": True, "enabled": False, **({"project": uid} if uid else {})}
 
     @app.post("/api/agents/builtin/{name}/runs/{run_id}/rerun", status_code=201)
-    async def rerun_builtin_agent(name: str, run_id: str):
+    def rerun_builtin_agent(name: str, run_id: str):
         """Run the agent again with the same inputs as an earlier run: same trigger, same key,
         and the firing's payload when a firing woke it (a manual or bootstrap run reruns with an
         empty note; the timeline the agent reads is the real input either way). Same run record,
@@ -4999,7 +4999,7 @@ def make_app() -> FastAPI:
     async def _linear_sync_now(uid: str) -> None:
         envelopes = await _linear.sync_project(store, uid)
         if envelopes:
-            store.append(envelopes)
+            await asyncio.to_thread(store.append, envelopes)
 
     @app.post("/api/projects/{uid}/linear")
     async def link_linear_project(uid: str, body: dict = Body(...)):
@@ -5071,7 +5071,7 @@ def make_app() -> FastAPI:
     async def _github_sync_now(uid: str) -> None:
         envelopes = await _gh_tickets.sync_project(store, uid)
         if envelopes:
-            store.append(envelopes)
+            await asyncio.to_thread(store.append, envelopes)
 
     @app.post("/api/projects/{uid}/github")
     async def link_github_issues(uid: str, body: dict = Body(...)):
@@ -5397,7 +5397,7 @@ def make_app() -> FastAPI:
                                  media_type="application/yaml")
 
     @app.post("/api/catalog/import")
-    async def catalog_import(body: ImportReq):
+    def catalog_import(body: ImportReq):
         if body.mode == "replace":
             store.clear_catalog()
         try:

@@ -123,7 +123,8 @@ class Runtime:
                 continue
             try:
                 envelopes = await conn.poll()
-                self.store.append(envelopes)
+                # the write runs in a worker thread, so a big batch never stalls the loop
+                await asyncio.to_thread(self.store.append, envelopes)
                 h.events_since_start += len(envelopes)
                 h.last_ok_at = now_utc()
                 h.last_error, h.consecutive_errors, h.status = None, 0, "ok"
@@ -155,6 +156,11 @@ class Runtime:
         if normalize is not None:
             normalize()
         new = catalog_from_db(self.store)
+        # the reading above runs wherever the caller is (a request handler's worker thread); only
+        # swapping the catalog and starting or stopping poll tasks happens on the loop
+        loop_mod.on_loop(self._apply_catalog, new)
+
+    def _apply_catalog(self, new: Catalog) -> None:
         old_sources = self.catalog.sources
         self.catalog = new
         self._prime_metrics()
@@ -208,7 +214,7 @@ class Runtime:
         """Append envelopes, update health, fire triggers — the common ingest tail.
         `bypass_cooldown` forgets the cooldown for the keys these envelopes fire under, so the
         evaluation below fires for a key that is still cooling down."""
-        self.store.append(envelopes)
+        await asyncio.to_thread(self.store.append, envelopes)    # off the loop, like a poll's
         rt = self.sources.get(source_name)
         if rt:
             rt.health.events_since_start += len(envelopes)

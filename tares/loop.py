@@ -29,3 +29,20 @@ def spawn(coro):
         coro.close()
         raise RuntimeError("no event loop to start background work on")
     return asyncio.run_coroutine_threadsafe(coro, _main)
+
+
+def on_loop(fn, *args, timeout: float = 60):
+    """Call `fn(*args)` on the daemon's loop and return its result: directly when already on it (or
+    before the loop runs), handed over and waited for from a worker thread. For the few steps that
+    must happen on the loop, such as starting or cancelling a source's poll task."""
+    try:
+        asyncio.get_running_loop()
+        on = True
+    except RuntimeError:
+        on = False
+    if on or _main is None or _main.is_closed() or not _main.is_running():
+        return fn(*args)
+
+    async def call():
+        return fn(*args)
+    return asyncio.run_coroutine_threadsafe(call(), _main).result(timeout)
