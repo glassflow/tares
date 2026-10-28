@@ -196,8 +196,10 @@ class PgState:
     def conn(self):
         c = getattr(self._local, "c", None)
         if c is None or c.closed:
+            # a dropped SYN (no egress to PgBouncer yet) waits seconds, not the kernel's minutes
+            extra = {} if "connect_timeout" in self._dsn else {"connect_timeout": 10}
             c = self._psycopg.connect(self._dsn, autocommit=True, prepare_threshold=None,
-                                      context=self._adapt)
+                                      context=self._adapt, **extra)
             self._local.c = c
         return c
 
