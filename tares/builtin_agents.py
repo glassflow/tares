@@ -25,6 +25,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 import os
+import threading
 import time
 import uuid
 
@@ -464,6 +465,8 @@ class AgentRunner:
         # (agent, key) currently running. Dispatch is at-least-once, so a retried delivery would
         # otherwise run the same investigation twice and pay for it twice.
         self._inflight: set[tuple[str, str]] = set()
+        # run_now is called from request handlers' worker threads: its check and add are one step
+        self._inflight_lock = threading.Lock()
         # the run going on for each (agent, key): a second project's firing for the same agent and
         # entity joins it instead of starting another (P-TR-216)
         self._inflight_run: dict[tuple[str, str], str] = {}
@@ -517,14 +520,17 @@ class AgentRunner:
         handoffs it leads to are shown as practice and never counted. Returns the run id, or None
         when the agent does not exist or is already running for this key."""
         agent = self.store.get_catalog_agent(agent_name, project)
-        if agent is None or (agent_name, key) in self._inflight:
+        if agent is None:
             return None
         # the project it was started from (a project page, its practice), else its maker
         agent = for_projects(agent, [project] if project else [])
         run_id = "run_" + uuid.uuid4().hex[:12]
         marker = (agent_name, key)
-        self._inflight.add(marker)
-        self._inflight_run[marker] = run_id
+        with self._inflight_lock:
+            if marker in self._inflight:
+                return None
+            self._inflight.add(marker)
+            self._inflight_run[marker] = run_id
         async def go():
             t0 = time.monotonic()
             status = "failed"
@@ -541,17 +547,20 @@ class AgentRunner:
             if status == "ok":
                 self._hand_off(agent, run_id)
 
-        try:
-            self._spawn(go)
-        except RuntimeError:
-            self._inflight.discard(marker)
-            self._inflight_run.pop(marker, None)
-            raise
+        # the run's row before its task: from a worker thread the task can start (and fail) before
+        # this line returns, and its finish must find the row
         self.store.start_agent_run(run_id, agent_name, trigger_name, "", key,
                                    prompt_hash(agent["prompt"]), effective_max_rounds(agent),
                                    woken_by=woken_by, parent_run_id=parent_run_id,
                                    project=agent.get("owned_by"), practice=practice)
         self.store.add_run_projects(run_id, agent["projects"])
+        try:
+            self._spawn(go)
+        except RuntimeError as e:
+            self._inflight.discard(marker)
+            self._inflight_run.pop(marker, None)
+            self.store.finish_agent_run(run_id, "failed", error=str(e)[:500])
+            raise
         return run_id
 
     def attach_loop(self) -> None:

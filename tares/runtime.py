@@ -7,6 +7,8 @@ is tracked in memory; per-source event totals come from the events table.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import threading
 from dataclasses import dataclass, field
 
 from . import loop as loop_mod
@@ -44,6 +46,9 @@ class Runtime:
         self.storage_full = None
         self.dispatcher = dispatcher
         self.catalog: Catalog = catalog_from_db(store)
+        # reload_catalog numbers each read, so a reload that read earlier never replaces a later one
+        self._reload_lock = threading.Lock()
+        self._reload_seq = self._applied_seq = 0
         self.sources: dict[str, SourceRuntime] = {}
         # {trigger_name: last_eval_datetime} — debounces trigger re-evaluation across ingest ticks.
         self._trigger_eval_at: dict = {}
@@ -155,15 +160,34 @@ class Runtime:
         normalize = getattr(self.store, "normalize_projects", None)
         if normalize is not None:
             normalize()
+        with self._reload_lock:
+            self._reload_seq += 1
+            seq = self._reload_seq
         new = catalog_from_db(self.store)
+        try:
+            agents = [a["name"] for a in self.store.list_catalog_agents()]
+        except Exception:
+            agents = []
         # the reading above runs wherever the caller is (a request handler's worker thread); only
         # swapping the catalog and starting or stopping poll tasks happens on the loop
-        loop_mod.on_loop(self._apply_catalog, new)
+        try:
+            loop_mod.on_loop(self._apply_catalog, new, seq, agents)
+        except concurrent.futures.TimeoutError:
+            # the loop is busy: the swap still runs when it frees up, so the change stands
+            print("taresd: the catalog reload is waiting for a busy event loop; it applies shortly")
 
-    def _apply_catalog(self, new: Catalog) -> None:
+    def _apply_catalog(self, new: Catalog, seq: int = 0, agents: list | None = None) -> None:
+        # two reloads read at once can arrive in either order: keep the one that read last
+        if seq and seq < self._applied_seq:
+            return
+        self._applied_seq = max(self._applied_seq, seq)
         old_sources = self.catalog.sources
         self.catalog = new
-        self._prime_metrics()
+        if agents is None:
+            self._prime_metrics()
+        else:
+            metrics.prime(sources=list(new.sources), triggers=[t.name for t in new.triggers],
+                          agents=agents)
 
         for name in set(old_sources) - set(new.sources):
             self._stop(name)
