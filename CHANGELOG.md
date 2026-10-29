@@ -5,6 +5,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Each cell has an edition: factory, sre or platform. Existing cells stay as they are.
+
 ### Fixed
 - DuckDB's memory is capped at 1 GB when `tares up` runs on a machine with no container memory
   limit. Before, DuckDB took its own default of 80% of the machine's RAM and its cache grew to about

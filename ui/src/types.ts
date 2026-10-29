@@ -1092,3 +1092,24 @@ export interface Standup {
   summary?: { overall: string | null; projects: Record<string, string> } | null;
   summary_error?: string | null;
 }
+
+export type Edition = "factory" | "sre" | "platform";
+
+export interface Whoami {
+  id: string;
+  name: string;
+  scopes: string[];
+  project?: string;
+  project_name?: string | null;
+  edition: Edition;
+  edition_name: string;
+  edition_needed: boolean;
+}
+
+export interface EditionSettings {
+  edition: Edition;
+  edition_name: string;
+  edition_needed: boolean;
+  env_value: string | null;
+  choices: { id: Edition; name: string }[];
+}

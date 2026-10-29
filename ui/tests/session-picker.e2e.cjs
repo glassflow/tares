@@ -55,7 +55,7 @@ async function waitFor(url, tries = 100) {
   const tares = fs.existsSync(path.join(REPO, ".venv/bin/tares")) ? path.join(REPO, ".venv/bin/tares") : "tares";
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tares-picker-e2e-"));
   // a scratch cell: its own data under `home`, and none of the caller's auth, database or catalog settings
-  const env = { ...process.env, TARES_HOME: home, TARES_DB: path.join(home, "tares.duckdb"),
+  const env = { ...process.env, TARES_EDITION: "platform", TARES_HOME: home, TARES_DB: path.join(home, "tares.duckdb"),
                 TARES_CATALOG: path.join(home, "catalog.yaml"),
                 TARES_PORT: String(PORT), TARES_MCP_PORT: String(PORT + 1),
                 TARES_UI_DIST: path.join(UI_DIR, "dist") };

@@ -6,7 +6,7 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import { Close } from "../components/icons";
 import { InternalName, Picker, TimeAgo, keyTitle } from "../components/bits";
 import { type Cloud, cloudLink, useCloud } from "../cloud";
-import type { ApiKey, GithubAppTest, GithubCredential, ModelProvider, ModelProviders } from "../types";
+import type { ApiKey, Edition, EditionSettings, GithubAppTest, GithubCredential, ModelProvider, ModelProviders } from "../types";
 import { UsagePanels } from "../components/UsagePanels";
 import LinearSettings from "../components/LinearSettings";
 import OwnerOnly from "../components/OwnerOnly";
@@ -21,12 +21,13 @@ import WorkspaceSettings from "./WorkspaceSettings";
 // The per-source ingest URL is an address, not a secret — it lives on the source page, not here.
 //   · Workspace  (Tares Cloud only) team, plan, storage, credit and delete, held by the control
 //                  plane (TR-375); shown first, and the default tab, when /health has workspace_api_url
-type SettingsTab = "workspace" | "usage" | "access" | "anthropic" | "agents" | "github" | "linear" | "slack" | "observability";
+type SettingsTab = "workspace" | "usage" | "access" | "edition" | "anthropic" | "agents" | "github" | "linear" | "slack" | "observability";
 // The tabs as a second sidebar (TR-521): the workspace itself on top, then one group per concern.
 const TABS: { key: SettingsTab; label: string; group?: string }[] = [
   { key: "workspace", label: "Workspace" },
   { key: "usage", label: "Usage" },
   { key: "access", label: "Access and API keys" },
+  { key: "edition", label: "Edition" },
   { key: "anthropic", label: "Model providers", group: "Agents" },
   { key: "agents", label: "Limits", group: "Agents" },
   { key: "observability", label: "Observability", group: "Agents" },
@@ -148,6 +149,7 @@ export default function Security() {
         : <div className="panel"><div className="muted">loading…</div></div>)}
       {tab === "usage" && <UsagePanels />}
       {tab === "access" && <><AccessPanel /><ApiKeysPanel /></>}
+      {tab === "edition" && <EditionPanel />}
       {tab === "anthropic" && <ProvidersPanel />}
       {tab === "agents" && <AgentLimitsPanel agent={new URLSearchParams(loc.search).get("agent") ?? undefined} />}
       {tab === "github" && <GithubPanel cloud={cloud} />}
@@ -879,6 +881,80 @@ function AgentLimitsPanel({ agent }: { agent?: string }) {
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+// The cell's edition (TR-724): which set of screens the console shows. Anyone can see it; only an
+// admin can switch it. The data, projects and crew stay as they are; the console reloads after.
+const EDITION_BLURBS: Record<Edition, string> = {
+  factory: "Projects, tickets and reviews, with a crew of Claude Code sessions building them.",
+  sre: "Services, incidents and runbooks, watched by agents that tell you what needs you.",
+  platform: "Every building block on its own: sources, triggers, agents and projects.",
+};
+
+function EditionPanel() {
+  const [st, setSt] = useState<EditionSettings>();
+  const [admin, setAdmin] = useState<boolean>();
+  const [now, setNow] = useState<string>();
+  const [pick, setPick] = useState<Edition>();
+  const [ask, setAsk] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>();
+
+  // whoami carries the current edition for every key; the choices come from the admin-only route.
+  useEffect(() => {
+    api.whoami().then((w) => {
+      const isAdmin = w.scopes.includes("admin");
+      setAdmin(isAdmin);
+      setNow(w.edition_name);
+      if (!isAdmin) return;
+      return api.edition().then((s) => { setSt(s); setPick(s.edition); });
+    }).catch((e) => { setAdmin(false); setErr(String((e as Error).message ?? e)); });
+  }, []);
+
+  if (admin === false && now) return (
+    <div className="panel">
+      <h2 style={{ marginTop: 0 }}>Edition</h2>
+      <p className="help" style={{ marginTop: 0 }}>Which screens this workspace shows. Now: {now}.</p>
+      <p className="help">Only an admin can change the edition.</p>
+    </div>
+  );
+  if (!st || pick === undefined) return <div className="panel"><h2 style={{ marginTop: 0 }}>Edition</h2>
+    {err ? <div className="alert error">{err}</div> : <div className="muted">loading…</div>}</div>;
+
+  const nameOf = (e: Edition) => st.choices.find((c) => c.id === e)?.name ?? e;
+  const save = async () => {
+    setBusy(true); setErr(undefined);
+    try { await api.setEdition(pick); window.location.reload(); }
+    catch (e) { setErr(String((e as Error).message ?? e)); setAsk(false); setBusy(false); }
+  };
+
+  return (
+    <div className="panel">
+      <h2 style={{ marginTop: 0 }}>Edition</h2>
+      <p className="help" style={{ marginTop: 0 }}>
+        Which screens this workspace shows. Your projects, data and crew are the same in every edition.
+      </p>
+      {err && <div className="alert error">{err}</div>}
+      <div role="radiogroup" aria-label="Edition">
+        {st.choices.map((c) => (
+          <label key={c.id} className="field" style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
+            <input type="radio" name="edition" value={c.id} checked={pick === c.id}
+                   disabled={busy} onChange={() => setPick(c.id)} />
+            <span><strong>{c.name}</strong><br /><span className="help">{EDITION_BLURBS[c.id]}</span></span>
+          </label>
+        ))}
+      </div>
+      <p className="help">Now: {st.edition_name}</p>
+      <div className="btnrow">
+        <button className="primary" disabled={busy || pick === st.edition} onClick={() => setAsk(true)}>Save</button>
+      </div>
+      {ask && (
+        <ConfirmDialog title={`Switch to ${nameOf(pick)}?`} confirmLabel="Switch"
+          message={`Your projects, data and crew stay as they are. The screens change from ${nameOf(st.edition)} to ${nameOf(pick)}; what only ${nameOf(st.edition)} shows stays reachable under Settings, Advanced.`}
+          onConfirm={save} onCancel={() => setAsk(false)} />
+      )}
     </div>
   );
 }

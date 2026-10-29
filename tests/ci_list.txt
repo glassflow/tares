@@ -83,3 +83,4 @@ test_claude_usage
 test_factory_batching
 test_state_postgres
 test_ci_list
+test_edition
