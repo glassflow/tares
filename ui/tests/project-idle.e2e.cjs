@@ -47,7 +47,7 @@ async function waitFor(url, tries = 100) {
   const python = fs.existsSync(path.join(bin, "python")) ? path.join(bin, "python") : "python3";
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tares-project-idle-e2e-"));
   const dist = process.env.TARES_UI_DIST || path.join(UI_DIR, "dist");
-  const env = { ...process.env, TARES_HOME: home, TARES_PORT: String(PORT), TARES_MCP_PORT: String(PORT + 1),
+  const env = { ...process.env, TARES_EDITION: "platform", TARES_HOME: home, TARES_PORT: String(PORT), TARES_MCP_PORT: String(PORT + 1),
                 TARES_UI_DIST: dist, ANTHROPIC_API_KEY: "sk-ant-scratch-not-real",
                 PYTHONPATH: CODE };   // the venv installs one checkout; this runs the code under test
   for (const k of ["TARES_AUTH_TOKEN", "TARES_DB", "TARES_CATALOG", "TARESD_URL"]) delete env[k];

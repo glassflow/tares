@@ -59,6 +59,8 @@ from . import metrics as _metrics
 from . import docs as docs_mod
 from . import factory as factory_mod
 from . import claude_usage, factory_api, standup as standup_mod
+from . import edition as edition_mod
+from . import factory_home, sre_home, screens
 from . import linear as _linear
 from . import github_tickets as _gh_tickets
 from . import skills as skills_mod
@@ -497,6 +499,10 @@ class AgentLimitsIn(BaseModel):
     daily_cap: int | str | None = None   # "" or null clears the console value
 
 
+class EditionIn(BaseModel):
+    edition: str
+
+
 class TracingIn(BaseModel):
     enabled: bool | None = None
     provider: str | None = None
@@ -578,6 +584,10 @@ def make_app() -> FastAPI:
         print(f"taresd: DEGRADED; {e.reason}. Serving the console and 503s; fix the database "
               f"and restart.", flush=True)
         return _degraded_app(e.reason)
+
+    # The edition is settled here, before the catalog import and the seed project below: a
+    # seeded empty cell would otherwise look like a cell with data and be settled as platform.
+    edition_mod.settle(store)
 
     # seed the DB catalog from YAML on first boot — or on every boot when CATALOG_SYNC is set, so
     # the file stays the source of truth (the admin interface for a read-only demo: edit + restart).
@@ -1389,13 +1399,17 @@ def make_app() -> FastAPI:
             _err(KeyError(f"no active key {kid!r}"), 404)
         return {"ok": True, "note": "key revoked; its subscriptions were removed"}
 
+    def _edition_out() -> dict:
+        value, needed = edition_mod.edition(store)
+        return {"edition": value, "edition_name": edition_mod.NAMES[value], "edition_needed": needed}
+
     @app.get("/api/whoami")
     def whoami(request: Request):
         ident = getattr(request.state, "credential", None)
         scopes = getattr(request.state, "scopes", None)
         if ident is None:   # guard not active (open instance) or ingest-path credential
-            return {"id": "open", "name": "no auth configured", "scopes": sorted(_SCOPES)}
-        out = {**ident, "scopes": scopes or []}
+            return {"id": "open", "name": "no auth configured", "scopes": sorted(_SCOPES), **_edition_out()}
+        out = {**ident, "scopes": scopes or [], **_edition_out()}
         if ident.get("project"):   # a project key: the project it reads, by id and name
             out["project_name"] = (store.get_project(ident["project"]) or {}).get("name")
         return out
@@ -2821,6 +2835,23 @@ def make_app() -> FastAPI:
                                 f"{DAILY_CAP_MAX}"))
             store.set_setting(DAILY_CAP_SETTING, str(n))
         return {"ok": True, **_agent_limits()}
+
+    # ── the cell's edition (TR-724): admin through the /api/settings prefix rule ──
+    def _edition_settings() -> dict:
+        return {**_edition_out(), "env_value": os.getenv(edition_mod.EDITION_ENV) or None,
+                "choices": [{"id": e, "name": edition_mod.NAMES[e]} for e in edition_mod.EDITIONS]}
+
+    @app.get("/api/settings/edition")
+    def get_edition():
+        return _edition_settings()
+
+    @app.put("/api/settings/edition")
+    def set_edition(body: EditionIn):
+        value = edition_mod._valid(body.edition)
+        if value is None:
+            _err(ValueError("edition must be one of " + ", ".join(edition_mod.EDITIONS)))
+        store.set_setting(edition_mod.EDITION_SETTING, value)
+        return {"ok": True, **_edition_settings()}
 
     @app.get("/api/settings/tracing")
     def get_tracing():
@@ -4933,13 +4964,28 @@ def make_app() -> FastAPI:
         p = store.get_project(ref) or store.get_project_by_name(ref)
         return p["id"] if p else ref
 
-    factory_api.register(app, store, SimpleNamespace(
+    h = SimpleNamespace(
         err=lambda e, code=400: _err(e, code), project_or_404=lambda uid: _project_or_404(uid),
         by=lambda request, body=None: _by(request, body), cc_source=lambda: _cc_source(),
         global_ids=lambda create=False: _global_ids(create), resolve_project=_factory_project_id,
         ticket_out=lambda uid, t, **kw: _ticket_out(uid, t, **kw),
         ensure_globals=lambda uid: _ensure_globals(uid),
-        tickets_out=lambda uid: _tickets_out(uid)))
+        tickets_out=lambda uid: _tickets_out(uid))
+    fx = factory_api.register(app, store, h)
+    # the edition screens (tares/screens/__init__.py lists them)
+    screens.register_all(app, store, h, SimpleNamespace(fx=fx, runtime=runtime))
+
+    @app.get("/api/home")
+    async def home(request: Request):
+        """One read for the home screen of the cell's edition; the platform has none."""
+        value, _needed = edition_mod.edition(store)
+        if value == "factory":
+            return await asyncio.to_thread(factory_home.build, store, fx, request)
+        if value == "sre":
+            return await asyncio.to_thread(sre_home.build, store, runtime.catalog,
+                                           runtime.health_snapshot())
+        return JSONResponse({"error": "no home on this edition"}, status_code=404)
+
     # what the Claude Code sessions spend: the plan's limits and tokens by project
     claude_usage.register(app, store)
 

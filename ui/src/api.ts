@@ -1,4 +1,5 @@
 import type {
+  Edition, EditionSettings, Whoami,
   AgentInfo,
   ApiKey, ExternalAgent,
   CatalogDescribe, ConnectorSpec, DiscoverProposal, DispatchDetail, DispatchLogEntry, Entity, EnvScan,
@@ -235,7 +236,7 @@ export const api = {
     request<{ id: string; name: string; scopes: string[]; secret: string }>(
       "/api/keys", { method: "POST", body: JSON.stringify({ name, scopes }) }),
   revokeKey: (id: string) => request<{ ok: boolean }>(`/api/keys/${id}`, { method: "DELETE" }),
-  whoami: () => request<{ id: string; name: string; scopes: string[] }>("/api/whoami"),
+  whoami: () => request<Whoami>("/api/whoami"),
 
   sources: () => request<Source[]>("/api/sources"),
   source: (name: string) => request<Source>(`/api/sources/${name}`),
@@ -345,6 +346,12 @@ export const api = {
   clearAnthropicKey: () =>
     request<{ ok: boolean; configured: boolean }>("/api/settings/anthropic-key",
       { method: "DELETE" }),
+
+  // The cell's edition (TR-724): read by anyone through whoami, changed by an admin.
+  edition: () => request<EditionSettings>("/api/settings/edition"),
+  setEdition: (edition: Edition) =>
+    request<EditionSettings & { ok: boolean }>("/api/settings/edition",
+      { method: "PUT", body: JSON.stringify({ edition }) }),
 
   // Runs per agent per day (TR-325): the console value, else the environment, else the default.
   agentLimits: () => request<AgentLimits>("/api/settings/agents"),

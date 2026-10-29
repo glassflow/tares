@@ -52,7 +52,7 @@ async function waitFor(url, tries = 100) {
     String(PORT + 1), dist, tares], { cwd: REPO, encoding: "utf8" }).trim().split("\n").pop());
   ck("seeded 16 projects and the Default", Object.keys(ids).length === 17, String(Object.keys(ids).length));
 
-  const env = { ...process.env, TARES_HOME: home, TARES_PORT: String(PORT), TARES_MCP_PORT: String(PORT + 1),
+  const env = { ...process.env, TARES_EDITION: "platform", TARES_HOME: home, TARES_PORT: String(PORT), TARES_MCP_PORT: String(PORT + 1),
                 TARES_UI_DIST: dist, ANTHROPIC_API_KEY: "sk-ant-scratch-not-real",
                 PYTHONPATH: REPO };   // the venv installs the main checkout; this runs the code under test
   for (const k of ["TARES_AUTH_TOKEN", "TARES_DB", "TARES_CATALOG", "TARESD_URL"]) delete env[k];
