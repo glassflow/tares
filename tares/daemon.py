@@ -644,7 +644,7 @@ def make_app() -> FastAPI:
         runtime.start_all()
         # the daemon's own counters (/metrics, TR-308): storage gauges read on scrape, the event
         # loop watched by a one-second timer for the whole life of the process
-        _metrics.set_storage_probe(lambda: {**store.usage(), **{
+        _metrics.set_storage_probe(lambda: {**store.storage_usage(), **{
             k: v for k, v in storage_state(store, DB_PATH).items()
             if k in ("max_bytes", "pct_used", "paused")}})
         try:
