@@ -2308,3 +2308,40 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
   .pj-badge, .pj-sort .help { display: none; }
   .pj-bar .seg button { padding-left: 10px; padding-right: 10px; }
 }
+
+/* ── shadcn/ui bridge (TR-725) ──
+   The component library in src/components/ui reads shadcn's token names; they map onto the
+   semantic tokens above, so light and dark follow [data-theme] and there is one palette. Radii are
+   0 and there are no shadows: square corners and 1px hairlines are Tares's identity. No global
+   base layer is added here; Tailwind's preflight is already on and the rules above stay as they are. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--ink);
+  --color-card: var(--panel);
+  --color-card-foreground: var(--ink);
+  --color-popover: var(--panel);
+  --color-popover-foreground: var(--ink);
+  --color-primary: var(--btn-primary-bg);
+  --color-primary-foreground: var(--btn-primary-ink);
+  --color-secondary: var(--hover);
+  --color-secondary-foreground: var(--ink);
+  --color-muted: var(--hover);
+  --color-muted-foreground: var(--ink-soft);
+  --color-accent: var(--hover);
+  --color-accent-foreground: var(--ink);
+  --color-destructive: var(--err);
+  --color-border: var(--line);
+  --color-input: var(--line);
+  --color-ring: var(--accent);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-err: var(--err);
+  --color-track: var(--track);
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+  --font-mono: var(--mono);
+}
