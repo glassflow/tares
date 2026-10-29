@@ -3365,10 +3365,11 @@ def make_app() -> FastAPI:
 
         def card(p: dict) -> dict:
             if p.get("kind") != "software_factory":
-                return {**p, "activity_at": p["updated_at"]}
+                return {**p, "activity_at": p["updated_at"], "ready_to_close": False}
             ts = tickets[p["id"]]
             return {**p, "progress": factory_mod.progress(ts),
-                    "activity_at": factory_mod.activity_at(p["updated_at"], ts)}
+                    "activity_at": factory_mod.activity_at(p["updated_at"], ts),
+                    "ready_to_close": factory_mod.ready_to_close(p, ts)}
         return {"projects": [card(p) for p in cards]}
 
     @app.post("/api/projects", status_code=201)
@@ -3593,9 +3594,12 @@ def make_app() -> FastAPI:
     @app.get("/api/projects/{uid}/summary")
     def project_summary(uid: str):
         try:
-            return projects.summary(uid)
+            out = projects.summary(uid)
         except Exception as e:
             _uc_err(e)
+        factory = out.get("kind") == "software_factory"
+        out["ready_to_close"] = factory and factory_mod.ready_to_close(out, store.list_tickets(uid))
+        return out
 
     # ── the guided project setup: goal -> plan -> apply -> connect -> try it ──
     from . import setup_flow
