@@ -1,0 +1,17 @@
+{
+  "forbidden": [
+    {"word": "source", "plural": "sources", "factory": "connection", "sre": "connection", "allow": ["open source"]},
+    {"word": "view", "plural": "views", "factory": "(name the page)", "sre": "(name the page)", "allow": ["view the", "View PR", "View all"]},
+    {"word": "trigger", "plural": "triggers", "factory": "rule", "sre": "check rule", "allow": []},
+    {"word": "run", "plural": "runs", "factory": "session", "sre": "check (watcher) / investigation (investigator)", "allow": ["run the tests", "runs on"]},
+    {"word": "dispatch", "plural": "dispatches", "factory": "notification", "sre": "alert sent", "allow": []},
+    {"word": "firing", "plural": "firings", "factory": "notification", "sre": "alert sent", "allow": []},
+    {"word": "delivery", "plural": "deliveries", "factory": "notification", "sre": "alert sent", "allow": []},
+    {"word": "wiring", "plural": "wirings", "factory": "setup", "sre": "setup", "allow": []},
+    {"word": "catalog", "plural": "catalogs", "factory": "connections", "sre": "connections", "allow": []},
+    {"word": "entity", "plural": "entities", "factory": "(name it: repo, PR, ticket)", "sre": "service", "allow": []},
+    {"word": "ingest", "plural": "ingests", "factory": "receive", "sre": "receive", "allow": []},
+    {"word": "station", "plural": "stations", "factory": "crew member (lead, builder, reviewer)", "sre": "(not used)", "allow": []}
+  ],
+  "punctuation": ["\u2014"]
+}

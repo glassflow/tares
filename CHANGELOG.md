@@ -19,6 +19,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 ### Changed
 - CI reads its test list from tests/ci_list.txt.
 - Plugin 0.6.1: builders mock a screen first and wait for approval; the reviewer compares screenshots of every state with the approved mock.
+- The factory and AI SRE console editions have a words list (`ui/src/editions/words.json`) and checks
+  that fail CI when an edition screen shows an internal name such as source, trigger or run, or an em
+  dash. `tares.words` runs the same check over API JSON.
 
 ## [1.54.0] - 2026-10-28
 
