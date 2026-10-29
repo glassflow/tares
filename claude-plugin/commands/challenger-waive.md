@@ -1,5 +1,5 @@
 ---
-description: Waive a disputed finding from the last failed Codex review so it stops blocking the commit.
+description: Waive a disputed finding from the last failed challenger review so it stops blocking the commit.
 argument-hint: "[n|all] [why it does not apply]"
 allowed-tools: [Bash]
 ---
