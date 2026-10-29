@@ -176,8 +176,8 @@ def _status(args: argparse.Namespace):
 
 
 def _mcp(args: argparse.Namespace):
-    """Run the MCP server over a network transport (for remote agents). stdio is the default for
-    local use and is what the `tares-mcp` entry point a client spawns uses."""
+    """Run the MCP server: over HTTP for remote agents (the default), or over stdio for a client
+    that spawns it, as the `tares-mcp` entry point does and as the MCP registry entry runs it."""
     os.environ["TARES_MCP_TRANSPORT"] = args.transport
     os.environ["TARES_MCP_HOST"] = args.host
     os.environ["TARES_MCP_PORT"] = str(args.port)
@@ -280,7 +280,7 @@ def main():
     up.set_defaults(func=_up)
 
     m = sub.add_parser(
-        "mcp", help="run the MCP server for remote agents (HTTP transport)",
+        "mcp", help="run the MCP server: HTTP for remote agents, or --transport stdio",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="joining one project:\n"
                "  Make a project key on the project page (Setup, Keys) and connect with it, e.g.\n"

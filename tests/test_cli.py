@@ -52,11 +52,14 @@ def test_parser_builds():
 def test_mcp_stdio_keeps_stdout_clean():
     # over stdio, stdout is the MCP channel: a startup line there breaks the client's session
     import contextlib, io
-    cli.run_mcp = lambda: None  # don't actually serve
+    real_run_mcp, cli.run_mcp = cli.run_mcp, lambda: None  # don't actually serve
     out, err = io.StringIO(), io.StringIO()
     args = types.SimpleNamespace(transport="stdio", host="127.0.0.1", port=8788, taresd="")
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        cli._mcp(args)
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            cli._mcp(args)
+    finally:
+        cli.run_mcp = real_run_mcp
     ck("`tares mcp --transport stdio` writes nothing to stdout", out.getvalue() == "", out.getvalue())
     ck("...and says where it proxies to on stderr", "tares-mcp: stdio" in err.getvalue(), err.getvalue())
 

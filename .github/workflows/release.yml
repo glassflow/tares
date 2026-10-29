@@ -123,13 +123,21 @@ jobs:
         env:
           MCP_REGISTRY_KEY: ${{ secrets.MCP_REGISTRY_KEY }}
         run: |
-          if curl -sSf "https://registry.modelcontextprotocol.io/v0.1/servers/ai.glassflow%2Ftares/versions/${VERSION}" > /dev/null 2>&1; then
+          published() {
+            curl -sSf "https://registry.modelcontextprotocol.io/v0.1/servers/ai.glassflow%2Ftares/versions/${VERSION}" > /dev/null 2>&1
+          }
+          if published; then
             echo "ai.glassflow/tares ${VERSION} is already published"
             exit 0
           fi
           ./mcp-publisher login dns --domain glassflow.ai --private-key "$MCP_REGISTRY_KEY"
-          # PyPI can take a minute to serve a release it just accepted, and the registry checks it
+          # PyPI can take a minute to serve a release it just accepted, and the registry checks it.
+          # Each retry first checks the registry, in case a failed attempt was in fact accepted.
           for attempt in 1 2 3 4 5; do
+            if [ "$attempt" -gt 1 ] && published; then
+              echo "ai.glassflow/tares ${VERSION} is published"
+              exit 0
+            fi
             ./mcp-publisher publish server.json && exit 0
             echo "publish attempt ${attempt} failed, retrying in 30s"
             sleep 30
