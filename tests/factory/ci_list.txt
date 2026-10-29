@@ -1,0 +1,15 @@
+# Tests CI runs, one per line. Add your test's name on its own line. On a merge conflict keep both sides.
+parse
+guard
+heavy
+tidy
+spec
+session
+tares
+crew
+usage
+freeze
+idle_wake
+pace
+claude_update
+lsp

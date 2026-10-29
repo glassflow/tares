@@ -12,6 +12,9 @@ the project follows [Semantic Versioning](https://semver.org/).
   change it; a container limit still sets it to 60% of that limit. The cap also sets
   `TARES_DUCKDB_THREADS` to 2 unless you set it.
 
+### Changed
+- CI reads its test list from tests/ci_list.txt.
+
 ## [1.54.0] - 2026-10-28
 
 Grok can review a challenger session instead of Codex, and xAI is one of the model provider
