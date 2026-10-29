@@ -544,6 +544,35 @@ def _plain_error(connector: str, error: str) -> tuple[str, str, str]:
     return what, reason, "Check the source's settings"
 
 
+def _plain_run_error(error: str) -> tuple[str, bool]:
+    """(reason, passes) for a failed run's error, in plain words. `passes` says whether the same
+    run is likely to go through on the next wake (a busy or erroring provider) or will fail the
+    same way until someone changes something (a refused key, an unknown error). Model errors
+    read "<provider> <status>: <body>" (models.ModelError)."""
+    e = " ".join(str(error or "").split())
+    low = e.lower()
+    m = re.match(r"^\S+ (\d{3}):", e)
+    status = int(m.group(1)) if m else None
+    if (status in (429, 529) or "rate limit" in low or "resource-exhausted" in low
+            or "resource_exhausted" in low or "overloaded" in low):
+        return f"the model provider was busy or over its rate limit (HTTP {status or 429})", True
+    if status in (401, 403):
+        return f"the model provider refused the key (HTTP {status})", False
+    if status is not None and status >= 500:
+        return f"the model provider answered with an error (HTTP {status})", True
+    if "timed out" in low or "timeout" in low:
+        return "the model provider did not answer in time", True
+    return _cut(re.sub(r"^[A-Za-z_.]+(Error|Exception)?:\s*", "", e), 160) or "it failed", False
+
+
+def _last_run_failed(store, agent: str) -> dict | None:
+    """The agent's newest finished run when it failed, else None. A run still going, a capped
+    run (it never started) and a practice run say nothing about whether the agent works."""
+    last = store.list_agent_runs(agent, limit=1, where_sql=(
+        "status NOT IN ('running', 'capped') AND NOT COALESCE(practice, FALSE)"))
+    return last[0] if last and last[0]["status"] == "failed" else None
+
+
 def _silent(store, name: str, last, now) -> tuple[bool, float]:
     """(silent, seconds since the last event). Silent means nothing arrived for longer than
     SILENT_FACTOR times the source's usual gap and longer than SILENT_MIN_S. The usual gap is the
@@ -1225,6 +1254,24 @@ def project_health(store, catalog, uid: str, project: dict, runtime_health: dict
                              "message": f"{a['name']} used its budget of ${float(budget):.2f}, so "
                                         "it does not run until the budget is raised.",
                              "fix": "Raise the budget", "view": f"agent:{a['name']}"})
+    # a failed run adds nothing to "What the agents found", so without this the page reads as
+    # a quiet project while every run fails
+    for a in ready:
+        if a["name"] in capped or not (run := _last_run_failed(store, a["name"])):
+            continue
+        reason, passes = _plain_run_error(run.get("error"))
+        when = age_words((now - _aware(run["started_at"])).total_seconds())
+        msg = f"{a['name']} could not finish its last run ({when}): {reason}."
+        if passes:
+            warnings.append({"severity": "warning",
+                             "message": msg + " It tries again the next time it wakes.",
+                             "fix": "See the agent", "view": f"agent:{a['name']}"})
+        elif reason.startswith("the model provider refused"):
+            warnings.append({"severity": "warning", "message": msg,
+                             "fix": "Check the model provider", "view": "settings:providers"})
+        else:
+            warnings.append({"severity": "warning", "message": msg,
+                             "fix": "See the agent", "view": f"agent:{a['name']}"})
     for n, st in states.items():
         mode = SPECS.get(sources[n].connector, {}).get("mode")
         if st["state"] == "waiting" and mode == "push":
