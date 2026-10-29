@@ -136,7 +136,8 @@ class AgentCfg:
     webhook_key_label: str = ""   # the write-back reports this label's value as `key`, else the entity
     mcp_servers: list = dc_field(default_factory=list)   # registry names this agent may use
     max_rounds: int | None = None   # model rounds per run; None = default for the agent's shape
-    budget_usd: float | None = None  # lifetime spend cap in USD; None = no budget
+    budget_usd: float | None = None  # spend cap in USD over budget_period; None = no budget
+    budget_period: str = "lifetime"  # "lifetime" (all spend) or "month" (resets on the 1st, UTC)
     daily_cap: int | None = None     # runs per rolling 24h; None = the instance-wide cap
     concludes: bool = False   # every run ends with the conclude tool, whatever the prompt says
     verdicts: list = dc_field(default_factory=list)   # [{verdict, when}]: the only ones it may give
@@ -275,6 +276,7 @@ def _agent_from_dict(a: dict, enabled: bool = False) -> AgentCfg:
         mcp_servers=list(a.get("mcp_servers") or []),
         max_rounds=(int(a["max_rounds"]) if a.get("max_rounds") not in (None, "") else None),
         budget_usd=(float(a["budget_usd"]) if a.get("budget_usd") not in (None, "") else None),
+        budget_period=a.get("budget_period") or "lifetime",
         daily_cap=(int(a["daily_cap"]) if a.get("daily_cap") not in (None, "") else None),
         concludes=bool(a.get("concludes")),
         verdicts=normalize_verdicts(a["name"], a.get("verdicts")),
@@ -463,6 +465,7 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
                                     else None),
                                    webhook_key_label=a.get("webhook_key_label"),
                                    provider=a.get("provider"),
+                                   budget_period=a.get("budget_period"),
                                    daily_cap=(int(a["daily_cap"])
                                               if a.get("daily_cap") not in (None, "") else None),
                                    # absent keeps what is stored (see upsert_catalog_agent)
@@ -740,6 +743,7 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
          **({"mcp_servers": a["mcp_servers"]} if a.get("mcp_servers") else {}),
          **({"max_rounds": a["max_rounds"]} if a.get("max_rounds") else {}),
          **({"budget_usd": a["budget_usd"]} if a.get("budget_usd") else {}),
+         **({"budget_period": "month"} if a.get("budget_period") == "month" else {}),
          **({"daily_cap": a["daily_cap"]} if a.get("daily_cap") else {}),
          **({"handoffs": a["handoffs"]} if a.get("handoffs") else {}),
          **({"concludes": True} if a.get("concludes") else {}),
@@ -1255,6 +1259,8 @@ def validate_agent_dict(a: dict, trigger_names: set, triggers: dict | None = Non
         if b <= 0:
             raise CatalogError(f"agent {a['name']!r}: budget_usd must be above zero "
                                "(or empty for no budget)")
+    if a.get("budget_period") not in (None, "", "lifetime", "month"):
+        raise CatalogError(f"agent {a['name']!r}: budget_period must be lifetime or month")
     dc = a.get("daily_cap")
     if dc not in (None, ""):
         try:

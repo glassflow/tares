@@ -768,7 +768,8 @@ export type AgentBody = {
   name: string; trigger: string; prompt: string; project?: string;
   slack_webhook?: string; slack_webhook_clear?: boolean; model?: string; provider?: string;
   slack_channel?: string; webhook_url?: string; webhook_token?: string; mcp_servers?: string[];
-  max_rounds?: number | null; budget_usd?: number | null; webhook_key_label?: string;
+  max_rounds?: number | null; budget_usd?: number | null; budget_period?: "lifetime" | "month";
+  webhook_key_label?: string;
   handoffs?: Handoff[];
 };
 
