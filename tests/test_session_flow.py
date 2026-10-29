@@ -63,6 +63,10 @@ def main():
                           "blocking_count": 0, "duration_seconds": 12, "findings": []}}
     e = c.map_payload(plan)[0]
     ck("challenge_plan text", e.text == "Challenger reviewed the plan pricing-page.md: no findings", e.text)
+    graded = {**commit, "challenge": {**commit["challenge"], "reviewer": "grok", "model": "grok-4.6"}}
+    e = c.map_payload(graded)[0]
+    ck("text names the reviewer when the plugin sends one",
+       e.text.startswith("Challenger (Grok) reviewed commit abcdef12, round 2"), e.text)
     waived = {"sessionId": "s1", "type": "challenge_waived", "cwd": "/tmp/proj",
               "challenge": {"findings": [{"priority": "P2", "title": "Missing test"}]}}
     e = c.map_payload(waived)[0]

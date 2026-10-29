@@ -308,6 +308,22 @@ async def main():
                    pv.default_model_for(store, "openai") == "gpt-5", pv.default_model_for(store, "openai"))
                 pv.entry = lambda st, pid: {"id": "openai", "kind": "openai", "models": ["o3-mini", "o4-mini"]}
                 ck("...else the first one listed", pv.default_model_for(store, "openai") == "o3-mini")
+                # xAI lists a non-reasoning model first; agents default to grok-4.6, Triage to grok-4.3
+                grok = ["grok-4.20-0309-non-reasoning", "grok-4.3", "grok-4.6"]
+                pv.entry = lambda st, pid: {"id": "xai", "kind": "openai_compatible",
+                                            "base_url": "https://api.x.ai/v1", "models": grok}
+                ck("xAI's default model is grok-4.6", pv.default_model_for(store, "xai") == "grok-4.6",
+                   pv.default_model_for(store, "xai"))
+                ck("xAI's small model is grok-4.3", pv.small_model_for(store, "xai") == "grok-4.3",
+                   pv.small_model_for(store, "xai"))
+                pv.entry = lambda st, pid: {"id": "xai", "kind": "openai_compatible",
+                                            "base_url": "https://api.x.ai/v1", "models": ["grok-5"]}
+                ck("...each only while the key lists it", pv.default_model_for(store, "xai") == "grok-5"
+                   and pv.small_model_for(store, "xai") == "", pv.small_model_for(store, "xai"))
+                pv.entry = lambda st, pid: {"id": "local", "kind": "openai_compatible",
+                                            "base_url": "http://localhost:4000/v1", "models": grok}
+                ck("another endpoint listing the same ids keeps the first listed and no small model",
+                   pv.default_model_for(store, "local") == grok[0] and pv.small_model_for(store, "local") == "")
             finally:
                 pv.entry = real_entry
             os.environ.pop("OPENAI_BASE_URL")

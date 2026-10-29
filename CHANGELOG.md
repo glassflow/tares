@@ -6,6 +6,20 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- Challenger with Grok: the console, the summary and Claude no longer say Codex when Grok
+  reviews. `/tares:challenger` and the tares skill name the challenger as Codex or Grok, each
+  challenge on the timeline names its reviewer ("Challenger (Grok) reviewed commit ..."), the
+  summarizer calls the reviewer by that name and no longer reports a plan challenge that did not
+  happen, and the template's setup says how to pick Grok.
+- Template setup: the "model provider" step counts any configured provider, not only an
+  Anthropic key, and the Model picker lists the default provider's models instead of Anthropic's.
+
+### Changed
+- xAI: an agent without a model runs on grok-4.6 (xAI lists a non-reasoning model first), and the
+  Triage (on a schedule) preset picks grok-4.3 for the frequent look. Each applies only while the
+  key lists that model.
+
+### Fixed
 - DuckDB's memory is capped at 1 GB when `tares up` runs on a machine with no container memory
   limit. Before, DuckDB took its own default of 80% of the machine's RAM and its cache grew to about
   4 GB on a Mac after two days of crew use. Set `TARES_DUCKDB_MEMORY_LIMIT` (for example `2GB`) to

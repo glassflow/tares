@@ -60,7 +60,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
                                     presets, models, defaultModel, slackWorkspace, onSaved,
                                     onCancel, defaultMaxRounds = 6, defaultMaxRoundsWithMcp = 12,
                                     maxRoundsLimit = 24, providers = [], defaultProvider = null,
-                                    defaultModels = {} }: {
+                                    defaultModels = {}, smallModels = {} }: {
   initial?: BuiltinAgent;              // absent = create
   prefill?: boolean;                   // initial is a proposal for a NEW agent: create, editable name
   deliveryKind?: "slack" | "webhook" | "none";   // prefill: which delivery row starts open (and on)
@@ -73,6 +73,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
   providers?: ModelProvider[];         // the cell's providers (Settings); each lists its models
   defaultProvider?: string | null;     // the cell default's id
   defaultModels?: Record<string, string>;   // per provider id, the model "" resolves to
+  smallModels?: Record<string, string>;     // per provider id, the model a "small" preset picks
   slackWorkspace: boolean;             // a workspace bot token is configured
   defaultMaxRounds?: number;           // round cap when the agent has no external MCP servers
   defaultMaxRoundsWithMcp?: number;    // round cap once it does
@@ -292,6 +293,11 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
             <button key={p.id} onClick={() => {
               setPrompt(p.prompt);
               if (p.concludes !== undefined) { setConcludes(!!p.concludes); setVerdicts(p.verdicts ?? []); }
+              // a frequent look runs on the provider's cheaper model; another preset puts back the
+              // default, unless the model was picked by hand
+              const small = smallModels[effectiveId] ?? "";
+              if (p.tier === "small" && small) setModel(small);
+              else if (small && model === small) setModel("");
             }}>{p.label}</button>
           ))}
         </div>

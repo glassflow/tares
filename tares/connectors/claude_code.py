@@ -339,11 +339,14 @@ class ClaudeCodeConnector(Connector):
         findings = "\n".join(f"[{f.get('priority')}] {f.get('title')}"
                               for f in (ch.get("findings") or []) if isinstance(f, dict))
         tail = f"\n{findings}" if findings else ""
+        # plugin 0.6.0+ names the reviewer; the summarizer reads this text, so it says which model
+        name = {"codex": "Codex", "grok": "Grok"}.get(str(ch.get("reviewer") or "").lower())
+        who = f"Challenger ({name})" if name else "Challenger"
         if typ == "challenge_plan":
-            what = f"Challenger reviewed the plan {ch.get('plan') or ''}".rstrip()
+            what = f"{who} reviewed the plan {ch.get('plan') or ''}".rstrip()
         elif typ == "challenge_commit":
             rnd = f", round {ch['round']}" if ch.get("round") else ""
-            what = f"Challenger reviewed commit {str(ch.get('sha') or '')[:8]}{rnd}"
+            what = f"{who} reviewed commit {str(ch.get('sha') or '')[:8]}{rnd}"
         else:
             return f"Challenger finding waived{tail}"
         # say what happened, not Codex's verdict word: "FAIL" reads as a broken run elsewhere

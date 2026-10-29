@@ -2492,6 +2492,9 @@ def make_app() -> FastAPI:
                 "providers": plist["providers"], "default_provider": plist["default"],
                 "default_models": {p["id"]: providers_mod.default_model_for(store, p["id"])
                                    for p in plist["providers"]},
+                # per provider id, the model the Triage preset picks ("" = keep the default)
+                "small_models": {p["id"]: providers_mod.small_model_for(store, p["id"])
+                                 for p in plist["providers"]},
                 "default_max_rounds": AGENT_MAX_ROUNDS,
                 "default_max_rounds_with_mcp": AGENT_MAX_ROUNDS_WITH_MCP,
                 "max_rounds_limit": AGENT_MAX_ROUNDS_LIMIT,

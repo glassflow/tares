@@ -149,8 +149,9 @@ def effective_max_rounds(agent: dict) -> int:
     return MAX_ROUNDS_WITH_MCP if agent.get("mcp_servers") else MAX_ROUNDS
 
 
-# Starting points offered in the form. A preset only seeds the prompt box — the user edits freely,
-# because we cannot know what sources they attached or what they need looked at.
+# Starting points offered in the form. A preset only seeds the prompt box (and, with a tier, the
+# model) — the user edits freely, because we cannot know what sources they attached or what they
+# need looked at.
 PRESETS = {
     "what-changed": {
         "label": "What changed",
@@ -199,6 +200,7 @@ PRESETS = {
     # through a handoff on that verdict (TR-334) or a trigger over findings (TR-322).
     "triage": {
         "label": "Triage (on a schedule)",
+        "tier": "small",          # runs every few minutes: the provider's cheaper model, if it has one
         "concludes": True,
         "verdicts": [{"verdict": "investigate",
                       "when": "one entity looks like a problem and needs a closer look"}],

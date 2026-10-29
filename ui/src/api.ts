@@ -284,6 +284,7 @@ export const api = {
               models: string[]; default_model: string; slack_workspace: boolean;
               providers: ModelProvider[]; default_provider: string | null;
               default_models: Record<string, string>;   // per provider id, what "" resolves to
+              small_models?: Record<string, string>;    // per provider id, the Triage preset's model ("" = none)
               default_max_rounds: number; default_max_rounds_with_mcp: number;
               max_rounds_limit: number;
               presets: AgentPreset[] }>(`/api/agents/builtin${project ? `?project=${encodeURIComponent(project)}` : ""}`),
