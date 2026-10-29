@@ -1,0 +1,48 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "ai.glassflow/tares",
+  "title": "Tares",
+  "description": "Always-on AI agents: a software factory for Claude Code, or an AI SRE that watches your systems.",
+  "version": "1.54.1",
+  "websiteUrl": "https://docs.glassflow.ai/tares",
+  "repository": {
+    "url": "https://github.com/glassflow/tares",
+    "source": "github",
+    "id": "1286953738"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "tares",
+      "version": "1.54.1",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        },
+        {
+          "type": "named",
+          "name": "--transport",
+          "value": "stdio"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "TARESD_URL",
+          "description": "Address of the Tares the server talks to. Start one with `tares up`.",
+          "default": "http://127.0.0.1:8787"
+        },
+        {
+          "name": "TARES_AUTH_TOKEN",
+          "description": "Token or API key for a Tares that has auth on. Leave empty for a local Tares without auth.",
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

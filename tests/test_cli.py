@@ -49,10 +49,23 @@ def test_parser_builds():
     ck("main() with no args is a no-op (prints help)", True)
 
 
+def test_mcp_stdio_keeps_stdout_clean():
+    # over stdio, stdout is the MCP channel: a startup line there breaks the client's session
+    import contextlib, io
+    cli.run_mcp = lambda: None  # don't actually serve
+    out, err = io.StringIO(), io.StringIO()
+    args = types.SimpleNamespace(transport="stdio", host="127.0.0.1", port=8788, taresd="")
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        cli._mcp(args)
+    ck("`tares mcp --transport stdio` writes nothing to stdout", out.getvalue() == "", out.getvalue())
+    ck("...and says where it proxies to on stderr", "tares-mcp: stdio" in err.getvalue(), err.getvalue())
+
+
 test_up_wires_data_home("/tmp/nf_cli_home")
 test_up_respects_explicit_db()
 test_ui_dist_dev_fallback()
 test_parser_builds()
+test_mcp_stdio_keeps_stdout_clean()
 
 
 

@@ -103,13 +103,27 @@ def _station_headers() -> dict:
     return out
 
 
+class _TaresdTransport(httpx.AsyncHTTPTransport):
+    """Says where taresd was expected when it can't be reached, instead of httpx's bare "All
+    connection attempts failed": the server starts and lists its tools without a daemon (what a
+    directory scanner does), so the first tool call is where a missing daemon shows."""
+
+    async def handle_async_request(self, request):
+        try:
+            return await super().handle_async_request(request)
+        except httpx.ConnectError as e:
+            raise httpx.ConnectError(
+                f"Tares isn't reachable at {TARESD}. Start it with `tares up`, or set TARESD_URL "
+                "to the address of a running Tares.", request=request) from e
+
+
 def _cx(timeout: float = 10):
     """An httpx client that carries the caller's token and station to taresd. Over HTTP the
     server's own token is never spent for a caller that sent none."""
     tok = _caller("token")
     headers = {"Authorization": f"Bearer {tok}"} if tok else {}
     headers.update(_station_headers())
-    return httpx.AsyncClient(timeout=timeout, headers=headers)
+    return httpx.AsyncClient(timeout=timeout, headers=headers, transport=_TaresdTransport())
 
 # stdio (default) is what a local agent spawns. For remote agents (the demo / a server), run with
 # TARES_MCP_TRANSPORT=streamable-http (or sse) and the server listens on MCP_HOST:MCP_PORT — at

@@ -186,8 +186,9 @@ def _mcp(args: argparse.Namespace):
         os.environ["TARESD_URL"] = os.environ["TARES_FACTORY_URL"] = args.taresd
     target = os.getenv("TARES_FACTORY_URL") or os.getenv("TARESD_URL", "http://127.0.0.1:8787")
     path = "/sse" if args.transport == "sse" else "/mcp"
-    print(f"tares-mcp: {args.transport} on http://{args.host}:{args.port}{path}  ->  {target}",
-          flush=True)
+    where = "stdio" if args.transport == "stdio" else f"{args.transport} on http://{args.host}:{args.port}{path}"
+    # stderr: over stdio, stdout is the MCP channel and any other line breaks the client's session
+    print(f"tares-mcp: {where}  ->  {target}", file=sys.stderr, flush=True)
     run_mcp()
 
 

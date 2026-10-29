@@ -11,6 +11,8 @@ Most agents wait for a prompt and forget everything when the session ends. Tares
 
 <!-- TR-134: video thumbnail goes here -->
 
+<!-- mcp-name: ai.glassflow/tares -->
+
 ## What you can build with it
 
 ### Agents that watch your systems
