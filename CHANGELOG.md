@@ -5,6 +5,13 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- DuckDB's memory is capped at 1 GB when `tares up` runs on a machine with no container memory
+  limit. Before, DuckDB took its own default of 80% of the machine's RAM and its cache grew to about
+  4 GB on a Mac after two days of crew use. Set `TARES_DUCKDB_MEMORY_LIMIT` (for example `2GB`) to
+  change it; a container limit still sets it to 60% of that limit. The cap also sets
+  `TARES_DUCKDB_THREADS` to 2 unless you set it.
+
 ## [1.54.0] - 2026-10-28
 
 Grok can review a challenger session instead of Codex, and xAI is one of the model provider

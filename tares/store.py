@@ -623,19 +623,24 @@ def _file_size(path: str) -> int:
         return 0
 
 
+DEFAULT_DUCKDB_MEMORY_LIMIT = "1GB"
+
+
 def _bound_duckdb_memory(con, path: str) -> None:
     """Bound DuckDB to the CONTAINER, not the host. Without a memory_limit DuckDB sizes itself to
     the node's RAM, so one heavy scan over a grown dataset blows past the cgroup limit and the
     process is OOMKilled (this took the dev cell down at ~1M events). With a limit set, DuckDB
     spills intermediates to temp_directory (on the data volume) instead of dying. Override with
-    TARES_DUCKDB_MEMORY_LIMIT (e.g. "800MB"); no-op locally when there's no cgroup limit."""
+    TARES_DUCKDB_MEMORY_LIMIT (e.g. "800MB"). With no container limit (`tares up` on a laptop)
+    the cap is DEFAULT_DUCKDB_MEMORY_LIMIT: DuckDB's own default is 80% of the machine's RAM, and
+    its cache grew to about 4 GB on a Mac and never shrank."""
     limit = os.getenv("TARES_DUCKDB_MEMORY_LIMIT")
     if not limit:
         cg = _cgroup_mem_bytes()
         if cg:
             limit = f"{max(256, int(cg * 0.6) // (1024 * 1024))}MB"   # 60% of the container
     if not limit:
-        return
+        limit = DEFAULT_DUCKDB_MEMORY_LIMIT
     try:
         con.execute(f"PRAGMA memory_limit='{limit}'")
         con.execute(f"PRAGMA threads={os.getenv('TARES_DUCKDB_THREADS', '2')}")
