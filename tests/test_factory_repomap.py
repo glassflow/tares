@@ -272,6 +272,11 @@ async def main():
     rsteps = {n: line for line in rman.splitlines() for n in ("6", "11") if line.startswith(n + ". ")}
     ck("reviewer step 6 is the design check and reads the approval with list_decisions",
        "Design check" in rsteps["6"] and "list_decisions" in rman.split("Design check", 1)[1].split("\n7. ")[0], rsteps["6"][:200])
+    ck("reviewer step 6 reads the choice and compares author dates as timestamps",
+       all(w in rman.split("Design check", 1)[1].split("\n7. ")[0]
+           for w in ("`choice`", "%aI", "--reverse", "neither its `choice` nor its `words` asks for a change")), rsteps["6"][:300])
+    ck("builder step 3 reads the choice and wants no requested change",
+       all(w in manual.split("Mock first", 1)[1].split("\n4. ")[0] for w in ("choice", "neither the choice nor the words ask for a change")), manual[:100])
     ck("reviewer step 11 still tidies the worktree", "factory tidy" in rsteps["11"], rsteps["11"][-200:])
 
 
