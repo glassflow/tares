@@ -268,6 +268,11 @@ async def main():
     steps = {n: line for line in manual.splitlines() for n in ("7", "11") if line.startswith(n + ". ")}
     ck("step 7 writes a new map with an empty base", "write_repo_map" in steps["7"] and "empty `base`" in steps["7"], steps["7"][-300:])
     ck("step 11 passes the brief's version as base (TR-685)", "write_repo_map" in steps["11"] and "`version` as `base`" in steps["11"], steps["11"][-300:])
+    rman = open(os.path.join(ROOT, "claude-plugin/skills/station-reviewer/SKILL.md")).read()
+    rsteps = {n: line for line in rman.splitlines() for n in ("6", "11") if line.startswith(n + ". ")}
+    ck("reviewer step 6 is the design check and reads the approval with list_decisions",
+       "Design check" in rsteps["6"] and "list_decisions" in rman.split("Design check", 1)[1].split("\n7. ")[0], rsteps["6"][:200])
+    ck("reviewer step 11 still tidies the worktree", "factory tidy" in rsteps["11"], rsteps["11"][-200:])
 
 
 async def store_handover(app, uid, repos):
