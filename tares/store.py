@@ -3589,21 +3589,24 @@ class Store(FactoryStore, ClaudeUsageStore):
         `source_stats` counter (never a scan of events), and the two row counts are unfiltered
         COUNT(*)s, which DuckDB answers from table metadata. Per-source bytes are None — DuckDB
         stores every source in one events table and does not attribute storage per value."""
-        db_bytes = _file_size(self.path)
-        wal_bytes = _file_size(self.path + ".wal")
-        with self._lock:
-            sources = self.con.execute(
-                "SELECT source, events FROM source_stats ORDER BY source").fetchall()
         with self._sread:
             runs = self.sc.execute("SELECT COUNT(*) FROM agent_runs").fetchone()[0]
             deliveries = self.sc.execute("SELECT COUNT(*) FROM dispatch_deliveries").fetchone()[0]
+        return {**self.storage_usage(), "agent_runs": int(runs),
+                "dispatch_deliveries": int(deliveries)}
+
+    def storage_usage(self) -> dict:
+        """The disk half of `usage()`: file sizes and event counts, from stat() and the DuckDB file
+        only. /metrics reads this on every scrape, so it never touches the state database: on a
+        cloud cell that is Postgres, and an idle cell would otherwise open a connection each time."""
+        with self._lock:
+            sources = self.con.execute(
+                "SELECT source, events FROM source_stats ORDER BY source").fetchall()
         return {
-            "db_bytes": db_bytes,
-            "wal_bytes": wal_bytes,
+            "db_bytes": _file_size(self.path),
+            "wal_bytes": _file_size(self.path + ".wal"),
             "events": sum(int(r[1] or 0) for r in sources),
             "sources": [{"name": r[0], "events": int(r[1] or 0), "bytes": None} for r in sources],
-            "agent_runs": int(runs),
-            "dispatch_deliveries": int(deliveries),
         }
 
     def newest_key(self, sources: list[str], filters: list | None,
