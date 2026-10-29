@@ -300,6 +300,7 @@ export default function AgentDetail() {
             providers={data.providers}
             defaultProvider={data.default_provider}
             defaultModels={data.default_models}
+            smallModels={data.small_models}
             slackWorkspace={data.slack_workspace}
             defaultMaxRounds={data.default_max_rounds}
             defaultMaxRoundsWithMcp={data.default_max_rounds_with_mcp}

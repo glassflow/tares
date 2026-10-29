@@ -624,6 +624,7 @@ export interface AgentPreset {
   label: string;
   prompt: string;
   concludes?: boolean;          // the preset ends every run with conclude
+  tier?: "small";               // picks the provider's cheaper model (small_models), when it has one
   verdicts?: Verdict[];         // and gives these verdicts
 }
 
