@@ -31,6 +31,8 @@ jobs:
         run: |
           npm ci
           npx tsc --noEmit
+          node tests/words.selftest.cjs
+          node tests/words.check.cjs
           npm run build          # produces ui/dist, which the daemon serves and the wheel bundles
         working-directory: ui
 
