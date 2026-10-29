@@ -84,3 +84,4 @@ test_factory_batching
 test_state_postgres
 test_ci_list
 test_edition
+test_factory_close

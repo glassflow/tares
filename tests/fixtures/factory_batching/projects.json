@@ -19,6 +19,7 @@
     "todo": 3,
     "total": 10
    },
+   "ready_to_close": false,
    "recipe": "custom",
    "recipe_title": "From existing objects",
    "setup": null,
@@ -45,6 +46,7 @@
     "todo": 8,
     "total": 30
    },
+   "ready_to_close": false,
    "recipe": "custom",
    "recipe_title": "From existing objects",
    "setup": null,
@@ -71,6 +73,7 @@
     "todo": 0,
     "total": 3
    },
+   "ready_to_close": false,
    "recipe": "custom",
    "recipe_title": "From existing objects",
    "setup": null,
@@ -89,6 +92,7 @@
    "params": {
     "objects": []
    },
+   "ready_to_close": false,
    "recipe": "custom",
    "recipe_title": "From existing objects",
    "setup": null,

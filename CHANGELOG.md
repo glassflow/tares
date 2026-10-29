@@ -7,6 +7,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 - Each cell has an edition: factory, sre or platform. Existing cells stay as they are.
+- `GET /api/projects` and a project's summary say `ready_to_close` for a factory project that is still open with every ticket merged or otherwise finished.
 
 ### Fixed
 - DuckDB's memory is capped at 1 GB when `tares up` runs on a machine with no container memory

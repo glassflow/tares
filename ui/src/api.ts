@@ -462,6 +462,10 @@ export const api = {
     request<{ ok: boolean; source: string }>("/remember", { method: "POST", body: JSON.stringify(body) }),
   projectSummary: (id: string) =>
     request<ProjectSummary>(`/api/projects/${encodeURIComponent(id)}/summary`),
+  // close a factory project whose tickets are all finished; `words` is what the person said
+  finishProject: (id: string, words: string) =>
+    request<{ project: string; name: string; finished: unknown }>(
+      `/api/projects/${encodeURIComponent(id)}/finish`, { method: "POST", body: JSON.stringify({ words }) }),
   // the project's threads, newest first; page with `before` = the previous page's next_before
   projectTimeline: (id: string, q: { trigger?: string; agent?: string; outcome?: string;
                                      entity?: string; before?: string | null; limit?: number } = {}) =>
