@@ -113,16 +113,17 @@ const router = createBrowserRouter([
       // views are gone: a project holds what a view used to
       { path: "views", element: <Navigate to="/projects" replace /> },
       { path: "views/*", element: <Navigate to="/projects" replace /> },
-      {
-        path: "dev/components",
-        element: (
-          <Suspense fallback={null}>
-            <DevComponents />
-          </Suspense>
-        ),
-      },
       { path: "*", element: <NotFound /> },
     ],
+  },
+  // The gallery sits outside the console shell, so it has the whole width at any screen size.
+  {
+    path: "/dev/components",
+    element: (
+      <Suspense fallback={null}>
+        <DevComponents />
+      </Suspense>
+    ),
   },
 ]);
 
