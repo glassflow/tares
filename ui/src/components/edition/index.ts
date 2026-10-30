@@ -5,7 +5,7 @@ export { Dialog, type DialogProps } from "./Dialog";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
 export { Initials, initialsOf, type InitialsProps } from "./Initials";
 export { Input, type InputProps } from "./Input";
-export { LineChart, type LineChartProps, type LineMark, type LineSeries } from "./LineChart";
+export { LineChart, LineMarks, type LineChartProps, type LineMark, type LineSeries } from "./LineChart";
 export { ListRow, type ListRowProps } from "./ListRow";
 export { ListSection, type ListSectionProps } from "./ListSection";
 export { Panel, type PanelProps } from "./Panel";
