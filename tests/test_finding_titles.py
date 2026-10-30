@@ -290,7 +290,9 @@ async def cell():
                     summary="Cart latency is up because the cache was cold after a restart.")
         await wait_for(lambda: settled(store, "investigator", 3))
 
-        runs = {(r["agent"], r["key"]): r for r in store.list_agent_runs(None, limit=100)}
+        # the schedule can fire its own tick (key "watch-prod") on a slow machine; it is not one of ours
+        runs = {(r["agent"], r["key"]): r for r in store.list_agent_runs(None, limit=100)
+                if r["key"] != "watch-prod"}
         ck("every run finished", len(runs) == 8 and all(r["status"] == "ok" for r in runs.values()),
            str([(k, r["status"]) for k, r in runs.items()]))
         w = runs[("watcher", "edge-proxy")]
