@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import tares.builtin_agents as ba
+import tares.models as models
 from tares.models import (ModelError, ModelReply, OpenAIProvider, ToolCall, empty_usage,
                           tool_call_in_text, tool_message)
 
@@ -31,6 +32,7 @@ def check(label, cond, detail=""):
 CALLS: list = []
 ANSWERS: list = []          # queued responses: a dict (JSON) or a list of SSE chunks
 STATUS = [200]
+STATUSES: list = []      # per-request statuses, used before STATUS while any are queued
 HEADERS: dict = {}
 
 
@@ -39,7 +41,7 @@ class Stub(BaseHTTPRequestHandler):
         raw = self.rfile.read(int(self.headers.get("content-length") or 0))
         CALLS.append({"path": self.path, "headers": dict(self.headers), "body": json.loads(raw)})
         answer = ANSWERS.pop(0) if ANSWERS else {"choices": [{"message": {"content": "?"}}]}
-        self.send_response(STATUS[0])
+        self.send_response(STATUSES.pop(0) if STATUSES else STATUS[0])
         for k, v in HEADERS.items():
             self.send_header(k, v)
         if isinstance(answer, list):
@@ -192,6 +194,11 @@ async def main():
           replay["tool_calls"][0]["function"] == {"name": "read", "arguments": '{"selector": 1}'}, str(replay))
 
     print("== errors ==")
+    waits: list = []
+
+    async def no_sleep(s):
+        waits.append(s)
+    models._sleep = no_sleep
     STATUS[0] = 429
     ANSWERS.append({"error": {"message": "slow down"}})
     try:
@@ -213,6 +220,50 @@ async def main():
         await named.complete(model="m", system="", tools=[], messages=[{"role": "user", "content": "hi"}], max_tokens=1)
     except ModelError as e:
         check("a router's label names it in the error", str(e).startswith("litellm 500"), str(e))
+    STATUS[0] = 200
+
+    print("== a busy provider is asked again; any other error is not ==")
+    hi = dict(model="m", system="", tools=[], messages=[{"role": "user", "content": "hi"}], max_tokens=1)
+    waits.clear(); n = len(CALLS)
+    STATUSES[:] = [429]; ANSWERS[:] = [{"error": "resource-exhausted"}, completion(text="ok")]
+    reply = await p.complete(**hi)
+    check("a 429 then a 200: the run gets the reply", reply.text == "ok" and len(CALLS) - n == 2,
+          f"{reply.text!r} {len(CALLS) - n}")
+    check("after waiting 1 s", waits == [1.0], str(waits))
+    waits.clear(); n = len(CALLS)
+    STATUSES[:] = [503, 502]; ANSWERS[:] = [{}, {}, completion(text="ok")]
+    reply = await p.complete(**hi)
+    check("two 5xx then a 200: three tries, waits of 1 s and 2 s",
+          reply.text == "ok" and len(CALLS) - n == 3 and waits == [1.0, 2.0], f"{len(CALLS) - n} {waits}")
+    waits.clear(); n = len(CALLS)
+    STATUSES[:] = [429]; HEADERS["retry-after"] = "7"; ANSWERS[:] = [{}, completion(text="ok")]
+    await p.complete(**hi)
+    check("Retry-After is honoured", waits == [7.0], str(waits))
+    waits.clear(); n = len(CALLS)
+    STATUSES[:] = [429]; HEADERS["retry-after"] = "120"; ANSWERS[:] = [{}, completion(text="ok")]
+    try:
+        await p.complete(**hi)
+        check("a Retry-After past the cap fails the run at once", False, "no error")
+    except ModelError as e:
+        check("a Retry-After past the cap fails the run at once, with the provider's status",
+              str(e).startswith("openai 429") and len(CALLS) - n == 1 and waits == [], f"{e} {waits}")
+    HEADERS.clear(); STATUSES.clear(); ANSWERS.clear()
+    waits.clear(); n = len(CALLS)
+    STATUS[0] = 429
+    try:
+        await p.complete(**hi)
+        check("still busy after three tries: ModelError", False, "no error")
+    except ModelError as e:
+        check("still busy after three tries: ModelError, three requests",
+              str(e).startswith("openai 429") and len(CALLS) - n == 3 and waits == [1.0, 2.0],
+              f"{e} {len(CALLS) - n} {waits}")
+    for code in (400, 401, 404):
+        waits.clear(); n = len(CALLS); STATUS[0] = code
+        try:
+            await p.complete(**hi)
+        except ModelError:
+            pass
+        check(f"a {code} is not asked again", len(CALLS) - n == 1 and waits == [], f"{len(CALLS) - n}")
     STATUS[0] = 200
 
     print("== the agent runner's loop on the OpenAI provider, unchanged ==")

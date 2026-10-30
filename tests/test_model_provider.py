@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import tares.models as models
 from tares.models import (AnthropicProvider, ModelError, ModelReply, ToolCall, add_usage,
                           empty_usage, tool_message)
 
@@ -29,6 +30,7 @@ def check(label, cond, detail=""):
 CALLS: list = []
 ANSWER: dict = {}
 STATUS = [200]
+STATUSES: list = []      # per-request statuses, used before STATUS while any are queued
 
 
 class Stub(BaseHTTPRequestHandler):
@@ -36,7 +38,7 @@ class Stub(BaseHTTPRequestHandler):
         raw = self.rfile.read(int(self.headers.get("content-length") or 0))
         CALLS.append({"path": self.path, "headers": dict(self.headers), "body": json.loads(raw)})
         out = json.dumps(ANSWER).encode()
-        self.send_response(STATUS[0])
+        self.send_response(STATUSES.pop(0) if STATUSES else STATUS[0])
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(out)))
         self.end_headers()
@@ -123,6 +125,17 @@ async def main():
         check("4xx raises ModelError naming provider and status", str(e).startswith("anthropic 401: "),
               str(e))
     STATUS[0] = 200
+    waits: list = []
+
+    async def no_sleep(s):
+        waits.append(s)
+    models._sleep = no_sleep
+    ANSWER.clear(); ANSWER.update({"content": [{"type": "text", "text": "after the wait"}]})
+    STATUSES[:] = [529]; n = len(CALLS)
+    r = await p.complete(model="m", system="s", tools=[], messages=[{"role": "user", "content": "x"}],
+                         max_tokens=1)
+    check("an overloaded 529 is asked again and the run gets the reply",
+          r.text == "after the wait" and len(CALLS) - n == 2 and waits == [1.0], f"{len(CALLS) - n} {waits}")
 
     print("== usage accounting ==")
     total = empty_usage()
