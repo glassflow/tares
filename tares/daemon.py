@@ -1628,6 +1628,7 @@ def make_app() -> FastAPI:
     def create_person(body: dict = Body(...)):
         """{name, email?, emails?, github?, is_admin?}. 201 with the new person; 200 with the
         existing one when that email is already someone's."""
+        email = None
         try:
             email = store.check_email(body.get("email"))
             found = store.find_person_by_email(email) if email else None
@@ -1636,7 +1637,12 @@ def make_app() -> FastAPI:
             p = store.create_person(body.get("name"), email, body.get("emails"), body.get("github"),
                                     bool(body.get("is_admin")), via="admin")
         except ValueError as e:
-            # a second creation of the same email, extra email or GitHub login answers 409
+            # this handler runs in the thread pool: two creations of one email can both pass the
+            # lookup above, and the loser then meets the winner's row. It gets that person (200).
+            found = store.find_person_by_email(email) if email and "already belongs" in str(e) else None
+            if found:
+                return _person_out(found)
+            # a second creation of the same extra email or GitHub login answers 409
             _err(e, 409 if "already belongs" in str(e) else 400)
         return JSONResponse(_person_out(p), status_code=201)
 
