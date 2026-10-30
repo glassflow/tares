@@ -304,6 +304,11 @@ def register(app, store, h: SimpleNamespace) -> None:
             if person["id"] == "local":
                 h.err(PermissionError("The cell's settings need the admin scope"), 403)
             key = personal_key(person)
+            if "kit" in body:
+                # the kit (the freeze) is the crew's: settings() leaves a person's copy out, so
+                # storing it would answer 200 and change nothing
+                h.err(PermissionError("The kit is the crew's: only the cell's credential or "
+                                      "its admin changes it"), 403)
         try:
             if key != CREW_SETTING:
                 factory_mod.personal_ceiling_ok(stored(CREW_SETTING), body)
@@ -792,8 +797,9 @@ def register(app, store, h: SimpleNamespace) -> None:
         out.sort(key=lambda s: (order.get(s["role"] or "", 99), s["name"], s["crew_id"] or ""))
         return out
 
-    def pace() -> dict:
-        return factory_mod.pace_now(settings(), claude_usage.plan(store), now_utc())
+    def pace(request: Request | None = None) -> dict:
+        """The pace under the caller's settings (a person's own `pace` over the cell's)."""
+        return factory_mod.pace_now(settings(request), claude_usage.plan(store), now_utc())
 
     def caller_person_id(request: Request) -> str:
         """The person whose crews the caller means by "mine". A recording with no person (the
@@ -884,7 +890,7 @@ def register(app, store, h: SimpleNamespace) -> None:
             me = caller_person_id(request)
             rows = [s for s in rows if (s["person"] or {}).get("id") == me]
         return {"crews": crews_of(rows), "stations": rows, "settings": settings(request),
-                "grants": grants_out(None)["all"], "pace": pace(),
+                "grants": grants_out(None)["all"], "pace": pace(request),
                 "claude_retry": claude_retry(), "now": now_utc()}
 
     @app.put("/api/crew/claude-retry")
@@ -915,14 +921,14 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {"stations": out}
 
     @app.get("/api/crew/pace")
-    def get_crew_pace():
+    def get_crew_pace(request: Request):
         """Whether the crew is pacing itself before the plan's limits (the crew setting `pace`),
         worked out from the plan usage Tares keeps. `level` is 0 (ok), 1 (slow: the 5-hour window
         at 85% or the weekly limit at 90%) or 2 (hold: the window at 95%); `at_limit` is true while
         a limit is full and has not reset; `state` is off, ok, slow, hold or limit; `until` is when
         the limits behind it reset; `known` is false when no plan reading has arrived. The factory
-        watch reads this (TR-674)."""
-        return pace()
+        watch reads this (TR-674); a person's own `pace` setting counts for that person."""
+        return pace(request)
 
     @app.get("/api/crew/my-work")
     def my_work(request: Request, crew: str | None = None, project: str | None = None):

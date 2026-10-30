@@ -188,6 +188,26 @@ async def auth_on():
             ck("an admin key deletes one (any case)", r.status_code == 200
                and (await cx.get(f"{B}/api/areas", headers=JR_)).json() == [], r.text)
 
+            print("== claims at once ==")
+            mia = await person("Mia", "mia@x.dev")
+            M_ = await key(mia, "read+ingest")
+            repos = [f"race/r{i}" for i in range(6)]
+            rs = await asyncio.gather(*[cx.put(f"{B}/api/areas/{x}", headers=J_, json={"person_id": jo})
+                                        for x in repos])
+            ck("six claims of six repos at once: all 200", sorted(r.status_code for r in rs) == [200] * 6,
+               str(sorted(r.status_code for r in rs)))
+            got = owners((await cx.get(f"{B}/api/areas", headers=JR_)).json())
+            ck("... and all six are kept", got == {x: jo for x in repos}, str(got))
+            rs = await asyncio.gather(*[cx.put(f"{B}/api/areas/race/one", headers=hd, json={"person_id": who})
+                                        for hd, who in [(J_, jo), (M_, mia)] * 4])
+            codes = sorted(r.status_code for r in rs)
+            ck("Jo and Mia claim one repo at once: one of them gets it, the other is refused",
+               codes == [200] * 4 + [403] * 4, str(codes))
+            got = owners((await cx.get(f"{B}/api/areas", headers=JR_)).json())
+            ck("... and the six earlier repos are still there", all(got.get(x) == jo for x in repos), str(got))
+            await cx.put(f"{B}/api/areas", headers=ROOT, json=[])
+            ck("set down: the list is empty again", (await cx.get(f"{B}/api/areas", headers=JR_)).json() == [])
+
             print("== the MCP tools ==")
             who = {"k": J_}
             m._cx = mf._cx = lambda timeout=10: httpx.AsyncClient(timeout=timeout, headers=who["k"])

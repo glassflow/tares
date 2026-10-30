@@ -15,6 +15,7 @@ import json
 import ipaddress
 import os
 import socket
+import threading
 import time
 import re
 import secrets
@@ -1673,6 +1674,8 @@ def make_app() -> FastAPI:
         return _person_out(p)
 
     # ── Area owners (TR-627): the person who owns each GitHub repo ──
+    _areas_lock = threading.Lock()
+
     @app.get("/api/areas")
     def list_areas():
         """[{repo, person: {id, name}, note}], one per repo."""
@@ -1683,7 +1686,8 @@ def make_app() -> FastAPI:
         """Admin only. Replace the whole list with [{repo, person_id, note?}]. A repo given twice
         keeps its last entry; repos are saved in lowercase."""
         try:
-            areas_mod.save(store, body)
+            with _areas_lock:
+                areas_mod.save(store, body)
         except ValueError as e:
             _err(e, 400)
         return areas_mod.view(store)
@@ -1699,7 +1703,9 @@ def make_app() -> FastAPI:
         pid = str(body.get("person_id") or "").strip()
         if not pid or store.get_person(pid) is None:
             _err(KeyError(f"no person {pid!r}; GET /api/people lists them"), 400)
-        if not _is_admin(request):
+        admin = _is_admin(request)
+        me = None
+        if not admin:
             me = _current_person(request)
             if not me:
                 raise HTTPException(status_code=403, detail="this key belongs to no person, so it "
@@ -1707,19 +1713,24 @@ def make_app() -> FastAPI:
             if pid != me["id"]:
                 raise HTTPException(status_code=403, detail="you can claim a repo only for "
                                     "yourself; ask an admin to set another person as owner")
-            held = areas_mod.owner(store, repo)
-            if held and held["id"] != me["id"]:
-                raise HTTPException(status_code=403, detail=f"{repo} already belongs to "
-                                    f"{held['name']}; ask an admin to reassign it")
-        old = next((e for e in areas_mod.load(store) if e["repo"] == repo), None)
-        entries = [e for e in areas_mod.load(store) if e["repo"] != repo]
-        # a reassign keeps the note the repo had unless the body names one
-        note = body["note"] if "note" in body else (old or {}).get("note")
-        entries.append({"repo": repo, "person_id": pid, "note": note})
-        try:
-            areas_mod.save(store, entries)
-        except ValueError as e:
-            _err(e, 400)
+        # the unowned check, the load and the save are one step: handlers run in the thread
+        # pool, and two claims at once would each save a list without the other's repo
+        with _areas_lock:
+            if not admin:
+                held = areas_mod.owner(store, repo)
+                if held and held["id"] != me["id"]:
+                    raise HTTPException(status_code=403, detail=f"{repo} already belongs to "
+                                        f"{held['name']}; ask an admin to reassign it")
+            current = areas_mod.load(store)
+            old = next((e for e in current if e["repo"] == repo), None)
+            entries = [e for e in current if e["repo"] != repo]
+            # a reassign keeps the note the repo had unless the body names one
+            note = body["note"] if "note" in body else (old or {}).get("note")
+            entries.append({"repo": repo, "person_id": pid, "note": note})
+            try:
+                areas_mod.save(store, entries)
+            except ValueError as e:
+                _err(e, 400)
         return next(a for a in areas_mod.view(store) if a["repo"] == repo)
 
     @app.delete("/api/areas/{owner}/{name}")
@@ -1729,9 +1740,11 @@ def make_app() -> FastAPI:
             repo = areas_mod.norm_repo(f"{owner}/{name}")
         except ValueError as e:
             _err(e, 400)
-        left = [e for e in areas_mod.load(store) if e["repo"] != repo]
-        gone = len(left) != len(areas_mod.load(store))
-        store.set_setting(areas_mod.AREAS_SETTING, json.dumps(left))
+        with _areas_lock:
+            current = areas_mod.load(store)
+            left = [e for e in current if e["repo"] != repo]
+            gone = len(left) != len(current)
+            store.set_setting(areas_mod.AREAS_SETTING, json.dumps(left))
         return {"ok": True, "removed": gone}
 
     @app.get("/api/whoami")
