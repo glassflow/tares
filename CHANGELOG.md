@@ -16,6 +16,7 @@ the project follows [Semantic Versioning](https://semver.org/).
   4 GB on a Mac after two days of crew use. Set `TARES_DUCKDB_MEMORY_LIMIT` (for example `2GB`) to
   change it; a container limit still sets it to 60% of that limit. The cap also sets
   `TARES_DUCKDB_THREADS` to 2 unless you set it.
+- Console: the line chart and sparkline skip values that are not numbers instead of drawing them as zero, sort points by time, and draw one point as a short segment; y labels show the decimals small values need, marks can be listed as text, and disabled controls and focused fields now match the rest of the console.
 
 ### Changed
 - Agents can have a monthly budget (`budget_period: month`, resets on the 1st UTC); existing budgets stay lifetime.

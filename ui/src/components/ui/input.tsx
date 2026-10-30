@@ -2,7 +2,8 @@ import * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-// Border, padding, fill and size are important: the console's bare `input` rules are unlayered.
+// Border, padding, fill and size are important: the console's bare `input` rules are unlayered. The focus border
+// is too: the console turns it to the accent (`input:focus`) and `--color-ring` is that accent.
 const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<"input">>(
   ({ className, type, ...props }, ref) => (
     <input
@@ -10,7 +11,7 @@ const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<"input">>(
       ref={ref}
       data-slot="input"
       className={cn(
-        "flex h-9 w-full border! border-input! bg-background! px-3! py-1! text-sm! text-foreground! transition-colors motion-reduce:transition-none file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
+        "flex h-9 w-full border! border-input! focus:border-ring! bg-background! px-3! py-1! text-sm! text-foreground! transition-colors motion-reduce:transition-none file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-45!",
         className,
       )}
       {...props}

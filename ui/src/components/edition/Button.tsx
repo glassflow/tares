@@ -36,7 +36,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         aria-disabled={asChild && inert ? true : undefined}
         aria-busy={busy || undefined}
         type={asChild ? undefined : (props.type ?? "button")}
-        className={cn(v.extra, asChild && inert && "pointer-events-none opacity-50", busy && "cursor-progress", className)}
+        className={cn(v.extra, asChild && inert && "pointer-events-none opacity-45", busy && "cursor-progress", className)}
         {...props}
         tabIndex={asChild && inert ? -1 : props.tabIndex}
         // A link has no disabled state. The capture handler runs before the child's own onClick (a

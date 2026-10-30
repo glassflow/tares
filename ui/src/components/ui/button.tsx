@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 // The console's own `button` element rules are unlayered and would beat these utilities, so the
 // ones they also set (display, size, padding, border, fill, colour) are marked important.
 const buttonVariants = cva(
-  "inline-flex! items-center justify-center gap-2 whitespace-nowrap no-underline! text-sm! font-medium! transition-colors motion-reduce:transition-none disabled:pointer-events-none disabled:opacity-50! [&_svg]:pointer-events-none [&_svg]:shrink-0",
+  "inline-flex! items-center justify-center gap-2 whitespace-nowrap no-underline! text-sm! font-medium! transition-colors motion-reduce:transition-none disabled:pointer-events-none disabled:opacity-45! [&_svg]:pointer-events-none [&_svg]:shrink-0",
   {
     variants: {
       variant: {

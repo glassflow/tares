@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Component, useMemo, useState, type ReactNode } from "react";
 
 import {
   Banner,
@@ -52,6 +52,100 @@ const LONG =
 const HOURS = Array.from({ length: 12 }, (_, i) => `2026-10-29T${String(i * 2).padStart(2, "0")}:00:00Z`);
 const ERRORS = [2, 3, 2, 4, 3, 9, 14, 8, 5, 3, 2, 2];
 const TRAFFIC = [8, 9, 8, 10, 9, 11, 12, 11, 10, 9, 9, 8];
+
+// A fixture that is not a valid series: nulls, NaN, undefined and Infinity among real values, out of time order.
+const DIRTY: [string, number][] = [
+  [HOURS[3], 6],
+  [HOURS[0], NaN],
+  [HOURS[1], 2],
+  [HOURS[2], null as unknown as number],
+  [HOURS[4], undefined as unknown as number],
+  [HOURS[5], 10],
+  [HOURS[6], Infinity],
+];
+const DIRTY_SPARK = [1, NaN, 3, null, undefined, Infinity, 5] as unknown as number[];
+const HUGE_COUNT = 200_000;
+const MARKS = [
+  { at: "2026-10-30T02:00:00Z", label: "Deploy of service-e" },
+  { at: HOURS[8], label: "Deploy of service-b" },
+  { at: HOURS[4], label: "Deploy of service-a" },
+  { at: "2026-10-28T20:00:00Z", label: "Deploy of service-d" },
+  { at: "2026-10-29T16:01:00Z", label: "Deploy of service-c" },
+];
+
+/** Shows a line instead of a blank page when a chart throws, so the e2e can name the chart that broke. */
+class Guard extends Component<{ children: ReactNode; testid: string }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    return this.state.failed ? <div data-testid={this.props.testid}>This chart could not be drawn.</div> : this.props.children;
+  }
+}
+
+/** A series far longer than a spread of arguments allows. */
+function HugeCharts() {
+  const base = Date.parse("2026-10-01T00:00:00Z");
+  const { points, values } = useMemo(() => {
+    const pts: [string, number][] = [];
+    const vals: number[] = [];
+    for (let i = 0; i < HUGE_COUNT; i++) {
+      const v = 5 + 4 * Math.sin(i / 2000);
+      pts.push([new Date(base + i * 60_000).toISOString(), v]);
+      vals.push(i % 1000 === 0 ? NaN : v);
+    }
+    return { points: pts, values: vals };
+  }, [base]);
+  return (
+    <div className="grid gap-4">
+      <Guard testid="line-chart-huge-failed">
+        <LineChart aria-label="A very long series for service-a" series={[{ label: "Errors", points }]} height={60} data-testid="line-chart-huge" />
+      </Guard>
+      <div className="w-40">
+        <Guard testid="sparkline-huge-failed">
+          <Sparkline points={values} aria-label="A very long series for service-b" data-testid="sparkline-huge" />
+        </Guard>
+      </div>
+    </div>
+  );
+}
+
+/** A link that is inert (disabled) must not run its own onClick or follow its href; a live one does. */
+function LinkProbe() {
+  const [inert, setInert] = useState(0);
+  const [live, setLive] = useState(0);
+  return (
+    <div className="grid gap-2">
+      <Row>
+        <Button asChild variant="secondary" disabled data-testid="inert-link">
+          <a href="#inert-followed" onClick={() => setInert((n) => n + 1)}>
+            Inert link
+          </a>
+        </Button>
+        <Button asChild variant="secondary" busy data-testid="busy-link">
+          <a href="#busy-followed" onClick={() => setInert((n) => n + 1)}>
+            Busy link
+          </a>
+        </Button>
+        <Button asChild variant="secondary" data-testid="live-link">
+          <a
+            href="#live-followed"
+            onClick={(e) => {
+              e.preventDefault();
+              setLive((n) => n + 1);
+            }}
+          >
+            Live link
+          </a>
+        </Button>
+      </Row>
+      <div className="text-xs text-muted-foreground">
+        <span data-testid="inert-clicks">Inert clicks: {inert}</span>, <span data-testid="live-clicks">live clicks: {live}</span>
+      </div>
+    </div>
+  );
+}
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -349,6 +443,16 @@ export default function Components() {
         <Checkbox label="Not available" disabled />
       </Section>
 
+      <Section title="Controls marked invalid by the caller">
+        <Caption>Each has aria-invalid and no error text</Caption>
+        <Input label="Probe input" aria-invalid data-testid="probe-input" />
+        <Textarea label="Probe textarea" aria-invalid data-testid="probe-textarea" />
+        <Select label="Probe select" options={SERVICES} aria-invalid data-testid="probe-select" />
+        <Switch label="Probe switch" aria-invalid data-testid="probe-switch" />
+        <Checkbox label="Probe checkbox" aria-invalid data-testid="probe-checkbox" />
+        <LinkProbe />
+      </Section>
+
       <Section title="Banner">
         <Banner data-testid="banner">Your changes are saved for project-x.</Banner>
         <Banner tone="warn" action={<Button variant="secondary">Reconnect</Button>}>
@@ -386,21 +490,31 @@ export default function Components() {
             <Sparkline points={[]} aria-label="No data for service-c" />
           </div>
         </Row>
+        <Caption>Values that are not numbers, and one value</Caption>
+        <Row>
+          <div className="w-40 text-[color:var(--err)]">
+            <Sparkline points={DIRTY_SPARK} marks={[2]} aria-label="Errors for service-a with gaps" data-testid="sparkline-dirty" />
+          </div>
+          <div className="w-40">
+            <Sparkline points={[7]} aria-label="One value for service-a" data-testid="sparkline-one" />
+          </div>
+          <div className="w-40">
+            <Sparkline points={[3, NaN, NaN, NaN]} aria-label="One value for service-b among gaps" data-testid="sparkline-one-gaps" />
+          </div>
+        </Row>
       </Section>
 
       <Section title="Line chart">
         <Panel>
           <LineChart
-            aria-label="Errors and requests for service-a, with two deploys"
+            aria-label="Errors and requests for service-a, with deploys"
             data-testid="line-chart"
             series={[
               { label: "Errors", points: HOURS.map((t, i) => [t, ERRORS[i]]) },
               { label: "Requests per minute", points: HOURS.map((t, i) => [t, TRAFFIC[i]]) },
             ]}
-            marks={[
-              { at: HOURS[4], label: "Deploy of service-a" },
-              { at: HOURS[8], label: "Deploy of service-b" },
-            ]}
+            marks={MARKS}
+            marksList
           />
         </Panel>
         <Panel>
@@ -408,6 +522,35 @@ export default function Components() {
         </Panel>
         <Panel>
           <LineChart aria-label="Errors for service-b, empty" series={[{ label: "Errors", points: [] }]} data-testid="line-chart-empty" />
+        </Panel>
+        <Caption>Values that are not numbers, out of time order</Caption>
+        <Panel>
+          <LineChart aria-label="Errors for service-a with gaps" series={[{ label: "Errors", points: DIRTY }]} height={100} data-testid="line-chart-dirty" />
+        </Panel>
+        <Caption>Small values</Caption>
+        <Panel>
+          <LineChart
+            aria-label="Error rate for service-a, small values"
+            series={[{ label: "Error rate", points: HOURS.map((t, i) => [t, [0.001, 0.002, 0.004, 0.003][i % 4]]) }]}
+            height={100}
+            data-testid="line-chart-small"
+          />
+        </Panel>
+        <Caption>One value</Caption>
+        <Panel>
+          <LineChart aria-label="Errors for service-a, one value" series={[{ label: "Errors", points: [[HOURS[3], 5]] }]} height={80} data-testid="line-chart-one" />
+        </Panel>
+        <Panel>
+          <LineChart
+            aria-label="Errors for service-b, one value among gaps"
+            series={[{ label: "Errors", points: [[HOURS[3], 5], [HOURS[4], NaN], [HOURS[5], NaN]] }]}
+            height={80}
+            data-testid="line-chart-one-gaps"
+          />
+        </Panel>
+        <Caption>200,000 points</Caption>
+        <Panel>
+          <HugeCharts />
         </Panel>
       </Section>
 
