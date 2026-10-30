@@ -93,6 +93,9 @@ def units():
            "3 hours", "1 day", "2 days", "6 days", "1 week", "3 weeks"],
        [fh.plain_wait(x) for x in (None, 0, 1, 5, 59, 60, 119, 180, 1440, 2880, 9007, 10080, 30240)])
     ck("9007 minutes is 6 days", fh.plain_wait(9007) == "6 days")
+    ck("plain_wait: the last minute before each unit changes",
+       [fh.plain_wait(x) for x in (1439, 10079)] == ["23 hours", "6 days"],
+       [fh.plain_wait(x) for x in (1439, 10079)])
     now = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
     ck("plain_ago: a span and 'just now' alone",
        fh.plain_ago(now - timedelta(minutes=27), now) == "27 minutes ago"
