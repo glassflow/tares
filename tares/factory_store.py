@@ -333,6 +333,20 @@ class FactoryStore:
                                     "ORDER BY position, created_at", [project]).fetchall()
         return [self._ms_row(r) for r in rows]
 
+    def milestones_by_project(self, projects: list[str]) -> dict[str, list[dict]]:
+        """{project: its milestones in order} in one query (the home page)."""
+        if not projects:
+            return {}
+        marks = ", ".join("?" for _ in projects)
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._MS_COLS} FROM milestones WHERE project IN "
+                                    f"({marks}) ORDER BY position, created_at",
+                                    list(projects)).fetchall()
+        out: dict[str, list[dict]] = {p: [] for p in projects}
+        for r in rows:
+            out[r[1]].append(self._ms_row(r))
+        return out
+
     def get_milestone(self, project: str, ref: str) -> dict | None:
         """A milestone of the project by id, Linear id, or name (any case)."""
         ref = (ref or "").strip()
@@ -626,6 +640,13 @@ class FactoryStore:
             rows = self.sc.execute(q + " ORDER BY number", vals).fetchall()
         out = [self._as_row(r) for r in rows]
         return [a for a in out if ticket in a["tickets"]] if ticket else out
+
+    def open_assumptions(self) -> list[dict]:
+        """Every open assumption of every project in one query, oldest first (the home page)."""
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._AS_COLS} FROM assumptions WHERE state = 'open' "
+                                    "ORDER BY made_at, project, number").fetchall()
+        return [self._as_row(r) for r in rows]
 
     def get_assumption(self, project: str, ref: str) -> dict | None:
         m = re.match(r"^[Aa]?(\d{1,6})$", (ref or "").strip())
