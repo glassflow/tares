@@ -190,7 +190,8 @@ async def api():
             check("platform has no home", r.status_code == 404 and r.json() == {"error": "no home on this edition"}, r.text)
             await cx.put(f"{B}/api/settings/edition", headers=root, json={"edition": "factory"})
             r = await cx.get(f"{B}/api/home", headers=root)
-            check("factory home", r.status_code == 200 and r.json() == {"edition": "factory"}, r.text)
+            check("factory home", r.status_code == 200 and r.json().get("edition") == "factory"
+                  and "headline" in r.json() and "projects" in r.json(), r.text)
             await cx.put(f"{B}/api/settings/edition", headers=root, json={"edition": "sre"})
     finally:
         stop(proc)

@@ -220,9 +220,9 @@ def project_progress(store, uid: str, tickets: list[dict] | None = None) -> dict
             "milestone": current, "progress": factory_mod.progress(tickets)}
 
 
-def register(app, store, h: SimpleNamespace) -> None:
+def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
     """`h` carries the daemon's helpers: err(exc, code), project_or_404(uid), by(request, body),
-    cc_source(), global_ids(create)."""
+    cc_source(), global_ids(create). Returns the crew readers the home page shares."""
 
     def deny(request: Request, action: str) -> None:
         why = factory_mod.may(caller(request), action)
@@ -1737,3 +1737,5 @@ def register(app, store, h: SimpleNamespace) -> None:
         ho = store.get_handover(uid) or {}
         rows = repo_rows(uid, ho.get("repos") or [])
         return {"repos": [r for r in rows if r["path"] or r["name"]]}
+
+    return SimpleNamespace(stations=stations, queue=queue, pace=pace, settings=settings)
