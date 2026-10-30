@@ -198,6 +198,29 @@ def pure():
        ("The proxy returns 502s.", "The deploy."))
     eq("a dash with no space is not a label", G.derive_parts("Next-day delivery is failing for EU orders.")["next_step"], None)
     eq("nor is it in the middle of a word pair", G.derive_parts("Root cause-analysis pending.")["likely_cause"], None)
+    the = G.derive_parts("1) What is failing: A.\n2) The most likely cause: B.\n3) The suggested next action: roll back.")
+    eq("a label may start with 'the'", (the["failing"], the["likely_cause"], the["next_step"]),
+       ("A.", "B.", "Roll back."))
+    what = G.derive_parts("1) What is failing: A.\n2) What is the most likely cause: B\n3) What is the suggested next action: C")
+    eq("a label may be asked as 'what is the ...'", (what["failing"], what["likely_cause"], what["next_step"]),
+       ("A.", "B", "C"))
+    eq("and the headline is the first part", G.derive_headline("1) What is the failing?\nThe proxy is down."),
+       "The proxy is down.")
+    for shape, part in (("**Root cause** analysis found a bad deploy.", "likely_cause"),
+                        ("**Next** week we look again.", "next_step"),
+                        ("*Next* time we look again.", "next_step"),
+                        ("**Recommendation** engine is slow.", "next_step"),
+                        ("**Most likely cause** analysis is pending.", "likely_cause")):
+        eq(f"a closed bold word before a lower-case word is not a label: {shape}", G.derive_parts(shape)[part], None)
+    eq("and the headline is the bold lead, as before", G.derive_headline("**Root cause** analysis found a bad deploy."),
+       "Root cause")
+    eq("a closed bold label before a digit counts", G.derive_parts("**Next step** 1) roll back.")["next_step"], "Roll back.")
+    eq("a closed bold label before a colon counts", G.derive_parts("**Next step**: roll back.")["next_step"], "Roll back.")
+    prose = G.derive_parts("1) What is failing: the proxy.\nNext deploy is at five.\n2) Most likely cause: B.")
+    eq("a plain prose line starting with a label word does not cut the part above it", prose["failing"],
+       "The proxy. Next deploy is at five.")
+    eq("a bold line that is a sentence ends the part above it",
+       G.derive_parts("1) What is failing: A.\n**Next** week we look again.")["failing"], "A.")
 
     print("== the title ==")
     now = datetime(2026, 10, 30, 16, 30, tzinfo=timezone.utc)

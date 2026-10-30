@@ -823,11 +823,12 @@ def derive_next_step(note: str | None) -> str | None:
 
 
 PART_MAX = 200
+_WHAT_IS = r"(?:what(?:\s+is|'?s)\s+)?(?:the\s+)?"   # "What is the ...", "The ...": a label may be asked as a question
 _PART_WORDS = {
-    "failing": r"what is failing(?: and since when)?|what'?s failing|what failed",
-    "likely_cause": r"(?:the )?(?:most )?(?:likely|probable) (?:root )?cause|root cause",
-    "next_step": r"suggested next actions?|suggested actions?|recommended actions?|"
-                 r"recommendations?|next steps?|next",
+    "failing": r"what(?:\s+is|'?s)\s+(?:the\s+)?failing(?: and since when)?|what failed",
+    "likely_cause": _WHAT_IS + r"(?:most )?(?:likely|probable) (?:root )?cause|" + _WHAT_IS + r"root cause",
+    "next_step": _WHAT_IS + r"(?:suggested next actions?|suggested actions?|recommended actions?|"
+                 r"recommendations?|next steps?)|next",
 }
 _PART_LINE = re.compile(
     r"^[ \t>]*(?:[-*+][ \t]+)?(?P<hash>#{1,6}[ \t]*)?(?P<bold>[*_]{1,2})?[ \t]*"
@@ -839,15 +840,19 @@ _PART_LEAD = re.compile(r"^[\s*_:?\u2014\u2013-]+")
 
 
 def _is_part_label(m) -> bool:
-    """A closed bold label ("**What is failing** ...") always counts. Any other label counts when it
-    ends its line or is followed by a colon, a spaced dash, a question mark or a qualifier such as
-    ", with the evidence:": "Root cause analysis", "Next.js" and "Next-day" are not parts."""
+    """A label counts when it ends its line or is followed by a colon, a spaced dash, a question mark
+    or a qualifier such as ", with the evidence:". A closed bold label ("**What is failing** ...")
+    also counts when a new sentence follows it: "**Root cause** analysis", "**Next** week" and
+    "Next.js" are not parts."""
     tail = m.group("tail")
     bold = m.group("bold") or m.group("bold2")
+    sentence = False
     if bold and tail.startswith(bold):
-        return True
+        tail = tail[len(bold):]
+        after = tail.lstrip(" \t")[:1]
+        sentence = tail[:1] in " \t" and (after.isupper() or after.isdigit())
     rest = tail.lstrip(" \t")
-    if not tail.strip("*_ \t") or rest[:1] in (":", "?"):
+    if sentence or not tail.strip("*_ \t") or rest[:1] in (":", "?"):
         return True
     if tail[:1] in " \t" and rest[:1] in "-\u2014\u2013":
         return True
@@ -864,10 +869,11 @@ def derive_parts(note: str | None) -> dict:
     for m in _PART_LINE.finditer(text):
         part = next(k for k in _PART_WORDS if m.group(k))
         tail = m.group("tail")
-        # "Next, restart it." and a "Root cause analysis" heading are sentences, not labels, but
-        # they still end the section above them
+        # "Next, restart it." and a "Root cause analysis" heading are sentences, not labels. A marked
+        # one (number, bold, heading) still ends the section above it; plain prose stays in it
         if not _is_part_label(m):
-            found.append((None, m.end(), m.start()))
+            if m.group("hash") or m.group("bold") or m.group("bold2") or m.group("num"):
+                found.append((None, m.end(), m.start()))
             continue
         q = _PART_QUALIFIER.match(tail)
         body_from = m.start("tail") + (q.end() if q else 0)
