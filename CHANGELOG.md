@@ -7,6 +7,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 - `GET /api/services` lists the services a cell receives data for.
+- `PATCH /api/services/{name}` renames, hides or merges a service, and `PUT /api/settings/service-labels` says which label names the services in each source. The computed list is kept for 30 seconds and every change drops it.
 - Each cell has an edition: factory, sre or platform. Existing cells stay as they are.
 - `GET /api/projects` and a project's summary say `ready_to_close` for a factory project that is still open with every ticket merged or otherwise finished.
 - Console: shadcn/ui primitives on Radix, themed with the Tares tokens, with a /dev/components gallery (part 1 of the component library).

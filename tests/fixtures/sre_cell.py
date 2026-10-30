@@ -106,7 +106,7 @@ def _agents(store: Store, now, investigator: bool, quiet_hours: int) -> dict:
         if investigator else None
     store.upsert_catalog_agent(
         "watcher", "watch-prod", "Look at the last 10 minutes of prod-otlp and say what changed.",
-        budget_usd=25.0, concludes=True, handoffs=handoffs)   # budget_period "month" once TR-770 has merged
+        budget_usd=25.0, budget_period="month", concludes=True, handoffs=handoffs)
     names = {"agents": ["watcher"], "triggers": ["watch-prod"], "project": uid}
     if investigator:
         store.upsert_catalog_agent(

@@ -25,6 +25,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from urllib.parse import parse_qs
 
 import httpx
@@ -5007,12 +5008,34 @@ def make_app() -> FastAPI:
                                         None, bool(hidden))
         return {"services": items, "updated_at": now_utc().isoformat()}
 
-    @app.get("/api/services/{name}")
+    @app.get("/api/services/{name:path}")
     async def get_service_route(name: str):
         item = await asyncio.to_thread(sre_mod.get_service, store, runtime.catalog, name)
         if item is None:
             raise HTTPException(status_code=404, detail=f"no service named {name}")
         return item
+
+    @app.patch("/api/services/{name:path}")
+    async def patch_service_route(name: str, request: Request, body: Any = Body(...)):
+        """{display?, hidden?, merged_into?}: a field left out stays, null clears it. Answers the
+        service as GET does. Admin: every non-GET route is, by _required_scope."""
+        who = _by(request) or "console"
+        try:
+            return await asyncio.to_thread(sre_mod.patch_service, store, runtime.catalog, name,
+                                           body, who)
+        except LookupError as e:
+            raise HTTPException(status_code=404, detail=str(e.args[0]))
+        except ValueError as e:
+            _err(e)
+
+    @app.put("/api/settings/service-labels")
+    async def put_service_labels(body: Any = Body(...)):
+        """{source name: label name, or null}: which label names the services in each source.
+        Replaces the stored mapping and answers it. Admin like every /api/settings route."""
+        try:
+            return await asyncio.to_thread(sre_mod.set_service_labels, store, runtime.catalog, body)
+        except ValueError as e:
+            _err(e)
 
     # what the Claude Code sessions spend: the plan's limits and tokens by project
     claude_usage.register(app, store)
