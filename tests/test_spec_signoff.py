@@ -632,6 +632,16 @@ async def main():
         ck("a second run changes nothing and adds no second entry", store.get_handover(lo) == ho
            and store.list_handover_overrides(lo) == first and len(first) == 1, str(first))
 
+        print("== two overrides at the same instant come back in one fixed order (not insertion order) ==")
+        tie = await make_project("ashish", "signoff-override-tie")
+        same = datetime.now(timezone.utc) - timedelta(days=1)
+        # inserted "zed" first, then "abe": the order the key list gives is by handed_by, so abe, zed
+        store.set_handover(tie, repos, None, "zed", same, pid["ashish"], None, "reason z")
+        store.set_handover(tie, repos, None, "abe", same, pid["ashish"], None, "reason a")
+        ck("a tie on the time is broken by who handed over, not by insertion order",
+           [o["reason"] for o in store.list_handover_overrides(tie)] == ["reason a", "reason z"],
+           str(store.list_handover_overrides(tie)))
+
         print("== an area owner answers and signs off with an ordinary person key (no admin scope) ==")
         for who in ("ashish", "kiran", "lee"):
             r = await call("root", "POST", "/api/keys", {"name": f"{who}-plain", "scopes": ["read", "ingest"],

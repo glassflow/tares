@@ -1731,7 +1731,10 @@ def make_app() -> FastAPI:
                 areas_mod.save(store, entries)
             except ValueError as e:
                 _err(e, 400)
-        return next(a for a in areas_mod.view(store) if a["repo"] == repo)
+            # the answer is built before the lock is let go: a delete in between would leave
+            # nothing to find
+            out = next(a for a in areas_mod.view(store) if a["repo"] == repo)
+        return out
 
     @app.delete("/api/areas/{owner}/{name}")
     def delete_area(owner: str, name: str):

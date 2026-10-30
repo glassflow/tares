@@ -1335,7 +1335,7 @@ class FactoryStore:
         with self._sread:
             rows = self.sc.execute(
                 "SELECT \"at\", reason, person_id, handed_by FROM handover_overrides WHERE project = ? "
-                "ORDER BY \"at\"", [project]).fetchall()
+                "ORDER BY \"at\", handed_by, person_id, reason", [project]).fetchall()
         refs = self._person_refs(r[2] for r in rows)
         return [{"at": r[0], "reason": r[1], "person": refs.get(r[2]),
                  "by_label": by_label(refs.get(r[2]), r[3])} for r in rows]

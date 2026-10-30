@@ -130,6 +130,17 @@ async def main():
                (await cx.get(f"{B}/api/crew/pace", headers=ROOT)).json()["state"] == "off")
             r = await cx.put(f"{B}/api/crew/settings", headers=KA, json={"kit": {"frozen": None}})
             ck("A cannot set the kit: 403 rather than a 200 that changes nothing", r.status_code == 403, r.text)
+            ck("... and the message says it belongs to the whole cell, to its own credential or local admin",
+               "The kit (the freeze) belongs to the whole cell: only the cell's own credential, "
+               "or its local admin, changes it" in r.text and "\u2014" not in r.text, r.text)
+            r = await cx.put(f"{B}/api/crew/settings", headers=KA, json={"kit": None, "pace": False})
+            ck("a kit of null is no change: A's other field in the same PUT is saved (200)",
+               r.status_code == 200 and r.json()["pace"] is False, f"{r.status_code} {r.text}")
+            r = await cx.put(f"{B}/api/crew/settings", headers=KA, json={"kit": {"frozen": None}, "pace": True})
+            ck("... while a kit with a value is still refused (403) and saves nothing",
+               r.status_code == 403 and (await cx.get(f"{B}/api/crew/settings", headers=KA)).json()["pace"] is False,
+               f"{r.status_code} {r.text}")
+            await cx.put(f"{B}/api/crew/settings", headers=KA, json={"pace": True})
 
             print("-- a personal doc has a size limit --")
             for name in ("agents", "memory"):

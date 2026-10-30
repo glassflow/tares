@@ -237,6 +237,10 @@ the project follows [Semantic Versioning](https://semver.org/).
   person, a key bound to nobody acts as that person (`local`), so it can do both for them.
   The contributor part of the spec skill now says what to do when an ordinary key is refused a
   ticket edit (pass it to the lead), and quotes the real 404 text of `my_work`.
+- The idle-wake scans of the reviewer and the orchestrator now look only at the caller's own tickets
+  (`/api/review-queue?mine=1`, `/api/desk?...&mine=1`), so a crew no longer wakes for another person's work.
+  The Claude Code retry marks are kept per person and crew, so two people's crews with the same
+  station names no longer overwrite each other's marks. A personal PUT of `{"kit": null}` is no change.
 
 ## [1.54.1] - 2026-10-29
 

@@ -38,7 +38,11 @@ B=links-app-build-m1
 STATIONS="crew-orchestrator crew-reviewer crew-releaser $B"
 idle_all() { local s; for s in $STATIONS; do agent $s '.state = "done"'; done; }
 # One watch round at SEC seconds, then every station idle again (as a woken one is when its turn ends).
-round() { SEC=$1; FACTORY_NOW=$((N0 + SEC)) "$F" crew watch --once >>"$T/watch.log" 2>&1; idle_all; }
+# The watch's curl goes through a shim that notes each URL asked for ($T/urls) and then calls the real one.
+mkdir -p "$T/shim"; REAL_CURL=$(command -v curl)
+printf '#!/bin/sh\nfor a in "$@"; do case "$a" in http*) echo "$a" >> "%s/urls" ;; esac; done\nexec "%s" "$@"\n' "$T" "$REAL_CURL" > "$T/shim/curl"
+chmod +x "$T/shim/curl"
+round() { SEC=$1; PATH="$T/shim:$PATH" FACTORY_NOW=$((N0 + SEC)) "$F" crew watch --once >>"$T/watch.log" 2>&1; idle_all; }
 # Rounds every $2 seconds up to $1 seconds, noting when each station was woken (the state file's last_wake).
 sim() { # until-seconds step
   local t s lw
@@ -339,6 +343,10 @@ rmdir "$gf"
 check "a restart that fails midway is not marked delivered either" '[ "$(wakes crew-reviewer work)" = "$rw" ] && ! wk crew-reviewer ".seen[]" | grep -q 8888888 && grep -q "could not wake crew-reviewer" "$T/watch.log"'
 round 40260; round 40320
 check "and it is sent once the failure is gone" '[ "$(wakes crew-reviewer work)" = $((rw + 1)) ]'
+
+# ---- two crews share a cell: the scans ask only for their own person's work ----
+check "the reviewer's scan asked for its own tickets only" 'grep -q "/api/review-queue?mine=1$" "$T/urls" && ! grep -q "/api/review-queue$" "$T/urls"'
+check "the orchestrator's scan asked for its own desk answers only" 'grep -q "/api/desk?state=answered&mine=1$" "$T/urls" && ! grep -q "/api/desk?state=answered$" "$T/urls"'
 
 # ---- turning it off: each station that gave up its tick is told once to take it back ----
 api POST "/api/projects/$P/tickets/T1/stage" '{"stage": "doing"}' >/dev/null

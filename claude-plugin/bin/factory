@@ -1627,7 +1627,7 @@ station_updated() { # station → when its session last did anything, epoch seco
 # What each role has to do, as {pending: [{key, text}], live: bool} (the orchestrator's also carries
 # the baseline it compares with). A key names one thing to do once. Fails when Tares can't be read.
 iw_scan_reviewer() { # the review queue's PRs without a current verdict, once per head
-  local q; q=$(tares_http GET /api/review-queue) || return 1
+  local q; q=$(tares_http GET "/api/review-queue?mine=1") || return 1
   jq -c '[(.queue // [])[] | select(.verdict == null or ((.verdict.current // false) | not))
       | {key: "rv:\(.project)/\(.ticket)@\(.head // "")",
          text: "\(.project_name // .project) \(.ticket) at \((.head // "")[0:7])"}]
@@ -1659,7 +1659,7 @@ iw_scan_releaser() { # RELEASE lines under Undelivered in the orchestrator's rep
 }
 iw_scan_orchestrator() { # desk answers closed, and projects handed over, since the baseline; the first look only sets it
   local desk projs base act
-  desk=$(tares_http GET '/api/desk?state=answered') || return 1
+  desk=$(tares_http GET '/api/desk?state=answered&mine=1') || return 1
   projs=$(tares_http GET /api/crew/projects) || return 1
   base=$(wake_read "$(crew_orchestrator)" | jq -c '.baseline')
   act=$(station_updated "$(crew_orchestrator)"); act=${act:-null}   # an answer the orchestrator itself recorded is not news to it
@@ -1962,7 +1962,7 @@ cc_retry_sync() {
   body=$(jq -c '{stations: from_entries}' <<<"$rows") || return 0
   tok=$(tares_token)
   { [ -n "$tok" ] && printf 'Authorization: Bearer %s\n' "$tok"; true; } | curl -sS -o /dev/null --max-time 3 -X PUT -H @- \
-    -H 'Content-Type: application/json' --data "$body" "$TARES/api/crew/claude-retry" 2>/dev/null || true
+    -H 'Content-Type: application/json' --data "$body" "$TARES/api/crew/claude-retry?crew=$(uri "$(crew_name 2>/dev/null)")" 2>/dev/null || true
 }
 
 # Restart a station on the Claude Code now on PATH, in the same conversation, and check its process

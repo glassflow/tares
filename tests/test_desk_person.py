@@ -384,6 +384,42 @@ async def main():
         out = json.loads(await mf.desk_answer(d14["label"], "Tabs, always"))
         ck("words typed in any session are found, as before", out["recorded"], out)
 
+        print("== the review queue can be narrowed to the caller's tickets (idle-wake scans) ==")
+        for t in (s1, s2, s3, b1):
+            store.update_ticket(t["id"], stage="review")
+
+        async def queue_of(who, qs=""):
+            async with mk() as cx:
+                r = await cx.get("/api/review-queue" + qs, headers=keys[who] if who else root)
+            return r
+
+        every = sorted([L["s1"], L["s2"], L["s3"], L["b1"]])
+        r = await queue_of("P")
+        ck("with no parameter the queue holds every project's tickets, as before",
+           r.status_code == 200 and sorted(q["ticket"] for q in r.json()["queue"]) == every, r.text)
+        r = await queue_of("P", "?mine=1")
+        ck("mine=1 as P: the ticket assigned to P and the unassigned one of P's project",
+           r.status_code == 200 and sorted(q["ticket"] for q in r.json()["queue"])
+           == sorted([L["s1"], L["s3"]]), r.text)
+        r = await queue_of("Q", "?mine=1")
+        ck("mine=1 as Q: Q's ticket in Shop and Q's own in Blog, none of P's",
+           r.status_code == 200 and sorted(q["ticket"] for q in r.json()["queue"])
+           == sorted([L["s2"], L["b1"]]), r.text)
+        r = await queue_of("R", "?mine=1")
+        ck("mine=1 as R, who has nothing in review: empty", r.status_code == 200
+           and r.json()["queue"] == [], r.text)
+        r = await queue_of("Q", "?mine=0")
+        ck("mine=0 is the whole queue", len(r.json()["queue"]) == 4, r.text)
+        async with mk() as cx:
+            r = await cx.post("/api/keys", json={"name": "no-person", "scopes": ["admin"]})
+            nokey = {"Authorization": f"Bearer {r.json()['secret']}"}
+            r = await cx.get("/api/review-queue?mine=1", headers=nokey)
+            ck("a key with no person is refused with the existing 403", r.status_code == 403
+               and "This key has no person" in r.text, f"{r.status_code} {r.text}")
+            r = await cx.get("/api/review-queue", headers=nokey)
+            ck("and without the parameter it still reads the whole queue", r.status_code == 200
+               and len(r.json()["queue"]) == 4, f"{r.status_code} {r.text}")
+
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
 

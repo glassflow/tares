@@ -431,6 +431,69 @@ async def main():
             ck("an empty list clears every mark",
                all(r["claude_retry"] is None for r in (await cx.get("/api/crew")).json()["stations"]))
 
+        print("== two people's crews with the same station names keep their own retry marks ==")
+        keys, who = {}, {}
+        async with mk() as cx:
+            for n, mail in (("A", "ann@example.com"), ("B", "bob@example.com")):
+                r = await cx.post("/api/keys", json={"name": f"{n}-laptop", "scopes": ["admin"],
+                                                     "person": {"email": mail, "name": n}})
+                keys[n] = {"Authorization": f"Bearer {r.json()['secret']}"}
+                who[n] = r.json()["person"]["id"]
+            for n, crewname in (("A", "alpha"), ("B", "beta")):
+                line = {**st_line(f"rt-{n}", "crew-reviewer", "reviewer"), "factory_crew": crewname,
+                        "crew": crewname}
+                r = await cx.post("/ingest/claude_code", content=json.dumps(line) + "\n",
+                                  headers={"Content-Type": "application/x-ndjson", **keys[n]})
+                ck(f"set up: {n}'s crew {crewname} has a crew-reviewer", r.status_code < 300, r.text)
+
+            def row_a(target, fails=1):
+                return {"target": target, "fails": fails, "next_at": 1790000000}
+
+            async def put(n, rows, crew=None):
+                return await cx.put("/api/crew/claude-retry", headers=keys[n], params={"crew": crew} if crew else {},
+                                    json={"stations": {"crew-reviewer": rows} if rows else {}})
+
+            async def mine(n):
+                r = await cx.get("/api/crew", headers=keys[n], params={"mine": 1})
+                j = r.json()
+                return ([x["claude_retry"] for x in j["stations"] if x["name"] == "crew-reviewer"],
+                        j["claude_retry"])
+
+            ck("A reports a mark for crew alpha", (await put("A", row_a("3.0.0", 2), "alpha")).status_code == 200)
+            ck("B reports a mark for crew beta, which does not remove A's",
+               (await put("B", row_a("4.0.0"), "beta")).status_code == 200)
+            rows_a, flat_a = await mine("A")
+            rows_b, flat_b = await mine("B")
+            ck("A sees A's mark on A's station row, and only there",
+               rows_a == [row_a("3.0.0", 2)] and flat_a == {"crew-reviewer": row_a("3.0.0", 2)}, f"{rows_a} {flat_a}")
+            ck("B sees B's mark on B's station row, and only there",
+               rows_b == [row_a("4.0.0")] and flat_b == {"crew-reviewer": row_a("4.0.0")}, f"{rows_b} {flat_b}")
+            await put("A", row_a("3.0.0", 3), "alpha")
+            rows_b, _ = await mine("B")
+            ck("A reporting again leaves B's mark as it was", rows_b == [row_a("4.0.0")], str(rows_b))
+            await put("A", None, "alpha")
+            rows_a, flat_a = await mine("A")
+            rows_b, flat_b = await mine("B")
+            ck("A's empty report clears A's marks only",
+               rows_a == [None] and flat_a == {} and rows_b == [row_a("4.0.0")]
+               and flat_b == {"crew-reviewer": row_a("4.0.0")}, f"{rows_a} {flat_a} {rows_b} {flat_b}")
+            await put("B", row_a("5.0.0"))
+            await put("B", None, "beta")
+            rows_b, _ = await mine("B")
+            ck("a person's crew-less mark covers a crew of theirs that has none of its own",
+               rows_b == [row_a("5.0.0")], str(rows_b))
+            await put("B", None)
+            await cx.put("/api/crew/claude-retry", json={"stations": {}})
+
+            store = app.state.store
+            store.set_setting("crew_claude_retry", json.dumps({"crew-reviewer": row_a("6.0.0", 4)}))
+            r = (await cx.get("/api/crew")).json()
+            ck("a mark stored the old way (one flat list) still reads, as the person local's",
+               r["claude_retry"] == {"crew-reviewer": row_a("6.0.0", 4)}
+               and all(x["claude_retry"] == row_a("6.0.0", 4) for x in r["stations"] if x["name"] == "crew-reviewer"
+                       and (x["person"] or {}).get("id") in (None, "local")), str(r["claude_retry"]))
+            await cx.put("/api/crew/claude-retry", json={"stations": {}})
+
 
         print("== ending a station ==")
         nd = {"Content-Type": "application/x-ndjson"}
