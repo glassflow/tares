@@ -79,12 +79,19 @@ class SreStore:
                 self.sc.execute(
                     "INSERT INTO services (display, hidden, merged_into, repos, updated_at, "
                     "updated_by, name) VALUES (?, ?, ?, ?, ?, ?, ?)", vals + [name])
+        self.clear_services_cache()   # every writer, not only the routes: a change shows at once
         return self.service_settings()[name]
+
+    def clear_services_cache(self) -> None:
+        """Forget the computed services (tares/sre.py keeps them for 30 seconds). The counter
+        lets a compute that started before the write see that it must not be kept."""
+        self.__dict__["services_gen"] = self.__dict__.get("services_gen", 0) + 1
+        self.__dict__.setdefault("services_cache", {}).clear()
 
     # ── services: what arrived, from the events (DuckDB only) ─────────────────
     def service_window_counts(self, spec: dict[str, str], since_10m, since_24h) -> list[dict]:
         """One scan of the last 24 hours. `spec` maps a source to the label that names a service
-        in it. One row per (source, label value, event type, is a metric): the count since
+        in it. One row per (source, label value, 'span' or None, is a metric): the count since
         `since_10m` (n10), the count since `since_24h` (n24) and the newest ingest_time. Events
         live in DuckDB only, so this reads self.con under self._lock and joins no state table."""
         from .store import _FIELD_RE, _label_expr
@@ -97,12 +104,13 @@ class SreStore:
         case = "CASE source " + " ".join(f"WHEN ? THEN {_label_expr(spec[s])}" for s in sources) \
                + " END"
         ph = ", ".join(["?"] * len(sources))
-        sql = (f"SELECT source, {case} AS svc, event_type, "
+        sql = (f"SELECT source, {case} AS svc, "
+               "CASE WHEN event_type = 'span' THEN 'span' END AS etype, "
                "json_extract_string(payload, '$.metricType') IS NOT NULL AS is_metric, "
                "COUNT(*) FILTER (WHERE ingest_time >= ?) AS n10, COUNT(*) AS n24, "
                "MAX(ingest_time) AS last "
                f"FROM events WHERE ingest_time >= ? AND source IN ({ph}) "
-               "GROUP BY source, svc, event_type, is_metric")
+               "GROUP BY source, svc, etype, is_metric")
         params = [*sources, since_10m, since_24h, *sources]
         with self._lock:
             rows = self.con.execute(sql, params).fetchall()

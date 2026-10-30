@@ -8,6 +8,7 @@ lives in the `services` table (tares/sre_store.py) and is applied here, in Pytho
 from __future__ import annotations
 
 import json
+import time
 from datetime import timedelta, timezone
 
 from .config import primary_label
@@ -19,6 +20,8 @@ NOT_SERVICES = {"finding", "memory", "claude_code", "reference", "github", "gith
 DEPLOY_CONNECTORS = ("github", "github_app")
 MAX_HOPS = 5
 MAX_LABELS = 20
+CACHE_SECONDS = 30
+cache_clock = time.monotonic   # the cache's clock; a test replaces it instead of sleeping
 
 
 def service_label(src, overrides: dict | None = None) -> str | None:
@@ -69,11 +72,18 @@ def canonical(name: str, settings: dict) -> str:
 
 
 def _overrides(store) -> dict:
+    """The stored label setting. An entry that is not a label name or null (a setting written by
+    hand, or before the PUT checked it) is left out, so that source keeps its default instead of
+    the whole list failing on a name the event query refuses."""
+    from .store import _FIELD_RE
     try:
         v = json.loads(store.get_setting(LABELS_SETTING) or "{}")
     except ValueError:
         return {}
-    return v if isinstance(v, dict) else {}
+    if not isinstance(v, dict):
+        return {}
+    return {k: lab for k, lab in v.items()
+            if lab is None or (isinstance(lab, str) and _FIELD_RE.match(lab))}
 
 
 def _iso(t) -> str | None:
@@ -149,6 +159,30 @@ def _compute(store, catalog, now) -> dict:
             "svc_sources": svc_sources}
 
 
+def _compute_cached(store, catalog, now) -> dict:
+    """_compute, kept for CACHE_SECONDS so a busy cell does not scan its events on every page
+    load. One entry per store serves the list (hidden or not) and every single service, because
+    hiding is applied afterwards. It is dropped by every service write (Store.set_service) and
+    is keyed by which sources hold services under which label, so a source added, removed or
+    relabelled, or a changed sre.service_labels setting, shows at once. A call with a `now` of
+    its own is never cached: that is a test or a replay asking about another moment."""
+    if now is not None:
+        return _compute(store, catalog, now)
+    overrides = _overrides(store)
+    key = tuple(sorted((s.name, s.connector, service_label(s, overrides) or "")
+                       for s in catalog.sources.values()))
+    cache = store.__dict__.setdefault("services_cache", {})
+    hit = cache.get("entry")
+    if hit and hit["key"] == key and cache_clock() - hit["at"] < CACHE_SECONDS:
+        return hit["value"]
+    gen = store.__dict__.get("services_gen", 0)
+    value = _compute(store, catalog, None)
+    if store.__dict__.get("services_gen", 0) == gen:   # no write while it ran
+        store.__dict__.setdefault("services_cache", {})["entry"] = {
+            "key": key, "at": cache_clock(), "value": value}
+    return value
+
+
 def _item(name: str, r: dict, settings: dict, include_hidden: bool) -> dict | None:
     st = settings.get(name) or {}
     if st.get("hidden") and not include_hidden:
@@ -177,7 +211,7 @@ def _item(name: str, r: dict, settings: dict, include_hidden: bool) -> dict | No
 
 def list_services(store, catalog, now=None, include_hidden: bool = False) -> list[dict]:
     """The services the cell receives data for, busiest first (events in 24 hours, then name)."""
-    c = _compute(store, catalog, now)
+    c = _compute_cached(store, catalog, now)
     out = [i for n, r in c["recs"].items()
            if (i := _item(n, r, c["settings"], include_hidden)) is not None]
     out.sort(key=lambda i: (-i["events_24h"], i["name"]))
@@ -188,7 +222,7 @@ def get_service(store, catalog, name: str, now=None) -> dict | None:
     """One service (hidden ones too, and a merged name resolves to what it is merged into): the
     list item plus by_feed (the numbers per feed) and the label names seen on its events in 24
     hours. None when the cell knows no such service."""
-    c = _compute(store, catalog, now)
+    c = _compute_cached(store, catalog, now)
     name = canonical(name, c["settings"])
     r = c["recs"].get(name)
     if r is None:
@@ -207,3 +241,103 @@ def get_service(store, catalog, name: str, now=None) -> dict | None:
     scope = {s: (label, [name, *item["merged"]]) for s, label in c["svc_sources"].items()}
     item["labels"] = store.service_label_names(scope, c["since_24h"], MAX_LABELS)
     return item
+
+
+# ── what a person changes ────────────────────────────────────────────────────
+PATCH_FIELDS = ("display", "hidden", "merged_into")
+MAX_DISPLAY = 100
+MAX_NAME = 200
+
+
+def check_merge(settings: dict, name: str, target: str) -> None:
+    """Refuse a merge of `name` into `target` that would lose or hide data. A service can only be
+    merged into one that is not merged elsewhere, and the chain it makes must stay within MAX_HOPS
+    hops, or the services at its far end would show up as separate rows."""
+    if target == name:
+        raise ValueError(f"{name} cannot be merged into itself: pick a different service")
+    onward = (settings.get(target) or {}).get("merged_into")
+    if onward:
+        raise ValueError(f"{target} is already merged into {onward}, so {name} cannot be merged "
+                         f"into it: merge {name} into {onward} instead")
+    links = {n: st["merged_into"] for n, st in settings.items() if st.get("merged_into")}
+    links[name] = target
+    for start in links:
+        cur, hops = start, 0
+        while cur in links:
+            cur, hops = links[cur], hops + 1
+            if hops > MAX_HOPS or cur == start:
+                raise ValueError(f"merging {name} into {target} makes a chain of more than "
+                                 f"{MAX_HOPS} services: merge {name} into the last one instead")
+
+
+def _text(body: dict, key: str, limit: int) -> str | None:
+    v = body[key]
+    if v is None:
+        return None
+    if not isinstance(v, str):
+        raise ValueError(f"{key} must be text or null, and it was {type(v).__name__}")
+    v = v.strip()
+    if len(v) > limit:
+        raise ValueError(f"{key} is {len(v)} characters long and can be at most {limit}")
+    return v or None
+
+
+def patch_service(store, catalog, name: str, body, by: str) -> dict:
+    """Change one service's display name, hidden flag or merge, and return it as get_service
+    does. A field left out stays as it is, null clears it. ValueError (400) when the body is
+    refused, LookupError (404) when the cell knows no such service. The body is checked before
+    the name, so a refused merge says why whatever the name is."""
+    if not isinstance(body, dict):
+        raise ValueError("the body must be a JSON object such as {\"hidden\": true}")
+    unknown = sorted(set(body) - set(PATCH_FIELDS))
+    if unknown:
+        raise ValueError(f"cannot change {', '.join(unknown)}: a service takes "
+                         + ", ".join(PATCH_FIELDS))
+    if not body:
+        raise ValueError("nothing to change: give one of " + ", ".join(PATCH_FIELDS))
+    name = str(name or "").strip()
+    if not name or len(name) > MAX_NAME:
+        raise ValueError("the service name is empty or too long")
+    changes: dict = {}
+    if "display" in body:
+        changes["display"] = _text(body, "display", MAX_DISPLAY)
+    if "hidden" in body:
+        if body["hidden"] is not None and not isinstance(body["hidden"], bool):
+            raise ValueError("hidden must be true, false or null")
+        changes["hidden"] = bool(body["hidden"])
+    settings = store.service_settings()
+    if "merged_into" in body:
+        target = _text(body, "merged_into", MAX_NAME)
+        if target is not None:
+            check_merge(settings, name, target)
+        changes["merged_into"] = target
+    # the same test GET /api/services/{name} applies, so a name that answers 404 there does here
+    if canonical(name, settings) not in _compute_cached(store, catalog, None)["recs"]:
+        raise LookupError(f"no service named {name}")
+    store.set_service(name, by, **changes)
+    return get_service(store, catalog, name)
+
+
+def set_service_labels(store, catalog, body) -> dict:
+    """Store which label names services in which source: {source name: label name, or null for a
+    source that holds no services}. The mapping replaces the one stored. ValueError (400) for a
+    source the catalog does not have or a label name that is not letters, digits and underscores."""
+    from .store import _FIELD_RE
+    if not isinstance(body, dict):
+        raise ValueError("the body must be a JSON object such as {\"prod-otlp\": \"namespace\"}")
+    unknown = sorted(s for s in body if s not in catalog.sources)
+    if unknown:
+        raise ValueError(f"no source named {', '.join(unknown)}: use the names of the sources "
+                         "in this cell")
+    out = {}
+    for source, label in body.items():
+        if label is None:
+            out[source] = None
+        elif isinstance(label, str) and _FIELD_RE.match(label):
+            out[source] = label
+        else:
+            raise ValueError(f"the label for {source} must be a label name (letters, digits and "
+                             "underscores) or null for a source that holds no services")
+    store.set_setting(LABELS_SETTING, json.dumps(out))
+    store.clear_services_cache()
+    return out
