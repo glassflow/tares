@@ -245,6 +245,10 @@ async def main():
             r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
                                                     "poll": "10s", "config": {"push": True}})
             ck("the claude_code source is made", r.status_code < 300, r.text)
+            h = await get_home(cx)
+            ck("a claude_code source counts as Claude Code connected, with no station",
+               h["crew"]["members"] == [] and h["tools"][2] == {"name": "Claude Code", "connected": True},
+               h["tools"])
 
             # project-x: building. Two merged, one in progress, one to do; two milestones
             px = json.loads(await m.create_project("project-x", "Ship the docs site"))["id"]
@@ -407,6 +411,15 @@ async def main():
                 fh.WAITING_BUILDERS.remove(one)
             ck("one thing: 'waits', for how long", h["headline"] ==
                "The crew is working on 1 ticket. 1 thing waits for you, for 2 days.", h["headline"])
+            fresh = lambda s, f, n: [fh.home_item("question", label="Q", title="new", detail="d", meta="m",
+                                                  since=n, now=n, actions=[])]
+            fh.WAITING_BUILDERS.append(fresh)
+            try:
+                h = await get_home(cx)
+            finally:
+                fh.WAITING_BUILDERS.remove(fresh)
+            ck("a thing that just arrived does not wait 'for just now'", h["headline"] ==
+               "The crew is working on 1 ticket. 1 thing waits for you, for less than a minute.", h["headline"])
 
             print("== the crew, not running or silent ==")
             now = datetime.now(timezone.utc)

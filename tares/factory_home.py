@@ -246,7 +246,7 @@ def _crew(stations: list[dict], settings: dict, open_ids: dict, tickets: dict, d
     elif silent is not None and silent > _STALE_MINUTES:
         summary = "Not heard from in " + plain_wait(silent)
     else:
-        summary = "Running, last heard " + plain_ago(heard, now)
+        summary = ("Running, last heard " + plain_ago(heard, now)) if heard else "Running"
     by_holder: dict[str, list[dict]] = {}
     for ts in tickets.values():
         for t in ts:
@@ -278,9 +278,10 @@ def _headline(crew: dict, projects: list[dict], finished: int, working: int, wai
         part = "The crew is idle with nothing on its desk."
     if not waiting:
         return part + " Nothing waits for you."
+    waited = "less than a minute" if waiting[0]["waited"] == "just now" else waiting[0]["waited"]
     if len(waiting) == 1:
-        return part + f" 1 thing waits for you, for {waiting[0]['waited']}."
-    return part + f" {len(waiting)} things wait for you, the oldest for {waiting[0]['waited']}."
+        return part + f" 1 thing waits for you, for {waited}."
+    return part + f" {len(waiting)} things wait for you, the oldest for {waited}."
 
 
 # ── the plan and the tools ────────────────────────────────────────────────────
@@ -347,7 +348,8 @@ def home(store, fx, now, credential_key: str = "open") -> dict:
             "plan": _plan(store, now, {p["id"]: p["name"] for p in projects}),
             "tools": [{"name": "GitHub", "connected": bool(store.list_github_credentials())},
                       {"name": "Linear", "connected": bool(linear)},
-                      {"name": "Claude Code", "connected": bool(stations)}],
+                      {"name": "Claude Code", "connected": bool(stations) or any(
+                          c["connector"] == "claude_code" for c in store.list_catalog_sources())}],
             "now": now.isoformat()}
 
 
