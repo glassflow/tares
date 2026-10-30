@@ -165,6 +165,19 @@ def pure():
        {"failing": None, "likely_cause": None, "next_step": None})
     eq("a labelled next step still wins",
        G.derive_next_step("Something broke.\n\nNext step: restart the pods."), "Restart the pods.")
+    rca = ("## Root cause analysis\n\nThe edge-proxy returns 502s since 14:02.\n\n"
+           "2) Most likely cause: the 14:02 deploy of service-a.\n\n3) Suggested next action: roll it back.")
+    eq("a Root cause analysis heading is not the likely cause",
+       G.derive_parts(rca)["likely_cause"], "The 14:02 deploy of service-a.")
+    eq("and it is not the headline either", G.derive_headline("## Root cause analysis\n\nThe proxy is down."),
+       "Root cause analysis")
+    eq("a heading that only starts with a label word gives no part",
+       G.derive_parts("## Root cause analysis\n\nIt broke."), {"failing": None, "likely_cause": None, "next_step": None})
+    eq("a part label with a dash counts", G.derive_parts("Root cause - the 14:02 deploy.")["likely_cause"],
+       "The 14:02 deploy.")
+    eq("Next.js is not a next step", G.derive_parts("Next.js builds are slow.")["next_step"], None)
+    eq("a heading on its own line still counts", G.derive_parts("## Next steps\n\nRoll it back.")["next_step"],
+       "Roll it back.")
 
     print("== the title ==")
     now = datetime(2026, 10, 30, 16, 30, tzinfo=timezone.utc)
@@ -194,6 +207,9 @@ def pure():
     eq("a watcher with nothing to say is quiet",
        G.outcome_of({**watcher, "outcome": "no_op"}, G.is_watcher_run(watcher, sched)), "quiet")
     eq("a watcher that hands on raised it", G.outcome_of(watcher, G.is_watcher_run(watcher, sched)), "raised")
+    for v in ("ok", "benign", "no_action"):
+        eq(f"a watcher finding with the verdict {v} is not raised",
+           G.outcome_of({**watcher, "verdict": v}, G.is_watcher_run(watcher, sched)), "investigated")
     eq("an investigator that says resolved",
        G.outcome_of({**handed, "verdict": "resolved"}, G.is_watcher_run(handed, sched)), "investigated")
     eq("an investigator that writes an rca",

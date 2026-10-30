@@ -776,7 +776,8 @@ def derive_headline(note: str | None) -> str | None:
     if not lines:
         return None
     first = lines[0]
-    if _PART_LINE.match(first):
+    fm = _PART_LINE.match(first)
+    if fm and _is_part_label(fm):
         # a note that opens on its sections ("1) What is failing"): the first part says it
         parts = derive_parts(note)
         part = parts["failing"] or parts["likely_cause"]
@@ -837,6 +838,14 @@ _PART_QUALIFIER = re.compile(r"^\s*(?:with|and|for|from|including|based on)\b[^:
 _PART_LEAD = re.compile(r"^[\s*_:\u2014\u2013-]+")
 
 
+def _is_part_label(m) -> bool:
+    """A label counts only when it ends its line or is followed by a colon or a dash (after any
+    qualifier such as "with the evidence:"): "Root cause analysis" and "Next.js" are not parts."""
+    tail = m.group("tail")
+    rest = tail.lstrip("*_ \t")
+    return not rest.strip() or rest[:1] in ":-\u2014\u2013" or bool(_PART_QUALIFIER.match(tail))
+
+
 def derive_parts(note: str | None) -> dict:
     """What is failing, the likely cause and the next step, from a note written in sections:
     numbered ("1) What is failing", "2) Most likely cause", "3) Suggested next action"), bold,
@@ -847,11 +856,8 @@ def derive_parts(note: str | None) -> dict:
     for m in _PART_LINE.finditer(text):
         part = next(k for k in _PART_WORDS if m.group(k))
         tail = m.group("tail")
-        stripped = tail.strip("*_ \t")
-        marked = bool(m.group("hash") or m.group("bold") or m.group("bold2") or m.group("num"))
-        # unmarked, it is a label only with a colon or when it stands alone on its line:
-        # "Next, restart it." is a sentence
-        if not marked and not (tail.lstrip("*_ \t").startswith(":") or not stripped):
+        # "Next, restart it." and a "Root cause analysis" heading are sentences, not labels
+        if not _is_part_label(m):
             continue
         q = _PART_QUALIFIER.match(tail)
         body_from = m.start("tail") + (q.end() if q else 0)
@@ -1014,14 +1020,15 @@ def is_watcher_run(run: dict, scheduled: set | None) -> bool:
 
 def outcome_of(run: dict, is_watcher: bool) -> str:
     """What a run came to: quiet (it had nothing to hand on), raised (a watcher's finding),
-    investigated (an agent that looked and found nothing to do) or note_written (any other
-    finding, one with no verdict included). The one rule for "is this an incident note"."""
+    investigated (a finding whose verdict says there is nothing to do, a watcher's included) or
+    note_written (any other finding, one with no verdict included). The one rule for "is this
+    an incident note"."""
     if run.get("outcome") == "no_op":
         return "quiet"
-    if is_watcher:
-        return "raised"
     if str(run.get("verdict") or "").strip().lower() in NO_ACTION_VERDICTS:
         return "investigated"
+    if is_watcher:
+        return "raised"
     return "note_written"
 
 
