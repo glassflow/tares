@@ -257,7 +257,7 @@ def upgrade():
     s.create_project("uc_plain", "custom", "Plain", {"objects": []})
     s.create_doc("uc_spec", "spec", "Spec", "x")
     s.create_ticket("uc_spec", "tares", "First")
-    s.con.execute("DELETE FROM settings WHERE key = 'factory_kind_filled'")
+    s.sc.execute("DELETE FROM settings WHERE key = 'factory_kind_filled'")
     s.con.close()
     s = Store(path)
     ck("the spec-made project is a software factory project",

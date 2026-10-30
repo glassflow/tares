@@ -56,6 +56,108 @@ t orchestrator mcp__plugin_tares_tares__desk_add '' allow
 t orchestrator mcp__plugin_slack_slack__slack_send_message '' deny
 t orchestrator Bash 'factory crew down' allow
 t reviewer Bash 'factory crew halt "x"' deny
+t builder Bash 'factory crew freeze' deny
+t builder Bash 'factory crew unfreeze' deny
+t orchestrator Bash 'factory crew freeze' allow
+t orchestrator Bash 'factory crew unfreeze' allow
+t builder Bash 'factory crew update' deny
+t builder Bash 'tares factory crew update --wait 60' deny
+t reviewer Bash 'factory crew restart' deny
+t releaser Bash 'tares factory crew restart' deny
+t orchestrator Bash 'factory crew update' allow
+t orchestrator Bash 'tares factory crew restart' allow
+# The CLI is matched by its name, whatever its path (an absolute path, a relative one, the plugin's bin).
+t builder Bash '/opt/glass0/tares/claude-plugin/bin/factory crew freeze' deny
+t orchestrator Bash '/opt/glass0/tares/claude-plugin/bin/factory crew freeze' allow
+t builder Bash '/opt/glass0/tares/claude-plugin/bin/factory crew unfreeze' deny
+t orchestrator Bash '/opt/glass0/tares/claude-plugin/bin/factory crew unfreeze' allow
+t builder Bash '/opt/glass0/tares/claude-plugin/bin/factory crew up' deny
+t orchestrator Bash '/opt/glass0/tares/claude-plugin/bin/factory crew up' allow
+t builder Bash '/opt/glass0/tares/claude-plugin/bin/factory crew down' deny
+t orchestrator Bash '/opt/glass0/tares/claude-plugin/bin/factory crew down' allow
+t builder Bash '/opt/glass0/tares/claude-plugin/bin/factory crew halt' deny
+t orchestrator Bash '/opt/glass0/tares/claude-plugin/bin/factory crew halt' allow
+t builder Bash '/opt/glass0/tares/claude-plugin/bin/factory crew resume' deny
+t orchestrator Bash '/opt/glass0/tares/claude-plugin/bin/factory crew resume' allow
+t builder Bash '/opt/glass0/tares/claude-plugin/bin/factory crew update' deny
+t orchestrator Bash '/opt/glass0/tares/claude-plugin/bin/factory crew update' allow
+t builder Bash '/opt/glass0/tares/claude-plugin/bin/factory crew restart' deny
+t orchestrator Bash '/opt/glass0/tares/claude-plugin/bin/factory crew restart' allow
+t builder Bash '/opt/glass0/tares/claude-plugin/bin/factory spawn x' deny
+t orchestrator Bash '/opt/glass0/tares/claude-plugin/bin/factory spawn x' allow
+t builder Bash '/opt/glass0/tares/claude-plugin/bin/factory retire x' deny
+t orchestrator Bash '/opt/glass0/tares/claude-plugin/bin/factory retire x' allow
+t builder Bash '/opt/glass0/tares/claude-plugin/bin/factory revive x' deny
+t orchestrator Bash '/opt/glass0/tares/claude-plugin/bin/factory revive x' allow
+t builder Bash '/opt/glass0/tares/claude-plugin/bin/factory restart x' deny
+t orchestrator Bash '/opt/glass0/tares/claude-plugin/bin/factory restart x' allow
+t builder Bash '/opt/glass0/tares/claude-plugin/bin/factory down' deny
+t orchestrator Bash '/opt/glass0/tares/claude-plugin/bin/factory down' allow
+t builder Bash '/opt/glass0/tares/claude-plugin/bin/factory halt' deny
+t orchestrator Bash '/opt/glass0/tares/claude-plugin/bin/factory halt' allow
+t builder Bash './claude-plugin/bin/factory crew freeze' deny
+t builder Bash 'cd x && /abs/bin/factory crew halt "y"' deny
+t builder Bash '$HOME/x/factory crew down' deny
+t builder Bash '/abs/bin/factory finish p' deny
+# ... and however the command is ended, wrapped or quoted.
+t builder Bash 'factory crew down; ls' deny
+t builder Bash 'factory crew down&&ls' deny
+t builder Bash 'factory crew down|cat' deny
+t builder Bash '(factory crew down)' deny
+t builder Bash '$(/abs/bin/factory crew up)' deny
+t builder Bash '"/abs/bin/factory" crew up' deny
+t builder Bash 'bash -c "factory crew down"' deny
+t builder Bash "bash -c 'factory crew halt'" deny
+t builder Bash 'factory halt; true' deny
+t builder Bash 'factory finish p;' deny
+# A verb closed by a backtick, >, } or # is still the verb.
+t builder Bash 'x=`factory crew down`' deny
+t builder Bash 'factory crew down>/dev/null' deny
+t builder Bash '{ factory crew down}' deny
+t builder Bash 'factory crew down#x' deny
+t orchestrator Bash 'x=`factory crew down`' allow
+t orchestrator Bash 'factory crew down>/dev/null' allow
+# A folder named factory given to a reader is an argument; a command that runs its arguments is not a reader.
+t builder Bash 'ls ~/factory down' allow
+t builder Bash 'ls -la ~/factory halt' allow
+t builder Bash 'ls "my dir" ~/factory down' allow
+t builder Bash "cat 'a b' ~/factory halt" allow
+# A reader inside a quote owns nothing: the quote ends before factory, which then runs with the assignment prefix.
+t builder Bash 'X="
+ls a" factory down' deny
+t builder Bash "X='; ls a' factory down" deny
+t builder Bash "X='
+ls a' factory down" deny
+t builder Bash 'FOO="x
+cat a" factory restart crew-reviewer' deny
+t builder Bash 'env FOO="
+cat a" /abs/bin/factory crew down' deny
+t builder Bash 'X="$(ls a)" factory down' deny
+t orchestrator Bash 'X="
+ls a" factory crew down' allow
+t builder Bash 'ls ~/factory; /abs/bin/factory crew down' deny
+t builder Bash 'ls x;/abs/bin/factory crew down' deny
+t builder Bash 'find . -exec /abs/bin/factory crew down {} \;' deny
+t builder Bash 'echo /abs/bin/factory crew down | sh' deny
+t builder Bash 'echo factory crew halt | bash' deny
+t builder Bash 'printf "%s\n" /abs/bin/factory crew down | sh' deny
+t builder Bash 'rg --pre /abs/bin/factory crew down x' deny
+t builder Bash 'rg --hostname-bin /abs/bin/factory crew down x' deny
+t orchestrator Bash 'factory crew down; ls' allow
+t orchestrator Bash '(factory crew down)' allow
+t orchestrator Bash '"/abs/bin/factory" crew up' allow
+t builder Bash 'factory crew updated' allow
+t builder Bash 'factory roster' allow
+t builder Bash 'factory finish p' deny
+t builder Bash 'ls /opt/glass0/tares/.factory/worktrees && cat .factory/halt.md' allow
+t builder Bash '/opt/glass0/tares/.factory/halt crew' allow
+# A halted crew refuses a new session however the CLI is spelled.
+H=$(mktemp -d); echo '{"reason":"test"}' > "$H/HALT"
+for c in 'factory spawn x' '/abs/bin/factory spawn x' '/abs/bin/factory revive x' 'factory spawn;ls' '(factory revive x)'; do
+  out=$(jq -n --arg c "$c" '{tool_name: "Bash", tool_input: {command: $c}}' | FACTORY_HOME=$H FACTORY_ROLE=orchestrator bash "$G")
+  grep -q 'crew is halted' <<<"$out" || { echo "FAIL halted | $c | expected the halt to refuse it"; fail=1; }
+done
+rm -rf "$H"
 # A quoted message is prose, but a command substituted inside it runs.
 t reviewer Bash 'git commit -m "$(gh pr merge 1)"' deny
 t reviewer Bash 'git commit -m "notes `gh pr merge 1`"' deny

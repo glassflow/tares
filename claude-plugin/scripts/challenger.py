@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""The challenger hooks: a second model (OpenAI Codex CLI, on this laptop) challenges Claude's plan
-and every commit in a session the user marked as a challenger session.
+"""The challenger hooks: a second model challenges Claude's plan and every commit in a session the
+user marked as a challenger session. The second model is the OpenAI Codex CLI on this laptop (the
+default) or Grok over the xAI API (`challenger_backend=grok`, see grok.py).
 
 Runs as three Claude Code hooks, all gated on the per-session marker the shipper writes when Claude
 calls the `set_session_flow` MCP tool (see ship.py). Nothing here ever asks Tares whether to run.
 
-- PostToolUse(ExitPlanMode): Codex critiques the plan. Findings come back to Claude as context so
+- PostToolUse(ExitPlanMode): the second model critiques the plan. Findings come back to Claude as context so
   it can revise before the user sees the plan. Never blocks: the user approves the plan anyway.
-- PostToolUse(Bash) after a successful `git commit`: `codex exec --sandbox read-only review --json --commit HEAD`.
+- PostToolUse(Bash) after a successful `git commit`: `codex exec --sandbox read-only review --json --commit HEAD`,
+  or one Grok call over the commit's patch and changed files.
   P1/P2 findings block Claude with the review (strict mode, the default) or come back as context
   (advise mode). Errors, timeouts and inconclusive reviews never block.
 - Stop: while the last review of this session's commit is FAIL, keep Claude in the fix loop
@@ -33,6 +35,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import grok
 from ship import CHALLENGER, _opt, config, read_flow, ship_lines, synthetic_line  # noqa: E402
 
 MAX_LOOPS = int(os.environ.get("TARES_CHALLENGER_MAX_LOOPS", "5"))      # Stop-hook continuations
@@ -74,6 +77,25 @@ def context(event: str, text: str) -> dict:
 
 def block(reason: str) -> dict:
     return {"decision": "block", "reason": reason[:MAX_OUTPUT]}
+
+
+def backend() -> str:
+    """codex (default) or grok: which second model challenges. The plugin option wins over the env."""
+    b = (_opt("challenger_backend") or os.environ.get("TARES_CHALLENGER_BACKEND") or "codex")
+    return "grok" if b.strip().lower() == "grok" else "codex"
+
+
+def who() -> str:
+    return "Grok" if backend() == "grok" else "Codex"
+
+
+def reviewer_ready() -> str:
+    """Empty when the chosen backend can run; otherwise what to tell Claude."""
+    if backend() == "grok":
+        return "" if grok.api_key() else ("the xAI key is not set (the plugin's xai_api_key option or "
+                                          "XAI_API_KEY)")
+    return "" if codex_bin() else ("the Codex CLI is not installed (npm install -g @openai/codex && "
+                                   "codex login)")
 
 
 def codex_bin() -> str:
@@ -295,6 +317,14 @@ def review_plan(hook: dict, cfg: dict) -> dict:
     if not text.strip():
         return {}
     cwd = hook.get("cwd") or os.getcwd()
+    if backend() == "grok":
+        r = grok.review_plan(text, TIMEOUT)
+    else:
+        r = _codex_plan(text, cwd)
+    return _plan_verdict(hook, cfg, name, r)
+
+
+def _codex_plan(text: str, cwd: str) -> dict:
     with tempfile.NamedTemporaryFile("w", suffix=".md", prefix="tares-plan-", delete=False) as f:
         f.write(text)
         path = f.name
@@ -306,22 +336,27 @@ def review_plan(hook: dict, cfg: dict) -> dict:
             os.remove(path)
         except OSError:
             pass
+    return r
+
+
+def _plan_verdict(hook: dict, cfg: dict, name: str, r: dict) -> dict:
     # a plan is a sketch: only P1 counts as blocking here (P2 on a commit blocks, on a plan it
     # is advice), otherwise every plan comes back with a long list of "blocking" items
     n, blocking, _ = counts(r["findings"], PLAN_BLOCKING)
     verdict = r["verdict"] or ("FAIL" if blocking else "PASS")
     ship_challenge(cfg, hook, "challenge_plan", {
+        "reviewer": backend(), "model": r.get("model") or "",
         "verdict": verdict, "plan": name, "finding_count": n, "blocking_count": blocking,
         "waived_count": 0, "duration_seconds": r["duration_seconds"], "prose": r["prose"][:4000],
         "findings": [{"priority": f["priority"], "title": f["title"], "waived": False} for f in r["findings"]]})
     if verdict in ("TIMEOUT", "ERROR"):
-        return context("PostToolUse", f"Codex could not review the plan ({verdict.lower()}): {r['prose']} "
+        return context("PostToolUse", f"{who()} could not review the plan ({verdict.lower()}): {r['prose']} "
                        "You are not blocked; mention it to the user.")
-    head = (f"Codex challenged the plan and found {blocking} blocking finding(s) ({n} total). Revise "
+    head = (f"{who()} challenged the plan and found {blocking} blocking finding(s) ({n} total). Revise "
             "the plan for the P1 items before presenting it, or tell the user why you disagree. "
             "P2 and P3 items are advice; take what is worth it."
             if blocking else
-            f"Codex challenged the plan: no blocking findings ({n} advisory). Mention that the plan "
+            f"{who()} challenged the plan: no blocking findings ({n} advisory). Mention that the plan "
             "was challenged when you present it.")
     return context("PostToolUse", head + "\n\n" + r["prose"])
 
@@ -355,7 +390,10 @@ def review_commit(hook: dict, cfg: dict, session_id: str) -> dict:
     strict = (_opt("challenger_mode") or "strict").strip().lower() != "advise"
     write_state(gd, session_id, "RUNNING", sha)
 
-    r = run_codex(["exec", *sandbox_args(), "review", "--json", "--commit", sha], root)
+    if backend() == "grok":
+        r = grok.review_commit(root, sha, TIMEOUT)
+    else:
+        r = run_codex(["exec", *sandbox_args(), "review", "--json", "--commit", sha], root)
     apply_waivers(gd, r["findings"])
     n, blocking, waived = counts(r["findings"])
     verdict = r["verdict"]
@@ -388,10 +426,11 @@ def review_commit(hook: dict, cfg: dict, session_id: str) -> dict:
              "short_sha": short, "branch": git(root, "rev-parse", "--abbrev-ref", "HEAD"),
              "session_id": session_id, "verdict": verdict, "capped": capped, "round": rnd,
              "findings": r["findings"], "finding_count": n, "blocking_count": blocking,
-             "waived_count": waived, "review_prose": r["prose"][:2000], "codex_exit": r["exit"],
+             "waived_count": waived, "review_prose": r["prose"][:2000], "codex_exit": r["exit"], "reviewer": backend(),
              "duration_seconds": r["duration_seconds"]}
     record(gd, entry)
     ship_challenge(cfg, hook, "challenge_commit", {
+        "reviewer": backend(), "model": r.get("model") or "",
         "verdict": verdict, "sha": sha, "round": rnd, "finding_count": n, "blocking_count": blocking,
         "waived_count": waived, "duration_seconds": r["duration_seconds"], "capped": capped,
         "strict": strict, "prose": r["prose"][:4000],
@@ -400,23 +439,25 @@ def review_commit(hook: dict, cfg: dict, session_id: str) -> dict:
 
     if verdict == "TIMEOUT":
         clear_state(gd, session_id)
-        return context("PostToolUse", f"Codex review of commit {short} timed out after {TIMEOUT}s and was "
+        return context("PostToolUse", f"{who()} review of commit {short} timed out after {TIMEOUT}s and was "
                        "skipped. You are not blocked. Mention the timeout to the user.")
     if verdict == "ERROR":
         clear_state(gd, session_id)
-        return context("PostToolUse", f"Codex review of commit {short} errored and produced no verdict. "
+        return context("PostToolUse", f"{who()} review of commit {short} errored and produced no verdict. "
                        f"You are not blocked.\n\n{r['prose']}\n\nMention the error to the user; likely a "
-                       "Codex auth or rate-limit issue.")
+                       f"{who()} auth or rate-limit issue.")
     if verdict == "INCONCLUSIVE":
         clear_state(gd, session_id)
-        return context("PostToolUse", f"Codex review of commit {short} was INCONCLUSIVE: it returned no "
+        return context("PostToolUse", f"{who()} review of commit {short} was INCONCLUSIVE: it returned no "
                        "findings but never inspected the code (its sandbox probably failed to start). "
-                       "This is NOT a clean pass. You are not blocked. Tell the user; they can set the "
-                       "plugin's codex_sandbox option to danger-full-access and amend the commit to "
-                       "re-run the review.\n\nReview output:\n" + r["prose"])
+                       "This is NOT a clean pass. You are not blocked. Tell the user; " + (
+                       "Grok gave no explicit verdict, so amend the commit to re-run the review."
+                       if backend() == "grok" else
+                       "they can set the plugin's codex_sandbox option to danger-full-access and amend "
+                       "the commit to re-run the review.") + "\n\nReview output:\n" + r["prose"])
     if verdict == "FAIL" and capped:
         clear_state(gd, session_id, rounds=True)
-        return context("PostToolUse", f"Codex review of commit {short} still has findings, but this is "
+        return context("PostToolUse", f"{who()} review of commit {short} still has findings, but this is "
                        f"review round {rnd} of a max of {MAX_ROUNDS} since the last pass; the loop is "
                        "CAPPED and no longer blocking. Treat the findings as ADVISORY: fix what you judge "
                        "real, note the rest to the user, and proceed.\n\n" + r["prose"])
@@ -427,17 +468,17 @@ def review_commit(hook: dict, cfg: dict, session_id: str) -> dict:
         fix = ("Fix the issues and fold them into the reviewed commit with `git commit --amend` (it is "
                "not on any remote)." if not pushed else
                "Fix the issues in a new commit (the reviewed commit is already on a remote; do not amend).")
-        return block(f"Codex review of commit {short} found issues (fix round {rnd} of max {MAX_ROUNDS})"
+        return block(f"{who()} review of commit {short} found issues (fix round {rnd} of max {MAX_ROUNDS})"
                      f"{waive_note}:\n\n{r['prose']}\n\n{fix} Do NOT re-run the review yourself; it runs "
                      "on your next commit. Do NOT push until the review passes. If the user disagrees "
                      "with a finding, they can suppress it with /tares:challenger-waive.")
     if verdict == "FAIL":
         clear_state(gd, session_id)
-        return context("PostToolUse", f"Codex review of commit {short} found {blocking} blocking "
+        return context("PostToolUse", f"{who()} review of commit {short} found {blocking} blocking "
                        f"finding(s){waive_note}. Advise mode: you are not blocked. Fix what you judge "
                        "real and tell the user the rest.\n\n" + r["prose"])
     clear_state(gd, session_id)
-    return context("PostToolUse", f"Codex review of commit {short} passed{waive_note}.\n\n{r['prose']}\n\n"
+    return context("PostToolUse", f"{who()} review of commit {short} passed{waive_note}.\n\n{r['prose']}\n\n"
                    "Ask the user if they want to push.")
 
 
@@ -474,7 +515,7 @@ def stop_loop(hook: dict, session_id: str) -> dict:
         clear_state(gd, session_id)
         return context("Stop", f"The challenger fix loop reached its max of {MAX_LOOPS} iterations without "
                        "passing. Stopping. Tell the user what is still open.")
-    return block("The Codex review of your last commit found issues that still need fixing. Fix them and "
+    return block(f"The {who()} review of your last commit found issues that still need fixing. Fix them and "
                  "commit (amend the reviewed commit if it is not pushed, otherwise a new commit). Do NOT "
                  "re-run the review yourself; it runs on your commit. Do not stop until the review passes.")
 
@@ -557,14 +598,14 @@ def main() -> None:
             out({}); return
         tool = hook.get("tool_name")
         if tool == "ExitPlanMode":
-            if not codex_bin():
-                out(context("PostToolUse", "The challenger is on for this session but the Codex CLI is not "
-                            "installed (npm install -g @openai/codex && codex login). The plan was not "
+            if reviewer_ready():
+                out(context("PostToolUse", f"The challenger is on for this session but {reviewer_ready()}. "
+                            "The plan was not "
                             "challenged; tell the user."))
                 return
             out(review_plan(hook, cfg)); return
         if tool == "Bash" and is_commit(hook):
-            if not codex_bin():
+            if reviewer_ready():
                 out({}); return
             out(review_commit(hook, cfg, session_id)); return
         out({})

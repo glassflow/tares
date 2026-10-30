@@ -5,13 +5,14 @@ through here; the MCP server never touches the DB directly.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import secrets
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import duckdb
 
@@ -21,6 +22,7 @@ from .factory_store import FACTORY_SCHEMA, FactoryStore
 
 # the URL a Tares agent's subscription had before the wiring moved onto projects (config.agent_url)
 AGENT_PREFIX = "tares://agent/"
+from . import state_db
 from .reads import parse_window
 
 _SCHEMA = """
@@ -345,7 +347,7 @@ CREATE TABLE IF NOT EXISTS project_sessions (
   PRIMARY KEY (project, session)
 );
 -- What a Claude Code session is doing now (TR-405 follow-up), from the plugin's session_state
--- lines: working, waiting (for the person, `reason` says why) or ended. One row per session.
+-- lines: working, idle (a turn ended), waiting (for the person, `reason` says why) or ended. One row per session.
 CREATE TABLE IF NOT EXISTS session_states (
   session    TEXT PRIMARY KEY,
   state      TEXT,
@@ -640,7 +642,7 @@ def _scope_sql(scope) -> tuple[str, list]:
     return sql + ")", params
 
 
-def _exclude_sql(exclude, sources=None) -> tuple[str, list]:
+def _exclude_sql(exclude, sources=None, sessions=None) -> tuple[str, list]:
     """Rows that belong to projects the caller cannot see -> ('AND ...' SQL, params). `exclude` is
     {"ids": [project ids], "names": [project names], "shared": [the shared finding and
     memory sources, or None for every source]}, or None/empty for no filter (the common
@@ -648,7 +650,9 @@ def _exclude_sql(exclude, sources=None) -> tuple[str, list]:
     `tares_project` label names one of them, when its session (key) is linked to one in
     project_sessions, or when a shared finding or memory row was recorded in one (payload
     `project`). A row with none of those is kept. `sources` is what the query reads: the payload
-    test is left out when none of them is a shared source."""
+    test is left out when none of them is a shared source. `sessions` is the keys linked in
+    project_sessions to those projects (Store._exclude_sql reads them from the state, which may
+    be Postgres while the events are in DuckDB)."""
     if not exclude or not (exclude.get("ids") or exclude.get("names")):
         return "", []
     ids = list(exclude.get("ids") or [])
@@ -671,10 +675,11 @@ def _exclude_sql(exclude, sources=None) -> tuple[str, list]:
     else:
         pay, pparams = "", []
     sql = (f" AND NOT COALESCE(lower(json_extract_string(labels, '$.tares_project')) "
-           f"IN ({ph(len(both))}), FALSE){pay}"
-           f" AND NOT COALESCE(key_value IN "
-           f"(SELECT session FROM project_sessions WHERE project IN ({ph(len(ids))})), FALSE)")
-    return sql, [*both, *pparams, *ids]
+           f"IN ({ph(len(both))}), FALSE){pay}")
+    sessions = list(sessions or [])
+    if sessions:
+        sql += f" AND NOT COALESCE(key_value IN ({ph(len(sessions))}), FALSE)"
+    return sql, [*both, *pparams, *sessions]
 
 
 def _cgroup_mem_bytes() -> int | None:
@@ -699,19 +704,24 @@ def _file_size(path: str) -> int:
         return 0
 
 
+DEFAULT_DUCKDB_MEMORY_LIMIT = "1GB"
+
+
 def _bound_duckdb_memory(con, path: str) -> None:
     """Bound DuckDB to the CONTAINER, not the host. Without a memory_limit DuckDB sizes itself to
     the node's RAM, so one heavy scan over a grown dataset blows past the cgroup limit and the
     process is OOMKilled (this took the dev cell down at ~1M events). With a limit set, DuckDB
     spills intermediates to temp_directory (on the data volume) instead of dying. Override with
-    TARES_DUCKDB_MEMORY_LIMIT (e.g. "800MB"); no-op locally when there's no cgroup limit."""
+    TARES_DUCKDB_MEMORY_LIMIT (e.g. "800MB"). With no container limit (`tares up` on a laptop)
+    the cap is DEFAULT_DUCKDB_MEMORY_LIMIT: DuckDB's own default is 80% of the machine's RAM, and
+    its cache grew to about 4 GB on a Mac and never shrank."""
     limit = os.getenv("TARES_DUCKDB_MEMORY_LIMIT")
     if not limit:
         cg = _cgroup_mem_bytes()
         if cg:
             limit = f"{max(256, int(cg * 0.6) // (1024 * 1024))}MB"   # 60% of the container
     if not limit:
-        return
+        limit = DEFAULT_DUCKDB_MEMORY_LIMIT
     try:
         con.execute(f"PRAGMA memory_limit='{limit}'")
         con.execute(f"PRAGMA threads={os.getenv('TARES_DUCKDB_THREADS', '2')}")
@@ -734,11 +744,14 @@ class StoreUnavailable(RuntimeError):
 
 
 class Store(FactoryStore, ClaudeUsageStore):
-    def __init__(self, path: str = "tares.duckdb"):
-        # All access is from taresd's event loop thread; the lock is belt-and-suspenders since
-        # FastAPI may run sync work in a threadpool.
+    def __init__(self, path: str = "tares.duckdb", state_dsn: str | None = None):
+        # One DuckDB connection, used under self._lock from whichever thread a request runs on.
+        # State (every table but state_db.EVENT_TABLES) is read through self.sc: the same DuckDB
+        # connection and lock by default; with a state_dsn, Postgres, where reads take no lock and
+        # run in parallel and writes take self._swrite, so read-then-write steps stay atomic.
         self._lock = threading.Lock()
         self.path = path          # kept so usage() can size the db file and its WAL
+        self.state_dsn = state_dsn
         # Opening the DB is the one startup step that routinely fails for reasons outside the
         # process (another daemon holds the lock, the file is unreadable, the volume is full).
         # Fail as StoreUnavailable so the caller can degrade; the original error is kept as the
@@ -747,29 +760,49 @@ class Store(FactoryStore, ClaudeUsageStore):
             self.con = duckdb.connect(path)
         except Exception as e:
             raise StoreUnavailable(f"cannot open the database at {path}: {e}", path) from e
+        self._use_duckdb_state()
         try:
             _bound_duckdb_memory(self.con, path)
-            for stmt in _SCHEMA.strip().split(";"):
-                if stmt.strip():
-                    self.con.execute(stmt)
-            for stmt in _MIGRATIONS:
+            for stmt in self._ddl():
                 self.con.execute(stmt)
-            for stmt in FACTORY_SCHEMA + CLAUDE_USAGE_SCHEMA:
-                self.con.execute(stmt)
-            self._rename_query_log_scope()
-            self._query_log_projects()
-            self._fold_views()
-            self._migrate_claude_code_repo_label()
-            self._normalize_projects()
-            self._lineage_upgrade()
-            self._wiring_upgrade()
-            self._skills_upgrade()
-            self._factory_kind_upgrade()
-            self._factory_upgrade()
-            self._people_upgrade()
-            self._claude_usage_fill()
-            self._init_source_stats()
-            self._init_entity_counts()
+            pg = None
+            moved_at = self.con.execute(
+                "SELECT value FROM settings WHERE key = 'state_moved_to_postgres'").fetchone()
+            if moved_at and not state_dsn:
+                # the DuckDB copy stopped at the move; serving it would quietly lose everything
+                # written since, so say what is missing instead
+                raise StoreUnavailable(
+                    f"this cell's state moved to Postgres on {moved_at[0]}; TARES_STATE_DSN is not "
+                    "set, so it cannot be read. Set it again and restart.", path)
+            if state_dsn:
+                pg = state_db.PgState(state_dsn)
+                for stmt in state_db.state_ddl(self._ddl()):
+                    pg.execute(stmt)
+                if state_db.moved(pg):
+                    self._use_pg_state(pg)        # upgrades below run on the moved state
+                    if not moved_at:
+                        # the move committed but the start stopped before marking DuckDB: mark
+                        # it now, so a later start without the DSN still refuses
+                        self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
+                                         "('state_moved_to_postgres', ?, now())",
+                                         [now_utc().isoformat()])
+                elif moved_at:
+                    # this cell moved before, yet this database holds none of it (recreated,
+                    # restored from before the move, or the wrong DSN): moving again would put
+                    # the DuckDB copy from the day of the move in place of everything since
+                    raise StoreUnavailable(
+                        f"this cell's state moved to Postgres on {moved_at[0]}, but the database "
+                        "TARES_STATE_DSN points at does not hold it. Point it at the cell's "
+                        "state database and restart.", path)
+            self._upgrade()
+            if pg is not None and self.sc is self.con:
+                # first start with a state database: the state moves over once, then is read
+                # from Postgres only; the DuckDB copy is left as it was, as a fallback
+                state_db.move(self.con, pg, self._state_tables())
+                self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
+                                 "('state_moved_to_postgres', ?, now()) ON CONFLICT (key) DO "
+                                 "UPDATE SET value = excluded.value", [now_utc().isoformat()])
+                self._use_pg_state(pg)
             # Write the upgrade into the database file now. Left in the WAL, the new columns on
             # agent_runs (a table with an index) replay after a hard stop into a corrupted index:
             # "Corrupted ART index", and every query after it fails until a restart.
@@ -777,13 +810,51 @@ class Store(FactoryStore, ClaudeUsageStore):
         except Exception as e:
             raise StoreUnavailable(f"cannot initialize the database at {path}: {e}", path) from e
 
+    def _use_duckdb_state(self) -> None:
+        self.sc, self._sread, self._swrite = self.con, self._lock, self._lock
+
+    def _use_pg_state(self, pg) -> None:
+        self.sc, self._sread, self._swrite = pg, contextlib.nullcontext(), threading.Lock()
+
+    @staticmethod
+    def _ddl() -> list[str]:
+        return ([s for s in _SCHEMA.strip().split(";") if s.strip()] + list(_MIGRATIONS)
+                + list(FACTORY_SCHEMA) + list(CLAUDE_USAGE_SCHEMA))
+
+    def _state_tables(self) -> list[str]:
+        return sorted(t for t in self._tables_of(self.con) if t not in state_db.EVENT_TABLES)
+
+    def _upgrade(self) -> None:
+        """The data upgrades every open runs; each is idempotent."""
+        self._rename_query_log_scope()
+        self._query_log_projects()
+        self._fold_views()
+        self._migrate_claude_code_repo_label()
+        self._normalize_projects()
+        self._lineage_upgrade()
+        self._wiring_upgrade()
+        self._skills_upgrade()
+        self._factory_kind_upgrade()
+        self._factory_upgrade()
+        self._people_upgrade()
+        self._claude_usage_fill()
+        self._challenges_fill()
+        self._init_source_stats()
+        self._init_entity_counts()
+
+    @staticmethod
+    def _tables_of(con) -> set:
+        return {r[0] for r in con.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = current_schema()").fetchall()}
+
     def _query_log_projects(self) -> None:
         """Reads logged before the project column: the ones that named a project in their selector
         (`tares_project=<id or name>`) get it, so the log still hides a private project's. The rest
         cannot be told apart and stay unattributed. A row that named something no project answers
         to is marked with '' (read like no project everywhere) so later boots do not look at it
         again."""
-        rows = self.con.execute(
+        rows = self.sc.execute(
             "SELECT id, key_value FROM query_log WHERE project IS NULL "
             "AND key_value LIKE '%tares_project=%'").fetchall()
         if not rows:
@@ -796,31 +867,32 @@ class Store(FactoryStore, ClaudeUsageStore):
             m = re.search(r"tares_project=([^,]*)", key or "")
             ref = m.group(1).strip().lower() if m else ""
             ids = by_ref.get(ref, []) if ref else []
-            self.con.execute("UPDATE query_log SET project = ? WHERE id = ?",
+            self.sc.execute("UPDATE query_log SET project = ? WHERE id = ?",
                              [",".join(ids), qid])
 
     def _people_upgrade(self) -> None:
         """The person `local` always exists: the one person of a cell with auth off, and the one
         an unbound key acts as while nobody else is on the cell."""
-        self.con.execute(
+        self.sc.execute(
             "INSERT INTO people (id, name, email, emails, github, is_admin, created_at, created_via) "
             "SELECT 'local', 'You', NULL, '[]', NULL, TRUE, ?, 'boot' "
             "WHERE NOT EXISTS (SELECT 1 FROM people WHERE id = 'local')", [now_utc()])
 
     def _columns(self, table: str) -> set:
-        return {r[0] for r in self.con.execute(
-            "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
-            [table]).fetchall()}
+        con = self.con if table in state_db.EVENT_TABLES else self.sc
+        return {r[0] for r in con.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = ?", [table]).fetchall()}
 
     def _tables(self) -> set:
-        return {r[0] for r in self.con.execute(
-            "SELECT table_name FROM information_schema.tables").fetchall()}
+        """The state tables where the state lives, plus the event tables."""
+        return self._tables_of(self.sc) | (self._tables_of(self.con) & state_db.EVENT_TABLES)
 
     def _rename_query_log_scope(self) -> None:
         """query_log.view named what an agent read through when views existed; it is now the
         read's scope (a trigger, an agent tool, "(read)"). Renamed in place so the log is kept."""
         if "view" in self._columns("query_log") and "scope" not in self._columns("query_log"):
-            self.con.execute("ALTER TABLE query_log RENAME COLUMN view TO scope")
+            self.sc.execute("ALTER TABLE query_log RENAME COLUMN view TO scope")
 
     def _fold_views(self) -> None:
         """Views were removed: a trigger names its own sources, filters and key_field. Copy them
@@ -836,42 +908,42 @@ class Store(FactoryStore, ClaudeUsageStore):
                 vcols = self._columns("catalog_views")
                 sel = ", ".join(c if c in vcols else "NULL" for c in
                                 ("name", "sources", "filters", "key_field"))
-                for name, sources, filters, key_field in self.con.execute(
+                for name, sources, filters, key_field in self.sc.execute(
                         f"SELECT {sel} FROM catalog_views").fetchall():
                     views[name] = (json.loads(sources or "[]"), json.loads(filters or "[]"),
                                    key_field or "")
-            for name, view, sources, cond in self.con.execute(
+            for name, view, sources, cond in self.sc.execute(
                     "SELECT name, view, sources, condition FROM catalog_triggers").fetchall():
                 if json.loads(sources or "[]"):
                     continue
                 v = views.get(view)
                 if v is None:
-                    self.con.execute("UPDATE catalog_triggers SET sources = '[]', filters = '[]', "
+                    self.sc.execute("UPDATE catalog_triggers SET sources = '[]', filters = '[]', "
                                      "key_field = '', paused = TRUE WHERE name = ?", [name])
                     print(f"taresd: trigger {name!r} named view {view!r}, which is gone; "
                           "paused it with no sources")
                     continue
-                self.con.execute(
+                self.sc.execute(
                     "UPDATE catalog_triggers SET sources = ?, filters = ?, key_field = ? "
                     "WHERE name = ?", [json.dumps(v[0]), json.dumps(v[1]), v[2], name])
                 # a schedule trigger's last tick was recorded under its view's name; it is under
                 # the trigger's own name now, so carry it over or the first tick comes early
                 if (json.loads(cond or "{}") or {}).get("every"):
-                    self.con.execute("UPDATE trigger_state SET key_value = ? WHERE trigger = ? "
+                    self.sc.execute("UPDATE trigger_state SET key_value = ? WHERE trigger = ? "
                                      "AND key_value = ? AND NOT EXISTS (SELECT 1 FROM "
                                      "trigger_state WHERE trigger = ? AND key_value = ?)",
                                      [name, name, view, name, name])
             # emit.attach_view asked for the view's timeline in the payload, which it always
             # carries; nothing reads it, so it goes with the view
-            for name, emit in self.con.execute("SELECT name, emit FROM catalog_triggers").fetchall():
+            for name, emit in self.sc.execute("SELECT name, emit FROM catalog_triggers").fetchall():
                 e = json.loads(emit or "{}") or {}
                 if isinstance(e, dict) and "attach_view" in e:
                     e.pop("attach_view")
-                    self.con.execute("UPDATE catalog_triggers SET emit = ? WHERE name = ?",
+                    self.sc.execute("UPDATE catalog_triggers SET emit = ? WHERE name = ?",
                                      [json.dumps(e), name])
-            self.con.execute("ALTER TABLE catalog_triggers DROP COLUMN view")
+            self.sc.execute("ALTER TABLE catalog_triggers DROP COLUMN view")
         if "catalog_views" in tables:
-            self.con.execute("DROP TABLE catalog_views")
+            self.sc.execute("DROP TABLE catalog_views")
 
     def migrate_claude_code_repo_label(self) -> None:
         """1.14: the claude_code label `project` became `repo`. Rewrites what the catalog says
@@ -881,11 +953,11 @@ class Store(FactoryStore, ClaudeUsageStore):
         label, as any label change does: new events only. Idempotent, cheap (catalog tables
         only), run at every open and again after a catalog import, since an old catalog file can
         bring the old label back."""
-        with self._lock:
+        with self._swrite:
             self._migrate_claude_code_repo_label()
 
     def _migrate_claude_code_repo_label(self) -> None:
-        rows = self.con.execute(
+        rows = self.sc.execute(
             "SELECT name, config FROM catalog_sources WHERE connector = 'claude_code'").fetchall()
         names = []
         for name, raw in rows:
@@ -899,9 +971,9 @@ class Store(FactoryStore, ClaudeUsageStore):
                         l["field"] = "repo"
                     hit = True
             if hit:
-                self.con.execute("UPDATE catalog_sources SET config = ? WHERE name = ?",
+                self.sc.execute("UPDATE catalog_sources SET config = ? WHERE name = ?",
                                  [json.dumps(cfg), name])
-        for name, key_field, sources, filters in self.con.execute(
+        for name, key_field, sources, filters in self.sc.execute(
                 "SELECT name, key_field, sources, filters FROM catalog_triggers").fetchall():
             srcs = set(json.loads(sources or "[]"))
             if not srcs or not srcs <= set(names):
@@ -911,7 +983,7 @@ class Store(FactoryStore, ClaudeUsageStore):
                 if f.get("field") == "project":
                     f["field"] = "repo"
             if key_field == "project" or json.loads(filters or "[]") != fl:
-                self.con.execute("UPDATE catalog_triggers SET key_field = ?, filters = ? WHERE name = ?",
+                self.sc.execute("UPDATE catalog_triggers SET key_field = ?, filters = ? WHERE name = ?",
                                  ["repo" if key_field == "project" else key_field, json.dumps(fl), name])
 
     def _lineage_upgrade(self) -> None:
@@ -919,7 +991,7 @@ class Store(FactoryStore, ClaudeUsageStore):
         trigger's owner when that still exists (a run of a deleted agent stays unplaced). Then the
         indexes the project timeline reads through. Idempotent: only NULL rows are touched, and
         the backfill runs once per database (a settings marker), not on every start."""
-        done = self.con.execute("SELECT 1 FROM settings WHERE key = 'lineage_backfilled'").fetchone()
+        done = self.sc.execute("SELECT 1 FROM settings WHERE key = 'lineage_backfilled'").fetchone()
         if not done:
             self._lineage_backfill()
         for stmt in ("CREATE INDEX IF NOT EXISTS ix_agent_runs_dispatch ON agent_runs(dispatch_id)",
@@ -927,23 +999,23 @@ class Store(FactoryStore, ClaudeUsageStore):
                      "CREATE INDEX IF NOT EXISTS ix_agent_runs_project ON agent_runs(project, started_at)",
                      "CREATE INDEX IF NOT EXISTS ix_dispatch_log_project ON dispatch_log(project, fired_at)",
                      "CREATE INDEX IF NOT EXISTS ix_dispatch_log_parent ON dispatch_log(parent_run_id)"):
-            self.con.execute(stmt)
+            self.sc.execute(stmt)
 
     def _lineage_backfill(self) -> None:
-        self.con.execute(
+        self.sc.execute(
             "UPDATE agent_runs SET project = a.owned_by FROM catalog_agents a "
             "WHERE agent_runs.project IS NULL AND a.name = agent_runs.agent "
             "AND a.owned_by IS NOT NULL")
-        self.con.execute(
+        self.sc.execute(
             "UPDATE dispatch_log SET project = t.owned_by FROM catalog_triggers t "
             "WHERE dispatch_log.project IS NULL AND t.name = dispatch_log.trigger "
             "AND t.owned_by IS NOT NULL")
         # and the project rows the timeline reads (P-TR-216)
-        self.con.execute("INSERT INTO run_projects (run_id, project) SELECT id, project "
+        self.sc.execute("INSERT INTO run_projects (run_id, project) SELECT id, project "
                          "FROM agent_runs WHERE project IS NOT NULL ON CONFLICT DO NOTHING")
-        self.con.execute("INSERT INTO dispatch_projects (dispatch_id, project) SELECT dispatch_id, "
+        self.sc.execute("INSERT INTO dispatch_projects (dispatch_id, project) SELECT dispatch_id, "
                          "project FROM dispatch_log WHERE project IS NOT NULL ON CONFLICT DO NOTHING")
-        self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
+        self.sc.execute("INSERT INTO settings (key, value, updated_at) VALUES "
                          "('lineage_backfilled', '1', ?) ON CONFLICT (key) DO NOTHING", [now_utc()])
 
     def _wiring_upgrade(self) -> None:
@@ -951,101 +1023,101 @@ class Store(FactoryStore, ClaudeUsageStore):
         handoffs, and on/off as a tares://agent/ subscription) becomes the wiring of the project
         that made it; those subscriptions go. Runs and firings get their project rows. Called
         with no lock needed (the store is being opened)."""
-        if self.con.execute("SELECT 1 FROM settings WHERE key = 'wiring_moved'").fetchone():
+        if self.sc.execute("SELECT 1 FROM settings WHERE key = 'wiring_moved'").fetchone():
             return
         # one transaction: a crash part-way leaves the subscriptions (the on/off record) as they
         # were, and the next start does the whole upgrade again
-        self.con.execute("BEGIN TRANSACTION")
+        self.sc.execute("BEGIN TRANSACTION")
         try:
             self._wiring_move()
-            self.con.execute("COMMIT")
+            self.sc.execute("COMMIT")
         except Exception:
-            self.con.execute("ROLLBACK")
+            self.sc.execute("ROLLBACK")
             raise
 
     def _skills_upgrade(self) -> None:
         """Once per database: the skills each project kept become skills of the cell that those
         projects use. Two projects' skills of the same name and text are one skill; the same name
         with different text keeps both, the second named name-2 (and so on)."""
-        if self.con.execute("SELECT 1 FROM settings WHERE key = 'skills_shared'").fetchone():
+        if self.sc.execute("SELECT 1 FROM settings WHERE key = 'skills_shared'").fetchone():
             return
-        self.con.execute("BEGIN TRANSACTION")
+        self.sc.execute("BEGIN TRANSACTION")
         try:
-            for project, name, desc, body, c, u in self.con.execute(
+            for project, name, desc, body, c, u in self.sc.execute(
                     "SELECT project, name, description, body, created_at, updated_at FROM skills "
                     "ORDER BY created_at, project").fetchall():
                 use, n = name, 2
                 while True:
-                    have = self.con.execute("SELECT body FROM shared_skills WHERE name = ?",
+                    have = self.sc.execute("SELECT body FROM shared_skills WHERE name = ?",
                                             [use]).fetchone()
                     if have is None or have[0] == body:
                         break
                     use, n = f"{name}-{n}", n + 1
                 if have is None:
-                    self.con.execute("INSERT INTO shared_skills (name, description, body, made_by, "
+                    self.sc.execute("INSERT INTO shared_skills (name, description, body, made_by, "
                                      "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
                                      [use, desc, body, project, c, u])
                 if use != name:   # the project's own row follows the new name
-                    self.con.execute("UPDATE usecase_objects SET name = ? WHERE usecase_id = ? "
+                    self.sc.execute("UPDATE usecase_objects SET name = ? WHERE usecase_id = ? "
                                      "AND kind = 'skill' AND name = ?", [use, project, name])
-                self.con.execute(
+                self.sc.execute(
                     "INSERT INTO usecase_objects (usecase_id, kind, key, name, customized, "
                     "created_at) SELECT ?, 'skill', ?, ?, FALSE, ? WHERE NOT EXISTS (SELECT 1 FROM "
                     "usecase_objects WHERE usecase_id = ? AND kind = 'skill' AND name = ?)",
                     [project, f"skill:{use}", use, c or now_utc(), project, use])
-            self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
+            self.sc.execute("INSERT INTO settings (key, value, updated_at) VALUES "
                              "('skills_shared', '1', ?) ON CONFLICT (key) DO NOTHING", [now_utc()])
-            self.con.execute("COMMIT")
+            self.sc.execute("COMMIT")
         except Exception:
-            self.con.execute("ROLLBACK")
+            self.sc.execute("ROLLBACK")
             raise
 
     def _wiring_move(self) -> None:
         default = self._lazy_default_project()
-        projects = {r[0] for r in self.con.execute("SELECT id FROM usecases").fetchall()}
-        on = {r[0][len(AGENT_PREFIX):] for r in self.con.execute(
+        projects = {r[0] for r in self.sc.execute("SELECT id FROM usecases").fetchall()}
+        on = {r[0][len(AGENT_PREFIX):] for r in self.sc.execute(
             "SELECT url FROM subscriptions WHERE url LIKE ?", [AGENT_PREFIX + "%"]).fetchall()}
         ts = now_utc()
-        for name, trig, owner, raw in self.con.execute(
+        for name, trig, owner, raw in self.sc.execute(
                 "SELECT name, trigger, owned_by, handoffs FROM catalog_agents").fetchall():
             project = owner if owner in projects else default()
             # the store's placement pass may have wired it already (off): keep that row, carry
             # on/off over
             if trig:
-                if self.con.execute("SELECT 1 FROM project_wiring WHERE kind = 'wake' AND "
+                if self.sc.execute("SELECT 1 FROM project_wiring WHERE kind = 'wake' AND "
                                     "project = ? AND trigger = ? AND agent = ?",
                                     [project, trig, name]).fetchone():
-                    self.con.execute("UPDATE project_wiring SET enabled = ? WHERE kind = 'wake' "
+                    self.sc.execute("UPDATE project_wiring SET enabled = ? WHERE kind = 'wake' "
                                      "AND project = ? AND trigger = ? AND agent = ?",
                                      [name in on, project, trig, name])
                 else:
-                    self.con.execute(
+                    self.sc.execute(
                         "INSERT INTO project_wiring (project, kind, trigger, agent, enabled, "
                         "created_at) VALUES (?, 'wake', ?, ?, ?, ?)",
                         [project, trig, name, name in on, ts])
-            has_handoffs = self.con.execute(
+            has_handoffs = self.sc.execute(
                 "SELECT 1 FROM project_wiring WHERE kind = 'handoff' AND project = ? AND "
                 "from_agent = ?", [project, name]).fetchone()
             for h in (json.loads(raw) if raw else []) if not has_handoffs else []:
                 if isinstance(h, dict) and h.get("agent") and h.get("verdict"):
-                    self.con.execute(
+                    self.sc.execute(
                         "INSERT INTO project_wiring (project, kind, from_agent, agent, verdict, "
                         "cooldown, created_at) VALUES (?, 'handoff', ?, ?, ?, ?, ?)",
                         [project, name, h["agent"], str(h["verdict"]).lower(),
                          h.get("cooldown") or None, ts])
-        self.con.execute("INSERT INTO run_projects (run_id, project) SELECT id, project "
+        self.sc.execute("INSERT INTO run_projects (run_id, project) SELECT id, project "
                          "FROM agent_runs WHERE project IS NOT NULL ON CONFLICT DO NOTHING")
-        self.con.execute("INSERT INTO dispatch_projects (dispatch_id, project) SELECT dispatch_id, "
+        self.sc.execute("INSERT INTO dispatch_projects (dispatch_id, project) SELECT dispatch_id, "
                          "project FROM dispatch_log WHERE project IS NOT NULL ON CONFLICT DO NOTHING")
         for stmt in ("CREATE INDEX IF NOT EXISTS ix_wiring_trigger ON project_wiring(trigger)",
                      "CREATE INDEX IF NOT EXISTS ix_wiring_project ON project_wiring(project)",
                      "CREATE INDEX IF NOT EXISTS ix_run_projects_project ON run_projects(project)",
                      "CREATE INDEX IF NOT EXISTS ix_dispatch_projects_project ON dispatch_projects(project)"):
-            self.con.execute(stmt)
-        self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
+            self.sc.execute(stmt)
+        self.sc.execute("INSERT INTO settings (key, value, updated_at) VALUES "
                          "('wiring_moved', '1', ?) ON CONFLICT (key) DO NOTHING", [ts])
         # last: the old on/off record goes only with the marker that says it was carried over
-        self.con.execute("DELETE FROM subscriptions WHERE url LIKE ?", [AGENT_PREFIX + "%"])
+        self.sc.execute("DELETE FROM subscriptions WHERE url LIKE ?", [AGENT_PREFIX + "%"])
 
     # ── wiring: what each project wakes, and who digs in on whose verdict (P-TR-216) ──
     def list_wakes(self, project: str | None = None, trigger: str | None = None,
@@ -1058,25 +1130,25 @@ class Store(FactoryStore, ClaudeUsageStore):
                 args.append(v)
         sql = "SELECT project, trigger, agent, enabled FROM project_wiring WHERE kind = 'wake'"
         sql += "".join(f" AND {w}" for w in where) + " ORDER BY created_at, agent"
-        with self._lock:
-            rows = self.con.execute(sql, args).fetchall()
+        with self._sread:
+            rows = self.sc.execute(sql, args).fetchall()
         return [{"project": r[0], "trigger": r[1], "agent": r[2], "enabled": bool(r[3])}
                 for r in rows]
 
     def set_wake(self, project: str, trigger: str, agent: str, enabled: bool | None = None) -> None:
         """In `project`, `trigger` wakes `agent`. `enabled` None keeps what the row had (a new row
         starts off): wiring an agent is not turning it on."""
-        with self._lock:
-            row = self.con.execute(
+        with self._swrite:
+            row = self.sc.execute(
                 "SELECT enabled FROM project_wiring WHERE kind = 'wake' AND project = ? "
                 "AND trigger = ? AND agent = ?", [project, trigger, agent]).fetchone()
             if row is not None:
                 if enabled is not None:
-                    self.con.execute(
+                    self.sc.execute(
                         "UPDATE project_wiring SET enabled = ? WHERE kind = 'wake' AND project = ? "
                         "AND trigger = ? AND agent = ?", [enabled, project, trigger, agent])
                 return
-            self.con.execute(
+            self.sc.execute(
                 "INSERT INTO project_wiring (project, kind, trigger, agent, enabled, created_at) "
                 "VALUES (?, 'wake', ?, ?, ?, ?)", [project, trigger, agent, bool(enabled), now_utc()])
 
@@ -1090,10 +1162,10 @@ class Store(FactoryStore, ClaudeUsageStore):
             if v is not None:
                 where.append(f"{col} = ?")
                 args.append(v)
-        with self._lock:
-            n = self.con.execute(f"SELECT count(*) FROM project_wiring WHERE {' AND '.join(where)}",
+        with self._swrite:
+            n = self.sc.execute(f"SELECT count(*) FROM project_wiring WHERE {' AND '.join(where)}",
                                  args).fetchone()[0]
-            self.con.execute(f"DELETE FROM project_wiring WHERE {' AND '.join(where)}", args)
+            self.sc.execute(f"DELETE FROM project_wiring WHERE {' AND '.join(where)}", args)
         return int(n)
 
     def set_agent_enabled(self, agent: str, enabled: bool, project: str | None = None) -> int:
@@ -1104,10 +1176,10 @@ class Store(FactoryStore, ClaudeUsageStore):
         if project is not None:
             where += " AND project = ?"
             args.append(project)
-        with self._lock:
-            n = self.con.execute(f"SELECT count(*) FROM project_wiring WHERE {where}",
+        with self._swrite:
+            n = self.sc.execute(f"SELECT count(*) FROM project_wiring WHERE {where}",
                                  args).fetchone()[0]
-            self.con.execute(f"UPDATE project_wiring SET enabled = ? WHERE {where}",
+            self.sc.execute(f"UPDATE project_wiring SET enabled = ? WHERE {where}",
                              [enabled, *args])
         return int(n)
 
@@ -1127,20 +1199,20 @@ class Store(FactoryStore, ClaudeUsageStore):
         if from_agent is not None:
             sql += " AND from_agent = ?"
             args.append(from_agent)
-        with self._lock:
-            rows = self.con.execute(sql + " ORDER BY created_at, verdict", args).fetchall()
+        with self._sread:
+            rows = self.sc.execute(sql + " ORDER BY created_at, verdict", args).fetchall()
         return [{"project": r[0], "from_agent": r[1], "agent": r[2], "verdict": r[3],
                  "cooldown": r[4]} for r in rows]
 
     def set_handoffs(self, project: str, from_agent: str, handoffs: list[dict]) -> None:
         """Replace what `from_agent` hands off to in `project` ({verdict, agent, cooldown})."""
         ts = now_utc()
-        with self._lock:
-            self.con.execute("DELETE FROM project_wiring WHERE kind = 'handoff' AND project = ? "
+        with self._swrite:
+            self.sc.execute("DELETE FROM project_wiring WHERE kind = 'handoff' AND project = ? "
                              "AND from_agent = ?", [project, from_agent])
             for h in handoffs or []:
                 if h.get("agent") and h.get("verdict"):
-                    self.con.execute(
+                    self.sc.execute(
                         "INSERT INTO project_wiring (project, kind, from_agent, agent, verdict, "
                         "cooldown, created_at) VALUES (?, 'handoff', ?, ?, ?, ?, ?)",
                         [project, from_agent, h["agent"], str(h["verdict"]).lower(),
@@ -1150,63 +1222,63 @@ class Store(FactoryStore, ClaudeUsageStore):
                       trigger: str | None = None) -> None:
         """Forget wiring: a project's (deleted), an agent's (deleted: its wakes and every handoff
         from or to it), a trigger's (deleted: its wakes)."""
-        with self._lock:
+        with self._swrite:
             if project is not None:
-                self.con.execute("DELETE FROM project_wiring WHERE project = ?", [project])
+                self.sc.execute("DELETE FROM project_wiring WHERE project = ?", [project])
             if agent is not None:
-                self.con.execute("DELETE FROM project_wiring WHERE agent = ? OR from_agent = ?",
+                self.sc.execute("DELETE FROM project_wiring WHERE agent = ? OR from_agent = ?",
                                  [agent, agent])
             if trigger is not None:
-                self.con.execute("DELETE FROM project_wiring WHERE kind = 'wake' AND trigger = ?",
+                self.sc.execute("DELETE FROM project_wiring WHERE kind = 'wake' AND trigger = ?",
                                  [trigger])
 
     def rename_in_wiring(self, kind: str, old: str, new: str) -> None:
-        with self._lock:
+        with self._swrite:
             if kind == "trigger":
-                self.con.execute("UPDATE project_wiring SET trigger = ? WHERE trigger = ?", [new, old])
+                self.sc.execute("UPDATE project_wiring SET trigger = ? WHERE trigger = ?", [new, old])
             else:
-                self.con.execute("UPDATE project_wiring SET agent = ? WHERE agent = ?", [new, old])
-                self.con.execute("UPDATE project_wiring SET from_agent = ? WHERE from_agent = ?",
+                self.sc.execute("UPDATE project_wiring SET agent = ? WHERE agent = ?", [new, old])
+                self.sc.execute("UPDATE project_wiring SET from_agent = ? WHERE from_agent = ?",
                                  [new, old])
 
     # which projects a run or a firing belongs to
     def add_run_projects(self, run_id: str, projects) -> None:
-        with self._lock:
+        with self._swrite:
             for p in dict.fromkeys(x for x in projects or [] if x):
-                self.con.execute("INSERT INTO run_projects (run_id, project) VALUES (?, ?) "
+                self.sc.execute("INSERT INTO run_projects (run_id, project) VALUES (?, ?) "
                                  "ON CONFLICT DO NOTHING", [run_id, p])
 
     def run_projects(self, run_id: str) -> list[str]:
-        with self._lock:
-            return [r[0] for r in self.con.execute(
+        with self._sread:
+            return [r[0] for r in self.sc.execute(
                 "SELECT project FROM run_projects WHERE run_id = ? ORDER BY project",
                 [run_id]).fetchall()]
 
     def add_dispatch_projects(self, dispatch_id: str, projects) -> None:
-        with self._lock:
+        with self._swrite:
             for p in dict.fromkeys(x for x in projects or [] if x):
-                self.con.execute("INSERT INTO dispatch_projects (dispatch_id, project) VALUES (?, ?) "
+                self.sc.execute("INSERT INTO dispatch_projects (dispatch_id, project) VALUES (?, ?) "
                                  "ON CONFLICT DO NOTHING", [dispatch_id, p])
 
     def dispatch_projects(self, dispatch_id: str) -> list[str]:
-        with self._lock:
-            return [r[0] for r in self.con.execute(
+        with self._sread:
+            return [r[0] for r in self.sc.execute(
                 "SELECT project FROM dispatch_projects WHERE dispatch_id = ? ORDER BY project",
                 [dispatch_id]).fetchall()]
 
     def active_projects_using(self, kind: str, name: str) -> list[str]:
         """projects_using, without the paused projects and the drafts: the ones a firing of the
         part reaches."""
-        with self._lock:
-            status = {r[0]: r[1] for r in self.con.execute(
+        with self._sread:
+            status = {r[0]: r[1] for r in self.sc.execute(
                 "SELECT id, status FROM usecases").fetchall()}
         return [p for p in self.projects_using(kind, name)
                 if status.get(p) not in ("paused", "draft", "done", None)]
 
     def projects_using(self, kind: str, name: str) -> list[str]:
         """The projects whose object list has this part (any kind), oldest membership first."""
-        with self._lock:
-            return [r[0] for r in self.con.execute(
+        with self._sread:
+            return [r[0] for r in self.sc.execute(
                 "SELECT usecase_id FROM usecase_objects WHERE kind = ? AND name = ? "
                 "GROUP BY usecase_id ORDER BY min(created_at)", [kind, name]).fetchall()]
 
@@ -1373,6 +1445,20 @@ class Store(FactoryStore, ClaudeUsageStore):
             except Exception:
                 self.con.execute("ROLLBACK")
                 raise
+        # the challenger's lines also go to `challenges` (state), after the events committed; one
+        # lost to a crash in between is copied at the next open (_challenges_fill)
+        ch = [(e.source, e.key_value or "", e.event_time, e.event_type,
+               str((e.labels or {}).get("branch") or ""),
+               None if (e.labels or {}).get("tares_project") is None
+               else str(e.labels["tares_project"]),
+               json.dumps(e.payload)) for e in envelopes if e.event_type in self.CHALLENGE_TYPES]
+        if ch:
+            try:
+                with self._swrite:
+                    self._record_challenges(ch)
+            except Exception as ex:          # the events are in; never fail the ingest for this
+                print(f"taresd: keeping {len(ch)} challenger line(s) failed ({ex}); "
+                      "copied at the next start", flush=True)
 
     def _apply_entity_deltas(self, ent: dict) -> None:
         """Fold this batch's (source, label, value) deltas into entity_counts. Already-truncated
@@ -1434,7 +1520,7 @@ class Store(FactoryStore, ClaudeUsageStore):
         fsql, fparams = _filter_sql(filters)
         wsql, wparams = _where_sql(where)
         ssql, sparams = _scope_sql(scope)
-        esql, eparams = _exclude_sql(exclude, sources)
+        esql, eparams = self._exclude(exclude, sources)
         wsql, wparams = wsql + ssql + esql, wparams + sparams + eparams
         ksql, kparams = (" AND key_value = ?", [key]) if key is not None else ("", [])
         with self._lock:
@@ -1454,6 +1540,18 @@ class Store(FactoryStore, ClaudeUsageStore):
         n = len(rows[0]) - 3 if rows else 0       # the columns asked for, before key, payload project, rn
         owners |= self._row_owners(rows, n)
         return [r[:n] for r in rows]
+
+    def _exclude(self, exclude, sources=None) -> tuple[str, list]:
+        """The module's _exclude_sql, with the sessions linked to the hidden projects read from
+        the state first."""
+        ids = list((exclude or {}).get("ids") or [])
+        sessions: list = []
+        if ids:
+            with self._sread:
+                sessions = [r[0] for r in self.sc.execute(
+                    f"SELECT DISTINCT session FROM project_sessions WHERE project IN "
+                    f"({', '.join(['?'] * len(ids))})", ids).fetchall()]
+        return _exclude_sql(exclude, sources, sessions)
 
     def _row_owners(self, rows: list, n: int) -> set[str]:
         """The ids of the projects the `rows` belong to, by the three tests _exclude_sql hides by:
@@ -1478,8 +1576,8 @@ class Store(FactoryStore, ClaudeUsageStore):
                 keys.add(r[n])
         found.update(self.project_ids_named(sorted(named)))
         if keys:
-            with self._lock:
-                found.update(x[0] for x in self.con.execute(
+            with self._sread:
+                found.update(x[0] for x in self.sc.execute(
                     f"SELECT DISTINCT project FROM project_sessions WHERE session IN "
                     f"({', '.join(['?'] * len(keys))})", sorted(keys)).fetchall())
         return found
@@ -1553,8 +1651,8 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     # ── trigger cooldown state ────────────────────────────────────────────────
     def last_fired(self, trigger: str, key: str):
-        with self._lock:
-            r = self.con.execute(
+        with self._sread:
+            r = self.sc.execute(
                 "SELECT last_fired FROM trigger_state WHERE trigger = ? AND key_value = ?",
                 [trigger, key],
             ).fetchone()
@@ -1562,14 +1660,14 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def last_fired_any(self, trigger: str):
         """When the trigger last fired for any key (a custom project's trigger card)."""
-        with self._lock:
-            r = self.con.execute("SELECT MAX(last_fired) FROM trigger_state WHERE trigger = ?",
+        with self._sread:
+            r = self.sc.execute("SELECT MAX(last_fired) FROM trigger_state WHERE trigger = ?",
                                  [trigger]).fetchone()
         return r[0] if r else None
 
     def set_fired(self, trigger: str, key: str, ts: datetime) -> None:
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO trigger_state VALUES (?, ?, ?) "
                 "ON CONFLICT (trigger, key_value) DO UPDATE SET last_fired = excluded.last_fired",
                 [trigger, key, ts],
@@ -1578,14 +1676,14 @@ class Store(FactoryStore, ClaudeUsageStore):
     def clear_fired(self, trigger: str, key: str) -> None:
         """Forget one key's last firing, so the next evaluation is not in cooldown for it. The
         firing that follows writes a fresh `set_fired`, which re-arms the cooldown as usual."""
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "DELETE FROM trigger_state WHERE trigger = ? AND key_value = ?", [trigger, key])
 
     # ── catalog (DB-backed; YAML is import/export) ────────────────────────────
     def catalog_empty(self) -> bool:
-        with self._lock:
-            n = self.con.execute(
+        with self._sread:
+            n = self.sc.execute(
                 "SELECT (SELECT COUNT(*) FROM catalog_sources)"
                 " + (SELECT COUNT(*) FROM catalog_triggers)"
             ).fetchone()[0]
@@ -1597,8 +1695,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         # the ingest_key is the stable, unguessable path segment for push endpoints (/ingest/<key>).
         # Generated once at creation, preserved across updates; backfilled if an older row lacks one.
         ik = ingest_key or f"{connector}-{secrets.token_hex(4)}"
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO catalog_sources "
                 "(name, type, connector, poll, config, paused, created_at, updated_at, ingest_key) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
@@ -1611,13 +1709,13 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def set_source_ingest_key(self, name: str, ingest_key: str) -> None:
         """Replace a push source's ingest key (a GitHub App recreated for an existing source)."""
-        with self._lock:
-            self.con.execute("UPDATE catalog_sources SET ingest_key = ? WHERE name = ?",
+        with self._swrite:
+            self.sc.execute("UPDATE catalog_sources SET ingest_key = ? WHERE name = ?",
                              [ingest_key, name])
 
     def list_catalog_sources(self) -> list[dict]:
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT name, type, connector, poll, config, paused, created_at, updated_at, "
                 "ingest_key, owned_by, customized FROM catalog_sources ORDER BY name"
             ).fetchall()
@@ -1630,13 +1728,13 @@ class Store(FactoryStore, ClaudeUsageStore):
         ]
 
     def delete_catalog_source(self, name: str) -> None:
-        with self._lock:
-            self.con.execute("DELETE FROM catalog_sources WHERE name = ?", [name])
+        with self._swrite:
+            self.sc.execute("DELETE FROM catalog_sources WHERE name = ?", [name])
             self._forget_part("source", name)
 
     def set_source_paused(self, name: str, paused: bool) -> None:
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "UPDATE catalog_sources SET paused = ?, updated_at = ? WHERE name = ?",
                 [paused, now_utc(), name],
             )
@@ -1650,8 +1748,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         # description: None keeps what is stored (a caller that does not know it), "" clears it.
         ts = now_utc()
         keep = description is None
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO catalog_triggers "
                 "(name, sources, filters, key_field, condition, emit, cooldown, created_at, "
                 "updated_at, paused, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, ?) "
@@ -1666,18 +1764,18 @@ class Store(FactoryStore, ClaudeUsageStore):
             )
 
     def set_trigger_filters(self, name: str, filters: list) -> None:
-        with self._lock:
-            self.con.execute("UPDATE catalog_triggers SET filters = ? WHERE name = ?",
+        with self._swrite:
+            self.sc.execute("UPDATE catalog_triggers SET filters = ? WHERE name = ?",
                              [json.dumps(filters or []), name])
 
     def set_trigger_description(self, name: str, description: str | None) -> None:
-        with self._lock:
-            self.con.execute("UPDATE catalog_triggers SET description = ? WHERE name = ?",
+        with self._swrite:
+            self.sc.execute("UPDATE catalog_triggers SET description = ? WHERE name = ?",
                              [description or None, name])
 
     def list_catalog_triggers(self) -> list[dict]:
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT name, sources, filters, key_field, condition, emit, cooldown, paused, "
                 "owned_by, customized, description FROM catalog_triggers ORDER BY name"
             ).fetchall()
@@ -1691,8 +1789,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         ]
 
     def set_trigger_paused(self, name: str, paused: bool) -> None:
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "UPDATE catalog_triggers SET paused = ?, updated_at = ? WHERE name = ?",
                 [paused, now_utc(), name],
             )
@@ -1701,24 +1799,24 @@ class Store(FactoryStore, ClaudeUsageStore):
         """Delete a trigger: what it woke stops being woken by it, it leaves every project's list
         of parts, and an agent that had it as its own trigger keeps going without one (a handoff
         still starts it). Returns those agents."""
-        with self._lock:
-            self.con.execute("DELETE FROM catalog_triggers WHERE name = ?", [name])
-            self.con.execute("DELETE FROM project_wiring WHERE kind = 'wake' AND trigger = ?",
+        with self._swrite:
+            self.sc.execute("DELETE FROM catalog_triggers WHERE name = ?", [name])
+            self.sc.execute("DELETE FROM project_wiring WHERE kind = 'wake' AND trigger = ?",
                              [name])
             self._forget_part("trigger", name)
-            agents = [r[0] for r in self.con.execute(
+            agents = [r[0] for r in self.sc.execute(
                 "SELECT name FROM catalog_agents WHERE trigger = ?", [name]).fetchall()]
-            self.con.execute("UPDATE catalog_agents SET trigger = '', updated_at = ? "
+            self.sc.execute("UPDATE catalog_agents SET trigger = '', updated_at = ? "
                              "WHERE trigger = ?", [now_utc(), name])
         return agents
 
     def clear_catalog(self) -> None:
-        with self._lock:
-            self.con.execute("DELETE FROM catalog_sources")
-            self.con.execute("DELETE FROM catalog_triggers")
-            self.con.execute("DELETE FROM catalog_agents")
-            self.con.execute("DELETE FROM mcp_servers")
-            self.con.execute("DELETE FROM project_wiring")
+        with self._swrite:
+            self.sc.execute("DELETE FROM catalog_sources")
+            self.sc.execute("DELETE FROM catalog_triggers")
+            self.sc.execute("DELETE FROM catalog_agents")
+            self.sc.execute("DELETE FROM mcp_servers")
+            self.sc.execute("DELETE FROM project_wiring")
 
     # ── Tares agents (a prompt attached to a trigger; enabled ⟺ subscribed) ──
     def upsert_catalog_agent(self, name: str, trigger: str, prompt: str,
@@ -1739,8 +1837,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         # not know about them, such as a template re-plan, must not wipe them); [] / False / ""
         # clears
         ts = now_utc()
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO catalog_agents "
                 "(name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, max_rounds, budget_usd, "
@@ -1771,7 +1869,7 @@ class Store(FactoryStore, ClaudeUsageStore):
             )
             # the agent's trigger and handoffs are the wiring of the project that made it
             # (P-TR-216); one not placed yet is wired when it is (_wire_owner)
-            row = self.con.execute("SELECT owned_by FROM catalog_agents WHERE name = ?",
+            row = self.sc.execute("SELECT owned_by FROM catalog_agents WHERE name = ?",
                                    [name]).fetchone()
             if row and row[0]:
                 self._wire_owner(name, row[0], trigger, handoffs)
@@ -1780,7 +1878,7 @@ class Store(FactoryStore, ClaudeUsageStore):
                    handoffs: list[dict] | None) -> None:
         """`project`'s wiring of the agent: the wake-up that wakes it there (on/off kept) and,
         when given, what it hands off to there."""
-        with self._lock:
+        with self._swrite:
             self._wire_owner(name, project, trigger, handoffs)
 
     def _wire_owner(self, name: str, project: str, trigger: str | None,
@@ -1791,33 +1889,33 @@ class Store(FactoryStore, ClaudeUsageStore):
         if trigger == "":
             # no trigger of its own any more: nothing wakes it in this project (a handoff still
             # starts it). None means "leave the wake-up as it is".
-            self.con.execute("DELETE FROM project_wiring WHERE kind = 'wake' AND project = ? "
+            self.sc.execute("DELETE FROM project_wiring WHERE kind = 'wake' AND project = ? "
                              "AND agent = ?", [project, name])
         elif trigger:
-            rows = self.con.execute(
+            rows = self.sc.execute(
                 "SELECT trigger, enabled FROM project_wiring WHERE kind = 'wake' AND project = ? "
                 "AND agent = ?", [project, name]).fetchall()
             if not rows:
-                self.con.execute(
+                self.sc.execute(
                     "INSERT INTO project_wiring (project, kind, trigger, agent, enabled, created_at) "
                     "VALUES (?, 'wake', ?, ?, FALSE, ?)", [project, trigger, name, now_utc()])
             elif not any(t == trigger for t, _on in rows):
                 # one wake-up in this project: the agent's trigger changed, its row follows
                 if len(rows) == 1:
-                    self.con.execute(
+                    self.sc.execute(
                         "UPDATE project_wiring SET trigger = ? WHERE kind = 'wake' AND project = ? "
                         "AND agent = ?", [trigger, project, name])
                 else:
-                    self.con.execute(
+                    self.sc.execute(
                         "INSERT INTO project_wiring (project, kind, trigger, agent, enabled, "
                         "created_at) VALUES (?, 'wake', ?, ?, FALSE, ?)",
                         [project, trigger, name, now_utc()])
         if handoffs is not None:
-            self.con.execute("DELETE FROM project_wiring WHERE kind = 'handoff' AND project = ? "
+            self.sc.execute("DELETE FROM project_wiring WHERE kind = 'handoff' AND project = ? "
                              "AND from_agent = ?", [project, name])
             for h in handoffs:
                 if isinstance(h, dict) and h.get("agent") and h.get("verdict"):
-                    self.con.execute(
+                    self.sc.execute(
                         "INSERT INTO project_wiring (project, kind, from_agent, agent, verdict, "
                         "cooldown, created_at) VALUES (?, 'handoff', ?, ?, ?, ?, ?)",
                         [project, name, h["agent"], str(h["verdict"]).lower(),
@@ -1827,14 +1925,14 @@ class Store(FactoryStore, ClaudeUsageStore):
         """Every agent. `trigger`, `handoffs` and `enabled` are its wiring in `project`, or by
         default in the project that made it (P-TR-216: the wiring belongs to the project; an
         agent wired nowhere keeps the trigger and handoffs it was defined with)."""
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, updated_at, max_rounds, budget_usd, owned_by, customized, "
                 "webhook_key_label, provider, daily_cap, handoffs, concludes, verdicts, github "
                 "FROM catalog_agents ORDER BY name"
             ).fetchall()
-            wiring = self.con.execute(
+            wiring = self.sc.execute(
                 "SELECT project, kind, trigger, agent, from_agent, verdict, cooldown, enabled "
                 "FROM project_wiring ORDER BY created_at").fetchall()
         wakes: dict[tuple, list] = {}
@@ -1868,22 +1966,22 @@ class Store(FactoryStore, ClaudeUsageStore):
         return next((a for a in self.list_catalog_agents(project) if a["name"] == name), None)
 
     def delete_catalog_agent(self, name: str) -> None:
-        with self._lock:
-            self.con.execute("DELETE FROM catalog_agents WHERE name = ?", [name])
+        with self._swrite:
+            self.sc.execute("DELETE FROM catalog_agents WHERE name = ?", [name])
             # its wiring in every project: what wakes it, and handoffs from and to it
-            self.con.execute("DELETE FROM project_wiring WHERE agent = ? OR from_agent = ?",
+            self.sc.execute("DELETE FROM project_wiring WHERE agent = ? OR from_agent = ?",
                              [name, name])
-            self.con.execute("DELETE FROM agent_runs WHERE agent = ?", [name])
+            self.sc.execute("DELETE FROM agent_runs WHERE agent = ?", [name])
             self._forget_part("agent", name)
             # a handoff to the agent goes with it (TR-334): the agents that handed off to it
             # keep their other handoffs
-            rows = self.con.execute("SELECT name, handoffs FROM catalog_agents "
+            rows = self.sc.execute("SELECT name, handoffs FROM catalog_agents "
                                     "WHERE handoffs IS NOT NULL").fetchall()
             for other, raw in rows:
                 entries = json.loads(raw) if raw else []
                 kept = [h for h in entries if h.get("agent") != name]
                 if len(kept) != len(entries):
-                    self.con.execute("UPDATE catalog_agents SET handoffs = ? WHERE name = ?",
+                    self.sc.execute("UPDATE catalog_agents SET handoffs = ? WHERE name = ?",
                                      [json.dumps(kept), other])
 
     # ── agent runs (the operational record; the finding is an event, not this) ──
@@ -1894,8 +1992,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         # max_rounds is the cap this run will be held to (the effective value, not the agent's
         # nullable setting), so the history stays honest if defaults change later. woken_by,
         # parent_run_id and project are the run's lineage (TR-330), fixed when it starts.
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO agent_runs (id, agent, trigger, dispatch_id, key_value, status, "
                 "rounds, tool_calls, prompt_hash, started_at, max_rounds, woken_by, "
                 "parent_run_id, project, practice) "
@@ -1904,7 +2002,7 @@ class Store(FactoryStore, ClaudeUsageStore):
                  woken_by, parent_run_id or None, project or None, bool(practice)],
             )
             if project:   # the run belongs to its project (more join with add_run_projects)
-                self.con.execute("INSERT INTO run_projects (run_id, project) VALUES (?, ?) "
+                self.sc.execute("INSERT INTO run_projects (run_id, project) VALUES (?, ?) "
                                  "ON CONFLICT DO NOTHING", [run_id, project])
 
     def finish_agent_run(self, run_id: str, status: str, rounds: int = 0, tool_calls: int = 0,
@@ -1912,8 +2010,8 @@ class Store(FactoryStore, ClaudeUsageStore):
                          external_tools: list[str] | None = None, outcome: str | None = None,
                          verdict: str | None = None, headline: str | None = None,
                          next_step: str | None = None) -> None:
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "UPDATE agent_runs SET status = ?, rounds = ?, tool_calls = ?, finding = ?, "
                 "error = ?, external_tools = ?, outcome = ?, verdict = ?, headline = ?, "
                 "next_step = ?, finished_at = ?, "
@@ -1931,8 +2029,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         """Stamp a run with what its model loop consumed. Separate from finish_agent_run on
         purpose: usage exists for every outcome (ok, empty, exhausted, and failed after burning
         tokens), so it is written by the loop's finally rather than each outcome path."""
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "UPDATE agent_runs SET model = ?, input_tokens = ?, output_tokens = ?, "
                 "cache_creation_input_tokens = ?, cache_read_input_tokens = ?, cost_usd = ?, "
                 "provider = COALESCE(?, provider) WHERE id = ?",
@@ -1942,8 +2040,8 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def count_agent_runs(self, agent: str) -> tuple[int, int]:
         """(all runs, runs that ended ok) for one agent."""
-        with self._lock:
-            r = self.con.execute("SELECT COUNT(*), COUNT(*) FILTER (WHERE status = 'ok') "
+        with self._sread:
+            r = self.sc.execute("SELECT COUNT(*), COUNT(*) FILTER (WHERE status = 'ok') "
                                  "FROM agent_runs WHERE agent = ?", [agent]).fetchone()
         return (int(r[0]), int(r[1])) if r else (0, 0)
 
@@ -1974,8 +2072,8 @@ class Store(FactoryStore, ClaudeUsageStore):
             sql += "WHERE " + " AND ".join(where) + " "
         sql += "ORDER BY started_at DESC LIMIT ? OFFSET ?"
         params += [int(limit), max(0, int(offset))]
-        with self._lock:
-            rows = self.con.execute(sql, params).fetchall()
+        with self._sread:
+            rows = self.sc.execute(sql, params).fetchall()
         return [
             {"id": r[0], "agent": r[1], "trigger": r[2], "dispatch_id": r[3], "key": r[4],
              "status": r[5], "rounds": r[6], "tool_calls": r[7], "started_at": r[8],
@@ -2022,33 +2120,33 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def set_run_results(self, run_id: str, results: list) -> None:
         """What the run produced (TR-220), stamped when it ends."""
-        with self._lock:
-            self.con.execute("UPDATE agent_runs SET results = ? WHERE id = ?",
+        with self._swrite:
+            self.sc.execute("UPDATE agent_runs SET results = ? WHERE id = ?",
                              [json.dumps(results), run_id])
 
     def set_run_skills(self, run_id: str, names: list[str]) -> None:
         """The skills the run loaded (TR-332), stamped when it ends."""
-        with self._lock:
-            self.con.execute("UPDATE agent_runs SET skills = ? WHERE id = ?",
+        with self._swrite:
+            self.sc.execute("UPDATE agent_runs SET skills = ? WHERE id = ?",
                              [json.dumps(names), run_id])
 
     def set_run_handled(self, run_id: str, by: str | None) -> None:
         """Mark a run's result handled by `by` now, or clear the mark when `by` is None."""
-        with self._lock:
-            self.con.execute("UPDATE agent_runs SET handled_at = ?, handled_by = ? WHERE id = ?",
+        with self._swrite:
+            self.sc.execute("UPDATE agent_runs SET handled_at = ?, handled_by = ? WHERE id = ?",
                              [now_utc() if by else None, by or None, run_id])
 
     def set_run_practice(self, run_id: str) -> None:
         """Mark a run as practice: an outside agent's finding answering a practice firing."""
-        with self._lock:
-            self.con.execute("UPDATE agent_runs SET practice = TRUE WHERE id = ?", [run_id])
+        with self._swrite:
+            self.sc.execute("UPDATE agent_runs SET practice = TRUE WHERE id = ?", [run_id])
 
     def project_threads_since(self, project: str, since) -> int:
         """How many timeline threads of a project started at or after `since` something looked
         at: the roots timeline_roots pages through, counted, without firings no agent was on
         (a trigger whose agents are all off still fires). Practice threads are left out."""
-        with self._lock:
-            r = self.con.execute(
+        with self._sread:
+            r = self.sc.execute(
                 "WITH pr AS (SELECT run_id FROM run_projects WHERE project = ?), "
                 "pd AS (SELECT dispatch_id FROM dispatch_projects WHERE project = ?) "
                 "SELECT (SELECT count(*) FROM dispatch_log d WHERE dispatch_id IN (SELECT * FROM pd) "
@@ -2065,8 +2163,8 @@ class Store(FactoryStore, ClaudeUsageStore):
     def project_spend_since(self, project: str, since) -> float:
         """What the runs of a project started at or after `since` cost, in USD. Practice runs are
         left out."""
-        with self._lock:
-            r = self.con.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM agent_runs "
+        with self._sread:
+            r = self.sc.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM agent_runs "
                                  "WHERE id IN (SELECT run_id FROM run_projects WHERE project = ?) "
                                  "AND started_at >= ? "
                                  "AND NOT COALESCE(practice, FALSE)", [project, since]).fetchone()
@@ -2094,8 +2192,8 @@ class Store(FactoryStore, ClaudeUsageStore):
     def set_run_delivery(self, run_id: str, delivery: str, error: str | None = None) -> None:
         """The write-back's outcome for a run, recorded after the finding is stored: a failed
         delivery never loses the finding, it only marks the run."""
-        with self._lock:
-            self.con.execute("UPDATE agent_runs SET delivery = ?, delivery_error = ? WHERE id = ?",
+        with self._swrite:
+            self.sc.execute("UPDATE agent_runs SET delivery = ?, delivery_error = ? WHERE id = ?",
                              [delivery, error, run_id])
 
     def agent_stats(self, project: str | None = None) -> dict[str, dict]:
@@ -2104,8 +2202,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         runs that actually concluded or tried to. Cost sums skip NULL rows (historical runs and
         unpriced models); `uncosted_runs` says how many finished runs the sum could not see, so
         a total reads as a floor rather than a fact."""
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT agent, count(*), "
                 "count(*) FILTER (WHERE status = 'ok'), "
                 "count(*) FILTER (WHERE status IN ('ok', 'empty', 'failed', 'exhausted')), "
@@ -2136,8 +2234,8 @@ class Store(FactoryStore, ClaudeUsageStore):
                            cost_usd: float | None = None,
                            key_source: str | None = None,
                            provider: str | None = None) -> None:
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO model_usage (id, ts, surface, agent, run_id, model, calls, "
                 "input_tokens, output_tokens, cache_creation_input_tokens, "
                 "cache_read_input_tokens, cost_usd, key_source, provider) "
@@ -2165,20 +2263,20 @@ class Store(FactoryStore, ClaudeUsageStore):
                     "cost_usd": float(r[5]) if r[5] is not None else None,
                     "uncosted_calls": int(r[6])}
 
-        with self._lock:
-            total = self.con.execute(f"SELECT {agg} FROM model_usage").fetchone()
-            surfaces = self.con.execute(
+        with self._sread:
+            total = self.sc.execute(f"SELECT {agg} FROM model_usage").fetchone()
+            surfaces = self.sc.execute(
                 f"SELECT surface, {agg} FROM model_usage GROUP BY surface").fetchall()
             # Which key paid: the boundary a hosted trial is enforced against ('unknown' holds
             # rows from before attribution existed).
-            key_sources = self.con.execute(
+            key_sources = self.sc.execute(
                 f"SELECT coalesce(key_source, 'unknown'), {agg} FROM model_usage "
                 "GROUP BY 1").fetchall()
             # Which provider served it: rows from before providers existed were all Anthropic.
-            providers = self.con.execute(
+            providers = self.sc.execute(
                 f"SELECT coalesce(provider, 'anthropic'), {agg} FROM model_usage "
                 "GROUP BY 1").fetchall()
-            daily = self.con.execute(
+            daily = self.sc.execute(
                 f"SELECT CAST(ts AS DATE) AS day, {agg} FROM model_usage "
                 f"WHERE ts > now() - INTERVAL {int(days)} DAY "
                 "GROUP BY day ORDER BY day").fetchall()
@@ -2198,8 +2296,8 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def agent_cost_total(self, agent: str) -> float:
         """Lifetime spend of one agent, from the run log (the budget_usd cap counts against it)."""
-        with self._lock:
-            r = self.con.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM agent_runs "
+        with self._sread:
+            r = self.sc.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM agent_runs "
                                  "WHERE agent = ?", [agent]).fetchone()
         return float(r[0] or 0)
 
@@ -2216,17 +2314,38 @@ class Store(FactoryStore, ClaudeUsageStore):
         trigger in a hot loop — the exact case this cap exists for — would silence its agent
         indefinitely. `failed` rows ARE counted: some of them failed after spending tokens, and
         this is a cost ceiling, so the conservative direction is to count them."""
-        sql = ("SELECT count(*) FROM agent_runs WHERE agent = ? "
-               "AND started_at > now() - INTERVAL 1 DAY AND status <> 'capped'")
+        where, params = self._cap_window(agent, exclude_run_id, include_practice)
+        with self._sread:
+            row = self.sc.execute(f"SELECT count(*) FROM agent_runs WHERE {where}", params).fetchone()
+        return int(row[0]) if row else 0
+
+    def agent_cap_frees_at(self, agent: str, cap: int, exclude_run_id: str | None = None,
+                           include_practice: bool = True):
+        """When a run past the daily cap is allowed again: the moment the run that holds the count
+        at `cap` is a day old (a rolling window, so the oldest run in it, or a later one when the
+        count is already over the cap). The same runs `agent_runs_today` counts. None when the
+        agent is under the cap, so nothing waits."""
+        where, params = self._cap_window(agent, exclude_run_id, include_practice)
+        with self._sread:
+            rows = self.sc.execute(f"SELECT started_at FROM agent_runs WHERE {where} "
+                                    "ORDER BY started_at", params).fetchall()
+        if len(rows) < cap:
+            return None
+        started = rows[len(rows) - cap][0]
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        return started + timedelta(days=1)
+
+    @staticmethod
+    def _cap_window(agent: str, exclude_run_id: str | None, include_practice: bool):
+        where = "agent = ? AND started_at > now() - INTERVAL 1 DAY AND status <> 'capped'"
         params: list = [agent]
         if exclude_run_id:
-            sql += " AND id <> ?"
+            where += " AND id <> ?"
             params.append(exclude_run_id)
         if not include_practice:   # project health: a practice run is not the agent's workload
-            sql += " AND NOT COALESCE(practice, FALSE)"
-        with self._lock:
-            row = self.con.execute(sql, params).fetchone()
-        return int(row[0]) if row else 0
+            where += " AND NOT COALESCE(practice, FALSE)"
+        return where, params
 
     def reap_stale_agent_runs(self, older_than: str | None = None) -> int:
         """Close out orphaned `running` rows, returning how many were reaped.
@@ -2239,13 +2358,13 @@ class Store(FactoryStore, ClaudeUsageStore):
         cutoff = None if older_than is None else now_utc() - parse_window(older_than)
         where = "status = 'running'" + ("" if cutoff is None else " AND started_at < ?")
         args: list = [] if cutoff is None else [cutoff]
-        with self._lock:
-            row = self.con.execute(f"SELECT count(*) FROM agent_runs WHERE {where}",
+        with self._swrite:
+            row = self.sc.execute(f"SELECT count(*) FROM agent_runs WHERE {where}",
                                    args).fetchone()
             n = int(row[0]) if row else 0
             if n:
                 ts = now_utc()
-                self.con.execute(
+                self.sc.execute(
                     "UPDATE agent_runs SET status = 'failed', error = ?, finished_at = ?, "
                     "duration_ms = CAST(date_diff('millisecond', started_at, ?) AS INTEGER) "
                     f"WHERE {where}",
@@ -2254,16 +2373,16 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     # ── settings (instance config set from the console) ───────────────────────
     def get_setting(self, key: str) -> str | None:
-        with self._lock:
-            row = self.con.execute("SELECT value FROM settings WHERE key = ?", [key]).fetchone()
+        with self._sread:
+            row = self.sc.execute("SELECT value FROM settings WHERE key = ?", [key]).fetchone()
         return row[0] if row else None
 
     def set_setting(self, key: str, value: str | None) -> None:
-        with self._lock:
+        with self._swrite:
             if value is None:
-                self.con.execute("DELETE FROM settings WHERE key = ?", [key])
+                self.sc.execute("DELETE FROM settings WHERE key = ?", [key])
             else:
-                self.con.execute(
+                self.sc.execute(
                     "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) "
                     "ON CONFLICT (key) DO UPDATE SET value = excluded.value, "
                     "updated_at = excluded.updated_at", [key, value, now_utc()])
@@ -2272,8 +2391,8 @@ class Store(FactoryStore, ClaudeUsageStore):
     # `auth_value` is a secret (an API key or full header value); redaction is the API layer's
     # job, the store holds it verbatim like connector secrets.
     def list_mcp_servers(self) -> list[dict]:
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT name, url, auth_header, auth_value, updated_at, owned_by, customized, headers "
                 "FROM mcp_servers ORDER BY name").fetchall()
         return [{"name": r[0], "url": r[1], "auth_header": r[2] or "",
@@ -2287,8 +2406,8 @@ class Store(FactoryStore, ClaudeUsageStore):
     def upsert_mcp_server(self, name: str, url: str, auth_header: str | None = None,
                           auth_value: str | None = None, headers: dict | None = None) -> None:
         ts = now_utc()
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO mcp_servers (name, url, auth_header, auth_value, headers, "
                 "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (name) DO UPDATE SET url = excluded.url, "
@@ -2300,15 +2419,15 @@ class Store(FactoryStore, ClaudeUsageStore):
     def delete_mcp_server(self, name: str) -> None:
         """Delete an MCP server: it leaves every project's list of parts and every agent's
         tools, so no agent is left naming a server that is gone."""
-        with self._lock:
-            self.con.execute("DELETE FROM mcp_servers WHERE name = ?", [name])
+        with self._swrite:
+            self.sc.execute("DELETE FROM mcp_servers WHERE name = ?", [name])
             self._forget_part("mcp_server", name)
-            for agent, raw in self.con.execute(
+            for agent, raw in self.sc.execute(
                     "SELECT name, mcp_servers FROM catalog_agents "
                     "WHERE mcp_servers IS NOT NULL").fetchall():
                 listed = json.loads(raw) if raw else []
                 if name in listed:
-                    self.con.execute("UPDATE catalog_agents SET mcp_servers = ? WHERE name = ?",
+                    self.sc.execute("UPDATE catalog_agents SET mcp_servers = ? WHERE name = ?",
                                      [json.dumps([x for x in listed if x != name]), agent])
 
     # ── projects (templates instantiated with params; they own ordinary catalog objects) ──
@@ -2320,8 +2439,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         """Mark an ordinary object as created by a project (or clear it). Ownership is a badge and
         a diff key, not a lock: the object stays editable and deletable everywhere."""
         table = self._OWNED_TABLES[kind]
-        with self._lock:
-            self.con.execute(f"UPDATE {table} SET owned_by = ?, customized = FALSE WHERE name = ?",
+        with self._swrite:
+            self.sc.execute(f"UPDATE {table} SET owned_by = ?, customized = FALSE WHERE name = ?",
                              [project_id, name])
             if kind == "agent" and project_id:
                 self._wire_from_definition(name, project_id)
@@ -2329,17 +2448,17 @@ class Store(FactoryStore, ClaudeUsageStore):
     def _wire_from_definition(self, name: str, project: str) -> None:
         """An agent placed in a project that does not wire it yet takes the trigger and handoffs
         it was defined with as that project's wiring (off until turned on). Lock held."""
-        r = self.con.execute("SELECT trigger, handoffs FROM catalog_agents WHERE name = ?",
+        r = self.sc.execute("SELECT trigger, handoffs FROM catalog_agents WHERE name = ?",
                              [name]).fetchone()
         if r is None:
             return
-        has = self.con.execute("SELECT 1 FROM project_wiring WHERE project = ? AND "
+        has = self.sc.execute("SELECT 1 FROM project_wiring WHERE project = ? AND "
                                "(agent = ? AND kind = 'wake' OR from_agent = ?) LIMIT 1",
                                [project, name, name]).fetchone()
         if not has:
             # the project that made it starts from its own handoffs; another project that takes
             # it in wires its own (it may not have the agents those name)
-            maker = self.con.execute("SELECT owned_by FROM catalog_agents WHERE name = ?",
+            maker = self.sc.execute("SELECT owned_by FROM catalog_agents WHERE name = ?",
                                      [name]).fetchone()
             mine = bool(maker) and maker[0] == project
             self._wire_owner(name, project, r[0], (json.loads(r[1]) if r[1] else []) if mine else None)
@@ -2349,34 +2468,34 @@ class Store(FactoryStore, ClaudeUsageStore):
         the claim holds afterwards. The check and the write share the store lock, so two projects
         adopting the same object cannot both win."""
         table = self._OWNED_TABLES[kind]
-        with self._lock:
-            self.con.execute(f"UPDATE {table} SET owned_by = ?, customized = FALSE "
+        with self._swrite:
+            self.sc.execute(f"UPDATE {table} SET owned_by = ?, customized = FALSE "
                              f"WHERE name = ? AND (owned_by IS NULL OR owned_by = ?)",
                              [project_id, name, project_id])
-            row = self.con.execute(f"SELECT owned_by FROM {table} WHERE name = ?", [name]).fetchone()
+            row = self.sc.execute(f"SELECT owned_by FROM {table} WHERE name = ?", [name]).fetchone()
         return bool(row and row[0] == project_id)
 
     def release_owned_by(self, kind: str, name: str, project_id: str) -> None:
         """Clear ownership only while the object is still this project's (a same-name object
         recreated by hand and claimed by another project is left alone)."""
         table = self._OWNED_TABLES[kind]
-        with self._lock:
-            self.con.execute(f"UPDATE {table} SET owned_by = NULL, customized = FALSE "
+        with self._swrite:
+            self.sc.execute(f"UPDATE {table} SET owned_by = NULL, customized = FALSE "
                              f"WHERE name = ? AND owned_by = ?", [name, project_id])
 
     def mark_customized(self, kind: str, name: str) -> bool:
         """Called by the normal update paths: if the object is owned by a project, flag it so the
         engine keeps the user's version on the next re-plan. Returns whether it was owned."""
         table = self._OWNED_TABLES[kind]
-        with self._lock:
-            row = self.con.execute(f"SELECT owned_by FROM {table} WHERE name = ?", [name]).fetchone()
+        with self._swrite:
+            row = self.sc.execute(f"SELECT owned_by FROM {table} WHERE name = ?", [name]).fetchone()
             if not row or not row[0]:
                 return False
-            owner = self.con.execute("SELECT recipe FROM usecases WHERE id = ?", [row[0]]).fetchone()
+            owner = self.sc.execute("SELECT recipe FROM usecases WHERE id = ?", [row[0]]).fetchone()
             if owner and owner[0] in ("custom", "default"):
                 return True   # adopted, not planned: there is no planned version to diverge from
-            self.con.execute(f"UPDATE {table} SET customized = TRUE WHERE name = ?", [name])
-            self.con.execute("UPDATE usecase_objects SET customized = TRUE "
+            self.sc.execute(f"UPDATE {table} SET customized = TRUE WHERE name = ?", [name])
+            self.sc.execute("UPDATE usecase_objects SET customized = TRUE "
                              "WHERE usecase_id = ? AND kind = ? AND name = ?", [row[0], kind, name])
         return True
 
@@ -2384,8 +2503,8 @@ class Store(FactoryStore, ClaudeUsageStore):
                        status: str = "active", goal: str | None = None,
                        lead_person_id: str | None = None) -> None:
         ts = now_utc()
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO usecases (id, recipe, name, params, status, created_at, updated_at, "
                 "last_error, goal, lead_person_id, scope) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 'team')",
@@ -2409,8 +2528,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         if last_error != "":
             sets.append("last_error = ?"); vals.append(last_error)
         vals.append(uid)
-        with self._lock:
-            self.con.execute(f"UPDATE usecases SET {', '.join(sets)} WHERE id = ?", vals)
+        with self._swrite:
+            self.sc.execute(f"UPDATE usecases SET {', '.join(sets)} WHERE id = ?", vals)
 
     @staticmethod
     def _project_row(r) -> dict:
@@ -2420,8 +2539,8 @@ class Store(FactoryStore, ClaudeUsageStore):
                 "scope": r[11] or "team"}
 
     def list_projects(self) -> list[dict]:
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
                 "goal, kind, lead_person_id, scope FROM usecases ORDER BY created_at").fetchall()
         return [self._project_row(r) for r in rows]
@@ -2429,29 +2548,29 @@ class Store(FactoryStore, ClaudeUsageStore):
     def private_projects(self) -> list[dict]:
         """The private projects, as {id, name, scope}: the one small query every cell-wide read
         runs to learn whether it has anything to hide (usually it has not)."""
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT id, name FROM usecases WHERE scope = 'private'").fetchall()
         return [{"id": r[0], "name": r[1], "scope": "private"} for r in rows]
 
     def get_project(self, uid: str) -> dict | None:
-        with self._lock:
-            r = self.con.execute(
+        with self._sread:
+            r = self.sc.execute(
                 "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
                 "goal, kind, lead_person_id, scope FROM usecases WHERE id = ?", [uid]).fetchone()
         return self._project_row(r) if r else None
 
     # ── who a project belongs to: its lead, its scope and its members (TR-623) ──
     def set_project_lead(self, uid: str, person_id: str | None) -> None:
-        with self._lock:
-            self.con.execute("UPDATE usecases SET lead_person_id = ? WHERE id = ?",
+        with self._swrite:
+            self.sc.execute("UPDATE usecases SET lead_person_id = ? WHERE id = ?",
                              [person_id or None, uid])
 
     def set_project_scope(self, uid: str, scope: str) -> None:
         if scope not in ("team", "private"):
             raise ValueError("scope is team or private")
-        with self._lock:
-            self.con.execute("UPDATE usecases SET scope = ? WHERE id = ?", [scope, uid])
+        with self._swrite:
+            self.sc.execute("UPDATE usecases SET scope = ? WHERE id = ?", [scope, uid])
 
     def add_project_member(self, uid: str, person_id: str, added_by: str | None = None,
                            reason: str = "manual") -> bool:
@@ -2459,29 +2578,29 @@ class Store(FactoryStore, ClaudeUsageStore):
         a member (a second add changes nothing, the first reason stays)."""
         if reason not in ("manual", "ticket"):
             raise ValueError("reason is manual or ticket")
-        with self._lock:
-            if self.con.execute("SELECT 1 FROM project_members WHERE project = ? AND person_id = ?",
+        with self._swrite:
+            if self.sc.execute("SELECT 1 FROM project_members WHERE project = ? AND person_id = ?",
                                 [uid, person_id]).fetchone():
                 return False
-            self.con.execute(
+            self.sc.execute(
                 "INSERT INTO project_members (project, person_id, added_by, added_at, reason) "
                 "VALUES (?, ?, ?, ?, ?)", [uid, person_id, added_by or None, now_utc(), reason])
         return True
 
     def remove_project_member(self, uid: str, person_id: str) -> bool:
         """True when they were a member (a stored one; the lead is not)."""
-        with self._lock:
-            hit = self.con.execute("SELECT 1 FROM project_members WHERE project = ? "
+        with self._swrite:
+            hit = self.sc.execute("SELECT 1 FROM project_members WHERE project = ? "
                                    "AND person_id = ?", [uid, person_id]).fetchone()
-            self.con.execute("DELETE FROM project_members WHERE project = ? AND person_id = ?",
+            self.sc.execute("DELETE FROM project_members WHERE project = ? AND person_id = ?",
                              [uid, person_id])
         return bool(hit)
 
     def list_project_members(self, uid: str) -> list[dict]:
         """The people on the project besides its lead, oldest first: {person_id, added_by,
         added_at, reason}."""
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT person_id, added_by, added_at, reason FROM project_members "
                 "WHERE project = ? ORDER BY added_at, person_id", [uid]).fetchall()
         return [{"person_id": r[0], "added_by": r[1], "added_at": r[2], "reason": r[3]}
@@ -2491,31 +2610,31 @@ class Store(FactoryStore, ClaudeUsageStore):
         """The project's lead, or a person on its member list."""
         if not person_id:
             return False
-        with self._lock:
-            lead = self.con.execute("SELECT lead_person_id FROM usecases WHERE id = ?",
+        with self._sread:
+            lead = self.sc.execute("SELECT lead_person_id FROM usecases WHERE id = ?",
                                     [uid]).fetchone()
             if lead and lead[0] == person_id:
                 return True
-            return bool(self.con.execute(
+            return bool(self.sc.execute(
                 "SELECT 1 FROM project_members WHERE project = ? AND person_id = ?",
                 [uid, person_id]).fetchone())
 
     def set_project_kind(self, uid: str, kind: str | None) -> None:
-        with self._lock:
-            self.con.execute("UPDATE usecases SET kind = ? WHERE id = ?", [kind or None, uid])
+        with self._swrite:
+            self.sc.execute("UPDATE usecases SET kind = ? WHERE id = ?", [kind or None, uid])
 
     def _factory_kind_upgrade(self) -> None:
         """Once: a project from before project kinds that holds docs and tickets and no agent was
         made by a spec session; it is a software factory project. Lock not needed (init)."""
-        if self.con.execute("SELECT value FROM settings WHERE key = 'factory_kind_filled'"
+        if self.sc.execute("SELECT value FROM settings WHERE key = 'factory_kind_filled'"
                             ).fetchone():
             return
-        self.con.execute(
+        self.sc.execute(
             "UPDATE usecases SET kind = 'software_factory' WHERE kind IS NULL AND recipe = 'custom' "
             "AND id IN (SELECT project FROM tickets) "
             "AND id IN (SELECT usecase_id FROM usecase_objects WHERE kind = 'doc') "
             "AND id NOT IN (SELECT usecase_id FROM usecase_objects WHERE kind = 'agent')")
-        self.con.execute("INSERT INTO settings (key, value, updated_at) VALUES "
+        self.sc.execute("INSERT INTO settings (key, value, updated_at) VALUES "
                          "('factory_kind_filled', '1', ?) ON CONFLICT (key) DO NOTHING",
                          [now_utc()])
 
@@ -2523,58 +2642,58 @@ class Store(FactoryStore, ClaudeUsageStore):
         return next((u for u in self.list_projects() if u["name"] == name), None)
 
     def delete_project(self, uid: str) -> None:
-        with self._lock:
+        with self._swrite:
             # its keys stop working and nothing is delivered for it any more (TR-335)
-            self.con.execute("UPDATE api_keys SET revoked_at = ? WHERE project = ? "
+            self.sc.execute("UPDATE api_keys SET revoked_at = ? WHERE project = ? "
                              "AND revoked_at IS NULL", [now_utc(), uid])
-            self.con.execute("DELETE FROM subscriptions WHERE project = ?", [uid])
-            self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ?", [uid])
-            self.con.execute("DELETE FROM project_wiring WHERE project = ?", [uid])
-            self.con.execute("DELETE FROM project_members WHERE project = ?", [uid])
+            self.sc.execute("DELETE FROM subscriptions WHERE project = ?", [uid])
+            self.sc.execute("DELETE FROM usecase_objects WHERE usecase_id = ?", [uid])
+            self.sc.execute("DELETE FROM project_wiring WHERE project = ?", [uid])
+            self.sc.execute("DELETE FROM project_members WHERE project = ?", [uid])
             self._forget_unused_skills()   # a skill another project uses stays
             self._forget_unused_docs()     # so does a doc
-            self.con.execute("DELETE FROM tickets WHERE project = ?", [uid])
+            self.sc.execute("DELETE FROM tickets WHERE project = ?", [uid])
             self._factory_forget_project(uid)
             self._usage_forget_project(uid)
-            self.con.execute("DELETE FROM project_sessions WHERE project = ?", [uid])
+            self.sc.execute("DELETE FROM project_sessions WHERE project = ?", [uid])
             # a crew station's session serves every project: its state stays
-            self.con.execute("DELETE FROM session_states WHERE session NOT IN (SELECT session "
+            self.sc.execute("DELETE FROM session_states WHERE session NOT IN (SELECT session "
                              "FROM project_sessions) AND session NOT IN (SELECT session FROM "
                              "session_stations)")
-            self.con.execute("DELETE FROM usecase_log WHERE usecase_id = ?", [uid])
-            self.con.execute("DELETE FROM usecases WHERE id = ?", [uid])
+            self.sc.execute("DELETE FROM usecase_log WHERE usecase_id = ?", [uid])
+            self.sc.execute("DELETE FROM usecases WHERE id = ?", [uid])
 
     def get_project_setup(self, uid: str) -> dict | None:
         """The guided setup of a project ({plan, step, practice_run, ...}), or None when it was
         not set up that way."""
-        with self._lock:
-            r = self.con.execute("SELECT setup FROM usecases WHERE id = ?", [uid]).fetchone()
+        with self._sread:
+            r = self.sc.execute("SELECT setup FROM usecases WHERE id = ?", [uid]).fetchone()
         return json.loads(r[0]) if r and r[0] else None
 
     def set_project_setup(self, uid: str, setup: dict | None) -> None:
-        with self._lock:
-            self.con.execute("UPDATE usecases SET setup = ?, updated_at = ? WHERE id = ?",
+        with self._swrite:
+            self.sc.execute("UPDATE usecases SET setup = ?, updated_at = ? WHERE id = ?",
                              [json.dumps(setup, default=str) if setup is not None else None,
                               now_utc(), uid])
 
     def upsert_project_object(self, uid: str, kind: str, key: str, name: str) -> None:
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO usecase_objects (usecase_id, kind, key, name, customized, created_at) "
                 "VALUES (?, ?, ?, ?, FALSE, ?) ON CONFLICT (usecase_id, kind, key) DO UPDATE SET "
                 "name = excluded.name", [uid, kind, key, name, now_utc()])
 
     def list_project_objects(self, uid: str) -> list[dict]:
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT kind, key, name, customized, created_at FROM usecase_objects "
                 "WHERE usecase_id = ? ORDER BY created_at, kind, key", [uid]).fetchall()
         return [{"kind": r[0], "key": r[1], "name": r[2], "customized": bool(r[3]),
                  "created_at": r[4]} for r in rows]
 
     def delete_project_object(self, uid: str, kind: str, key: str) -> None:
-        with self._lock:
-            self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = ? "
+        with self._swrite:
+            self.sc.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = ? "
                              "AND key = ?", [uid, kind, key])
 
     # ── skills (TR-332): parts of the cell (P-TR-216), used by projects; validated by
@@ -2582,8 +2701,8 @@ class Store(FactoryStore, ClaudeUsageStore):
     def list_skills(self, project: str) -> list[dict]:
         """The skills a project uses, without their bodies: name, description, updated_at, size
         (bytes of the body)."""
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT DISTINCT s.name, s.description, s.updated_at, octet_length(encode(s.body)) "
                 "FROM shared_skills s JOIN usecase_objects o ON o.kind = 'skill' AND o.name = s.name "
                 "WHERE o.usecase_id = ? ORDER BY s.name", [project]).fetchall()
@@ -2593,10 +2712,10 @@ class Store(FactoryStore, ClaudeUsageStore):
     def list_all_skills(self) -> list[dict]:
         """Every skill on the cell with its body, the project that made it (`project`) and the
         projects that use it (`projects`)."""
-        with self._lock:
-            rows = self.con.execute("SELECT name, description, body, made_by FROM shared_skills "
+        with self._sread:
+            rows = self.sc.execute("SELECT name, description, body, made_by FROM shared_skills "
                                     "ORDER BY name").fetchall()
-            users = self.con.execute("SELECT name, usecase_id FROM usecase_objects WHERE "
+            users = self.sc.execute("SELECT name, usecase_id FROM usecase_objects WHERE "
                                      "kind = 'skill' GROUP BY name, usecase_id").fetchall()
         by: dict[str, list] = {}
         for n, u in users:
@@ -2606,12 +2725,12 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def get_skill(self, project: str | None, name: str) -> dict | None:
         """A skill the project uses (any project, with None)."""
-        with self._lock:
-            if project is not None and not self.con.execute(
+        with self._sread:
+            if project is not None and not self.sc.execute(
                     "SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND kind = 'skill' "
                     "AND name = ?", [project, name]).fetchone():
                 return None
-            r = self.con.execute(
+            r = self.sc.execute(
                 "SELECT name, description, body, created_at, updated_at FROM shared_skills "
                 "WHERE name = ?", [name]).fetchone()
         return ({"name": r[0], "description": r[1], "body": r[2], "created_at": r[3],
@@ -2619,10 +2738,10 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def _use_skill(self, project: str, name: str) -> bool:
         """The project uses the skill; True when it did not before. Lock held."""
-        if self.con.execute("SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND kind = 'skill' "
+        if self.sc.execute("SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND kind = 'skill' "
                             "AND name = ?", [project, name]).fetchone():
             return False
-        self.con.execute("INSERT INTO usecase_objects (usecase_id, kind, key, name, customized, "
+        self.sc.execute("INSERT INTO usecase_objects (usecase_id, kind, key, name, customized, "
                          "created_at) VALUES (?, 'skill', ?, ?, FALSE, ?) ON CONFLICT DO NOTHING",
                          [project, f"skill:{name}", name, now_utc()])
         return True
@@ -2630,8 +2749,8 @@ class Store(FactoryStore, ClaudeUsageStore):
     def use_skill(self, project: str, name: str) -> bool:
         """A skill already on the cell, used by one more project. False when there is no such
         skill; the project already using it is fine."""
-        with self._lock:
-            if not self.con.execute("SELECT 1 FROM shared_skills WHERE name = ?", [name]).fetchone():
+        with self._sread:
+            if not self.sc.execute("SELECT 1 FROM shared_skills WHERE name = ?", [name]).fetchone():
                 return False
             self._use_skill(project, name)
         return True
@@ -2640,8 +2759,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         """Create or replace the skill (shared: every project that uses it sees the change), and
         have the project use it. Returns True when the project did not have it before."""
         ts = now_utc()
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO shared_skills (name, description, body, made_by, created_at, "
                 "updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (name) DO UPDATE SET "
                 "description = excluded.description, body = excluded.body, "
@@ -2651,17 +2770,17 @@ class Store(FactoryStore, ClaudeUsageStore):
     def delete_skill(self, project: str, name: str) -> bool:
         """The project stops using the skill; the skill goes when no project uses it any more.
         Returns whether the project had it."""
-        with self._lock:
-            had = self.con.execute("SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND "
+        with self._swrite:
+            had = self.sc.execute("SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND "
                                    "kind = 'skill' AND name = ?", [project, name]).fetchone()
-            self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = 'skill' "
+            self.sc.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = 'skill' "
                              "AND name = ?", [project, name])
             self._forget_unused_skills()
         return had is not None
 
     def _forget_unused_skills(self) -> None:
         """Skills no project uses any more go. Lock held."""
-        self.con.execute("DELETE FROM shared_skills WHERE name NOT IN (SELECT name FROM "
+        self.sc.execute("DELETE FROM shared_skills WHERE name NOT IN (SELECT name FROM "
                          "usecase_objects WHERE kind = 'skill')")
 
     def skill_users(self, name: str) -> list[str]:
@@ -2669,8 +2788,8 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def mark_skill_customized(self, project: str, name: str) -> None:
         """A skill a template planned was edited by hand: a re-plan keeps the edit."""
-        with self._lock:
-            self.con.execute("UPDATE usecase_objects SET customized = TRUE WHERE usecase_id = ? "
+        with self._swrite:
+            self.sc.execute("UPDATE usecase_objects SET customized = TRUE WHERE usecase_id = ? "
                              "AND kind = 'skill' AND name = ?", [project, name])
 
     # ── docs and tickets (TR-403): validated by tares/docs.py before they get here ──
@@ -2692,8 +2811,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         a project, listed only to them. Returns its id."""
         doc_id = "doc_" + uuid.uuid4().hex[:10]
         ts = now_utc()
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO docs (id, kind, title, body, made_by, updated_by, created_at, "
                 "updated_at, owner) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [doc_id, kind, title, body, project, by or None, ts, ts, owner])
@@ -2708,22 +2827,22 @@ class Store(FactoryStore, ClaudeUsageStore):
             if v is not None:
                 sets.append(f"{col} = ?"); vals.append(v)
         vals.append(doc_id)
-        with self._lock:
-            self.con.execute(f"UPDATE docs SET {', '.join(sets)} WHERE id = ?", vals)
+        with self._swrite:
+            self.sc.execute(f"UPDATE docs SET {', '.join(sets)} WHERE id = ?", vals)
 
     def get_doc(self, project: str | None, doc_id: str) -> dict | None:
         """A doc the project includes (any doc, with None), with its body and the projects that
         include it."""
-        with self._lock:
-            if project is not None and not self.con.execute(
+        with self._sread:
+            if project is not None and not self.sc.execute(
                     "SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND kind = 'doc' "
                     "AND name = ?", [project, doc_id]).fetchone():
                 return None
-            r = self.con.execute(f"SELECT {self._DOC_COLS}, d.body FROM docs d WHERE d.id = ?",
+            r = self.sc.execute(f"SELECT {self._DOC_COLS}, d.body FROM docs d WHERE d.id = ?",
                                  [doc_id]).fetchone()
             if not r:
                 return None
-            users = [u[0] for u in self.con.execute(
+            users = [u[0] for u in self.sc.execute(
                 "SELECT usecase_id FROM usecase_objects WHERE kind = 'doc' AND name = ? "
                 "ORDER BY usecase_id", [doc_id]).fetchall()]
         return {**self._doc_row(r, r[8]), "projects": users}
@@ -2731,11 +2850,23 @@ class Store(FactoryStore, ClaudeUsageStore):
     def personal_doc(self, person_id: str, kind: str) -> dict | None:
         """The doc of `kind` that belongs to this person, with its body, or None until they
         write the first line."""
-        with self._lock:
-            r = self.con.execute(f"SELECT {self._DOC_COLS}, d.body FROM docs d WHERE d.owner = ? "
+        with self._sread:
+            r = self.sc.execute(f"SELECT {self._DOC_COLS}, d.body FROM docs d WHERE d.owner = ? "
                                  "AND d.kind = ? ORDER BY d.created_at LIMIT 1",
                                  [person_id, kind]).fetchone()
         return self._doc_row(r, r[8]) if r else None
+
+    def doc_titles(self, project: str, doc_ids: list[str]) -> dict[str, str]:
+        """The titles of those docs the project includes, in one query (TR-657); a doc the
+        project does not include is absent, as get_doc gives None for it."""
+        if not doc_ids:
+            return {}
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT DISTINCT d.id, d.title FROM docs d JOIN usecase_objects o ON o.kind = 'doc' "
+                f"AND o.name = d.id WHERE o.usecase_id = ? AND d.id IN "
+                f"({', '.join('?' for _ in doc_ids)})", [project, *doc_ids]).fetchall()
+        return {r[0]: r[1] for r in rows}
 
     def list_docs(self, project: str, kind: str | None = None) -> list[dict]:
         """The docs a project includes, without bodies: size in bytes instead."""
@@ -2745,19 +2876,19 @@ class Store(FactoryStore, ClaudeUsageStore):
         vals: list = [project]
         if kind:
             q += " AND d.kind = ?"; vals.append(kind)
-        with self._lock:
-            rows = self.con.execute(q, vals).fetchall()
+        with self._sread:
+            rows = self.sc.execute(q, vals).fetchall()
         return [{**self._doc_row(r), "size": int(r[8] or 0)} for r in rows]
 
     def list_cell_docs(self, viewer: str | None = None) -> list[dict]:
         """Every doc on the cell (no bodies), with the projects that include it. A personal doc
         is listed only to its person (`viewer`, a people.id): nobody else sees it, whatever their
         rights."""
-        with self._lock:
-            rows = self.con.execute(f"SELECT {self._DOC_COLS}, octet_length(encode(d.body)) "
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._DOC_COLS}, octet_length(encode(d.body)) "
                                     "FROM docs d WHERE d.owner IS NULL OR d.owner = ? "
                                     "ORDER BY d.title", [viewer or ""]).fetchall()
-            users = self.con.execute("SELECT name, usecase_id FROM usecase_objects WHERE "
+            users = self.sc.execute("SELECT name, usecase_id FROM usecase_objects WHERE "
                                      "kind = 'doc' GROUP BY name, usecase_id").fetchall()
         by: dict[str, list] = {}
         for n, u in users:
@@ -2767,15 +2898,15 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def _use_doc(self, project: str, doc_id: str) -> None:
         """Lock held."""
-        self.con.execute("INSERT INTO usecase_objects (usecase_id, kind, key, name, customized, "
+        self.sc.execute("INSERT INTO usecase_objects (usecase_id, kind, key, name, customized, "
                          "created_at) VALUES (?, 'doc', ?, ?, FALSE, ?) ON CONFLICT DO NOTHING",
                          [project, f"doc:{doc_id}", doc_id, now_utc()])
 
     def use_doc(self, project: str, doc_id: str) -> bool:
         """A doc already on the cell, included in one more project. False when there is no such
         doc."""
-        with self._lock:
-            if not self.con.execute("SELECT 1 FROM docs WHERE id = ? AND owner IS NULL",
+        with self._sread:
+            if not self.sc.execute("SELECT 1 FROM docs WHERE id = ? AND owner IS NULL",
                                     [doc_id]).fetchone():
                 return False        # no such doc, or a person's own: those join no project
             self._use_doc(project, doc_id)
@@ -2785,19 +2916,19 @@ class Store(FactoryStore, ClaudeUsageStore):
         """The project stops including the doc; the doc is deleted when no project includes it
         any more and it was made by a project (a doc made on the cell stays). A ticket of this
         project whose working doc it was loses the link. Returns whether the project had it."""
-        with self._lock:
-            had = self.con.execute("SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND "
+        with self._swrite:
+            had = self.sc.execute("SELECT 1 FROM usecase_objects WHERE usecase_id = ? AND "
                                    "kind = 'doc' AND name = ?", [project, doc_id]).fetchone()
-            self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = 'doc' "
+            self.sc.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = 'doc' "
                              "AND name = ?", [project, doc_id])
-            self.con.execute("UPDATE tickets SET working_doc = NULL WHERE project = ? AND "
+            self.sc.execute("UPDATE tickets SET working_doc = NULL WHERE project = ? AND "
                              "working_doc = ?", [project, doc_id])
             self._forget_unused_docs()
         return had is not None
 
     def _forget_unused_docs(self) -> None:
         """Docs a project made that no project includes any more go. Lock held."""
-        self.con.execute("DELETE FROM docs WHERE made_by IS NOT NULL AND id NOT IN (SELECT name "
+        self.sc.execute("DELETE FROM docs WHERE made_by IS NOT NULL AND id NOT IN (SELECT name "
                          "FROM usecase_objects WHERE kind = 'doc')")
 
     _TICKET_COLS = ("id, project, owner, external_id, identifier, url, title, status, position, "
@@ -2825,13 +2956,13 @@ class Store(FactoryStore, ClaudeUsageStore):
         project's next number (T1, T2, ...)."""
         tid = "tk_" + uuid.uuid4().hex[:10]
         ts = now_utc()
-        with self._lock:
+        with self._swrite:
             if position is None:
-                last = self.con.execute("SELECT max(position) FROM tickets WHERE project = ?",
+                last = self.sc.execute("SELECT max(position) FROM tickets WHERE project = ?",
                                         [project]).fetchone()[0]
                 position = (last or 0) + 1
             num = self._next_ticket_number(project)
-            self.con.execute(
+            self.sc.execute(
                 f"INSERT INTO tickets ({self._TICKET_COLS}) VALUES "
                 "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [tid, project, owner, external_id, identifier, url, title, status,
@@ -2840,14 +2971,15 @@ class Store(FactoryStore, ClaudeUsageStore):
                  repo, assignee_person_id or None, assignee_raw or None])
         return tid
 
-    def update_ticket(self, tid: str, **fields) -> None:
+    def update_ticket(self, tid: str, touch: bool = True, **fields) -> None:
         """Set the given columns (title, status, position, working_doc, identifier, url,
         external_id, milestone, depends_on); None clears working_doc or milestone only when passed
-        explicitly."""
+        explicitly. `touch=False` leaves updated_at alone: a re-read that found nothing new is
+        not activity."""
         allowed = {"title", "status", "position", "working_doc", "identifier", "url",
                    "external_id", "milestone", "depends_on", "holder", "stage", "stage_reason",
                    "pr", "repo", "assignee_person_id", "assignee_raw"}
-        sets, vals = ["updated_at = ?"], [now_utc()]
+        sets, vals = (["updated_at = ?"], [now_utc()]) if touch else ([], [])
         for col, v in fields.items():
             if col == "depends_on":
                 v = json.dumps(v) if v else None
@@ -2856,28 +2988,42 @@ class Store(FactoryStore, ClaudeUsageStore):
             if col in allowed:
                 sets.append(f"{col} = ?"); vals.append(v)
         vals.append(tid)
-        with self._lock:
-            self.con.execute(f"UPDATE tickets SET {', '.join(sets)} WHERE id = ?", vals)
+        with self._swrite:
+            self.sc.execute(f"UPDATE tickets SET {', '.join(sets)} WHERE id = ?", vals)
 
     def update_ticket_owner(self, tid: str, owner: str) -> None:
         """A project stopped using Linear or GitHub: its tickets become Tares's (TR-408)."""
-        with self._lock:
-            self.con.execute("UPDATE tickets SET owner = ?, updated_at = ? WHERE id = ?",
+        with self._swrite:
+            self.sc.execute("UPDATE tickets SET owner = ?, updated_at = ? WHERE id = ?",
                              [owner, now_utc(), tid])
 
     def list_tickets(self, project: str) -> list[dict]:
-        with self._lock:
-            rows = self.con.execute(f"SELECT {self._TICKET_COLS} FROM tickets WHERE project = ? "
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._TICKET_COLS} FROM tickets WHERE project = ? "
                                     "ORDER BY position, created_at", [project]).fetchall()
         return [self._ticket_row(r) for r in rows]
+
+    def tickets_by_project(self, projects: list[str]) -> dict[str, list[dict]]:
+        """{project: its tickets as list_tickets gives them} in one query (TR-659)."""
+        if not projects:
+            return {}
+        marks = ", ".join("?" for _ in projects)
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._TICKET_COLS} FROM tickets WHERE project IN "
+                                    f"({marks}) ORDER BY position, created_at",
+                                    list(projects)).fetchall()
+        out: dict[str, list[dict]] = {p: [] for p in projects}
+        for r in rows:
+            out[r[1]].append(self._ticket_row(r))
+        return out
 
     def get_ticket(self, project: str, ref: str) -> dict | None:
         """A ticket of the project by its id, Linear identifier (ENG-12, any case), Linear
         issue id, or number (T3, or 3)."""
         m = re.match(r"^[Tt]?(\d{1,6})$", (ref or "").strip())
         num = int(m.group(1)) if m else -1
-        with self._lock:
-            r = self.con.execute(
+        with self._sread:
+            r = self.sc.execute(
                 f"SELECT {self._TICKET_COLS} FROM (SELECT *, 0 AS rank FROM tickets WHERE "
                 "project = ? AND (id = ? OR upper(identifier) = upper(?) OR external_id = ?) "
                 "UNION ALL SELECT *, 1 AS rank FROM tickets WHERE project = ? AND number = ?) "
@@ -2887,59 +3033,81 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def delete_ticket(self, tid: str) -> None:
         """The ticket goes, and with it the other tickets' dependency on it."""
-        with self._lock:
-            row = self.con.execute("SELECT project FROM tickets WHERE id = ?", [tid]).fetchone()
-            self.con.execute("DELETE FROM tickets WHERE id = ?", [tid])
+        with self._swrite:
+            row = self.sc.execute("SELECT project FROM tickets WHERE id = ?", [tid]).fetchone()
+            self.sc.execute("DELETE FROM tickets WHERE id = ?", [tid])
             if row:
-                for oid, deps in self.con.execute(
+                for oid, deps in self.sc.execute(
                         "SELECT id, depends_on FROM tickets WHERE project = ? AND depends_on IS "
                         "NOT NULL", [row[0]]).fetchall():
                     ids = json.loads(deps) if deps else []
                     if tid in ids:
                         ids = [d for d in ids if d != tid]
-                        self.con.execute("UPDATE tickets SET depends_on = ? WHERE id = ?",
+                        self.sc.execute("UPDATE tickets SET depends_on = ? WHERE id = ?",
                                          [json.dumps(ids) if ids else None, oid])
 
     def link_session(self, project: str, session: str, repo: str | None = None) -> bool:
         """The Claude Code session works in the project. True when it was not linked before."""
-        with self._lock:
-            had = self.con.execute("SELECT 1 FROM project_sessions WHERE project = ? AND "
+        with self._swrite:
+            had = self.sc.execute("SELECT 1 FROM project_sessions WHERE project = ? AND "
                                    "session = ?", [project, session]).fetchone()
             if not had:
-                self.con.execute("INSERT INTO project_sessions (project, session, repo, linked_at) "
+                self.sc.execute("INSERT INTO project_sessions (project, session, repo, linked_at) "
                                  "VALUES (?, ?, ?, ?)", [project, session, repo, now_utc()])
         return not had
 
     def project_sessions(self, project: str) -> list[dict]:
         """The sessions that worked in the project, newest activity first, with when they started
-        and last did something, how many lines they have, and their state (working, waiting,
+        and last did something, how many lines they have, and their state (working, idle, waiting,
         ended; None before the plugin reported one) with its reason and time."""
-        with self._lock:
-            rows = self.con.execute(
-                "SELECT s.session, s.repo, s.linked_at, min(e.event_time), max(e.event_time), "
-                "count(e.key_value), st.state, st.reason, st.state_at, x.station "
-                "FROM project_sessions s "
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT s.session, s.repo, s.linked_at, st.state, st.reason, st.state_at, "
+                "x.station FROM project_sessions s "
                 "LEFT JOIN session_stations x ON x.session = s.session "
-                "LEFT JOIN events e ON e.source = 'claude_code' AND e.key_value = s.session "
                 "LEFT JOIN session_states st ON st.session = s.session WHERE s.project = ? "
                 # the crew's own stations serve every project: they show on the Crew page and
                 # never count as the project's build session (a pick-up must not replace them)
                 "AND s.session NOT IN (SELECT session FROM session_stations WHERE role IN "
-                "('orchestrator', 'reviewer', 'releaser', 'comms')) "
-                "GROUP BY s.session, s.repo, s.linked_at, st.state, st.reason, st.state_at, "
-                "x.station "
-                "ORDER BY max(e.event_time) DESC NULLS LAST", [project]).fetchall()
-        return [{"session": r[0], "repo": r[1], "linked_at": r[2], "started_at": r[3],
-                 "last_at": r[4], "lines": int(r[5] or 0), "state": r[6], "state_reason": r[7],
-                 "state_at": r[8], "station": r[9]} for r in rows]
+                "('orchestrator', 'reviewer', 'releaser', 'comms'))", [project]).fetchall()
+        seen, uniq = set(), []
+        for r in rows:
+            if r[0] not in seen:
+                seen.add(r[0])
+                uniq.append(r)
+        act = self.session_activity("claude_code", [r[0] for r in uniq])
+        out = [{"session": r[0], "repo": r[1], "linked_at": r[2],
+                "started_at": act.get(r[0], (None,))[0], "last_at": act.get(r[0], (None, None))[1],
+                "lines": act.get(r[0], (None, None, 0))[2], "state": r[3], "state_reason": r[4],
+                "state_at": r[5], "station": r[6]} for r in uniq]
+        # newest activity first, sessions with no lines last
+        out.sort(key=lambda s: (s["last_at"] is None, -(s["last_at"].timestamp())
+                                if s["last_at"] else 0))
+        return out
+
+    def session_activity(self, source: str, sessions: list[str]) -> dict:
+        """{session: (first event time, last event time, event count)} for the sessions that have
+        events on `source`."""
+        out = {}
+        for i in range(0, len(sessions), 500):
+            chunk = sessions[i:i + 500]
+            if not chunk:
+                continue
+            with self._lock:
+                for sid, first, last, n in self.con.execute(
+                        "SELECT key_value, min(event_time), max(event_time), count(*) FROM events "
+                        f"WHERE source = ? AND key_value IN ({', '.join('?' * len(chunk))}) "
+                        "GROUP BY key_value", [source, *chunk]).fetchall():
+                    out[sid] = (first, last, int(n))
+        return out
 
     def set_session_state(self, session: str, state: str, reason: str | None, at,
                           force: bool = False) -> None:
         """The session's state now; an older line than the one stored does not win, unless
         `force` (a take-over is a decision, not a report)."""
         when = "" if force else " WHERE excluded.state_at >= session_states.state_at"
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO session_states (session, state, reason, state_at) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT (session) DO UPDATE SET state = excluded.state, "
                 "reason = excluded.reason, state_at = excluded.state_at" + when,
@@ -2948,8 +3116,8 @@ class Store(FactoryStore, ClaudeUsageStore):
     def session_state(self, session: str) -> dict | None:
         """The session's stored state {state, reason, state_at}, as reported (not as shown), or
         None when it never reported one."""
-        with self._lock:
-            row = self.con.execute("SELECT state, reason, state_at FROM session_states "
+        with self._sread:
+            row = self.sc.execute("SELECT state, reason, state_at FROM session_states "
                                    "WHERE session = ?", [session]).fetchone()
         return {"state": row[0], "reason": row[1], "state_at": row[2]} if row else None
 
@@ -3010,46 +3178,46 @@ class Store(FactoryStore, ClaudeUsageStore):
         return None
 
     def session_projects(self, session: str) -> list[str]:
-        with self._lock:
-            return [r[0] for r in self.con.execute(
+        with self._sread:
+            return [r[0] for r in self.sc.execute(
                 "SELECT project FROM project_sessions WHERE session = ?", [session]).fetchall()]
 
     def get_project_linear(self, uid: str) -> dict | None:
         """The Linear project a project's tickets live in, with the last sync's state, or None."""
-        with self._lock:
-            r = self.con.execute("SELECT linear FROM usecases WHERE id = ?", [uid]).fetchone()
+        with self._sread:
+            r = self.sc.execute("SELECT linear FROM usecases WHERE id = ?", [uid]).fetchone()
         return json.loads(r[0]) if r and r[0] else None
 
     def set_project_linear(self, uid: str, linear: dict | None) -> None:
-        with self._lock:
-            self.con.execute("UPDATE usecases SET linear = ? WHERE id = ?",
+        with self._swrite:
+            self.sc.execute("UPDATE usecases SET linear = ? WHERE id = ?",
                              [json.dumps(linear, default=str) if linear is not None else None,
                               uid])
 
     def linear_projects(self) -> list[tuple[str, dict]]:
         """(project id, its Linear link) for every project that uses Linear."""
-        with self._lock:
-            rows = self.con.execute("SELECT id, linear FROM usecases WHERE linear IS NOT NULL"
+        with self._sread:
+            rows = self.sc.execute("SELECT id, linear FROM usecases WHERE linear IS NOT NULL"
                                     ).fetchall()
         return [(r[0], json.loads(r[1])) for r in rows if r[1]]
 
     def get_project_github(self, uid: str) -> dict | None:
         """The GitHub repo and issue label a project's tickets live in, with the last sync's
         state, or None."""
-        with self._lock:
-            r = self.con.execute("SELECT github_issues FROM usecases WHERE id = ?",
+        with self._sread:
+            r = self.sc.execute("SELECT github_issues FROM usecases WHERE id = ?",
                                  [uid]).fetchone()
         return json.loads(r[0]) if r and r[0] else None
 
     def set_project_github(self, uid: str, link: dict | None) -> None:
-        with self._lock:
-            self.con.execute("UPDATE usecases SET github_issues = ? WHERE id = ?",
+        with self._swrite:
+            self.sc.execute("UPDATE usecases SET github_issues = ? WHERE id = ?",
                              [json.dumps(link, default=str) if link is not None else None, uid])
 
     def github_projects(self) -> list[tuple[str, dict]]:
         """(project id, its GitHub link) for every project whose tickets live in GitHub Issues."""
-        with self._lock:
-            rows = self.con.execute("SELECT id, github_issues FROM usecases "
+        with self._sread:
+            rows = self.sc.execute("SELECT id, github_issues FROM usecases "
                                     "WHERE github_issues IS NOT NULL").fetchall()
         return [(r[0], json.loads(r[1])) for r in rows if r[1]]
 
@@ -3068,8 +3236,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         from datetime import timedelta
         since = now_utc() - timedelta(days=days)
         marks = ", ".join("?" for _ in agents)
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 f"SELECT agent, skills FROM agent_runs WHERE agent IN ({marks}) "
                 "AND skills IS NOT NULL AND started_at >= ? ORDER BY started_at DESC",
                 [*agents, since]).fetchall()
@@ -3088,20 +3256,20 @@ class Store(FactoryStore, ClaudeUsageStore):
     DEFAULT_PROJECT_NAME = "Default"
 
     def default_project_id(self) -> str:
-        with self._lock:
+        with self._swrite:
             return self._ensure_default_project()
 
     def default_project_id_if_any(self) -> str | None:
-        with self._lock:
+        with self._swrite:
             return self._default_project_if_any()
 
     def _default_project_if_any(self) -> str | None:
         """The default project's id when the cell has one, never creating it. Called with the
         lock held."""
-        row = self.con.execute("SELECT value FROM settings WHERE key = 'default_project'").fetchone()
-        if row and self.con.execute("SELECT 1 FROM usecases WHERE id = ?", [row[0]]).fetchone():
+        row = self.sc.execute("SELECT value FROM settings WHERE key = 'default_project'").fetchone()
+        if row and self.sc.execute("SELECT 1 FROM usecases WHERE id = ?", [row[0]]).fetchone():
             return row[0]
-        found = self.con.execute("SELECT id FROM usecases WHERE recipe = 'default' "
+        found = self.sc.execute("SELECT id FROM usecases WHERE recipe = 'default' "
                                  "ORDER BY created_at LIMIT 1").fetchone()
         return found[0] if found else None
 
@@ -3120,41 +3288,41 @@ class Store(FactoryStore, ClaudeUsageStore):
     def _ensure_default_project(self) -> str:
         """The default project's id, creating the project if the cell has none yet. Called with
         the lock held."""
-        row = self.con.execute("SELECT value FROM settings WHERE key = 'default_project'").fetchone()
-        if row and self.con.execute("SELECT 1 FROM usecases WHERE id = ?", [row[0]]).fetchone():
+        row = self.sc.execute("SELECT value FROM settings WHERE key = 'default_project'").fetchone()
+        if row and self.sc.execute("SELECT 1 FROM usecases WHERE id = ?", [row[0]]).fetchone():
             return row[0]
-        found = self.con.execute("SELECT id FROM usecases WHERE recipe = 'default' "
+        found = self.sc.execute("SELECT id FROM usecases WHERE recipe = 'default' "
                                  "ORDER BY created_at LIMIT 1").fetchone()
         if found:
             uid = found[0]
         else:
             uid = "uc_" + uuid.uuid4().hex[:10]
-            taken = {r[0] for r in self.con.execute("SELECT name FROM usecases").fetchall()}
+            taken = {r[0] for r in self.sc.execute("SELECT name FROM usecases").fetchall()}
             name = self.DEFAULT_PROJECT_NAME if self.DEFAULT_PROJECT_NAME not in taken \
                 else "Default project"
             ts = now_utc()
-            self.con.execute(
+            self.sc.execute(
                 "INSERT INTO usecases (id, recipe, name, params, status, created_at, updated_at, "
                 "last_error) VALUES (?, 'default', ?, '{}', 'active', ?, ?, NULL)",
                 [uid, name, ts, ts])
-        self.con.execute(
+        self.sc.execute(
             "INSERT INTO settings (key, value, updated_at) VALUES ('default_project', ?, ?) "
             "ON CONFLICT (key) DO UPDATE SET value = excluded.value, "
             "updated_at = excluded.updated_at", [uid, now_utc()])
         return uid
 
     def _recipes(self) -> dict:
-        return {r[0]: r[1] for r in self.con.execute("SELECT id, recipe FROM usecases").fetchall()}
+        return {r[0]: r[1] for r in self.sc.execute("SELECT id, recipe FROM usecases").fetchall()}
 
     def _custom_objects(self, uid: str, change) -> None:
         """Rewrite a custom project's `objects` param with `change(list) -> list`."""
-        row = self.con.execute("SELECT params FROM usecases WHERE id = ?", [uid]).fetchone()
+        row = self.sc.execute("SELECT params FROM usecases WHERE id = ?", [uid]).fetchone()
         params = json.loads((row[0] if row else None) or "{}")
         objs = list(params.get("objects") or [])
         new = change(objs)
         if new != objs:
             params["objects"] = new
-            self.con.execute("UPDATE usecases SET params = ?, updated_at = ? WHERE id = ?",
+            self.sc.execute("UPDATE usecases SET params = ?, updated_at = ? WHERE id = ?",
                              [json.dumps(params), now_utc(), uid])
 
     def _add_row(self, uid: str, kind: str, name: str, key: str | None = None) -> None:
@@ -3165,7 +3333,7 @@ class Store(FactoryStore, ClaudeUsageStore):
         recipe = self._recipes().get(uid)
         if recipe is None:
             raise KeyError(f"unknown project {uid!r}")
-        have = self.con.execute("SELECT key FROM usecase_objects WHERE usecase_id = ? AND kind = ? "
+        have = self.sc.execute("SELECT key FROM usecase_objects WHERE usecase_id = ? AND kind = ? "
                                 "AND name = ?", [uid, kind, name]).fetchall()
         if key is None:
             if have:
@@ -3174,9 +3342,9 @@ class Store(FactoryStore, ClaudeUsageStore):
         else:
             for (k,) in have:
                 if k != key:
-                    self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = ? "
+                    self.sc.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = ? "
                                      "AND key = ?", [uid, kind, k])
-        self.con.execute(
+        self.sc.execute(
             "INSERT INTO usecase_objects (usecase_id, kind, key, name, customized, created_at) "
             "VALUES (?, ?, ?, ?, FALSE, ?) ON CONFLICT (usecase_id, kind, key) DO UPDATE SET "
             "name = excluded.name", [uid, kind, key, name, now_utc()])
@@ -3189,7 +3357,7 @@ class Store(FactoryStore, ClaudeUsageStore):
         """Forget `name` as an object of each project in `uids`."""
         recipes = self._recipes()
         for uid in uids:
-            self.con.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = ? "
+            self.sc.execute("DELETE FROM usecase_objects WHERE usecase_id = ? AND kind = ? "
                              "AND name = ?", [uid, kind, name])
             if recipes.get(uid) == "custom":
                 self._custom_objects(uid, lambda objs: [
@@ -3202,7 +3370,7 @@ class Store(FactoryStore, ClaudeUsageStore):
                         | {u for u, r in self._recipes().items() if r == "custom"})
 
     def _rows_for(self, kind: str, name: str) -> list[str]:
-        return [r[0] for r in self.con.execute(
+        return [r[0] for r in self.sc.execute(
             "SELECT DISTINCT usecase_id FROM usecase_objects WHERE kind = ? AND name = ?",
             [kind, name]).fetchall()]
 
@@ -3215,18 +3383,18 @@ class Store(FactoryStore, ClaudeUsageStore):
         stays while a default trigger still reads it). `creator` records `uid` as the project
         that made it; a part with no maker takes `uid`."""
         table = self._OWNED_TABLES[kind]
-        with self._lock:
+        with self._swrite:
             # None on a cell that has none: nothing can be leaving it
             default = self._default_project_if_any()
-            row = self.con.execute(f"SELECT owned_by FROM {table} WHERE name = ?",
+            row = self.sc.execute(f"SELECT owned_by FROM {table} WHERE name = ?",
                                    [name]).fetchone()
             owner = row[0] if row else None
             if kind == "source":
                 if creator:
-                    self.con.execute(f"UPDATE {table} SET owned_by = ? WHERE name = ?", [uid, name])
+                    self.sc.execute(f"UPDATE {table} SET owned_by = ? WHERE name = ?", [uid, name])
                 if uid != default and default in self._rows_for("source", name):
                     # a trigger of the default project still reads it: it stays there too
-                    readers = [r[0] for r in self.con.execute(
+                    readers = [r[0] for r in self.sc.execute(
                         "SELECT t.name, t.sources FROM catalog_triggers t JOIN usecase_objects o "
                         "ON o.kind = 'trigger' AND o.name = t.name AND o.usecase_id = ?",
                         [default]).fetchall() if name in json.loads(r[1] or "[]")]
@@ -3240,15 +3408,15 @@ class Store(FactoryStore, ClaudeUsageStore):
                 if leaving_default:
                     self._drop_rows(kind, name, [default])
                     if kind == "agent":
-                        self.con.execute(
+                        self.sc.execute(
                             "UPDATE project_wiring SET project = ? WHERE project = ? AND "
                             "(agent = ? OR from_agent = ?)", [uid, default, name, name])
                     elif kind == "trigger":
-                        self.con.execute(
+                        self.sc.execute(
                             "UPDATE project_wiring SET project = ? WHERE project = ? AND "
                             "kind = 'wake' AND trigger = ?", [uid, default, name])
                 if creator or owner is None or (leaving_default and owner in (None, default)):
-                    self.con.execute(f"UPDATE {table} SET owned_by = ? WHERE name = ?", [uid, name])
+                    self.sc.execute(f"UPDATE {table} SET owned_by = ? WHERE name = ?", [uid, name])
                 if kind == "agent":
                     self._wire_from_definition(name, uid)
             self._add_row(uid, kind, name, key)
@@ -3257,16 +3425,16 @@ class Store(FactoryStore, ClaudeUsageStore):
         """Take a part out of a project, with that project's wiring of it. A part left in no
         project joins the default one; a part whose maker leaves it gets another project that
         uses it as its maker."""
-        with self._lock:
+        with self._swrite:
             self._drop_rows(kind, name, [uid])
             if kind == "agent":
-                self.con.execute("DELETE FROM project_wiring WHERE project = ? AND "
+                self.sc.execute("DELETE FROM project_wiring WHERE project = ? AND "
                                  "(agent = ? OR from_agent = ?)", [uid, name, name])
             elif kind == "trigger":
-                self.con.execute("DELETE FROM project_wiring WHERE project = ? AND kind = 'wake' "
+                self.sc.execute("DELETE FROM project_wiring WHERE project = ? AND kind = 'wake' "
                                  "AND trigger = ?", [uid, name])
             table = self._OWNED_TABLES[kind]
-            exists = self.con.execute(f"SELECT owned_by FROM {table} WHERE name = ?",
+            exists = self.sc.execute(f"SELECT owned_by FROM {table} WHERE name = ?",
                                       [name]).fetchone()
             if exists is None:
                 return
@@ -3276,12 +3444,12 @@ class Store(FactoryStore, ClaudeUsageStore):
                 self._add_row(default, kind, name)
                 left = [default]
             if kind != "source" and exists[0] == uid:
-                self.con.execute(f"UPDATE {table} SET owned_by = ? WHERE name = ?", [left[0], name])
+                self.sc.execute(f"UPDATE {table} SET owned_by = ? WHERE name = ?", [left[0], name])
 
     def source_memberships(self) -> dict[str, list[str]]:
         """{source name: [project ids it is in]}, for every source with a membership."""
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT DISTINCT name, usecase_id FROM usecase_objects WHERE kind = 'source' "
                 "ORDER BY name, usecase_id").fetchall()
         out: dict[str, list[str]] = {}
@@ -3291,8 +3459,8 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def project_sources(self, uid: str) -> list[str]:
         """The sources project `uid` is made of: its source rows that name a source that exists."""
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT DISTINCT o.name FROM usecase_objects o JOIN catalog_sources s "
                 "ON s.name = o.name WHERE o.usecase_id = ? AND o.kind = 'source' ORDER BY o.name",
                 [uid]).fetchall()
@@ -3306,7 +3474,7 @@ class Store(FactoryStore, ClaudeUsageStore):
         project whose agents use it, else to the default; a trigger's sources are members of its
         project; a source in no project joins the default one. An owner that no longer exists
         counts as none."""
-        with self._lock:
+        with self._swrite:
             self._normalize_projects()
 
     def _normalize_projects(self) -> None:
@@ -3314,7 +3482,7 @@ class Store(FactoryStore, ClaudeUsageStore):
         default = self._lazy_default_project()
         recipes = self._recipes()
         # views are gone: so are their rows, and their entries in custom projects
-        self.con.execute("DELETE FROM usecase_objects WHERE kind = 'view'")
+        self.sc.execute("DELETE FROM usecase_objects WHERE kind = 'view'")
         for uid, recipe in recipes.items():
             if recipe == "custom":
                 self._custom_objects(uid, lambda objs: [o for o in objs
@@ -3323,10 +3491,10 @@ class Store(FactoryStore, ClaudeUsageStore):
         # a deleted part is gone from every project (deleting it was the choice), and an agent
         # whose trigger was deleted keeps going without one; this also mends cells where a delete
         # happened before deletes did both
-        self.con.execute("UPDATE catalog_agents SET trigger = '' WHERE trigger IS NULL OR "
+        self.sc.execute("UPDATE catalog_agents SET trigger = '' WHERE trigger IS NULL OR "
                          "(trigger <> '' AND trigger NOT IN (SELECT name FROM catalog_triggers))")
         for kind, table in self._OWNED_TABLES.items():
-            gone = [r[0] for r in self.con.execute(
+            gone = [r[0] for r in self.sc.execute(
                 f"SELECT DISTINCT name FROM usecase_objects WHERE kind = ? "
                 f"AND name NOT IN (SELECT name FROM {table})", [kind]).fetchall()]
             for name in gone:
@@ -3336,12 +3504,12 @@ class Store(FactoryStore, ClaudeUsageStore):
         def valid(owner):
             return owner if owner in recipes else None
 
-        triggers = {r[0]: (valid(r[1]), json.loads(r[2] or "[]")) for r in self.con.execute(
+        triggers = {r[0]: (valid(r[1]), json.loads(r[2] or "[]")) for r in self.sc.execute(
             "SELECT name, owned_by, sources FROM catalog_triggers").fetchall()}
         owners: dict[tuple[str, str], str] = {}
         for name, (owner, _srcs) in triggers.items():
             owners[("trigger", name)] = owner or default()
-        agents = {r[0]: (valid(r[1]), r[2], json.loads(r[3] or "[]")) for r in self.con.execute(
+        agents = {r[0]: (valid(r[1]), r[2], json.loads(r[3] or "[]")) for r in self.sc.execute(
             "SELECT name, owned_by, trigger, mcp_servers FROM catalog_agents").fetchall()}
         for name, (owner, trig, _servers) in agents.items():
             owners[("agent", name)] = owner or owners.get(("trigger", trig)) or default()
@@ -3349,16 +3517,16 @@ class Store(FactoryStore, ClaudeUsageStore):
         for name, (_o, _t, servers) in agents.items():
             for srv in servers:
                 users.setdefault(srv, set()).add(owners[("agent", name)])
-        for name, owner in self.con.execute("SELECT name, owned_by FROM mcp_servers").fetchall():
+        for name, owner in self.sc.execute("SELECT name, owned_by FROM mcp_servers").fetchall():
             by = users.get(name) or set()
             owners[("mcp_server", name)] = valid(owner) or (next(iter(by)) if len(by) == 1
                                                             else default())
         table = self._OWNED_TABLES
         for (kind, name), owner in owners.items():
-            current = self.con.execute(f"SELECT owned_by FROM {table[kind]} WHERE name = ?",
+            current = self.sc.execute(f"SELECT owned_by FROM {table[kind]} WHERE name = ?",
                                        [name]).fetchone()
             if current and current[0] != owner:
-                self.con.execute(f"UPDATE {table[kind]} SET owned_by = ? WHERE name = ?",
+                self.sc.execute(f"UPDATE {table[kind]} SET owned_by = ? WHERE name = ?",
                                  [owner, name])
             # a row elsewhere is left alone: it is how a project shows an object it lost (one
             # deleted by hand and recreated, which lands here unowned), and how an edit that
@@ -3370,7 +3538,7 @@ class Store(FactoryStore, ClaudeUsageStore):
             self._add_row(owner, kind, name)
             if first:
                 self._wire_from_definition(name, owner)
-        existing = {r[0] for r in self.con.execute("SELECT name FROM catalog_sources").fetchall()}
+        existing = {r[0] for r in self.sc.execute("SELECT name FROM catalog_sources").fetchall()}
         for name, (_owner, srcs) in triggers.items():
             for src in srcs:
                 if src in existing:
@@ -3391,13 +3559,13 @@ class Store(FactoryStore, ClaudeUsageStore):
                 self._drop_rows("source", src, [held])
 
     def log_project(self, uid: str, action: str, detail: str = "") -> None:
-        with self._lock:
-            self.con.execute("INSERT INTO usecase_log (usecase_id, logged_at, action, detail) "
+        with self._swrite:
+            self.sc.execute("INSERT INTO usecase_log (usecase_id, logged_at, action, detail) "
                              "VALUES (?, ?, ?, ?)", [uid, now_utc(), action, detail[:2000]])
 
     def list_project_log(self, uid: str, limit: int = 100) -> list[dict]:
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT logged_at, action, detail FROM usecase_log WHERE usecase_id = ? "
                 "ORDER BY logged_at DESC LIMIT ?", [uid, limit]).fetchall()
         return [{"at": r[0], "action": r[1], "detail": r[2]} for r in rows]
@@ -3406,8 +3574,8 @@ class Store(FactoryStore, ClaudeUsageStore):
     # redaction is the API's job. `config` holds the kind-specific fields: for `app` the app id,
     # private key, webhook secret and installations; for `app_broker` the broker URL and secret.
     def list_github_credentials(self) -> list[dict]:
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT name, kind, token, api_url, account, created_at, updated_at, config "
                 "FROM github_credentials ORDER BY name").fetchall()
         out = []
@@ -3431,14 +3599,14 @@ class Store(FactoryStore, ClaudeUsageStore):
         """Create or replace a credential. `config` None keeps the stored one (a token rotation
         does not wipe an App's installations); pass {} to clear it."""
         ts = now_utc()
-        with self._lock:
+        with self._swrite:
             if config is None:
-                row = self.con.execute("SELECT config FROM github_credentials WHERE name = ?",
+                row = self.sc.execute("SELECT config FROM github_credentials WHERE name = ?",
                                        [name]).fetchone()
                 cfg_json = row[0] if row and row[0] else None
             else:
                 cfg_json = json.dumps(config) if config else None
-            self.con.execute(
+            self.sc.execute(
                 "INSERT INTO github_credentials (name, kind, token, api_url, account, "
                 "created_at, updated_at, config) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (name) DO UPDATE SET kind = excluded.kind, token = excluded.token, "
@@ -3448,14 +3616,14 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def update_github_credential_config(self, name: str, config: dict) -> None:
         """Replace only the kind-specific fields (an installation added or removed by a webhook)."""
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "UPDATE github_credentials SET config = ?, updated_at = ? WHERE name = ?",
                 [json.dumps(config) if config else None, now_utc(), name])
 
     def delete_github_credential(self, name: str) -> None:
-        with self._lock:
-            self.con.execute("DELETE FROM github_credentials WHERE name = ?", [name])
+        with self._swrite:
+            self.sc.execute("DELETE FROM github_credentials WHERE name = ?", [name])
 
     # ── ask sessions (the in-app agent's chat history) ────────────────────────
     # `state` is an opaque JSON blob owned by the console (messages, tool calls, proposal
@@ -3468,16 +3636,16 @@ class Store(FactoryStore, ClaudeUsageStore):
     # none. The 50-row cap counts per owner so one person cannot push another's history out.
     def list_ask_sessions(self, person_id: str | None = None, system: bool = True) -> list[dict]:
         where, args = ("", []) if system else (" WHERE person_id = ?", [person_id])
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT id, title, created_at, updated_at FROM ask_sessions" + where +
                 " ORDER BY updated_at DESC", args).fetchall()
         return [{"id": r[0], "title": r[1], "created_at": r[2], "updated_at": r[3]} for r in rows]
 
     def get_ask_session(self, sid: str, person_id: str | None = None,
                         system: bool = True) -> dict | None:
-        with self._lock:
-            row = self.con.execute(
+        with self._sread:
+            row = self.sc.execute(
                 "SELECT id, title, state, created_at, updated_at, person_id FROM ask_sessions "
                 "WHERE id = ?", [sid]).fetchone()
         if row is None or not (system or (person_id is not None and row[5] == person_id)):
@@ -3492,18 +3660,18 @@ class Store(FactoryStore, ClaudeUsageStore):
         one lock hold, so two saves cannot both pass the check. The owner is set on insert and
         never changes."""
         ts = now_utc()
-        with self._lock:
-            row = self.con.execute(
+        with self._swrite:
+            row = self.sc.execute(
                 "SELECT person_id FROM ask_sessions WHERE id = ?", [sid]).fetchone()
             if row is not None and not (system or (person_id is not None and row[0] == person_id)):
                 return False
-            self.con.execute(
+            self.sc.execute(
                 "INSERT INTO ask_sessions (id, title, state, created_at, updated_at, person_id) "
                 "VALUES (?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (id) DO UPDATE SET title = excluded.title, "
                 "state = excluded.state, updated_at = excluded.updated_at",
                 [sid, title, state, ts, ts, person_id])
-            self.con.execute(
+            self.sc.execute(
                 "DELETE FROM ask_sessions WHERE person_id IS NOT DISTINCT FROM ? AND id NOT IN "
                 "(SELECT id FROM ask_sessions WHERE person_id IS NOT DISTINCT FROM ? "
                 "ORDER BY updated_at DESC LIMIT ?)",
@@ -3511,10 +3679,11 @@ class Store(FactoryStore, ClaudeUsageStore):
         return True
 
     def delete_ask_session(self, sid: str) -> bool:
-        with self._lock:
-            n = self.con.execute("DELETE FROM ask_sessions WHERE id = ?", [sid]).fetchone()
-            # DuckDB returns the deleted-row count as a result row
-        return bool(n and n[0])
+        with self._swrite:
+            # RETURNING answers the same on DuckDB and Postgres (a bare DELETE gives a count row
+            # on DuckDB and no row on Postgres)
+            gone = self.sc.execute("DELETE FROM ask_sessions WHERE id = ? RETURNING id", [sid]).fetchall()
+        return bool(gone)
 
     # ── activity logs (agent-facing observability) ────────────────────────────
     def project_ids_named(self, refs: list[str]) -> list[str]:
@@ -3551,8 +3720,8 @@ class Store(FactoryStore, ClaudeUsageStore):
                   rows_returned: int, client: str, project: str | None = None) -> None:
         """`scope` says what was read: a trigger's name, an agent tool, "(read)" for a raw read.
         `project` is the comma-joined ids of the projects it was about (see read_projects)."""
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO query_log (id, scope, key_value, time_window, rows_returned, client, "
                 "queried_at, project) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 [qid, scope, key, window, rows_returned, client, now_utc(), project],
@@ -3562,11 +3731,13 @@ class Store(FactoryStore, ClaudeUsageStore):
         """The read log. `hide` lists the ids of the projects the caller cannot see: a read that was
         about one of them (its `project` column) is left out."""
         sql, params = "", []
-        if hide:
-            sql = " AND NOT list_has_any(string_split(COALESCE(project, ''), ','), ?)"
-            params = [list(hide)]
-        with self._lock:
-            rows = self.con.execute(
+        for pid in hide or []:
+            # the column is a comma-joined list; ids may carry `_`, which LIKE reads as a wildcard
+            esc = pid.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+            sql += " AND (',' || COALESCE(project, '') || ',') NOT LIKE ? ESCAPE '!'"
+            params.append(f"%,{esc},%")
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT id, scope, key_value, time_window, rows_returned, client, queried_at "
                 f"FROM query_log WHERE TRUE{sql} ORDER BY queried_at DESC LIMIT ?",
                 [*params, int(limit)],
@@ -3579,8 +3750,8 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def get_dispatch(self, dispatch_id: str) -> dict | None:
         """One firing by id, with the same failure-reason as list_dispatches. None if unknown."""
-        with self._lock:
-            r = self.con.execute(
+        with self._sread:
+            r = self.sc.execute(
                 "SELECT l.dispatch_id, l.trigger, l.key_value, l.kind, l.fired_at, l.subscribers, "
                 "(SELECT COUNT(*) FROM dispatch_deliveries d "
                 " WHERE d.dispatch_id = l.dispatch_id AND d.ok) AS delivered, "
@@ -3598,8 +3769,8 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def deliveries_for(self, dispatch_id: str) -> list[dict]:
         """Per-subscriber delivery attempts for one firing — the detail behind 'delivered X of N'."""
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT subscription_id, url, ok, error, delivered_at FROM dispatch_deliveries "
                 "WHERE dispatch_id = ? ORDER BY delivered_at", [dispatch_id]).fetchall()
         # ok stays None when the delivery is still pending (a Tares agent mid-run) — the caller
@@ -3613,8 +3784,8 @@ class Store(FactoryStore, ClaudeUsageStore):
                      project: str | None = None, parent_run_id: str | None = None,
                      practice: bool = False) -> None:
         # project: the trigger's at firing time. parent_run_id: the run whose finding tripped it.
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO dispatch_log (dispatch_id, trigger, key_value, kind, fired_at, "
                 "subscribers, delivered, payload, project, parent_run_id, practice) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -3622,7 +3793,7 @@ class Store(FactoryStore, ClaudeUsageStore):
                  project or None, parent_run_id or None, bool(practice)],
             )
             if project:   # the firing belongs to its project (more join with add_dispatch_projects)
-                self.con.execute("INSERT INTO dispatch_projects (dispatch_id, project) VALUES (?, ?) "
+                self.sc.execute("INSERT INTO dispatch_projects (dispatch_id, project) VALUES (?, ?) "
                                  "ON CONFLICT DO NOTHING", [dispatch_id, project])
 
     # ── project timeline (TR-331): the store's side is indexed lookups only ──
@@ -3633,9 +3804,9 @@ class Store(FactoryStore, ClaudeUsageStore):
         the project (a rerun or a handoff sits under its parent)."""
         b = "AND {col} < ? " if before is not None else ""
         args = [before] if before is not None else []
-        with self._lock:
+        with self._sread:
             # the firings and runs that belong to the project (P-TR-216)
-            return self.con.execute(
+            return self.sc.execute(
                 "WITH pr AS (SELECT run_id FROM run_projects WHERE project = ?), "
                 "pd AS (SELECT dispatch_id FROM dispatch_projects WHERE project = ?) "
                 "SELECT * FROM ("
@@ -3661,8 +3832,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         if project is not None:
             sql += " AND dispatch_id IN (SELECT dispatch_id FROM dispatch_projects WHERE project = ?)"
             params.append(project)
-        with self._lock:
-            rows = self.con.execute(sql + " ORDER BY fired_at", params).fetchall()
+        with self._sread:
+            rows = self.sc.execute(sql + " ORDER BY fired_at", params).fetchall()
         return [{"dispatch_id": r[0], "trigger": r[1], "key": r[2], "kind": r[3],
                  "fired_at": r[4], "subscribers": r[5], "payload": r[6], "project": r[7],
                  "parent_run_id": r[8]} for r in rows]
@@ -3671,8 +3842,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         """{dispatch_id: [delivery]} for several firings at once, each in the deliveries_for shape."""
         if not dispatch_ids:
             return {}
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT dispatch_id, subscription_id, url, ok, error, delivered_at "
                 f"FROM dispatch_deliveries WHERE dispatch_id IN ({', '.join(['?'] * len(dispatch_ids))}) "
                 "ORDER BY delivered_at", list(dispatch_ids)).fetchall()
@@ -3708,8 +3879,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         # `hide` = projects the caller cannot see: a firing recorded against one is left out.
         where = (" WHERE NOT EXISTS (SELECT 1 FROM dispatch_projects p WHERE p.dispatch_id = "
                  f"l.dispatch_id AND p.project IN ({', '.join('?' * len(hide))}))") if hide else ""
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT l.dispatch_id, l.trigger, l.key_value, l.kind, l.fired_at, l.subscribers, "
                 "(SELECT COUNT(*) FROM dispatch_deliveries d "
                 " WHERE d.dispatch_id = l.dispatch_id AND d.ok) AS delivered, "
@@ -3751,8 +3922,9 @@ class Store(FactoryStore, ClaudeUsageStore):
         with self._lock:
             sources = self.con.execute(
                 "SELECT source, events FROM source_stats ORDER BY source").fetchall()
-            runs = self.con.execute("SELECT COUNT(*) FROM agent_runs").fetchone()[0]
-            deliveries = self.con.execute("SELECT COUNT(*) FROM dispatch_deliveries").fetchone()[0]
+        with self._sread:
+            runs = self.sc.execute("SELECT COUNT(*) FROM agent_runs").fetchone()[0]
+            deliveries = self.sc.execute("SELECT COUNT(*) FROM dispatch_deliveries").fetchone()[0]
         return {
             "db_bytes": db_bytes,
             "wal_bytes": wal_bytes,
@@ -3771,7 +3943,7 @@ class Store(FactoryStore, ClaudeUsageStore):
             return None
         ph = ", ".join(["?"] * len(sources))
         fsql, fparams = _filter_sql(filters)
-        esql, eparams = _exclude_sql(exclude, list(sources))
+        esql, eparams = self._exclude(exclude, list(sources))
         with self._lock:
             r = self.con.execute(
                 f"SELECT key_value, event_time FROM events WHERE source IN ({ph}) AND ingest_time >= ? "
@@ -3781,7 +3953,7 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def recent_events(self, source: str | None = None, limit: int = 50,
                       exclude: dict | None = None) -> list[dict]:
-        esql, eparams = _exclude_sql(exclude, [source] if source else None)
+        esql, eparams = self._exclude(exclude, [source] if source else None)
         clauses = (["source = ?"] if source else []) + ([esql[5:]] if esql else [])
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         params = ([source] if source else []) + eparams + [int(limit)]
@@ -3826,7 +3998,7 @@ class Store(FactoryStore, ClaudeUsageStore):
     def recent_payloads(self, source: str, limit: int = 500,
                         exclude: dict | None = None) -> list[dict]:
         """The lossless payloads of a source's most recent events (for field profiling)."""
-        esql, eparams = _exclude_sql(exclude, [source])
+        esql, eparams = self._exclude(exclude, [source])
         with self._lock:
             rows = self.con.execute(
                 f"SELECT payload FROM events WHERE source = ?{esql} "
@@ -3913,7 +4085,7 @@ class Store(FactoryStore, ClaudeUsageStore):
         value that only a hidden project's rows carry must not list."""
         if not _FIELD_RE.match(label):
             raise ValueError(f"bad label name {label!r}")
-        xsql, xparams = _exclude_sql(exclude, sources)
+        xsql, xparams = self._exclude(exclude, sources)
         if xsql:
             with self._lock:
                 return self._list_entities_scan(label, sources, limit, xsql, xparams)
@@ -3970,19 +4142,19 @@ class Store(FactoryStore, ClaudeUsageStore):
         """Delete a trigger's firing history: its dispatch_log rows, their per-recipient
         deliveries, and its cooldown state. Used when a project is deleted with purge, so a
         re-created demo does not open on last week's firings."""
-        with self._lock:
-            n = self.con.execute(
+        with self._swrite:
+            n = self.sc.execute(
                 "SELECT COUNT(*) FROM dispatch_log WHERE trigger = ?", [trigger]).fetchone()[0]
-            self.con.execute("BEGIN TRANSACTION")
+            self.sc.execute("BEGIN TRANSACTION")
             try:
-                self.con.execute(
+                self.sc.execute(
                     "DELETE FROM dispatch_deliveries WHERE dispatch_id IN "
                     "(SELECT dispatch_id FROM dispatch_log WHERE trigger = ?)", [trigger])
-                self.con.execute("DELETE FROM dispatch_log WHERE trigger = ?", [trigger])
-                self.con.execute("DELETE FROM trigger_state WHERE trigger = ?", [trigger])
-                self.con.execute("COMMIT")
+                self.sc.execute("DELETE FROM dispatch_log WHERE trigger = ?", [trigger])
+                self.sc.execute("DELETE FROM trigger_state WHERE trigger = ?", [trigger])
+                self.sc.execute("COMMIT")
             except Exception:
-                self.con.execute("ROLLBACK")
+                self.sc.execute("ROLLBACK")
                 raise
         return int(n)
 
@@ -4009,8 +4181,8 @@ class Store(FactoryStore, ClaudeUsageStore):
                          project: str | None = None) -> None:
         """A subscription to one trigger, or with `project` (and trigger "") to every trigger of
         that project, the ones added later included (TR-336)."""
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO subscriptions (subscription_id, trigger, url, created_at, created_by, "
                 "project) VALUES (?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (subscription_id) DO UPDATE SET trigger = excluded.trigger, url = excluded.url",
@@ -4019,16 +4191,16 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def list_project_subscriptions(self, project: str) -> list[dict]:
         """The subscriptions to a whole project, oldest first."""
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT subscription_id, url, created_at, created_by FROM subscriptions "
                 "WHERE project = ? ORDER BY created_at", [project]).fetchall()
         return [{"subscription_id": r[0], "url": r[1], "created_at": r[2], "created_by": r[3]}
                 for r in rows]
 
     def get_subscription(self, sid: str) -> dict | None:
-        with self._lock:
-            r = self.con.execute(
+        with self._sread:
+            r = self.sc.execute(
                 "SELECT subscription_id, trigger, url, created_at, created_by, project "
                 "FROM subscriptions WHERE subscription_id = ?", [sid]).fetchone()
         if r is None:
@@ -4038,8 +4210,8 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def last_delivery(self, subscription_id: str) -> dict | None:
         """The newest delivery made through one subscription, or None."""
-        with self._lock:
-            r = self.con.execute(
+        with self._sread:
+            r = self.sc.execute(
                 "SELECT delivered_at, ok, error, dispatch_id FROM dispatch_deliveries "
                 "WHERE subscription_id = ? ORDER BY delivered_at DESC LIMIT 1",
                 [subscription_id]).fetchone()
@@ -4049,15 +4221,15 @@ class Store(FactoryStore, ClaudeUsageStore):
                 "dispatch_id": r[3]}
 
     def list_subscriptions(self, trigger: str):
-        with self._lock:
-            return self.con.execute(
+        with self._sread:
+            return self.sc.execute(
                 "SELECT subscription_id, trigger, url FROM subscriptions WHERE trigger = ?",
                 [trigger],
             ).fetchall()
 
     def list_all_subscriptions(self) -> list[dict]:
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT subscription_id, trigger, url, created_at, project FROM subscriptions "
                 "ORDER BY created_at DESC"
             ).fetchall()
@@ -4065,29 +4237,29 @@ class Store(FactoryStore, ClaudeUsageStore):
                  "project": r[4]} for r in rows]
 
     def remove_subscription(self, sid: str) -> None:
-        with self._lock:
-            self.con.execute("DELETE FROM subscriptions WHERE subscription_id = ?", [sid])
+        with self._swrite:
+            self.sc.execute("DELETE FROM subscriptions WHERE subscription_id = ?", [sid])
 
     def subscription_by_url(self, url: str) -> dict | None:
         """A subscription by its exact URL — used to find a Tares agent's internal subscription
         (url = tares://agent/<name>), which is how enabled/disabled is represented."""
-        with self._lock:
-            r = self.con.execute(
+        with self._sread:
+            r = self.sc.execute(
                 "SELECT subscription_id, trigger, url FROM subscriptions WHERE url = ? LIMIT 1",
                 [url]).fetchone()
         return {"subscription_id": r[0], "trigger": r[1], "url": r[2]} if r else None
 
     def remove_subscription_by_url(self, url: str) -> None:
-        with self._lock:
-            self.con.execute("DELETE FROM subscriptions WHERE url = ?", [url])
+        with self._swrite:
+            self.sc.execute("DELETE FROM subscriptions WHERE url = ?", [url])
 
     def log_delivery(self, dispatch_id: str, subscription_id: str, url: str, ok: bool | None,
                      error: str | None = None) -> None:
         # Explicit column list: `error` was appended by migration, so positional VALUES no longer match.
         # ok may be NULL — a Tares agent's delivery is logged pending at fire time and updated when
         # the in-process run finishes (external POSTs log their final ok immediately).
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO dispatch_deliveries "
                 "(dispatch_id, subscription_id, url, ok, delivered_at, error) VALUES (?, ?, ?, ?, ?, ?)",
                 [dispatch_id, subscription_id, url, ok, now_utc(), error])
@@ -4095,8 +4267,8 @@ class Store(FactoryStore, ClaudeUsageStore):
     def update_delivery(self, dispatch_id: str, subscription_id: str, ok: bool,
                         error: str | None = None) -> None:
         """Resolve a pending delivery (a Tares agent's in-process run finishing)."""
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "UPDATE dispatch_deliveries SET ok = ?, error = ?, delivered_at = ? "
                 "WHERE dispatch_id = ? AND subscription_id = ?",
                 [ok, error, now_utc(), dispatch_id, subscription_id])
@@ -4104,15 +4276,15 @@ class Store(FactoryStore, ClaudeUsageStore):
     def remove_subscriptions_by_trigger(self, trigger: str) -> int:
         """Drop every subscription to this trigger — called when the trigger is deleted, so no
         subscriber keeps 'waking on' a trigger that no longer exists."""
-        with self._lock:
-            n = self.con.execute("SELECT COUNT(*) FROM subscriptions WHERE trigger = ?",
+        with self._swrite:
+            n = self.sc.execute("SELECT COUNT(*) FROM subscriptions WHERE trigger = ?",
                                  [trigger]).fetchone()[0]
-            self.con.execute("DELETE FROM subscriptions WHERE trigger = ?", [trigger])
+            self.sc.execute("DELETE FROM subscriptions WHERE trigger = ?", [trigger])
         return int(n)
 
     def all_subscriptions(self) -> list[dict]:
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT subscription_id, trigger, url, created_at, created_by, project "
                 "FROM subscriptions ORDER BY created_at").fetchall()
         return [{"subscription_id": r[0], "trigger": r[1], "url": r[2],
@@ -4130,11 +4302,11 @@ class Store(FactoryStore, ClaudeUsageStore):
         when it has been quiet for longer than the window (arg_max picks the value at the latest
         delivered_at)."""
         since = now_utc() - parse_window(window)
-        with self._lock:
+        with self._sread:
             # ok IS NULL is a pending Tares-agent run — count it as neither delivered nor failed,
             # and exclude it from the "most recent outcome" (arg_max over resolved deliveries only),
             # so a running agent never reads as a failure.
-            rows = self.con.execute(
+            rows = self.sc.execute(
                 "SELECT url, SUM(CASE WHEN ok AND delivered_at > ? THEN 1 ELSE 0 END), "
                 "SUM(CASE WHEN ok = FALSE AND delivered_at > ? THEN 1 ELSE 0 END), "
                 "SUM(CASE WHEN ok THEN 1 ELSE 0 END), "
@@ -4151,8 +4323,8 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def recent_deliveries(self, url: str, limit: int = 20) -> list[dict]:
         """Latest deliveries to one endpoint, joined with the firing's trigger/entity."""
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT d.delivered_at, d.ok, l.trigger, l.key_value, d.dispatch_id, d.error "
                 "FROM dispatch_deliveries d LEFT JOIN dispatch_log l ON d.dispatch_id = l.dispatch_id "
                 "WHERE d.url = ? ORDER BY d.delivered_at DESC LIMIT ?", [url, limit]).fetchall()
@@ -4164,8 +4336,8 @@ class Store(FactoryStore, ClaudeUsageStore):
                        project: str | None = None, person_id: str | None = None) -> None:
         """`project` makes it a project key: it reads that project only (TR-335). `person_id`
         is the person it belongs to."""
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO api_keys (id, name, prefix, hash, scopes, created_at, last_used_at, "
                 "revoked_at, project, person_id) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
                 [kid, name, prefix, hash_, json.dumps(scopes), now_utc(), project or None,
@@ -4179,8 +4351,8 @@ class Store(FactoryStore, ClaudeUsageStore):
         if project is not None:
             sql += "WHERE project = ? "
             params.append(project)
-        with self._lock:
-            rows = self.con.execute(sql + "ORDER BY created_at DESC", params).fetchall()
+        with self._sread:
+            rows = self.sc.execute(sql + "ORDER BY created_at DESC", params).fetchall()
         return [{"id": r[0], "name": r[1], "prefix": r[2], "scopes": json.loads(r[3]),
                  "created_at": r[4], "last_used_at": r[5], "revoked_at": r[6],
                  "project": r[7], "person_id": r[8]} for r in rows]
@@ -4190,8 +4362,8 @@ class Store(FactoryStore, ClaudeUsageStore):
 
     def find_api_key(self, hash_: str) -> dict | None:
         """Active (non-revoked) key by secret hash, or None."""
-        with self._lock:
-            r = self.con.execute(
+        with self._sread:
+            r = self.sc.execute(
                 "SELECT id, name, scopes, last_used_at, project, person_id FROM api_keys "
                 "WHERE hash = ? AND revoked_at IS NULL", [hash_]).fetchone()
         if not r:
@@ -4202,19 +4374,19 @@ class Store(FactoryStore, ClaudeUsageStore):
     def key_person_id(self, kid: str) -> str | None:
         """The person an active key is bound to, None for an unbound or unknown key (unlike a
         credential's person, this never falls back to `local`)."""
-        with self._lock:
-            r = self.con.execute("SELECT person_id FROM api_keys WHERE id = ? AND revoked_at IS NULL",
+        with self._sread:
+            r = self.sc.execute("SELECT person_id FROM api_keys WHERE id = ? AND revoked_at IS NULL",
                                  [kid]).fetchone()
         return r[0] if r else None
 
     def set_key_person(self, kid: str, person_id: str | None) -> bool:
         """Bind an active key to a person (None unbinds it). False when there is no such key."""
-        with self._lock:
-            hit = self.con.execute("SELECT 1 FROM api_keys WHERE id = ? AND revoked_at IS NULL",
+        with self._swrite:
+            hit = self.sc.execute("SELECT 1 FROM api_keys WHERE id = ? AND revoked_at IS NULL",
                                    [kid]).fetchone()
             if not hit:
                 return False
-            self.con.execute("UPDATE api_keys SET person_id = ? WHERE id = ?", [person_id, kid])
+            self.sc.execute("UPDATE api_keys SET person_id = ? WHERE id = ?", [person_id, kid])
         return True
 
     # ── People: who is on the cell. A key belongs to one; the credential names the person ─
@@ -4277,34 +4449,34 @@ class Store(FactoryStore, ClaudeUsageStore):
         email = self.check_email(email)
         extra = self._norm_emails(emails)
         github = str(github or "").strip().lstrip("@").lower() or None
-        with self._lock:
+        with self._swrite:
             clash = self._taken_emails(([email] if email else []) + extra)
             if clash:
                 raise ValueError(f"{clash} already belongs to another person")
             if github and any(p["github"] == github for p in self._people()):
                 raise ValueError(f"the GitHub login {github} already belongs to another person")
             pid = "p_" + uuid.uuid4().hex[:10]
-            self.con.execute(
+            self.sc.execute(
                 "INSERT INTO people (id, name, email, emails, github, is_admin, created_at, "
                 "created_via) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 [pid, name, email, json.dumps(extra), github, bool(is_admin), now_utc(), via])
         return self.get_person(pid)
 
     def get_person(self, pid: str) -> dict | None:
-        with self._lock:
-            r = self.con.execute(f"SELECT {self._PERSON_COLS} FROM people WHERE id = ?",
+        with self._sread:
+            r = self.sc.execute(f"SELECT {self._PERSON_COLS} FROM people WHERE id = ?",
                                  [pid]).fetchone()
         return self._person_row(r) if r else None
 
     def _people(self) -> list[dict]:
         """list_people for a caller that already holds the lock."""
-        rows = self.con.execute(
+        rows = self.sc.execute(
             f"SELECT {self._PERSON_COLS} FROM people ORDER BY created_at, id").fetchall()
         return [self._person_row(r) for r in rows]
 
     def list_people(self) -> list[dict]:
         """Everyone on the cell, oldest first (`local` first on a cell that has it)."""
-        with self._lock:
+        with self._sread:
             return self._people()
 
     def find_person_by_email(self, email: str) -> dict | None:
@@ -4339,7 +4511,7 @@ class Store(FactoryStore, ClaudeUsageStore):
             new["github"] = str(fields["github"] or "").strip().lstrip("@").lower() or None
         if "is_admin" in fields:
             new["is_admin"] = bool(fields["is_admin"])
-        with self._lock:
+        with self._swrite:
             clash = self._taken_emails(([new["email"]] if new["email"] else []) + new["emails"],
                                        besides=pid)
             if clash:
@@ -4347,7 +4519,7 @@ class Store(FactoryStore, ClaudeUsageStore):
             if new["github"] and any(p["github"] == new["github"] and p["id"] != pid
                                      for p in self._people()):
                 raise ValueError(f"the GitHub login {new['github']} already belongs to another person")
-            self.con.execute(
+            self.sc.execute(
                 "UPDATE people SET name = ?, email = ?, emails = ?, github = ?, is_admin = ? "
                 "WHERE id = ?", [new["name"], new["email"], json.dumps(new["emails"]),
                                  new["github"], new["is_admin"], pid])
@@ -4374,22 +4546,22 @@ class Store(FactoryStore, ClaudeUsageStore):
     def only_local_person(self) -> bool:
         """True while `local` is the only person on the cell: a key nobody has bound still acts
         as them, so a single-user cell keeps working."""
-        with self._lock:
-            rows = self.con.execute("SELECT id FROM people LIMIT 2").fetchall()
+        with self._sread:
+            rows = self.sc.execute("SELECT id FROM people LIMIT 2").fetchall()
         return [r[0] for r in rows] == ["local"]
 
     def touch_api_key(self, kid: str) -> None:
-        with self._lock:
-            self.con.execute("UPDATE api_keys SET last_used_at = ? WHERE id = ?", [now_utc(), kid])
+        with self._swrite:
+            self.sc.execute("UPDATE api_keys SET last_used_at = ? WHERE id = ?", [now_utc(), kid])
 
     def revoke_api_key(self, kid: str) -> bool:
         """Revoke the key and delete its subscriptions (a revoked agent must stop receiving
         trigger dispatches — otherwise its webhook is a post-revocation exfiltration path)."""
-        with self._lock:
-            hit = self.con.execute("SELECT 1 FROM api_keys WHERE id = ? AND revoked_at IS NULL",
+        with self._swrite:
+            hit = self.sc.execute("SELECT 1 FROM api_keys WHERE id = ? AND revoked_at IS NULL",
                                    [kid]).fetchone()
             if not hit:
                 return False
-            self.con.execute("UPDATE api_keys SET revoked_at = ? WHERE id = ?", [now_utc(), kid])
-            self.con.execute("DELETE FROM subscriptions WHERE created_by = ?", [f"key:{kid}"])
+            self.sc.execute("UPDATE api_keys SET revoked_at = ? WHERE id = ?", [now_utc(), kid])
+            self.sc.execute("DELETE FROM subscriptions WHERE created_by = ?", [f"key:{kid}"])
         return True

@@ -147,11 +147,11 @@ async def main():
         ck("run_id is not counted as an entity axis",
            not store.con.execute("SELECT 1 FROM entity_counts WHERE label IN ('run_id', "
                                  "'dispatch_id')").fetchone())
-        rca_fire = store.con.execute("SELECT project, parent_run_id FROM dispatch_log "
+        rca_fire = store.sc.execute("SELECT project, parent_run_id FROM dispatch_log "
                                      "WHERE trigger = 'rca'").fetchone()
         ck("the rca firing records its project and the run that tripped it",
            rca_fire == (a, w["id"]), str(rca_fire))
-        bfire = await wait_for(lambda: store.con.execute(
+        bfire = await wait_for(lambda: store.sc.execute(
             "SELECT project, parent_run_id FROM dispatch_log WHERE trigger = 'beta_rca'").fetchone())
         ck("Beta's findings firing is Beta's", bfire and bfire[0] == b, str(bfire))
 
@@ -334,7 +334,7 @@ async def main():
             ck("the cursor is the same instant with and without a zone, and has a zone to drop",
                nb.tzinfo is not None and datetime.fromisoformat(naive) == nb.astimezone(timezone.utc).replace(tzinfo=None), naive)
             # an override a microsecond before the cursor belongs on the page that starts there
-            store.con.execute("INSERT INTO handover_overrides (project, \"at\", reason, handed_by) "
+            store.sc.execute("INSERT INTO handover_overrides (project, \"at\", reason, handed_by) "
                               "VALUES (?, ?, 'zone check', 'lead')", [a, nb - timedelta(microseconds=1)])
             pa = (await cx.get(f"/api/projects/{a}/timeline", params={"limit": 2, "before": aware})).json()
             pn = (await cx.get(f"/api/projects/{a}/timeline", params={"limit": 2, "before": naive})).json()
@@ -372,7 +372,7 @@ async def main():
                str(fp.get("events")))
 
     print("== upgrade of an old database ==")
-    old = Store(OLD_DB)
+    old = Store(OLD_DB, state_dsn="")   # a file from a release before the state database
     old.upsert_catalog_source("evt", "webhook", "webhook", "5s", {})
     old.upsert_catalog_trigger("t", ["evt"], cond(), {}, "5m")
     old.upsert_catalog_agent("ag", "t", "look")
@@ -401,7 +401,7 @@ async def main():
            r and r["woken_by"] is None and r["project"] == owner, str(r))
         ck(f"open {attempt}: a run of a deleted agent stays unplaced",
            st.get_agent_run("r_gone")["project"] is None)
-        d = st.con.execute("SELECT project FROM dispatch_log WHERE dispatch_id = 'd_old'").fetchone()
+        d = st.sc.execute("SELECT project FROM dispatch_log WHERE dispatch_id = 'd_old'").fetchone()
         ck(f"open {attempt}: an old firing gets its trigger's project", d == (owner,), str(d))
         tl = __import__("tares.timeline", fromlist=["x"]).project_timeline(st, owner)
         ck(f"open {attempt}: the old firing and its run form one thread",

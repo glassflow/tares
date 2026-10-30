@@ -119,6 +119,18 @@ async def main():
             ck("the team moves to L3-review with the challenger on: A's older, looser values no longer apply",
                s["autonomy"] == "L3-review" and s["challenger"] is True, str(s))
 
+            print("-- pace and the kit --")
+            r = await cx.put(f"{B}/api/crew/settings", headers=KA, json={"pace": True})
+            ck("A turns pace on for themselves", r.status_code == 200 and r.json()["pace"] is True, r.text)
+            pa = (await cx.get(f"{B}/api/crew/pace", headers=KA)).json()
+            ck("GET /api/crew/pace counts A's own pace", pa["state"] != "off", str(pa))
+            ck("... GET /api/crew shows it too",
+               (await cx.get(f"{B}/api/crew", headers=KA)).json()["pace"]["state"] != "off")
+            ck("... the cell's own pace stays off",
+               (await cx.get(f"{B}/api/crew/pace", headers=ROOT)).json()["state"] == "off")
+            r = await cx.put(f"{B}/api/crew/settings", headers=KA, json={"kit": {"frozen": None}})
+            ck("A cannot set the kit: 403 rather than a 200 that changes nothing", r.status_code == 403, r.text)
+
             print("-- a personal doc has a size limit --")
             for name in ("agents", "memory"):
                 last, n = None, 0

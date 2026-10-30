@@ -481,7 +481,7 @@ export interface Milestone {
   finished: boolean;
 }
 // The tares-factory crew (M3): stations are roles with stable names, played by a chain of sessions
-export type CrewState = "working" | "waiting" | "quiet" | "ended";
+export type CrewState = "working" | "idle" | "waiting" | "quiet" | "ended";
 export interface CrewStation {
   name: string;
   role: string | null;
@@ -499,6 +499,10 @@ export interface CrewStation {
   lines: number;
   earlier: { session: string; started_at: string | null; last_at: string | null; lines: number; state: "replaced" }[];
   children: string[];
+  /** the Claude Code version the station runs, from its status line; null before it reported */
+  claude_version: string | null;
+  /** Set while the factory retries moving the station onto a newer Claude Code: the version, failed moves, unix time of the next try. */
+  claude_retry: { target: string; fails: number; next_at: number } | null;
   /** the context window from the station's status line, null before it reported */
   context: StationContext | null;
   /** what all the station's sessions spent, null before any reply */
@@ -563,10 +567,20 @@ export interface CrewSettings {
   prod_pattern: string | null;
   challenger: boolean | null;
   builders_max: number | null;
+  kit: { frozen: { at: string; by: string; version: string } | null };
+  idle_wake?: boolean | null;
+  pace?: boolean | null;
+  claude_update: boolean | null;
+}
+/** The crew's pace before the plan's limits (/api/crew/pace, TR-674). */
+export interface CrewPace {
+  on: boolean; known: boolean; level: 0 | 1 | 2; at_limit: boolean;
+  state: "off" | "ok" | "slow" | "hold" | "limit";
+  until: string | null; session_pct: number | null; weekly_pct: number | null; note: string;
 }
 // The merged settings the caller sees (GET /api/crew/settings): theirs over the cell's default.
 export interface CrewSettingsView extends CrewSettings { autonomy_levels?: Record<string, string> }
-export type CrewSettingField = "autonomy" | "challenger" | "builders_max" | "releaser" | "release_profile" | "prod_pattern";
+export type CrewSettingField = "autonomy" | "challenger" | "builders_max" | "releaser" | "release_profile" | "prod_pattern" | "pace" | "idle_wake";
 export interface HandoverRepo { path: string | null; name: string | null }
 export interface ProjectFinished { at: string; words: string; decision: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null }
 // A hand-over the project lead pushed through without every area owner's sign-off, and why (TR-636)
@@ -632,7 +646,7 @@ export interface ProjectSession {
   session: string; repo: string | null; linked_at: string;
   started_at: string | null; last_at: string | null; lines: number;
   // what it is doing now, from the plugin; null before the plugin reported a state
-  state: "working" | "waiting" | "quiet" | "ended" | "replaced" | null;   // replaced: a fresh session picked up; quiet: silent past its window (TR-473)
+  state: "working" | "idle" | "waiting" | "quiet" | "ended" | "replaced" | null;   // idle: a turn ended, the person is not needed; replaced: a fresh session picked up; quiet: silent past its window (TR-473)
   state_reason: string | null;
   state_at: string | null;
   last_said?: string;   // a waiting session: the last thing it wrote
@@ -670,6 +684,7 @@ export interface AgentPreset {
   label: string;
   prompt: string;
   concludes?: boolean;          // the preset ends every run with conclude
+  tier?: "small";               // picks the provider's cheaper model (small_models), when it has one
   verdicts?: Verdict[];         // and gives these verdicts
 }
 
@@ -860,6 +875,7 @@ export interface Project {
   scope?: ProjectScope;                // team: everyone on the cell sees it; private: lead and members only
   members?: ProjectMember[];           // the lead first (reason "lead"), then the others
   hidden?: boolean;                    // a private project the caller is not on: name and lead, nothing else
+  activity_at?: string;                // when it last moved: its own update or its newest ticket's (GET /api/projects only)
 }
 export type ProjectScope = "team" | "private";
 export interface ProjectMember { id: string; name: string; reason: "lead" | "manual" | "ticket" }
@@ -928,6 +944,7 @@ export interface ProjectHealthIssue {
   message: string;
   fix: string | null;
   view: string | null;        // a project view to open, same form as ?view= (e.g. "source:checkout-errors")
+  agent?: string;             // with view "settings:agents": the agent whose daily cap this is (TR-670)
 }
 export interface ProjectHealth {
   state: "working" | "attention" | "paused" | "setting_up";

@@ -7,7 +7,7 @@ import { ContextBadge, PlanPanel, StationUsage } from "../components/ClaudeUsage
 import ConfirmDialog from "../components/ConfirmDialog";
 import { ProgressRing } from "../components/ProgressRing";
 import StandupSheet from "../components/Standup";
-import type { CrewGroup, CrewProject, CrewSettingField, CrewSettings, CrewStation, DeskAllowed, DeskItem, ProjectUsage } from "../types";
+import type { CrewGroup, CrewPace, CrewProject, CrewSettingField, CrewSettings, CrewStation, DeskAllowed, DeskItem, ProjectUsage } from "../types";
 
 // The crew of a tares-factory (M3, M8): one always-on crew (orchestrator, reviewer, and a releaser
 // when the person asked for one) serves every project handed to it, and builders come and go per
@@ -100,10 +100,18 @@ function useDismissed() {
 
 interface Notice { id: string; sig: string; tone: "waiting" | "silent"; title: React.ReactNode; body: React.ReactNode }
 
-function Notices({ stations, desk, myId }: { stations: CrewStation[]; desk: DeskItem[]; myId: string }) {
+function Notices({ stations, desk, myId, pace }: { stations: CrewStation[]; desk: DeskItem[]; myId: string; pace?: CrewPace }) {
   const { shown, dismiss } = useDismissed();
   const d = useDesk(desk);
   const notices: Notice[] = [];
+  if (pace && pace.level >= 1) {
+    const until = pace.until ? ` until ${new Date(pace.until).toLocaleString()}` : "";
+    notices.push({
+      id: "pace", sig: `${pace.state}:${pace.until ?? ""}`, tone: "silent",
+      title: <>Pacing: {pace.state === "limit" ? "at the plan's limit" : pace.state}{until}</>,
+      body: <p className="help" style={{ margin: 0 }}>{pace.note}</p>,
+    });
+  }
   if (d.items.length) {
     // the count and the dismissal are about what is yours (for you, or for anyone); other people's
     // items are listed under their name but never counted as waiting for you
@@ -185,6 +193,37 @@ const isMine = (g: { person: { id: string } | null }, myId: string) => !g.person
 
 // ── the member list ─────────────────────────────────────────────────────────
 
+/** Whether version a is lower than b, comparing the numbers part by part (2.1.9 before 2.1.10). */
+function versionBefore(a: string, b: string): boolean {
+  const n = (v: string) => v.split(/[.-]/).map((p) => parseInt(p, 10) || 0);
+  const [x, y] = [n(a), n(b)];
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d !== 0) return d < 0;
+  }
+  return false;
+}
+
+/** The Claude Code a station runs; flagged when another station runs a newer one, since the factory moves
+ *  stations onto a new version one at a time (or `tares factory crew update` does all of them). A station
+ *  whose restarts kept landing on an old pre-warmed spare is flagged as retrying: the factory starts it again
+ *  in a new conversation, then tries again after a pause. */
+function CodeVersion({ s, all }: { s: CrewStation; all: CrewStation[] }) {
+  if (!s.claude_version) return null;
+  const newest = all.reduce((m, x) => (x.claude_version && (!m || versionBefore(m, x.claude_version)) ? x.claude_version : m), "");
+  const older = !!newest && versionBefore(s.claude_version, newest);
+  const retry = s.claude_retry && versionBefore(s.claude_version, s.claude_retry.target) ? s.claude_retry : null;
+  const next = retry && retry.next_at ? new Date(retry.next_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+  return (
+    <small className={`crew-cc${older || retry ? " is-older" : ""}`}
+      title={retry
+        ? `Claude Code ${s.claude_version}; ${retry.target} is installed, but restarts keep coming back on an old pre-warmed spare (${retry.fails} failed). The factory tries again${next ? ` at ${next}` : " soon"}, or run tares factory crew update.`
+        : older ? `Claude Code ${s.claude_version}; ${newest} runs on another station. It moves when idle, or run tares factory crew update.` : `Claude Code ${s.claude_version}`}>
+      {s.claude_version}{retry ? " · older, retrying" : older ? " · older" : ""}
+    </small>
+  );
+}
+
 /** What a station is on: its project (when `withProject`) and the reason it gave for its state. */
 function onText(s: CrewStation, withProject: boolean): string {
   const reason = s.state === "ended" ? "" : (s.state_reason ?? "").replace(/[.!]+$/, "");
@@ -206,6 +245,7 @@ function MemberRow({ s, all, selected, depth = 0, withProject = false }: { s: Cr
           {on && <span className="crew-on">{on}</span>}
         </button>
         <span className="crew-side">
+          <CodeVersion s={s} all={all} />
           <ContextBadge ctx={s.context} />
           <small>{s.last_at ? <TimeAgo ts={s.last_at} /> : "silent"}</small>
           <CrewState s={s} />
@@ -397,7 +437,7 @@ function MemberDetail({ name, crew, crewSide, mine, onChanged }: { name: string;
       <div className="crew-detail-body">
         {s.role && ROLE_TEXT[s.role] && <p className="dim" style={{ margin: 0 }}>{ROLE_TEXT[s.role]}</p>}
         <p style={{ margin: 0 }}>
-          {s.state === "working" ? "Working" : s.state === "waiting" ? "Waiting" : s.state === "quiet" ? `No word for ${s.quiet_minutes} min` : "Ended"}
+          {s.state === "working" ? "Working" : s.state === "waiting" ? "Waiting for you" : s.state === "idle" ? "Idle" : s.state === "quiet" ? `No word for ${s.quiet_minutes} min` : "Ended"}
           {s.state_reason && <>: {s.state_reason.replace(/[.!]+$/, "")}</>}
           {s.last_at && <>; last spoke <TimeAgo ts={s.last_at} /></>}.
           {!crewSide && s.project_name && <> Works on <Link to={`/projects/${encodeURIComponent(s.project ?? "")}`}>{s.project_name}</Link>.</>}
@@ -555,6 +595,11 @@ function SettingsForm({ st, personal, onDone }: { st: CrewSettings; personal: bo
 function Settings({ st, grants, onChanged }: { st: CrewSettings; grants: string; onChanged: () => void }) {
   const { data: me } = usePolling(() => api.whoami(), 60000);
   const [editing, setEditing] = useState(false);
+  const [paceErr, setPaceErr] = useState("");
+  const togglePace = () => {
+    setPaceErr("");
+    api.setCrewSettings({ pace: !st.pace }).then(onChanged, (e) => setPaceErr(String(e?.message ?? e)));
+  };
   const lines = grants.split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
   // a person other than `local`, with a key of their own: these are their settings over the team's
   const person = me && me.kind !== "system" && me.person && me.person.id !== "local" ? me.person : null;
@@ -574,6 +619,16 @@ function Settings({ st, grants, onChanged }: { st: CrewSettings; grants: string;
               <dd>{st.releaser === null ? <span className="dim">not set</span> : st.releaser ? <>yes, release profile {st.release_profile ?? "not set"}</> : "no: tickets end at merged on main"}</dd>
               <dt>Codex challenger on builders</dt><dd>{st.challenger === null ? <span className="dim">not set</span> : st.challenger ? "on" : "off"}</dd>
               <dt>Builders at once</dt><dd>{st.builders_max ?? <span className="dim">not set</span>}</dd>
+            <dt>Kit</dt>
+            <dd>{st.kit?.frozen ? <>frozen since {new Date(st.kit.frozen.at).toLocaleString()} by {st.kit.frozen.by}: stations that start or revive use the frozen kit, running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit</> : "following the checkout"}</dd>
+            <dt>Wake on events</dt>
+            <dd>{st.idle_wake ? "on: the watch wakes an idle station when it has work and holds its liveness tick (15 to 30 minutes, backing off to 45 while nothing happens)" : "off: each station ticks on its own schedule"}</dd>
+            <dt>Pace before the plan's limits</dt>
+            <dd>{st.pace ? "on: at 85% of the 5-hour window or 90% of the week no new builder starts and stations tick every 45 minutes; at 95% builders finish their step and wait; after the reset the watch resumes them" : "off: the crew runs until a limit stops it"}{" "}
+              <button type="button" onClick={togglePace}>{st.pace ? "Turn off" : "Turn on"}</button>
+              {paceErr && <span className="dim"> {paceErr}</span>}</dd>
+            <dt>Claude Code updates</dt>
+            <dd>{st.claude_update === false ? "off: the watch does not restart stations onto a new Claude Code (one that restarts for another reason starts on it); run tares factory crew update to move them" : "on: the watch restarts idle stations on a new Claude Code, one at a time"}</dd>
             </dl>
             <p style={{ margin: "0 0 16px" }}><button type="button" onClick={() => setEditing(true)}>Change</button></p>
           </>
@@ -722,7 +777,7 @@ export default function Crew() {
       </div>
       {standup && <StandupSheet onClose={closeStandup} />}
 
-      <Notices stations={stations} desk={desk} myId={myId} />
+      <Notices stations={stations} desk={desk} myId={myId} pace={data?.pace} />
 
       {data === undefined || (me === undefined && !meError) ? <div className="dim">loading…</div> : stations.length === 0 && projects.length === 0 && finished.length === 0 ? (
         <section className="fo-next fo-next-empty">

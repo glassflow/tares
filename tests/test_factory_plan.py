@@ -254,7 +254,7 @@ async def upgrade():
     s = Store(path)
     a = s.create_ticket("p", "tares", "A", position=2)
     b = s.create_ticket("p", "tares", "B", position=1)
-    s.con.execute("UPDATE tickets SET number = NULL")
+    s.sc.execute("UPDATE tickets SET number = NULL")
     s.con.close()
     s = Store(path)
     nums = {t["title"]: t["number"] for t in s.list_tickets("p")}

@@ -16,7 +16,7 @@ Every Tares call names its project (`project=`).
 3. Run `factory roster` (and `list_crew`). Expect `READY` from `$FACTORY_CREW-reviewer` (and `$FACTORY_CREW-releaser` when the crew has one), and from any builder still recorded as active.
 4. **Your work list is `my_work`**: the tickets of your person (the person this crew belongs to), not of everyone on the cell. `ready` are their tickets that can start, `in_progress` the ones a station holds, `desk` the open items addressed to them, `led_projects` the projects they lead. Start builders for `ready` tickets as in "Starting a project" below. `crew_projects` (every project handed to the crew, with its repos: `path` on this machine, GitHub `name`) is for context only: where a repo is cloned, what a project spans. Other people's tickets in it are not yours.
 5. **Re-ask the desk.** The `desk` of `my_work` (items addressed to your person): if items are open, ask the one your report says you were asking (else the top one) now, as in "The desk" below. The person may be attached right after a revive.
-6. Arm your schedule with `CronCreate`: every 20 minutes, with the prompt `Orchestrator tick: follow the Tick section of the station-orchestrator skill.` Check `CronList` first so you never hold two.
+6. Arm your schedule with `CronCreate`: every 20 minutes, with the prompt `Orchestrator tick: follow the Tick section of the station-orchestrator skill.` Check `CronList` first so you never hold two. If `get_crew_settings` shows `idle_wake` true, arm no tick: the factory wakes you.
 
 ## Starting a project
 
@@ -31,6 +31,7 @@ A project reaches you two ways: a `[TF:SHIP]` message from the spec session (sta
    ```
 
    With one repo, the slug is just `m<k>`. It starts `<project>-build-<slug>` in that repo with `TARES_PROJECT` set. The project's autonomy (from its hand-over) sticks to its builders by itself; pass `--autonomy L3-review` only when the person asked for a stricter one after the hand-over. A looser one needs the person to change the crew setting. Never more than `builders_max` builders across all projects: start the rest when one finishes.
+   While the factory paces the crew (a note from it, or `factory crew status` saying `pace: slow` or `pace: hold`), start no new builder: `factory spawn builder` refuses until the plan has room. Helpers are fine. Leave the tickets ready and spawn the builder after.
 4. Give each builder its tickets: `assign_ticket(ticket, holder="<project>-build-<slug>", project=...)`, only the tickets of its repo that are in your `ready` list. `assign_ticket` does not check whose ticket it is, so you do: never assign a ticket `my_work` does not list for your person.
 5. Reply to the sender (if it was a message) with one line: what you started, for which tickets. Write it to your report.
 

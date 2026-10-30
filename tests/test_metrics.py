@@ -131,8 +131,54 @@ async def main():
             body = (await cx.get("/metrics")).text
             ck("a blocked loop counts as a stall", (sample(body, "tares_event_loop_stalls_total") or 0) >= 1, str(sample(body, "tares_event_loop_stalls_total")))
 
+            print("== request timing per route (TR-652) ==")
+            auth = {"Authorization": "Bearer metrics-test-token"}
+            for pid in ("uc_routeone1", "uc_routetwo2"):
+                await cx.get(f"/api/projects/{pid}/tickets", headers=auth)
+            await cx.get("/some/console/page")
+            await cx.get("/api/no/such/route", headers=auth)
+            body = (await cx.get("/metrics")).text
+            ck("one series per route template, both requests in it",
+               sample(body, "tares_http_request_duration_seconds_count",
+                      route="/api/projects/{uid}/tickets", method="GET", status="4xx") == 2.0,
+               str(sample(body, "tares_http_request_duration_seconds_count",
+                          route="/api/projects/{uid}/tickets")))
+            ck("no ID in any label", "uc_routeone1" not in body and "uc_routetwo2" not in body)
+            ck("a path outside the API is labelled static, not by its path",
+               "/some/console/page" not in body
+               and (sample(body, "tares_http_request_duration_seconds_count", route="static") or 0) >= 1)
+            ck("an unknown API path is labelled unmatched",
+               "/api/no/such/route" not in body
+               and (sample(body, "tares_http_request_duration_seconds_count", route="unmatched") or 0) >= 1)
+            ck("/metrics itself is not timed",
+               sample(body, "tares_http_request_duration_seconds_count", route="/metrics") is None)
+
             print("== nothing sensitive in the body ==")
             ck("no entity keys or payload text", "checkout" not in body and "e0" not in body.split("tares_")[0])
+
+    print("== scrape token (TR-653) ==")
+    # a second app built with the token set; make_app reads TARES_METRICS_TOKEN when it builds
+    os.environ["TARES_METRICS_TOKEN"] = "scrape-secret"
+    try:
+        tapp = make_app()
+    finally:
+        del os.environ["TARES_METRICS_TOKEN"]
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=tapp), base_url="http://t",
+                                 timeout=20) as cx:
+        r = await cx.get("/metrics")
+        ck("no header: 401 with a Bearer challenge",
+           r.status_code == 401 and r.headers.get("www-authenticate") == "Bearer", str(r.status_code))
+        r = await cx.get("/metrics", headers={"Authorization": "Bearer wrong"})
+        ck("wrong token: 401", r.status_code == 401, str(r.status_code))
+        r = await cx.get("/metrics", headers={"Authorization": "Bearer metrics-test-token"})
+        ck("the cell's own auth token is not the scrape token", r.status_code == 401, str(r.status_code))
+        r = await cx.get("/metrics", headers={"Authorization": "Bearer scrape-secret"})
+        ck("right token: 200, Prometheus text",
+           r.status_code == 200 and r.headers["content-type"].startswith("text/plain")
+           and "# HELP tares_" in r.text, str(r.status_code))
+        r = await cx.get("/health")
+        ck("/health stays public", r.status_code == 200, str(r.status_code))
+    tapp.state.store.con.close()
 
     print(f"\n{PASS} passed, {FAIL} failed")
     return 1 if FAIL else 0

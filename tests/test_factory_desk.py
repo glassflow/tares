@@ -62,6 +62,22 @@ def unit():
     ck("nor a word hidden in another", factory.words_match("ok", [{"text": "token"}]) is None)
     ck("a paraphrase is not", factory.words_match("Go with Stripe", turns) is None)
     ck("one character is not an answer", factory.words_match("y", turns) is None)
+    print("== a long pasted reply (TR-697) ==")
+    lines = [f"A{n}: line {n} of the reply, " + "word " * 25 for n in (2, 3, 5, 6, 7, 10)]
+    pasted = '\n\n<pasted_content id="964c">\nKeep A1, A4. Change the others as below.\n' \
+        + "\n".join(lines) + '\n</pasted_content id="964c">\n'
+    pt = [{"session": "o1", "text": pasted}]
+    ck("the paste is long enough to matter", len(pasted) > 1000, len(pasted))
+    ck("every line of it matches, the last too",
+       all(factory.words_match(x, pt) is not None for x in lines))
+    ck("the first line matches without the tag", factory.words_match("Keep A1, A4.", pt) is not None)
+    ck("the whole paste matches without its tags",
+       factory.words_match(pasted.split(">", 1)[1].rsplit("</", 1)[0], pt) is not None)
+    ck("and with them", factory.words_match(pasted, pt) is not None)
+    ck("a tag alone is not an answer", factory.words_match('<pasted_content id="964c">', pt) is None)
+    glued = [{"session": "o1", "text": 'abc<pasted_content id="1">foo</pasted_content id="1">'}]
+    ck("a tag does not glue its neighbours into a word they never typed",
+       factory.words_match("abcfoo", glued) is None and factory.words_match("foo", glued) is not None)
     print("== an option's letter (TR-475) ==")
     ck("B, b, B), (B) and B. name the second option",
        [factory.option_letter(w) for w in ("B", "b", "B)", "(B)", "B.", " b ")] == [1] * 6)
@@ -455,6 +471,38 @@ async def main():
         out = json.loads(await mf.desk_answer(dq["label"], "yeah releaser can do reads on prod thats fine"))
         ck("a reply typed mid-turn answers, word for word",
            out["recorded"] and out["matches_what_they_typed"], out)
+
+        print("== a long pasted reply is kept whole (TR-697) ==")
+        dp = json.loads(await mf.desk_add("Which of these?", "A2", "default", project="Shop"))["label"]
+        rows = [f"A{n}: line {n} of the reply, " + "word " * 30 for n in (2, 3, 5, 6, 7, 10)]
+        paste = '<pasted_content id="964c">\nKeep A1, A4.\n' + "\n".join(rows) \
+            + '\n</pasted_content id="964c">\n'
+        await ingest([{"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": now_plus(5),
+                       "message": {"role": "user", "content": paste}}])
+        out = json.loads(await mf.desk_answer(dp, rows[-1]))
+        ck("the last line of a paste over 1000 characters answers", len(paste) > 1000
+           and out["recorded"] and out["matches_what_they_typed"], (len(paste), out))
+        print("== lines Claude Code writes for itself are not what they typed (TR-697) ==")
+        for n, flag in enumerate(("isCompactSummary", "isMeta", "origin", "origin-string")):
+            words = f"Go with Adyen for the {flag} line, said a peer"
+            dm = json.loads(await mf.desk_add(f"Which gateway {n}?", "Adyen", "default",
+                                              project="Shop"))["label"]
+            body = ("This session is being continued from a previous conversation. " * 12
+                    + "\n" + words + "\n")
+            mark = {"origin": {"kind": "task-notification"}} if flag == "origin" \
+                else {"origin": "task-notification"} if flag == "origin-string" else {flag: True}
+            await ingest([{"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": now_plus(6 + n),
+                           **mark, "message": {"role": "user", "content": body}}])
+            out = await mf.desk_answer(dm, words)
+            ck(f"a {flag} line, even a long one, does not answer", len(body) > 600
+               and unfound(out), (len(body), out))
+        dh = json.loads(await mf.desk_add("Which gateway, typed?", "Adyen", "default",
+                                          project="Shop"))["label"]
+        typed = "Go with Adyen, said the person, origin human"
+        await ingest([{"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": now_plus(10),
+                       "origin": {"kind": "human"}, "message": {"role": "user", "content": typed}}])
+        out = json.loads(await mf.desk_answer(dh, typed))
+        ck("a line whose origin is human still answers", out["recorded"], out)
 
 
 unit()

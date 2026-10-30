@@ -14,7 +14,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from fastapi import Body, Request
+from fastapi import Body, HTTPException, Request
 
 from . import areas as areas_mod
 from . import claude_usage
@@ -22,8 +22,10 @@ from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
 from .envelope import now_utc
+from .factory_store import MapChanged
 
 CREW_SETTING = "crew_settings"
+CLAUDE_RETRY_SETTING = "crew_claude_retry"   # stations the watch is retrying onto a new Claude Code
 GRANTS_SETTING = "global_grants"   # the id of the cell's "Grants (all projects)" doc
 GRANTS_MIGRATED_SETTING = "grants_migrated"   # set once the old grants docs became rows (TR-630)
 
@@ -80,6 +82,15 @@ def merged_fields(t: dict, pr: dict) -> dict:
     return out
 
 
+def _reread_only(cur: dict, fields: dict) -> bool:
+    """The PR was read again and nothing but when (or whether the read failed) differs: that is
+    not ticket activity, and the Projects list's Updated column must not move for it."""
+    if set(fields) != {"pr"} or not cur["pr"]:
+        return False
+    volatile = {"checked_at": None, "error": None}
+    return {**cur["pr"], **volatile} == {**fields["pr"], **volatile}
+
+
 async def _refresh(store, uid: str) -> None:
     """A linked PR read again when its last read is stale; a ticket in the work with no PR linked
     by a `factory/<ref>` branch in the project's repos, only when no other project has a ticket
@@ -99,12 +110,16 @@ async def _refresh(store, uid: str) -> None:
                            "linked_by": "branch"}
                 store.update_ticket(t["id"], pr=t["pr"])
     sem = asyncio.Semaphore(_READS_AT_ONCE)
+    linked = [t for t in tickets if t["pr"] and t["pr"].get("repo")]
+    lasts = store.last_reviews([t["id"] for t in linked])
 
     async def one(t: dict) -> None:
         pr = t["pr"]
         if factory_github.stale(pr):
             async with sem:
                 pr = await factory_github.read_pr(store, pr["repo"], int(pr["number"]), pr)
+        elif not _follows(t, pr, lasts.get(t["id"])):
+            return               # not read again and nothing to write: skip the re-read below
         cur = store.get_ticket(uid, t["id"])   # re-read: a set_stage may have run meanwhile
         if cur is None or not cur["pr"] or (cur["pr"].get("repo"), cur["pr"].get("number")) != (
                 pr.get("repo"), pr.get("number")):
@@ -120,14 +135,22 @@ async def _refresh(store, uid: str) -> None:
                                      "new commits pushed after the verdict", "github", "github",
                                      now_utc())
         if fields:
-            store.update_ticket(cur["id"], **fields)
+            store.update_ticket(cur["id"], touch=not _reread_only(cur, fields), **fields)
         if fields.get("stage") == "merged":
             store.add_ticket_history(cur["id"], uid, "stage", "merged",
                                      "GitHub shows the pull request merged", "github", "github",
                                      now_utc())
 
-    await asyncio.gather(*(one(t) for t in tickets if t["pr"] and t["pr"].get("repo")),
-                         return_exceptions=True)
+    await asyncio.gather(*(one(t) for t in linked), return_exceptions=True)
+
+
+def _follows(t: dict, pr: dict, last: dict | None) -> bool:
+    """Whether a PR that was not read again still changes the ticket: a merge it does not show
+    yet, or new commits after the verdict that asked for changes (the same tests `one` makes)."""
+    if merged_fields(t, pr):
+        return True
+    return bool(t["stage"] == "changes" and last and pr.get("head")
+                and not verdict_now({"pr": pr}, last)["current"])
 
 
 def verdict_now(t: dict, last: dict | None) -> dict | None:
@@ -186,11 +209,12 @@ def pr_note(t: dict) -> str | None:
     return None
 
 
-def project_progress(store, uid: str) -> dict:
+def project_progress(store, uid: str, tickets: list[dict] | None = None) -> dict:
     """Tickets done of all, by stage, and the first milestone with work left: what the crew's
     project list shows (canceled tickets count as done here), and `progress`, the same tickets
-    as the console's ring counts them (canceled kept out, tares/factory.py `progress`)."""
-    tickets = store.list_tickets(uid)
+    as the console's ring counts them (canceled kept out, tares/factory.py `progress`). `tickets`
+    is the project's tickets when the caller already read them."""
+    tickets = store.list_tickets(uid) if tickets is None else tickets
     done = [t for t in tickets if (t["stage"] in ("merged", "shipped")
                                    or t["status"] in factory_mod.DONE_STATUSES)]
     stages: dict[str, int] = {}
@@ -226,7 +250,7 @@ def register(app, store, h: SimpleNamespace) -> None:
             cur = json.loads(store.get_setting(key) or "{}")
         except ValueError:
             cur = {}
-        return {k: cur.get(k) for k in factory_mod.CREW_DEFAULTS}
+        return {k: cur.get(k, d) for k, d in factory_mod.CREW_DEFAULTS.items()}
 
     def personal_key(person: dict) -> str:
         return f"{CREW_SETTING}:{person['id']}"
@@ -245,7 +269,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         person = h.current_person(request) if request is not None else None
         if person and person.get("id") != "local" and not h.is_system(request):
             mine = stored(personal_key(person))
-            out.update({k: v for k, v in mine.items() if v is not None})
+            out.update({k: v for k, v in mine.items() if v is not None and k != "kit"})   # the kit is the crew's
             # the team's autonomy and challenger are a ceiling, also when the team tightened
             # them after the person chose theirs
             out.update({k: v for k, v in factory_mod.stricter_than_team(
@@ -253,14 +277,21 @@ def register(app, store, h: SimpleNamespace) -> None:
         return out
 
     @app.get("/api/crew/settings")
-    async def get_crew_settings(request: Request):
+    def get_crew_settings(request: Request):
         """The crew's settings for every project: autonomy (L3-review, L4-ship), whether it runs
         a releaser, release profile, prod pattern, challenger on builders, most builders at
-        once. Unset ones are null. The caller's own come over the cell's default."""
+        once, whether the watch moves stations onto a new Claude Code (claude_update, on unless
+        false). Unset ones are null. `kit.frozen` says when `factory crew freeze` froze the
+        crew's plugin kit, and by whom, or is null while the crew follows the checkout. `idle_wake`
+        (true or false; null counts as false) makes the watch wake an idle station with a message
+        when it has work, and hold the station's liveness tick, instead of each station ticking
+        on its own. `pace` (true or false; null counts as false) makes the crew slow down before
+        the plan's limits: see GET /api/crew/pace. The caller's own come over the cell's
+        default."""
         return {**settings(request), "autonomy_levels": factory_mod.AUTONOMY}
 
     @app.put("/api/crew/settings")
-    async def put_crew_settings(request: Request, body: dict = Body(...)):
+    def put_crew_settings(request: Request, body: dict = Body(...)):
         """Change the fields given; the rest keep their value. The system credential and the
         person `local` change the cell's default; any other person changes their own."""
         deny(request, "grants")
@@ -273,6 +304,11 @@ def register(app, store, h: SimpleNamespace) -> None:
             if person["id"] == "local":
                 h.err(PermissionError("The cell's settings need the admin scope"), 403)
             key = personal_key(person)
+            if "kit" in body:
+                # the kit (the freeze) is the crew's: settings() leaves a person's copy out, so
+                # storing it would answer 200 and change nothing
+                h.err(PermissionError("The kit is the crew's: only the cell's credential or "
+                                      "its admin changes it"), 403)
         try:
             if key != CREW_SETTING:
                 factory_mod.personal_ceiling_ok(stored(CREW_SETTING), body)
@@ -493,7 +529,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         return g
 
     @app.get("/api/grants")
-    async def get_grants(request: Request, project: str = ""):
+    def get_grants(request: Request, project: str = ""):
         """The grants for every project (`all`) and, with `project`, that project's own, as
         markdown (what the docs hold), and `grants`: the team grants, that project's and the
         caller's own personal ones, each {id, kind, words, state, given_by, consents,
@@ -549,7 +585,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         return row, True
 
     @app.post("/api/grants", status_code=201)
-    async def add_grant(request: Request, body: dict = Body(...)):
+    def add_grant(request: Request, body: dict = Body(...)):
         """{kind: team|project|personal, words, project?, areas?}: one grant, quoting the person,
         dated today (`scope: all|project` is the older name for kind). Team needs the admin
         scope; project, the project's lead, an area owner for repos they own, or the admin
@@ -606,7 +642,7 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "grant": grants_view([row])[0]}
 
     @app.post("/api/grants/{gid}/consent")
-    async def consent_grant(gid: str, request: Request):
+    def consent_grant(gid: str, request: Request):
         """The owner of a repo the grant names, or the project's lead (an admin when it has none)
         when the giver is neither, says yes. Only someone it is waiting for may, even on a private
         project they are not in; the grant takes effect when the last of them has."""
@@ -631,7 +667,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {"grant": grants_view([g])[0]}
 
     @app.post("/api/grants/{gid}/revoke")
-    async def revoke_grant(gid: str, request: Request):
+    def revoke_grant(gid: str, request: Request):
         """The giver, the project's lead, the holder of a personal grant, or the admin scope for
         a team or project one, ends it. A revoked grant is never in effect again."""
         deny(request, "grants")
@@ -685,6 +721,13 @@ def register(app, store, h: SimpleNamespace) -> None:
     def _ts(v) -> float:
         return v.timestamp() if isinstance(v, datetime) else 0.0
 
+    def claude_retry() -> dict:
+        try:
+            cur = json.loads(store.get_setting(CLAUDE_RETRY_SETTING) or "{}")
+        except ValueError:
+            cur = {}
+        return cur if isinstance(cur, dict) else {}
+
     def stations(project: str | None = None) -> list[dict]:
         """The stations, one row each per crew (TR-628): two crews with the same station names
         never merge. Each row names its crew, machine and person."""
@@ -733,20 +776,30 @@ def register(app, store, h: SimpleNamespace) -> None:
             out = kept
         meters = store.session_meters([st["session"] for st in out])
         spent = store.usage_by_session([s["session"] for s in rows])
+        retry = claude_retry()
+        coord = store.coordination_calls(h.cc_source(), [s["session"] for s in rows])
         for st in out:
             # the stations this one started: in its own crew, whose names may repeat in another
             st["children"] = sorted(x["name"] for x in out
                                     if x["parent"] == st["name"] and x["crew_id"] == st["crew_id"])
             # the context window from the station's status line, and what all its sessions spent
             st["context"] = claude_usage.context_now(meters.get(st["session"]))
+            st["claude_version"] = claude_usage.code_version(meters.get(st["session"]))
+            st["claude_retry"] = retry.get(st["name"])   # set while the watch retries its move, else null
             mine = [spent[s] for s in [st["session"], *(e["session"] for e in st["earlier"])]
                     if s in spent]
             st["usage"] = ({k: sum(x[k] for x in mine) for k in mine[0]} if mine else None)
+            st["coordination_calls"] = sum(coord.get(s, 0) for s in
+                                           [st["session"], *(e["session"] for e in st["earlier"])])
         if project:
             out = [s for s in out if project in s["projects"]]
         order = {r: i for i, r in enumerate(factory_mod.ROLES)}
         out.sort(key=lambda s: (order.get(s["role"] or "", 99), s["name"], s["crew_id"] or ""))
         return out
+
+    def pace(request: Request | None = None) -> dict:
+        """The pace under the caller's settings (a person's own `pace` over the cell's)."""
+        return factory_mod.pace_now(settings(request), claude_usage.plan(store), now_utc())
 
     def caller_person_id(request: Request) -> str:
         """The person whose crews the caller means by "mine". A recording with no person (the
@@ -824,21 +877,61 @@ def register(app, store, h: SimpleNamespace) -> None:
         return rows[0]
 
     @app.get("/api/crew")
-    async def get_crew(request: Request, mine: bool = False):
+    def get_crew(request: Request, mine: bool = False):
         """The crews (TR-628): one per person, crew name and machine, each with its stations (the
         current session and state, the earlier sessions that played it, the stations it
         started), the crews' settings, and the shared grants. `mine=1` keeps the caller's own
-        crews. `stations` is the same rows flat, for a client that does not group by crew yet."""
+        crews. `stations` is the same rows flat, for a client that does not group by crew yet. `pace`
+        is the crew's pace as GET /api/crew/pace gives it. `claude_retry` maps each station the
+        watch is retrying onto a newer Claude Code to {target, fails, next_at}; the row of each
+        shows its own as `claude_retry`."""
         rows = stations()
         if mine:
             me = caller_person_id(request)
             rows = [s for s in rows if (s["person"] or {}).get("id") == me]
         return {"crews": crews_of(rows), "stations": rows, "settings": settings(request),
-                "grants": grants_out(None)["all"],
-                "now": now_utc()}
+                "grants": grants_out(None)["all"], "pace": pace(request),
+                "claude_retry": claude_retry(), "now": now_utc()}
+
+    @app.put("/api/crew/claude-retry")
+    def put_claude_retry(body: dict = Body(...)):
+        """{stations: {name: {target, fails, next_at}}}: the stations the factory watch is retrying
+        onto a new Claude Code, after a restart kept landing on an older pre-warmed spare. It
+        replaces the whole list; a station left out is not retrying. `target` is the version it
+        is moving to, `fails` the failed moves so far and `next_at` the unix time of the next try.
+        Each row of /api/crew shows its entry as `claude_retry`, or null. The factory CLI sends
+        this; it is only information for the Crew page."""
+        rows = body.get("stations")
+        if not isinstance(rows, dict):
+            h.err(ValueError("stations must be an object of station name to {target, fails, next_at}"))
+        if len(rows) > 200:
+            h.err(ValueError("at most 200 stations"))
+        def num(v, lo: int, hi: int, default: int) -> int:
+            return v if isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi else default
+        out = {}
+        for name, r in rows.items():
+            if not isinstance(name, str) or not 0 < len(name) <= 128:
+                h.err(ValueError("a station name is 1 to 128 characters"))
+            if not isinstance(r, dict) or not isinstance(r.get("target"), str) or not r["target"]:
+                h.err(ValueError(f"{name}: target must be the Claude Code version it is moving to"))
+            out[name] = {"target": r["target"][:40],
+                         "fails": num(r.get("fails"), 0, 1_000_000, 1),
+                         "next_at": num(r.get("next_at"), 0, 4_102_444_800, 0)}
+        store.set_setting(CLAUDE_RETRY_SETTING, json.dumps(out))
+        return {"stations": out}
+
+    @app.get("/api/crew/pace")
+    def get_crew_pace(request: Request):
+        """Whether the crew is pacing itself before the plan's limits (the crew setting `pace`),
+        worked out from the plan usage Tares keeps. `level` is 0 (ok), 1 (slow: the 5-hour window
+        at 85% or the weekly limit at 90%) or 2 (hold: the window at 95%); `at_limit` is true while
+        a limit is full and has not reset; `state` is off, ok, slow, hold or limit; `until` is when
+        the limits behind it reset; `known` is false when no plan reading has arrived. The factory
+        watch reads this (TR-674); a person's own `pace` setting counts for that person."""
+        return pace(request)
 
     @app.get("/api/crew/my-work")
-    async def my_work(request: Request, crew: str | None = None, project: str | None = None):
+    def my_work(request: Request, crew: str | None = None, project: str | None = None):
         """What belongs to the caller's person (TR-633), across the projects that have an open
         hand-over and that the caller can see: `ready` (their tickets that can start),
         `in_progress` (their tickets a station holds; a ticket with no assignee is its project
@@ -902,7 +995,7 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "led_projects": led, "desk": desk, "spec_questions": asked}
 
     @app.get("/api/crew/projects")
-    async def crew_projects(request: Request):
+    def crew_projects(request: Request):
         """The projects handed to the crew, oldest hand-over first: each with its repos (the
         folder on the crew's machine and the GitHub name), the autonomy it was handed over at
         when stricter than the crew's, its tickets by stage, the milestone it is on, and which
@@ -914,22 +1007,26 @@ def register(app, store, h: SimpleNamespace) -> None:
         mine = my_projects(request)
         names = {u: n for u, n in names.items()
                  if u not in hidden and (mine is None or u in mine)}
+        active = store.handed_over_projects(finished=False, taken=False)
+        finished = store.handed_over_projects(finished=True)
+        # every listed project's tickets in one query, shared by progress and repos
+        tk = store.tickets_by_project(sorted({u for u in [*active, *finished] if u in names}))
         out = []
-        for uid in store.handed_over_projects(finished=False, taken=False):
+        for uid in active:
             if uid not in names:
                 continue
             ho = store.get_handover(uid) or {}
-            out.append({"id": uid, "name": names[uid], **project_progress(store, uid),
-                        "repos": repo_rows(uid, ho.get("repos") or []),
+            out.append({"id": uid, "name": names[uid], **project_progress(store, uid, tk[uid]),
+                        "repos": repo_rows(uid, ho.get("repos") or [], tk[uid]),
                         "autonomy": ho.get("autonomy"), "handed_over_at": ho.get("at"),
                         "handed_over_by": ho.get("by_label") or ho.get("by"),
                         "handed_over_person": ho.get("person")})
         out.sort(key=lambda p: str(p["handed_over_at"] or ""))
         done = []
-        for uid in store.handed_over_projects(finished=True):
+        for uid in finished:
             if uid in names:
                 ho = store.get_handover(uid) or {}
-                done.append({"id": uid, "name": names[uid], **project_progress(store, uid),
+                done.append({"id": uid, "name": names[uid], **project_progress(store, uid, tk[uid]),
                              "finished": ho.get("finished")})
         done.sort(key=lambda p: str((p["finished"] or {}).get("at") or ""), reverse=True)
         releasing = []
@@ -943,7 +1040,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {"projects": out, "finished": done, "releasing": releasing, "now": now_utc()}
 
     @app.get("/api/crew/{name}")
-    async def get_station(name: str, request: Request, recent: int = 30,
+    def get_station(name: str, request: Request, recent: int = 30,
                           crew: str | None = None):
         """One station: its row as in /api/crew, the tickets it holds in every project, its
         current session's last lines (`recent`, at most 200), and the command that opens it.
@@ -973,7 +1070,7 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "attach": factory_mod.attach_command(name, st.get("role") or "")}
 
     @app.post("/api/crew/{name}/end")
-    async def end_station(name: str, request: Request, body: dict | None = Body(None),
+    def end_station(name: str, request: Request, body: dict | None = Body(None),
                           crew: str | None = None):
         """{reason?}: mark the station's current session ended, for a station that was retired or
         whose session is gone, so it stops showing as working or quiet. Its earlier sessions and
@@ -995,7 +1092,7 @@ def register(app, store, h: SimpleNamespace) -> None:
     ASK_TTL = 15   # minutes an unanswered ask stays open; the watch reads on the crew's machine
 
     @app.post("/api/crew/{name}/context")
-    async def ask_station_context(name: str, request: Request, crew: str | None = None):
+    def ask_station_context(name: str, request: Request, crew: str | None = None):
         """Ask for a new /context reading of the station's session. The factory watch on the
         crew's machine reads it (no model call) within a few seconds, if it runs."""
         st = pick_station(name, request, crew)
@@ -1008,7 +1105,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {"session": st["session"], "asked_at": at}
 
     @app.get("/api/crew/context/asks")
-    async def station_context_asks():
+    def station_context_asks():
         """The stations someone asked a /context reading of that has not come in yet, for
         `factory crew watch`."""
         out = []
@@ -1020,13 +1117,25 @@ def register(app, store, h: SimpleNamespace) -> None:
 
     # ── the crew on a project, and the hand-over (TR-422, TR-425) ─────────────
     @app.get("/api/projects/{uid}/crew")
-    async def get_project_crew(uid: str):
+    def get_project_crew(uid: str):
         """The stations that worked on this project (builders started for it among them), and
         when it was handed to the crew."""
         h.project_or_404(uid)
         rows = stations(uid)
         return {"crews": crews_of(rows), "stations": rows, "handover": store.get_handover(uid),
-                "now": now_utc()}
+                "coordination": coordination_summary(uid, rows), "now": now_utc()}
+
+    def coordination_summary(uid: str, ss: list[dict]) -> dict:
+        """Coordination calls of the project's builders and helpers (the always-on stations
+        serve every project, so their calls are not the project's) against its merged pull
+        requests (TR-683)."""
+        mine = {s["name"]: s["coordination_calls"] for s in ss
+                if s["role"] in ("builder", "helper") and s["project"] == uid}
+        merged = sum(1 for t in store.list_tickets(uid)
+                     if (t["pr"] or {}).get("merged") or (t["stage"] in ("merged", "shipped") and t["pr"]))
+        calls = sum(mine.values())
+        return {"calls": calls, "merged_prs": merged,
+                "per_merged_pr": round(calls / merged, 1) if merged else None, "stations": mine}
 
     # ── the ledger (TR-427, TR-428, TR-410, TR-429) ───────────────────────────
     def ticket_or_404(uid: str, ref: str) -> dict:
@@ -1055,7 +1164,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         return p["id"] if p else None
 
     @app.post("/api/projects/{uid}/tickets/{ref}/assign")
-    async def assign_ticket(uid: str, ref: str, request: Request, body: dict = Body(...)):
+    def assign_ticket(uid: str, ref: str, request: Request, body: dict = Body(...)):
         """{holder}: the station that works the ticket. Only the orchestrator (or a person's own
         session) assigns. A ticket with no stage yet starts at todo."""
         h.project_or_404(uid)
@@ -1075,20 +1184,28 @@ def register(app, store, h: SimpleNamespace) -> None:
 
     @app.post("/api/projects/{uid}/tickets/{ref}/stage")
     async def set_stage(uid: str, ref: str, request: Request, body: dict = Body(...)):
-        """{stage, reason?, pr?}: move the ticket. Only the station holding it (or a helper it
-        started) moves it; only the releaser marks it shipped; a person's own session may do
-        anything. `pr` (a PR URL or owner/repo#12) links the ticket to its pull request, read
+        """{stage, reason?, pr?, checks?}: move the ticket. Only the station holding it (or a helper
+        it started) moves it; only the releaser marks it shipped; a person's own session may do
+        anything. `checks` ({command, result, commit?, broke_test?} each) are recorded in the same
+        call, so a builder asking for review need not record them one by one. `pr` (a PR URL or owner/repo#12) links the ticket to its pull request, read
         from GitHub from then on. A Tares ticket's status follows its stage; a Linear or GitHub
         ticket's status stays its home's."""
-        h.project_or_404(uid)
-        t = ticket_or_404(uid, ref)
-        try:
-            stage, reason = factory_mod.stage_ok(body.get("stage"), body.get("reason"))
-        except docs_mod.DocError as e:
-            h.err(e)
-        why = factory_mod.may_move(caller(request), t, stage)
-        if why:
-            h.err(PermissionError(why), 403)
+        # the store work runs in worker threads, before and after the one GitHub read
+
+        def check():
+            h.project_or_404(uid)
+            t = ticket_or_404(uid, ref)
+            try:
+                stage, reason = factory_mod.stage_ok(body.get("stage"), body.get("reason"))
+            except docs_mod.DocError as e:
+                h.err(e)
+            why = factory_mod.may_move(caller(request), t, stage)
+            if why:
+                h.err(PermissionError(why), 403)
+            return t, stage, reason
+
+        t, stage, reason = await asyncio.to_thread(check)
+        checks = parse_checks(body) if body.get("checks") else []
         fields: dict = {"stage": stage, "stage_reason": reason or None}
         if t["owner"] == "tares":
             fields["status"] = factory_mod.STATUS_OF_STAGE[stage]
@@ -1100,22 +1217,30 @@ def register(app, store, h: SimpleNamespace) -> None:
                                  "or o/r#12"))
             prev = t["pr"] if t["pr"] and (t["pr"].get("repo"), t["pr"].get("number")) == parsed else None
             fields["pr"] = await factory_github.read_pr(store, parsed[0], parsed[1], prev)
-        store.update_ticket(t["id"], **fields)
-        by, role = who(request, body)
-        store.add_ticket_history(t["id"], uid, "stage", stage, reason, by, role or None, now_utc(),
-                                 person_of(request))
-        if fields.get("pr"):   # a PR GitHub already shows merged makes the ticket merged
-            after = ticket_or_404(uid, t["id"])
-            merged = merged_fields(after, fields["pr"])
-            if merged:
-                store.update_ticket(t["id"], **merged)
-                store.add_ticket_history(t["id"], uid, "stage", "merged",
-                                         "GitHub shows the pull request merged", "github",
-                                         "github", now_utc())
-        return h.ticket_out(uid, ticket_or_404(uid, t["id"]), with_doc=False)
+
+        def write():
+            nonlocal t
+            if checks:
+                record_checks(uid, t, request, body, checks)
+                t = ticket_or_404(uid, t["id"])
+            store.update_ticket(t["id"], **fields)
+            by, role = who(request, body)
+            store.add_ticket_history(t["id"], uid, "stage", stage, reason, by, role or None,
+                                     now_utc(), person_of(request))
+            if fields.get("pr"):   # a PR GitHub already shows merged makes the ticket merged
+                after = ticket_or_404(uid, t["id"])
+                merged = merged_fields(after, fields["pr"])
+                if merged:
+                    store.update_ticket(t["id"], **merged)
+                    store.add_ticket_history(t["id"], uid, "stage", "merged",
+                                             "GitHub shows the pull request merged", "github",
+                                             "github", now_utc())
+            return h.ticket_out(uid, ticket_or_404(uid, t["id"]), with_doc=False)
+
+        return await asyncio.to_thread(write)
 
     @app.get("/api/projects/{uid}/tickets/{ref}/messages")
-    async def ticket_messages(uid: str, ref: str):
+    def ticket_messages(uid: str, ref: str):
         """The crew's protocol messages ([TF:<TYPE>]) that name this ticket, oldest first, from
         the recorded SendMessage calls (TR-429)."""
         p = h.project_or_404(uid)
@@ -1147,12 +1272,13 @@ def register(app, store, h: SimpleNamespace) -> None:
             h.err(e)
         return [ticket_or_404(uid, r)["id"] for r in refs]
 
-    def assumption_out(uid: str, a: dict) -> dict:
-        by_id = {t["id"]: t for t in store.list_tickets(uid)}
+    def assumption_out(uid: str, a: dict, by_id: dict | None = None) -> dict:
+        if by_id is None:
+            by_id = {t["id"]: t for t in store.list_tickets(uid)}
         return {**a, "tickets": [factory_mod.label(by_id[t]) for t in a["tickets"] if t in by_id]}
 
     @app.post("/api/projects/{uid}/assumptions", status_code=201)
-    async def add_assumption(uid: str, request: Request, body: dict = Body(...)):
+    def add_assumption(uid: str, request: Request, body: dict = Body(...)):
         """{question, choice, why, affects?, tickets?}: an assumption made so the work did not
         block. Numbered A1, A2... per project; open until the person keeps or overturns it."""
         h.project_or_404(uid)
@@ -1167,15 +1293,17 @@ def register(app, store, h: SimpleNamespace) -> None:
         return assumption_out(uid, a)
 
     @app.get("/api/projects/{uid}/assumptions")
-    async def list_assumptions(uid: str, state: str = ""):
+    def list_assumptions(uid: str, state: str = ""):
         h.project_or_404(uid)
         st = state.strip().lower() or None
         if st and st not in factory_mod.ASSUMPTION_STATES:
             h.err(ValueError("state is one of: " + ", ".join(factory_mod.ASSUMPTION_STATES)))
-        return {"assumptions": [assumption_out(uid, a) for a in store.list_assumptions(uid, st)]}
+        by_id = {t["id"]: t for t in store.list_tickets(uid)}
+        return {"assumptions": [assumption_out(uid, a, by_id)
+                                for a in store.list_assumptions(uid, st)]}
 
     @app.post("/api/projects/{uid}/assumptions/{ref}/state")
-    async def decide_assumption(uid: str, ref: str, request: Request, body: dict = Body(...)):
+    def decide_assumption(uid: str, ref: str, request: Request, body: dict = Body(...)):
         """{state: kept|overturned|open, words?, batch?}: what the person said about it. Only the
         orchestrator (or a person's own session) records it; an overturned one keeps the
         person's words."""
@@ -1194,30 +1322,53 @@ def register(app, store, h: SimpleNamespace) -> None:
                                 now_utc() if st != "open" else None)
         return assumption_out(uid, store.get_assumption(uid, a["id"]))
 
-    @app.post("/api/projects/{uid}/tickets/{ref}/checks", status_code=201)
-    async def add_check(uid: str, ref: str, request: Request, body: dict = Body(...)):
-        """{command, result, commit?, broke_test?}: a check run on the ticket. Kept, and added as
-        one line to the Checks part of the ticket's working doc (made when there is none)."""
-        p = h.project_or_404(uid)
-        t = ticket_or_404(uid, ref)
+    def parse_checks(body: dict) -> list[tuple[str, str, str, str]]:
+        """The checks a body carries: {command, result, commit?, broke_test?} itself, and `checks`,
+        a list of the same, for the ones recorded together (TR-683)."""
+        items = ([body] if body.get("command") is not None or body.get("result") is not None else [])
+        more = body.get("checks")
+        if more is not None and not isinstance(more, list):
+            h.err(ValueError("checks is a list of {command, result, commit?, broke_test?}"))
+        items += [x if isinstance(x, dict) else {} for x in more or []]
+        if not items:
+            h.err(ValueError("say the command you ran"))
         try:
-            cmd, result, commit, broke = factory_mod.check_ok(
-                body.get("command"), body.get("result"), body.get("commit"), body.get("broke_test"))
+            return [factory_mod.check_ok(x.get("command"), x.get("result"), x.get("commit"),
+                                         x.get("broke_test")) for x in items]
         except docs_mod.DocError as e:
             h.err(e)
+
+    def record_checks(uid: str, t: dict, request: Request, body: dict,
+                      checks: list[tuple[str, str, str, str]]) -> tuple[list[str], str]:
         by, _ = who(request, body)
-        store.add_check(uid, t["id"], cmd, result, commit, broke, caller(request)["station"],
-                        "", now_utc(), person_of(request))
-        line = factory_mod.check_line(cmd, result, commit, broke)
+        lines = []
+        for cmd, result, commit, broke in checks:
+            store.add_check(uid, t["id"], cmd, result, commit, broke, caller(request)["station"],
+                            "", now_utc(), person_of(request))
+            lines.append(factory_mod.check_line(cmd, result, commit, broke))
         doc_id = t["working_doc"]
         if doc_id and store.get_doc(uid, doc_id):
             body_now = store.get_doc(uid, doc_id)["body"]
-            store.update_doc(doc_id, body=factory_mod.add_check_to_doc(body_now, line), by=by)
+            for line in lines:
+                body_now = factory_mod.add_check_to_doc(body_now, line)
+            store.update_doc(doc_id, body=body_now, by=by)
         else:
-            doc_id = store.create_doc(uid, "working", f"Working: {t['title']}",
-                                      factory_mod.add_check_to_doc(f"# {t['title']}\n", line), by=by)
+            body_now = f"# {t['title']}\n"
+            for line in lines:
+                body_now = factory_mod.add_check_to_doc(body_now, line)
+            doc_id = store.create_doc(uid, "working", f"Working: {t['title']}", body_now, by=by)
             store.update_ticket(t["id"], working_doc=doc_id)
-        return {"line": line, "working_doc": doc_id,
+        return lines, doc_id
+
+    @app.post("/api/projects/{uid}/tickets/{ref}/checks", status_code=201)
+    def add_check(uid: str, ref: str, request: Request, body: dict = Body(...)):
+        """{command, result, commit?, broke_test?}: a check run on the ticket, and `checks`, more
+        of the same recorded in this call. Kept, and added as one line each to the Checks part of
+        the ticket's working doc (made when there is none)."""
+        p = h.project_or_404(uid)
+        t = ticket_or_404(uid, ref)
+        lines, doc_id = record_checks(uid, t, request, body, parse_checks(body))
+        return {"line": lines[0], "lines": lines, "working_doc": doc_id,
                 "checks": store.ticket_checks(t["id"], 10), "project": p["name"]}
 
     # the project's own memory (TR-436): what builders learned about this project
@@ -1232,7 +1383,7 @@ def register(app, store, h: SimpleNamespace) -> None:
                                 "this project, one line each, newest last.\n\n", by="tares")
 
     @app.post("/api/projects/{uid}/memory/lines", status_code=201)
-    async def remember_for_project(uid: str, request: Request, body: dict = Body(...)):
+    def remember_for_project(uid: str, request: Request, body: dict = Body(...)):
         """{text}: one dated line in the project's memory (made with the first line)."""
         h.project_or_404(uid)
         doc_id = memory_doc(uid, create=True)
@@ -1251,7 +1402,7 @@ def register(app, store, h: SimpleNamespace) -> None:
 
     # ── review and merge (TR-441..445) ────────────────────────────────────────
     @app.post("/api/projects/{uid}/tickets/{ref}/reviews", status_code=201)
-    async def record_review(uid: str, ref: str, request: Request, body: dict = Body(...)):
+    def record_review(uid: str, ref: str, request: Request, body: dict = Body(...)):
         """{head, verdict, verified, not_verified?, findings?, resolved?}: one review round, the
         verdict on the commit it was given on. `resolved` marks earlier findings ({F1: fixed}).
         Only the reviewer (or a person's own session) records one."""
@@ -1293,35 +1444,35 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {**rv, "open": [f["label"] for f in store.open_findings(t["id"])]}
 
     def queue() -> list[dict]:
+        # the tickets in review, their milestones' other tickets, when each went to review and
+        # its last review: one query each, however many are waiting (TR-648)
         hidden = h.hidden_ids()
-        names = {p["id"]: p["name"] for p in store.list_projects() if p["id"] not in hidden}
+        waiting = [(n, t) for n, t in store.review_tickets() if t["project"] not in hidden]
+        ids = [t["id"] for _, t in waiting]
+        siblings = store.milestone_statuses(sorted({t["milestone"] for _, t in waiting
+                                                    if t["milestone"]}))
+        entered = store.entered_stage(ids, "review")
+        lasts = store.last_reviews(ids)
         out = []
-        for uid, pname in names.items():
-            tickets = store.list_tickets(uid)
-            if not any(t["stage"] == "review" for t in tickets):
-                continue
-            for t in tickets:
-                if t["stage"] != "review":
-                    continue
-                # it blocks its milestone when it is the last of the milestone's tickets open
-                others = [x for x in tickets if x["milestone"] and x["milestone"] == t["milestone"]
-                          and x["id"] != t["id"]]
-                blocks = bool(t["milestone"]) and all(
-                    x["status"] in factory_mod.DONE_STATUSES for x in others)
-                since = next((x["at"] for x in reversed(store.ticket_history(t["id"]))
-                              if x["field"] == "stage" and x["value"] == "review"), t["updated_at"])
-                layer = factory_mod.challenger_layer(
-                    store.challenge_events(h.cc_source(), uid, factory_mod.label(t)))
-                last = store.ticket_reviews(t["id"])[-1:]
-                v = verdict_now(t, last[0] if last else None)
-                out.append({"project": uid, "project_name": pname, "ticket": factory_mod.label(t),
-                            "title": t["title"], "holder": t["holder"],
-                            "repo": t.get("repo") or (t["pr"] or {}).get("repo"),
-                            "pr": (t["pr"] or {}).get("url"), "head": (t["pr"] or {}).get("head"),
-                            "waiting_since": since,
-                            "blocks_milestone": blocks,
-                            "layer1_clean": layer["clean"],
-                            "verdict": v})
+        for pname, t in waiting:
+            uid = t["project"]
+            # it blocks its milestone when it is the last of the milestone's tickets open
+            others = [x for x in siblings if x["project"] == uid
+                      and x["milestone"] == t["milestone"] and x["id"] != t["id"]]
+            blocks = bool(t["milestone"]) and all(
+                x["status"] in factory_mod.DONE_STATUSES for x in others)
+            since = entered.get(t["id"], t["updated_at"])
+            layer = factory_mod.challenger_layer(
+                store.challenge_events(h.cc_source(), uid, factory_mod.label(t)))
+            v = verdict_now(t, lasts.get(t["id"]))
+            out.append({"project": uid, "project_name": pname, "ticket": factory_mod.label(t),
+                        "title": t["title"], "holder": t["holder"],
+                        "repo": t.get("repo") or (t["pr"] or {}).get("repo"),
+                        "pr": (t["pr"] or {}).get("url"), "head": (t["pr"] or {}).get("head"),
+                        "waiting_since": since,
+                        "blocks_milestone": blocks,
+                        "layer1_clean": layer["clean"],
+                        "verdict": v})
         now = now_utc()
         for q in out:
             q["waiting_minutes"] = (int((now - q["waiting_since"]).total_seconds() // 60)
@@ -1330,10 +1481,109 @@ def register(app, store, h: SimpleNamespace) -> None:
         return out
 
     @app.get("/api/review-queue")
-    async def review_queue():
+    def review_queue():
         """Tickets in review across every project: those blocking their milestone first, then
         the longest waiting (TR-444)."""
         return {"queue": queue(), "now": now_utc()}
+
+    # ── the repo map (TR-681): one per GitHub repo, shared by every project that names it ──
+    def pr_repo(t: dict) -> str | None:
+        """The repo of a ticket's PR, once GitHub has answered for it: a repo typed into a PR link is
+        not yet a repo anyone has seen."""
+        pr = t.get("pr") or {}
+        return pr.get("repo") if pr.get("checked_at") and not pr.get("error") else None
+
+    def repo_of(uid: str, t: dict) -> str | None:
+        """The repo a ticket changes: its own, its PR's, else the project's only repo (when it has a
+        GitHub name). With several repos, or one without a name, a ticket that names none has none."""
+        repo = t.get("repo") or pr_repo(t)
+        if repo:
+            return repo
+        repos = (store.get_handover(uid) or {}).get("repos") or []
+        return repos[0].get("name") or None if len(repos) == 1 else None
+
+    def repo_map_md(repo: str | None, builder: bool) -> list[str]:
+        if not repo:
+            return []
+        m = store.get_repo_map(repo)
+        if not m:
+            if not builder:
+                return []
+            return [f"## Repo map: {repo}",
+                    "There is none yet, and you are the first builder here. Once you know the layout, "
+                    "write it with write_repo_map (layout, entry points, how to install, build, test "
+                    f"and lint, conventions, the files tickets touch most, known traps; at most "
+                    f"{factory_mod.MAP_MAX_CHARS} characters). Every project on this repo then starts "
+                    "from it.", ""]
+        version = factory_mod.map_version(m["body"])
+        L = [f"## Repo map: {repo} (shared by every project on it; version {version}, changed "
+             f"{str(m['updated_at'])[:10]} by {m['updated_by']})", m["body"].strip()]
+        recent = store.repo_map_history(repo, 3)
+        if recent:
+            L += ["Recent changes to the map:"] + [f"- {str(x['at'])[:10]} {x['by']}: {x['note']}"
+                                                   for x in recent]
+        if builder:
+            L += ["If your pull request changes the layout or the build, test or lint commands, "
+                  f"update the map with write_repo_map(base=\"{version}\") after it merges. If someone "
+                  "changed the map meanwhile, the answer is the map now: fold your change into it and "
+                  "write again."]
+        return L + [""]
+
+    @app.get("/api/repo-map")
+    def get_repo_map(repo: str):
+        try:
+            name = factory_mod.repo_ok(repo)
+        except docs_mod.DocError as e:
+            h.err(e)
+        m = store.get_repo_map(name) if name else None
+        return {"repo": name, "map": m, "history": store.repo_map_history(name, 10) if m else [],
+                "max_chars": factory_mod.MAP_MAX_CHARS}
+
+    def named_repos() -> set[str]:
+        """Every GitHub repo some project names: on its hand-over, or on a ticket (its repo, else its PR's)."""
+        out: set[str] = set()
+        for p in store.list_projects():
+            for r in (store.get_handover(p["id"]) or {}).get("repos") or []:
+                if r.get("name"):
+                    out.add(r["name"].lower())
+            for t in store.list_tickets(p["id"]):
+                repo = t.get("repo") or pr_repo(t)
+                if repo:
+                    out.add(repo.lower())
+        return out
+
+    @app.put("/api/repo-map")
+    def put_repo_map(request: Request, body: dict = Body(...)):
+        """{repo, body, base, note, project?}: replace the repo's map. Builders (and a person's own
+        session) write it; `base` is the version of the map they read (none when there was none),
+        `note` becomes a dated line in the map's history. The repo must be one a project names."""
+        deny(request, "repo_map")
+        try:
+            name = factory_mod.repo_ok(body.get("repo"))
+            if not name:
+                raise docs_mod.DocError("say which repo the map is for (owner/name)")
+            text, note = factory_mod.map_ok(body.get("body"), body.get("note"))
+        except docs_mod.DocError as e:
+            h.err(e)
+        if name.lower() not in named_repos():
+            raise HTTPException(404, f"no project names {name}: hand a project over with that repo, "
+                                     "or give one of its tickets that repo, before writing its map")
+        by, _ = who(request, body)
+        try:
+            changed = store.set_repo_map(name, text, note, by, str(body.get("project") or "") or None,
+                                         now_utc(), str(body.get("base") or "").strip())
+        except MapChanged as e:
+            cur = e.current
+            if not cur:
+                raise HTTPException(409, "there is no map for this repo yet: write it with an empty base")
+            raise HTTPException(409, (
+                f"the map changed since you read it (now version {factory_mod.map_version(cur['body'])}, "
+                f"changed {str(cur['updated_at'])[:10]} by {cur['updated_by']}), or you gave no base. "
+                "Nothing was written. Fold your change into this map and write again with that "
+                f"version as base:\n\n{cur['body']}"))
+        return {"repo": name, "changed": changed, "chars": len(text), "version": factory_mod.map_version(
+                    store.get_repo_map(name)["body"]),
+                "max_chars": factory_mod.MAP_MAX_CHARS, "history": store.repo_map_history(name, 5)}
 
     @app.get("/api/projects/{uid}/tickets/{ref}/brief")
     async def review_brief(uid: str, ref: str, head: str = ""):
@@ -1426,10 +1676,127 @@ def register(app, store, h: SimpleNamespace) -> None:
                 L += [f"## What keeps coming back in {pr['repo']} (check these first)"]
                 L += [f"- {r['kind']}: {r['count']} tickets ({', '.join(r['tickets'][:5])})" for r in rec]
                 L.append("")
+        # 8. the repo map: read it instead of exploring the repo
+        L += repo_map_md(repo_of(p["id"], t), builder=False)
         # 8. links, not inlined
         L += ["## Read as needed",
               "- The spec, AGENTS.md (the project's and the shared one) and the project memory: "
               "list_docs, then get_doc(id).", "- The crew's messages about it: get_ticket."]
+        return "\n".join(L)
+
+    # ── the builder brief: one read at the start of a ticket and after a revive (TR-683) ──
+    @app.get("/api/projects/{uid}/tickets/{ref}/builder-brief")
+    async def builder_brief(uid: str, ref: str, request: Request, start: bool = False):
+        """Everything a builder needs to start or resume one ticket, as markdown. `start` also
+        moves a ticket that has not been started (no stage, or todo, and not done or canceled) to doing; a ticket already
+        past that (review, changes, blocked, merged) keeps its stage."""
+        p = h.project_or_404(uid)
+        await refresh_prs(store, uid)
+        t = ticket_or_404(uid, ref)
+        note = ""
+        if start and (t["stage"] or "todo") == "todo" and not factory_mod.finished(t):
+            try:
+                await set_stage(uid, ref, request, {"stage": "doing"})
+            except HTTPException as e:
+                note = f"Could not move the ticket to doing: {e.detail}\n\n"
+            t = ticket_or_404(uid, ref)
+        return {"brief": note + builder_brief_md(p, t)}
+
+    def builder_brief_md(p: dict, t: dict) -> str:
+        uid, lab = p["id"], factory_mod.label(t)
+        full = h.ticket_out(uid, t, with_doc=True)
+        pr = t["pr"] or {}
+        repo = repo_of(uid, t)
+        L = [f"# Builder brief: {lab} {t['title']} ({p['name']})", ""]
+        # 1. where it stands
+        L += ["## Where it stands",
+              f"Stage {t['stage'] or 'none'}" + (f" ({t['stage_reason']})" if t.get("stage_reason") else "")
+              + f". Held by {t['holder'] or 'nobody'}." + (f" Repo: {repo}." if repo else "")
+              + (f" Link: {t['url']}." if t.get("url") else "")]
+        if pr.get("url"):
+            L += [f"- Pull request {pr['url']}, head {str(pr.get('head') or '?')[:12]}, "
+                  f"CI {pr.get('ci') or 'unknown'}" + (", merged" if pr.get("merged") else "")]
+        if full.get("pr_note"):
+            L += [f"- {full['pr_note']}"]
+        v = full.get("verdict") or {}
+        if v.get("verdict"):
+            L += [f"- Reviewer's verdict: {v['verdict']}" + (f". {v['note']}" if v.get("note") else "")]
+        L.append("")
+        # 2. what was asked: the ticket's working doc
+        L += ["## The ticket and its working doc",
+              (full.get("working_doc_body") or "(no working doc)").strip(), ""]
+        # 3. the milestone it belongs to and the checks that close it
+        ms = store.get_milestone(uid, t["milestone"]) if t.get("milestone") else None
+        L += [f"## Milestone: {ms['name']}" if ms else "## Milestone", ]
+        if ms:
+            L += ([ms["goal"]] if ms["goal"] else [])
+            L += [f"- Acceptance check: `{c.get('check')}` should show: {c.get('expect')}"
+                  for c in ms["checks"]] or ["No acceptance checks written."]
+        else:
+            L += ["The ticket is in no milestone."]
+        L.append("")
+        # 4. what it depends on
+        by_id = {x["id"]: x for x in store.list_tickets(uid)}
+        deps = [by_id[d] for d in t["depends_on"] if d in by_id]
+        L += ["## Dependencies"]
+        if not deps:
+            L += ["None."]
+        for d in deps:
+            dpr = d["pr"] or {}
+            L += [f"- {factory_mod.label(d)} {d['title']}: {d['stage'] or d['status']}"
+                  + (f", {dpr['url']}" if dpr.get("url") else "")
+                  + ("" if factory_mod.delivered(d) else
+                     " (CANCELED: it delivered nothing and still blocks this ticket)"
+                     if d["status"] == "canceled" else " (NOT DONE: it blocks this ticket)")]
+        L.append("")
+        # 5. the rules: the project's AGENTS.md wins over the generic flow, then the shared one
+        gids = h.global_ids(False) or {}
+        agents = store.list_docs(uid, "agents")
+        mine = [d for d in agents if d["id"] not in gids.values()]
+        shared = [d for d in agents if d["id"] == gids.get("agents")]
+        for title, docs in (("AGENTS.md of this project (wins over the generic flow)", mine),
+                            ("AGENTS.md shared by every project", shared)):
+            for d in docs:
+                L += [f"## {title}", (store.get_doc(uid, d["id"])["body"] or "").strip(), ""]
+        if not (mine or shared):
+            L += ["## AGENTS.md", "This project has none.", ""]
+        L += repo_map_md(repo, builder=True)
+        # 6. what is open on it: assumptions to honour, questions waiting for the person
+        asm = [a for a in full.get("assumptions") or [] if a["state"] != "kept"]
+        if asm:
+            L += ["## Assumptions on this ticket (open, or overturned: follow the person's words)"]
+            L += [f"- {a['label']} ({a['state']}): {a['question']} -> {a['choice']}"
+                  + (f". The person: \"{a['words']}\"" if a.get("words") else "") for a in asm] + [""]
+        desk = [d for d in store.list_desk("open", uid) if lab in (d.get("tickets") or [])]
+        if desk:
+            L += ["## Questions on the desk about this ticket"]
+            L += [f"- {d['label']}{' (blocking)' if d['blocking'] else ''}: {d['question']}. "
+                  f"Recommended: {d['recommendation']}" for d in desk] + [""]
+        # 7. where you left off: for a revive, and a ticket sent back
+        checks = full.get("checks") or []
+        layer = full.get("challenger") or {}
+        reviews = full.get("reviews") or []
+        if checks or layer.get("rounds") or reviews:
+            L += ["## Where you left off"]
+            L += [f"- Check recorded: `{c['command']}` -> {c['result']}"
+                  + (f" (broke {c['broke_test']})" if c.get("broke_test") else "") for c in checks[-8:]]
+            if layer.get("rounds"):
+                L += [f"- Codex: {layer['rounds']} rounds, last {layer.get('verdict')}, "
+                      f"{len(layer.get('open') or [])} open, {len(layer.get('waived') or [])} waived"]
+            for r in reviews[-2:]:
+                L += [f"- Review round {r['round']} on {r['head'][:7]}: {r['verdict']}"]
+                L += [f"  - {f['label']} [{f['severity']}] {f['state']}: {f['text']}"
+                      for f in r["findings"] if f["state"] == "open"]
+            L.append("")
+        msgs = messages_for(p, t)[-5:]
+        if msgs:
+            L += ["## The crew's latest messages about it"]
+            L += [f"- {m['from'] or '?'} -> {m['to']}: [TF:{m['type']}] {m['first_line']}" for m in msgs]
+            L.append("")
+        # 8. links, not inlined
+        L += ["## Read as needed",
+              "- The spec, plan and the project memory: list_docs, then get_doc(id).",
+              "- The ticket's full history: get_ticket."]
         return "\n".join(L)
 
     # ── recurring findings and rules offered from them (TR-443) ───────────────
@@ -1461,11 +1828,11 @@ def register(app, store, h: SimpleNamespace) -> None:
             store.upsert_rule_proposal(repo, r["kind"], pid, scope, text, r["tickets"], now_utc())
 
     @app.get("/api/recurring-findings")
-    async def recurring_findings(repo: str):
+    def recurring_findings(repo: str):
         return {"repo": repo, "recurring": recurring(repo.strip(), h.hidden_ids())}
 
     @app.get("/api/rule-proposals")
-    async def list_rule_proposals(state: str = "open"):
+    def list_rule_proposals(state: str = "open"):
         hidden = h.hidden_ids()
         names = [p["name"] for p in store.list_projects() if p["id"] in hidden]
         out = []
@@ -1479,7 +1846,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {"proposals": out}
 
     @app.post("/api/rule-proposals/{pid}/{decision}")
-    async def decide_rule(pid: str, decision: str, request: Request,
+    def decide_rule(pid: str, decision: str, request: Request,
                           body: dict = Body(default={})):
         """accept (optionally with the text edited) adds the rule to AGENTS.md (the project's,
         or the shared one when it came back across projects); reject keeps it from being
@@ -1555,7 +1922,7 @@ def register(app, store, h: SimpleNamespace) -> None:
             store.close_desk_item(d["id"], "withdrawn", "the project is finished", now_utc())
 
     @app.post("/api/desk", status_code=201)
-    async def desk_add(request: Request, body: dict = Body(...)):
+    def desk_add(request: Request, body: dict = Body(...)):
         """{question, recommendation, why, options?, context?, blocks?, tickets?, blocking?,
         assumptions?, project?, station?, command?, to?}: a question for the person, numbered D1,
         D2... for the whole cell. `to` is the person it is addressed to (an id or an email): it
@@ -1594,7 +1961,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         return desk_out(d)
 
     @app.get("/api/desk")
-    async def desk_list(request: Request, state: str = "open", project: str = "",
+    def desk_list(request: Request, state: str = "open", project: str = "",
                         mine: bool = False):
         """The desk, blockers first, then oldest. `mine=1` keeps the items addressed to the
         caller's person (TR-634)."""
@@ -1615,7 +1982,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         return d
 
     @app.post("/api/desk/{ref}/withdraw")
-    async def desk_withdraw(ref: str, request: Request, body: dict = Body(default={})):
+    def desk_withdraw(ref: str, request: Request, body: dict = Body(default={})):
         deny(request, "desk")
         d = desk_or_404(ref)
         if d["state"] != "open":
@@ -1745,13 +2112,13 @@ def register(app, store, h: SimpleNamespace) -> None:
                         for w in over.values())
             return turns, hit, heard
 
-        turns, hit, heard = look()
+        turns, hit, heard = await asyncio.to_thread(look)  # scans events
         # the session is read a few seconds behind the person: look again before refusing
         waited = 0.0
         while (hit is None or not heard) and waited < factory_mod.MATCH_WAIT_SECONDS:
             await asyncio.sleep(1.0)
             waited += 1.0
-            turns, hit, heard = look()
+            turns, hit, heard = await asyncio.to_thread(look)  # scans events
         # an assumption batch: every listed assumption kept or overturned, with the person's words
         plan = []
         for ref_a, st, w in [(a, "kept", None) for a in kept] + [
@@ -1804,7 +2171,7 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "follow_up": follow, "unheard": []}
 
     @app.post("/api/desk/{ref}/allow")
-    async def desk_allow(ref: str, request: Request, body: dict = Body(...)):
+    def desk_allow(ref: str, request: Request, body: dict = Body(...)):
         """{words, scope: project|all}: the person allows a permission request (a desk item with
         a command) from the console. `words` is the grant as they let it stand (the console
         offers a sentence naming the station and the command; they may edit it). It is kept as a
@@ -1848,7 +2215,7 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "station": d["station"], "line": line, "added": added, "scope": scope}
 
     @app.get("/api/projects/{uid}/decisions")
-    async def project_decisions(uid: str):
+    def project_decisions(uid: str):
         """The person's answers on this project, newest first."""
         h.project_or_404(uid)
         return {"decisions": store.list_decisions(uid)}
@@ -1902,7 +2269,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         return gaps
 
     @app.post("/api/projects/{uid}/questions", status_code=201)
-    async def ask_area(uid: str, request: Request, body: dict = Body(...)):
+    def ask_area(uid: str, request: Request, body: dict = Body(...)):
         """{repo, text}: a question from the spec for the person who owns the repo (owner/name),
         numbered Q1, Q2... in the project. It shows in the owner's my_work until they answer.
         Anyone who can see the project may ask. A repo nobody owns is refused."""
@@ -1926,7 +2293,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         return store.add_spec_question(uid, owner["id"], repo, text, me["id"], now_utc())
 
     @app.get("/api/projects/{uid}/questions")
-    async def list_questions(uid: str, state: str = ""):
+    def list_questions(uid: str, state: str = ""):
         """The project's questions to area owners, oldest first; `state` open or answered."""
         h.project_or_404(uid)
         st = state.strip().lower()
@@ -1935,7 +2302,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {"questions": store.list_spec_questions(uid, st or None)}
 
     @app.post("/api/projects/{uid}/questions/{qid}/answer")
-    async def answer_question(uid: str, qid: str, request: Request, body: dict = Body(...)):
+    def answer_question(uid: str, qid: str, request: Request, body: dict = Body(...)):
         """{answer}: the person the question is addressed to answers it. Anyone else is refused."""
         h.project_or_404(uid)
         me = work_person(request)
@@ -1957,7 +2324,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         return store.get_spec_question(uid, q["id"])
 
     @app.post("/api/projects/{uid}/signoffs", status_code=201)
-    async def sign_off(uid: str, request: Request, body: dict = Body(...)):
+    def sign_off(uid: str, request: Request, body: dict = Body(...)):
         """{repo}: the owner of the repo says the tickets in it are right. Only that owner may,
         and only for a repo the project has tickets in. Signing again changes nothing. The
         hand-over waits for one per repo."""
@@ -1979,14 +2346,14 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {"signoffs": signoff_state(uid, p)}
 
     @app.get("/api/projects/{uid}/signoffs")
-    async def list_signoffs(uid: str):
+    def list_signoffs(uid: str):
         """Each repo the project has tickets in: its area owner, whether that is the lead and
         whether the owner has signed off, and `waiting_for` what the hand-over still lacks."""
         p = h.project_or_404(uid)
         return {"signoffs": signoff_state(uid, p), "waiting_for": signoff_gaps(uid, p)}
 
     @app.post("/api/projects/{uid}/handover")
-    async def hand_over(uid: str, request: Request, body: dict = Body(default={})):
+    def hand_over(uid: str, request: Request, body: dict = Body(default={})):
         """{repos?: [{path, name}], repo?, autonomy?, override_reason?}: the spec session hands
         the project to the crew. Each repo is the folder it is checked out in on the crew's
         machine and its GitHub name (owner/name). A later hand-over adds repos, never replaces
@@ -2037,7 +2404,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {"handover": store.get_handover(uid)}
 
     @app.post("/api/projects/{uid}/takeover")
-    async def take_over(uid: str, request: Request, body: dict = Body(default={})):
+    def take_over(uid: str, request: Request, body: dict = Body(default={})):
         """{words}: the person takes the project back from the crew to build it in their own
         session (`tares factory session <project>`, TR-520). Only the person, never a station.
         The project leaves the crew's work list at once and is listed under `releasing` in
@@ -2062,7 +2429,7 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "holders": sorted({t["holder"] for t in store.list_tickets(uid) if t["holder"]})}
 
     @app.post("/api/projects/{uid}/release")
-    async def release_project(uid: str, request: Request):
+    def release_project(uid: str, request: Request):
         """The orchestrator has stopped the builders of a project the person took over: the
         person's session owns it now. Clears every ticket's holder (the stages, pull requests and
         working docs stay as the builders left them). The person's own session may release it too,
@@ -2086,12 +2453,12 @@ def register(app, store, h: SimpleNamespace) -> None:
         return {"project": uid, "name": p["name"],
                 "takeover": store.get_handover(uid)["takeover"]}
 
-    def pr_row(t: dict) -> dict:
+    def pr_row(t: dict, last: dict | None) -> dict:
         """A ticket's pull request as the GitHub section shows it: what GitHub said when Tares last
-        read it (title, CI, the factory/review status), and the crew's own last verdict."""
+        read it (title, CI, the factory/review status), and the crew's own last verdict (`last`,
+        its latest review round)."""
         pr = t["pr"] or {}
-        last = store.ticket_reviews(t["id"])[-1:]
-        v = verdict_now(t, last[0] if last else None)
+        v = verdict_now(t, last)
         return {"url": pr["url"], "ticket": factory_mod.label(t), "number": pr.get("number"),
                 "title": pr.get("title") or t["title"], "branch": pr.get("branch"),
                 "head": (pr.get("head") or "")[:7] or None, "ci": pr.get("ci"),
@@ -2101,11 +2468,13 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "merged_at": pr.get("merged_at"), "checked_at": pr.get("checked_at"),
                 "error": pr.get("error")}
 
-    def repo_rows(uid: str, repos: list[dict]) -> list[dict]:
+    def repo_rows(uid: str, repos: list[dict], tickets: list[dict] | None = None) -> list[dict]:
         """Each hand-over repo with the tickets that change it, their open pull requests (newest
         first) and the ones merged. A ticket with no repo belongs to the first one; a repo only
-        tickets name is added. `github_error` says when Tares could not read GitHub for it."""
-        tickets = store.list_tickets(uid)
+        tickets name is added. `github_error` says when Tares could not read GitHub for it.
+        `tickets` is the project's tickets when the caller already read them."""
+        tickets = store.list_tickets(uid) if tickets is None else tickets
+        lasts = store.last_reviews([t["id"] for t in tickets if (t["pr"] or {}).get("url")])
         rows = [{**r, "tickets": [], "open_prs": [], "merged_prs": [], "github_error": None}
                 for r in repos]
         for t in tickets:
@@ -2130,16 +2499,16 @@ def register(app, store, h: SimpleNamespace) -> None:
             if pr.get("error"):
                 row["github_error"] = pr["error"]
             if pr.get("merged") or (done and pr.get("state") != "closed"):
-                row["merged_prs"].append(pr_row(t))
+                row["merged_prs"].append(pr_row(t, lasts.get(t["id"])))
             elif pr.get("state") != "closed":
-                row["open_prs"].append(pr_row(t))
+                row["open_prs"].append(pr_row(t, lasts.get(t["id"])))
         for row in rows:
             row["open_prs"].sort(key=lambda p: -(p["number"] or 0))
             row["merged_prs"].sort(key=lambda p: -(p["number"] or 0))
         return rows
 
     @app.post("/api/projects/{uid}/finish")
-    async def finish_project(uid: str, request: Request, body: dict = Body(...)):
+    def finish_project(uid: str, request: Request, body: dict = Body(...)):
         """{decision} or {words}: the person said the project is done. A station names the desk
         item (`decision`, D<n>) that asked them, answered in the orchestrator's session: its words,
         matched against what they typed, are what is kept. The person's own session (no station:
@@ -2203,7 +2572,7 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "open_projects": len(store.handed_over_projects(finished=False, taken=False))}
 
     @app.get("/api/projects/{uid}/repos")
-    async def project_repos(uid: str):
+    def project_repos(uid: str):
         """The repos this project touches, each with its tickets and open pull requests
         (TR-463). Empty for a project nobody handed over and whose tickets name no repo."""
         h.project_or_404(uid)

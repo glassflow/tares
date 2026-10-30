@@ -76,7 +76,7 @@ for pair in "a $A" "b $B"; do
   check "crew $c: the name is kept in crew.json" '[ "$(jq -r .crew_name $H/crew.json)" = $c ]'
   check "crew $c: no station of the default crew is recorded" '[ -z "$(st $H crew-orchestrator .status)" ] && [ -z "$(st $H crew-reviewer .status)" ]'
   check "crew $c: roster names the crew" '[ "$(FACTORY_CREW_HOME=$H "$F" roster 2>&1 | head -1)" = "crew: $c (orchestrator: $c-orchestrator)" ]'
-  check "crew $c: roster lists its orchestrator working" 'FACTORY_CREW_HOME=$H "$F" roster 2>&1 | grep -q "^$c-orchestrator	orchestrator		working$"'
+  check "crew $c: roster lists its orchestrator working" 'FACTORY_CREW_HOME=$H "$F" roster 2>&1 | grep -q "^$c-orchestrator	orchestrator		working	"'
 done
 check "both crews and the default one run: no station was started twice" '[ "$(launches)" = $((n_default + 4)) ]'
 check "the fake Claude holds six sessions with six different names" '[ "$(jq -r "[.[] | select(.name | test(\"^(crew|a|b)-(orchestrator|reviewer)$\")) | .name] | unique | length" "$FAKE_CLAUDE_STATE/agents.json")" = 6 ]'
@@ -99,7 +99,7 @@ check "crew a: its env carries the crew and the orchestrator" '[ "$(envof $A a-s
 check "crew a: its boot prompt sends READY to a-orchestrator" 'jq -e "select(.args[2] == \"a-shop-build-m1\") | .args | any(contains(\"send a-orchestrator READY\"))" "$FAKE_CLAUDE_STATE/calls.jsonl" >/dev/null'
 check "crew b: the same project builds as b-shop-build-m1, beside a's" '[ "$(st $B b-shop-build-m1 .role)" = builder ] && [ "$(jq -r "[.[] | select(.name | test(\"^(a|b)-shop-build-m1$\"))] | length" "$FAKE_CLAUDE_STATE/agents.json")" = 2 ]'
 check "the default crew keeps its builder name beside them" '[ "$(st $D shop-build-m1 .role)" = builder ] && [ "$(jq -r "[.[] | select(.name == \"shop-build-m1\")] | length" "$FAKE_CLAUDE_STATE/agents.json")" = 1 ]'
-check "crew a: roster lists its builder and not b's" 'FACTORY_CREW_HOME=$A "$F" roster 2>&1 | grep -q "^a-shop-build-m1	builder	shop	working$" && ! FACTORY_CREW_HOME=$A "$F" roster 2>&1 | grep -q "b-shop-build-m1"'
+check "crew a: roster lists its builder and not b's" 'FACTORY_CREW_HOME=$A "$F" roster 2>&1 | grep -q "^a-shop-build-m1	builder	shop	working	" && ! FACTORY_CREW_HOME=$A "$F" roster 2>&1 | grep -q "b-shop-build-m1"'
 FACTORY_CREW_HOME=$A "$F" spawn helper a-reviewer probe "look" >/dev/null 2>&1
 check "crew a: a helper of a-reviewer keeps its suffix rule and parent" '[ "$(st $A a-reviewer-probe .parent)" = a-reviewer ] && [ "$(st $A a-reviewer-probe .role)" = helper ]'
 check "crew a: a helper of a-reviewer is told to load station-reviewer" 'jq -e "select(.args[2] == \"a-reviewer-probe\") | .args | any(contains(\"station-reviewer\") and contains(\"send a-reviewer DONE\"))" "$FAKE_CLAUDE_STATE/calls.jsonl" >/dev/null'

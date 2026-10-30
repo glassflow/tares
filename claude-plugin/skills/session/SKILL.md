@@ -54,7 +54,7 @@ words, and the project left the crew's work list. Its builders may still be runn
    and the person answers.
 4. Wait for `[TF:RELEASED]` from the orchestrator. If none comes within about 25 minutes (the
    orchestrator ticks every 20), check `crew_projects` again: gone from `releasing` means released.
-   If `list_crew` shows no orchestrator working or waiting, tell the person, and once they confirm
+   If `list_crew` shows no orchestrator working, idle or waiting, tell the person, and once they confirm
    no builder of this project is still running (`tares factory crew status`), call
    `release_project` yourself.
 5. Then tell the person in one line which tickets the builders left in progress (stage `doing`,

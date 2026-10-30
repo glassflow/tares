@@ -53,8 +53,10 @@ class Engine:
                 "trigger": {x["name"]: x for x in s.list_catalog_triggers()},
                 "agent": {x["name"]: x for x in s.list_catalog_agents()},
                 "mcp_server": {x["name"]: x for x in s.list_mcp_servers()},
-                "skill": ({x["name"]: {**x, "owned_by": uid} for x in s.list_skills(uid)}
-                          if uid else {})}
+                "skill": self._skills_by_name(uid) if uid else {}}
+
+    def _skills_by_name(self, uid: str) -> dict[str, dict]:
+        return {x["name"]: {**x, "owned_by": uid} for x in self.store.list_skills(uid)}
 
     def default_id(self) -> str | None:
         """The default project's id, or None on a cell that has none yet: reading never makes
@@ -65,7 +67,12 @@ class Engine:
         inst = self.store.get_project(uid)
         if inst is None:
             return None
-        existing = self._existing_names(uid)
+        return self._card(inst, self._existing_names(uid), self.default_id())
+
+    def _card(self, inst: dict, existing: dict, default: str | None) -> dict:
+        """A project as get() returns it, from its row and the catalog by kind and name (with
+        the project's own skills)."""
+        uid = inst["id"]
         objects = []
         for o in self.store.list_project_objects(uid):
             if o["kind"] not in existing:   # a kind that no longer exists (a folded view)
@@ -82,7 +89,7 @@ class Engine:
         lead, members = self._who(inst)
         return {**inst, "template_title": title, "objects": objects,
                 "lead": lead, "members": members,
-                "default": uid == self.default_id(),
+                "default": uid == default,
                 # the guided setup's progress (the plan itself is on GET .../setup); None for a
                 # project set up any other way
                 "setup": ({"step": setup.get("step"), "practice_run": setup.get("practice_run")}
@@ -108,7 +115,10 @@ class Engine:
     def list(self) -> list[dict]:
         default = self.default_id()
         rows = sorted(self.store.list_projects(), key=lambda u: u["id"] != default)
-        return [self.get(u["id"]) for u in rows]
+        # the catalog is the same for every project: read it once, not once per project (TR-659)
+        shared = self._existing_names()
+        return [self._card(u, {**shared, "skill": self._skills_by_name(u["id"])}, default)
+                for u in rows]
 
     def summary(self, uid: str) -> dict:
         inst = self.get(uid)

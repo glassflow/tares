@@ -40,6 +40,9 @@ class Store:
     def agent_runs_today(self, *a, **k):
         return self.runs_today
 
+    def agent_cap_frees_at(self, *a, **k):
+        return None
+
     def agent_cost_total(self, *a):
         return self.spent
 
@@ -53,6 +56,12 @@ class Store:
         self.deliveries.append((dispatch_id, ok, note))
 
     def add_run_projects(self, *a):
+        pass
+
+    def get_catalog_agent(self, name, project=None):
+        return dict(AGENT) if name == AGENT["name"] else None
+
+    def log_delivery(self, dispatch_id, subscription_id, url, ok, note=None):
         pass
 
 
@@ -69,6 +78,7 @@ def runner(store):
     r = object.__new__(ba.AgentRunner)
     r.store = store
     r.posted = []
+    r._tasks = set()
 
     async def webhook(agent, body, attempts=3):
         r.posted.append(body)
@@ -132,13 +142,30 @@ async def caps():
 
 
 async def in_flight():
-    print("== a run for the same key already in flight ==")
+    print("== a firing that arrives while a run for its key is going (deliver) ==")
+    # The dedupe almost every duplicate meets is deliver's own, before any task starts.
+    store = Store()
+    r = runner(store)
+    r._inflight = {("rius-rca", "checkout")}
+    r._inflight_run = {("rius-rca", "checkout"): "run_going"}
+    r._callback_anchor = lambda agent, trigger_name, key: ("dlv_44", {"service": "checkout"})
+    started = r.deliver("rius-rca", "sub_1", "alert", "checkout", "", "dsp_3")
+    await asyncio.gather(*list(r._tasks))
+    check("no run starts", started is None, started)
+    check("the delivery is deduped as before",
+          store.deliveries == [("dsp_3", True, "deduped (already running)")], store.deliveries)
+    check("one skipped write-back, reason in_flight, under this firing's key",
+          [(b.get("reason"), b.get("key"), b.get("in_flight_run_id")) for b in r.posted]
+          == [("in_flight", "dlv_44", "run_going")], r.posted)
+
+    print("== the same, met in _guarded (a duplicate that slips in between) ==")
     store = Store()
     r = runner(store)
     r._inflight = {("rius-rca", "checkout")}
     r._inflight_run = {("rius-rca", "checkout"): "run_going"}
     r._callback_anchor = lambda agent, trigger_name, key: ("dlv_43", {"service": "checkout"})
     await r._guarded(AGENT, "sub_1", "alert", "checkout", "", "dsp_2")
+    await asyncio.gather(*list(r._tasks))
     check("the delivery is deduped as before", store.deliveries == [("dsp_2", True, "deduped (already running)")],
           store.deliveries)
     check("one skipped write-back, reason in_flight", [b.get("reason") for b in r.posted] == ["in_flight"],

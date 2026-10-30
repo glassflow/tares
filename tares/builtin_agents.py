@@ -23,13 +23,15 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 import os
+import threading
 import time
 import uuid
 
 import httpx
 
+from . import loop as loop_mod
 from . import metrics
 from . import results as _results
 from . import skills as _skills
@@ -94,6 +96,20 @@ def effective_daily_cap(agent: dict, store) -> tuple[int, str]:
     if own:
         return int(own), "agent"
     return daily_cap(store)
+
+
+def next_run_words(frees_at, now=None) -> str:
+    """"next run allowed in 1h 12m": the wait until a capped agent's window frees a slot, rounded
+    up to the minute so it never promises a run before it can happen. "" when nothing waits."""
+    if frees_at is None:
+        return ""
+    now = now or datetime.now(timezone.utc)
+    minutes = max(1, -(-int((frees_at - now).total_seconds()) // 60))
+    h, m = divmod(minutes, 60)
+    wait = f"{h}h {m}m" if h and m else f"{h}h" if h else f"{m}m"
+    return f"next run allowed in {wait}"
+
+
 MAX_BOOTSTRAP_KEYS = 50    # a project bootstraps at most this many entities in one go
 # Handoffs (TR-334): a chain stops after this many handoffs in a row; the next one is recorded
 # as a capped run. The cooldown per (from, to, entity) lives in trigger_state under this name.
@@ -133,8 +149,9 @@ def effective_max_rounds(agent: dict) -> int:
     return MAX_ROUNDS_WITH_MCP if agent.get("mcp_servers") else MAX_ROUNDS
 
 
-# Starting points offered in the form. A preset only seeds the prompt box — the user edits freely,
-# because we cannot know what sources they attached or what they need looked at.
+# Starting points offered in the form. A preset only seeds the prompt box (and, with a tier, the
+# model) — the user edits freely, because we cannot know what sources they attached or what they
+# need looked at.
 PRESETS = {
     "what-changed": {
         "label": "What changed",
@@ -183,6 +200,7 @@ PRESETS = {
     # through a handoff on that verdict (TR-334) or a trigger over findings (TR-322).
     "triage": {
         "label": "Triage (on a schedule)",
+        "tier": "small",          # runs every few minutes: the provider's cheaper model, if it has one
         "concludes": True,
         "verdicts": [{"verdict": "investigate",
                       "when": "one entity looks like a problem and needs a closer look"}],
@@ -449,6 +467,8 @@ class AgentRunner:
         # (agent, key) currently running. Dispatch is at-least-once, so a retried delivery would
         # otherwise run the same investigation twice and pay for it twice.
         self._inflight: set[tuple[str, str]] = set()
+        # run_now is called from request handlers' worker threads: its check and add are one step
+        self._inflight_lock = threading.Lock()
         # the run going on for each (agent, key): a second project's firing for the same agent and
         # entity joins it instead of starting another (P-TR-216)
         self._inflight_run: dict[tuple[str, str], str] = {}
@@ -481,9 +501,10 @@ class AgentRunner:
                 self.store.add_run_projects(going, projects)
             self.store.update_delivery(dispatch_id, subscription_id, True,
                                        "deduped (already running)")
+            self._write_back_in_flight(agent, trigger_name, key, dispatch_id, going)
             return None
         run_id = "run_" + uuid.uuid4().hex[:12]
-        task = asyncio.create_task(self._guarded(agent, subscription_id, trigger_name, key,
+        task = loop_mod.spawn(self._guarded(agent, subscription_id, trigger_name, key,
                                                  payload, dispatch_id, woken_by, run_id=run_id,
                                                  projects=projects))
         self._tasks.add(task)
@@ -501,14 +522,17 @@ class AgentRunner:
         handoffs it leads to are shown as practice and never counted. Returns the run id, or None
         when the agent does not exist or is already running for this key."""
         agent = self.store.get_catalog_agent(agent_name, project)
-        if agent is None or (agent_name, key) in self._inflight:
+        if agent is None:
             return None
         # the project it was started from (a project page, its practice), else its maker
         agent = for_projects(agent, [project] if project else [])
         run_id = "run_" + uuid.uuid4().hex[:12]
         marker = (agent_name, key)
-        self._inflight.add(marker)
-        self._inflight_run[marker] = run_id
+        with self._inflight_lock:
+            if marker in self._inflight:
+                return None
+            self._inflight.add(marker)
+            self._inflight_run[marker] = run_id
         async def go():
             t0 = time.monotonic()
             status = "failed"
@@ -525,17 +549,20 @@ class AgentRunner:
             if status == "ok":
                 self._hand_off(agent, run_id)
 
-        try:
-            self._spawn(go)
-        except RuntimeError:
-            self._inflight.discard(marker)
-            self._inflight_run.pop(marker, None)
-            raise
+        # the run's row before its task: from a worker thread the task can start (and fail) before
+        # this line returns, and its finish must find the row
         self.store.start_agent_run(run_id, agent_name, trigger_name, "", key,
                                    prompt_hash(agent["prompt"]), effective_max_rounds(agent),
                                    woken_by=woken_by, parent_run_id=parent_run_id,
                                    project=agent.get("owned_by"), practice=practice)
         self.store.add_run_projects(run_id, agent["projects"])
+        try:
+            self._spawn(go)
+        except RuntimeError as e:
+            self._inflight.discard(marker)
+            self._inflight_run.pop(marker, None)
+            self.store.finish_agent_run(run_id, "failed", error=str(e)[:500])
+            raise
         return run_id
 
     def attach_loop(self) -> None:
@@ -719,7 +746,7 @@ class AgentRunner:
 
             await asyncio.gather(*(one(k) for k in keys[:MAX_BOOTSTRAP_KEYS]))
 
-        task = asyncio.create_task(go())
+        task = loop_mod.spawn(go())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -733,10 +760,7 @@ class AgentRunner:
             if going:
                 self.store.add_run_projects(going, agent["projects"])
             self.store.update_delivery(dispatch_id, subscription_id, True, "deduped (already running)")
-            await self._write_back_skipped(
-                agent, trigger_name, self._callback_anchor(agent, trigger_name, key),
-                SKIPPED_IN_FLIGHT, "a run of this agent for the same key is already in flight",
-                dispatch_id, extra={"in_flight_run_id": going} if going else None)
+            self._write_back_in_flight(agent, trigger_name, key, dispatch_id, going)
             return
         self._inflight.add(marker)
         run_id = run_id or "run_" + uuid.uuid4().hex[:12]
@@ -845,6 +869,10 @@ class AgentRunner:
         if self.store.agent_runs_today(agent["name"], exclude_run_id=run_id) >= cap:
             where = "in its project's daily_cap" if source == "agent" else "under Settings, Agents"
             msg = f"cap of {cap} runs in the last 24h reached for this agent; raise it {where}"
+            wait = next_run_words(self.store.agent_cap_frees_at(agent["name"], cap,
+                                                                exclude_run_id=run_id))
+            if wait:
+                msg += f", or wait: {wait}"
             self.store.finish_agent_run(run_id, "capped", error=msg)
             obs.set_attribute(_tracing.SKIPPED_REASON, "daily_run_cap")
             await self._write_back_skipped(agent, trigger_name, (callback_key, callback_labels),
@@ -1386,6 +1414,23 @@ class AgentRunner:
             if await self._slack(agent["name"], hook, trigger_name, key, finding, meta):
                 return [{"kind": "slack", "label": "Slack webhook"}]
         return []
+
+    def _write_back_in_flight(self, agent: dict, trigger_name: str, key: str,
+                              dispatch_id: str | None, going: str | None) -> None:
+        """Write back the firing deduped against a run already in flight for its key
+        (RIUS-1103), from either dedupe: `deliver`'s, which almost every duplicate meets, and
+        `_guarded`'s, for one that slips in between. The key is resolved now, while the firing is
+        the newest in the window (TR-294); the post runs in the background, so the dispatch is
+        never blocked."""
+        if not dispatch_id or not (agent.get("webhook_url") or "").strip():
+            return
+        anchor = self._callback_anchor(agent, trigger_name, key)
+        task = loop_mod.spawn(self._write_back_skipped(
+            agent, trigger_name, anchor, SKIPPED_IN_FLIGHT,
+            "a run of this agent for the same key is already in flight",
+            dispatch_id, extra={"in_flight_run_id": going} if going else None))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def _write_back_skipped(self, agent: dict, trigger_name: str, anchor: tuple[str, dict],
                                   reason: str, message: str, dispatch_id: str | None,

@@ -302,7 +302,7 @@ async def main():
         from tares.store import Store
         path = os.path.join(_TMP, "old.duckdb")
         s0 = Store(path)
-        s0.con.execute("INSERT INTO session_stations (session, station, role, parent, project, seen_at) "
+        s0.sc.execute("INSERT INTO session_stations (session, station, role, parent, project, seen_at) "
                        "VALUES ('old-1', 'crew-reviewer', 'reviewer', NULL, NULL, now())")
         s0.con.close()
         s1 = Store(path)

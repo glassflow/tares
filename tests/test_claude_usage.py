@@ -131,6 +131,8 @@ def units():
     ck("no status line yet: the /context reading stands in", now["used"] == 95300 and now["size"] == 200000
        and now["pct"] == 48 and now["at"] == "t", now)
     ck("neither: nothing", cu.context_now({"status": None, "context": None}) is None)
+    ck("the Claude Code version comes from the status line", cu.code_version({"status": s}) == "2.1.296")
+    ck("no status line yet: no version", cu.code_version({"status": None}) is None and cu.code_version(None) is None)
     c = cu.compact_context(CONTEXT)
     ck("context: MCP tools summed by server, largest first",
        c["mcp_servers"] == [{"name": "slack", "tools": 1, "tokens": 400}, {"name": "tares", "tools": 2, "tokens": 150}], c["mcp_servers"])
@@ -155,8 +157,8 @@ def units():
 
     print("== cost ==")
     ck("an hour's cache writes bill at twice the input rate",
-       abs(cost_usd("claude-opus-5-5", 0, 0, 1_000_000, 0, 1_000_000) - 10.0) < 1e-9
-       and abs(cost_usd("claude-opus-5-5", 0, 0, 1_000_000, 0) - 6.25) < 1e-9)
+       abs(cost_usd("claude-opus-5-5", 0, 0, 1_000_000, 0, 1_000_000) - 8.0) < 1e-9
+       and abs(cost_usd("claude-opus-5-5", 0, 0, 1_000_000, 0) - 5.0) < 1e-9)
 
 
 async def main():
@@ -199,7 +201,7 @@ async def main():
                                                                      "usage": {"input_tokens": 0, "output_tokens": 0}}},
         ])
         ck("the push is taken", r.status_code == 202, r.text)
-        rows = {x["message"]: x for x in [dict(zip(("session", "message", "output", "cost"), t)) for t in store.con.execute(
+        rows = {x["message"]: x for x in [dict(zip(("session", "message", "output", "cost"), t)) for t in store.sc.execute(
             "SELECT session, message, output_tokens, cost_usd FROM session_usage").fetchall()]}
         ck("one row per reply, none for Claude Code's own notices", sorted(rows) == ["m1", "m2", "m3", "m4", "m5", "m6"], rows)
         ck("the largest count wins", rows["m1"]["output"] == 40, rows["m1"])
@@ -226,6 +228,7 @@ async def main():
             u = (await cx.get("/api/claude-code/usage")).json()
         ck("the station shows its context window", b["context"]["pct"] == 48 and b["context"]["size"] == 200000
            and b["context"]["model"] == "Opus 5.5", b["context"])
+        ck("and the Claude Code version it runs", b["claude_version"] == "2.1.296", b.get("claude_version"))
         ck("and what its sessions spent", b["usage"]["replies"] == 2 and b["usage"]["output_tokens"] == 60, b["usage"])
         ck("the plan's limits come from the status line",
            [(x["kind"], x["percent"], x["from"]) for x in u["plan"]["limits"]] ==
@@ -268,9 +271,9 @@ async def main():
 
         print("== the replies stored before ==")
         with store._lock:
-            store.con.execute("DELETE FROM session_usage")
+            store.sc.execute("DELETE FROM session_usage")
             store._claude_usage_fill()
-            n = store.con.execute("SELECT count(*), max(output_tokens) FILTER (WHERE message = 'm1'), "
+            n = store.sc.execute("SELECT count(*), max(output_tokens) FILTER (WHERE message = 'm1'), "
                                   "any_value(project) FILTER (WHERE message = 'm3'), "
                                   "count(cost_usd), any_value(cost_usd) FILTER (WHERE message = 'm2') "
                                   "FROM session_usage").fetchone()
@@ -279,10 +282,31 @@ async def main():
         ck("an hour's cache writes priced at their rate",
            abs(n[4] - cost_usd("claude-opus-5-5", 2, 20, 1000, 50000, 1000)) < 1e-12, n)
         with store._lock:
-            store.con.execute("DELETE FROM session_usage WHERE message = 'm1'")
+            store.sc.execute("DELETE FROM session_usage WHERE message = 'm1'")
             store._claude_usage_fill()
-            again = store.con.execute("SELECT count(*) FROM session_usage").fetchone()[0]
+            again = store.sc.execute("SELECT count(*) FROM session_usage").fetchone()[0]
         ck("a gap left by a version that did not count is filled at the next start", again == 6, again)
+        from datetime import datetime, timezone
+        store.record_reply_usage("b1", "mx", datetime.now(timezone.utc), "claude-opus-5-6", None, None,
+                                 {"input_tokens": 5, "output_tokens": 5})
+        with store._lock:
+            store._claude_usage_fill()
+            unlisted = store.sc.execute(
+                "SELECT cost_usd FROM session_usage WHERE message = 'mx'").fetchone()[0]
+            store.sc.execute("DELETE FROM session_usage WHERE message = 'mx'")
+        ck("a model version the table does not list stays unpriced through the fill", unlisted is None, unlisted)
+        # unpriced rows, as a version that did not price them leaves them; the fill prices what the table lists
+        for msg, model in (("md", "claude-haiku-4-5-20251001"), ("mr", "claude-opus-4-10")):
+            store.record_reply_usage("b1", msg, datetime.now(timezone.utc), model, None, None,
+                                     {"input_tokens": 1_000_000, "output_tokens": 0})
+        with store._lock:
+            store.sc.execute("UPDATE session_usage SET cost_usd = NULL WHERE message IN ('md', 'mr')")
+            store._claude_usage_fill()
+            got = dict(store.sc.execute(
+                "SELECT message, cost_usd FROM session_usage WHERE message IN ('md', 'mr')").fetchall())
+            store.sc.execute("DELETE FROM session_usage WHERE message IN ('md', 'mr')")
+        ck("a dated snapshot is priced through the fill", got["md"] is not None and abs(got["md"] - 1.0) < 1e-9, got)
+        ck("a version that runs on from a listed prefix stays unpriced through the fill", got["mr"] is None, got)
 
         print("== a project delete ==")
         async with mk() as cx:

@@ -935,7 +935,7 @@ def store_checks():
     runner.store, runner.runtime = store, Runtime()
 
     def logged(scope):
-        return [r[0] for r in store.con.execute(
+        return [r[0] for r in store.sc.execute(
             "SELECT project FROM query_log WHERE client = 'agent:counter' AND scope = ?",
             [scope]).fetchall()]
     runner._tool("counter", "read", {"selector": {"service": "zzz"}, "window": "30m"})
@@ -990,7 +990,7 @@ def store_checks():
     store.log_query("old3", "(read)", "tares_project=NoSuchProject", "1h", 0, "http")
     store.con.close()
     store = Store(path)
-    rows = dict(store.con.execute("SELECT id, project FROM query_log WHERE id LIKE 'old%'").fetchall())
+    rows = dict(store.sc.execute("SELECT id, project FROM query_log WHERE id LIKE 'old%'").fetchall())
     ck("the upgrade attributes a log row that named a project", rows.get("old1") == "uc_theirs", str(rows))
     ck("... and leaves the rest unattributed", rows.get("old2") is None, str(rows))
     ck("... and marks one that named no project, so the next boot skips it", rows.get("old3") == "", str(rows))
@@ -998,7 +998,7 @@ def store_checks():
     store.create_project("uc_late", "custom", "NoSuchProject", {"objects": []})
     store.con.close()
     store = Store(path)
-    rows = dict(store.con.execute("SELECT id, project FROM query_log WHERE id LIKE 'old%'").fetchall())
+    rows = dict(store.sc.execute("SELECT id, project FROM query_log WHERE id LIKE 'old%'").fetchall())
     ck("... which a later boot leaves alone", rows.get("old3") == "" and rows.get("old1") == "uc_theirs", str(rows))
     shown = {q["id"] for q in store.list_queries(hide=["uc_theirs"])}
     ck("the marked row reads as no project: the hide filter keeps it, drops a hidden project's",

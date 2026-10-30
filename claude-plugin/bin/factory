@@ -34,14 +34,45 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
   tares factory crew watch [--once]         (crew up runs it in the background) revive stations
                                             that stopped, under the same name; start
                                             fresh any that Claude Code stopped for thrashing on
-                                            autocompact; after an update, move each station onto it
-                                            when it's idle (same conversation); restart a station
+                                            autocompact; after an update of the plugin or of Claude
+                                            Code, move each station, helpers too, onto it when
+                                            it's idle (same conversation, the orchestrator last; a
+                                            station that keeps coming back on an old spare is
+                                            started again in a new conversation, then retried
+                                            after a pause, and shows as retrying; the crew setting
+                                            claude_update off stops this move); restart a station
                                             between its turns when you allow it something new in
                                             Tares (same conversation, its fresh settings have it);
-                                            between rounds, read the plan's limits and the context
+                                            a frozen crew's watch moves no station onto a newer kit
+                                            or Claude Code and is only told of one; between
+                                            rounds, read the plan's limits and the context
                                             the Crew page asks for
+                                            with the idle_wake setting on, wake an idle station only
+                                            when Tares has work for it (and after a quiet spell, to
+                                            check), and hold its tick instead of the station
+                                            with the pace setting on, slow the crew before the
+                                            plan's limits (no new builders, longest ticks, builders
+                                            wait), and revive a station that stopped at the limit in
+                                            its own conversation once the limit has reset
+  tares factory crew update [--wait <s>]    move every station onto the Claude Code installed now,
+                                            right away: each when it is idle (one someone has open
+                                            waits), the orchestrator last, same conversation; then
+                                            checks each runs it, one session per name; gives up on a
+                                            busy one after --wait seconds (default 1800, 0 = never);
+                                            run from a station, it leaves that station to the watch
+                                            when that station is behind, else to restart;
+                                            a frozen crew moves too, since you asked; with pace
+                                            on, neither moves one while a plan limit is full
+  tares factory crew restart [--wait <s>]   the same, for stations that already run it too
   tares factory crew halt ["<reason>"]      stop risky actions on every station until resume
   tares factory crew resume                 lift a halt
+  tares factory crew freeze                 keep the crew on today's plugin kit: a station that starts
+                                            or revives uses a copy of it, a running one keeps reading
+                                            the checkout until it restarts, and the watch moves none
+                                            onto a newer kit or Claude Code (it still tells you one
+                                            is there)
+  tares factory crew unfreeze               lift the freeze; the watch moves each station onto the
+                                            checkout's kit when it's idle
   tares factory crew down                   stop the watch and every station (Tares keeps the record)
   tares factory spec ["<idea>"]             plan a project with Claude and /tares:spec, in the repo it
                                             builds on or a folder of its repos; it ends with the
@@ -68,7 +99,7 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
   tares factory settings <station> [role]   print the settings a station launches with
 
   used by the orchestrator (as `factory`, inside its session):
-  factory roster                            stations, roles, projects, states (tab separated)
+  factory roster                            stations, roles, projects, states, Claude Code version (tab separated)
   factory spawn builder [--autonomy L3-review] <project> <slug> <repo path> "<task>"
                                             one builder per milestone and repo of a project
   factory spawn helper <parent-station> <slug> "<task>"
@@ -115,6 +146,20 @@ CREW_HOME="${FACTORY_CREW_HOME:-$HOME/factory}"
 CREW_CFG="$CREW_HOME/crew.json"
 STATIONS="$CREW_HOME/stations.json"
 HALT_FILE="$CREW_HOME/HALT"
+FROZEN_KIT="$CREW_HOME/frozen-kit"   # the kit as `crew freeze` found it, while the crew is frozen
+NEWER_FILE="$CREW_HOME/kit-newer"    # the newer kit the watch last told the person about
+FREEZING="$CREW_HOME/freezing"       # present while `crew freeze` has the copy but Tares not yet the setting
+CC_NEWER_FILE="$CREW_HOME/claude-newer"   # the newer Claude Code the watch last told the person about while frozen
+CHECKOUT_FILE="$CREW_HOME/kit-checkout"   # the checkout the frozen copy was taken from
+# The frozen copy as stations record it: physical, so a symlinked crew home still matches.
+frozen_phys() { echo "$(cd -P "$CREW_HOME" 2>/dev/null && pwd || echo "$CREW_HOME")/frozen-kit"; }
+# A factory run from the frozen copy (a station started while frozen) still means the checkout by
+# KIT_PLUGIN: what it fingerprints, copies and starts stations on once the crew is unfrozen.
+if [ -f "$CHECKOUT_FILE" ]; then
+  case "$KIT_PLUGIN/" in
+    "$(frozen_phys)"/*) c=$(cat "$CHECKOUT_FILE"); [ ! -d "$c" ] || { KIT_PLUGIN=$c; TEMPLATES="$KIT_PLUGIN/templates"; src="$KIT_PLUGIN/bin/factory"; } ;;
+  esac
+fi
 EVENTS="$CREW_HOME/events.jsonl"
 TOKEN_FILE="$CREW_HOME/.tares-token"
 
@@ -147,6 +192,8 @@ crew_name() {
 }
 crew_orchestrator() { echo "$(crew_name)-orchestrator"; }
 slugify() { tr '[:upper:]' '[:lower:]' <<<"$1" | tr -c 'a-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//'; echo; }
+# The time the idle wake works by: epoch seconds. FACTORY_NOW stands in for it in tests.
+now_s() { echo "${FACTORY_NOW:-$(date +%s)}"; }
 event() { [ -d "$CREW_HOME" ] && jq -cn --arg e "$1" --arg s "${2:-}" --arg d "${3:-}" \
   '{at: (now | todate), station: $s, event: $e, detail: $d}' >> "$EVENTS" 2>/dev/null || true; }
 
@@ -299,14 +346,16 @@ crew_projects_or_die() {
 }
 project_row() { crew_projects | jq -c --arg p "$1" --arg s "$(slugify "$1")" \
   '[.[] | select(.name == $p or .id == $p or ((.name | ascii_downcase | gsub("[^a-z0-9]+"; "-") | gsub("^-|-$"; "")) == $s))][0] // empty'; }
-project_repo_rows() { crew_projects | jq -r '.[] | .name as $n | .repos[] | select(.path != null) | [$n, .path] | @tsv'; }
+project_repo_rows() { crew_projects | jq -r '.[] | .name as $n | (.repos // [])[] | select(.path != null) | [$n, .path] | @tsv'; }
 all_repos() { crew_projects | jq -r '[.[] | .repos[] | .path | select(. != null)] | unique | .[]'; }
 
 # ---------- crew settings and grants ----------
 
 settings_defaults() {
   jq -n '{autonomy: "L4-ship", releaser: false, release_profile: "kind",
-          prod_pattern: "(^|[-_.])(prod|production)([-_.]|$)", challenger: false, builders_max: 2}'
+          prod_pattern: "(^|[-_.])(prod|production)([-_.]|$)", challenger: false, builders_max: 2,
+          kit: {frozen: null}, idle_wake: false, pace: false,
+          claude_update: true}'
 }
 settings_raw() {
   local s; s=$(tares_http GET /api/crew/settings) || die "could not read the crew settings from Tares at $TARES$(no_key_hint)"
@@ -675,16 +724,28 @@ write_settings() { # station role parent project repo
   wt="$CREW_HOME/worktrees"; [ -n "$repo" ] && wt="$repo/.factory/worktrees"
   [ -s "$TOKEN_FILE" ] && tok_file=$TOKEN_FILE
 
+  # TARES_PROJECT goes out as the X-Tares-Project header, which takes no emoji or other non-ASCII
+  # (TR-534): it carries the project's id; the name is TARES_PROJECT_NAME, for reading only.
+  local pid=""
+  if [ -n "$project" ]; then
+    pid=$(stations_get "$station" '.project_id'); [ -n "$pid" ] || [ -z "$parent" ] || pid=$(stations_get "$parent" '.project_id')
+    [ -n "$pid" ] || pid=$(jq -r '.id // empty' <<<"$(project_row "$project")" 2>/dev/null || true)
+    if [ -n "$pid" ]; then stations_put "$station" "$(jq -cn --arg p "$pid" '{project_id: $p}')"
+    elif LC_ALL=C grep -q '^[ -~]*$' <<<"$project"; then pid=$project
+    else echo "$ME: could not find $project's id on Tares; $station starts without a default project" >&2
+    fi
+  fi
+
   mkdir -p "$CREW_HOME/stations"
   # statusLine: after each reply it sends Tares the session's context window and the plan's limits;
   # FACTORY_AUTOCOMPACT tells it where the station compacts (the --autocompact it was started with)
   jq -n \
-    --arg role "$role" --arg station "$station" --arg parent "$parent" --arg project "$project" \
+    --arg role "$role" --arg station "$station" --arg parent "$parent" --arg project "$project" --arg pid "$pid" \
     --arg pslug "$( [ -n "$project" ] && slugify "$project" || true)" --arg home "$CREW_HOME" --arg repo "$repo" \
     --arg wt "$wt" --arg tares_url "$TARES" --arg tok "$tok_file" --arg mcp_url "$(mcp_url)" \
     --arg crew "$(crew_name)" --arg orch "$(crew_orchestrator)" \
     --arg env_line "$env_line" --argjson allow "$allow_json" --argjson deny "$deny_json" --argjson perms "$perms_json" \
-    --arg status_line "$(printf 'python3 %q' "$KIT_PLUGIN/scripts/statusline.py")" --arg compact "$(compact_window 2>/dev/null)" \
+    --arg status_line "$(printf 'python3 %q' "$(kit_dir)/scripts/statusline.py")" --arg compact "$(compact_window 2>/dev/null)" \
     '{
       env: ({
         FACTORY_STATION: $station, FACTORY_ROLE: $role, FACTORY_PARENT: $parent,
@@ -697,7 +758,7 @@ write_settings() { # station role parent project repo
       } + (if $tok != "" then {TARES_FACTORY_TOKEN_FILE: $tok,
              # the same file under a name Claude Code does not hide from the plugin header helper
              TARES_FACTORY_CRED_FILE: $tok} else {} end)
-        + (if $project != "" then {TARES_PROJECT: $project, FACTORY_PROJECT: $pslug} else {} end)
+        + (if $project != "" then {TARES_PROJECT: $pid, TARES_PROJECT_NAME: $project, FACTORY_PROJECT: $pslug} else {} end)
         + (if $repo != "" then {FACTORY_REPO: $repo} else {} end)),
       crossSessionInbound: "accept",
       enabledPlugins: { "tares@inline": true },
@@ -713,7 +774,27 @@ write_settings() { # station role parent project repo
 # script lives. Claude Code names a --plugin-dir plugin `tares@inline`, and a person who once turned
 # that off in their own settings would get stations without it, so every session this CLI starts
 # turns it on in its own --settings (stations in their settings file, the spec session in SPEC_SETTINGS).
-plugin_flags() { printf '%s\n' --plugin-dir "$KIT_PLUGIN"; }
+plugin_flags() { printf '%s\n' --plugin-dir "$(kit_dir)"; }
+
+# A frozen crew (`crew freeze`) keeps the kit it was frozen on: Tares holds the setting, and the copy
+# of the kit sits in FROZEN_KIT. The watch asks upgrades_frozen before it moves a station onto
+# anything newer. Tares unreadable: a copy on disk means frozen, so a blip never lets a station move.
+upgrades_frozen() { # → 0 while the crew's kit is frozen
+  if crew_settings >/dev/null 2>&1; then jq -e '.kit.frozen != null' <<<"$SETTINGS" >/dev/null
+  else [ -d "$FROZEN_KIT" ]; fi
+}
+frozen_field() { # field → what the freeze recorded (at, by, version), from this round's settings
+  [ -z "$SETTINGS" ] || jq -r --arg f "$1" '.kit.frozen[$f] // empty' <<<"$SETTINGS"
+}
+kit_dir() { # → the kit a station starts on: the frozen copy while frozen, else this checkout
+  if [ -d "$FROZEN_KIT" ] && upgrades_frozen; then frozen_phys; else echo "$KIT_PLUGIN"; fi
+}
+on_frozen_copy() { # station → 0 when it runs from the frozen copy, which is going away
+  [ "$(stations_get "$1" '.plugin')" = "$(frozen_phys)" ]
+}
+frozen_copy_in_use() { # → 0 while an active station runs from the frozen copy
+  [ -f "$STATIONS" ] && jq -e --arg p "$(frozen_phys)" 'any(.[]; .status == "active" and .plugin == $p)' "$STATIONS" >/dev/null 2>&1
+}
 MY_VERSION=$(jq -r '.version // ""' "$KIT_PLUGIN/.claude-plugin/plugin.json" 2>/dev/null || true)
 installed_tares() { # → "name version scope" for each installed tares plugin of another version
   jq -r --arg v "$MY_VERSION" '.plugins // {} | to_entries[] | select(.key | startswith("tares@"))
@@ -757,8 +838,8 @@ stuck_on_context() { # station → 0 when Claude Code's thrashing notice is the 
   [ "$st" != working ]
 }
 
-kit_version() { # a fingerprint of what the stations run on: this CLI, hooks, skills and scripts; never fails
-  { (cd "$KIT_PLUGIN" && find . -type f ! -path '*/__pycache__/*' ! -name '*.pyc' ! -name '.*' ! -name '*~' \
+kit_version() { # [dir] a fingerprint of what the stations run on: this CLI, hooks, skills and scripts; never fails
+  { (cd "${1:-$KIT_PLUGIN}" && find . -type f ! -path '*/__pycache__/*' ! -name '*.pyc' ! -name '.*' ! -name '*~' \
       ! -name '4913' ! -name '*.orig' ! -name '*.rej' ! -name '*.swp' -print0 2>/dev/null | LC_ALL=C sort -z \
       | xargs -0 cat 2>/dev/null) || true; } | cksum | cut -d' ' -f1
 }
@@ -800,6 +881,7 @@ launch() { # station role parent project repo cwd model effort prompt [resume-se
                  --settings "$settings" --autocompact "$(compact_window)"
                  --append-system-prompt "$identity")
   local f; while IFS= read -r f; do [ -n "$f" ] && args+=("$f"); done < <(plugin_flags)
+  local kd; kd=$(kit_dir)
   [ -n "$resume" ] && args+=(--resume "$resume")
   args+=("$prompt")
 
@@ -822,11 +904,13 @@ launch() { # station role parent project repo cwd model effort prompt [resume-se
   done
   stations_put "$station" "$(jq -n --arg role "$role" --arg parent "$parent" --arg project "$project" --arg repo "$repo" \
     --arg cwd "$cwd" --arg id "$id" --arg session "$session" --arg model "$model" --arg effort "$effort" --arg settings "$settings" \
-    --arg kit "$(kit_version)" --arg grants "$gsum" \
+    --arg kit "$(kit_version "$kd")" --arg plugin "$kd" --arg grants "$gsum" \
     '{role: $role, parent: $parent, project: $project, repo: $repo, cwd: $cwd, id: $id, sessionId: $session,
-      model: $model, effort: $effort, settings: $settings, kit: $kit, grants: $grants, grants_tried: null,
+      model: $model, effort: $effort, settings: $settings, kit: $kit, plugin: $plugin, grants: $grants, grants_tried: null,
       status: "active", startedAt: (now | todate)}')"
   [ -z "$gsum" ] || printf '%s\n' "$grants" > "$CREW_HOME/stations/$station.grants"
+  iw_launch_note "$station" || true
+  pace_launch_note "$station" || true
   event started "$station" "$id"
   echo "  ✓ started $station ($model, $effort)" >&2
 }
@@ -834,6 +918,7 @@ launch() { # station role parent project repo cwd model effort prompt [resume-se
 boot_prompt() { # role [task]
   local p="Boot as the $1 station: load the skills factory-protocol and station-$1, follow their Boot sections, and send $(crew_orchestrator) READY when you are set."
   [ "$1" = orchestrator ] && p="Boot as the orchestrator station: load the skills factory-protocol and station-orchestrator, then follow the Boot section. The other stations will send you READY."
+  idle_wake_on && p="$p $(idle_wake_note)"
   [ -n "${2:-}" ] && p="$p
 
 Your task:
@@ -965,6 +1050,7 @@ cmd_crew_up() {
   setup_crew_name
   ensure_settings
   prime
+  lsp_offer
   [ -n "${roles// /}" ] || roles=$(crew_roles)
   # Orchestrator first so the others can check in with it.
   local ordered="" r
@@ -1001,6 +1087,9 @@ cmd_spawn() {
     builder)
       if [ "${1:-}" = --autonomy ]; then autonomy=${2:-}; shift 2 || true; fi
       [ $# -ge 4 ] || die "usage: factory spawn builder [--autonomy L3-review] <project> <slug> <repo path> \"<task>\""
+      if pace_read && [ "$PACE_LEVEL" -ge 1 ]; then   # the plan is nearly full (TR-674); a reading that fails lets it through
+        die "no new builder starts now. $(jq -r .note <<<"$PACE") Spawn it after that, or when the plan has room. Helpers are not affected."
+      fi
       if [ -n "$autonomy" ]; then
         # A project may be stricter than the crew, never looser: a looser level is a new grant from the person.
         local want have
@@ -1042,7 +1131,7 @@ cmd_spawn() {
   station_lock "$station"
   is_alive "$station" "$cwd" && die "$station is already running; message it instead"
   if [ "$role" = builder ]; then
-    stations_put "$station" "$(jq -n --arg a "$autonomy" '{autonomy: $a}')"
+    stations_put "$station" "$(jq -n --arg a "$autonomy" --arg p "$(jq -r .id <<<"$row")" '{autonomy: $a, project_id: $p}')"
     rm -f "$CREW_HOME/stations/$station.done"
   fi
   local prompt; prompt=$(boot_prompt builder "$task")
@@ -1066,7 +1155,7 @@ cmd_revive() { # station [--fresh] [prompt]: same name, same env; the conversati
   old_id=$(stations_get "$station" '.id')
   local skill=$role; [ "$role" = helper ] && skill=$(parent_role "$parent")
   local prompt=${1:-}
-  local again="Reload the skills factory-protocol and station-$skill, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."
+  local again="Reload the skills factory-protocol and station-$skill, re-read your report and your work on Tares, $(rearm_text), then carry on where your report left off."
   if [ -z "$prompt" ] && [ $fresh = 1 ]; then
     prompt="You were started again under the same name, in a new conversation: the last one kept refilling its context right after each compaction, so Claude Code stopped it. Nothing from it carries over except your report and what is on Tares. $again Read big files, logs and diffs in parts."
   fi
@@ -1108,6 +1197,7 @@ cmd_retire() { # station
   "$CLAUDE" stop "$id" >/dev/null 2>&1 || true
   "$CLAUDE" rm "$id" >/dev/null 2>&1 || true
   stations_put "$station" '{"status": "retired"}'
+  rm -f "$CREW_HOME/stations/$station.pace"   # what the pace told it (TR-674)
   event retired "$station" "$id"
   tell_tares_ended "$station"
   say "retired $station"
@@ -1145,16 +1235,20 @@ cmd_down() {
   say "all stations stopped. Tares keeps the projects, tickets and the desk; $ME crew up starts fresh sessions."
 }
 
-cmd_watch() { # every interval: revive stopped stations, restart stuck ones fresh, restart idle ones with new grants, move idle ones onto an updated plugin; readings between
+cmd_watch() { # every interval: revive stopped stations, restart stuck ones fresh, restart idle ones with new grants, move idle ones onto an updated plugin or Claude Code; readings between
   require_crew
   local once=0 interval=${FACTORY_WATCH_INTERVAL:-180}
   while [ $# -gt 0 ]; do
     case "$1" in --once) once=1; shift ;; --interval) interval=$2; shift 2 ;; *) die "unknown option $1" ;; esac
   done
   local kit_start seen said_dirty=0; kit_start=$(kit_version); seen=$kit_start
+  local cc_seen; cc_seen=$(claude_version)
   [ $once = 1 ] || say "watching the crew every ${interval}s (it revives stations that stop, and gives one a permission you allowed in Tares); Ctrl-C to stop"
   while :; do
     local s kit settled=0 down=0 candidate=""; kit=$(kit_version)
+    TARES_STATE=""; SETTINGS=""; tares_on || true   # this round's Tares and settings; one that doesn't answer changes no grants
+    pace_read || true   # the plan's pace, once a round (TR-674); a reading that is missing changes nothing
+    pace_tidy || true
     # An update counts once it has held for a whole round in a clean checkout: a pull or an edit in
     # progress is not a release.
     [ "$kit" = "$seen" ] && kit_clean && settled=1
@@ -1163,11 +1257,19 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
       said_dirty=1
     fi
     seen=$kit
-    if [ $settled = 1 ] && [ "$kit" != "$kit_start" ] && [ $once = 0 ]; then
+    # A new Claude Code counts once `claude --version` has said the same for a whole round: the installer
+    # swaps a symlink, and a version that flips back and forth is not a release.
+    local cc_now cc_settled=0; cc_now=$(claude_version)
+    [ -n "$cc_now" ] && [ "$cc_now" = "$cc_seen" ] && cc_settled=1
+    cc_seen=$cc_now
+    if upgrades_frozen; then
+      [ $settled = 0 ] || tell_newer_kit "$kit"
+    elif [ $settled = 1 ] && [ "$kit" != "$kit_start" ] && [ $once = 0 ]; then
       say "the plugin was updated; the watch restarts on the new version"
       exec "$src" crew watch --interval "$interval"
+    else
+      reap_frozen_copy
     fi
-    TARES_STATE=""; tares_on || true   # this round's Tares; one that doesn't answer changes no grants
     if ! active_json >/dev/null; then
       say "$UNREAD; nothing is revived or restarted this round"
       [ $once = 1 ] && return 0
@@ -1183,6 +1285,7 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
       esac
       local up; up=$(is_alive "$s" && echo yes || echo no) || { say "skipping $s this round"; down=1; continue; }
       if [ "$up" = yes ]; then
+        [ ! -f "$PACE_FILE" ] || pace_revived "$s"   # it runs again: nothing left to carry out for it
         if stuck_on_context "$s"; then
           say "$s is stuck: Claude Code stopped it for thrashing on autocompact; starting it fresh under the same name"
           event thrashing "$s"
@@ -1193,25 +1296,51 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
           [ $rc = 0 ] || say "could not restart $s; will try again next round"
         elif ! halted && between_turns "$s" && regrant_due "$s"; then
           regrant_station "$s"
-        elif [ -z "$candidate" ] && movable "$s" "$kit"; then
+        elif idle_wake_plan "$s"; then idle_wake_send   # woken: one restart a station a round (TR-673)
+        elif pace_plan "$s"; then pace_send             # told to stretch its tick, hold or go back (TR-674)
+        elif [ -z "$candidate" ] && ! upgrades_frozen && movable "$s" "$kit"; then
           candidate=$s
         fi
         continue
       fi
       down=1
-      local fresh=""; stuck_on_context "$s" && fresh=--fresh
-      say "$s stopped; reviving it under the same name${fresh:+, in a new conversation since its last one thrashed}"
+      if pace_closed; then pace_hold_down "$s"; continue; fi   # the plan's limit is full: no reviving into a closed door (TR-674)
+      local fresh="" pprompt=""; stuck_on_context "$s" && fresh=--fresh
+      if [ -z "$fresh" ] && pace_stopped "$s"; then
+        # It stopped while the limit was full, and the limit has reset: back in its own conversation,
+        # and only when that fails, a new one.
+        if pace_tried "$s"; then fresh=--fresh; pprompt=$(pace_fresh_prompt "$s"); else pprompt=$(pace_resume_prompt); fi
+        say "$s stopped while the plan's limit was full, which has reset; reviving it under the same name${fresh:+, in a new conversation since its own could not be resumed}"
+      else
+        say "$s stopped; reviving it under the same name${fresh:+, in a new conversation since its last one thrashed}"
+      fi
       # Each revive in its own shell with errexit on, so a failure stops that revive (never a station
       # started with half-made settings) and not the watcher. Tares and the settings are re-read each time.
       set +e
-      ( set -e; TARES_STATE=""; SETTINGS=""; CREW_PROJECTS=""; prime; cmd_revive "$s" $fresh )
+      ( set -e; TARES_STATE=""; SETTINGS=""; CREW_PROJECTS=""; prime; cmd_revive "$s" $fresh "$pprompt" )
       local rc=$?
       set -e
-      [ $rc = 0 ] || say "could not revive $s; will try again next round"
+      if [ $rc = 0 ]; then pace_revived "$s"
+      else
+        say "could not revive $s; will try again next round"
+        [ -z "$pprompt" ] || [ -n "$fresh" ] || pace_mark_tried "$s"   # a resume that failed; two in a row and the next is a new conversation
+      fi
     done
     # One station a round moves onto an updated plugin, and only while every station is up, so a
     # version that can't start a station never takes the crew down one station at a time.
-    if [ -n "$candidate" ] && [ $settled = 1 ] && [ $down = 0 ] && ! halted; then upgrade_station "$candidate" "$kit"; fi
+    if [ -n "$candidate" ] && [ $settled = 1 ] && [ $down = 0 ] && ! halted && ! upgrades_frozen; then upgrade_station "$candidate" "$kit"
+    elif [ $cc_settled = 1 ] && [ $down = 0 ] && ! halted && claude_auto; then
+      # the same, for Claude Code itself: one idle station a round, the orchestrator last; a frozen crew
+      # only hears that there is a newer one
+      if upgrades_frozen; then tell_newer_claude "$cc_now"
+      elif pace_closed; then :   # the plan's limit is full: a restart is a model turn into it, so the move waits for the reset (TR-674)
+      else
+        rm -f "$CC_NEWER_FILE"
+        candidate=$(cc_pick "$cc_now")
+        [ -z "$candidate" ] || watch_claude_move "$candidate" "$cc_now"
+      fi
+    fi
+    [ $cc_settled = 1 ] && [ $down = 0 ] && cc_retry_sync || true   # the Crew page's retry flags follow the marks every round
     [ $once = 1 ] && return 0
     nap "$interval"
   done
@@ -1259,9 +1388,9 @@ regrant_station() { # station: restart it with its new grants, in the same conve
     if [ -n "$rules" ]; then
       prompt="$human allowed new permissions in Tares, so the factory restarted you in this same conversation with fresh settings. These are in your settings now:
 $rules
-If something you tried was refused for want of one of these and is still needed, run it again now. Then re-read your report, re-arm your schedule if you have one, and carry on where you were."
+If something you tried was refused for want of one of these and is still needed, run it again now. Then re-read your report, $(rearm_text), and carry on where you were."
     else
-      prompt="$human changed what the crew is allowed in Tares, so the factory restarted you in this same conversation with fresh settings that have the change (read_grants shows them). Re-read your report, re-arm your schedule if you have one, then carry on where you were."
+      prompt="$human changed what the crew is allowed in Tares, so the factory restarted you in this same conversation with fresh settings that have the change (read_grants shows them). Re-read your report, $(rearm_text), then carry on where you were."
     fi
     say "$s has new permissions from Tares; restarting it with them now that it's between turns, in the same conversation"
     cmd_restart "$s" "$prompt"
@@ -1274,8 +1403,387 @@ If something you tried was refused for want of one of these and is still needed,
   esac
 }
 
+# ---------- idle wake (TR-673) ----------
+# With the crew setting idle_wake on, a station holds no tick of its own. The watch (bash, no model
+# call) looks at Tares and wakes an idle station with one message when it has something to do, and
+# sends a liveness wake when nothing has happened for a while: after 15 minutes (reviewer), 20
+# (orchestrator) or 30 (builder, releaser), then 30, then 45 and every 45 after, so a quiet crew costs
+# a few turns an hour instead of one per tick. A wake is a restart in the same conversation, the way
+# the watch hands a station new grants. What a wake has already told a station lives in
+# stations/<station>.wake. With the setting off none of this runs and no file is written.
+idle_wake_on() { crew_settings >/dev/null 2>&1 && jq -e '.idle_wake == true' <<<"$SETTINGS" >/dev/null; }
+idle_wake_state() { # → on, off, or unknown (Tares gave no settings: nothing changes on a blip)
+  if ! crew_settings >/dev/null 2>&1; then echo unknown
+  elif jq -e '.idle_wake == true' <<<"$SETTINGS" >/dev/null; then echo on
+  else echo off; fi
+}
+idle_wake_note() {
+  echo "idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete)."
+}
+rearm_text() { # what a restart tells a station about its schedule
+  [ "$PACE_READ" = 1 ] || pace_read || true   # a command other than the watch has not read the pace yet (TR-674)
+  if idle_wake_on; then echo "arm no tick of your own (idle_wake is on: the factory wakes you when there is work and holds your tick; if you hold one, delete it with CronList and CronDelete)"
+  elif [ "$PACE_STATE" = active ] && [ "$PACE_LEVEL" -ge 1 ]; then echo "re-arm your schedule if you have one, at 45 minutes while the factory paces the crew before the plan's limit"
+  else echo "re-arm your schedule if you have one"; fi
+}
+
+# ---------- pace (TR-674) ----------
+# With the crew setting pace on, the watch reads how full the plan's limits are (Tares keeps the reading
+# the usage meter takes; GET /api/crew/pace) once a round and slows the crew before the limit instead of
+# hitting it. At 85% of the 5-hour window or 90% of the week no new builder starts and every station
+# ticks at its longest interval; at 95% of the window builders also finish their step, push, write
+# down where they are and wait. A station that stopped while a limit was full is not revived into it,
+# and once it has reset it is revived in its own conversation (a new one only when that fails). A
+# reading that is missing changes nothing. With the setting off none of this runs and no file is written.
+# Per station: stations/<station>.pace ({stretched, held}); crew-wide: pace.json (the stopped ones).
+PACE_FILE="$CREW_HOME/pace.json"
+PACE=""; PACE_STATE=unknown; PACE_LEVEL=0; PACE_AT_LIMIT=false; PACE_UNTIL=""; PACE_READ=0
+pace_read() { # → 0 with PACE_* set when pace is on and Tares has a reading of the limits; else 1, and nothing is paced
+  PACE=""; PACE_STATE=unknown; PACE_LEVEL=0; PACE_AT_LIMIT=false; PACE_UNTIL=""; PACE_READ=1
+  local p
+  tares_on || return 1
+  p=$(tares_http GET /api/crew/pace 2>/dev/null) && jq -e 'type == "object"' <<<"$p" >/dev/null 2>&1 || return 1
+  if [ "$(jq -r '.on // false' <<<"$p")" != true ]; then PACE_STATE=off; return 1; fi
+  [ "$(jq -r '.known // false' <<<"$p")" = true ] || return 1
+  PACE=$p; PACE_STATE=active
+  PACE_LEVEL=$(jq -r '.level // 0' <<<"$p"); PACE_AT_LIMIT=$(jq -r '.at_limit // false' <<<"$p"); PACE_UNTIL=$(jq -r '.until // ""' <<<"$p")
+  return 0
+}
+pace_closed() { [ "$PACE_STATE" = active ] && [ "$PACE_AT_LIMIT" = true ]; }   # a limit is full and has not reset
+
+PACE_DEFAULT='{"limit_since":null,"until":null,"said":false,"stopped":[],"tried":[]}'
+pace_json() { # the crew-wide pace file, the defaults under whatever it has
+  if [ -f "$PACE_FILE" ] && jq -e . "$PACE_FILE" >/dev/null 2>&1; then jq -c --argjson d "$PACE_DEFAULT" '$d + .' "$PACE_FILE"
+  else echo "$PACE_DEFAULT"; fi
+}
+pace_json_update() { # jq-filter [jq args]: apply the filter to the pace file, written whole
+  local filter=$1 tmp; shift
+  tmp=$(mktemp "$PACE_FILE.XXXXXX") || return 1
+  if pace_json | jq -c "$@" "$filter" > "$tmp"; then mv "$tmp" "$PACE_FILE"; else rm -f "$tmp"; return 1; fi
+}
+pace_stopped() { [ "$PACE_STATE" != unknown ] && pace_json | jq -e --arg s "$1" '.stopped | index($s)' >/dev/null; }   # it stopped while a limit was full
+pace_tried() { pace_json | jq -e --arg s "$1" '[.tried[] | select(. == $s)] | length >= 2' >/dev/null; }          # its resume failed twice in a row
+pace_mark_tried() { pace_json_update '.tried += [$s]' --arg s "$1" || true; }
+pace_hold_down() { # station: it is down while a limit is full; remember it, and say so once per episode; a full limit again starts its failed resumes over
+  local said; said=$(pace_json | jq -r '.said')
+  pace_json_update '.tried -= [$s] | .stopped = ((.stopped + [$s]) | unique) | .limit_since = (.limit_since // $now) | .["until"] = $up | .said = true' \
+    --arg s "$1" --argjson now "$(now_s)" --arg up "$PACE_UNTIL" || true
+  [ "$said" = true ] || say "the plan's limit is full${PACE_UNTIL:+ until $PACE_UNTIL}, so a stopped station is not revived now ($1 is the first); the watch revives each one in its own conversation after the reset"
+  return 0
+}
+pace_revived() { # station: it runs again (revived, or by hand): forget it; the file goes when nothing is left to carry out
+  [ -f "$PACE_FILE" ] || return 0
+  pace_json_update '.stopped -= [$s] | .tried -= [$s]' --arg s "$1" || true
+  if [ "$(pace_json | jq '(.stopped | length) == 0')" = true ] && ! pace_closed; then rm -f "$PACE_FILE"; fi
+  return 0
+}
+pace_tidy() { # once a round: forget stations that will not be revived (retired, done, a helper) and a pace file with nothing left to carry out
+  [ -f "$PACE_FILE" ] && [ "$PACE_STATE" != unknown ] || return 0   # a reading that is missing changes nothing
+  if [ "$PACE_STATE" = off ]; then rm -f "$PACE_FILE"; return 0; fi
+  local n live="[]"
+  for n in $(jq -r 'to_entries[] | select(.value.status == "active" and .value.role != "helper") | .key' "$STATIONS" 2>/dev/null); do
+    [ "$(stations_get "$n" '.role')" = builder ] && [ -f "$CREW_HOME/stations/$n.done" ] && continue
+    live=$(jq -c --arg n "$n" '. + [$n]' <<<"$live")
+  done
+  pace_json_update '.stopped |= map(select(. as $x | $live | index($x))) | .tried |= map(select(. as $x | $live | index($x)))
+                    | if $closed then . else .said = false end' --argjson live "$live" --argjson closed "$(pace_closed && echo true || echo false)" || return 0
+  if [ "$(pace_json | jq '(.stopped | length) == 0')" = true ] && ! pace_closed; then rm -f "$PACE_FILE"; fi
+  return 0
+}
+pace_resume_prompt() { # a short one: the conversation is its own, so it needs no reload of the skills
+  echo "The plan's limit was reset. Carry on from where you stopped: re-read your report and your work on Tares, $(rearm_text), then continue."
+}
+pace_fresh_prompt() { # station: its conversation could not be resumed
+  echo "The plan's limit was reset, but your last conversation could not be resumed, so this is a new one under the same name. Nothing from it carries over except your report and what is on Tares. Reload the skills factory-protocol and station-$(stations_get "$1" '.role'), re-read your report and your work on Tares, $(rearm_text), then carry on where your report left off."
+}
+
+pace_station_file() { echo "$CREW_HOME/stations/$1.pace"; }
+pace_station_read() { # station → {stretched, held}
+  local f; f=$(pace_station_file "$1")
+  if [ -f "$f" ] && jq -e . "$f" >/dev/null 2>&1; then jq -c '{stretched: false, held: false} + .' "$f"
+  else echo '{"stretched":false,"held":false}'; fi
+}
+pace_station_put() { # station stretched held (true|false): what the station has been told; nothing told, no file
+  local f tmp; f=$(pace_station_file "$1")
+  if [ "$2" = false ] && [ "$3" = false ]; then rm -f "$f"; return 0; fi
+  mkdir -p "$(dirname "$f")"
+  tmp=$(mktemp "$f.XXXXXX") || return 1
+  if jq -cn --argjson st "$2" --argjson h "$3" '{stretched: $st, held: $h}' > "$tmp"; then mv "$tmp" "$f"; else rm -f "$tmp"; return 1; fi
+}
+pace_launch_note() { # station: a start while the crew is paced is a start with the stretched tick (rearm_text says so)
+  case "$(stations_get "$1" '.role')" in orchestrator|reviewer|releaser|builder) ;; *) return 0 ;; esac
+  [ "$PACE_STATE" = active ] && [ "$PACE_LEVEL" -ge 1 ] && [ "$(idle_wake_state)" = off ] || return 0
+  pace_station_put "$1" true false
+}
+
+# Two steps, like the idle wake: pace_plan decides (0 = tell it now, the what in PACE_*), pace_send does
+# the restart as a plain statement. Only with idle_wake off: with it on the station holds no tick of its
+# own and the wake machinery already waits the longest and sends a builder no work at the hold.
+pace_plan() { # station → 0 when the station is to be restarted with a pace note now, else 1
+  local s=$1 role st cur stretched held want="" note
+  [ "$PACE_STATE" != unknown ] || return 1
+  role=$(stations_get "$s" '.role')
+  case "$role" in orchestrator|reviewer|releaser|builder) ;; *) return 1 ;; esac
+  st=$(idle_wake_state)
+  case "$st" in
+    off) ;;
+    on) rm -f "$(pace_station_file "$s")"; return 1 ;;   # a released tick is not stretched
+    *) return 1 ;;
+  esac
+  cur=$(pace_station_read "$s"); stretched=$(jq -r .stretched <<<"$cur"); held=$(jq -r .held <<<"$cur")
+  if [ "$PACE_STATE" = off ] || [ "$PACE_LEVEL" -eq 0 ]; then
+    if [ "$stretched" = true ] || [ "$held" = true ]; then want=release; fi
+  elif [ "$stretched" != true ]; then want=stretch
+  elif [ "$role" = builder ] && [ "$PACE_LEVEL" -ge 2 ] && [ "$held" != true ]; then want=hold
+  elif [ "$held" = true ] && [ "$PACE_LEVEL" -lt 2 ]; then want=unhold
+  fi
+  [ -n "$want" ] || return 1
+  halted && return 1
+  [ -n "$(stations_get "$s" '.sessionId')" ] || return 1
+  ! attached "$s" || return 1
+  between_turns "$s" || return 1
+
+  note=$(jq -r '.note // ""' <<<"$PACE")
+  local stretch_text="Stretch your tick to 45 minutes: if you hold a CronCreate tick, delete it (CronList, then CronDelete) and create it again at 45 minutes, and keep it there until the factory tells you otherwise."
+  local hold_text="Finish the step you are on, push, write in your report where you are and what comes next, then wait without starting new work until the factory tells you the plan has room again."
+  PACE_S=$s PACE_WANT=$want PACE_NEW_STRETCHED=true PACE_NEW_HELD=false
+  case "$want" in
+    stretch)
+      PACE_PROMPT="$note $stretch_text Carry on from your report."
+      if [ "$role" = builder ] && [ "$PACE_LEVEL" -ge 2 ]; then PACE_PROMPT="$note $stretch_text $hold_text"; PACE_NEW_HELD=true; fi ;;
+    hold)
+      PACE_PROMPT="$note $hold_text"; PACE_NEW_HELD=true ;;
+    unhold)
+      PACE_PROMPT="The plan's limit has room for builders again: pick up where your report says you stopped. Keep your tick at 45 minutes while the factory still paces the crew." ;;
+    release)
+      PACE_PROMPT="The factory has stopped pacing the crew (the plan has room, or pace was turned off). Put your tick back to its normal interval: delete the 45-minute CronCreate tick and create it again as your manual says. Then carry on from your report, including anything you held back."
+      PACE_NEW_STRETCHED=false ;;
+  esac
+  return 0
+}
+
+pace_send() { # the station pace_plan chose: restart it in the same conversation with the note; always returns 0
+  local s=$PACE_S want=$PACE_WANT prompt=$PACE_PROMPT rc
+  set +e
+  ( set -e; TARES_STATE=""; SETTINGS=""; CREW_PROJECTS=""
+    tares_on || exit 3
+    [ "$(idle_wake_state)" = off ] || exit 4   # the setting changed since the round began
+    ! halted || exit 4
+    ! attached "$s" || exit 4
+    between_turns "$s" || exit 4   # it started something since the first check
+    say "pacing: telling $s ($want) in the same conversation"
+    cmd_restart "$s" "$prompt"
+    event pace "$s" "$want" )
+  rc=$?
+  set -e
+  case $rc in
+    0) pace_station_put "$s" "$PACE_NEW_STRETCHED" "$PACE_NEW_HELD" || true ;;
+    3|4) ;;
+    *) say "could not tell $s about the pace; will try again next round" ;;
+  esac
+  return 0
+}
+
+pace_status_line() { # the pace in one line for crew status; nothing when it is off
+  tares_on || return 0
+  local p; p=$(tares_http GET /api/crew/pace 2>/dev/null) || return 0
+  jq -r '
+    def pc: if . == null then "-" else "\(.)%" end;
+    if .on != true then empty
+    elif .known != true then "pace: on, no reading of the plan limits yet"
+    else "pace: \(if .state == "ok" then "ok"
+                  elif .state == "slow" then "slow, no new builders and the longest ticks, until \(.["until"] // "the reset")"
+                  elif .state == "hold" then "hold, builders finish their step and wait, until \(.["until"] // "the reset")"
+                  else "at the limit, stopped stations wait for the reset, until \(.["until"] // "the reset")" end) (5-hour \(.session_pct | pc), week \(.weekly_pct | pc))"
+    end' <<<"$p" 2>/dev/null || true
+}
+
+WAKE_DEFAULT='{"seen":[],"n":0,"last_wake":null,"clock":null,"baseline":null,"released":false}'
+wake_file() { echo "$CREW_HOME/stations/$1.wake"; }
+wake_read() { # station → its wake state, the defaults under whatever the file has
+  local f; f=$(wake_file "$1")
+  if [ -f "$f" ] && jq -e . "$f" >/dev/null 2>&1; then jq -c --argjson d "$WAKE_DEFAULT" '$d + .' "$f"
+  else echo "$WAKE_DEFAULT"; fi
+}
+wake_update() { # station jq-filter [jq args]: apply the filter to the wake state, written whole
+  local s=$1 filter=$2 f tmp; shift 2
+  f=$(wake_file "$s"); mkdir -p "$(dirname "$f")"
+  tmp=$(mktemp "$f.XXXXXX") || return 1
+  if wake_read "$s" | jq -c "$@" "$filter" > "$tmp"; then mv "$tmp" "$f"; else rm -f "$tmp"; return 1; fi
+}
+iw_launch_note() { # station: a start with idle_wake on is a start with its tick released; off, with it back
+  case "$(stations_get "$1" '.role')" in orchestrator|reviewer|releaser|builder) ;; *) return 0 ;; esac
+  case "$(idle_wake_state)" in
+    on) wake_update "$1" '.released = true | .n = 0 | .clock = $now' --argjson now "$(now_s)" ;;
+    off) [ ! -f "$(wake_file "$1")" ] || wake_update "$1" '.released = false' ;;
+  esac
+}
+
+wake_base_min() { case "$1" in reviewer) echo 15 ;; orchestrator) echo 20 ;; *) echo 30 ;; esac; }
+station_updated() { # station → when its session last did anything, epoch seconds; empty when unknown
+  job_state "$(stations_get "$1" '.id')" | jq -r '((.updatedAt // "") | sub("\\.[0-9]+"; "") | fromdateiso8601?) // empty'
+}
+
+# What each role has to do, as {pending: [{key, text}], live: bool} (the orchestrator's also carries
+# the baseline it compares with). A key names one thing to do once. Fails when Tares can't be read.
+iw_scan_reviewer() { # the review queue's PRs without a current verdict, once per head
+  local q; q=$(tares_http GET /api/review-queue) || return 1
+  jq -c '[(.queue // [])[] | select(.verdict == null or ((.verdict.current // false) | not))
+      | {key: "rv:\(.project)/\(.ticket)@\(.head // "")",
+         text: "\(.project_name // .project) \(.ticket) at \((.head // "")[0:7])"}]
+    | {pending: ., live: true}' <<<"$q"
+}
+iw_scan_builder() { # the tickets it holds that need it: changes asked for, a verdict, or failed CI
+  local s=$1 project uid tickets
+  project=$(stations_get "$s" '.project')
+  uid=$(tares_http GET /api/crew/projects | jq -r --arg p "$project" '[(.projects // [])[] | select(.name == $p or .id == $p)][0].id // empty') || return 1
+  [ -n "$uid" ] || { echo '{"pending":[],"live":false}'; return 0; }
+  tickets=$(tares_http GET "/api/projects/$(uri "$uid")/tickets") || return 1
+  jq -c --arg s "$s" '[(.tickets // [])[] | select(.holder == $s and (.stage | IN("review", "changes")))] as $mine
+    | {live: (($mine | length) > 0),
+       pending: [$mine[] | . as $t | ($t.pr // {}) as $pr
+         | (if ($t.verdict // null) != null and ($t.verdict.current // false) and ($t.verdict.verdict | IN("pass", "changes", "block"))
+            then $t.verdict.verdict else "" end) as $vd
+         | select($t.stage == "changes" or $vd != "" or $pr.ci == "failure")
+         | {key: "bd:\($t.label)@\($pr.head // "")|\($vd)|\($pr.ci // "")",
+            text: "\($t.label) (\(if $vd != "" then "verdict \($vd)" elif $pr.ci == "failure" then "CI failed" else "changes asked for" end))"}]}' <<<"$tickets"
+}
+iw_scan_releaser() { # RELEASE lines under Undelivered in the orchestrator's report, once per line
+  local f="$CREW_HOME/reports/$(crew_orchestrator).md" line key
+  if [ ! -f "$f" ]; then echo '{"pending":[],"live":true}'; return 0; fi
+  while IFS= read -r line; do
+    line=$(sed 's/^[[:space:]]*//; s/[[:space:]]*$//' <<<"$line"); [ -n "$line" ] || continue
+    key="rl:$(printf '%s' "$line" | cksum | cut -d' ' -f1)"
+    jq -cn --arg k "$key" --arg t "$line" '{key: $k, text: $t}'
+  done < <(awk '/^## /{u = ($0 ~ /^## Undelivered/)} u && /(^|[^A-Za-z])RELEASE([^A-Za-z]|$)/' "$f") | jq -cs '{pending: ., live: true}'
+}
+iw_scan_orchestrator() { # desk answers closed, and projects handed over, since the baseline; the first look only sets it
+  local desk projs base act
+  desk=$(tares_http GET '/api/desk?state=answered') || return 1
+  projs=$(tares_http GET /api/crew/projects) || return 1
+  base=$(wake_read "$(crew_orchestrator)" | jq -c '.baseline')
+  act=$(station_updated "$(crew_orchestrator)"); act=${act:-null}   # an answer the orchestrator itself recorded is not news to it
+  jq -cn --argjson d "$desk" --argjson p "$projs" --argjson b "$base" --argjson act "$act" '
+    def secs: (capture("^(?<t>[0-9T:-]+)(\\.[0-9]+)?(?<z>Z|[+-][0-9]{2}:[0-9]{2})?$")
+               | ((.t + "Z" | fromdateiso8601)
+                  - (if (.z // "Z") == "Z" then 0
+                     else ((.z[0:1] + "1" | tonumber) * ((.z[1:3] | tonumber) * 3600 + (.z[4:6] | tonumber) * 60)) end))) ? // null;
+    [($d.desk // [])[] | select(.command == null and .closed_at != null)] as $ans
+    | ([$ans[].closed_at] | max // "") as $dmax
+    | [($p.projects // [])[].id] as $ids
+    | if $b == null then {first: true, pending: [], live: true, baseline: {desk: $dmax, projects: $ids}}
+      else {live: true,
+            pending: ([$ans[] | select(.closed_at > ($b.desk // ""))
+                        | select($act == null or ((.closed_at | secs) // ($act + 1)) > $act) | {key: "dk:\(.id)", text: "desk answer \(.label // .id) is closed"}]
+                    + [($p.projects // [])[] | select(.id as $i | (($b.projects // []) | index($i)) | not)
+                       | {key: "ph:\(.id)", text: "project \(.name // .id) was handed over"}]),
+            baseline: {desk: ([$dmax, ($b.desk // "")] | max), projects: ((($b.projects // []) + $ids) | unique)}}
+      end'
+}
+
+iw_work_prompt() { # role items
+  case "$1" in
+    reviewer) echo "There is work in the review queue: $2 have no current verdict. Work the queue." ;;
+    builder) echo "Your tickets changed: $2. Read the reviewer's verdict and CI on the current head and act on it, as your manual says." ;;
+    releaser) echo "A RELEASE is waiting for you in the orchestrator's report under Undelivered: $2. Take it as your manual says." ;;
+    *) echo "Something is waiting for you: $2. Follow the Tick section of your manual." ;;
+  esac
+}
+
+# Two steps, so the restart runs as a plain statement (errexit works there) and not inside a condition:
+# idle_wake_plan decides (0 = wake it, with the what and why in IW_*), idle_wake_send does the restart.
+idle_wake_plan() { # station → 0 when the station is to be woken now, else 1
+  local s=$1 role st
+  role=$(stations_get "$s" '.role')
+  case "$role" in orchestrator|reviewer|releaser|builder) ;; *) return 1 ;; esac
+  halted && return 1
+  [ -n "$(stations_get "$s" '.sessionId')" ] || return 1
+  st=$(idle_wake_state)
+  case "$st" in
+    on) ;;
+    off) [ "$(wake_read "$s" | jq -r '.released')" = true ] || return 1 ;;
+    *) return 1 ;;
+  esac
+  ! attached "$s" || return 1
+  between_turns "$s" || return 1
+
+  local now reason prompt keys="[]" baseline=null n=0 work=0
+  now=$(now_s)
+  if [ "$st" = off ]; then
+    reason=rearm; prompt="idle_wake is off again: re-arm your tick as your manual says."
+  else
+    local w scan upd plan
+    w=$(wake_read "$s")
+    scan=$(iw_scan_"$role" "$s") || return 1
+    upd=$(station_updated "$s")
+    plan=$(jq -cn --argjson w "$w" --argjson sc "$scan" --argjson now "$now" --argjson upd "${upd:-null}" \
+      --argjson settle "${FACTORY_WAKE_SETTLE:-600}" --argjson base "$(wake_base_min "$role")" \
+      --argjson pace "$PACE_LEVEL" --argjson hold "$([ "$role" = builder ] && [ "$PACE_LEVEL" -ge 2 ] && echo true || echo false)" '
+      def after($n): (if $pace >= 1 then 2700 elif $n == 0 then $base * 60 elif $n == 1 then 1800 else 2700 end);   # pacing (TR-674): the longest wait at once
+      ($w.clock // $now) as $c0
+      | (if $upd != null and $upd > (($w.last_wake // $c0) + $settle) then {n: 0, clock: $upd} else {n: $w.n, clock: $c0} end) as $r
+      | (if $sc.live then $r else {n: 0, clock: $now} end) as $r
+      | (if $hold then [] else [$sc.pending[] | select(.key as $k | ($w.seen | index($k)) | not)] end) as $new   # a builder told to hold gets no work wake
+      | {n: $r.n, clock: $r.clock, keys: [$sc.pending[].key], new: $new, baseline: ($sc.baseline // null), first: ($sc.first // false),
+         live: $sc.live, due: ($sc.live and ($now - $r.clock) >= after($r.n))}')
+    keys=$(jq -c '.keys' <<<"$plan"); baseline=$(jq -c '.baseline' <<<"$plan"); n=$(jq '.n' <<<"$plan")
+    wake_update "$s" '.clock = $p.clock | .n = $p.n | .seen = [.seen[] | select(. as $k | $p.keys | index($k))]
+      | (if $p.first then .baseline = $p.baseline else . end)
+      | (if $p.live then . else .released = true end)' --argjson p "$plan" || true   # a builder with no PR holds no tick
+    if [ "$(jq '.new | length' <<<"$plan")" -gt 0 ]; then
+      work=1; reason="work: $(jq -r '[.new[].text] | join("; ")' <<<"$plan")"
+      prompt="$(iw_work_prompt "$role" "$(jq -r '[.new[].text] | join("; ")' <<<"$plan")") $(idle_wake_note) Carry on from your report."
+      n=0
+    elif [ "$(jq -r '.live' <<<"$plan")" = true ] && [ "$(jq -r '.released' <<<"$w")" != true ]; then
+      # Switched on under a running station: it still holds the tick it armed itself, so tell it now.
+      reason="release: idle_wake was switched on, telling the station to drop its tick"
+      prompt="idle_wake was switched on. $(idle_wake_note) Carry on from your report."
+      n=0
+    elif [ "$(jq '.due' <<<"$plan")" = true ]; then
+      reason="liveness: wake $((n + 1)) with nothing pending"
+      prompt="Liveness check, nothing is known to be pending: check your queue once, then end the turn. $(idle_wake_note) Carry on from your report."
+      n=$((n + 1))
+    else
+      return 1
+    fi
+  fi
+  IW_S=$s IW_ST=$st IW_NOW=$now IW_REASON=$reason IW_PROMPT=$prompt IW_KEYS=$keys IW_BASELINE=$baseline IW_N=$n IW_WORK=$work
+  return 0
+}
+
+idle_wake_send() { # the station idle_wake_plan chose: restart it in the same conversation; always returns 0
+  local s=$IW_S st=$IW_ST now=$IW_NOW reason=$IW_REASON prompt=$IW_PROMPT keys=$IW_KEYS baseline=$IW_BASELINE n=$IW_N work=$IW_WORK
+  local rc
+  set +e
+  ( set -e; TARES_STATE=""; SETTINGS=""; CREW_PROJECTS=""
+    tares_on || exit 3
+    [ "$(idle_wake_state)" = "$st" ] || exit 4   # the setting changed since the round began
+    ! halted || exit 4
+    ! attached "$s" || exit 4
+    between_turns "$s" || exit 4   # it started something since the first check
+    say "waking $s (${reason%%:*}); restarting it in the same conversation"
+    cmd_restart "$s" "$prompt"
+    event idle_wake "$s" "$reason" )
+  rc=$?
+  set -e
+  case $rc in
+    0) wake_update "$s" '.last_wake = $now | .clock = $now | .n = $n | .released = $rel
+         | (if $work then .seen = $keys else . end) | (if $b != null then .baseline = $b else . end)' \
+         --argjson now "$now" --argjson n "$n" --argjson rel "$([ "$st" = on ] && echo true || echo false)" \
+         --argjson work "$([ $work = 1 ] && echo true || echo false)" --argjson keys "$keys" --argjson b "$baseline" || true
+       ;;
+    3|4) ;;
+    *) say "could not wake $s; will try again next round" ;;
+  esac
+  return 0
+}
+
+
+stale_kit() { # station kit → 0 when it runs another version, or from a frozen copy that is going away
+  [ "$(stations_get "$1" '.kit')" != "$2" ] || { ! upgrades_frozen && on_frozen_copy "$1"; }
+}
 movable() { # station kit → 0 when it runs another version, has a conversation to resume, and is quiet
-  [ "$(stations_get "$1" '.kit')" != "$2" ] && [ -n "$(stations_get "$1" '.sessionId')" ] && quiet "$1"
+  stale_kit "$1" "$2" && [ -n "$(stations_get "$1" '.sessionId')" ] && quiet "$1"
 }
 
 upgrade_station() { # station kit: restart it on the new version, in the same conversation
@@ -1285,9 +1793,10 @@ upgrade_station() { # station kit: restart it on the new version, in the same co
   ( set -e; TARES_STATE=""; SETTINGS=""; CREW_PROJECTS=""
     tares_on || exit 3   # without Tares there are no settings to restart it with
     crew_settings >/dev/null
+    ! upgrades_frozen || exit 4   # frozen since the round began
     quiet "$s" || exit 4   # it started something since the first check
     say "$s runs an older version of the plugin; restarting it on this one now that it's idle, in the same conversation"
-    cmd_restart "$s" "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-$skill (they may have changed), re-read your report, re-arm your schedule if you have one, then carry on where you were."
+    cmd_restart "$s" "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-$skill (they may have changed), re-read your report, $(rearm_text), then carry on where you were."
     event upgraded "$s" "$kit" )
   rc=$?
   set -e
@@ -1298,6 +1807,342 @@ upgrade_station() { # station kit: restart it on the new version, in the same co
   esac
 }
 
+# ---------- Claude Code updates ----------
+# A new Claude Code is installed by swapping a symlink, and a running station keeps the version it
+# started on. The watch moves each station onto the new one like a plugin update: one idle station a
+# round, in the same conversation, the orchestrator last. Claude Code's daemon also keeps pre-warmed
+# spare sessions, and a restart can claim one of an older version, so a station is only counted as
+# moved once its process is seen running the new version (TR-669).
+claude_version() { # → the version `claude` on PATH is now (2.1.310); empty when it can't be read
+  "$CLAUDE" --version 2>/dev/null | head -1 | grep -Eo '^[0-9]+(\.[0-9]+)+[^ ]*' || true
+}
+
+older_than() { # version target → 0 when version is a lower Claude Code version than target; unknown is never older
+  [ -n "$1" ] && [ -n "$2" ] && [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$1" ]
+}
+
+# The version a session's process runs. Claude Code's list may give it; if not, a station's pid is a
+# `bg-spare` process under a pty host whose command line names the binary it runs (.../versions/<v>).
+running_version() { # session id [agents json] → its version; empty when it can't be told
+  local agents=${2:-} e v pid p
+  [ -n "$1" ] || return 0
+  [ -n "$agents" ] || agents=$(active_json) || return 0
+  e=$(jq -r --arg id "$1" '.[] | select(.id == $id) | [(.version // ""), ((.pid // "") | tostring)] | join(" ")' <<<"$agents" | head -1) || return 0
+  v=${e%% *}; pid=${e#* }
+  if [ -n "$v" ]; then echo "$v"; return 0; fi
+  [ -n "$pid" ] || return 0
+  for p in "$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')" "$pid"; do
+    [ -n "$p" ] || continue
+    v=$(ps -o command= -p "$p" 2>/dev/null | grep -Eo '/versions/[0-9][^ /]*' | head -1 | cut -d/ -f3) || true
+    if [ -n "$v" ]; then echo "$v"; return 0; fi
+  done
+  return 0
+}
+station_cc() { running_version "$(stations_get "$1" '.id')" "${2:-}"; } # station [agents json] → its version
+
+# The pre-warmed spares of an older version that nobody has claimed yet (their claim socket is still
+# there): stopped before a restart, so the restart can't land on one.
+prune_spares() { # target version
+  local pid cmd sock v
+  while read -r pid cmd; do
+    case "$cmd" in *bg-pty-host*--bg-spare*.claim.sock*) ;; *) continue ;; esac
+    sock=$(grep -Eo -- '--bg-spare [^ ]+\.claim\.sock' <<<"$cmd" | cut -d' ' -f2) || continue
+    [ -e "$sock" ] || continue   # claimed: a session runs in it
+    v=$(grep -Eo '/versions/[0-9][^ /]*' <<<"$cmd" | head -1 | cut -d/ -f3) || true
+    older_than "$v" "$1" || continue
+    [ -e "$sock" ] || continue   # claimed since the listing: leave it
+    kill "$pid" 2>/dev/null && event spare-pruned "" "$v"
+  done < <(ps -axo pid=,command= 2>/dev/null)
+  return 0
+}
+
+duplicate_sessions() { # → a line "name: id, id" for each station that more than one live session answers to
+  [ -f "$STATIONS" ] || return 0
+  active_json | jq -r --argjson names "$(jq -c 'keys' "$STATIONS")" "$GONE"'
+    map(select((.name // "") as $n | ($names | index($n)) and (gone | not))) | group_by(.name)[] | select(length > 1)
+    | "\(.[0].name): \(map(.id) | join(", "))"'
+}
+
+# Whether the watch may move stations onto a new Claude Code: the crew setting claude_update (default
+# on), for people who pin a version. Tares not answering counts as off for this round.
+claude_auto() {
+  local s; s=$(SETTINGS=""; crew_settings 2>/dev/null) || return 1
+  [ "$(jq -r '.claude_update' <<<"$s")" != false ]
+}
+
+cc_behind() { # target [agents json] → how many stations that matter run an older Claude Code
+  local target=$1 agents=${2:-} s n=0
+  [ -n "$agents" ] || agents=$(active_json) || { echo 0; return 0; }
+  for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS" 2>/dev/null); do
+    [ -f "$CREW_HOME/stations/$s.done" ] && continue
+    older_than "$(station_cc "$s" "$agents")" "$target" && n=$((n + 1))
+  done
+  echo "$n"
+}
+
+# A frozen crew moves no station onto a newer Claude Code either, but says so: once for each version.
+tell_newer_claude() { # live Claude Code version
+  local n; n=$(cc_behind "$1")
+  if [ "$n" = 0 ]; then rm -f "$CC_NEWER_FILE"; return 0; fi
+  [ "$(cat "$CC_NEWER_FILE" 2>/dev/null)" != "$1" ] || return 0
+  say "Claude Code $1 is newer than the one $n station(s) run; not moving stations while the kit is frozen ($ME crew unfreeze lets them follow it)"
+  event claude-newer "" "$1"
+  echo "$1" > "$CC_NEWER_FILE"
+}
+
+# A station whose move onto $2 kept landing on an older spare waits out a backoff before the watch tries
+# again (cc_failed names the version it failed for, cc_retry_at is when the next try is due).
+cc_backoff() { # station target → 0 while the station is waiting out the backoff after a failed move onto target
+  [ "$(stations_get "$1" '.cc_failed')" = "$2" ] && [ "$(date +%s)" -lt "$(stations_get "$1" '.cc_retry_at')" ] 2>/dev/null
+}
+
+cc_movable() { # station target → 0 when the watch may restart it now: conversation to resume, quiet, nobody attached
+  [ -n "$(stations_get "$1" '.sessionId')" ] && ! cc_backoff "$1" "$2" && ! attached "$1" && quiet "$1"
+}
+
+# The one station to move this round: a station on an older Claude Code that is idle, then a helper, the
+# orchestrator only once no other station is behind. A helper never holds the orchestrator back, since a
+# helper can work for a long time; finished builders stay stopped, and a station backing off after a failed
+# move does not hold the orchestrator back either. A station that is not running shows no version, so is not behind.
+cc_pick() { # target → a station name, or nothing
+  local target=$1 s agents others_behind=0 orch="" helper="" v role
+  agents=$(active_json) || return 0
+  for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS" 2>/dev/null); do
+    role=$(stations_get "$s" '.role')
+    [ "$role" = helper ] || [ ! -f "$CREW_HOME/stations/$s.done" ] || continue
+    v=$(station_cc "$s" "$agents"); older_than "$v" "$target" || continue
+    case "$role" in
+      orchestrator) orch=$s; continue ;;
+      helper) [ -n "$helper" ] || ! cc_movable "$s" "$target" || helper=$s; continue ;;
+    esac
+    cc_backoff "$s" "$target" && continue
+    others_behind=1
+    if cc_movable "$s" "$target"; then echo "$s"; return 0; fi
+  done
+  if [ -n "$helper" ]; then echo "$helper"; return 0; fi
+  if [ $others_behind = 0 ] && [ -n "$orch" ] && cc_movable "$orch" "$target"; then echo "$orch"; fi
+  return 0
+}
+
+# The seconds a station waits before the watch tries to move it again, after $1 failed moves onto the same
+# version: FACTORY_CC_BACKOFF, doubling each time, never past FACTORY_CC_BACKOFF_MAX.
+cc_delay() { # failed moves so far → seconds
+  local n=$1 d=${FACTORY_CC_BACKOFF:-600} max=${FACTORY_CC_BACKOFF_MAX:-14400}
+  while [ "$n" -gt 1 ] && [ "$d" -lt "$max" ]; do d=$((d * 2)); n=$((n - 1)); done
+  [ "$d" -le "$max" ] || d=$max
+  echo "$d"
+}
+
+cc_retry_in() { # station → how long until the watch tries it again: "10 min", "3 h"
+  local at n; at=$(stations_get "$1" '.cc_retry_at'); case $at in ''|*[!0-9]*) at=0 ;; esac
+  n=$(( (at - $(date +%s) + 59) / 60 )); [ $n -ge 1 ] || n=1
+  if [ $n -ge 120 ]; then echo "$(( (n + 59) / 60 )) h"; else echo "$n min"; fi
+}
+
+cc_retrying() { # station target → 0 when a move of the station onto target failed and the watch is retrying it
+  [ "$(stations_get "$1" '.cc_failed')" = "$2" ]
+}
+
+# Tell Tares which stations are retrying a move, so the Crew page can flag them: the CLI is the only
+# one that knows (the marks are in stations.json). Best effort; the roster has the same marks. Only a
+# mark for the Claude Code now installed counts, on a station that is still behind it and not retired:
+# a station that moved some other way, a retired one or a mark for an older version is left out. The
+# watch sends it every round, so the list never outlives the mark.
+cc_retry_sync() {
+  tares_on || return 0
+  local tok body target agents s rows="[]" t
+  target=$(claude_version); agents=$(active_json) || return 0
+  for s in $(jq -r 'to_entries[] | select(.value.status == "active" and (.value.cc_failed // "") != "") | .key' "$STATIONS" 2>/dev/null); do
+    [ -f "$CREW_HOME/stations/$s.done" ] && continue
+    t=$(stations_get "$s" '.cc_failed'); [ "$t" = "$target" ] || continue
+    older_than "$(station_cc "$s" "$agents")" "$target" || continue
+    rows=$(jq -c --arg k "$s" --arg t "$t" --argjson n "$(jq -n --arg v "$(stations_get "$s" '.cc_fails')" '$v|tonumber? // 1')" \
+      --argjson at "$(jq -n --arg v "$(stations_get "$s" '.cc_retry_at')" '$v|tonumber? // 0')" '. + [{key: $k, value: {target: $t, fails: $n, next_at: $at}}]' <<<"$rows")
+  done
+  body=$(jq -c '{stations: from_entries}' <<<"$rows") || return 0
+  tok=$(tares_token)
+  { [ -n "$tok" ] && printf 'Authorization: Bearer %s\n' "$tok"; true; } | curl -sS -o /dev/null --max-time 3 -X PUT -H @- \
+    -H 'Content-Type: application/json' --data "$body" "$TARES/api/crew/claude-retry" 2>/dev/null || true
+}
+
+# Restart a station on the Claude Code now on PATH, in the same conversation, and check its process
+# runs it; an older spare from the pool is stopped and the restart tried again. When the tries keep
+# landing on an old spare, the last one starts the station in a new conversation (once per version), so
+# the station is never left on the old version. Exit status: 0 it runs the new version (or its version
+# can't be told), 3 Tares doesn't answer, 4 it isn't idle any more or the crew is halted, 5 an older
+# spare came back every time (the station is marked cc_failed with a retry time, and the watch tries
+# again after a backoff), 6 the plan's limit is full (pace, TR-674: a restart is a model turn into a limit
+# that has not reset), 1 anything else. It runs in a subshell with its own errexit, so the caller turns
+# errexit off around the call (`set +e; claude_move ...; rc=$?; set -e`): `claude_move ... && ... || ...`
+# would turn it off inside the subshell too.
+claude_move() { # station target
+  local s=$1 target=$2
+  set +e
+  ( set -e; TARES_STATE=""; SETTINGS=""; CREW_PROJECTS=""
+    tares_on || exit 3   # without Tares there are no settings to restart it with
+    crew_settings >/dev/null
+    ! halted || exit 4
+    pace_read || true; ! pace_closed || exit 6   # also the reading the restart prompt's schedule wording comes from
+    { quiet "$s" && ! attached "$s"; } || exit 4   # it started something, or someone opened it, since the first check
+    local skill try=0 tries=${FACTORY_CC_TRIES:-3} total v prompt fresh_prompt fails at helper=0
+    skill=$(stations_get "$s" '.role'); [ "$skill" != helper ] || { helper=1; skill=$(parent_role "$(stations_get "$s" '.parent')"); }
+    prompt="Claude Code was updated to $target, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-$skill, re-read your report, $(rearm_text), then carry on where you were."
+    fresh_prompt="Claude Code was updated to $target, but your old conversation kept coming back on an older Claude Code, so the factory started you again under the same name, in a new conversation, on $target. Nothing from the old one carries over except your report and what is on Tares. Reload the skills factory-protocol and station-$skill, re-read your report and your work on Tares, $(rearm_text), then carry on where your report left off."
+    total=$tries; [ "$(stations_get "$s" '.cc_fresh')" = "$target" ] || total=$((tries + 1))   # one new conversation per version
+    [ $helper = 0 ] || total=$tries   # a helper's task lives only in its conversation (its spawn prompt), so it is never started fresh: it is retried after a backoff instead
+    while [ $try -lt "$total" ]; do
+      try=$((try + 1))
+      if [ $try -gt 1 ]; then ! halted && ! attached "$s" || exit 4; pace_read || true; ! pace_closed || exit 6; fi   # the first restart started it on the prompt, so only a halt or someone opening it stops a retry
+      prune_spares "$target"
+      if [ $try -gt "$tries" ]; then
+        say "$s still comes back on an older Claude Code after $tries tries; starting it again in a new conversation on $target"
+        cmd_restart "$s" --fresh "$fresh_prompt"
+        stations_put "$s" "$(jq -n --arg t "$target" '{cc_fresh: $t}')"   # after the restart: one that died leaves the new conversation to a later round
+      else
+        cmd_restart "$s" "$prompt"
+      fi
+      v=""; for _ in 1 2 3 4 5 6; do v=$(station_cc "$s"); [ -n "$v" ] && break; sleep "${FACTORY_PAUSE:-2}"; done
+      if ! older_than "$v" "$target"; then
+        [ -n "$v" ] || say "could not tell which Claude Code $s runs; taking it for $target"
+        stations_put "$s" '{"cc_failed": null, "cc_fails": null, "cc_retry_at": null, "cc_fresh": null}'
+        cc_retry_sync || true
+        event claude-updated "$s" "${v:-$target}"
+        exit 0
+      fi
+      say "$s came back on Claude Code $v, an older spare from Claude Code's pool, not $target; stopping it and starting it again"
+      event stale-spare "$s" "$v"
+    done
+    fails=0; [ "$(stations_get "$s" '.cc_failed')" != "$target" ] || fails=$(stations_get "$s" '.cc_fails')
+    case $fails in ''|*[!0-9]*) fails=0 ;; esac
+    fails=$((fails + 1)); at=$(( $(date +%s) + $(cc_delay "$fails") ))
+    stations_put "$s" "$(jq -n --arg t "$target" --argjson n "$fails" --argjson at "$at" '{cc_failed: $t, cc_fails: $n, cc_retry_at: $at}')"
+    cc_retry_sync || true
+    event claude-retry "$s" "$target"
+    exit 5 )
+  return $?
+}
+
+watch_claude_move() { # station target: the watch's turn at claude_move, with what it says
+  local s=$1 target=$2 rc dup
+  SETTINGS=""; ! upgrades_frozen || return 0   # frozen since the round began: the freeze wins
+  pace_read || true; ! pace_closed || return 0   # the plan's limit filled since the round began: wait for the reset (TR-674)
+  say "$s runs an older Claude Code than $target; restarting it on $target now that it's idle, in the same conversation"
+  set +e; claude_move "$s" "$target"; rc=$?; set -e
+  case $rc in
+    0) say "$s runs Claude Code $target"
+       dup=$(duplicate_sessions) || dup=""
+       [ -z "$dup" ] || { say "TWO SESSIONS named $dup; stop the one stations.json does not list (factory roster)"; event two-sessions "$s" "$dup"; } ;;
+    3) say "Tares doesn't answer; $s moves onto Claude Code $target once it does" ;;
+    4|6) ;;
+    5) if [ "$(stations_get "$s" '.role')" = helper ]; then
+         say "$s keeps coming back on an older Claude Code than $target (an old pre-warmed spare in Claude Code's pool); a helper keeps its conversation, since its task is only there; the watch tries again in $(cc_retry_in "$s"), and $ME crew update tries again now"
+       else
+         say "$s keeps coming back on an older Claude Code than $target (an old pre-warmed spare in Claude Code's pool), even in a new conversation; the watch tries again in $(cc_retry_in "$s"), and $ME crew update tries again now"
+       fi ;;
+    *) if [ "$(stations_get "$s" '.role')" = helper ]; then
+         say "could not restart $s on Claude Code $target; the watch does not revive helpers, so ask $(stations_get "$s" '.parent') to spawn it again if it is down"
+       else
+         say "could not restart $s on Claude Code $target; the watch revives it as before, and no other station moves until it is up"
+       fi ;;
+  esac
+}
+
+cmd_crew_update() { # [--force] [--wait seconds]: every station onto the Claude Code now on PATH, each when idle, the orchestrator last
+  require_crew
+  local force=0 limit=1800 self="" mine=${FACTORY_STATION:-}
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force) force=1; shift ;;
+      --wait) [ $# -ge 2 ] || die "--wait takes a number of seconds"
+              limit=$2
+              case $limit in ''|*[!0-9]*) die "--wait takes a number of seconds, not '$limit'" ;; esac
+              while [ ${#limit} -gt 1 ] && [ "${limit#0}" != "$limit" ]; do limit=${limit#0}; done   # 00 is 0, no deadline
+              [ ${#limit} -le 9 ] || die "--wait takes a number of seconds, at most 9 digits, not '$limit'"
+              shift 2 ;;
+      *) die "usage: $ME crew update [--force] [--wait <seconds>]" ;;
+    esac
+  done
+  halted && die "the crew is halted ($(jq -r .reason "$HALT_FILE" 2>/dev/null)); $ME crew resume first"
+  local target; target=$(claude_version); [ -n "$target" ] || die "could not read the Claude Code version ($CLAUDE --version)"
+  pace_read || true
+  ! pace_closed || die "the plan's limit is full${PACE_UNTIL:+ until $PACE_UNTIL}, and a restart is a model turn into it; $ME crew update again after it resets"
+  [ -f "$STATIONS" ] || { say "no stations recorded"; return 0; }
+  local agents; agents=$(active_json) || die "$UNREAD"
+  local s v others="" orch="" failed=""
+  for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS"); do
+    if [ -n "$mine" ] && [ "$s" = "$mine" ]; then   # the station running this command can't wait for itself
+      v=$(station_cc "$s" "$agents")
+      if [ $force = 1 ] || [ -z "$v" ] || older_than "$v" "$target"; then self=$s; else say "$s already runs Claude Code $v"; fi
+      continue
+    fi
+    if [ -f "$CREW_HOME/stations/$s.done" ] || ! is_alive "$s"; then say "$s is stopped; it starts on Claude Code $target when the watch revives it"; continue; fi
+    if [ -z "$(stations_get "$s" '.sessionId')" ]; then say "$s has no conversation to resume; $ME restart $s --fresh starts it again"; failed="$failed $s"; continue; fi
+    v=$(station_cc "$s" "$agents")
+    if [ $force = 0 ] && [ -n "$v" ] && ! older_than "$v" "$target"; then say "$s already runs Claude Code $v"; continue; fi
+    if [ "$(stations_get "$s" '.role')" = orchestrator ]; then orch="$orch $s"; else others="$others $s"; fi
+  done
+  local deadline=0; [ "$limit" = 0 ] || deadline=$(( $(date +%s) + limit ))
+  local group left still rc told dup
+  for group in "$others" "$orch"; do
+    left=$group; told=""
+    while [ -n "${left// /}" ]; do
+      halted && die "the crew was halted; nothing more was restarted ($ME crew resume, then crew update again)"
+      still=""
+      for s in $left; do
+        if ! quiet "$s" || attached "$s"; then still="$still $s"; continue; fi
+        say "restarting $s on Claude Code $target, in the same conversation"
+        set +e; claude_move "$s" "$target"; rc=$?; set -e
+        case $rc in
+          0) say "$s runs Claude Code $target" ;;
+          4) still="$still $s" ;;
+          6) pace_read || true
+             die "the plan's limit is full${PACE_UNTIL:+ until $PACE_UNTIL}, and a restart is a model turn into it; nothing more was restarted ($ME crew update again after it resets)" ;;
+          5) if [ "$(stations_get "$s" '.role')" = helper ]; then
+               say "$s came back on an older Claude Code each time (an old pre-warmed spare in Claude Code's pool); a helper keeps its conversation, since its task is only there; the watch tries again in $(cc_retry_in "$s"), or run $ME crew update again"
+             else
+               say "$s came back on an older Claude Code each time, even in a new conversation (an old pre-warmed spare in Claude Code's pool); the watch tries again in $(cc_retry_in "$s"), or run $ME crew update again"
+             fi
+             failed="$failed $s" ;;
+          3) die "Tares doesn't answer; nothing more was restarted" ;;
+          *) if [ "$(stations_get "$s" '.role')" = helper ]; then
+               say "could not restart $s on Claude Code $target; the watch does not revive helpers, so ask $(stations_get "$s" '.parent') to spawn it again if it is down"
+             else
+               say "could not restart $s on Claude Code $target"
+             fi
+             failed="$failed $s" ;;
+        esac
+      done
+      left=$still
+      [ -n "${left// /}" ] || break
+      if [ $deadline != 0 ] && [ "$(date +%s)" -ge $deadline ]; then
+        say "gave up waiting for$left to be idle"; failed="$failed$left"; break
+      fi
+      for s in $left; do
+        case " $told " in *" $s "*) ;; *) say "waiting for $s to be idle ($(attached "$s" && echo "someone has it open" || echo "it is working"))"; told="$told $s" ;; esac
+      done
+      sleep "${FACTORY_UPDATE_POLL:-5}"
+    done
+  done
+  dup=$(duplicate_sessions) || die "$UNREAD; could not check for two sessions under one station name"
+  if [ -n "$dup" ]; then
+    echo "$dup" | while IFS= read -r s; do say "TWO SESSIONS named $s; stop the one stations.json does not list (factory roster)"; done
+    failed="$failed two-sessions"
+  fi
+  local selfnote="$self, which ran this command, can only be restarted from another session: run $ME restart $self there"
+  if [ -n "$self" ] && older_than "$(station_cc "$self" "$agents")" "$target" && claude_auto && ! upgrades_frozen; then   # the watch moves a station that is behind, unless claude_update is off or the crew is frozen; one that is not behind, or whose version can't be read, stays
+    selfnote="$self, which ran this command, moves when $ME crew watch finds it idle, or run $ME restart $self from another session"
+  fi
+  if [ -n "${failed// /}" ]; then
+    [ -z "$self" ] || say "$selfnote"
+    die "not every station runs Claude Code $target:$failed"
+  fi
+  if [ -n "$self" ]; then
+    say "every other station runs Claude Code $target, one session each; $selfnote"
+  else
+    say "every station runs Claude Code $target, one session each"
+  fi
+}
+
 cmd_halt() {
   require_crew
   jq -cn --arg r "${1:-halted by the human}" '{at: (now | todate), reason: $r}' > "$HALT_FILE"
@@ -1306,6 +2151,76 @@ cmd_halt() {
   say "tell the orchestrator too ($ME crew attach orchestrator) so it sends HALT to every station"
 }
 cmd_resume() { require_crew; rm -f "$HALT_FILE"; event resume; say "crew resumed"; }
+
+frozen_text() { # → "since <time> by <who>" from the freeze recorded in this round's settings
+  if [ -n "$(frozen_field at)" ]; then echo "since $(frozen_field at) by $(frozen_field by)"
+  else echo "(Tares does not say since when)"; fi
+}
+# Said once for each distinct kit newer than the frozen one, and again only for another change.
+tell_newer_kit() { # live kit
+  local was; was=$(frozen_field version)
+  [ -n "$was" ] || return 0
+  if [ "$1" = "$was" ]; then rm -f "$NEWER_FILE"; return 0; fi
+  [ "$(cat "$NEWER_FILE" 2>/dev/null)" != "$1" ] || return 0
+  say "kit $1 is newer than the frozen kit $was; not moving stations ($ME crew unfreeze lets them follow it)"
+  event kit-newer "" "$1"
+  echo "$1" > "$NEWER_FILE"
+}
+# The frozen copy goes once no station runs from it; until then a station that does would lose its hooks.
+# A freeze under way (its marker, ignored once 5 minutes old) has the copy before Tares has the setting.
+freezing() { [ -n "$(find "$FREEZING" -mmin -5 2>/dev/null)" ]; }
+reap_frozen_copy() {
+  [ -d "$FROZEN_KIT" ] && ! frozen_copy_in_use && ! freezing || return 0
+  rm -rf "$FROZEN_KIT" "$NEWER_FILE" "$CC_NEWER_FILE" "$CHECKOUT_FILE"
+}
+
+freeze_fail() { # made-a-copy message: nothing of a freeze that did not happen stays behind
+  rm -f "$FREEZING"; [ "$1" = 0 ] || rm -rf "$FROZEN_KIT" "$CHECKOUT_FILE"
+  die "$2"
+}
+cmd_freeze() {
+  require_crew
+  SETTINGS=""; crew_settings >/dev/null || die "could not read the crew settings from Tares at $TARES$(no_key_hint)"
+  if upgrades_frozen; then say "the kit is already frozen $(frozen_text); $ME crew unfreeze lifts it"; return 0; fi
+  touch "$FREEZING"
+  local made=0 version out
+  if frozen_copy_in_use; then
+    [ "$(kit_version "$FROZEN_KIT")" = "$(kit_version)" ] \
+      || freeze_fail 0 "stations still run from the kit copy of an earlier freeze, and the checkout has changed since: wait until $ME crew watch has moved them ($ME crew status), then freeze again"
+  else
+    made=1
+    rm -rf "$FROZEN_KIT.new"; mkdir -p "$FROZEN_KIT.new"
+    cp -R "$KIT_PLUGIN/." "$FROZEN_KIT.new/" || { rm -rf "$FROZEN_KIT.new"; freeze_fail 0 "could not copy the kit to $FROZEN_KIT"; }
+    rm -rf "$FROZEN_KIT"; mv "$FROZEN_KIT.new" "$FROZEN_KIT"
+  fi
+  echo "$KIT_PLUGIN" > "$CHECKOUT_FILE"
+  version=$(kit_version "$FROZEN_KIT")
+  out=$(tares_http PUT /api/crew/settings "$(jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg by "${FACTORY_STATION:-$(id -un)}" --arg v "$version" \
+    '{kit: {frozen: {at: $at, by: $by, version: $v}}}')") || freeze_fail $made "could not save the freeze on Tares at $TARES$(no_key_hint)"
+  jq -e --arg v "$version" '.kit.frozen.version == $v' <<<"$out" >/dev/null \
+    || freeze_fail $made "Tares at $TARES did not keep the freeze; it needs a newer version"
+  rm -f "$FREEZING"
+  SETTINGS=""; crew_settings >/dev/null || true
+  rm -f "$NEWER_FILE" "$CC_NEWER_FILE"
+  event freeze "" "$version"
+  say "kit frozen $(frozen_text): stations that start or revive use this kit; running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit. $ME crew unfreeze lifts it."
+}
+
+cmd_unfreeze() {
+  require_crew
+  SETTINGS=""; crew_settings >/dev/null || die "could not read the crew settings from Tares at $TARES$(no_key_hint)"
+  upgrades_frozen || { say "the kit is not frozen"; return 0; }
+  tares_http PUT /api/crew/settings '{"kit": {"frozen": null}}' >/dev/null || die "could not lift the freeze on Tares at $TARES$(no_key_hint)"
+  SETTINGS=""
+  rm -f "$NEWER_FILE" "$CC_NEWER_FILE"
+  event unfreeze
+  if frozen_copy_in_use; then
+    say "kit unfrozen: the watch moves each station onto the checkout's kit when it's idle, and removes $FROZEN_KIT once none runs from it"
+  else
+    rm -rf "$FROZEN_KIT" "$CHECKOUT_FILE"
+    say "kit unfrozen: the watch moves each station onto the checkout's kit when it's idle"
+  fi
+}
 
 desk_json() { tares_http GET "/api/desk?state=open" 2>/dev/null | jq -c '.desk // []' || echo '[]'; }
 
@@ -1345,7 +2260,7 @@ cmd_status() {
   else echo "no stations running; $ME crew up starts them"; fi
   for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS"); do
     case "$(stations_get "$s" '.role')" in helper) ;; *)
-      [ "$(stations_get "$s" '.kit')" = "$kit" ] || [ -f "$CREW_HOME/stations/$s.done" ] || old=$((old + 1)) ;;
+      stale_kit "$s" "$kit" && [ ! -f "$CREW_HOME/stations/$s.done" ] && old=$((old + 1)) ;;
     esac
     local id role model effort st job tempo detail needs
     id=$(stations_get "$s" '.id'); role=$(stations_get "$s" '.role')
@@ -1363,8 +2278,23 @@ cmd_status() {
   done
   active_json | jq -r --arg c "$(crew_name)" "$GONE"' map(select(((.name // "") | test("^" + $c + "-|-build-")) and (gone | not))) | group_by(.name)[] | select(length > 1)
     | "TWO SESSIONS named \(.[0].name): \(map(.id) | join(", ")); stop the one stations.json does not list (factory roster)"' || true
-  [ $old = 0 ] || echo "plugin: $old station(s) run an older version; $ME crew watch moves each onto this one when it's idle"
+  local frozen=0; upgrades_frozen && frozen=1
+  if [ $old = 0 ]; then :
+  elif [ $frozen = 1 ]; then echo "plugin: $old station(s) run an older version; the freeze holds them ($ME crew unfreeze lets the watch move each onto the checkout's)"
+  else echo "plugin: $old station(s) run an older version; $ME crew watch moves each onto this one when it's idle"; fi
+  local cc_target cc_old cc_retry=0 cc_s; cc_target=$(claude_version); cc_old=$(cc_behind "$cc_target" "$agents")
+  for cc_s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS" 2>/dev/null); do
+    cc_retrying "$cc_s" "$cc_target" && older_than "$(station_cc "$cc_s" "$agents")" "$cc_target" && cc_retry=$((cc_retry + 1))
+  done
+  if [ "$cc_old" = 0 ]; then :
+  elif [ $frozen = 1 ]; then echo "claude code: $cc_old station(s) run an older Claude Code than $cc_target; the freeze stops the watch moving them ($ME crew unfreeze lets it; $ME crew update does it now; one that restarts starts on $cc_target)"
+  else echo "claude code: $cc_old station(s) run an older Claude Code than $cc_target; $ME crew watch moves each onto it when it's idle ($ME crew update does it now; $ME roster shows each version)$([ "$cc_retry" = 0 ] || echo "; $cc_retry retrying after coming back on an old spare")"; fi
   halted && echo "HALTED: $(jq -r .reason "$HALT_FILE" 2>/dev/null)"
+  if [ $frozen = 1 ]; then
+    echo "FROZEN: the kit $(frozen_text); stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit$([ "$kit" = "$(frozen_field version)" ] || echo " (a newer kit is available)")"
+  fi
+  idle_wake_on && echo "idle_wake: on, the watch wakes a station when it has work and holds its tick (a liveness wake after 15, 20 or 30 minutes of quiet, then 30, then every 45)"
+  pace_status_line
   local wp; if wp=$(watch_pid); then echo "watch: running (pid $wp), it revives any station that stops and gives one a permission you allowed in Tares; log in $WATCH_LOG"
   else echo "watch: not running; $ME crew up starts it (or run $ME crew watch yourself)"; fi
   local items n; items=$(desk_json)
@@ -1533,8 +2463,22 @@ cmd_roster() { # compact, for stations
     | .value.id as $id | $a[] | select(.id == $id and (gone | not)) | .name' "$STATIONS" | head -1)
   [ -z "$title" ] || [ "$title" = "$(crew_orchestrator)" ] || \
     say "Orchestrator session title is $title, expected $(crew_orchestrator): messages to it will not arrive"
-  jq -r --argjson a "$agents" "$GONE $TURN"' to_entries[] | select(.value.status == "active") |
-    "\(.key)\t\(.value.role)\t\(.value.project // "")\t\((.value.id) as $id | ([$a[] | select(.id == $id and (gone | not)) | turn][0] // "gone"))"' "$STATIONS"
+  # the fifth column is the Claude Code each station's process runs, flagged when it is older than the one installed
+  local target s v row rows out=""; target=$(claude_version)
+  rows=$(jq -r --argjson a "$agents" "$GONE $TURN"' to_entries[] | select(.value.status == "active") |
+    "\(.key)\t\(.value.role)\t\(.value.project // "")\t\((.value.id) as $id | ([$a[] | select(.id == $id and (gone | not)) | turn][0] // "gone"))"' "$STATIONS")
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    s=${row%%$'\t'*}
+    v=$(station_cc "$s" "$agents")
+    if older_than "$v" "$target"; then
+      v="$v (older than $target"
+      if cc_retrying "$s" "$target"; then v="$v, retrying in $(cc_retry_in "$s")"; fi
+      v="$v)"
+    fi
+    out="$out$row"$'\t'"$v"$'\n'
+  done <<<"$rows"
+  printf '%s' "$out"   # in one write, so a reader that stops early never breaks a pipe
 }
 
 cmd_attach() { require_crew; local id; id=$(stations_get "$(station_name "${1:?usage: $ME crew attach <role|station>}")" '.id'); [ -n "$id" ] || die "unknown station $1"; exec "$CLAUDE" attach "$id"; }
@@ -1560,7 +2504,11 @@ cmd_crew() {
     watch) cmd_watch "$@" ;;
     halt) cmd_halt "$@" ;;
     resume) cmd_resume ;;
-    *) die "$ME crew takes up, down, status, desk, attach, logs, watch, halt or resume" ;;
+    freeze) cmd_freeze ;;
+    unfreeze) cmd_unfreeze ;;
+    update) cmd_crew_update "$@" ;;
+    restart) cmd_crew_update --force "$@" ;;
+    *) die "$ME crew takes up, down, status, desk, attach, logs, watch, halt, resume, freeze, unfreeze, update or restart" ;;
   esac
 }
 
@@ -1740,7 +2688,7 @@ session_project() { # project row (json)
   local prompt="/tares:session $name"
   [ -n "$taken" ] && prompt="$prompt (taken over from the crew)"
   person_claude "$(session_dir "$id")" "$slug-session" session "$prompt" \
-    TARES_PROJECT="$name" TARES_SESSION_TAKEOVER="${taken:-}" TARES_SESSION_NAME="$slug-session"
+    TARES_PROJECT="$id" TARES_PROJECT_NAME="$name" TARES_SESSION_TAKEOVER="${taken:-}" TARES_SESSION_NAME="$slug-session"
 }
 
 session_idea() { # idea
@@ -1845,6 +2793,148 @@ cmd_projects() { # every project handed to the crew: progress, milestone, builde
   done < <(jq -c '.[]' <<<"$rows")
 }
 
+# ---------- code intelligence (TR-682) ----------
+# Claude Code's LSP tool (definitions, references, callers) answers only where a language server is wired
+# in, and only a plugin wires one. Per language: the manifests that show it, the official plugin, the
+# server binary the plugin needs on PATH, and the command that installs that binary. One server can serve
+# two languages (typescript-language-server reads JavaScript too): a repo is listed once per plugin, by the
+# first language that shows it, so tsconfig.json says TypeScript and a package.json alone says JavaScript.
+LSP_MARKETPLACE=claude-plugins-official
+lsp_langs() { # language|manifest file names|plugin|binary|install command
+  cat <<'EOF'
+Python|pyproject.toml,setup.py,setup.cfg,Pipfile,requirements.txt|pyright-lsp|pyright-langserver|npm install -g pyright
+TypeScript|tsconfig.json|typescript-lsp|typescript-language-server|npm install -g typescript-language-server typescript
+JavaScript|package.json|typescript-lsp|typescript-language-server|npm install -g typescript-language-server typescript
+Go|go.mod|gopls-lsp|gopls|go install golang.org/x/tools/gopls@latest
+Rust|Cargo.toml|rust-analyzer-lsp|rust-analyzer|rustup component add rust-analyzer
+EOF
+}
+
+lsp_detect() { # repo → the languages its manifests show (at the root or one folder down), one per line
+  local lang names plugin _b _i f seen=" "
+  while IFS='|' read -r lang names plugin _b _i; do
+    case "$seen" in *" $plugin "*) continue ;; esac
+    local -a match=()
+    for f in ${names//,/ }; do [ ${#match[@]} = 0 ] || match+=(-o); match+=(-name "$f"); done
+    [ -n "$(find "$1" -maxdepth 2 \( -name node_modules -o -name .git -o -name .factory -o -name .venv -o -name venv \) -prune \
+      -o -type f \( "${match[@]}" \) -print -quit 2>/dev/null)" ] && { echo "$lang"; seen="$seen$plugin "; }
+  done < <(lsp_langs)
+  return 0
+}
+
+LSP_ENABLED=""   # "<id>\t<projectPath>" of each enabled plugin; LSP_LISTED=1 once read, 0 when claude could not list them
+lsp_read_plugins() {
+  [ -z "${LSP_LISTED:-}" ] || return 0
+  if LSP_ENABLED=$("$CLAUDE" plugin list --json 2>/dev/null | jq -r '.[] | select(.enabled == true) | [.id, (.projectPath // "")] | @tsv' 2>/dev/null); then LSP_LISTED=1
+  else LSP_ENABLED=""; LSP_LISTED=0; fi
+}
+
+lsp_have_bin() { PATH="${FACTORY_LSP_PATH:-$PATH}" command -v "$1" >/dev/null 2>&1; }   # FACTORY_LSP_PATH: look in these folders instead of PATH (tests)
+
+lsp_state() { # repo plugin binary → ready | no-plugin | no-binary | neither | unknown (claude could not list its plugins)
+  lsp_read_plugins
+  [ "$LSP_LISTED" = 1 ] || { echo unknown; return 0; }
+  local have_plugin=0 have_bin=0
+  # Only a user-scope plugin (no projectPath) counts: stations run in the crew home and in worktrees, never in the repo path itself.
+  awk -F'\t' -v id="$2@$LSP_MARKETPLACE" '$1 == id && $2 == "" { f = 1 } END { exit !f }' <<<"$LSP_ENABLED" && have_plugin=1
+  lsp_have_bin "$3" && have_bin=1
+  case "$have_plugin$have_bin" in 11) echo ready ;; 10) echo no-binary ;; 01) echo no-plugin ;; *) echo neither ;; esac
+}
+
+lsp_fix() { # state plugin binary install → the commands that make the language server work, one per line
+  case "$1" in no-binary|neither) echo "$4" ;; esac
+  case "$1" in no-plugin|neither) echo "claude plugin install $2@$LSP_MARKETPLACE" ;; esac
+}
+
+lsp_missing() { # → "language|plugin|binary|install|state|repo" for each repo language with no working server
+  local project repo lang plugin bin inst state _n _m
+  lsp_read_plugins
+  while IFS=$'\t' read -r project repo; do
+    [ -d "$repo" ] || continue
+    while IFS= read -r lang; do
+      IFS='|' read -r _n _m plugin bin inst < <(lsp_langs | awk -F'|' -v l="$lang" '$1 == l')
+      state=$(lsp_state "$repo" "$plugin" "$bin")
+      case "$state" in ready|unknown) ;; *) printf '%s|%s|%s|%s|%s|%s\n' "$lang" "$plugin" "$bin" "$inst" "$state" "$repo" ;; esac
+    done < <(lsp_detect "$repo")
+  done < <(project_repo_rows 2>/dev/null || true)
+}
+
+# cmux shows its own "Waiting for you" notice about a minute after any Claude Code turn ends (its
+# notifications.agentIdleReminder, on by default). Claude Code has no setting that drops only its idle
+# notice, and cmux reads this option globally from the person's own file, so doctor reads it and says
+# what to set; the factory never writes it (TR-694).
+cmux_config() { echo "$HOME/.config/cmux/cmux.json"; }
+cmux_idle_reminder() { # → on, off or unreadable (JSONC: whole-line comments and trailing commas are fine); empty when cmux has no config here
+  local f; f=$(cmux_config); [ -f "$f" ] || return 0
+  grep -v '^[[:space:]]*//' "$f" | perl -0pe 's/,(\s*[}\]])/$1/g' | jq -r 'if .notifications.agentIdleReminder == false then "off" else "on" end' 2>/dev/null || echo unreadable
+}
+doctor_cmux() {
+  case "$(cmux_idle_reminder)" in
+    on) warn "cmux shows \"Waiting for you\" about a minute after every station's turn ends, with nothing for you to do. To stop it and keep the permission alerts, set \"notifications\": {\"agentIdleReminder\": false} in $(cmux_config) (it applies to all your cmux agents; $ME never edits it)" ;;
+    off) ok "cmux's idle reminder is off, so a station between turns does not ask for you; permission alerts stay on" ;;
+    unreadable) warn "could not parse $(cmux_config); set \"notifications\": {\"agentIdleReminder\": false} there so cmux stops saying \"Waiting for you\" after every station turn" ;;
+  esac
+  return 0
+}
+
+doctor_lsp() { # per handed-over repo and language: has Claude Code a language server (ok), or what to run (warn)
+  local project repo lang plugin bin inst state _n _m cmds
+  [ -n "$(project_repo_rows 2>/dev/null)" ] || return 0
+  lsp_read_plugins
+  while IFS=$'\t' read -r project repo; do
+    [ -d "$repo" ] || continue
+    while IFS= read -r lang; do
+      IFS='|' read -r _n _m plugin bin inst < <(lsp_langs | awk -F'|' -v l="$lang" '$1 == l')
+      state=$(lsp_state "$repo" "$plugin" "$bin")
+      if [ "$state" = ready ]; then
+        ok "project $project: $lang in $repo has a language server for Claude Code ($plugin plugin, $bin on PATH)"
+      elif [ "$state" = unknown ]; then
+        warn "project $project: $lang in $repo: cannot tell whether Claude Code has a language server, because claude plugin list --json failed"
+      else
+        cmds=$(lsp_fix "$state" "$plugin" "$bin" "$inst" | sed 's/.*/`&`/' | paste -sd ' ' - | sed 's/` `/` then `/')
+        warn "project $project: $lang in $repo has no language server for Claude Code, so the LSP tool cannot answer for it ($(case "$state" in no-binary) echo "the $plugin plugin is on, $bin is not on PATH" ;; no-plugin) echo "$bin is installed, the $plugin plugin is not on" ;; *) echo "neither the $plugin plugin nor $bin is there" ;; esac)). Run $cmds; $ME crew up offers it"
+      fi
+    done < <(lsp_detect "$repo")
+  done < <(project_repo_rows 2>/dev/null)
+  return 0
+}
+
+lsp_offer() { # crew up: recommend the missing language servers of the handed-over repos; install only on a yes
+  local missing; missing=$(lsp_missing)
+  [ -n "$missing" ] || return 0
+  local lang plugin bin inst state repo cmds
+  {
+    printf '\nCode intelligence: Claude Code can find a definition, its references and its callers through a language server,\nso builders and the reviewer search less and read less. These repos have none wired in yet:\n'
+    while IFS='|' read -r lang plugin bin inst state repo; do
+      printf '  %s in %s\n' "$lang" "$repo"
+      lsp_fix "$state" "$plugin" "$bin" "$inst" | sed 's/^/      /'
+    done <<<"$missing"
+  } >&2
+  if [ "$ASSUME_YES" = 1 ]; then
+    say "not installing language servers without a yes: run the commands above yourself, or run crew up without --yes"
+    return 0
+  fi
+  printf 'Run these now?\n  recommended: yes\n  press enter to take it, or type no\n> ' >&2
+  local ans; IFS= read -r ans || ans=no   # no answer at all (a closed input) is a no
+  case "${ans:-yes}" in
+    y|Y|yes|Yes) ;;
+    *) say "no language servers installed; $ME doctor lists what is missing"; return 0 ;;
+  esac
+  local seen=""
+  while IFS='|' read -r lang plugin bin inst state repo; do
+    case " $seen " in *" $plugin "*) continue ;; esac
+    seen="$seen $plugin"
+    case "$state" in no-binary|neither)
+      say "installing $bin: $inst"
+      bash -c "$inst" >&2 || { say "could not install $bin; install it yourself ($inst)"; continue; } ;;
+    esac
+    case "$state" in no-plugin|neither)
+      say "installing the $plugin plugin"
+      "$CLAUDE" plugin install "$plugin@$LSP_MARKETPLACE" >&2 || say "could not install the $plugin plugin; run: claude plugin install $plugin@$LSP_MARKETPLACE" ;;
+    esac
+  done <<<"$missing"
+}
+
 # Which key each place holds, by id, so a stale one shows (TR-560): this terminal's key against the
 # saved login, then the crew file the stations read.
 doctor_keys() {
@@ -1865,6 +2955,17 @@ doctor_keys() {
   else
     no "stations use $(key_name "$theirs") from $file, and Tares refuses it: run tares login"
   fi
+}
+
+doctor_kit() { # the freeze, and whether the checkout has a kit the crew is not following
+  crew_settings >/dev/null 2>&1 || return 0
+  if ! upgrades_frozen; then ok "the kit follows the plugin checkout (not frozen)"; return 0; fi
+  local live; live=$(kit_version)
+  if [ ! -d "$FROZEN_KIT" ]; then
+    no "the kit is frozen $(frozen_text), but its copy $FROZEN_KIT is missing, so new starts use the checkout: $ME crew unfreeze, then $ME crew freeze"
+  elif [ "$live" != "$(frozen_field version)" ]; then
+    warn "the kit is frozen $(frozen_text), and the checkout has a newer kit that no station moves onto: $ME crew unfreeze lets them follow it"
+  else ok "the kit is frozen $(frozen_text); the checkout has nothing newer"; fi
 }
 
 cmd_doctor() {
@@ -1907,12 +3008,18 @@ cmd_doctor() {
     done
     if tares_on; then
       local raw missing; raw=$(settings_raw 2>/dev/null || echo '{}'); missing=$(settings_missing "$raw")
-      [ -z "$missing" ] && ok "crew settings on Tares: $(crew_settings)" || warn "crew settings not answered yet ($(echo $missing)); $ME crew up asks them"
+      [ -z "$missing" ] && ok "crew settings on Tares: $(crew_settings | jq -c 'del(.kit)')" || warn "crew settings not answered yet ($(echo $missing)); $ME crew up asks them"
+      doctor_kit
+      if idle_wake_on; then
+        if [ -n "$(watch_pid)" ]; then ok "idle_wake is on: the watch wakes stations when they have work and holds their ticks"
+        else warn "idle_wake is on but the watch is not running: nothing wakes the stations and they hold no tick ($ME crew watch)"; fi
+      fi
       if [ -z "$missing" ] && releaser_on && [ "$(setting release_profile)" = kind ]; then
         command -v docker >/dev/null && ok "docker" || no "docker not installed (release profile kind)"
         command -v kind >/dev/null && ok "kind" || no "kind not installed (release profile kind): brew install kind"
         command -v kubectl >/dev/null && ok "kubectl" || no "kubectl not installed (release profile kind)"
       fi
+      [ "$(setting claude_update)" = false ] && warn "crew setting claude_update is off: the watch does not move stations onto a new Claude Code (one that restarts for another reason starts on it); $ME crew update moves them"
       [ -z "$missing" ] && [ "$(setting challenger)" = true ] && { command -v codex >/dev/null && ok "codex (challenger on)" || no "challenger is on but the Codex CLI is not installed"; }
       local p repo gh_line perm
       while IFS=$'\t' read -r p repo; do
@@ -1934,10 +3041,23 @@ cmd_doctor() {
   else
     warn "no crew yet in $CREW_HOME: $ME crew up creates it"
   fi
+  doctor_cmux
+  tares_on && doctor_lsp
   if command -v gh >/dev/null; then
     gh auth status >/dev/null 2>&1 && ok "gh signed in" || no "gh not signed in: gh auth login"
   else
     no "gh not installed (needed for PRs, reviews and merges): brew install gh"
+  fi
+  if [ -f "$STATIONS" ] && [ -n "${list:-}" ]; then
+    local cc_target cc_s cc_v; cc_target=$(claude_version)
+    for cc_s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS"); do
+      [ -f "$CREW_HOME/stations/$cc_s.done" ] && continue
+      cc_v=$(station_cc "$cc_s" "$list")
+      if older_than "$cc_v" "$cc_target" && cc_retrying "$cc_s" "$cc_target"; then warn "$cc_s runs Claude Code $cc_v, older than the $cc_target installed, and keeps coming back on an old spare; the watch retries in $(cc_retry_in "$cc_s"), or $ME crew update now"
+      elif older_than "$cc_v" "$cc_target"; then warn "$cc_s runs Claude Code $cc_v, older than the $cc_target installed; $ME crew update moves it when it's idle"
+      elif [ -n "$cc_v" ]; then ok "$cc_s runs Claude Code $cc_v"
+      else warn "could not tell which Claude Code $cc_s runs"; fi
+    done
   fi
   if [ -f "$STATIONS" ]; then
     local id

@@ -8,7 +8,7 @@ import type {
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults, ProjectScope,
   Skill, SkillSummary,
-  Area, Assumption, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, GrantKind, Grant, GrantsView, PersonalDoc, PersonalDocs, CrewMessage, CrewProject, CrewGroup, CrewSettings, CrewStation, Decision, DeskAllowed, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, SignoffRow, SpecQuestion, LinearLink, LinearStatus, Milestone,
+  Area, Assumption, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, GrantKind, Grant, GrantsView, PersonalDoc, PersonalDocs, CrewMessage, CrewPace, CrewProject, CrewGroup, CrewSettings, CrewStation, Decision, DeskAllowed, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, SignoffRow, SpecQuestion, LinearLink, LinearStatus, Milestone,
   ProjectSession, Ticket, TicketStatus,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, ModelProvider, ModelProviders, Standup,
@@ -291,6 +291,7 @@ export const api = {
               models: string[]; default_model: string; slack_workspace: boolean;
               providers: ModelProvider[]; default_provider: string | null;
               default_models: Record<string, string>;   // per provider id, what "" resolves to
+              small_models?: Record<string, string>;    // per provider id, the Triage preset's model ("" = none)
               default_max_rounds: number; default_max_rounds_with_mcp: number;
               max_rounds_limit: number;
               presets: AgentPreset[] }>(`/api/agents/builtin${project ? `?project=${encodeURIComponent(project)}` : ""}`),
@@ -626,7 +627,7 @@ export const api = {
   // null = unchanged; `clear` unsets a personal value so the team's applies again
   setCrewSettings: (body: Partial<Record<CrewSettingField, string | boolean | number | null>> & { clear?: CrewSettingField[] }) =>
     request<CrewSettingsView>("/api/crew/settings", { method: "PUT", body: JSON.stringify(body) }),
-  crew: () => request<{ crews?: CrewGroup[]; stations: CrewStation[]; settings: CrewSettings; grants: string; now: string }>("/api/crew"),
+  crew: () => request<{ crews?: CrewGroup[]; stations: CrewStation[]; settings: CrewSettings; grants: string; pace?: CrewPace; now: string }>("/api/crew"),
   crewProjects: () => request<{ projects: CrewProject[]; finished?: (Pick<CrewProject, "id" | "name" | "tickets_done" | "tickets_total" | "progress"> & { finished: ProjectFinished | null })[]; now: string }>("/api/crew/projects"),
   standup: (since: string, until: string) =>
     request<Standup>(`/api/crew/standup?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}`),

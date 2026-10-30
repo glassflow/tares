@@ -38,6 +38,10 @@ DEFAULT_SETTING = "model_provider_default"
 TIMEOUT = 120   # per model request
 # The model choices the console offers per provider kind; a router lists its own (TR-303).
 OPENAI_MODELS = ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4o"]
+# xAI (an OpenAI-compatible entry at api.x.ai) lists a non-reasoning model first, which makes a
+# poor default. "default" is what an agent without a model runs on; "small" is what the Triage
+# preset picks for the cheap scheduled look. Each applies only while the key can use it.
+XAI_MODELS = {"default": "grok-4.6", "small": "grok-4.3"}
 
 
 # ── the Anthropic entry: the original key + gateway settings ─────────────────
@@ -477,7 +481,7 @@ def entry(store, provider_id: str) -> dict | None:
 def default_model_for(store, provider_id: str | None) -> str:
     """The model an agent runs on when it names none: TARES_AGENT_MODEL on Anthropic (and on the
     cell default, when the variable is set on purpose); on OpenAI the first of OPENAI_MODELS the
-    key can use; else the first model the provider lists. Empty when a router lists nothing yet:
+    key can use; on xAI XAI_MODELS["default"]; else the first model the provider lists. Empty when a router lists nothing yet:
     the agent must then name one."""
     from .builtin_agents import MODEL
     pid = provider_id or default_id(store)
@@ -491,7 +495,23 @@ def default_model_for(store, provider_id: str | None) -> str:
         preferred = next((m for m in OPENAI_MODELS if m in models), None)
         if preferred:
             return preferred
+    if _is_xai(e) and XAI_MODELS["default"] in models:
+        return XAI_MODELS["default"]
     return models[0] if models else ""
+
+
+def small_model_for(store, provider_id: str | None) -> str:
+    """The cheaper model for a frequent, simple look (the Triage preset), or "" when this
+    provider has no such preference: the agent then stays on the provider's default."""
+    pid = provider_id or default_id(store)
+    e = entry(store, pid) if pid else None
+    if e is not None and _is_xai(e) and XAI_MODELS["small"] in models_for(e):
+        return XAI_MODELS["small"]
+    return ""
+
+
+def _is_xai(e: dict) -> bool:
+    return e.get("kind") == "openai_compatible" and "api.x.ai" in (e.get("base_url") or "")
 
 
 def resolve_for_agent(store, agent: dict) -> tuple[Provider | None, str, str | None, str]:

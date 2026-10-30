@@ -1,7 +1,7 @@
 {
   "name": "tares",
   "displayName": "Tares",
-  "version": "0.5.1",
+  "version": "0.6.1",
   "description": "Open-source platform for always-on AI agents: a software factory for Claude Code that takes your projects from tickets to merged pull requests, or an AI SRE that watches your systems. The plugin connects Claude Code to Tares over MCP, streams sessions in, specs projects with /tares:spec, and runs the tares-factory crew and challenger sessions.",
   "author": {
     "name": "GlassFlow",
@@ -52,8 +52,27 @@
     "challenger_mode": {
       "type": "string",
       "title": "Challenger mode for commits",
-      "description": "strict or advise; empty = strict. strict: P1/P2 Codex findings on a commit block Claude until fixed and amended. advise: findings come back as context only. Only matters in a challenger session.",
+      "description": "strict or advise; empty = strict. strict: P1/P2 findings from the second model on a commit block Claude until fixed and amended. advise: findings come back as context only. Only matters in a challenger session.",
       "default": "strict"
+    },
+    "challenger_backend": {
+      "type": "string",
+      "title": "Challenger model",
+      "description": "codex or grok; empty = codex. codex: the Codex CLI on this laptop reviews. grok: Grok reviews over the xAI API, billed to your xAI account; needs the xAI API key below.",
+      "default": "codex"
+    },
+    "xai_api_key": {
+      "type": "string",
+      "title": "xAI API key (optional)",
+      "description": "Only for challenger_backend grok. Empty = the XAI_API_KEY environment variable.",
+      "sensitive": true,
+      "default": ""
+    },
+    "grok_model": {
+      "type": "string",
+      "title": "Grok model (optional)",
+      "description": "Only for challenger_backend grok. Empty = grok-4.6. Use a reasoning model: non-reasoning ones invent findings.",
+      "default": ""
     },
     "codex_bin": {
       "type": "string",

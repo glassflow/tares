@@ -238,6 +238,224 @@ the project follows [Semantic Versioning](https://semver.org/).
   The contributor part of the spec skill now says what to do when an ordinary key is refused a
   ticket edit (pass it to the lead), and quotes the real 404 text of `my_work`.
 
+## [1.54.1] - 2026-10-29
+
+Grok is named as the challenger when it reviews, xAI agents default to grok-4.6 with grok-4.3
+for Triage, and DuckDB's memory is capped on machines without a container limit. Claude Code
+plugin 0.6.1.
+
+### Changed
+- xAI: an agent without a model runs on grok-4.6 (xAI lists a non-reasoning model first), and the
+  Triage (on a schedule) preset picks grok-4.3 for the frequent look. Each applies only while the
+  key lists that model.
+
+### Fixed
+- Challenger with Grok: the console, the summary and Claude no longer say Codex when Grok
+  reviews. `/tares:challenger` and the tares skill name the challenger as Codex or Grok, each
+  challenge on the timeline names its reviewer ("Challenger (Grok) reviewed commit ..."), the
+  summarizer calls the reviewer by that name and no longer reports a plan challenge that did not
+  happen, and the template's setup says how to pick Grok.
+- Template setup: the "model provider" step counts any configured provider, not only an
+  Anthropic key, and the Model picker lists the default provider's models instead of Anthropic's.
+- DuckDB's memory is capped at 1 GB when `tares up` runs on a machine with no container memory
+  limit. Before, DuckDB took its own default of 80% of the machine's RAM and its cache grew to about
+  4 GB on a Mac after two days of crew use. Set `TARES_DUCKDB_MEMORY_LIMIT` (for example `2GB`) to
+  change it; a container limit still sets it to 60% of that limit. The cap also sets
+  `TARES_DUCKDB_THREADS` to 2 unless you set it.
+
+## [1.54.0] - 2026-10-28
+
+Grok can review a challenger session instead of Codex, and xAI is one of the model provider
+presets. Claude Code plugin 0.6.0.
+
+### Added
+- Console: xAI (Grok) is a preset in Settings, Model providers, next to the others.
+- Plugin: Grok can be the challenger's second model instead of Codex. Set `challenger_backend` to
+  `grok` and give the plugin an xAI key (`xai_api_key`, or `XAI_API_KEY`). Each plan or commit is
+  reviewed in one xAI API call over the patch and the changed files, with the same priority tags,
+  fix loop, waivers and Tares record as Codex. A reply passes only when it ends on an explicit
+  `VERDICT: CLEAN`; one that names nothing and gives no verdict is inconclusive, and a
+  `VERDICT: FINDINGS` whose findings cannot be read as `[P1]`/`[P2]` lines blocks. The challenge line
+  shipped to Tares now names the `reviewer` (codex or grok) and, for Grok, the `model`. Codex stays
+  the default. Running Codex itself against xAI does not work: xAI rejects Codex's second turn
+  ("Could not decode the compaction blob").
+
+## [1.53.0] - 2026-10-28
+
+A cell serves a page's requests side by side instead of one after another, and a cloud cell keeps
+its state (projects, tickets, agents, settings) in Postgres while its events stay in DuckDB. On
+factory the project page went from 1.2 s to about 0.7 s, and the Crew page from 0.43 s to about
+0.3 s (P-TR-268).
+
+### Added
+- State in Postgres, opt-in with `TARES_STATE_DSN` (install the `postgres-state` extra). A cell
+  started with it the first time copies its 44 state tables out of `tares.duckdb` in one
+  transaction, checks the row counts and records the move. From then on it reads and writes state
+  only there. Without the variable nothing changes: local installs keep everything in DuckDB.
+- A cell that moved refuses to start without `TARES_STATE_DSN`, or with one that points at a
+  database without its state, instead of serving the stale DuckDB copy. At startup it waits up to
+  120 s for its state database (`TARES_STATE_CONNECT_WAIT`), and reconnects once after a dropped
+  connection.
+
+### Changed
+- Request handlers run in worker threads, so the requests a page fires together are served
+  together. Catalog reloads, ingest and poll writes, ticket stage moves and desk answers no longer
+  run their database work on the event loop, so one slow query no longer stalls the rest of the
+  cell.
+- The Crew page's projects, repos, assumptions and pull request refresh are read once per request
+  instead of once per item.
+- Codex challenger results are kept in their own table when the event arrives, so the review
+  queue, the ticket view and the merge gate no longer scan every event. The "Codex open" chip stays.
+
+## [1.52.0] - 2026-10-27
+
+The Projects list reads as a work queue, the software factory crew paces itself and moves onto
+new Claude Code versions on its own, and cells time every request and can close `/metrics`.
+
+### Changed
+- Console: the Projects list no longer marks the Challenger workflow and Default projects as AI SRE
+  (TR-698). The chip went to every project that was not a software factory, but a project of no
+  special kind is an ordinary one. Now only a project made from an AI SRE template (`ai_sre_demo`
+  or `rius_rca`) shows the AI SRE chip, a software factory project keeps the factory chip, and
+  every other project shows no kind chip. The legend under the list names a kind only when a row
+  of that kind is on show.
+- Console: on the Projects list at 720px and below, a done project now says "done" after its ring
+  (TR-696). The count folds away there, so a project with every ticket closed but still active and
+  a done project looked alike apart from a shade of colour. A wide screen is unchanged.
+- Factory: cmux says "Waiting for you" about a minute after every crew station's turn ends, even
+  though a station between ticks needs nothing (TR-694). The notice is cmux's own, not Claude
+  Code's, and Claude Code has no setting that drops it while keeping permission prompts. The fix
+  is a cmux option on your side: set `"notifications": {"agentIdleReminder": false}` in
+  `~/.config/cmux/cmux.json`. `tares factory doctor` now reads that file and says when the option
+  is still on, with the exact line to add. It never edits your cmux file, and the stations' own
+  settings leave cmux's permission alerts alone.
+- Console: the Projects list marks each project's kind with an icon (TR-692). A software factory
+  project shows the factory emoji instead of the bolt, and an AI SRE project shows an AI SRE chip
+  with a heartbeat icon (TR-698 narrowed that to projects made from an AI SRE template). Both fold to the icon alone at 720px and below, keeping the name in
+  the tooltip and screen reader label, and the legend under the list explains each kind on show.
+  The status cell is now the progress ring and its count alone: the dot beside it is gone for a
+  project with tickets. A project with no tickets keeps the dot, and a paused, error or draft
+  project adds a short word ("paused", "error", "draft").
+- Console: the project page says a build station "is waiting for you" only when it needs you
+  (TR-693, TR-616). Before, every turn end showed the banner, even when the builder was waiting on
+  its own Monitor or on the reviewer and would resume by itself. The plugin now reports a new
+  session state, `idle`, for a turn that ended (the Stop hook and Claude Code's idle notice), and
+  keeps `waiting` for a permission request or prompt, an elicitation dialog or an AskUserQuestion
+  (new PermissionRequest and PreToolUse hooks). An idle session shows no banner, and still turns
+  quiet after 90 minutes. The crew list labels the two states "Idle" and "Waiting for you". Rows
+  from the old plugin keep working. Restart `tares up` first, then reload the plugin on a running crew: an old daemon
+  drops the `idle` lines, so a session would stay `working`.
+- Console: the Projects list reads as a work queue (TR-689). It hides done projects by default, with
+  Active, Done and All tabs that show their counts, and a line saying how many are hidden. A
+  filter box matches names and goals, and the sort offers recently active, most work pending, least
+  work pending and name. The name is the link, so the Open button is gone, and so is the Objects
+  column. Goals are a tooltip on the name, or on every row with the Goals toggle. A project's
+  status is the progress ring and its count; the Active and Done words are gone. A Pending column shows the work left, with what is in progress
+  and blocked. Updated now follows a project's newest ticket update, not only edits to the project
+  itself (`/api/projects` gains `activity_at`). The software factory tag is a small icon chip with
+  a legend, and the table keeps its layout at narrow widths. The view lives in the address
+  (`?show=`, `?sort=`, `?q=`, `?goals=1`), so a link or a reload keeps it.
+- A factory project's tickets list reads every working doc's title and every ticket's last review
+  in one query each, instead of a few queries per ticket (TR-657).
+- The review queue reads the tickets in review across every project, when each went to review and
+  its last review in one query each, instead of every project's whole ticket list and a few
+  queries per ticket (TR-648).
+- The projects list reads the catalog once and every software factory project's tickets in one
+  query, instead of both once per project (TR-659).
+
+### Added
+- Factory: `factory doctor` reads each handed-over repo's languages from its manifests (Python,
+  TypeScript, JavaScript, Go, Rust, at the repo root or one folder down) and says whether Claude Code has a
+  language server for each: the plugin enabled and its binary on your PATH. For a missing one it
+  prints the install command and the plugin that wires it in (`npm install -g pyright`, then
+  `claude plugin install pyright-lsp@claude-plugins-official`). `factory crew up` offers the same
+  install and runs it only on a yes; `--yes` and a closed input install nothing. The builder and
+  reviewer manuals say to prefer the LSP tool over grep for definitions, references and callers
+  when it answers. Without a server the tool has nothing to answer with (TR-682).
+- Factory: the crew setting `idle_wake` (off by default) wakes stations on events instead of fixed
+  ticks. The watch asks Tares what each station has to do and restarts an idle station with one
+  message only when there is work (a PR without a verdict, changes asked for, a `RELEASE`, a desk
+  answer, a new project), and otherwise sends a liveness wake after 15 to 30 minutes, then 30, then
+  every 45, so an empty crew costs a few model turns an hour instead of one every 15 to 30 minutes
+  per station (TR-673).
+- Factory: the crew setting `pace` (off by default) slows the crew before the plan's limit instead
+  of hitting it and restarting every station at once. From the plan usage Tares already keeps: at
+  85% of the 5-hour window or 90% of the week no new builder starts (`factory spawn builder`
+  says why) and each station is told once to tick every 45 minutes; at 95% of the window a builder
+  also finishes its step, pushes, writes down where it is and waits. A station that stopped while
+  a limit was full is not revived into it; after the reset the watch revives it in its own
+  conversation, and starts a new one only when that fails. The Crew page and
+  `factory crew status` say when the crew is pacing and until when (TR-674).
+- The tares-factory crew moves onto a new Claude Code by itself. Claude Code installs by swapping a
+  symlink, so a station kept the version it started on until someone restarted it. `tares factory
+  crew watch` now sees a newer `claude --version` that has held for a whole round and restarts
+  one idle station a round, in the same conversation, the orchestrator last; a busy or attached
+  station waits. `tares factory crew update` (or `crew restart`) does every station right away,
+  waits for each to be idle, and checks there is one session per station name. A restarted station
+  is checked to run the new version: Claude Code's daemon keeps pre-warmed spares of the old
+  version that a restart could claim, so those are stopped and the restart is tried again.
+  `factory roster`, `factory doctor` and the Crew page show each station's Claude Code version and
+  flag older ones. The crew setting `claude_update` (on by default) switches the watch's part off
+  for people who pin a version. A frozen crew (`crew freeze`) moves no station onto a newer Claude
+  Code either; the watch says there is one, once for each version, and `crew update` still works
+  (TR-669).
+- Factory: the Claude Code move now covers the crew's helpers and no longer gives up. A helper moves
+  onto a new Claude Code with the watch, like its station, after the other stations and before the
+  orchestrator; a busy helper does not hold the orchestrator back. A station whose restart keeps
+  landing on an old pre-warmed spare is no longer parked on the old version: after three tries in
+  its conversation it is started again in a new conversation on the new version (a helper is not,
+  since its task lives only in its conversation), and if that fails too the watch tries again after
+  a pause that doubles (10 minutes, up to 4 hours; `crew update` tries at once). `factory roster`, `crew status`, `factory doctor` and the Crew page show it as
+  retrying. `crew update --wait 00` waits without a deadline, and the message for a caller that is
+  not behind, or whose watch will not move it (`claude_update` off, a frozen crew), no longer
+  promises a move by the watch (TR-687).
+- `/metrics` times every HTTP request: `tares_http_request_duration_seconds{route, method, status}`,
+  labelled by route template (such as `/api/projects/{uid}/tickets`), never by a raw path or ID
+  (TR-652).
+- `TARES_METRICS_TOKEN` closes `/metrics`: when set, a scrape needs `Authorization: Bearer <token>`
+  and anything else gets 401. Unset, `/metrics` stays public as before (TR-653).
+
+### Fixed
+- Factory: `desk_answer` finds every line of a long pasted reply (TR-697). A reply of more than
+  about 500 characters was stored cut off, so its later lines were "not found" and only the first
+  lines matched. A person's turn is now kept up to 20000 characters, and the `<pasted_content>`
+  tags Claude Code wraps a paste in are ignored, so a whole paste matches with or without them.
+  Replies already stored stay cut; paste or resend the missing lines once.
+- "Raise the limit" on an agent that stopped at the daily run cap opened the agent's own page,
+  which has no cap field. It now opens Settings, Limits, with the daily cap in view and marked
+  for that agent; an agent with its own cap in its project still opens its own page (TR-670).
+- The daily run cap message now says when the next run is allowed ("next run allowed in
+  1h 12m"), counted from the run in the 24 hour window that has to age out first, on the project
+  banner and in the capped run's error. An agent's run list folds the runs the cap refused into
+  one line ("50 runs skipped, capped") that opens to list them. The Limits help line names who the
+  number applies to: every agent without its own limit (TR-671).
+- A firing that arrives while its agent is already running for the same key now gets the
+  `skipped` write-back with reason `in_flight`. Since 1.51.0 it was sent only when the duplicate
+  slipped past the first dedupe; the common case, caught when the firing is delivered, sent
+  nothing, and Rius kept the firing queued (RIUS-1103).
+- A link to a refused run inside a folded group of capped runs opened the group, but clicking
+  the group's line could not close it again. The link now opens the group once, and the line
+  toggles it like any other (TR-678).
+- Factory: a `crew watch` started from the frozen kit copy and left running past an unfreeze
+  restarted itself, on a kit change, from the copy it came from. By then the copy was removed, so
+  the watch died. It now restarts from the checkout's `factory` (TR-686).
+- Factory: the guard let a builder or reviewer run `/path/to/bin/factory crew freeze`, `up`,
+  `down`, `halt` and the other orchestrator-only commands, and `factory finish`, by spelling the
+  CLI with a path. It now matches the command by its name, whatever the path (TR-686).
+- Factory: `factory doctor` and `crew up` counted a language server plugin enabled only for the
+  repo's own folder as ready. Stations run in the crew home and in worktrees, never in that
+  folder, so they had no server. Only a plugin enabled for you (user scope) counts now (TR-686).
+- Factory: the guard still let a builder run an orchestrator-only command when the verb was
+  followed by a backtick, `>`, `}` or `#` (`` x=`factory crew down` ``, `factory crew down>log`). A
+  verb now ends at anything but a letter, digit, `_` or `-`. `ls ~/factory down`, a folder named
+  factory handed to `ls`, `cat` and the other readers, was refused as if it were the CLI; it now
+  runs (TR-688).
+- Factory: the folder-named-factory rule above could be turned into a bypass. A reader written
+  inside a quote (`` X='; ls a' factory down `` or a quote opened on the line before) made the guard
+  blank the word `factory`, although the quote ends before it and the CLI runs. The rule now skips
+  quoted strings as a unit, so a reader only owns the word when it starts a command outside any
+  quote; quoted arguments to a real reader (`ls "my dir" ~/factory down`) still work (TR-690).
+
 ## [1.51.1] - 2026-10-21
 
 The crew standup writes its summary again, and its Slack channel list fits on screen.

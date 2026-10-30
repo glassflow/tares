@@ -18,7 +18,7 @@ COPY tares/ ./tares/
 # the wheel bundles the Claude Code plugin (hatch force-include), for `tares factory`
 COPY claude-plugin/ ./claude-plugin/
 COPY --from=ui /ui/dist ./ui/dist
-RUN pip install --no-cache-dir ".[otlp-grpc]"
+RUN pip install --no-cache-dir ".[otlp-grpc,postgres-state]"
 
 # Run as a non-root user. Own /data before declaring the VOLUME so a first-mount Docker named
 # volume inherits the ownership; on k8s an empty PVC needs fsGroup: 1000 (set in the cell chart).
