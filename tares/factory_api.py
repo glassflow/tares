@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -304,11 +305,12 @@ def register(app, store, h: SimpleNamespace) -> None:
             if person["id"] == "local":
                 h.err(PermissionError("The cell's settings need the admin scope"), 403)
             key = personal_key(person)
-            if "kit" in body:
+            if body.get("kit") is not None:
                 # the kit (the freeze) is the crew's: settings() leaves a person's copy out, so
-                # storing it would answer 200 and change nothing
-                h.err(PermissionError("The kit is the crew's: only the cell's credential or "
-                                      "its admin changes it"), 403)
+                # storing it would answer 200 and change nothing. A null is no change (as
+                # crew_settings_ok reads it), so it passes.
+                h.err(PermissionError("The kit (the freeze) belongs to the whole cell: only the "
+                                      "cell's own credential, or its local admin, changes it"), 403)
         try:
             if key != CREW_SETTING:
                 factory_mod.personal_ceiling_ok(stored(CREW_SETTING), body)
@@ -721,12 +723,34 @@ def register(app, store, h: SimpleNamespace) -> None:
     def _ts(v) -> float:
         return v.timestamp() if isinstance(v, datetime) else 0.0
 
-    def claude_retry() -> dict:
+    retry_lock = threading.Lock()
+
+    def retry_key(person_id: str | None, crew: str | None) -> str:
+        return f"{person_id or 'local'}/{crew or ''}"
+
+    def claude_retry() -> dict[str, dict]:
+        """The retry marks as {"<person id>/<crew name>": {station: {target, fails, next_at}}}.
+        What an older Tares stored (one flat {station: {target, ...}} for the whole cell) reads as
+        the crew-less marks of the person `local`."""
         try:
             cur = json.loads(store.get_setting(CLAUDE_RETRY_SETTING) or "{}")
         except ValueError:
             cur = {}
-        return cur if isinstance(cur, dict) else {}
+        if not isinstance(cur, dict):
+            return {}
+        if any(isinstance(v, dict) and isinstance(v.get("target"), str) for v in cur.values()):
+            return {retry_key("local", ""): {k: v for k, v in cur.items() if isinstance(v, dict)}}
+        return {k: v for k, v in cur.items() if isinstance(v, dict)}
+
+    def claude_retry_of(person_id: str | None) -> dict:
+        """One person's marks as a flat {station: row}: all their crews' merged, the crew-less last."""
+        prefix = retry_key(person_id, None)
+        marks = claude_retry()
+        out: dict = {}
+        for k in sorted(k for k in marks if k.startswith(prefix) and k != prefix):
+            out.update(marks[k])
+        out.update(marks.get(prefix, {}))
+        return out
 
     def stations(project: str | None = None) -> list[dict]:
         """The stations, one row each per crew (TR-628): two crews with the same station names
@@ -785,7 +809,11 @@ def register(app, store, h: SimpleNamespace) -> None:
             # the context window from the station's status line, and what all its sessions spent
             st["context"] = claude_usage.context_now(meters.get(st["session"]))
             st["claude_version"] = claude_usage.code_version(meters.get(st["session"]))
-            st["claude_retry"] = retry.get(st["name"])   # set while the watch retries its move, else null
+            # set while the watch retries its move, else null: the crew's own marks, else those
+            # of its person that name no crew
+            pid = (crews.get(st["crew_id"]) or {}).get("person_id")
+            st["claude_retry"] = (retry.get(retry_key(pid, st["crew"]), {}).get(st["name"])
+                                  or retry.get(retry_key(pid, None), {}).get(st["name"]))
             mine = [spent[s] for s in [st["session"], *(e["session"] for e in st["earlier"])]
                     if s in spent]
             st["usage"] = ({k: sum(x[k] for x in mine) for k in mine[0]} if mine else None)
@@ -883,29 +911,33 @@ def register(app, store, h: SimpleNamespace) -> None:
         started), the crews' settings, and the shared grants. `mine=1` keeps the caller's own
         crews. `stations` is the same rows flat, for a client that does not group by crew yet. `pace`
         is the crew's pace as GET /api/crew/pace gives it. `claude_retry` maps each station the
-        watch is retrying onto a newer Claude Code to {target, fails, next_at}; the row of each
-        shows its own as `claude_retry`."""
+        caller's person's crews are retrying onto a newer Claude Code to {target, fails, next_at};
+        the row of each station shows its own crew's as `claude_retry`."""
         rows = stations()
         if mine:
             me = caller_person_id(request)
             rows = [s for s in rows if (s["person"] or {}).get("id") == me]
         return {"crews": crews_of(rows), "stations": rows, "settings": settings(request),
                 "grants": grants_out(None)["all"], "pace": pace(request),
-                "claude_retry": claude_retry(), "now": now_utc()}
+                "claude_retry": claude_retry_of(caller_person_id(request)), "now": now_utc()}
 
     @app.put("/api/crew/claude-retry")
-    def put_claude_retry(body: dict = Body(...)):
+    def put_claude_retry(request: Request, body: dict = Body(...), crew: str = ""):
         """{stations: {name: {target, fails, next_at}}}: the stations the factory watch is retrying
         onto a new Claude Code, after a restart kept landing on an older pre-warmed spare. It
-        replaces the whole list; a station left out is not retrying. `target` is the version it
-        is moving to, `fails` the failed moves so far and `next_at` the unix time of the next try.
-        Each row of /api/crew shows its entry as `claude_retry`, or null. The factory CLI sends
-        this; it is only information for the Crew page."""
+        replaces the caller's list for the crew named by `crew` (a query parameter; none: the
+        caller's crew-less list); another person's or another crew's list is left alone. A station
+        left out is not retrying. `target` is the version it is moving to, `fails` the failed
+        moves so far and `next_at` the unix time of the next try. Each row of /api/crew shows its
+        crew's entry as `claude_retry`, or null. The factory CLI sends this; it is only
+        information for the Crew page."""
         rows = body.get("stations")
         if not isinstance(rows, dict):
             h.err(ValueError("stations must be an object of station name to {target, fails, next_at}"))
         if len(rows) > 200:
             h.err(ValueError("at most 200 stations"))
+        if len(crew) > 128:
+            h.err(ValueError("a crew name is at most 128 characters"))
         def num(v, lo: int, hi: int, default: int) -> int:
             return v if isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi else default
         out = {}
@@ -917,7 +949,14 @@ def register(app, store, h: SimpleNamespace) -> None:
             out[name] = {"target": r["target"][:40],
                          "fails": num(r.get("fails"), 0, 1_000_000, 1),
                          "next_at": num(r.get("next_at"), 0, 4_102_444_800, 0)}
-        store.set_setting(CLAUDE_RETRY_SETTING, json.dumps(out))
+        key = retry_key(caller_person_id(request), crew.strip())
+        with retry_lock:   # read, change one key, write: two people's reports must not undo each other
+            marks = claude_retry()
+            if out:
+                marks[key] = out
+            else:
+                marks.pop(key, None)
+            store.set_setting(CLAUDE_RETRY_SETTING, json.dumps(marks))
         return {"stations": out}
 
     @app.get("/api/crew/pace")
@@ -1443,11 +1482,12 @@ def register(app, store, h: SimpleNamespace) -> None:
         rv = next(x for x in store.ticket_reviews(t["id"]) if x["id"] == r["id"])
         return {**rv, "open": [f["label"] for f in store.open_findings(t["id"])]}
 
-    def queue() -> list[dict]:
+    def queue(keep=None) -> list[dict]:
         # the tickets in review, their milestones' other tickets, when each went to review and
-        # its last review: one query each, however many are waiting (TR-648)
+        # its last review: one query each, however many are waiting (TR-648). `keep` narrows them.
         hidden = h.hidden_ids()
-        waiting = [(n, t) for n, t in store.review_tickets() if t["project"] not in hidden]
+        waiting = [(n, t) for n, t in store.review_tickets()
+                   if t["project"] not in hidden and (keep is None or keep(t))]
         ids = [t["id"] for _, t in waiting]
         siblings = store.milestone_statuses(sorted({t["milestone"] for _, t in waiting
                                                     if t["milestone"]}))
@@ -1481,10 +1521,21 @@ def register(app, store, h: SimpleNamespace) -> None:
         return out
 
     @app.get("/api/review-queue")
-    def review_queue():
+    def review_queue(request: Request, mine: bool = False):
         """Tickets in review across every project: those blocking their milestone first, then
-        the longest waiting (TR-444)."""
-        return {"queue": queue(), "now": now_utc()}
+        the longest waiting (TR-444). `mine=1` keeps the caller's person's tickets (assigned to
+        them, or unassigned in a project they lead), for a crew that shares the cell with
+        another person's."""
+        if not mine:
+            return {"queue": queue(), "now": now_utc()}
+        me = work_person(request)["id"]
+        projects: dict[str, dict | None] = {}
+
+        def keep(t: dict) -> bool:
+            if t["project"] not in projects:
+                projects[t["project"]] = store.get_project(t["project"])
+            return is_mine(t, me, projects[t["project"]])
+        return {"queue": queue(keep), "now": now_utc()}
 
     # ── the repo map (TR-681): one per GitHub repo, shared by every project that names it ──
     def pr_repo(t: dict) -> str | None:

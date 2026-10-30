@@ -208,6 +208,49 @@ async def auth_on():
             await cx.put(f"{B}/api/areas", headers=ROOT, json=[])
             ck("set down: the list is empty again", (await cx.get(f"{B}/api/areas", headers=JR_)).json() == [])
 
+            print("== a delete or a replace at the same time as a claim ==")
+            kept_all, bad_codes = True, []
+            for rnd in range(6):
+                dead = [f"gone/d{rnd}x{i}" for i in range(6)]
+                keep = [f"keep/k{rnd}x{i}" for i in range(6)]
+                await cx.put(f"{B}/api/areas", headers=ROOT, json=[{"repo": x, "person_id": jo} for x in dead])
+                rs = await asyncio.gather(
+                    *[cx.delete(f"{B}/api/areas/{x}", headers=ROOT) for x in dead],
+                    *[cx.put(f"{B}/api/areas/{x}", headers=J_, json={"person_id": jo}) for x in keep])
+                bad_codes += [r.status_code for r in rs if r.status_code != 200]
+                got = owners((await cx.get(f"{B}/api/areas", headers=JR_)).json())
+                kept_all = kept_all and all(got.get(x) == jo for x in keep) and not any(x in got for x in dead)
+            ck("six deletes and six claims at once, six rounds: every claim is kept, every delete done",
+               kept_all, str(got))
+            ck("... and every answer is 200", bad_codes == [], str(bad_codes))
+            outcomes, bad_codes = set(), []
+            for rnd in range(15):
+                await cx.put(f"{B}/api/areas", headers=ROOT, json=[{"repo": "rep/old", "person_id": jo}])
+                claims = [f"rep/c{rnd}x{i}" for i in range(10)]
+                put = lambda x: cx.put(f"{B}/api/areas/{x}", headers=J_, json={"person_id": jo})
+                rs = await asyncio.gather(
+                    *[put(x) for x in claims[:5]],
+                    cx.put(f"{B}/api/areas", headers=ROOT, json=[{"repo": "rep/one", "person_id": kiran}]),
+                    *[put(x) for x in claims[5:]])
+                bad_codes += [r.status_code for r in rs if r.status_code != 200]
+                got = owners((await cx.get(f"{B}/api/areas", headers=JR_)).json())
+                # the replace ran first (its list, then every claim) or after some claims (its list alone
+                # or with the claims that came after it): "rep/one" is always there, and "rep/old" never
+                outcomes.add("rep/one" in got and "rep/old" not in got
+                             and all(k == "rep/one" or k in claims for k in got))
+            ck("a replace and ten claims at once, fifteen rounds: always a serial outcome, answers all 200",
+               outcomes == {True} and bad_codes == [], f"{outcomes} {bad_codes}")
+            codes = []
+            for rnd in range(25):
+                xs = [f"cd/r{rnd}x{i}" for i in range(16)]
+                rs = await asyncio.gather(
+                    *[cx.put(f"{B}/api/areas/{x}", headers=J_, json={"person_id": jo}) for x in xs],
+                    *[cx.delete(f"{B}/api/areas/{x}", headers=ROOT) for x in xs])
+                codes += [r.status_code for r in rs]
+            ck("a claim and a delete of the same repo at once: the claim answers 200 either way, never 500",
+               codes == [200] * len(codes) and len(codes) == 25 * 32, str(sorted(set(codes))))
+            await cx.put(f"{B}/api/areas", headers=ROOT, json=[])
+
             print("== the MCP tools ==")
             who = {"k": J_}
             m._cx = mf._cx = lambda timeout=10: httpx.AsyncClient(timeout=timeout, headers=who["k"])
