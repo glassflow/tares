@@ -310,7 +310,10 @@ def _excluded(trig, src, names: list[str], overrides: dict) -> bool:
             return True
         if op == "neq" and str(val) == names[0]:
             return True
-        if op == "in" and isinstance(val, list) and not {str(v) for v in val} & set(names):
+        # the runtime matches `in` and `contains` without regard to case
+        if op == "in" and isinstance(val, list) and not {str(v).lower() for v in val} & {n.lower() for n in names}:
+            return True
+        if op == "contains" and not any(str(val).lower() in n.lower() for n in names):
             return True
     return False
 

@@ -223,6 +223,16 @@ async def main():
         eq("a filter service eq service-a covers service-a only",
            {n: items[n]["watched"] for n in ("service-a", "edge-proxy")},
            {"service-a": True, "edge-proxy": False})
+        for op, val, want in (("in", ["SERVICE-A"], {"service-a": True, "edge-proxy": False}),
+                              ("contains", "PROXY", {"service-a": False, "edge-proxy": True}),
+                              ("contains", "serv", {"service-a": True, "edge-proxy": False})):
+            store.upsert_catalog_trigger("watch-prod", ["prod-otlp"], {"every": "10m"}, {}, "10m",
+                                         filters=[{"field": "service", "op": op, "value": val}])
+            runtime.reload_catalog()
+            cat = runtime.catalog
+            items = {i["name"]: i for i in sre.list_services(store, cat, NOW)}
+            eq(f"a filter service {op} {val} covers what the runtime lets through, whatever the case",
+               {n: items[n]["watched"] for n in want}, want)
         store.upsert_catalog_trigger("watch-prod", ["prod-otlp"], {"every": "10m"}, {}, "10m")
         runtime.reload_catalog()
         cat = runtime.catalog
@@ -466,6 +476,82 @@ async def main():
         store.set_wake(UID, "watch-prod", "watcher", enabled=True)
         store.set_handoffs(UID, "watcher", HANDOFFS)
         runtime.reload_catalog()
+
+        print("== two stopped watchers on one service ==")
+        cat = await base()
+        store.upsert_catalog_agent("watcher2", "watch-prod", "Look at prod-otlp too.", concludes=True,
+                                   slack_channel="C111")
+        store.put_in_project("agent", "watcher2", UID)
+        store.set_wake(UID, "watch-prod", "watcher2", enabled=False)
+        runtime.reload_catalog()
+        cat = runtime.catalog
+        step(store, cat, NOW)
+        SLACK.clear()
+        key = os.environ.pop("ANTHROPIC_API_KEY")
+        try:
+            changes, said = step(store, cat, NOW)
+            first = {n: (rows()[n]["agent"], rows()[n]["reason"], W._aware(rows()[n]["since"])) for n in SERVICES}
+            eq("the first look names one of them", {n: rows()[n]["reason"] for n in SERVICES},
+               {n: first[n][1] for n in SERVICES})
+            eq("and says it once", (len(changes), len(said), len(SLACK)), (len(SERVICES), 1, 1))
+            later = []
+            for i in range(1, 5):
+                later.append(step(store, cat, NOW + timedelta(minutes=i)))
+            eq("four more looks change nothing", [c for c, _p in later], [[], [], [], []])
+            eq("and post nothing", [p for _c, p in later], [[], [], [], []])
+            eq("the same one stays named, with its own reason and time",
+               {n: (rows()[n]["agent"], rows()[n]["reason"], W._aware(rows()[n]["since"])) for n in SERVICES}, first)
+            eq("one message in all", len(SLACK), 1)
+        finally:
+            os.environ["ANTHROPIC_API_KEY"] = key
+            store.delete_catalog_agent("watcher2")
+            runtime.reload_catalog()
+            cat = runtime.catalog
+
+        print("== the rows, kept and removed ==")
+        cat = await base()
+        step(store, cat, NOW)
+        store.set_service("service-a", "test", hidden=True)
+        changes, said = step(store, cat, NOW)
+        eq("a service that is gone has its row removed", sorted(rows()), ["docs-site", "edge-proxy"])
+        eq("with nothing said", [c["service"] for c in changes if c["service"] == "service-a"], [])
+        store.set_service("service-a", "test", hidden=False)
+        step(store, cat, NOW)
+        eq("it comes back", sorted(rows()), ["docs-site", "edge-proxy", "service-a"])
+        docs_since = W._aware(rows()["docs-site"]["since"])
+        step(store, cat, NOW + timedelta(hours=1))
+        eq("an uncovered service keeps its since across looks", W._aware(rows()["docs-site"]["since"]), docs_since)
+        eq("and so does the answer a later look gives", W._aware(W.compute(store, cat, NOW + timedelta(hours=2))["docs-site"]["since"]),
+           docs_since)
+        store.set_watch_row("probe", watched=False, reason="no_agent", since=NOW)
+        eq("a row not told yet is marked, and returned", store.mark_told(["probe"], NOW, "C1"), ["probe"])
+        eq("a row already told is not marked again", store.mark_told(["probe", "nothing"], NOW, "C2"), [])
+        eq("and keeps the first channel", store.watch_rows()["probe"]["told_where"], "C1")
+        store.delete_watch_rows(["probe"])
+
+        print("== two looks at once ==")
+        cat = await base()
+        real_set = store.set_watch_row
+
+        def slow_set(*a, **kw):
+            time.sleep(0.05)
+            return real_set(*a, **kw)
+
+        store.set_watch_row = slow_set
+        got = []
+        gate = threading.Barrier(2)
+
+        def look():
+            gate.wait()
+            got.append(W.sync(store, cat, NOW))
+
+        try:
+            ts = [threading.Thread(target=look) for _ in range(2)]
+            [t.start() for t in ts]
+            [t.join() for t in ts]
+        finally:
+            store.set_watch_row = real_set
+        eq("a change is reported to one of them only", sorted(len(c) for c in got), [0, 1])
 
         print("== a cell that is not an AI SRE cell ==")
         real = datetime.now(UTC)

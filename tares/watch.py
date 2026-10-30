@@ -178,7 +178,15 @@ def compute(store, catalog, now=None) -> dict[str, dict]:
             out[name] = {"watched": True, "reason": None, "since": since,
                          "agent": w["agent"], "project": w["project"]}
         elif cover:
-            w = max(cover, key=lambda w: _aware(why[(w["agent"], w["project"], w["trigger"])]["since"]))
+            # the watcher stopped longest is named; the one the row already names keeps its place
+            # while it is still stopped for that reason, so two stopped watchers do not take turns
+            def stopped_since(w):
+                return _aware(why[(w["agent"], w["project"], w["trigger"])]["since"])
+
+            kept = [w for w in cover if prev and not prev["watched"]
+                    and (w["agent"], w["project"]) == (prev["agent"], prev["project"])
+                    and why[(w["agent"], w["project"], w["trigger"])]["reason"] == prev["reason"]]
+            w = kept[0] if kept else max(cover, key=stopped_since)
             j = why[(w["agent"], w["project"], w["trigger"])]
             out[name] = {"watched": False, "reason": j["reason"], "since": j["since"],
                          "agent": w["agent"], "project": w["project"]}
