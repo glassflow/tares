@@ -178,6 +178,26 @@ def pure():
     eq("Next.js is not a next step", G.derive_parts("Next.js builds are slow.")["next_step"], None)
     eq("a heading on its own line still counts", G.derive_parts("## Next steps\n\nRoll it back.")["next_step"],
        "Roll it back.")
+    bolds = G.derive_parts("**What is failing** A.\n**Likely cause** B.\n**Next step** C.")
+    eq("a closed bold label with words after it counts", (bolds["failing"], bolds["likely_cause"], bolds["next_step"]),
+       ("A.", "B.", "C."))
+    eq("and it is not the headline", G.derive_headline("**What is failing** The proxy returns 502s.\n**Likely cause** B."),
+       "The proxy returns 502s.")
+    loose = G.derive_parts("1) What is failing: A.\n2) Most likely cause is B.\n3) Suggested next action: C.")
+    eq("a numbered line that is a sentence ends the part above it", loose["failing"], "A.")
+    eq("and is not a part itself", loose["likely_cause"], None)
+    eq("the part after it still counts", loose["next_step"], "C.")
+    commas = G.derive_parts("1) What is failing and since when: A.\n2) Most likely cause, with the evidence: B.\n"
+                            "3) Suggested next action, for now: C.")
+    eq("a qualifier after a space, a comma or a parenthesis counts",
+       (commas["failing"], commas["likely_cause"], commas["next_step"]), ("A.", "B.", "C."))
+    eq("a qualifier in brackets counts", G.derive_parts("2) Most likely cause (with the evidence): B.")["likely_cause"],
+       "B.")
+    asked = G.derive_parts("1) What is failing?\nThe proxy returns 502s.\n\n2) Most likely cause?\nThe deploy.")
+    eq("a label that ends in a question mark counts", (asked["failing"], asked["likely_cause"]),
+       ("The proxy returns 502s.", "The deploy."))
+    eq("a dash with no space is not a label", G.derive_parts("Next-day delivery is failing for EU orders.")["next_step"], None)
+    eq("nor is it in the middle of a word pair", G.derive_parts("Root cause-analysis pending.")["likely_cause"], None)
 
     print("== the title ==")
     now = datetime(2026, 10, 30, 16, 30, tzinfo=timezone.utc)

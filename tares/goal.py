@@ -834,16 +834,24 @@ _PART_LINE = re.compile(
     r"(?:(?P<num>\d+)[.)][ \t]*)?(?P<bold2>[*_]{1,2})?[ \t]*"
     r"(?P<label>" + "|".join(f"(?P<{k}>{v})" for k, v in _PART_WORDS.items()) + r")"
     r"\b(?P<tail>[^\n]*)", re.IGNORECASE | re.MULTILINE)
-_PART_QUALIFIER = re.compile(r"^\s*(?:with|and|for|from|including|based on)\b[^:\n]*:", re.IGNORECASE)
-_PART_LEAD = re.compile(r"^[\s*_:\u2014\u2013-]+")
+_PART_QUALIFIER = re.compile(r"^(?:\s+|\s*[,(]\s*)(?:with|and|for|from|including|based on)\b[^:\n]*:", re.IGNORECASE)
+_PART_LEAD = re.compile(r"^[\s*_:?\u2014\u2013-]+")
 
 
 def _is_part_label(m) -> bool:
-    """A label counts only when it ends its line or is followed by a colon or a dash (after any
-    qualifier such as "with the evidence:"): "Root cause analysis" and "Next.js" are not parts."""
+    """A closed bold label ("**What is failing** ...") always counts. Any other label counts when it
+    ends its line or is followed by a colon, a spaced dash, a question mark or a qualifier such as
+    ", with the evidence:": "Root cause analysis", "Next.js" and "Next-day" are not parts."""
     tail = m.group("tail")
-    rest = tail.lstrip("*_ \t")
-    return not rest.strip() or rest[:1] in ":-\u2014\u2013" or bool(_PART_QUALIFIER.match(tail))
+    bold = m.group("bold") or m.group("bold2")
+    if bold and tail.startswith(bold):
+        return True
+    rest = tail.lstrip(" \t")
+    if not tail.strip("*_ \t") or rest[:1] in (":", "?"):
+        return True
+    if tail[:1] in " \t" and rest[:1] in "-\u2014\u2013":
+        return True
+    return bool(_PART_QUALIFIER.match(tail))
 
 
 def derive_parts(note: str | None) -> dict:
@@ -856,15 +864,17 @@ def derive_parts(note: str | None) -> dict:
     for m in _PART_LINE.finditer(text):
         part = next(k for k in _PART_WORDS if m.group(k))
         tail = m.group("tail")
-        # "Next, restart it." and a "Root cause analysis" heading are sentences, not labels
+        # "Next, restart it." and a "Root cause analysis" heading are sentences, not labels, but
+        # they still end the section above them
         if not _is_part_label(m):
+            found.append((None, m.end(), m.start()))
             continue
         q = _PART_QUALIFIER.match(tail)
         body_from = m.start("tail") + (q.end() if q else 0)
         found.append((part, body_from, m.start()))
     out: dict = {"failing": None, "likely_cause": None, "next_step": None}
     for i, (part, body_from, _start) in enumerate(found):
-        if out[part] is not None:
+        if part is None or out[part] is not None:
             continue
         end = found[i + 1][2] if i + 1 < len(found) else len(text)
         chunk = text[body_from:end]
