@@ -21,7 +21,7 @@ export function Banner({ tone = "note", action, className, children, ...props }:
   return (
     <div
       role={tone === "error" ? "alert" : "status"}
-      className={cn("flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border px-4 py-2.5 text-sm", TONES[tone], className)}
+      className={cn("min-w-0 [overflow-wrap:anywhere] flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border px-4 py-2.5 text-sm", TONES[tone], className)}
       {...props}
     >
       <span className="min-w-0">{children}</span>

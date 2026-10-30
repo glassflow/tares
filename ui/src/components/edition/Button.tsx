@@ -38,6 +38,12 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         type={asChild ? undefined : (props.type ?? "button")}
         className={cn(v.extra, asChild && inert && "pointer-events-none opacity-50", busy && "cursor-progress", className)}
         {...props}
+        tabIndex={asChild && inert ? -1 : props.tabIndex}
+        onClick={(e) => {
+          // A link has no disabled state: stop Enter and clicks from following it.
+          if (asChild && inert) e.preventDefault();
+          else props.onClick?.(e);
+        }}
       >
         {asChild ? (
           children

@@ -11,7 +11,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(({ label, hi
   const ids = useFieldIds(id);
   return (
     <StackedField ids={ids} label={label} hint={hint} error={error}>
-      <BaseInput ref={ref} {...fieldAria(ids, { hint, error })} className={cn(error && ERROR_BORDER, className)} {...props} />
+      <BaseInput ref={ref} {...props} {...fieldAria(ids, { hint, error }, props["aria-describedby"])} className={cn(error && ERROR_BORDER, className)} />
     </StackedField>
   );
 });

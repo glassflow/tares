@@ -12,7 +12,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
     const ids = useFieldIds(id);
     return (
       <StackedField ids={ids} label={label} hint={hint} error={error}>
-        <BaseTextarea ref={ref} {...fieldAria(ids, { hint, error })} className={cn(error && ERROR_BORDER, className)} {...props} />
+        <BaseTextarea ref={ref} {...props} {...fieldAria(ids, { hint, error }, props["aria-describedby"])} className={cn(error && ERROR_BORDER, className)} />
       </StackedField>
     );
   },

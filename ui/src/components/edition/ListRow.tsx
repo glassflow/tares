@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 
 /** Shared with SkeletonRows so a loading row is exactly as tall as a real one. */
 export const ROW_CLASS =
-  "flex min-h-[58px] flex-wrap items-center gap-x-4 gap-y-1 border-t border-border px-[18px] py-4 first:border-t-0";
+  "flex min-h-[58px] min-w-0 [overflow-wrap:anywhere] flex-wrap items-center gap-x-4 gap-y-1 border-t border-border px-[18px] py-4 first:border-t-0";
 
 export interface ListRowProps extends React.HTMLAttributes<HTMLElement> {
   /** `a` renders a plain link (give it `href`); `to` renders a router link. Default: a div. */

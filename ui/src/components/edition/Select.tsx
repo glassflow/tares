@@ -15,18 +15,23 @@ export interface SelectOption {
   label: string;
 }
 
-export interface SelectProps extends FieldProps {
+type TriggerProps = Omit<
+  React.ComponentPropsWithoutRef<typeof SelectTrigger>,
+  "id" | "children" | "className" | "value" | "defaultValue" | "dir" | "name" | "disabled" | "onChange"
+>;
+
+export interface SelectProps extends FieldProps, TriggerProps {
   options: SelectOption[];
   value?: string;
   defaultValue?: string;
   onValueChange?: (value: string) => void;
   placeholder?: string;
   disabled?: boolean;
+  required?: boolean;
   name?: string;
   id?: string;
   className?: string;
-  /** Lands on the trigger button. */
-  "data-testid"?: string;
+  /** `data-testid` and other aria props land on the trigger button. */
 }
 
 export function Select({
@@ -40,15 +45,20 @@ export function Select({
   onValueChange,
   placeholder,
   disabled,
+  required,
   name,
   className,
-  "data-testid": testId,
+  ...triggerProps
 }: SelectProps) {
   const ids = useFieldIds(id);
   return (
     <StackedField ids={ids} label={label} hint={hint} error={error}>
-      <BaseSelect value={value} defaultValue={defaultValue} onValueChange={onValueChange} disabled={disabled} name={name}>
-        <SelectTrigger {...fieldAria(ids, { hint, error })} data-testid={testId} className={cn(error && ERROR_BORDER, className)}>
+      <BaseSelect value={value} defaultValue={defaultValue} onValueChange={onValueChange} disabled={disabled} required={required} name={name}>
+        <SelectTrigger
+          {...triggerProps}
+          {...fieldAria(ids, { hint, error }, triggerProps["aria-describedby"])}
+          className={cn(error && ERROR_BORDER, className)}
+        >
           <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent>

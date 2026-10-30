@@ -11,7 +11,7 @@ export interface StatProps extends React.HTMLAttributes<HTMLDivElement> {
 
 export function Stat({ label, value, note, className, ...props }: StatProps) {
   return (
-    <div className={cn("grid content-start gap-1", className)} {...props}>
+    <div className={cn("grid min-w-0 content-start gap-1 [overflow-wrap:anywhere]", className)} {...props}>
       <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground">{label}</div>
       <div className="text-[22px] font-semibold leading-tight">{value}</div>
       {note && <div className="text-xs text-muted-foreground">{note}</div>}

@@ -18,9 +18,9 @@ export function useFieldIds(id?: string) {
 
 type Ids = ReturnType<typeof useFieldIds>;
 
-/** The control's aria attributes: described by the hint and the error, invalid when there is an error. */
-export function fieldAria(ids: Ids, { hint, error }: Pick<FieldProps, "hint" | "error">) {
-  const describedBy = [hint && ids.hintId, error && ids.errorId].filter(Boolean).join(" ");
+/** The control's aria attributes: described by the hint and the error (after any id the caller gave), invalid when there is an error. Spread after the caller's props. */
+export function fieldAria(ids: Ids, { hint, error }: Pick<FieldProps, "hint" | "error">, extra?: string) {
+  const describedBy = [extra, hint && ids.hintId, error && ids.errorId].filter(Boolean).join(" ");
   return { id: ids.id, "aria-describedby": describedBy || undefined, "aria-invalid": error ? true : undefined };
 }
 
@@ -62,9 +62,11 @@ export function InlineField({ ids, label, hint, error, children }: { ids: Ids; c
       <label htmlFor={ids.id} className="cursor-pointer text-sm font-medium leading-5 text-foreground">
         {label}
       </label>
-      <div className="col-start-2 grid gap-1">
-        <FieldNote ids={ids} hint={hint} error={error} />
-      </div>
+      {(hint || error) && (
+        <div className="col-start-2 grid gap-1">
+          <FieldNote ids={ids} hint={hint} error={error} />
+        </div>
+      )}
     </div>
   );
 }

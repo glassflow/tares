@@ -10,7 +10,7 @@ export interface PanelProps extends Omit<React.HTMLAttributes<HTMLElement>, "tit
 
 export function Panel({ title, action, className, children, ...props }: PanelProps) {
   return (
-    <section className={cn("border border-border bg-card", className)} {...props}>
+    <section className={cn("min-w-0 border border-border bg-card [overflow-wrap:anywhere]", className)} {...props}>
       {(title || action) && (
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border px-[18px] py-3">
           {title ? <h3 className="m-0! text-[15px]!">{title}</h3> : <span />}

@@ -14,9 +14,9 @@ export const Checkbox = React.forwardRef<React.ElementRef<typeof BaseCheckbox>, 
       <InlineField ids={ids} label={label} hint={hint} error={error}>
         <BaseCheckbox
           ref={ref}
-          {...fieldAria(ids, { hint, error })}
-          className={cn("mt-0.5", error && ERROR_BORDER, className)}
           {...props}
+          {...fieldAria(ids, { hint, error }, props["aria-describedby"])}
+          className={cn("mt-0.5", error && ERROR_BORDER, className)}
         />
       </InlineField>
     );
