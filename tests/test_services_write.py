@@ -458,8 +458,12 @@ async def cache_over_http():
     async with app.router.lifespan_context(app):
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t", headers=H)
         store, runtime = app.state.store, app.state.runtime
+        # the daemon's watch loop (TR-743) reads the services once at start; let that look end
+        # before the build, so it does not count as a compute of the test
+        await asyncio.sleep(1)
         build(store, datetime.now(timezone.utc))
         runtime.reload_catalog()
+        store.clear_services_cache()
         clock = Clock()
         sre.cache_clock = clock
         spy = Computes()

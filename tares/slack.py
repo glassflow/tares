@@ -703,3 +703,38 @@ def build_error(message: str, thread_ts: str | None = None) -> dict:
     if thread_ts:
         body["thread_ts"] = thread_ts
     return body
+
+
+def build_watch_message(stopped: list[dict], started: list[dict], system: str = "") -> dict:
+    """Block Kit body for a change in who is watching (TR-743). `stopped` and `started` are lists
+    of {service, display, since, reason_words}. Services stopped for the same reason since the same
+    moment share a line, so a budget used up reads as one sentence naming every service it left
+    unwatched. `text` is the notification fallback."""
+    def when(d) -> str:
+        from .store import day_month_words
+        d = d.astimezone(timezone.utc) if d.tzinfo else d
+        return f"{day_month_words(d)}, {d.strftime('%H:%M')}"
+
+    lines: list[str] = []
+    grouped: dict[tuple, list[str]] = {}
+    for e in stopped:
+        grouped.setdefault((e["since"], e["reason_words"]), []).append(e.get("display") or e["service"])
+    for (since, why), names in grouped.items():
+        lines.append(f"{', '.join(names)}: not watched since {when(since)}, {why}.")
+    if started:
+        lines.append("Watching again: " + ", ".join(e.get("display") or e["service"] for e in started) + ".")
+    if stopped:
+        n = len(stopped)
+        head = ("Nobody is watching " + (stopped[0].get("display") or stopped[0]["service"])
+                if n == 1 else f"Nobody is watching {n} services")
+    else:
+        head = "Watching again"
+    blocks: list[dict] = [_header(head),
+                          {"type": "section", "text": {"type": "mrkdwn", "text": _truncate("\n".join(lines))}}]
+    base = public_base()
+    actions = _buttons([("Open in Tares", f"{base}/" if base else "", None)])
+    if actions:
+        blocks.append(actions)
+    blocks.append(_context("AI SRE for " + (system or "your services")))
+    return {"text": _truncate(" ".join(lines), 1000), "blocks": blocks,
+            "unfurl_links": False, "unfurl_media": False}

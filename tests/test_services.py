@@ -27,6 +27,7 @@ os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_AUTH_TOKEN"] = ROOT
+os.environ["TARES_WATCH_SECONDS"] = "3600"   # a watch pass mid-build would cache half-built counts
 
 import httpx
 
@@ -139,7 +140,7 @@ def reading():
     eq("and the signals it ever sent", r["signals"], ["logs"])
     eq("an item has exactly these fields", sorted(got["service-a"]),
        sorted(["name", "display", "hidden", "merged", "signals", "feeds", "events_10m",
-               "events_24h", "last_seen"]))
+               "events_24h", "last_seen", "watched", "watched_by"]))
     eq("display is the name until renamed", (got["service-a"]["display"], got["service-a"]["hidden"],
                                              got["service-a"]["merged"]), ("service-a", False, []))
 
