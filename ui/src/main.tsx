@@ -1,4 +1,4 @@
-import React from "react";
+import React, { lazy, Suspense } from "react";
 import ReactDOM from "react-dom/client";
 import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom";
 
@@ -27,6 +27,9 @@ import ProjectNewCustom from "./pages/ProjectNewCustom";
 import ProjectNewGeneric from "./pages/ProjectNewGeneric";
 import ProjectNewSharedContext from "./pages/ProjectNewSharedContext";
 import "./styles.css";
+
+// The component gallery loads on demand, so it stays out of the main chunk. No menu links to it.
+const DevComponents = lazy(() => import("./pages/dev/Components"));
 
 /** /activity?tab=dispatches (and the bare page, whose default tab was dispatches) → Deliveries;
  *  /activity?tab=queries → Reads; ?agent=… → the subscriber roster on Deliveries. */
@@ -110,6 +113,14 @@ const router = createBrowserRouter([
       // views are gone: a project holds what a view used to
       { path: "views", element: <Navigate to="/projects" replace /> },
       { path: "views/*", element: <Navigate to="/projects" replace /> },
+      {
+        path: "dev/components",
+        element: (
+          <Suspense fallback={null}>
+            <DevComponents />
+          </Suspense>
+        ),
+      },
       { path: "*", element: <NotFound /> },
     ],
   },
