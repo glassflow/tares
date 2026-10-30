@@ -6,6 +6,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- `GET /api/services` lists the services a cell receives data for.
 - Each cell has an edition: factory, sre or platform. Existing cells stay as they are.
 - `GET /api/projects` and a project's summary say `ready_to_close` for a factory project that is still open with every ticket merged or otherwise finished.
 - Console: shadcn/ui primitives on Radix, themed with the Tares tokens, with a /dev/components gallery (part 1 of the component library).

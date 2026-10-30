@@ -86,3 +86,4 @@ test_ci_list
 test_edition
 test_factory_close
 test_words_sync
+test_services

@@ -61,6 +61,7 @@ from . import factory as factory_mod
 from . import claude_usage, factory_api, standup as standup_mod
 from . import edition as edition_mod
 from . import factory_home, sre_home, screens
+from . import sre as sre_mod
 from . import linear as _linear
 from . import github_tickets as _gh_tickets
 from . import skills as skills_mod
@@ -4989,6 +4990,21 @@ def make_app() -> FastAPI:
             return await asyncio.to_thread(sre_home.build, store, runtime.catalog,
                                            runtime.health_snapshot())
         return JSONResponse({"error": "no home on this edition"}, status_code=404)
+
+    # ── services (TR-742): the services this cell receives data for, read from the events ──
+    @app.get("/api/services")
+    async def list_services_route(hidden: int = 0):
+        """Services busiest first; `hidden=1` includes the ones a person hid."""
+        items = await asyncio.to_thread(sre_mod.list_services, store, runtime.catalog,
+                                        None, bool(hidden))
+        return {"services": items, "updated_at": now_utc().isoformat()}
+
+    @app.get("/api/services/{name}")
+    async def get_service_route(name: str):
+        item = await asyncio.to_thread(sre_mod.get_service, store, runtime.catalog, name)
+        if item is None:
+            raise HTTPException(status_code=404, detail=f"no service named {name}")
+        return item
 
     # what the Claude Code sessions spend: the plan's limits and tokens by project
     claude_usage.register(app, store)

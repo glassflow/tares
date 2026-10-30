@@ -19,6 +19,7 @@ import duckdb
 from .envelope import Envelope, now_utc
 from .claude_usage_store import CLAUDE_USAGE_SCHEMA, ClaudeUsageStore
 from .factory_store import FACTORY_SCHEMA, FactoryStore
+from .sre_store import SRE_SCHEMA, SreStore
 
 # the URL a Tares agent's subscription had before the wiring moved onto projects (config.agent_url)
 AGENT_PREFIX = "tares://agent/"
@@ -662,7 +663,7 @@ class StoreUnavailable(RuntimeError):
         self.path = path
 
 
-class Store(FactoryStore, ClaudeUsageStore):
+class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def __init__(self, path: str = "tares.duckdb", state_dsn: str | None = None):
         # One DuckDB connection, used under self._lock from whichever thread a request runs on.
         # State (every table but state_db.EVENT_TABLES) is read through self.sc: the same DuckDB
@@ -738,7 +739,7 @@ class Store(FactoryStore, ClaudeUsageStore):
     @staticmethod
     def _ddl() -> list[str]:
         return ([s for s in _SCHEMA.strip().split(";") if s.strip()] + list(_MIGRATIONS)
-                + list(FACTORY_SCHEMA) + list(CLAUDE_USAGE_SCHEMA))
+                + list(FACTORY_SCHEMA) + list(CLAUDE_USAGE_SCHEMA) + list(SRE_SCHEMA))
 
     def _state_tables(self) -> list[str]:
         return sorted(t for t in self._tables_of(self.con) if t not in state_db.EVENT_TABLES)
