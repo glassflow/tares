@@ -39,10 +39,14 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         className={cn(v.extra, asChild && inert && "pointer-events-none opacity-50", busy && "cursor-progress", className)}
         {...props}
         tabIndex={asChild && inert ? -1 : props.tabIndex}
-        onClick={(e) => {
-          // A link has no disabled state: stop Enter and clicks from following it.
-          if (asChild && inert) e.preventDefault();
-          else props.onClick?.(e);
+        // A link has no disabled state. The capture handler runs before the child's own onClick (a
+        // navigate() call, analytics) and before the browser follows the link, so none of them fire.
+        // Under Slot a child's own tabIndex still wins; do not set one on an inert link.
+        onClickCapture={(e) => {
+          if (asChild && inert) {
+            e.preventDefault();
+            e.stopPropagation();
+          } else props.onClickCapture?.(e);
         }}
       >
         {asChild ? (

@@ -12,7 +12,7 @@ export const Switch = React.forwardRef<React.ElementRef<typeof BaseSwitch>, Swit
     const ids = useFieldIds(id);
     return (
       <InlineField ids={ids} label={label} hint={hint} error={error}>
-        <BaseSwitch ref={ref} {...props} {...fieldAria(ids, { hint, error }, props["aria-describedby"])} className={cn(error && ERROR_BORDER, className)} />
+        <BaseSwitch ref={ref} {...props} {...fieldAria(ids, { hint, error }, props)} className={cn(error && ERROR_BORDER, className)} />
       </InlineField>
     );
   },

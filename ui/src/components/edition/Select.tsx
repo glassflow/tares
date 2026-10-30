@@ -56,7 +56,7 @@ export function Select({
       <BaseSelect value={value} defaultValue={defaultValue} onValueChange={onValueChange} disabled={disabled} required={required} name={name}>
         <SelectTrigger
           {...triggerProps}
-          {...fieldAria(ids, { hint, error }, triggerProps["aria-describedby"])}
+          {...fieldAria(ids, { hint, error }, triggerProps)}
           className={cn(error && ERROR_BORDER, className)}
         >
           <SelectValue placeholder={placeholder} />

@@ -8,6 +8,7 @@ import {
   EmptyState,
   Initials,
   Input,
+  LineChart,
   ListRow,
   ListSection,
   Panel,
@@ -15,6 +16,7 @@ import {
   Select,
   Skeleton,
   SkeletonRows,
+  Sparkline,
   Stat,
   StatusDot,
   StatusLabel,
@@ -46,6 +48,10 @@ const SERVICES = [
 
 const LONG =
   "service-a-eu-west-checkout-payment-gateway-retry-worker, a name long enough to wrap onto a second line instead of pushing the status off the screen";
+
+const HOURS = Array.from({ length: 12 }, (_, i) => `2026-10-29T${String(i * 2).padStart(2, "0")}:00:00Z`);
+const ERRORS = [2, 3, 2, 4, 3, 9, 14, 8, 5, 3, 2, 2];
+const TRAFFIC = [8, 9, 8, 10, 9, 11, 12, 11, 10, 9, 9, 8];
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -363,6 +369,46 @@ export default function Components() {
             Short toast
           </Button>
         </Row>
+      </Section>
+
+      <Section title="Sparkline">
+        <Row>
+          <div className="w-40 text-[color:var(--err)]">
+            <Sparkline points={ERRORS} marks={[5]} aria-label="Errors for service-a, with one deploy" data-testid="sparkline" />
+          </div>
+          <div className="w-40">
+            <Sparkline points={TRAFFIC} aria-label="Requests for service-a" />
+          </div>
+          <div className="w-40">
+            <Sparkline points={[4, 4, 4, 4]} aria-label="A flat line for service-b" />
+          </div>
+          <div className="w-40">
+            <Sparkline points={[]} aria-label="No data for service-c" />
+          </div>
+        </Row>
+      </Section>
+
+      <Section title="Line chart">
+        <Panel>
+          <LineChart
+            aria-label="Errors and requests for service-a, with two deploys"
+            data-testid="line-chart"
+            series={[
+              { label: "Errors", points: HOURS.map((t, i) => [t, ERRORS[i]]) },
+              { label: "Requests per minute", points: HOURS.map((t, i) => [t, TRAFFIC[i]]) },
+            ]}
+            marks={[
+              { at: HOURS[4], label: "Deploy of service-a" },
+              { at: HOURS[8], label: "Deploy of service-b" },
+            ]}
+          />
+        </Panel>
+        <Panel>
+          <LineChart aria-label="Errors for service-a, one series" series={[{ label: "Errors", points: HOURS.map((t, i) => [t, ERRORS[i]]) }]} height={100} />
+        </Panel>
+        <Panel>
+          <LineChart aria-label="Errors for service-b, empty" series={[{ label: "Errors", points: [] }]} data-testid="line-chart-empty" />
+        </Panel>
       </Section>
 
       <Section title="Dropdown menu">
