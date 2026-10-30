@@ -3557,7 +3557,8 @@ def make_app() -> FastAPI:
     async def project_results(uid: str, limit: int = 20, before: str = "", show: str = ""):
         """What the agents concluded, newest first: one result per chain of runs. Page with
         `before` = the previous page's `next_before`. `show`: "findings" leaves out the runs that
-        had nothing to report, "agent:<name>" keeps that agent's conclusions."""
+        had nothing to report, "worth" leaves out the quiet checks (the response's `quiet` counts
+        them), "agent:<name>" keeps that agent's conclusions."""
         _project_or_404(uid)
         at = None
         if before:
@@ -3565,10 +3566,29 @@ def make_app() -> FastAPI:
                 at = datetime.fromisoformat(before.replace("Z", "+00:00"))
             except ValueError:
                 _err(ValueError("before must be an ISO timestamp, as next_before gives it"))
-        if show and show != "findings" and not show.startswith("agent:"):
-            _err(ValueError('show is "findings" or "agent:<name>"'))
+        if show and show not in ("findings", "worth") and not show.startswith("agent:"):
+            _err(ValueError('show is "findings", "worth" or "agent:<name>"'))
         return await asyncio.to_thread(goal_mod.project_results, store, uid, limit=limit,
                                        before=at, scheduled=_scheduled(), show=show)
+
+    @app.get("/api/findings")
+    async def cell_findings(show: str = "worth", service: str = "", limit: int = 20,
+                            before: str = ""):
+        """The findings of every project in the cell, newest first, with a title, the parts and
+        an outcome each (the results of GET /api/projects/{uid}/results, across projects;
+        practice results left out). `show` "worth" (default) leaves out the quiet checks and
+        counts them in `quiet`, "all" keeps them; `service` keeps one service's. Page with
+        `before` = the previous page's `next_before`. Not open to project keys."""
+        at = None
+        if before:
+            try:
+                at = datetime.fromisoformat(before.replace("Z", "+00:00"))
+            except ValueError:
+                _err(ValueError("before must be an ISO timestamp, as next_before gives it"))
+        if show not in ("worth", "all"):
+            _err(ValueError('show is "worth" or "all"'))
+        return await asyncio.to_thread(goal_mod.cell_results, store, _scheduled(), limit=limit,
+                                       before=at, show=show, service=service)
 
     @app.get("/api/projects/{uid}/results/{run_id}")
     async def project_result(uid: str, run_id: str):
@@ -5398,7 +5418,8 @@ def make_app() -> FastAPI:
 
     @app.post("/api/projects/{uid}/findings", status_code=201)
     async def record_project_finding(uid: str, request: Request, body: dict = Body(...)):
-        """{entity, finding, verdict?, label?, headline?, next_step?}: an external agent records what it concluded about
+        """{entity, finding, verdict?, label?, headline?, next_step?, what_changed?, since?,
+        failing?, likely_cause?}: an external agent records what it concluded about
         an entity. It is stored like a Tares agent's finding (on the entity's timeline, read by
         findings triggers) and shows in the project timeline as a run marked external. The agent
         is the key's name; `label` is the label the entity is a value of (default: the entity
@@ -5421,6 +5442,22 @@ def make_app() -> FastAPI:
             _err(ValueError("headline is one line of at most 100 characters"))
         if next_step and len(next_step) > 300:
             _err(ValueError("next_step is at most 300 characters"))
+        what_changed = " ".join(str(body.get("what_changed") or "").split()) or None
+        failing = " ".join(str(body.get("failing") or "").split()) or None
+        likely_cause = " ".join(str(body.get("likely_cause") or "").split()) or None
+        if what_changed and len(what_changed) > 60:
+            _err(ValueError("what_changed is at most 60 characters"))
+        if (failing and len(failing) > 200) or (likely_cause and len(likely_cause) > 200):
+            _err(ValueError("failing and likely_cause are at most 200 characters"))
+        since = None
+        if str(body.get("since") or "").strip():
+            from .builtin_agents import parse_since as _parse_since
+            since = _parse_since(body.get("since"))
+            if since is None:   # unparsable is an error; a time in the future is left out
+                try:
+                    datetime.fromisoformat(str(body["since"]).strip().replace("Z", "+00:00"))
+                except ValueError:
+                    _err(ValueError("since is an ISO 8601 time, e.g. 2026-10-30T14:05:00Z"))
         label = str(body.get("label") or "").strip() or None
         if label and not _LABEL.match(label):
             _err(ValueError("label is a label name: letters, digits and underscores"))
@@ -5439,7 +5476,10 @@ def make_app() -> FastAPI:
                             "a key of another name"), 409)
         run_id = await dispatcher.agents.record_external(uid, agent, entity, finding,
                                                          verdict=verdict, label=label,
-                                                         headline=headline, next_step=next_step)
+                                                         headline=headline, next_step=next_step,
+                                                         what_changed=what_changed, since=since,
+                                                         failing=failing,
+                                                         likely_cause=likely_cause)
         _flag_practice_finding(uid, run_id, ident)
         return {"ok": True, "run_id": run_id, "agent": agent, "entity": entity,
                 "verdict": verdict}

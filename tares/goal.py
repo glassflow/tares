@@ -720,8 +720,21 @@ def _first_sentence(text: str) -> str:
 # analysis:"): never a headline or a summary.
 _FILLER = re.compile(r"^(i have (a|the|all|enough|sufficient|everything)|i now have|i've (got|gathered|"
                      r"collected|confirmed)|i'll|i will|i can now|let me|now (let me|i)|here's|"
-                     r"here (is|are)|okay|alright|great|perfect)\b", re.IGNORECASE)
+                     r"here (is|are)|okay|alright|great|good|perfect)\b", re.IGNORECASE)
 FILLER_MAX = 120
+# Narration about the evidence ("The stats give me what I need."): short, opens on the evidence
+# and says what it does. A sentence that names a failure or a number is a finding, not narration.
+_EVIDENCE_FILLER = re.compile(
+    r"^the (stats|numbers|data|timeline|evidence|read|wider read|picture|logs|window|summary)\b",
+    re.IGNORECASE)
+_EVIDENCE_VERB = re.compile(
+    r"\b(gives?|shows?|confirms?|tells?|is clear|are clear|is enough)\b", re.IGNORECASE)
+_FAILURE_WORDS = re.compile(r"\d|\b(error|errors|fail\w*|down|5xx|4xx)\b", re.IGNORECASE)
+
+
+def _evidence_filler(t: str) -> bool:
+    return (len(t) <= FILLER_MAX and bool(_EVIDENCE_FILLER.match(t))
+            and bool(_EVIDENCE_VERB.search(t)) and not _FAILURE_WORDS.search(t))
 
 
 def _filler(sentence: str, after_filler: bool) -> bool:
@@ -729,6 +742,7 @@ def _filler(sentence: str, after_filler: bool) -> bool:
     follows ("Here's the full analysis:")."""
     t = plain(sentence).strip()
     return bool(t) and ((bool(_FILLER.match(t)) and len(t) <= FILLER_MAX)
+                        or _evidence_filler(t)
                         or (after_filler and t.endswith(":")))
 
 
@@ -762,6 +776,13 @@ def derive_headline(note: str | None) -> str | None:
     if not lines:
         return None
     first = lines[0]
+    fm = _PART_LINE.match(first)
+    if fm and _is_part_label(fm):
+        # a note that opens on its sections ("1) What is failing"): the first part says it
+        parts = derive_parts(note)
+        part = parts["failing"] or parts["likely_cause"]
+        if part:
+            return _cut(_first_sentence(part), HEADLINE_MAX)
     m = _HEADING.match(first)
     if m and plain(m.group(1)):
         return _cut(plain(m.group(1)), HEADLINE_MAX)
@@ -785,7 +806,8 @@ def _tidy(text: str | None) -> str | None:
 
 def derive_next_step(note: str | None) -> str | None:
     """The text after a "Next step:", "Next:" or "Recommendation:" label (or under a heading
-    of that name), to the end of its paragraph; None when the note has no such label."""
+    of that name), to the end of its paragraph; failing that, the "suggested next action" part
+    of a numbered note (derive_parts). None when the note has neither."""
     text = str(note or "")
     m = _NEXT_HEADING.search(text)
     if m:
@@ -793,11 +815,83 @@ def derive_next_step(note: str | None) -> str | None:
         body = re.split(r"\n\s*\n|\n\s{0,3}#{1,6}\s", rest, maxsplit=1)[0]
         return _tidy(_cut(plain(body), NEXT_STEP_MAX))
     m = _NEXT_LABEL.search(text)
-    if not m:
-        return None
-    rest = text[m.end():]
-    body = re.split(r"\n\s*\n", rest, maxsplit=1)[0]
-    return _tidy(_cut(plain(body), NEXT_STEP_MAX))
+    if m:
+        rest = text[m.end():]
+        body = re.split(r"\n\s*\n", rest, maxsplit=1)[0]
+        return _tidy(_cut(plain(body), NEXT_STEP_MAX))
+    return derive_parts(text)["next_step"]
+
+
+PART_MAX = 200
+_WHAT_IS = r"(?:what(?:\s+is|'?s)\s+)?(?:the\s+)?"   # "What is the ...", "The ...": a label may be asked as a question
+_PART_WORDS = {
+    "failing": r"what(?:\s+is|'?s)\s+(?:the\s+)?failing(?: and since when)?|what failed",
+    "likely_cause": _WHAT_IS + r"(?:most )?(?:likely|probable) (?:root )?cause|" + _WHAT_IS + r"root cause",
+    "next_step": _WHAT_IS + r"(?:suggested next actions?|suggested actions?|recommended actions?|"
+                 r"recommendations?|next steps?)|next",
+}
+_PART_LINE = re.compile(
+    r"^[ \t>]*(?:[-*+][ \t]+)?(?P<hash>#{1,6}[ \t]*)?(?P<bold>[*_]{1,2})?[ \t]*"
+    r"(?:(?P<num>\d+)[.)][ \t]*)?(?P<bold2>[*_]{1,2})?[ \t]*"
+    r"(?P<label>" + "|".join(f"(?P<{k}>{v})" for k, v in _PART_WORDS.items()) + r")"
+    r"\b(?P<tail>[^\n]*)", re.IGNORECASE | re.MULTILINE)
+_PART_QUALIFIER = re.compile(r"^(?:\s+|\s*[,(]\s*)(?:with|and|for|from|including|based on)\b[^:\n]*:", re.IGNORECASE)
+_PART_LEAD = re.compile(r"^[\s*_:?\u2014\u2013-]+")
+
+
+def _is_part_label(m) -> bool:
+    """A label counts when it ends its line or is followed by a colon, a spaced dash, a question mark
+    or a qualifier such as ", with the evidence:". A closed bold label ("**What is failing** ...")
+    also counts when a new sentence follows it: "**Root cause** analysis", "**Next** week" and
+    "Next.js" are not parts."""
+    tail = m.group("tail")
+    bold = m.group("bold") or m.group("bold2")
+    sentence = False
+    if bold and tail.startswith(bold):
+        tail = tail[len(bold):]
+        after = tail.lstrip(" \t")[:1]
+        sentence = tail[:1] in " \t" and (after.isupper() or after.isdigit())
+    rest = tail.lstrip(" \t")
+    if sentence or not tail.strip("*_ \t") or rest[:1] in (":", "?"):
+        return True
+    if tail[:1] in " \t" and rest[:1] in "-\u2014\u2013":
+        return True
+    return bool(_PART_QUALIFIER.match(tail))
+
+
+def derive_parts(note: str | None) -> dict:
+    """What is failing, the likely cause and the next step, from a note written in sections:
+    numbered ("1) What is failing", "2) Most likely cause", "3) Suggested next action"), bold,
+    a heading, or a label with a colon ("Root cause: ..."). Each is plain text of at most
+    PART_MAX characters (the next step NEXT_STEP_MAX); None when the note has no such section."""
+    text = str(note or "")
+    found = []   # (part, start of its body, start of its label line)
+    for m in _PART_LINE.finditer(text):
+        part = next(k for k in _PART_WORDS if m.group(k))
+        tail = m.group("tail")
+        # "Next, restart it." and a "Root cause analysis" heading are sentences, not labels. A marked
+        # one (number, bold, heading) still ends the section above it; plain prose stays in it
+        if not _is_part_label(m):
+            if m.group("hash") or m.group("bold") or m.group("bold2") or m.group("num"):
+                found.append((None, m.end(), m.start()))
+            continue
+        q = _PART_QUALIFIER.match(tail)
+        body_from = m.start("tail") + (q.end() if q else 0)
+        found.append((part, body_from, m.start()))
+    out: dict = {"failing": None, "likely_cause": None, "next_step": None}
+    for i, (part, body_from, _start) in enumerate(found):
+        if part is None or out[part] is not None:
+            continue
+        end = found[i + 1][2] if i + 1 < len(found) else len(text)
+        chunk = text[body_from:end]
+        chunk = _PART_LEAD.sub("", chunk, count=1) if chunk.lstrip(" \t")[:1] != "\n" else chunk
+        # a heading ends the section, and so does a blank line once it has said something
+        chunk = re.split(r"\n[ \t]{0,3}#{1,6}\s", chunk, maxsplit=1)[0]
+        paras = [p for p in re.split(r"\n\s*\n", chunk) if plain(p)]
+        body = plain(paras[0]) if paras else ""
+        if body:
+            out[part] = _tidy(_cut(body, NEXT_STEP_MAX if part == "next_step" else PART_MAX))
+    return out
 
 
 def _paragraphs(note: str | None) -> list[str]:
@@ -847,6 +941,113 @@ def headline_and_next(run: dict) -> tuple[str | None, str | None]:
     return _no_dash(derive_headline(note)), _no_dash(derive_next_step(note))
 
 
+# ── titles and outcomes (TR-745) ─────────────────────────────────────────────
+WHAT_MAX = 60
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+_SINCE_TAIL = re.compile(r"\s+since\b.*$", re.IGNORECASE)
+
+
+def _lower_first(text: str) -> str:
+    """The first letter lower case, unless the word is an acronym or a name ("API errors",
+    "S3 outage"): lowered only when the second letter is lower case too."""
+    if len(text) > 1 and text[0].isupper() and text[1].islower():
+        return text[0].lower() + text[1:]
+    return text
+
+
+def _what(what_changed: str | None, headline: str | None) -> str:
+    """What moved, for a title: the agent's words; else the headline, minus its own "since ..."
+    (the title says it) and its final period; lower case start; at most WHAT_MAX characters."""
+    text = " ".join(str(what_changed or "").split())
+    if not text:
+        text = " ".join(str(headline or "").split())
+        short = _SINCE_TAIL.sub("", text)
+        text = short if len(short) >= 8 else text
+    text = _lower_first(text.rstrip(" .;:"))
+    return _cut(text, WHAT_MAX) or ""
+
+
+def service_name(key: str | None, settings: dict | None) -> str:
+    """The service a finding is about, as the cell shows it (TR-742): the key followed through
+    its merges, in its display name when it has one; the key as it is when it is no service."""
+    from .sre import canonical
+    key = str(key or "").strip()
+    if not key:
+        return ""
+    settings = settings or {}
+    return (settings.get(canonical(key, settings)) or {}).get("display") or canonical(key, settings)
+
+
+def service_key(key: str | None, settings: dict | None) -> str:
+    """The service a key is merged into, by its own name (service_name gives the display name)."""
+    from .sre import canonical
+    return canonical(str(key or "").strip(), settings or {})
+
+
+def title_parts_of(key: str | None, what_changed: str | None, headline: str | None,
+                   since_at, fallback_at, settings: dict | None = None) -> dict:
+    """{service, what, since_at}: the three parts of a finding's title. `since_at` is when the
+    agent said it started, else `fallback_at` (the firing time)."""
+    return {"service": service_name(key, settings), "what": _what(what_changed, headline),
+            "since_at": _aware(since_at) or _aware(fallback_at)}
+
+
+def title_parts(run: dict, thread_at, settings: dict | None = None,
+                headline: str | None = None) -> dict:
+    """The title parts of a result's run: what the agent gave, else derived from its note.
+    `headline`: the headline already worked out for the run (saves doing it twice)."""
+    if headline is None:
+        headline = headline_and_next(run)[0]
+    return title_parts_of(run.get("key"), run.get("what_changed"), headline,
+                          run.get("since_at"), thread_at, settings)
+
+
+def _since_words(at, now) -> str:
+    """"14:05" for today, "yesterday, 14:05", else "27 Oct, 14:05", in UTC (the cell does not
+    know the viewer's zone)."""
+    at = _aware(at).astimezone(timezone.utc)
+    now = (_aware(now) or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    clock = at.strftime("%H:%M")
+    days = (now.date() - at.date()).days
+    if days == 0:
+        return clock
+    if days == 1:
+        return f"yesterday, {clock}"
+    return f"{at.day} {_MONTHS[at.month - 1]}, {clock}"
+
+
+def title(parts: dict, now=None) -> str:
+    """"edge-proxy: 5xx errors up 12x since 14:05" (see _since_words for the time)."""
+    since = f"since {_since_words(parts['since_at'], now)}" if parts.get("since_at") else ""
+    what = " ".join(x for x in (parts.get("what") or "finding", since) if x)
+    out = f"{parts['service']}: {what}" if parts.get("service") else what
+    return _no_dash(out) or ""
+
+
+OUTCOME_WORDS = {"quiet": "Quiet", "raised": "Raised", "investigated": "Looked into, nothing to do",
+                 "note_written": "Note written"}
+
+
+def is_watcher_run(run: dict, scheduled: set | None) -> bool:
+    """A scheduled check: its trigger is on a schedule and nothing handed the run over."""
+    return bool(run.get("trigger")) and run.get("trigger") in (scheduled or set()) \
+        and run.get("woken_by") != "handoff"
+
+
+def outcome_of(run: dict, is_watcher: bool) -> str:
+    """What a run came to: quiet (it had nothing to hand on), raised (a watcher's finding),
+    investigated (a finding whose verdict says there is nothing to do, a watcher's included) or
+    note_written (any other finding, one with no verdict included). The one rule for "is this
+    an incident note"."""
+    if run.get("outcome") == "no_op":
+        return "quiet"
+    if str(run.get("verdict") or "").strip().lower() in NO_ACTION_VERDICTS:
+        return "investigated"
+    if is_watcher:
+        return "raised"
+    return "note_written"
+
+
 # ── results ──────────────────────────────────────────────────────────────────
 def _concluding(r: dict) -> bool:
     if r.get("status") != "ok":
@@ -875,22 +1076,25 @@ def _started(r: dict):
     return _aware(r.get("started_at")) or datetime.min.replace(tzinfo=timezone.utc)
 
 
-def kind_of(run: dict, next_step: str | None) -> str:
-    if run.get("outcome") == "no_op":
-        return "no_action"
-    if not next_step or str(run.get("verdict") or "").strip().lower() in NO_ACTION_VERDICTS:
-        return "no_action"
-    # a next step that says there is nothing to do ("No action required. Monitor ...")
-    if _NOTHING_TO_DO.match(next_step):
-        return "no_action"
-    return "action"
-
-
 _NOTHING_TO_DO = re.compile(r"\s*(no action|nothing to do|no further action|none needed|no need to)",
                             re.IGNORECASE)
 
 
-def result_for(thread: dict, run: dict, parent: dict) -> dict:
+def needs_action(outcome: str, next_step: str | None) -> bool:
+    """A note or a raised check somebody should look at, unless its own next step says there is
+    nothing to do ("No action required. Monitor ...")."""
+    if outcome not in ("note_written", "raised"):
+        return False
+    return not (next_step and _NOTHING_TO_DO.match(next_step))
+
+
+def kind_of(outcome: str, next_step: str | None, handled: bool = False) -> str:
+    """"action" while a note or a raised check waits for a person, else "no_action"."""
+    return "action" if needs_action(outcome, next_step) and not handled else "no_action"
+
+
+def result_for(thread: dict, run: dict, parent: dict, scheduled: set | None = None,
+               settings: dict | None = None, now=None) -> dict:
     path = []
     cur = run
     while cur is not None and len(path) < 50:
@@ -902,11 +1106,20 @@ def result_for(thread: dict, run: dict, parent: dict) -> dict:
         if not chain or chain[-1] != r["agent"]:
             chain.append(r["agent"])
     headline, next_step = headline_and_next(run)
+    parts = derive_parts(run.get("finding"))
+    failing = _no_dash(run.get("failing") or parts["failing"])
+    likely_cause = _no_dash(run.get("likely_cause") or parts["likely_cause"])
     handled = ({"at": _iso(run["handled_at"]), "by": run.get("handled_by")}
                if run.get("handled_at") else None)
+    outcome = outcome_of(run, is_watcher_run(run, scheduled))
+    tp = title_parts(run, thread.get("at"), settings, headline)
     return {"id": run["id"], "thread": thread["id"], "at": _iso(thread.get("at")),
             "entity": run.get("key") or thread.get("entity"),
-            "kind": kind_of(run, next_step),
+            "kind": kind_of(outcome, next_step, bool(handled)),
+            "title": title(tp, now),
+            "title_parts": {**tp, "since_at": _iso(tp["since_at"])},
+            "failing": failing, "likely_cause": likely_cause,
+            "outcome": outcome, "outcome_words": OUTCOME_WORDS[outcome],
             "headline": headline, "summary": summary_of(run.get("finding"), headline),
             "next_step": next_step, "verdict": run.get("verdict"), "chain": chain,
             "no_op": run.get("outcome") == "no_op",
@@ -917,7 +1130,8 @@ def result_for(thread: dict, run: dict, parent: dict) -> dict:
             "practice": any(bool(r.get("practice")) for r in path)}
 
 
-def thread_result(thread: dict) -> dict | None:
+def thread_result(thread: dict, scheduled: set | None = None, settings: dict | None = None,
+                  now=None) -> dict | None:
     """The one result of a thread: its last concluding run (a triage that handed off is not a
     result, the run it handed to is). None while a run of the thread is still working, and when
     no run concluded."""
@@ -927,7 +1141,7 @@ def thread_result(thread: dict) -> dict | None:
     done = [r for r in runs if _concluding(r)]
     if not done:
         return None
-    return result_for(thread, max(done, key=_started), parent)
+    return result_for(thread, max(done, key=_started), parent, scheduled, settings, now)
 
 
 def _threads(store, uid: str, before, scheduled: set):
@@ -950,39 +1164,42 @@ def utc_midnight(now=None):
 
 def _shown(r: dict, show: str) -> bool:
     """Whether a result passes the overview's Show filter: "" everything, "findings" only runs
-    that recorded a finding (not "nothing to report"), "agent:<name>" only those the agent
-    concluded."""
+    that recorded a finding (not "nothing to report"), "worth" leaves out the quiet checks,
+    "agent:<name>" only those the agent concluded."""
     if not show:
         return True
     if show == "findings":
         return not r.get("no_op")
+    if show == "worth":
+        return r.get("outcome") != "quiet"
     if show.startswith("agent:"):
         return bool(r["chain"]) and r["chain"][-1] == show[len("agent:"):]
     return True
 
 
-def project_results(store, uid: str, limit: int = 20, before=None, scheduled: set | None = None,
-                    now=None, show: str = "") -> dict:
-    """One page of results. The first page (no `before`) also counts today's in the same walk:
-    it reads on past the page while threads are from today, so the overview's poll walks the
-    project once. Older pages leave `found` at 0; the console reads today from the first page.
-    `show` narrows the page (see _shown); today's counts are the whole project's either way."""
-    limit = max(1, min(int(limit), 100))
-    scheduled = scheduled or set()
-    # "today" is since midnight UTC: the cell does not know the viewer's time zone
-    midnight = utc_midnight(now)
-    first_page = before is None
+def _page(threads, make, limit: int, show: str, first_page: bool, midnight,
+          keep=None) -> tuple[list, str | None, dict, int]:
+    """One page of results from `threads` (newest first), made by `make(thread)`. The first page
+    reads on past the page while threads are from today, to count what today found and, under
+    show="worth", the quiet checks it left out. Returns (results, next_before, quiet, found).
+    `keep(result)` False drops a result altogether: it is neither shown nor counted."""
     results, next_before, scanned, found, full = [], None, 0, 0, False
-    for t in _threads(store, uid, before, scheduled):
+    quiet_n, last_at = 0, None
+    for t in threads:
         scanned += 1
+        last_at = t["at"]
         today_thread = first_page and _aware(t["at"]) >= midnight
         if full and not today_thread:
             break
-        r = thread_result(t)
-        if r is not None:
-            if today_thread and r["kind"] == "action" and not r["practice"]:
+        r = make(t)
+        if r is not None and (keep is None or keep(r)):
+            if today_thread and needs_action(r["outcome"], r["next_step"]) and not r["practice"]:
                 found += 1
-            if not full and _shown(r, show):
+            shown = _shown(r, show)
+            if show == "worth" and r["outcome"] == "quiet" and (
+                    today_thread if first_page else not full):
+                quiet_n += 1
+            if not full and shown:
                 results.append(r)
                 if len(results) >= limit:
                     next_before, full = _iso(t["at"]), True
@@ -990,9 +1207,69 @@ def project_results(store, uid: str, limit: int = 20, before=None, scheduled: se
             if not full:
                 next_before = _iso(t["at"])
             break
+    since = _iso(midnight) if first_page else _iso(last_at)
+    return results, next_before, {"count": quiet_n, "since": since}, found
+
+
+def project_results(store, uid: str, limit: int = 20, before=None, scheduled: set | None = None,
+                    now=None, show: str = "") -> dict:
+    """One page of results. The first page (no `before`) also counts today's in the same walk:
+    it reads on past the page while threads are from today, so the overview's poll walks the
+    project once. Older pages leave `found` at 0; the console reads today from the first page.
+    `show` narrows the page (see _shown); today's counts are the whole project's either way.
+    `quiet` counts the quiet checks `show="worth"` left out (the first page: since midnight)."""
+    limit = max(1, min(int(limit), 100))
+    scheduled = scheduled or set()
+    # "today" is since midnight UTC: the cell does not know the viewer's time zone
+    midnight = utc_midnight(now)
+    settings = store.service_settings()
+    results, next_before, quiet, found = _page(
+        _threads(store, uid, before, scheduled),
+        lambda t: thread_result(t, scheduled, settings, now), limit, show, before is None, midnight)
     today = {"looked_at": store.project_threads_since(uid, midnight), "found": found,
              "spent_usd": round(store.project_spend_since(uid, midnight), 6)}
-    return {"results": results, "next_before": next_before, "today": today}
+    return {"results": results, "next_before": next_before, "today": today, "quiet": quiet}
+
+
+def _merged_threads(store, before, scheduled: set):
+    """The threads of every project, newest first. One that two projects share comes twice,
+    with the same runs: the caller drops the second result it makes."""
+    import heapq
+    gens = [_threads(store, p["id"], before, scheduled) for p in store.list_projects()]
+    return heapq.merge(*gens, key=lambda t: _aware(t["at"]), reverse=True)
+
+
+def cell_results(store, scheduled: set | None = None, limit: int = 20, before=None,
+                 show: str = "worth", service: str = "", now=None) -> dict:
+    """The AI SRE findings list: the results of every project, newest first, practice results
+    left out, paged like project_results (`before` = the previous page's `next_before`).
+    show="worth" (the default) leaves out the quiet checks and counts them in `quiet`, "all"
+    keeps them. `service` keeps the findings about that service (its display name or its key)."""
+    limit = max(1, min(int(limit), 100))
+    scheduled = scheduled or set()
+    midnight = utc_midnight(now)
+    settings = store.service_settings()
+    want = (service or "").strip().lower()
+    seen: set = set()
+
+    def make(t):
+        r = thread_result(t, scheduled, settings, now)
+        if r is None or r["id"] in seen:
+            return None
+        seen.add(r["id"])
+        return r
+
+    def keep(r):
+        if r["practice"]:
+            return False
+        if not want:
+            return True
+        return want in (r["title_parts"]["service"].lower(), service_key(r["entity"], settings).lower())
+
+    results, next_before, quiet, _found = _page(
+        _merged_threads(store, before, scheduled), make, limit,
+        "worth" if show == "worth" else "", before is None, midnight, keep)
+    return {"findings": results, "quiet": quiet, "next_before": next_before}
 
 
 def _root_of(store, run: dict, uid: str | None = None) -> tuple | None:
@@ -1140,7 +1417,8 @@ def result_detail(store, catalog, uid: str, run_id: str, scheduled: set | None =
     if target is None:
         target = {**run, "children": [], "firings": []}
         parent = {run_id: None}
-    out = result_for(thread, {**target, "finding": run.get("finding")}, parent)
+    out = result_for(thread, {**target, "finding": run.get("finding")}, parent, scheduled,
+                     store.service_settings())
     out["note"] = run.get("finding") or ""
     out["steps"] = steps_of(store, catalog, thread, run_id)
     return out

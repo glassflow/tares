@@ -456,6 +456,12 @@ _MIGRATIONS = [
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS next_step TEXT",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS handled_at TIMESTAMPTZ",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS handled_by TEXT",
+    # TR-745: the parts of a finding an agent gives with `conclude`: what moved, when it started,
+    # what is failing and the likely cause. NULL on every earlier row; goal.py derives them.
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS what_changed TEXT",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS since_at TIMESTAMPTZ",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS failing TEXT",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS likely_cause TEXT",
     # The guided project setup: the plan a project was set up from and how far the person got
     # ({plan, step, practice_run}, NULL for any other project), and a practice mark on the runs
     # and firings "Try it" makes. A practice result is shown, never counted: today's totals and
@@ -1855,17 +1861,21 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                          finding: str | None = None, error: str | None = None,
                          external_tools: list[str] | None = None, outcome: str | None = None,
                          verdict: str | None = None, headline: str | None = None,
-                         next_step: str | None = None) -> None:
+                         next_step: str | None = None, what_changed: str | None = None,
+                         since_at=None, failing: str | None = None,
+                         likely_cause: str | None = None) -> None:
         with self._swrite:
             self.sc.execute(
                 "UPDATE agent_runs SET status = ?, rounds = ?, tool_calls = ?, finding = ?, "
                 "error = ?, external_tools = ?, outcome = ?, verdict = ?, headline = ?, "
-                "next_step = ?, finished_at = ?, "
+                "next_step = ?, what_changed = ?, since_at = ?, failing = ?, likely_cause = ?, "
+                "finished_at = ?, "
                 "duration_ms = CAST(date_diff('millisecond', started_at, ?) AS INTEGER) "
                 "WHERE id = ?",
                 [status, rounds, tool_calls, finding, error,
                  json.dumps(external_tools or []), outcome, verdict, headline or None,
-                 next_step or None, now_utc(), now_utc(), run_id],
+                 next_step or None, what_changed or None, since_at or None, failing or None,
+                 likely_cause or None, now_utc(), now_utc(), run_id],
             )
 
     def record_run_usage(self, run_id: str, model: str, input_tokens: int, output_tokens: int,
@@ -1902,7 +1912,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                "model, input_tokens, output_tokens, cache_creation_input_tokens, "
                "cache_read_input_tokens, cost_usd, delivery, delivery_error, provider, "
                "outcome, verdict, results, woken_by, parent_run_id, project, skills, "
-               "headline, next_step, handled_at, handled_by, practice "
+               "headline, next_step, handled_at, handled_by, practice, "
+               "what_changed, since_at, failing, likely_cause "
                "FROM agent_runs ")
         where, params = [], []
         if where_sql:
@@ -1933,7 +1944,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
              "woken_by": r[26], "parent_run_id": r[27], "project": r[28],
              "skills": json.loads(r[29]) if r[29] else [],
              "headline": r[30], "next_step": r[31], "handled_at": r[32], "handled_by": r[33],
-             "practice": bool(r[34])}
+             "practice": bool(r[34]), "what_changed": r[35], "since_at": r[36],
+             "failing": r[37], "likely_cause": r[38]}
             for r in rows
         ]
 
