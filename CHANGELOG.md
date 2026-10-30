@@ -12,6 +12,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 - `GET /api/projects` and a project's summary say `ready_to_close` for a factory project that is still open with every ticket merged or otherwise finished.
 - `GET /api/home` on a factory cell returns the home page in one call: a headline, what waits for you, the open projects, the crew, the Claude plan and the connected tools.
 - Console: shadcn/ui primitives on Radix, themed with the Tares tokens, with a /dev/components gallery (part 1 of the component library).
+- AI SRE cells tell Slack when nobody is watching a service, and when watching starts again. `GET /api/watch` says who watches what and why a watcher stopped.
 
 ### Fixed
 - DuckDB's memory is capped at 1 GB when `tares up` runs on a machine with no container memory

@@ -90,3 +90,4 @@ test_services
 test_services_write
 test_budget_period
 test_factory_home
+test_watch_state

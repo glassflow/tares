@@ -11,7 +11,7 @@ import json
 import time
 from datetime import timedelta, timezone
 
-from .config import primary_label
+from .config import FINDINGS_SOURCE, primary_label
 from .envelope import now_utc
 
 LABELS_SETTING = "sre.service_labels"   # JSON {source name: label name, or null for not a service}
@@ -215,6 +215,9 @@ def list_services(store, catalog, now=None, include_hidden: bool = False) -> lis
     out = [i for n, r in c["recs"].items()
            if (i := _item(n, r, c["settings"], include_hidden)) is not None]
     out.sort(key=lambda i: (-i["events_24h"], i["name"]))
+    found = roles(store, catalog)["watchers"]
+    for i in out:
+        _watched(store, catalog, i, found)
     return out
 
 
@@ -228,6 +231,7 @@ def get_service(store, catalog, name: str, now=None) -> dict | None:
     if r is None:
         return None
     item = _item(name, r, c["settings"], True)
+    _watched(store, catalog, item)
     ever = {}
     for sname, kind, t in r["ever"]:
         ever[(sname, kind)] = _later(ever.get((sname, kind)), t)
@@ -241,6 +245,109 @@ def get_service(store, catalog, name: str, now=None) -> dict | None:
     scope = {s: (label, [name, *item["merged"]]) for s, label in c["svc_sources"].items()}
     item["labels"] = store.service_label_names(scope, c["since_24h"], MAX_LABELS)
     return item
+
+
+# ── who is watching (TR-743) ─────────────────────────────────────────────────
+def _paused_projects(store) -> dict:
+    return {p["id"]: p.get("status") == "paused" for p in store.list_projects()}
+
+
+def roles(store, catalog, include_paused: bool = False) -> dict:
+    """The jobs the agents of this cell do, from how they are wired.
+
+    watchers: [{agent, project, trigger, enabled, paused, trigger_paused}], one per wake of an
+    agent by a scheduled trigger. By default only the ones that can run: the wake is on and neither
+    its trigger nor its project is paused. With `include_paused` the ones that cannot are listed
+    too, and the three flags say why (`paused` is the project's).
+    investigators: [{agent, project}], the agents a watcher hands a verdict to, and the agents
+    woken by a trigger that reads only findings."""
+    from .schedule import is_scheduled
+    triggers = {t.name: t for t in catalog.triggers}
+    agents = {a["name"] for a in store.list_catalog_agents()}
+    paused = _paused_projects(store)
+    watchers, investigators = [], []
+
+    def add_investigator(agent, project):
+        if agent in agents and not any(i["agent"] == agent and i["project"] == project
+                                       for i in investigators):
+            investigators.append({"agent": agent, "project": project})
+
+    for w in store.list_wakes():
+        trig = triggers.get(w["trigger"])
+        if trig is None or w["agent"] not in agents:
+            continue
+        project_paused = bool(paused.get(w["project"]))
+        runnable = w["enabled"] and not trig.paused and not project_paused
+        if not (runnable or include_paused):
+            continue
+        if is_scheduled(trig) and trig.sources:
+            watchers.append({"agent": w["agent"], "project": w["project"], "trigger": trig.name,
+                             "enabled": bool(w["enabled"]), "paused": project_paused,
+                             "trigger_paused": bool(trig.paused)})
+        elif list(trig.sources) == [FINDINGS_SOURCE]:
+            add_investigator(w["agent"], w["project"])
+    for w in list(watchers):
+        for h in store.list_handoffs(project=w["project"], from_agent=w["agent"]):
+            add_investigator(h["agent"], w["project"])
+    # an investigator whose own wake of the schedule is off is wiring left over, not a watcher
+    # that was turned off
+    inv = {(i["agent"], i["project"]) for i in investigators}
+    watchers = [w for w in watchers if w["enabled"] or (w["agent"], w["project"]) not in inv]
+    return {"watchers": watchers, "investigators": investigators}
+
+
+def _excluded(trig, src, names: list[str], overrides: dict) -> bool:
+    """Whether a filter of `trig` leaves out the service whose names (itself and what is merged
+    into it) are `names`, when it is fed by source `src`. Only a filter on the label that names
+    services in that source says anything about a service: eq or in with other values leave it
+    out, and so does neq with this service's own name."""
+    label = service_label(src, overrides)
+    for f in trig.filters or []:
+        if not label or f.get("field") != label:
+            continue
+        op, val = f.get("op"), f.get("value")
+        if op == "eq" and str(val) not in names:
+            return True
+        if op == "neq" and str(val) == names[0]:
+            return True
+        if op == "in" and isinstance(val, list) and not {str(v) for v in val} & set(names):
+            return True
+    return False
+
+
+def covers(store, catalog, service_item: dict, watchers: list | None = None) -> list[dict]:
+    """The watchers whose trigger reads a feed of this service and does not filter it out, from
+    how they are set up (configuration only: whether they can run is tares/watch.py's question).
+    `watchers` is a roles() list when the caller has one, else the ones that can run."""
+    if watchers is None:
+        watchers = roles(store, catalog)["watchers"]
+    triggers = {t.name: t for t in catalog.triggers}
+    overrides = _overrides(store)
+    feeds = {f["name"] for f in service_item.get("feeds") or []}
+    names = [service_item["name"], *(service_item.get("merged") or [])]
+    out = []
+    for w in watchers:
+        trig = triggers.get(w["trigger"])
+        if trig is None:
+            continue
+        for sname in trig.sources:
+            src = catalog.sources.get(sname)
+            if sname in feeds and src is not None and not _excluded(trig, src, names, overrides):
+                out.append(w)
+                break
+    return out
+
+
+def _watched(store, catalog, item: dict, watchers: list | None = None) -> None:
+    """Add `watched` and `watched_by` to a service item."""
+    by = covers(store, catalog, item, watchers)
+    seen = []
+    for w in by:
+        pair = {"agent": w["agent"], "project": w["project"]}
+        if pair not in seen:
+            seen.append(pair)
+    item["watched_by"] = seen
+    item["watched"] = bool(seen)
 
 
 # ── what a person changes ────────────────────────────────────────────────────

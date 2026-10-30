@@ -20,6 +20,18 @@ SRE_SCHEMA = [
       updated_at  TIMESTAMPTZ,
       updated_by  TEXT
     )""",
+    # TR-743: whether anybody is watching each service, and whether Slack was told. One row per
+    # service; a service that is no longer known has its row removed (tares/watch.py).
+    """CREATE TABLE IF NOT EXISTS watch_state (
+      service    TEXT PRIMARY KEY,
+      watched    BOOLEAN,
+      reason     TEXT,
+      since      TIMESTAMPTZ,
+      agent      TEXT,
+      project    TEXT,
+      told_at    TIMESTAMPTZ,
+      told_where TEXT
+    )""",
 ]
 
 UNSET = object()   # a field left out of set_service keeps its value; None clears it
@@ -134,3 +146,66 @@ class SreStore:
                     [source, since_24h, *values]).fetchall()
                 names.update(r[0] for r in rows if r[0])
         return sorted(names)[:limit]
+
+    # ── watching: whether anybody is watching each service (TR-743) ───────────
+    def watch_rows(self) -> dict[str, dict]:
+        """service -> {watched, reason, since, agent, project, told_at, told_where}, every row."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT service, watched, reason, since, agent, project, told_at, told_where "
+                "FROM watch_state").fetchall()
+        return {r[0]: {"watched": bool(r[1]), "reason": r[2], "since": r[3], "agent": r[4],
+                       "project": r[5], "told_at": r[6], "told_where": r[7]} for r in rows}
+
+    def set_watch_row(self, service: str, **fields) -> None:
+        """Create or change one service's row: only the fields given change (watched, reason,
+        since, agent, project, told_at, told_where); None clears one."""
+        cols = ("watched", "reason", "since", "agent", "project", "told_at", "told_where")
+        bad = sorted(set(fields) - set(cols))
+        if bad:
+            raise ValueError(f"no such watch field: {', '.join(bad)}")
+        with self._swrite:
+            row = self.sc.execute(
+                "SELECT watched, reason, since, agent, project, told_at, told_where "
+                "FROM watch_state WHERE service = ?", [service]).fetchone()
+            cur = dict(zip(cols, row)) if row else dict.fromkeys(cols)
+            cur.update(fields)
+            vals = [bool(cur["watched"]) if cur["watched"] is not None else None,
+                    *(cur[c] for c in cols[1:])]
+            if row:
+                self.sc.execute(
+                    "UPDATE watch_state SET watched = ?, reason = ?, since = ?, agent = ?, "
+                    "project = ?, told_at = ?, told_where = ? WHERE service = ?", vals + [service])
+            else:
+                self.sc.execute(
+                    "INSERT INTO watch_state (watched, reason, since, agent, project, told_at, "
+                    "told_where, service) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", vals + [service])
+
+    def delete_watch_rows(self, services: list[str]) -> None:
+        with self._swrite:
+            for s in services:
+                self.sc.execute("DELETE FROM watch_state WHERE service = ?", [s])
+
+    def mark_told(self, services: list[str], at, where: str) -> list[str]:
+        """Say Slack was told about these services at `at`, in `where`. Only a row not told yet
+        changes, and the services that did are returned, so two posts for one change cannot both
+        count."""
+        done = []
+        with self._swrite:
+            for s in services:
+                row = self.sc.execute(
+                    "SELECT 1 FROM watch_state WHERE service = ? AND told_at IS NULL",
+                    [s]).fetchone()
+                if row:
+                    self.sc.execute(
+                        "UPDATE watch_state SET told_at = ?, told_where = ? WHERE service = ? "
+                        "AND told_at IS NULL", [at, where, s])
+                    done.append(s)
+        return done
+
+    def trigger_created_at(self, name: str):
+        """When a trigger was made (None for one the catalog does not hold)."""
+        with self._sread:
+            row = self.sc.execute("SELECT created_at FROM catalog_triggers WHERE name = ?",
+                                  [name]).fetchone()
+        return row[0] if row else None

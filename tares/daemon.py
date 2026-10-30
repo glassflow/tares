@@ -63,6 +63,7 @@ from . import claude_usage, factory_api, standup as standup_mod
 from . import edition as edition_mod
 from . import factory_home, sre_home, screens
 from . import sre as sre_mod
+from . import watch as watch_mod
 from . import linear as _linear
 from . import github_tickets as _gh_tickets
 from . import skills as skills_mod
@@ -676,6 +677,8 @@ def make_app() -> FastAPI:
         # the clock for schedule triggers (TR-320)
         from . import schedule as _schedule
         schedule_task = asyncio.create_task(_schedule.run(runtime, loop_stop))
+        # who is watching each service, and telling Slack when that changes (TR-743)
+        watch_task = asyncio.create_task(watch_mod.run(runtime, loop_stop))
         print(f"taresd: {len(runtime.catalog.sources)} source(s); "
               f"console at / · agent API at /read · management API at /api")
         # optional OTLP gRPC receiver (:4317). Needs grpcio + opentelemetry-proto; off if absent.
@@ -694,6 +697,7 @@ def make_app() -> FastAPI:
         loop_stop.set()
         loop_watch.cancel()
         schedule_task.cancel()
+        watch_task.cancel()
         if grpc_server is not None:
             await grpc_server.stop(grace=2)
         runtime.shutdown()
@@ -5006,7 +5010,16 @@ def make_app() -> FastAPI:
         """Services busiest first; `hidden=1` includes the ones a person hid."""
         items = await asyncio.to_thread(sre_mod.list_services, store, runtime.catalog,
                                         None, bool(hidden))
+        rows = await asyncio.to_thread(store.watch_rows)
+        agents = {a["name"]: a for a in await asyncio.to_thread(store.list_catalog_agents)}
+        for i in items:
+            i["watch"] = watch_mod.service_state(store, rows, i["name"], agents, now_utc())
         return {"services": items, "updated_at": now_utc().isoformat()}
+
+    @app.get("/api/watch")
+    async def watch_route():
+        """Whether anybody is watching each service, and each watcher's state (TR-743)."""
+        return await asyncio.to_thread(watch_mod.view, store, runtime.catalog)
 
     @app.get("/api/services/{name:path}")
     async def get_service_route(name: str):
