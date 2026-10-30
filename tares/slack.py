@@ -561,9 +561,12 @@ def to_mrkdwn(text: str) -> str:
 def build_finding_message(agent_name: str, trigger: str, key: str, finding: str, *,
                           verdict: str | None = None, model: str | None = None,
                           run_id: str | None = None, when: str | None = None,
-                          full_note: bool = False) -> dict:
+                          full_note: bool = False, title: str | None = None,
+                          service: str | None = None) -> dict:
     """Block Kit body for a Tares agent's finding (TR-275): the entity as the header, a grid of
-    fields, a short excerpt of the note, and buttons into Tares.
+    fields, a short excerpt of the note, and buttons into Tares. With a `title` (TR-745: the AI
+    SRE edition's "service: what changed since when") the header is the title and the fields add
+    the `service`.
 
     A note that fits in one message block is posted whole (`full_note=True`), and Slack folds it
     behind "Show more". A longer one, like a multi-section incident note, gets an excerpt here and
@@ -573,9 +576,11 @@ def build_finding_message(agent_name: str, trigger: str, key: str, finding: str,
     # the entity is the header, so the fields say who wrote the note and why
     fields = [("Agent", agent_name), ("Trigger", f"`{trigger}`"), ("Verdict", verdict),
               ("Model", model)]
+    if title:
+        fields.insert(0, ("Service", service))
     if when:
         fields.append(("When", _slack_date(when)))
-    blocks: list[dict] = [_header(key), _fields(fields)]
+    blocks: list[dict] = [_header(title or key), _fields(fields)]
     if full_note:
         blocks += _sections(finding)
     else:

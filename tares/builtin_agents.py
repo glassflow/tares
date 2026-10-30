@@ -329,6 +329,14 @@ CONCLUDE_DEF = {
         "next_step": {"type": "string", "description": "at most 300 characters: what a person "
                                                        "should do now; empty when nothing needs "
                                                        "doing"},
+        "what_changed": {"type": "string", "description": "at most 60 characters, what moved, "
+                                                          "in the reader's terms, lower case, "
+                                                          "e.g. 5xx errors up 12x"},
+        "since": {"type": "string", "description": "when it started, ISO 8601 UTC, from the "
+                                                   "evidence"},
+        "failing": {"type": "string", "description": "at most 200 characters: what is failing"},
+        "likely_cause": {"type": "string", "description": "at most 200 characters: the most "
+                                                          "likely cause, or empty when unknown"},
         "produced": {"type": "array", "items": {"type": "string"},
                      "description": "anything you produced that Tares cannot see from your "
                                     "tool calls, one short line each; usually leave empty"}},
@@ -342,9 +350,13 @@ CONCLUDE_GUIDANCE = (
     "\n\nWhen you call conclude, also give `headline`: one line of at most 100 characters "
     "saying what you found, in the reader's terms (for example: Payment provider outage). And "
     "give `next_step`: what a person should do now, in at most 300 characters; leave it empty "
-    "when nothing needs doing.")
+    "when nothing needs doing. With a finding, also give `what_changed` (what moved, in at most "
+    "60 characters), `since` (when it started, ISO 8601 UTC), `failing` and `likely_cause` (at "
+    "most 200 characters each).")
 HEADLINE_MAX = 100
 NEXT_STEP_MAX = 300
+WHAT_CHANGED_MAX = 60
+PART_MAX = 200
 
 
 def for_projects(agent: dict, projects: list[str]) -> dict:
@@ -407,6 +419,27 @@ def _one_line(text, limit: int) -> str | None:
     return t or None
 
 
+def parts_of(concluded: dict) -> dict:
+    """The conclude parts `finish_agent_run` stores (TR-745), under the column names."""
+    return {"what_changed": concluded.get("what_changed"), "since_at": concluded.get("since"),
+            "failing": concluded.get("failing"), "likely_cause": concluded.get("likely_cause")}
+
+
+def parse_since(value) -> datetime | None:
+    """`since` as an aware UTC time; None when it is empty, unparsable or in the future."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    dt = dt.astimezone(timezone.utc)
+    return None if dt > datetime.now(timezone.utc) else dt
+
+
 def parse_conclude(args: dict, verdicts: list[str] | None = None) -> tuple[dict | None, str | None]:
     """The `conclude` call as an outcome, or the error the model gets back to try again.
     `verdicts`: the only ones a finding may carry, and it must carry one (none given: any)."""
@@ -427,6 +460,10 @@ def parse_conclude(args: dict, verdicts: list[str] | None = None) -> tuple[dict 
             "label": str(args.get("label") or "").strip() or None,
             "headline": _one_line(args.get("headline"), HEADLINE_MAX),
             "next_step": _one_line(args.get("next_step"), NEXT_STEP_MAX),
+            "what_changed": _one_line(args.get("what_changed"), WHAT_CHANGED_MAX),
+            "since": parse_since(args.get("since")),
+            "failing": _one_line(args.get("failing"), PART_MAX),
+            "likely_cause": _one_line(args.get("likely_cause"), PART_MAX),
             "produced": args.get("produced") or []}, None
 
 
@@ -958,7 +995,8 @@ class AgentRunner:
                                         finding=concluded["summary"] or None,
                                         external_tools=external_used, outcome="no_op",
                                         headline=concluded.get("headline"),
-                                        next_step=concluded.get("next_step"))
+                                        next_step=concluded.get("next_step"),
+                                        **parts_of(concluded))
             return "ok", None
         if not finding:
             msg = "the model returned no conclusion"
@@ -991,12 +1029,14 @@ class AgentRunner:
                                           run_id=run_id, model=model,
                                           dispatch_id=dispatch_id,
                                           headline=concluded.get("headline"),
-                                          next_step=concluded.get("next_step")) or [])
+                                          next_step=concluded.get("next_step"),
+                                          parts=concluded) or [])
         self.store.finish_agent_run(run_id, "ok", rounds=rounds, tool_calls=tool_calls,
                                     finding=finding, external_tools=external_used,
                                     outcome="finding", verdict=verdict,
                                     headline=concluded.get("headline"),
-                                    next_step=concluded.get("next_step"))
+                                    next_step=concluded.get("next_step"),
+                                    **parts_of(concluded))
         if (agent.get("webhook_url") or "").strip():
             delivery, derr = await self._webhook(agent, {
                 "event": "finding",
@@ -1378,7 +1418,9 @@ class AgentRunner:
 
     async def record_external(self, project: str, agent_label: str, key: str, finding: str,
                               verdict: str | None = None, label: str | None = None,
-                              headline: str | None = None, next_step: str | None = None) -> str:
+                              headline: str | None = None, next_step: str | None = None,
+                              what_changed: str | None = None, since=None,
+                              failing: str | None = None, likely_cause: str | None = None) -> str:
         """An external agent's finding (TR-336): a run of kind external in the project, ended
         with this finding, plus the finding event every read and findings trigger sees, exactly
         like a Tares agent's. Returns the run id."""
@@ -1390,14 +1432,16 @@ class AgentRunner:
                                    label=label, run_id=run_id, project=project,
                                    headline=headline, next_step=next_step)
         self.store.finish_agent_run(run_id, "ok", finding=finding, outcome="finding",
-                                    verdict=verdict, headline=headline, next_step=next_step)
+                                    verdict=verdict, headline=headline, next_step=next_step,
+                                    what_changed=what_changed, since_at=since, failing=failing,
+                                    likely_cause=likely_cause)
         return run_id
 
     async def _record(self, agent: dict, trigger_name: str, key: str, finding: str,
                       verdict: str | None = None, label: str | None = None,
                       run_id: str | None = None, model: str | None = None,
                       dispatch_id: str | None = None, headline: str | None = None,
-                      next_step: str | None = None) -> list:
+                      next_step: str | None = None, parts: dict | None = None) -> list:
         """Record the finding, then notify. Returns the notifications delivered, as results.
         The finding names the run and the firing it came from, in its payload and its labels, so
         a firing it trips later can be traced back to this run (TR-330)."""
@@ -1416,6 +1460,7 @@ class AgentRunner:
         hook = agent.get("slack_webhook")
         # what the Slack message shows beside the note (TR-275)
         meta = {"verdict": verdict, "model": model, "run_id": run_id, "when": now_utc().isoformat()}
+        meta.update(self._title_meta(key, finding, headline, parts or {}))
         if channel:
             if await self._slack_channel(agent["name"], channel, trigger_name, key, finding, meta):
                 return [{"kind": "slack", "label": f"Slack {channel}"}]
@@ -1423,6 +1468,23 @@ class AgentRunner:
             if await self._slack(agent["name"], hook, trigger_name, key, finding, meta):
                 return [{"kind": "slack", "label": "Slack webhook"}]
         return []
+
+    def _title_meta(self, key: str, finding: str, headline: str | None, parts: dict) -> dict:
+        """The Slack title and service of a finding (TR-745), on an AI SRE cell only: the other
+        editions keep the message as it was, with the entity as its header."""
+        try:
+            from . import goal
+            from .edition import edition
+            if edition(self.store)[0] != "sre":
+                return {}
+            now = now_utc()
+            settings = self.store.service_settings()
+            tp = goal.title_parts_of(key, parts.get("what_changed"), headline or finding,
+                                     parts.get("since"), now, settings)
+            return {"title": goal.title(tp, now), "service": tp["service"]}
+        except Exception as e:   # a title must never cost the notification
+            print(f"[agent] finding title: {type(e).__name__}: {e}")
+            return {}
 
     def _write_back_in_flight(self, agent: dict, trigger_name: str, key: str,
                               dispatch_id: str | None, going: str | None) -> None:

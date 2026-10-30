@@ -9,12 +9,14 @@ the project follows [Semantic Versioning](https://semver.org/).
 - `GET /api/services` lists the services a cell receives data for.
 - `PATCH /api/services/{name}` renames, hides or merges a service, and `PUT /api/settings/service-labels` says which label names the services in each source. The computed list is kept for 30 seconds and every change drops it.
 - Each cell has an edition: factory, sre or platform. Existing cells stay as they are.
+- Findings carry a title, what is failing, the likely cause and an outcome. `GET /api/findings` lists them across projects, and a project's results take `show=worth` to leave out the quiet checks.
 - `GET /api/projects` and a project's summary say `ready_to_close` for a factory project that is still open with every ticket merged or otherwise finished.
 - `GET /api/home` on a factory cell returns the home page in one call: a headline, what waits for you, the open projects, the crew, the Claude plan and the connected tools.
 - Console: shadcn/ui primitives on Radix, themed with the Tares tokens, with a /dev/components gallery (part 1 of the component library).
 - AI SRE cells tell Slack when nobody is watching a service, and when watching starts again. `GET /api/watch` says who watches what and why a watcher stopped.
 
 ### Fixed
+- Incident notes no longer show No action when the note has a numbered next step. A finding with no verdict now counts as a note that waits for a person, on every edition.
 - DuckDB's memory is capped at 1 GB when `tares up` runs on a machine with no container memory
   limit. Before, DuckDB took its own default of 80% of the machine's RAM and its cache grew to about
   4 GB on a Mac after two days of crew use. Set `TARES_DUCKDB_MEMORY_LIMIT` (for example `2GB`) to
