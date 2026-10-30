@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 from .config import agent_url, parse_duration, trigger_entity_label
 from .connectors import SPECS
+from .store import day_month_words
 from . import timeline as _timeline
 
 GOAL_MAX = 200
@@ -1219,11 +1220,16 @@ def project_health(store, catalog, uid: str, project: dict, runtime_health: dict
             warnings.append(issue)
             continue
         budget = a.get("budget_usd")
-        if budget and store.agent_cost_total(a["name"]) >= float(budget):
+        if budget and store.agent_budget_spend(a, now) >= float(budget):
             capped.append(a["name"])
-            warnings.append({"severity": "warning",
-                             "message": f"{a['name']} used its budget of ${float(budget):.2f}, so "
-                                        "it does not run until the budget is raised.",
+            if a.get("budget_period") == "month":
+                words = (f"{a['name']} used its ${float(budget):.2f} budget for this month, so it "
+                         f"does not run again until {day_month_words(store.budget_resets_on(a, now))}"
+                         " or until the budget is raised.")
+            else:
+                words = (f"{a['name']} used its budget of ${float(budget):.2f}, so "
+                         "it does not run until the budget is raised.")
+            warnings.append({"severity": "warning", "message": words,
                              "fix": "Raise the budget", "view": f"agent:{a['name']}"})
     for n, st in states.items():
         mode = SPECS.get(sources[n].connector, {}).get("mode")
