@@ -751,8 +751,9 @@ async def main():
             store.start_agent_run(rid, "checkout-triage", "t", "d", "k", "h", project=a,
                                   practice=practice)
             store.finish_agent_run(rid, status, error=error)
-            store.sc.execute("UPDATE agent_runs SET started_at = now() + to_seconds(?) "
-                              "WHERE id = ?", [len(mine) + 1, rid])
+            # a timestamp from here, not SQL date arithmetic: the suite also runs on Postgres
+            at = datetime.now(timezone.utc) + timedelta(seconds=len(mine) + 1)
+            store.sc.execute("UPDATE agent_runs SET started_at = ? WHERE id = ?", [at, rid])
             mine.append(rid)
 
         run("failed", 'xai 429: {"code":"resource-exhausted","error":"capacity"}')
