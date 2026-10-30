@@ -401,7 +401,10 @@ class AgentIn(BaseModel):
     slack_webhook_clear: bool = False   # blank means keep (it is a secret), so clearing is explicit
     mcp_servers: list[str] = []  # registry names this agent may use
     max_rounds: int | None = None   # model rounds per run; None = default (6, or 12 with MCP servers)
-    budget_usd: float | None = None  # lifetime spend cap in USD; None = no budget
+    budget_usd: float | None = None  # spend cap in USD over budget_period; None = no budget
+    # "lifetime" or "month" (resets on the 1st, 00:00 UTC); None = "lifetime" on create, the
+    # stored value on update
+    budget_period: str | None = None
     project: str = ""            # "" = the default project on create, unchanged on update
     # [{verdict, agent, cooldown}]: who takes over when a run concludes with that verdict
     # (TR-334); None = none on create, unchanged on update
@@ -2488,6 +2491,7 @@ def make_app() -> FastAPI:
                          "mcp_servers": a.get("mcp_servers") or [],
                          "max_rounds": a.get("max_rounds"),
                          "budget_usd": a.get("budget_usd"),
+                         "budget_period": a.get("budget_period") or "lifetime",
                          "daily_cap": a.get("daily_cap"),
                          "handoffs": a.get("handoffs") or [],
                          "concludes": bool(a.get("concludes")),
@@ -2538,7 +2542,8 @@ def make_app() -> FastAPI:
                                    handoffs=raw.get("handoffs") or [],
                                    concludes=bool(body.concludes),
                                    verdicts=raw.get("verdicts") or [],
-                                   github=_check_agent_github(body.github) or "")
+                                   github=_check_agent_github(body.github) or "",
+                                   budget_period=body.budget_period or "lifetime")
         store.put_in_project("agent", body.name, uid, creator=True)
         runtime.reload_catalog()
         return {"ok": True, "enabled": False, "project": uid,
@@ -2581,7 +2586,10 @@ def make_app() -> FastAPI:
                                    verdicts=(raw.get("verdicts") if body.verdicts is not None
                                              else None),
                                    github=_check_agent_github(body.github,
-                                                              existing.get("github") or ""))
+                                                              existing.get("github") or ""),
+                                   # absent keeps the stored period
+                                   budget_period=(body.budget_period or
+                                                  existing.get("budget_period") or "lifetime"))
         store.mark_customized("agent", name)
         store.put_in_project("agent", name, uid)
         if not here:

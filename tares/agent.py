@@ -222,6 +222,7 @@ BUILD_PROPOSAL_TOOLS = [
          "model": {"type": "string", "description": "omit to follow the instance default"},
          "max_rounds": {"type": "integer"},
          "budget_usd": {"type": "number"},
+         "budget_period": {"type": "string", "enum": ["lifetime", "month"]},
          "delivery": {"type": "object", "properties": {
              "kind": {"type": "string", "enum": ["slack", "webhook", "none"],
                       "description": "where the finding also goes; it always lands on the "
