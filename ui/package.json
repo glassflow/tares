@@ -13,6 +13,7 @@
     "test:raise-limit": "vite build && node tests/raise-limit.e2e.cjs",
     "test:projects-list": "vite build && node tests/projects-list.e2e.cjs",
     "test:project-idle": "vite build && node tests/project-idle.e2e.cjs",
+    "test:components": "vite build && node tests/component-gallery.e2e.cjs",
     "test:words": "node tests/words.selftest.cjs && node tests/words.check.cjs"
   },
   "dependencies": {

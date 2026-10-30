@@ -18,10 +18,14 @@ export function useFieldIds(id?: string) {
 
 type Ids = ReturnType<typeof useFieldIds>;
 
-/** The control's aria attributes: described by the hint and the error (after any id the caller gave), invalid when there is an error. Spread after the caller's props. */
-export function fieldAria(ids: Ids, { hint, error }: Pick<FieldProps, "hint" | "error">, extra?: string) {
-  const describedBy = [extra, hint && ids.hintId, error && ids.errorId].filter(Boolean).join(" ");
-  return { id: ids.id, "aria-describedby": describedBy || undefined, "aria-invalid": error ? true : undefined };
+/** The control's aria attributes: described by the hint and the error (after any id the caller gave), invalid when there is an error or the caller said so. Spread after the caller's props. */
+export function fieldAria(
+  ids: Ids,
+  { hint, error }: Pick<FieldProps, "hint" | "error">,
+  caller: { "aria-describedby"?: string; "aria-invalid"?: React.AriaAttributes["aria-invalid"] } = {},
+) {
+  const describedBy = [caller["aria-describedby"], hint && ids.hintId, error && ids.errorId].filter(Boolean).join(" ");
+  return { id: ids.id, "aria-describedby": describedBy || undefined, "aria-invalid": error ? true : caller["aria-invalid"] };
 }
 
 export function FieldNote({ ids, hint, error }: { ids: Ids } & Pick<FieldProps, "hint" | "error">) {
