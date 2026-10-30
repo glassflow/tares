@@ -11,8 +11,10 @@ what", so every session reads the same plan.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
+from datetime import datetime, timezone
 
 from .docs import DocError, title_ok
 
@@ -154,6 +156,33 @@ def handover_repos(repos) -> list[dict]:
     return out
 
 
+MAP_MAX_CHARS = 8000   # about 2,000 tokens
+MAP_NOTE_MAX = 200
+
+
+def map_version(body: str | None) -> str:
+    """What a writer must name to change the map: a short hash of the map it read ("" for none)."""
+    return hashlib.sha1(body.encode()).hexdigest()[:10] if body else ""
+
+
+def map_ok(body, note) -> tuple[str, str]:
+    """A repo map and the line that says what changed in it, or DocError. The cap keeps every
+    brief that carries the map small: a longer map has to lose something first."""
+    text, why = str(body or "").strip(), " ".join(str(note or "").split())
+    if not text:
+        raise DocError("the map is empty: write the layout, entry points, how to install, build, "
+                       "test and lint, conventions, the files tickets touch most and known traps")
+    if len(text) > MAP_MAX_CHARS:
+        raise DocError(f"the map is {len(text)} characters; the most is {MAP_MAX_CHARS} (about "
+                       f"2,000 tokens). Cut {len(text) - MAP_MAX_CHARS}: keep what a builder needs "
+                       "on its first day, and point to files for the rest")
+    if not why:
+        raise DocError("say what changed in the map (note): it becomes a dated line in its history")
+    if len(why) > MAP_NOTE_MAX:
+        raise DocError(f"the note is {len(why)} characters; the most is {MAP_NOTE_MAX}")
+    return text, why
+
+
 def merge_repos(old: list[dict], new: list[dict]) -> list[dict]:
     """A later hand-over adds its repos to the ones already handed over, never replaces them."""
     return handover_repos([*(old or []), *(new or [])])
@@ -233,6 +262,14 @@ def progress(tickets: list[dict]) -> dict:
              else "todo")
         n[k] += 1
     return {**n, "total": n["done"] + n["doing"] + n["blocked"] + n["todo"]}
+
+
+def activity_at(updated_at, tickets: list[dict]):
+    """When a project last moved: its own update or its newest ticket's (a stage change, a new
+    PR and a sync all touch the ticket), whichever is later. The Projects list shows this as
+    Updated, so a project the crew is working on reads as fresh without anyone editing it."""
+    stamps = [t for t in [updated_at, *(x.get("updated_at") for x in tickets)] if t]
+    return max(stamps) if stamps else None
 
 
 # ── the ledger (M4): who holds a ticket and where it stands ───────────────────
@@ -535,10 +572,15 @@ def _plain(s: str) -> str:
     return t.strip(" .!\"'")
 
 
+_PASTE_TAG = re.compile(r"</?pasted_content\b[^>]*>")
+
+
 def _pieces(text: str) -> list[str]:
-    """A turn, each of its lines, and each sentence of each line, in plain form."""
+    """A turn, each of its lines, and each sentence of each line, in plain form. Claude Code wraps
+    a paste in <pasted_content> tags; the person typed what is inside them (TR-697)."""
+    text = _PASTE_TAG.sub("\n", str(text or ""))
     out = [_plain(text)]
-    for line in str(text or "").splitlines():
+    for line in text.splitlines():
         if line.strip():
             out.append(_plain(line))
             out += [_plain(s) for s in re.split(r"(?<=[.!?;])\s+", line) if s.strip()]
@@ -550,7 +592,7 @@ def words_match(words: str, turns: list[dict]) -> dict | None:
     spacing and quote marks aside), or None. Not a fragment: "ok" is not found in "token", nor
     "ship it" in "I don't want to ship it". An answer recorded as the person's must be what
     they typed (TR-450)."""
-    w = _plain(words)
+    w = _plain(_PASTE_TAG.sub("\n", str(words or "")))
     if len(w) < 2:
         return None
     return next((t for t in turns if w in _pieces(t["text"])), None)
@@ -574,15 +616,15 @@ def letter_match(index: int, turns: list[dict]) -> dict | None:
 
 
 QUIET_MIN = 10   # a working session that sent nothing for this long shows as quiet
-# a waiting session silent this long is most likely gone: Claude Code retires idle background
+# an idle or waiting session silent this long is most likely gone: Claude Code retires idle background
 # sessions after about an hour, and one killed, or whose end never reached Tares, never says so
 WAITING_QUIET_MIN = 90
 
 
 def shown_state(state: str | None, last_at, now) -> str | None:
-    """The state to show for a session: "quiet" once a working or waiting one has been silent
-    past its window (TR-473), else the state it reported."""
-    if state in ("working", "waiting") and hasattr(last_at, "timestamp"):
+    """The state to show for a session: "quiet" once a working, idle or waiting one has been
+    silent past its window (TR-473), else the state it reported."""
+    if state in ("working", "idle", "waiting") and hasattr(last_at, "timestamp"):
         quiet = (now - last_at).total_seconds() // 60
         if quiet >= (QUIET_MIN if state == "working" else WAITING_QUIET_MIN):
             return "quiet"
@@ -611,6 +653,16 @@ AUTONOMY = {
     "L4-ship": "a builder merges after the reviewer's pass and green CI",
 }
 MAX_NAME = 120
+
+# a model call whose tool only coordinates the crew: Tares and Linear MCP calls, messages, the
+# agent list, skill loads and the schedule (TR-683)
+_COORDINATION_PREFIXES = ("mcp__tares__", "mcp__plugin_tares_tares__", "mcp__linear")
+_COORDINATION_TOOLS = ("SendMessage", "ListAgents", "Skill", "CronCreate", "CronList", "CronDelete")
+
+
+def is_coordination(tool: str) -> bool:
+    tool = str(tool or "")
+    return tool in _COORDINATION_TOOLS or tool.startswith(_COORDINATION_PREFIXES)
 
 
 def station_ok(name, role, parent) -> tuple[str, str, str]:
@@ -683,7 +735,35 @@ def attach_command(station: str, role: str = "") -> str:
 
 
 CREW_DEFAULTS = {"autonomy": None, "releaser": None, "release_profile": None,
-                 "prod_pattern": None, "challenger": None, "builders_max": None}
+                 "prod_pattern": None, "challenger": None, "builders_max": None,
+                 "kit": {"frozen": None}, "idle_wake": None, "pace": None,
+                 "claude_update": None}
+
+
+def kit_ok(v) -> dict:
+    """The kit setting: `frozen` is null (the crew follows the checkout) or when, by whom and
+    which kit version `factory crew freeze` froze it at; DocError on anything else."""
+    if not isinstance(v, dict) or set(v) != {"frozen"}:
+        raise DocError("kit is an object with one field, frozen")
+    f = v.get("frozen")
+    if f is None:
+        return {"frozen": None}
+    if not isinstance(f, dict):
+        raise DocError("kit.frozen is null or an object with at, by and version")
+    out = {}
+    for k in ("at", "by", "version"):
+        x = f.get(k)
+        if not isinstance(x, str) or not x.strip():
+            raise DocError(f"kit.frozen.{k} is a non-empty string")
+        x = " ".join(x.split())
+        if len(x) > 100:
+            raise DocError(f"kit.frozen.{k} is {len(x)} characters; keep it to 100")
+        out[k] = x
+    try:
+        datetime.fromisoformat(out["at"].replace("Z", "+00:00"))
+    except ValueError:
+        raise DocError("kit.frozen.at is a time such as 2026-10-25T10:00:00Z") from None
+    return {"frozen": out}
 
 
 def _stricter_autonomy(a, b):
@@ -739,9 +819,17 @@ def crew_settings_ok(body: dict, cur: dict) -> dict:
             if len(v) > 300:
                 raise DocError(f"{k} is {len(v)} characters; keep it to 300")
             out[k] = v or None
-    for k in ("challenger", "releaser"):
+    for k in ("challenger", "releaser", "claude_update"):
         if body.get(k) is not None:
             out[k] = bool(body[k])
+    if body.get("idle_wake") is not None:
+        if not isinstance(body["idle_wake"], bool):
+            raise DocError("idle_wake is true or false")
+        out["idle_wake"] = body["idle_wake"]
+    if body.get("pace") is not None:
+        if not isinstance(body["pace"], bool):
+            raise DocError("pace is true or false")
+        out["pace"] = body["pace"]
     if body.get("builders_max") is not None:
         try:
             n = int(body["builders_max"])
@@ -750,6 +838,80 @@ def crew_settings_ok(body: dict, cur: dict) -> dict:
         if not 1 <= n <= 20:
             raise DocError("builders_max is between 1 and 20")
         out["builders_max"] = n
+    if body.get("kit") is not None:
+        out["kit"] = kit_ok(body["kit"])
+    return out
+
+
+PACE_SLOW = {"session": 85, "weekly_all": 90}   # percent of a limit at which the crew slows
+PACE_HOLD = 95                                  # percent of the 5-hour window at which builders wait
+PACE_NAME = {"session": "5-hour window", "weekly_all": "weekly limit"}
+
+
+def _pace_when(v) -> datetime | None:
+    """A limit's reset time (ISO 8601 as plan_now carries it) as an aware datetime, or None."""
+    if not isinstance(v, str) or not v:
+        return None
+    try:
+        t = datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
+def pace_now(settings: dict, plan: dict | None, now: datetime) -> dict:
+    """How hard the plan's limits press on the crew (TR-674). `level` is 0 (ok), 1 (slow: the 5-hour
+    window at 85% or the weekly limit at 90%: no new builders, every station on its longest tick) or
+    2 (hold: the window at 95%: builders finish their step, push, report and wait). `at_limit` is
+    true while any limit is full and has not reset. A limit whose reset time has passed counts as 0.
+    With the crew setting `pace` off the state is "off" and the level 0 whatever the plan says;
+    `known` is false while no plan reading exists. `until` is when the limits behind the level reset."""
+    on = bool((settings or {}).get("pace"))
+    out = {"on": on, "known": False, "level": 0, "at_limit": False, "state": "off" if not on else "ok",
+           "until": None, "session_pct": None, "weekly_pct": None, "note": "Pacing is off."}
+    if not on:
+        return out
+    limits = [x for x in ((plan or {}).get("limits") or []) if isinstance(x, dict)]
+    if not limits:
+        out["note"] = "Pacing is on, and no reading of the plan's limits has arrived yet."
+        return out
+    out["known"] = True
+    pct = {}
+    causes = []   # (limit, percent) of each limit that sets the level
+    level = 0
+    for x in limits:
+        t = _pace_when(x.get("resets_at"))
+        p = x.get("percent")
+        p = 0 if x.get("reset") or (t and t <= now) or isinstance(p, bool) or not isinstance(p, (int, float)) else p
+        kind = x.get("kind")
+        if kind not in PACE_SLOW:
+            continue   # a per-model week or any other limit stops that model only, not the crew
+        pct[kind] = max(p, pct.get(kind, 0))
+        if p >= 100:
+            out["at_limit"] = True
+        if p >= PACE_SLOW[kind]:
+            causes.append((kind, p, t))
+        if kind == "session" and p >= PACE_HOLD:
+            level = 2
+        elif p >= PACE_SLOW.get(kind, 101):
+            level = max(level, 1)
+    out["level"] = level
+    out["session_pct"], out["weekly_pct"] = pct.get("session"), pct.get("weekly_all")
+    if out["at_limit"]:
+        out["state"] = "limit"
+    elif level:
+        out["state"] = "hold" if level == 2 else "slow"
+    ends = [t for _, _, t in causes if t]
+    if ends:
+        out["until"] = max(ends).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    if not causes:
+        out["note"] = "Pacing is on, and the plan has room."
+        return out
+    what = " and ".join(f"the {PACE_NAME.get(k, k)} is at {p:g}%" for k, p, _ in causes)
+    do = ("builders finish their step, push, report and wait, and no new builder starts" if level == 2 else
+          "no new builder starts and every station ticks every 45 minutes")
+    when = f" until {max(ends).astimezone(timezone.utc):%Y-%m-%d %H:%M} UTC" if ends else ""
+    out["note"] = f"Pacing: {what}, so {do}{when}."
     return out
 
 
@@ -788,13 +950,15 @@ ONLY = {
     "review": ("reviewer",),
     "shipped": ("releaser",),
     "end_station": ("orchestrator",),
+    "repo_map": ("builder", "helper"),
 }
 WHO = {"grants": "the orchestrator", "global_docs": "the orchestrator",
        "assign": "the orchestrator", "desk": "the orchestrator", "finish": "the orchestrator",
        "release": "the orchestrator",
        "takeover": "the person, in their own terminal (tares factory session <project>)",
        "assumption_state": "the orchestrator", "review": "the reviewer",
-       "shipped": "the releaser", "end_station": "the orchestrator, or the person"}
+       "shipped": "the releaser", "end_station": "the orchestrator, or the person",
+       "repo_map": "a builder"}
 
 
 def may(caller: dict, action: str) -> str | None:

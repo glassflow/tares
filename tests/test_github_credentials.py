@@ -151,8 +151,14 @@ async def main():
             conn = REGISTRY["github"](src_cfg, store)
             STATE["calls"].clear()
             envs = await conn.poll()
+            # the source's own poll, started when it was created, may have taken the two commits
+            # first (requests run in threads, so it gets the loop meanwhile); either way they came
+            # in once, through the credential's token
+            stored = [r for r in store.event_stats() if r["source"] == "app_commits"]
+            n_stored = stored[0]["events"] if stored else 0
             check("poll ingests commits with the credential token",
-                  len(envs) == 2 and all(t == "tok-1" for _, t in STATE["calls"]), str(STATE["calls"]))
+                  (len(envs) == 2 or (not envs and n_stored == 2)) and all(t == "tok-1" for _, t in STATE["calls"]),
+                  f"{STATE['calls']} polled={len(envs)} stored={stored}")
             check("api_url from the credential (GHE) is used",
                   all(p.startswith("/repos/acme/app") for p, _ in STATE["calls"]), str(STATE["calls"]))
 

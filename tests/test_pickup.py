@@ -127,6 +127,13 @@ async def main():
            and "6 errors" in r["notes"][0]["body"], r["notes"])
         ck("a checklist that starts with git", "git status" in r["checklist"][0], r["checklist"])
         ck("a waiting session may still be open", r["may_be_open"] is True)
+        await ingest({"type": "session_state", "sessionId": "build", "state": "idle",
+                      "reason": "the turn ended", "timestamp": ts(0.6)})
+        r = (await cx.get(f"{b}/pickup")).json()
+        ck("an idle session (between turns) may still be open",
+           r["previous_session"]["state"] == "idle" and r["may_be_open"] is True, r["previous_session"])
+        await ingest({"type": "session_state", "sessionId": "build", "state": "waiting",
+                      "reason": "the turn ended; the session waits for input", "timestamp": ts(0.7)})
 
         print("== taking over ==")
         r = await cx.post(f"{b}/pickup", json={})

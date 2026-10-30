@@ -11,7 +11,15 @@ env > "$S/last.env"   # the environment of the latest call, for the session's ow
 set_agents() { local tmp; tmp=$(mktemp); jq "$@" "$S/agents.json" > "$tmp" && mv "$tmp" "$S/agents.json"; }
 
 case "${1:-}" in
-  --version) echo "0.0.0 (fake)" ;;
+  # The version on PATH: $S/version, which a test changes to fake an installer swapping the symlink.
+  # $S/version-flip makes every second call answer that version instead: an installer caught mid-swap.
+  --version)
+    v=$(cat "$S/version" 2>/dev/null || echo 0.0.0)
+    if [ -f "$S/version-flip" ]; then
+      k=$(( $(cat "$S/version-calls" 2>/dev/null || echo 0) + 1 )); echo "$k" > "$S/version-calls"
+      [ $((k % 2)) = 0 ] && v=$(cat "$S/version-flip")
+    fi
+    echo "$v (Claude Code)" ;;
   # Without --all, only what Claude Code counts as active: a session with a process, or one still working
   # or blocked on a person without one (a schedule armed keeps a stopped session "working"). A finished
   # session whose process is gone drops out, as observed on 2.1.295.
@@ -21,12 +29,27 @@ case "${1:-}" in
       n=$(( $(cat "$S/agents-reads" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$S/agents-reads"
       [ "$n" -le "$FAKE_CLAUDE_AGENTS_FAIL_AFTER" ] || { echo "agents failed (fake)" >&2; exit 1; }
     fi
+    # $S/on-agents holds a command to run once, after the n-th read (n in $S/on-agents-at, default 1):
+    # something that happens to the crew in the middle of a watch round.
+    if [ -f "$S/on-agents" ]; then
+      k=$(( $(cat "$S/on-agents-reads" 2>/dev/null || echo 0) + 1 )); echo "$k" > "$S/on-agents-reads"
+      if [ "$k" -ge "$(cat "$S/on-agents-at" 2>/dev/null || echo 1)" ]; then
+        hook=$(cat "$S/on-agents"); rm -f "$S/on-agents"; bash -c "$hook" >/dev/null 2>&1 || true
+      fi
+    fi
     if printf '%s\n' "$@" | grep -qx -- --all; then cat "$S/agents.json"
     else jq 'map(select(has("pid") or ((.state // "") | IN("working", "blocked"))))' "$S/agents.json"; fi ;;
   # A session with a schedule armed stays listed as "working" once stopped (FAKE_CLAUDE_STOP_KEEPS_STATE).
   stop) sleep "${FAKE_CLAUDE_STOP_DELAY:-0}"
     if [ "${FAKE_CLAUDE_STOP_KEEPS_STATE:-}" = 1 ]; then set_agents --arg id "$2" 'map(if .id == $id then del(.pid, .status) else . end)'
     else set_agents --arg id "$2" 'map(if .id == $id then .state = "stopped" | del(.pid) else . end)'; fi ;;
+  # The plugins installed: `plugin list --json` serves plugins.json, `plugin install <id>` adds an enabled one.
+  plugin)
+    [ -f "$S/plugins.json" ] || echo '[]' > "$S/plugins.json"
+    case "${2:-}" in
+      list) [ "${FAKE_CLAUDE_PLUGIN_FAIL:-}" = 1 ] && { echo "plugin list failed (fake)" >&2; exit 1; }; cat "$S/plugins.json" ;;
+      install) tmp=$(mktemp); jq --arg id "$3" '. + [{id: $id, version: "1.0.0", scope: "user", enabled: true}]' "$S/plugins.json" > "$tmp" && mv "$tmp" "$S/plugins.json" ;;
+    esac ;;
   rm) set_agents --arg id "$2" 'map(select(.id != $id))' ;;
   # Print mode reads /context of a session and /usage without a model call; it prints what Claude Code
   # prints with --output-format stream-json --verbose, and keeps the settings it was given.
@@ -44,6 +67,7 @@ case "${1:-}" in
     echo '{"type":"result","subtype":"success"}' ;;
   --bg)
     if [ "${FAKE_CLAUDE_FAIL_RESUME:-}" = 1 ] && printf '%s\n' "$@" | grep -qx -- --resume; then echo "resume failed (fake)"; exit 1; fi
+    if [ "${FAKE_CLAUDE_FAIL_FRESH:-}" = 1 ] && ! printf '%s\n' "$@" | grep -qx -- --resume; then echo "new conversation failed (fake)"; exit 1; fi
     sleep "${FAKE_CLAUDE_BG_DELAY:-0}" # Claude Code takes a moment to register a new session
     name=""; prev=""
     for a in "$@"; do [ "$prev" = "-n" ] && name=$a; prev=$a; done
@@ -53,5 +77,21 @@ case "${1:-}" in
     jq -n --arg s "session-$n" '{sessionId: $s}' > "$HOME/.claude/jobs/$id/state.json"
     set_agents --arg id "$id" --arg n "$name" --arg cwd "$PWD" --arg s "session-$n" --argjson at "$n" \
       '. + [{id: $id, name: $n, cwd: $cwd, state: "working", sessionId: $s, startedAt: $at, pid: (40000 + $at)}]'
+    # The process listing of the session, as `ps` shows it: the session is a bg-spare process whose parent is a
+    # pty host started from a versions/<v> binary. $S/stale-left (a number, or "all") fakes old pre-warmed
+    # spares of $S/spawn-version that the daemon hands to the next launches; otherwise the session runs the
+    # version on PATH.
+    pid=$(( 40000 + n )); mkdir -p "$S/ps"
+    v=$(cat "$S/version" 2>/dev/null || echo 0.0.0)
+    stale=$(cat "$S/stale-left" 2>/dev/null || echo 0)
+    if [ "$stale" = all ] || [ "$stale" -gt 0 ] 2>/dev/null; then
+      v=$(cat "$S/spawn-version"); [ "$stale" = all ] || echo $(( stale - 1 )) > "$S/stale-left"
+    fi
+    echo $(( pid + 1000 )) > "$S/ps/$pid.ppid"
+    echo "claude bg-pty-host --bg-pty-host /tmp/cc/spare/$id.pty.sock 200 50 -- /home/u/.local/share/claude/versions/$v --bg-spare /tmp/cc/spare/$id.claim.sock" > "$S/ps/$(( pid + 1000 )).command"
+    echo "claude bg-spare" > "$S/ps/$pid.command"
+    # $S/on-bg holds a command to run once after a launch, with the new session's id in $FAKE_ID: something
+    # that happens between one restart and the next.
+    if [ -f "$S/on-bg" ]; then hook=$(cat "$S/on-bg"); rm -f "$S/on-bg"; FAKE_ID=$id bash -c "$hook" >/dev/null 2>&1 || true; fi
     printf 'backgrounded · %s · %s\n' "$id" "$name" ;;
 esac

@@ -369,7 +369,7 @@ async def main():
         as_(root)
         d14 = await add("Old: tabs or spaces?")
         with store._lock:
-            store.con.execute("UPDATE desk_items SET to_person_id = NULL WHERE number = ?", [int(d14["label"][1:])])
+            store.sc.execute("UPDATE desk_items SET to_person_id = NULL WHERE number = ?", [int(d14["label"][1:])])
         ck("(an item with no person)", store.get_desk_item(d14["label"])["to_person_id"] is None)
         wd = await my_work_desk("Q")
         ck("it is in nobody's my_work but `local`'s", d14["label"] not in [d["label"] for d in wd])

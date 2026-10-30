@@ -131,11 +131,49 @@ def plugin():
     print("== the plugin: session state ==")
     ck("hooks map to states",
        ship.state_for("PostToolUse", {}) == ("working", "")
-       and ship.state_for("Stop", {})[0] == "waiting"
-       and ship.state_for("Notification", {"message": "Claude needs your permission to use Bash"})
-       == ("waiting", "Claude needs your permission to use Bash")
        and ship.state_for("SessionEnd", {"reason": "exit"}) == ("ended", "exit")
        and ship.state_for("SessionStart", {}) == (None, None))
+    print("== the plugin: a turn that ended is idle, only a real need is waiting (TR-693) ==")
+    ck("a turn that ended is idle, not waiting for the person",
+       ship.state_for("Stop", {}) == ("idle", ship.IDLE_REASON))
+    ck("Claude Code's idle notice (idle_prompt) is idle too, with the same reason",
+       ship.state_for("Notification", {"notification_type": "idle_prompt",
+                                       "message": "Claude is waiting for your input"})
+       == ("idle", ship.IDLE_REASON))
+    ck("a permission prompt waits for the person",
+       ship.state_for("Notification", {"notification_type": "permission_prompt",
+                                       "message": "Claude needs your permission to use Bash"})
+       == ("waiting", "Claude needs your permission to use Bash"))
+    ck("an elicitation dialog waits for the person",
+       ship.state_for("Notification", {"notification_type": "elicitation_dialog",
+                                       "message": "Claude needs your input"})[0] == "waiting")
+    ck("a question to the person waits for the person",
+       ship.state_for("PreToolUse", {"tool_name": "AskUserQuestion"})[0] == "waiting"
+       and ship.state_for("PreToolUse", {"tool_name": "Bash"}) == (None, None))
+    ck("a permission request waits for the person at once, naming the tool",
+       ship.state_for("PermissionRequest", {"tool_name": "Bash"})
+       == ("waiting", "Claude Code needs your permission to use Bash"))
+    ck("a URL elicitation dialog waits for the person",
+       ship.state_for("Notification", {"notification_type": "elicitation_url_dialog",
+                                       "message": "Open this link"})[0] == "waiting")
+    hooks = json.load(open(os.path.join(ROOT, "claude-plugin", "hooks", "hooks.json")))["hooks"]
+
+    def ships(entry):
+        return any("scripts/ship.py" in " ".join(h.get("args") or []) for h in entry["hooks"])
+    ck("the plugin registers PermissionRequest with the shipper",
+       any(ships(e) for e in hooks.get("PermissionRequest", [])), hooks.get("PermissionRequest"))
+    ck("the plugin registers the AskUserQuestion PreToolUse hook with the shipper",
+       any(e.get("matcher") == "AskUserQuestion" and ships(e) for e in hooks.get("PreToolUse", [])),
+       hooks.get("PreToolUse"))
+    ck("a notification of another type says nothing new",
+       ship.state_for("Notification", {"notification_type": "auth_success",
+                                       "message": "Authenticated"}) == (None, None))
+    ck("without a type (older Claude Code) the message tells permission from idle",
+       ship.state_for("Notification", {"message": "Claude needs your permission to use Bash"})[0]
+       == "waiting"
+       and ship.state_for("Notification", {"message": "Claude is waiting for your input"})[0]
+       == "idle"
+       and ship.state_for("Notification", {"message": "something else"}) == (None, None))
     sent = []
     real = ship.ship_lines
     ship.ship_lines = lambda cfg, objs: sent.extend(objs) or True
@@ -143,11 +181,17 @@ def plugin():
         cfg = {"base": "http://x", "headers": {}, "data_dir": tempfile.mkdtemp()}
         ship.write_project(cfg["data_dir"], SID, "Invoices")
         h = {"session_id": SID, "cwd": "/w/invoices"}
-        for ev in ("PostToolUse", "PostToolUse", "PostToolUse", "Stop", "Stop", "UserPromptSubmit",
-                   "SessionEnd"):
-            ship.report_state(cfg, h, ev, "")
-        ck("one line per change, not per tool call",
-           [o["state"] for o in sent] == ["working", "waiting", "working", "ended"], sent)
+        idle_notice = {**h, "notification_type": "idle_prompt",
+                       "message": "Claude is waiting for your input"}
+        ask = {**h, "notification_type": "permission_prompt",
+               "message": "Claude needs your permission to use Bash"}
+        for ev, hook in (("PostToolUse", h), ("PostToolUse", h), ("PostToolUse", h), ("Stop", h),
+                         ("Notification", idle_notice), ("Stop", h), ("UserPromptSubmit", h),
+                         ("Notification", ask), ("PostToolUse", h), ("SessionEnd", h)):
+            ship.report_state(cfg, hook, ev, "")
+        ck("one line per change, not per tool call; the idle notice after Stop adds none",
+           [o["state"] for o in sent] == ["working", "idle", "working", "waiting", "working",
+                                           "ended"], sent)
         ck("the line carries the project", all(o.get("tares_project") == "Invoices" for o in sent))
     finally:
         ship.ship_lines = real
@@ -235,6 +279,13 @@ async def tares(shipped):
            and one["last_said"] == "I've paused: the safety check stopped answering."
            and s["now"], one)
         ck("an older line does not win", one["state"] == "waiting")
+        idle = {**waiting, "state": "idle", "reason": "the turn ended", "timestamp": at(3, 0)}
+        await cx.post("/ingest/claude_code", content=json.dumps(idle) + "\n",
+                      headers={"Content-Type": "application/x-ndjson"})
+        one = (await cx.get(f"/api/projects/{uid}/sessions")).json()["sessions"][0]
+        ck("then idle: a turn that ended is kept as idle, with no last_said (nobody is asked)",
+           one["state"] == "idle" and one["state_reason"] == "the turn ended"
+           and "last_said" not in one, one)
         ended = {"type": "session_state", "sessionId": SID, "state": "ended", "reason": "exit",
                  "timestamp": at(5, 0)}
         await cx.post("/ingest/claude_code", content=json.dumps(ended) + "\n",
@@ -253,6 +304,8 @@ async def tares(shipped):
         iso = lambda d: (now - d).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         for sid, state, ago in (("q-wait-old", "waiting", timedelta(minutes=100)),
                                 ("q-wait-new", "waiting", timedelta(minutes=30)),
+                                ("q-idle-old", "idle", timedelta(minutes=100)),
+                                ("q-idle-new", "idle", timedelta(minutes=30)),
                                 ("q-work-old", "working", timedelta(minutes=20))):
             await cx.post("/ingest/claude_code", content="\n".join(json.dumps(o) for o in (
                 {"type": "session_project", "sessionId": sid, "tares_project": "Invoices",
@@ -263,6 +316,9 @@ async def tares(shipped):
                for x in (await cx.get(f"/api/projects/{uid}/sessions")).json()["sessions"]}
         ck("waiting, silent past the 90-minute window: quiet", got.get("q-wait-old") == "quiet", got)
         ck("waiting for half an hour: still waiting", got.get("q-wait-new") == "waiting", got)
+        ck("idle, silent past the 90-minute window: quiet", got.get("q-idle-old") == "quiet", got)
+        ck("idle for half an hour: still idle, not a stopped build", got.get("q-idle-new") == "idle",
+           got)
         ck("working, silent for 20 minutes: quiet", got.get("q-work-old") == "quiet", got)
         ck("an ended session stays ended", got.get(SID) == "ended", got)
         r = await cx.get(f"/api/projects/{uid}/sessions/other")

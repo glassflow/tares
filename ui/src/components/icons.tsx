@@ -70,12 +70,6 @@ export const Book = (p: P) => (
   </S>
 );
 
-export const Bolt = (p: P) => (
-  <S {...p}>
-    <path d="M13 2 3 14h7l-1 8 10-12h-7z" />
-  </S>
-);
-
 export const Terminal = (p: P) => (
   <S {...p}>
     <path d="M4 17l6-5-6-5" />

@@ -418,7 +418,7 @@ def unit():
     ck("store: take_over keeps its person", (ho["takeover"]["person"] or {}).get("id") == ben, str(ho))
     ck("store: finish_handover keeps its person", (ho["finished"]["person"] or {}).get("id") == ann, str(ho))
     s.set_handover("proj", [{"path": "/w/x"}], None, "", at, ben)
-    left = s.con.execute("SELECT person_id, finished_person_id, taken_person_id FROM handovers "
+    left = s.sc.execute("SELECT person_id, finished_person_id, taken_person_id FROM handovers "
                          "WHERE project = 'proj'").fetchone()
     ho = s.get_handover("proj")
     ck("store: handing over again clears the finished and taken persons",

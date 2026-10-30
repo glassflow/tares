@@ -1,37 +1,135 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
 import { LeadPicker, usePeople } from "../components/project/access";
-import { Lock } from "../components/icons";
 import { ErrorState, TimeAgo, projectGoal, usePolling } from "../components/bits";
-import { ProgressRing } from "../components/ProgressRing";
+import { Activity, Lock, Search } from "../components/icons";
+import { ProgressRing, progressText } from "../components/ProgressRing";
 import { ReadyReminder } from "../components/readiness";
 import { DeleteDraft } from "../components/setup/deleteDraft";
 import type { Project } from "../types";
+import {
+  SHOWS, SORTS, matchesQuery, matchesShow, pendingWork, sortProjects,
+  type Show, type Sort,
+} from "./projectsList";
 
 // Projects are the unit: a named set of sources, triggers, agents and MCP servers with one page.
 // This page lists them; Create new (/projects/new) is the goal-first setup. The default project
 // (whatever was made outside another project) is not listed as a project: when it holds
 // something, one line under the list points to All resources. What is left of the Start list
 // (the demo, model provider, GitHub, Slack) sits on top until done or hidden.
+//
+// The list is a work queue, not an inventory: done projects are hidden until asked for, the name
+// is the link, the goal is a tooltip (or a line under the name on request), and the filter, sort
+// and search sit in the address so a view can be shared and survives a reload.
 
-function statusClass(s: Project["status"]) {
-  return s === "active" || s === "done" ? "ok" : s === "paused" || s === "draft" ? "paused" : "error";
+const STATUS_WORD: Record<Project["status"], string> = {
+  active: "Active", done: "Done", paused: "Paused", error: "Needs attention", draft: "Draft",
+};
+
+const SHOW_LABEL: Record<Show, string> = { active: "Active", done: "Done", all: "All" };
+
+function pick<T extends string>(value: string | null, allowed: readonly T[], fallback: T): T {
+  return allowed.find((a) => a === value) ?? fallback;
 }
 
-export function projectKindCounts(u: Project) {
-  const c: Record<string, number> = {};
-  for (const o of u.objects) c[o.kind] = (c[o.kind] ?? 0) + 1;
-  return c;
+// Active and done need no word on a wide screen: the ring and its count say it. The others the ring cannot show.
+// Under 720px the count folds away, so a done project says "done" there (a closed active one has no word).
+const STATUS_TAG: Partial<Record<Project["status"], string>> = {
+  paused: "paused", error: "error", draft: "draft",
+};
+
+function StatusCell({ u }: { u: Project }) {
+  const word = STATUS_WORD[u.status];
+  const ring = !!u.progress && u.progress.total > 0;
+  const tag = STATUS_TAG[u.status];
+  const missing = u.objects.filter((o) => o.missing).length;
+  const label = [word, u.progress && progressText(u.progress), missing > 0 && `${missing} missing`]
+    .filter(Boolean).join(". ");
+  return (
+    <span className={`pj-status s-${u.status}`} role="img" aria-label={label} title={label}>
+      {ring && u.progress ? (
+        <>
+          <ProgressRing progress={u.progress} />
+          <span className="pj-count" aria-hidden="true">{u.progress.done}/{u.progress.total}</span>
+        </>
+      ) : <span className="pj-dot" />}
+      {tag && <span className="pj-tag" aria-hidden="true">{tag}</span>}
+      {u.status === "done" && <span className="pj-tag pj-tag-narrow" aria-hidden="true">done</span>}
+      {missing > 0 && <span className="help" aria-hidden="true">{missing} missing</span>}
+    </span>
+  );
+}
+
+// the templates that make an AI SRE project; kind is null for these as for any ordinary project
+const AI_SRE_TEMPLATES = new Set(["ai_sre_demo", "rius_rca"]);
+const isFactory = (p: Project) => p.kind === "software_factory";
+const isAiSre = (p: Project) => AI_SRE_TEMPLATES.has(p.template);
+
+// in a row the label folds into the title and aria-label at narrow widths (.pj-chip-label); the legend keeps it
+function KindChip({ factory, legend }: { factory: boolean; legend?: boolean }) {
+  const label = factory ? "Factory" : "AI SRE";
+  const icon = factory ? <span className="pj-emoji" aria-hidden="true">🏭</span> : <Activity />;
+  if (legend) return <span className="pj-chip">{icon}<span>{label}</span></span>;
+  const what = factory ? "Software factory project: a crew builds it from tickets" : "AI SRE project: agents watch your systems";
+  return (
+    <span className="pj-chip" role="img" title={what} aria-label={factory ? "Software factory" : "AI SRE"}
+          data-testid={factory ? "factory-chip" : "sre-chip"}>
+      {icon}<span className="pj-chip-label">{label}</span>
+    </span>
+  );
+}
+
+// Under 720px the Pending and Updated columns are hidden; when the list is ordered by one of them,
+// this short cue on the name line says what the order is by.
+function SortCue({ u, sort }: { u: Project; sort: Sort }) {
+  if (sort === "name") return null;
+  if (sort === "recent") return <div className="pj-cue"><TimeAgo ts={u.activity_at ?? u.updated_at} /></div>;
+  if (u.status === "draft" || !u.progress || u.progress.total === 0) return null;
+  return <div className="pj-cue">{pendingWork(u)} pending</div>;
+}
+
+function PendingCell({ u }: { u: Project }) {
+  if (u.status === "draft") return <span className="dim">Not set up yet</span>;
+  const g = u.progress;
+  if (!g || g.total === 0) return <span className="dim">No tickets</span>;
+  const n = pendingWork(u);
+  return (
+    <span className="pj-pending">
+      <span className={n ? "pj-n" : "dim"}>{n || "None"}</span>
+      {g.doing > 0 && <span className="pj-sub doing">{g.doing} in progress</span>}
+      {g.blocked > 0 && <span className="pj-sub blocked">{g.blocked} blocked</span>}
+    </span>
+  );
 }
 
 export default function Projects() {
   const { data: inst, error: instError, reload: reloadInst } = usePolling(() => api.projectsWithHidden(), 10000);
+  const [params, setParams] = useSearchParams();
+  const show = pick(params.get("show"), SHOWS, "active");
+  const sort = pick(params.get("sort"), SORTS.map((s) => s.key), "recent");
+  const query = params.get("q") ?? "";
+  const goals = params.get("goals") === "1";
+  const set = (changes: Record<string, string>) => {
+    const next = new URLSearchParams(params);
+    for (const [k, v] of Object.entries(changes)) v ? next.set(k, v) : next.delete(k);
+    setParams(next, { replace: true });
+  };
+
   const projects = (inst?.projects ?? []).filter((p) => !p.default);
   const loose = inst?.projects.find((p) => p.default && !p.hidden)?.objects.length ?? 0;
   const { list: people, isAdmin } = usePeople();
   const [handing, setHanding] = useState<string>();   // the hidden project whose lead is being changed
+  const counts: Record<Show, number> = {
+    all: projects.length,
+    done: projects.filter((p) => p.status === "done").length,
+    active: projects.filter((p) => p.status !== "done").length,
+  };
+  const shown = sortProjects(projects.filter((p) => matchesShow(p, show) && matchesQuery(p, query)), sort);
+  const hiddenDone = show === "active" ? counts.done : 0;
+  const factory = shown.some(isFactory);
+  const sre = shown.some(isAiSre);
 
   return (
     <>
@@ -60,87 +158,131 @@ export default function Projects() {
       )}
 
       {projects.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th>name</th><th>goal</th><th>status</th><th>objects</th><th>updated</th>
-              <th aria-label="actions" />
-            </tr>
-          </thead>
-          <tbody>
-            {projects.map((u) => {
-              // a private project the caller is not on: its name and lead, nothing to open
-              if (u.hidden) {
-                return (
-                  <tr key={u.id} className="proj-hidden">
-                    <td colSpan={5}>
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        <Lock /><strong>{u.name}</strong>
-                      </span>
-                      <span className="proj-lead">
-                        {u.lead ? `Private, led by ${u.lead.name}` : "Private, no lead"}
-                      </span>
-                      {handing === u.id && (
-                        <div style={{ marginTop: 8 }}>
-                          <LeadPicker id={u.id} people={people.filter((p) => p.id !== u.lead?.id)}
-                                      onDone={() => { setHanding(undefined); reloadInst(); }}
-                                      onCancel={() => setHanding(undefined)} />
-                        </div>
-                      )}
-                    </td>
-                    <td>
-                      {isAdmin && handing !== u.id && (
-                        <div className="btnrow" style={{ justifyContent: "flex-end" }}>
-                          <button type="button" onClick={() => setHanding(u.id)}>Change lead</button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                );
-              }
-              const c = projectKindCounts(u);
-              const missing = u.objects.filter((o) => o.missing).length;
-              // a draft opens where its setup stopped: nothing of it exists yet
-              const to = u.status === "draft" ? `/projects/${encodeURIComponent(u.id)}/setup`
-                : `/projects/${encodeURIComponent(u.id)}`;
-              return (
-                <tr key={u.id}>
-                  <td>
-                    <Link to={to}><strong>{u.name}</strong></Link>
-                    {u.scope === "private" && <span className="proj-lock"><Lock /> Private</span>}
-                    {u.kind === "software_factory" && <span className="fo-tag" style={{ marginLeft: 8 }}>Software factory</span>}
-                    {u.lead && <span className="proj-lead">Lead: {u.lead.name}</span>}
-                  </td>
-                  <td className="help"><span className="proj-goal">{projectGoal(u)}</span></td>
-                  <td className={u.progress ? "fo-ring-cell" : undefined}>
-                    <span className={`badge ${statusClass(u.status)}`}>{u.status}</span>
-                    {u.progress && (
-                      <span className="fo-ring-count">
-                        <ProgressRing progress={u.progress} />
-                        {u.progress.total > 0 && <span aria-hidden="true">{u.progress.done}/{u.progress.total}</span>}
-                      </span>
-                    )}
-                    {missing > 0 && <span className="help" style={{ marginLeft: 6 }}>{missing} missing</span>}
-                  </td>
-                  <td className="help">
-                    {u.status === "draft" ? "Not set up yet" : <>
-                    {c.source ?? 0} source{c.source === 1 ? "" : "s"}
-                    {c.trigger ? `, ${c.trigger} trigger${c.trigger === 1 ? "" : "s"}` : ""}
-                    {c.agent ? `, ${c.agent} agent${c.agent === 1 ? "" : "s"}` : ""}
-                    </>}
-                  </td>
-                  <td style={{ whiteSpace: "nowrap" }}><TimeAgo ts={u.updated_at} /></td>
-                  <td>
-                    <div className="btnrow" style={{ justifyContent: "flex-end" }}>
-                      <Link className="btn" to={to}>{u.status === "draft" ? "Finish setting up" : "Open"}</Link>
-                      {u.status === "draft" && <DeleteDraft id={u.id} name={u.name} onDeleted={reloadInst} />}
-                    </div>
-                  </td>
+        <>
+          <div className="pj-bar" role="toolbar" aria-label="Filter and sort projects">
+            <div className="seg" role="group" aria-label="Show">
+              {SHOWS.map((s) => (
+                <button key={s} type="button" className={show === s ? "active" : ""} aria-pressed={show === s}
+                        data-testid={`show-${s}`} onClick={() => set({ show: s === "active" ? "" : s })}>
+                  {SHOW_LABEL[s]} <span className="pj-badge">{counts[s]}</span>
+                </button>
+              ))}
+            </div>
+            <label className="pj-search">
+              <Search />
+              <input type="text" placeholder="Filter projects" aria-label="Filter projects by name or goal"
+                     value={query} onChange={(e) => set({ q: e.target.value })} />
+            </label>
+            <span className="pj-bar-end">
+              <label className="pj-sort">
+                <span className="help">Sort</span>
+                <select aria-label="Sort projects" value={sort} data-testid="sort"
+                        onChange={(e) => set({ sort: e.target.value === "recent" ? "" : e.target.value })}>
+                  {SORTS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+                </select>
+              </label>
+              <button type="button" className={`pj-toggle${goals ? " active" : ""}`} aria-pressed={goals}
+                      data-testid="goals-toggle" onClick={() => set({ goals: goals ? "" : "1" })}>
+                Goals
+              </button>
+            </span>
+          </div>
+
+          {shown.length === 0 ? (
+            <div className="empty" data-testid="no-match">
+              {query ? <>No project matches “{query}”.</>
+                : show === "done" ? <>No project is done yet.</>
+                : <>Every project is done.</>}{" "}
+              {(show !== "all" || query) && (
+                <button type="button" className="linklike" onClick={() => set({ show: "all", q: "" })}>
+                  Show all projects
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="pj-scroll">
+            <table className="pj-table">
+              <thead>
+                <tr>
+                  <th>name</th><th>status</th><th>pending</th><th>updated</th>
+                  <th aria-label="actions" />
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              </thead>
+              <tbody>
+                {shown.map((u) => {
+                  // a private project the caller is not on: its name and lead, nothing to open
+                  if (u.hidden) {
+                    return (
+                      <tr key={u.id} className="proj-hidden" data-testid="project-row" data-status="hidden">
+                        <td colSpan={4}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            <Lock /><strong>{u.name}</strong>
+                          </span>
+                          <span className="proj-lead">
+                            {u.lead ? `Private, led by ${u.lead.name}` : "Private, no lead"}
+                          </span>
+                          {handing === u.id && (
+                            <div style={{ marginTop: 8 }}>
+                              <LeadPicker id={u.id} people={people.filter((p) => p.id !== u.lead?.id)}
+                                          onDone={() => { setHanding(undefined); reloadInst(); }}
+                                          onCancel={() => setHanding(undefined)} />
+                            </div>
+                          )}
+                        </td>
+                        <td className="pj-actions">
+                          {isAdmin && handing !== u.id && (
+                            <button type="button" onClick={() => setHanding(u.id)}>Change lead</button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  }
+                  // a draft opens where its setup stopped: nothing of it exists yet
+                  const to = u.status === "draft" ? `/projects/${encodeURIComponent(u.id)}/setup`
+                    : `/projects/${encodeURIComponent(u.id)}`;
+                  const goal = projectGoal(u);
+                  return (
+                    <tr key={u.id} data-testid="project-row" data-status={u.status}>
+                      <td className="pj-name-cell">
+                        <div className="pj-name-row">
+                          <Link to={to} className="pj-name" title={`${u.name}\n${goal}`}><strong>{u.name}</strong></Link>
+                          {(isFactory(u) || isAiSre(u)) && <KindChip factory={isFactory(u)} />}
+                          {u.scope === "private" && <span className="proj-lock"><Lock /> Private</span>}
+                        </div>
+                        {u.lead && <span className="proj-lead">Lead: {u.lead.name}</span>}
+                        <SortCue u={u} sort={sort} />
+                        {goals && <div className="pj-goal help" data-testid="goal-line">{goal}</div>}
+                      </td>
+                      <td><StatusCell u={u} /></td>
+                      <td><PendingCell u={u} /></td>
+                      <td className="pj-updated"><TimeAgo ts={u.activity_at ?? u.updated_at} /></td>
+                      <td className="pj-actions">
+                        {u.status === "draft" && <DeleteDraft id={u.id} name={u.name} onDeleted={reloadInst} />}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            </div>
+          )}
+
+          <p className="help pj-foot">
+            {hiddenDone > 0 && !query && (
+              <>
+                {hiddenDone} done project{hiddenDone === 1 ? " is" : "s are"} hidden.{" "}
+                <button type="button" className="linklike" data-testid="show-done-link" onClick={() => set({ show: "all" })}>
+                  Show {hiddenDone === 1 ? "it" : "them"}
+                </button>.{" "}
+              </>
+            )}
+            {shown.length > 0 && <span className="pj-legend">
+              {factory && <span><KindChip factory legend /> a software factory project, built by the crew from tickets.</span>}
+              {sre && <span><KindChip factory={false} legend /> an AI SRE project, watching your systems.</span>}
+              <span>Hover a name for its goal.</span>
+            </span>}
+          </p>
+        </>
       )}
 
       {loose > 0 && (

@@ -39,7 +39,7 @@ check "a planned project: the person's own session" '[ "$(calls)" = 1 ] && ! las
 check "named after the project" '[ "$(last | jq -r ".args[1]")" = notes-app-session ]'
 check "it loads this plugin and turns it on" '[ "$(last | jq -r ".args | index(\"--plugin-dir\") as \$i | .[\$i+1]")" = "$plugin" ] && jq -e ".enabledPlugins[\"tares@inline\"] == true" "$(last | jq -r ".args | index(\"--settings\") as \$i | .[\$i+1]")" >/dev/null'
 check "it runs /tares:session with the project" '[ "$(last | jq -r ".args[-1]")" = "/tares:session Notes app" ]'
-check "the session is bound to the project" '[ "$(envof TARES_PROJECT)" = "Notes app" ] && [ "$(envof TARES_SESSION_NAME)" = notes-app-session ] && [ -z "$(envof TARES_SESSION_TAKEOVER)" ]'
+check "the session is bound to the project" '[ "$(envof TARES_PROJECT)" = "$notes" ] && [ "$(envof TARES_PROJECT_NAME)" = "Notes app" ] && [ "$(envof TARES_SESSION_NAME)" = notes-app-session ] && [ -z "$(envof TARES_SESSION_TAKEOVER)" ]'
 check "and told the Tares and its MCP endpoint" '[ "$(envof TARESD_URL)" = "$TARESD_URL" ] && [ "$(envof TARES_FACTORY_MCP_URL)" = "$TARES_FACTORY_MCP_URL" ]'
 check "with no repo of its own it opens where you are" '[ "$(last | jq -r .cwd)" = "$T/elsewhere" ]'
 (cd "$T/elsewhere" && "$F" session notes-app </dev/null >/dev/null 2>&1)
@@ -69,7 +69,7 @@ check "and nothing is recorded" '[ "$(api GET /api/crew/projects | jq -r "[.proj
 (cd "$T/elsewhere" && printf '1\nsmall, I will finish it myself\n' | "$F" session Shop >"$T/take.out" 2>&1)
 check "yes: taken over, in the person's words" '[ "$(api GET "/api/projects/$shop/crew" | jq -r .handover.takeover.words)" = "small, I will finish it myself" ]'
 check "off the crew's list, releasing" '[ "$(api GET /api/crew/projects | jq -r "[.releasing[].name] | join(\",\")")" = Shop ] && [ "$(api GET /api/crew/projects | jq -r "[.projects[].name] | index(\"Shop\")")" = null ]'
-check "the session knows it took it over" '[ "$(last | jq -r ".args[-1]")" = "/tares:session Shop (taken over from the crew)" ] && [ "$(envof TARES_SESSION_TAKEOVER)" = 1 ] && [ "$(envof TARES_PROJECT)" = Shop ]'
+check "the session knows it took it over" '[ "$(last | jq -r ".args[-1]")" = "/tares:session Shop (taken over from the crew)" ] && [ "$(envof TARES_SESSION_TAKEOVER)" = 1 ] && [ "$(envof TARES_PROJECT)" = "$shop" ]'
 check "it opens in the project's repo" '[ "$(last | jq -r .cwd)" = "$T/shop" ]'
 (cd "$T/elsewhere" && "$F" session Shop </dev/null >"$T/again.out" 2>&1)
 check "while it is being released, a new session carries on the takeover without asking" '[ "$(last | jq -r ".args[-1]")" = "/tares:session Shop (taken over from the crew)" ] && grep -q "was taken over from the crew" "$T/again.out"'

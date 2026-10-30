@@ -82,16 +82,20 @@ async def assign_ticket(ticket: str, holder: str, project: str = "") -> str:
 
 @writable()
 async def set_stage(ticket: str, stage: str, reason: str = "", pr: str = "",
-                    project: str = "") -> str:
+                    checks: list[dict] | None = None, project: str = "") -> str:
     """Move a ticket you hold: `stage` is doing (you started), review (its PR is up: pass `pr`,
     the pull request's URL), changes (the reviewer asked for changes), merged, or blocked (say
     why in `reason`). Only the releaser marks a ticket shipped. A ticket held by another station
     is refused; ask the orchestrator. For a ticket that lives in Linear or GitHub, also move it
     there (Linear's own tools, `gh` for GitHub). Name your branch factory/<ticket> (factory/T3)
-    so Tares finds the pull request on its own too."""
+    so Tares finds the pull request on its own too. Asking for review, pass the checks you ran
+    as `checks` ([{command, result, commit, broke_test}, ...]) instead of one add_check call
+    each; they are recorded before the stage moves."""
     body = {"stage": stage, "reason": reason}
     if pr:
         body["pr"] = pr
+    if checks:
+        body["checks"] = checks
     async with _cx(20) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -161,19 +165,24 @@ async def decide_assumption(assumption: str, state: str, words: str = "",
 
 @writable()
 async def add_check(ticket: str, command: str, result: str, commit: str = "",
-                    broke_test: str = "", project: str = "") -> str:
+                    broke_test: str = "", more: list[dict] | None = None,
+                    project: str = "") -> str:
     """Record a check you ran on a ticket: the exact `command`, what it showed (`result`), the
     `commit` it ran on, and, for a test you added, `broke_test`: the test you saw fail when you
     broke the code it covers (then pass again once restored). One line goes into the Checks part
     of the ticket's working doc; the rest of the doc is untouched. Record each check after you
-    run it, never one you did not run: the reviewer compares them with your session."""
+    run it, never one you did not run: the reviewer compares them with your session. Several
+    checks you ran back to back go in one call: `more` takes the others as
+    [{command, result, commit, broke_test}, ...]."""
     body = {"command": command, "result": result, "commit": commit, "broke_test": broke_test}
+    if more:
+        body["checks"] = more
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
             return why
         r = await cx.post(f"{TARESD}/api/projects/{uid}/tickets/{ticket}/checks", json=body)
-    return _out(r, ("line", "working_doc"))
+    return _out(r, ("line", "lines", "working_doc"))
 
 
 @writable()
@@ -247,6 +256,44 @@ async def review_brief(ticket: str, head: str = "", project: str = "") -> str:
         r = await cx.get(f"{TARESD}/api/projects/{uid}/tickets/{ticket}/brief",
                          params={"head": head})
     return r.json()["brief"] if r.status_code == 200 else _out(r)
+
+
+@mcp.tool()
+async def builder_brief(ticket: str, start: bool = False, project: str = "") -> str:
+    """Start every ticket here, and again after a revive: one read with where the ticket stands
+    (stage, holder, PR, verdict), its working doc, its milestone and acceptance checks, the state
+    of what it depends on, the project's AGENTS.md (it wins over the generic flow) and the shared
+    one, open assumptions and desk questions on it, and where you left off (checks recorded,
+    Codex, earlier review rounds, the crew's latest messages). `start=True` also moves a ticket
+    that has not been started to doing, so starting a ticket is this one call; a ticket already in
+    review, changes, blocked or merged keeps its stage."""
+    async with _cx(30) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/tickets/{ticket}/builder-brief",
+                         params={"start": "true"} if start else None)
+    return r.json()["brief"] if r.status_code == 200 else _out(r)
+
+
+@mcp.tool()
+async def write_repo_map(repo: str, body: str, note: str, base: str = "", project: str = "") -> str:
+    """Write the map of a GitHub repo (owner/name) that the builder and reviewer briefs serve:
+    layout, entry points, how to install, build, test and lint, conventions, the files tickets
+    touch most, known traps. One map per repo, shared by every project on it, at most 8,000
+    characters (about 2,000 tokens). `body` replaces the whole map, so start from the one in your
+    brief and pass its `version` as `base` (leave it empty when the repo has no map). If someone
+    wrote the map since, nothing is written and the answer is the map now: fold your change into it
+    and write again. `note` says what changed and becomes a dated line in its history. Write it when the
+    brief says the repo has none; update it when a merged PR changes the layout or the build, test
+    or lint commands."""
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.put(f"{TARESD}/api/repo-map",
+                         json={"repo": repo, "body": body, "note": note, "base": base, "project": uid})
+    return _out(r)
 
 
 @mcp.tool()
@@ -389,7 +436,7 @@ async def list_decisions(project: str = "") -> str:
 # ── the crew (TR-419, TR-420, TR-425) ─────────────────────────────────────────
 
 SETTING_KEYS = ("autonomy", "releaser", "release_profile", "prod_pattern", "challenger",
-                "builders_max")
+                "builders_max", "kit", "idle_wake", "pace", "claude_update")
 
 @mcp.tool()
 async def get_crew_settings() -> str:
@@ -397,9 +444,16 @@ async def get_crew_settings() -> str:
     approves each merge; L4-ship: a builder merges after the reviewer's pass and green CI),
     `releaser` (whether the crew runs a releaser; without one a ticket ends at merged),
     `release_profile`, `prod_pattern` (what counts as prod), `challenger` (builders run the
-    Codex challenger), `builders_max`. Unset ones are null: ask the person, one at a time, with
-    a recommendation. These are the caller's own settings where they have set one, else the
-    team's default."""
+    Codex challenger), `builders_max`, `claude_update` (whether the watch moves stations onto a
+    new Claude Code; on unless false). Unset ones are null: ask the person, one at a time, with
+    a recommendation. These are the caller's own settings where they have set one, else the team's
+    default. `kit.frozen` is null while the crew follows the plugin checkout, else
+    when and by whom the person froze it (`tares factory crew freeze`): the watch then moves no
+    station onto a newer kit. Read only here; the person freezes and unfreezes from the CLI.
+    `idle_wake` (null or false: off): when true the factory's watch wakes you with a message when
+    you have work and holds your liveness tick, so you arm no schedule of your own. `pace` (null or
+    false: off): when true the watch slows the crew before the plan's limits: no new builders, a
+    45-minute tick, and builders wait near the 5-hour limit; its notes to you say what to do."""
     async with _cx(10) as cx:
         r = await cx.get(f"{TARESD}/api/crew/settings")
     return _out(r, SETTING_KEYS)
@@ -410,15 +464,20 @@ async def set_crew_settings(autonomy: str = "", release_profile: str | None = No
                             prod_pattern: str | None = None, challenger: bool | None = None,
                             builders_max: int | None = None,
                             releaser: bool | None = None,
+                            idle_wake: bool | None = None,
+                            pace: bool | None = None,
+                            claude_update: bool | None = None,
                             clear: list[str] | None = None) -> str:
     """Save the crew's settings the person chose (only the ones given change). They are saved for
     that person; on a single-user cell they are the cell's. A personal autonomy or challenger
     can be as strict as the team's or stricter, not looser. `clear` names settings to unset, so
     a person's own fall back to the team's. Only the person's own session or the orchestrator
-    may."""
+    may. `idle_wake` true has the watch wake idle stations when they have work, instead of each
+    ticking on its own. `pace` true slows the crew before the plan's limits are hit."""
     body = {"autonomy": autonomy or None, "release_profile": release_profile,
             "prod_pattern": prod_pattern, "challenger": challenger, "builders_max": builders_max,
-            "releaser": releaser, "clear": clear}
+            "releaser": releaser, "idle_wake": idle_wake, "pace": pace,
+            "claude_update": claude_update, "clear": clear}
     async with _cx(10) as cx:
         r = await cx.put(f"{TARESD}/api/crew/settings", json=body)
     return _out(r, SETTING_KEYS)
@@ -615,7 +674,8 @@ async def sign_off(repo: str, project: str = "") -> str:
 def _station_line(s: dict) -> dict:
     return {k: s.get(k) for k in ("name", "role", "parent", "state", "state_reason",
                                   "quiet_minutes", "project_name", "session", "last_at",
-                                  "children", "crew", "machine")} | {
+                                  "children", "crew", "machine",
+                                  "coordination_calls")} | {
         "person": (s.get("person") or {}).get("name"),
         "earlier_sessions": len(s.get("earlier") or [])}
 
@@ -623,10 +683,10 @@ def _station_line(s: dict) -> dict:
 @mcp.tool()
 async def list_crew(mine: bool = False) -> str:
     """The crews as Tares sees them: one row per station (orchestrator, reviewer, releaser,
-    builders, helpers) with its state (working, waiting, quiet, ended), the project it is on,
-    when it last spoke, the stations it started, and how many earlier sessions played it. Each
-    row names its crew, the machine the crew runs on and the person it belongs to: two crews can
-    have stations of the same name. With `mine` only the caller's own crews are listed."""
+    builders, helpers) with its state (working, idle, waiting, quiet, ended), the project it is
+    on, when it last spoke, the stations it started, and how many earlier sessions played it.
+    Each row names its crew, the machine the crew runs on and the person it belongs to: two crews
+    can have stations of the same name. With `mine` only the caller's own crews are listed."""
     async with _cx(10) as cx:
         r = await cx.get(f"{TARESD}/api/crew", params={"mine": 1} if mine else None)
     if r.status_code >= 400:
@@ -690,7 +750,7 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
     others = "Other people's crews pick up their own tickets on their next tick."
     orch = [s for s in (crew.json().get("stations") or []) if s.get("role") == "orchestrator"
             and s.get("name") == orch_name and s.get("crew") == crew_name
-            and s.get("state") in ("working", "waiting", "quiet")] if crew.status_code == 200 else []
+            and s.get("state") in ("working", "idle", "waiting", "quiet")] if crew.status_code == 200 else []
     if not orch:
         return ("Recorded as handed to the crew with:\n" + "\n".join(lines) + f"\nNo orchestrator "
                 f"of crew {crew_name} ({orch_name}) is running: tell the person to run `tares "

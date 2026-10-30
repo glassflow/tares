@@ -13,6 +13,7 @@ import os
 import time
 from datetime import timezone
 
+from . import loop as loop_mod
 from .config import Catalog
 from .envelope import now_utc
 from .reads import parse_window, resolve_trigger
@@ -136,7 +137,7 @@ def _schedule_catchup(name: str, delay: float, store, catalog, dispatcher, eval_
             _catchups.pop(name, None)
 
     try:
-        _catchups[name] = asyncio.get_running_loop().create_task(_later())
+        _catchups[name] = loop_mod.spawn(_later())
     except RuntimeError:   # no running loop (tests calling synchronously): evaluate next time
         pass
 

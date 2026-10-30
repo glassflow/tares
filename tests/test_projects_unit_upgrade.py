@@ -161,7 +161,7 @@ SNAPSHOT = {
 
 
 def snapshot(store) -> dict:
-    return {t: sorted(store.con.execute(f"SELECT {cols} FROM {t}").fetchall(), key=str)
+    return {t: sorted(store.sc.execute(f"SELECT {cols} FROM {t}").fetchall(), key=str)
             for t, cols in SNAPSHOT.items()}
 
 
@@ -169,7 +169,7 @@ def check_invariants(store, where: str) -> None:
     """Every trigger, agent and MCP server in exactly one existing project, listed there; every
     source in at least one; every trigger's sources members of its project; no view anywhere."""
     projects = {p["id"] for p in store.list_projects()}
-    rows = store.con.execute("SELECT usecase_id, kind, name FROM usecase_objects").fetchall()
+    rows = store.sc.execute("SELECT usecase_id, kind, name FROM usecase_objects").fetchall()
     listed = {(u, k, n) for u, k, n in rows}
     bad = []
     for kind, items in (("trigger", store.list_catalog_triggers()), ("agent", store.list_catalog_agents()),
@@ -219,7 +219,7 @@ def upgrade_checks():
           str(trig["t_escalate"]))
     check("a trigger whose view was already gone is paused with no sources",
           trig["t_ghost"]["sources"] == [] and trig["t_ghost"]["paused"] is True, str(trig["t_ghost"]))
-    last = store.con.execute("SELECT key_value FROM trigger_state WHERE trigger = 't_watch'").fetchall()
+    last = store.sc.execute("SELECT key_value FROM trigger_state WHERE trigger = 't_watch'").fetchall()
     check("the schedule's last tick moved from the view's name to the trigger's",
           last == [("t_watch",)], str(last))
     q = store.list_queries()
@@ -361,7 +361,7 @@ def legacy_import_checks(label: str, text: str):
           custom and all(o["kind"] != "view" for p in custom for o in p["params"]["objects"])
           and any(o["kind"] == "trigger" for p in custom for o in p["params"]["objects"]), str(custom)[:300])
     blob = json.dumps({"t": store.list_catalog_triggers(), "p": store.list_projects(),
-                       "o": store.con.execute("SELECT kind FROM usecase_objects").fetchall()}, default=str)
+                       "o": store.sc.execute("SELECT kind FROM usecase_objects").fetchall()}, default=str)
     check(f"{label}: nothing references a view", '"view"' not in blob and "attach_view" not in blob,
           blob[:200])
     from tares.config import export_db_to_yaml

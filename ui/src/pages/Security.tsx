@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 
 import { api, type AgentLimits, type TracingStatus } from "../api";
@@ -151,7 +151,7 @@ export default function Security() {
       {tab === "usage" && <UsagePanels />}
       {tab === "access" && <AccessTab />}
       {tab === "anthropic" && <ProvidersPanel />}
-      {tab === "agents" && <AgentLimitsPanel />}
+      {tab === "agents" && <AgentLimitsPanel agent={new URLSearchParams(loc.search).get("agent") ?? undefined} />}
       {tab === "areas" && <AreasPanel />}
       {tab === "github" && <GithubPanel cloud={cloud} />}
       {tab === "linear" && <LinearSettings cloud={cloud} />}
@@ -787,6 +787,7 @@ const PRESETS: { id: string; label: string; kind: ProviderKind; name: string; ba
   { id: "openai", label: "OpenAI", kind: "openai", name: "OpenAI", base_url: "", key: true },
   { id: "litellm", label: "LiteLLM", kind: "openai_compatible", name: "LiteLLM", base_url: "http://localhost:4000/v1", key: true },
   { id: "openrouter", label: "OpenRouter", kind: "openai_compatible", name: "OpenRouter", base_url: "https://openrouter.ai/api/v1", key: true },
+  { id: "xai", label: "xAI (Grok)", kind: "openai_compatible", name: "xAI", base_url: "https://api.x.ai/v1", key: true },
   { id: "ollama", label: "Ollama", kind: "openai_compatible", name: "Ollama", base_url: "http://localhost:11434/v1", key: false },
   { id: "other", label: "Other OpenAI-compatible", kind: "openai_compatible", name: "", base_url: "", key: true },
 ];
@@ -980,8 +981,11 @@ function ProvidersPanel() {
 // the switch is the one live control. The key and headers are write-only.
 // Runs per agent per day (TR-325). A guard against a runaway trigger, not a bill: spend is bounded
 // by each agent's budget. Saved here it replaces the deployment's value; cleared, that comes back.
-function AgentLimitsPanel() {
+// `agent` is who the person came for (a project's "Raise the limit", TR-670): the field is scrolled
+// into view and marked, since the one number applies to every agent without its own limit.
+function AgentLimitsPanel({ agent }: { agent?: string }) {
   const [st, setSt] = useState<AgentLimits>();
+  const field = useRef<HTMLLabelElement>(null);
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
@@ -991,6 +995,9 @@ function AgentLimitsPanel() {
     .then((s) => { setSt(s); setValue(String(s.daily_cap)); })
     .catch((e) => setErr(String((e as Error).message ?? e)));
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (agent && st) field.current?.scrollIntoView({ block: "center" });
+  }, [agent, !!st]);
 
   const save = async (daily_cap: string | null, done: string) => {
     setBusy(true); setErr(undefined); setMsg(undefined);
@@ -1017,11 +1024,17 @@ function AgentLimitsPanel() {
       {err && <div className="alert error">{err}</div>}
       {msg && <p className="help">{msg}</p>}
       <div className="row2">
-        <label className="field">
+        <label className={`field${agent ? " field-focus" : ""}`} ref={field}
+               data-testid="daily-cap-field">
           <span className="lbl">runs per agent per day</span>
           <input type="number" min={1} max={10000} value={value} disabled={busy}
                  onChange={(e) => setValue(e.target.value)} />
           <span className="help">now {st.daily_cap}, {from}</span>
+          {agent && (
+            <span className="help">{agent} stopped at this limit. Raise it here and {agent} runs
+              again on its next trigger; the number applies to every agent
+              without its own limit.</span>
+          )}
         </label>
       </div>
       <div className="btnrow">

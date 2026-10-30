@@ -92,6 +92,44 @@ same questions come as numbered prompts. The Crew page
 Code stops idle sessions after about an hour) and gives a station a permission you allowed in
 Tares; its log is `~/factory/watch.log`, and `crew down` stops it. `tares factory doctor` checks everything the crew needs.
 
+If you run the crew in cmux, cmux says "Waiting for you" about a minute after every station's turn ends, with nothing for you to do. Claude
+Code has no setting that drops only that notice and keeps the permission one, so the switch is cmux's own: set
+`"notifications": {"agentIdleReminder": false}` in `~/.config/cmux/cmux.json`. Permission alerts stay on. It applies to all your cmux
+agents, so the factory never writes it; `tares factory doctor` reads the file and tells you when it is still on.
+
+Claude Code has a built-in LSP tool (go to definition, references, callers) that answers only where a language server is wired in, and
+only a plugin wires one. `doctor` reads each handed-over repo's languages (Python, TypeScript, JavaScript, Go, Rust) from its manifests (`pyproject.toml`, `package.json`,
+`tsconfig.json`, `go.mod`, `Cargo.toml` and the like, at the repo root or one folder down) and says for each whether Claude Code has a server:
+the plugin enabled and its binary on your PATH. For a missing one it prints the install command and the plugin that wires it in, for example
+`npm install -g pyright` then `claude plugin install pyright-lsp@claude-plugins-official`. `crew up` shows the same list and installs it only
+when you answer yes; `--yes` and a closed input install nothing. Builders and the reviewer prefer the LSP tool over grep when it answers.
+
+`tares factory crew freeze` keeps the crew on today's plugin kit: the watch still tells you when the
+checkout has a newer one, but moves no station onto it. A station that starts or revives uses a copy
+of the kit as it was frozen; a station already running keeps reading the checkout until it restarts.
+`tares factory crew unfreeze` lets the stations follow the checkout again.
+
+The crew setting `idle_wake` (off by default; `set_crew_settings(idle_wake=True)` or the crew's settings API) swaps the stations' fixed ticks for wakes. The watch, which makes no model call, asks Tares
+what each station has to do and sends an idle station one message only when there is something: a
+pull request in the review queue without a verdict for the reviewer, changes asked for, a verdict or
+failed CI on its own ticket for a builder, a `RELEASE` under Undelivered in the orchestrator's
+report for the releaser, a desk answer or a newly handed-over project for the orchestrator. A
+station with nothing to do gets a liveness wake after 15 minutes (reviewer), 20 (orchestrator) or
+30 (releaser, and a builder while a PR of its is open), then after 30, then every 45; a session
+that did something itself starts the count over. A busy or attached station and a halted crew are
+not woken. Turn the setting off and each station is told once to arm its tick again.
+
+The crew setting `pace` (off by default; `set_crew_settings(pace=True)` or the Crew page) slows the crew before the plan's
+limit instead of hitting it and restarting every station at once. The watch reads the plan usage Tares keeps
+(`GET /api/claude-code/usage`, through `GET /api/crew/pace`) once a round. At 85% of the 5-hour window or 90% of the week no new
+builder starts (`factory spawn builder` refuses and says until when; helpers are not affected) and every station ticks every
+45 minutes: each is told once, in its own conversation (with `idle_wake` on the liveness wake simply waits 45 minutes). At 95% of
+the window a builder also finishes the step it is on, pushes, writes in its report where it is and waits; with `idle_wake` on it
+gets no work wakes meanwhile. A station that stopped while a limit was full is not revived into it; after the reset the watch
+revives it in the same conversation with a short prompt, and starts it fresh only when that resume failed. Back below the
+thresholds each station is told once to go back to its normal tick. A reading that cannot be had changes nothing. `factory crew
+status` and the Crew page say when the crew is pacing and until when.
+
 ## 3. Plan a project
 
 In the repo the project builds on, or in a folder that holds its repos:

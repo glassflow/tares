@@ -178,12 +178,12 @@ async def main():
         ck("the questions route gives the answerer's name, not only the id",
            (q1["answered_by_person"] or {}).get("name") == "kiran" and q1["answered_by"] == pid["kiran"]
            and (q1["to_person"] or {}).get("name") == "kiran", r.text)
-        store.con.execute("UPDATE spec_questions SET answered_by = 'p_gone' WHERE project = ? AND id = 'Q1'",
+        store.sc.execute("UPDATE spec_questions SET answered_by = 'p_gone' WHERE project = ? AND id = 'Q1'",
                           [uid])
         q1 = (await call("ashish", "GET", f"/api/projects/{uid}/questions")).json()["questions"][0]
         ck("a person who is gone has no name, and the raw id is all there is", q1["answered_by_person"] is None
            and q1["answered_by"] == "p_gone", str(q1))
-        store.con.execute("UPDATE spec_questions SET answered_by = ? WHERE project = ? AND id = 'Q1'",
+        store.sc.execute("UPDATE spec_questions SET answered_by = ? WHERE project = ? AND id = 'Q1'",
                           [pid["kiran"], uid])
         ck("it leaves kiran's my_work", (await call("kiran", "GET", "/api/crew/my-work")
                                          ).json()["spec_questions"] == [])
@@ -376,14 +376,14 @@ async def main():
         ho = store.get_handover(f6)
         ck("the override is still ashish's, not lee's", (ho["override"]["person"] or {}).get("id")
            == pid["ashish"] and "ashish" in (ho["override"]["by_label"] or ""), str(ho["override"]))
-        row = store.con.execute("SELECT override_person_id FROM handovers WHERE project = ?",
+        row = store.sc.execute("SELECT override_person_id FROM handovers WHERE project = ?",
                                 [f6]).fetchone()
         ck("override_person_id is stored", row[0] == pid["ashish"], row)
         r = await call("ashish", "GET", f"/api/projects/{f6}/timeline")
         ev = (r.json() or {}).get("events") or []
         ck("and the timeline event names ashish", len(ev) == 1 and "ashish" in (ev[0]["by"] or "")
            and "lee" not in (ev[0]["by"] or ""), r.text)
-        store.con.execute("UPDATE handovers SET override_person_id = NULL WHERE project = ?", [f6])
+        store.sc.execute("UPDATE handovers SET override_person_id = NULL WHERE project = ?", [f6])
         ck("a row from before the column falls back to the handing person",
            (store.get_handover(f6)["override"]["person"] or {}).get("id") == pid["lee"])
 
@@ -395,7 +395,7 @@ async def main():
         for i, h in enumerate((10, 20, 30)):   # three threads: runs started at +10h, +20h, +30h
             rid = f"ov-run-{i}"
             store.start_agent_run(rid, "watcher", "t", "", "k", "h", project=ov)
-            store.con.execute("UPDATE agent_runs SET started_at = ? WHERE id = ?", [hours(h), rid])
+            store.sc.execute("UPDATE agent_runs SET started_at = ? WHERE id = ?", [hours(h), rid])
         repos = [{"path": os.path.join(_TMP, "r"), "name": "acme/api"}]
         # +5h older than every thread, +15h and +25h between them, +35h newer than all
         for h, who, why_ in ((5, "ashish", "first, old"), (15, "lee", "second, by lee"),
@@ -480,7 +480,7 @@ async def main():
         ck("a sign-off on it", r.status_code == 201, r.text)
         store.set_handover(dp, [{"path": "/w/x"}], None, "", datetime.now(timezone.utc), pid["ashish"],
                            None, "doomed override")
-        count = lambda t: store.con.execute(f"SELECT COUNT(*) FROM {t} WHERE project = ?", [dp]).fetchone()[0]
+        count = lambda t: store.sc.execute(f"SELECT COUNT(*) FROM {t} WHERE project = ?", [dp]).fetchone()[0]
         ck("all three tables hold a row", count("spec_questions") == 1 and count("signoffs") == 1
            and count("handover_overrides") == 1)
         r = await call("ashish", "DELETE", f"/api/projects/{dp}")
@@ -492,7 +492,7 @@ async def main():
         old = await make_project("ashish", "signoff-legacy")
         store.set_handover(old, [{"path": "/w/x"}], None, "", datetime.now(timezone.utc), pid["lee"],
                            None, "legacy reason")
-        store.con.execute("DELETE FROM handover_overrides WHERE project = ?", [old])
+        store.sc.execute("DELETE FROM handover_overrides WHERE project = ?", [old])
         store._factory_upgrade()
         store._factory_upgrade()
         lg = store.list_handover_overrides(old)
@@ -570,7 +570,7 @@ async def main():
         t1 = datetime.now(timezone.utc) - timedelta(hours=2)
         store.set_handover(tx, [{"path": "/w/one"}], "L3-review", "first", t1, pid["ashish"], "crewA")
         before_ho = store.get_handover(tx)
-        store.con.execute("ALTER TABLE handover_overrides RENAME TO handover_overrides_off")
+        store.sc.execute("ALTER TABLE handover_overrides RENAME TO handover_overrides_off")
         try:
             store.set_handover(tx, [{"path": "/w/two"}], None, "second", datetime.now(timezone.utc),
                                pid["lee"], "crewB", "pushed through")
@@ -578,7 +578,7 @@ async def main():
         except Exception:   # noqa: BLE001
             failed = True
         finally:
-            store.con.execute("ALTER TABLE handover_overrides_off RENAME TO handover_overrides")
+            store.sc.execute("ALTER TABLE handover_overrides_off RENAME TO handover_overrides")
         after_ho = store.get_handover(tx)
         ck("a failing log insert makes the hand-over fail", failed)
         ck("and leaves the hand-over row as it was", after_ho == before_ho and after_ho["override"] is None
@@ -595,10 +595,10 @@ async def main():
             nu = await make_project("ashish", name)
             hat = datetime.now(timezone.utc) - timedelta(days=1)
             store.set_handover(nu, [{"path": "/w/x"}], None, "", hat, pid["lee"], None, "no time kept")
-            store.con.execute("UPDATE handovers SET override_at = NULL WHERE project = ?", [nu])
+            store.sc.execute("UPDATE handovers SET override_at = NULL WHERE project = ?", [nu])
             if drop_handed:
-                store.con.execute("UPDATE handovers SET handed_at = NULL WHERE project = ?", [nu])
-            store.con.execute("DELETE FROM handover_overrides WHERE project = ?", [nu])
+                store.sc.execute("UPDATE handovers SET handed_at = NULL WHERE project = ?", [nu])
+            store.sc.execute("DELETE FROM handover_overrides WHERE project = ?", [nu])
             try:
                 store._factory_upgrade()
                 raised = None
@@ -620,8 +620,8 @@ async def main():
         lo = await make_project("ashish", "signoff-legacy-notime")
         hat = datetime.now(timezone.utc) - timedelta(days=2)
         store.set_handover(lo, [{"path": "/w/x"}], None, "", hat, pid["lee"], None, "old and untimed")
-        store.con.execute("UPDATE handovers SET override_at = NULL WHERE project = ?", [lo])
-        store.con.execute("DELETE FROM handover_overrides WHERE project = ?", [lo])
+        store.sc.execute("UPDATE handovers SET override_at = NULL WHERE project = ?", [lo])
+        store.sc.execute("DELETE FROM handover_overrides WHERE project = ?", [lo])
         ck("before the upgrade it reads as not overridden", store.get_handover(lo)["overridden"] is False)
         store._factory_upgrade()
         ho = store.get_handover(lo)
@@ -680,7 +680,7 @@ async def main():
         r = await call("kiran_plain", "POST", f"/api/projects/{pl}/signoffs", {"repo": "acme/plain"})
         ck("kiran signs off with his plain key (REST)", r.status_code == 201
            and r.json()["signoffs"][0]["signed_off"] is True, r.text)
-        store.con.execute("DELETE FROM signoffs WHERE project = ?", [pl])
+        store.sc.execute("DELETE FROM signoffs WHERE project = ?", [pl])
         as_(keys["kiran_plain"])
         out = await mf.sign_off("acme/plain", project="signoff-plain-keys")
         ck("and through the MCP tool", not out.startswith("error")

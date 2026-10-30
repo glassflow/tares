@@ -75,9 +75,11 @@ jobs:
     steps:
       - uses: Homebrew/actions/setup-homebrew@main
 
+      # Homebrew refuses a formula from a third-party tap until the tap is trusted.
       - name: Tap the update commit
         run: |
           brew tap glassflow/tap
+          brew trust glassflow/tap
           brew update
 
       - name: The tap formula is this version

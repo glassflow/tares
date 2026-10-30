@@ -13,6 +13,20 @@ import uuid
 from .envelope import now_utc
 
 FACTORY_SCHEMA = [
+    # The Codex challenger's reviews and waivers (TR-719), copied from the events as they arrive
+    # so the review queue, the ticket detail and the merge gate look a ticket's up by branch
+    # instead of scanning every event for them.
+    """CREATE TABLE IF NOT EXISTS challenges (
+      source        TEXT,
+      key_value     TEXT,
+      event_time    TIMESTAMPTZ,
+      event_type    TEXT,
+      branch        TEXT,
+      tares_project TEXT,
+      payload       JSON,
+      PRIMARY KEY (source, key_value, event_time, event_type, branch)
+    )""",
+    "CREATE INDEX IF NOT EXISTS ix_challenges_branch ON challenges(source, branch)",
     # A factory project's milestones (TR-411): each ships something a person can check, its
     # acceptance checks ([{check, expect}]). owner 'linear' when it mirrors a Linear project
     # milestone (external_id), written by the sync; the checks stay Tares's either way.
@@ -136,6 +150,21 @@ FACTORY_SCHEMA = [
       state       TEXT,
       created_at  TIMESTAMPTZ,
       decided_at  TIMESTAMPTZ
+    )""",
+    # A map of one GitHub repo (TR-681), shared by every project that names it, with a dated line
+    # for each change.
+    """CREATE TABLE IF NOT EXISTS repo_maps (
+      repo        TEXT PRIMARY KEY,
+      body        TEXT,
+      updated_at  TIMESTAMPTZ,
+      updated_by  TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS repo_map_history (
+      repo        TEXT,
+      changed_at  TIMESTAMPTZ,
+      by_station  TEXT,
+      project     TEXT,
+      note        TEXT
     )""",
     # The desk (TR-449): questions for the person, one numbering for the cell (D1, D2...), written
     # only by the orchestrator. A batch of assumptions to confirm is a desk item too (TR-452).
@@ -310,6 +339,14 @@ def by_label(person: dict | None, by: str | None) -> str | None:
     return name if by in GENERIC_BY or by == name else f"{name} ({by})"
 
 
+class MapChanged(Exception):
+    """A repo map was written since the writer read it; `.current` is the map now (None: none)."""
+
+    def __init__(self, current: dict | None):
+        super().__init__("the repo map changed since it was read")
+        self.current = current
+
+
 class FactoryStore:
     """Methods Store gains for the factory. Expects self.con and self._lock."""
 
@@ -319,8 +356,8 @@ class FactoryStore:
         ids = sorted({i for i in ids if i})
         if not ids:
             return {}
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 f"SELECT id, name FROM people WHERE id IN ({', '.join('?' for _ in ids)})",
                 ids).fetchall()
         return {r[0]: {"id": r[0], "name": r[1]} for r in rows}
@@ -340,14 +377,14 @@ class FactoryStore:
     def _factory_upgrade(self) -> None:
         """Tickets from before numbers get them, in plan order, per project. Sessions that played
         a station before crews existed (TR-628) join the crew `crew` of the person `local`."""
-        if self.con.execute("SELECT 1 FROM session_stations WHERE crew_id IS NULL LIMIT 1"
+        if self.sc.execute("SELECT 1 FROM session_stations WHERE crew_id IS NULL LIMIT 1"
                             ).fetchone():
             cid = self._crew_id("crew", "local", "", now_utc())
-            self.con.execute("UPDATE session_stations SET crew_id = ? WHERE crew_id IS NULL",
+            self.sc.execute("UPDATE session_stations SET crew_id = ? WHERE crew_id IS NULL",
                              [cid])
         # an override kept before the log existed is its first entry (TR-640); one with no time of
         # its own takes the hand-over's, else now, so a log entry always has a time
-        self.con.execute(
+        self.sc.execute(
             "INSERT INTO handover_overrides (project, \"at\", reason, person_id, handed_by) "
             "SELECT project, COALESCE(override_at, handed_at, now()), override_reason, "
             "COALESCE(override_person_id, person_id), "
@@ -355,48 +392,48 @@ class FactoryStore:
             "(SELECT project FROM handover_overrides)")
         # an override with no time of its own is stamped with its hand-over's, so get_handover
         # reads that hand-over as overridden (its rule compares the two times)
-        self.con.execute("UPDATE handovers SET override_at = COALESCE(handed_at, now()) "
+        self.sc.execute("UPDATE handovers SET override_at = COALESCE(handed_at, now()) "
                          "WHERE override_reason IS NOT NULL AND override_at IS NULL")
-        rows = self.con.execute("SELECT DISTINCT project FROM tickets WHERE number IS NULL"
+        rows = self.sc.execute("SELECT DISTINCT project FROM tickets WHERE number IS NULL"
                                 ).fetchall()
         for (project,) in rows:
-            top = self.con.execute("SELECT max(number) FROM tickets WHERE project = ?",
+            top = self.sc.execute("SELECT max(number) FROM tickets WHERE project = ?",
                                    [project]).fetchone()[0] or 0
-            todo = self.con.execute("SELECT id FROM tickets WHERE project = ? AND number IS NULL "
+            todo = self.sc.execute("SELECT id FROM tickets WHERE project = ? AND number IS NULL "
                                     "ORDER BY position, created_at", [project]).fetchall()
             for i, (tid,) in enumerate(todo, top + 1):
-                self.con.execute("UPDATE tickets SET number = ? WHERE id = ?", [i, tid])
-            self.con.execute("INSERT INTO ticket_numbers (project, last) VALUES (?, ?) ON "
+                self.sc.execute("UPDATE tickets SET number = ? WHERE id = ?", [i, tid])
+            self.sc.execute("INSERT INTO ticket_numbers (project, last) VALUES (?, ?) ON "
                              "CONFLICT (project) DO UPDATE SET last = greatest(ticket_numbers.last, "
                              "excluded.last)", [project, top + len(todo)])
 
     def _next_ticket_number(self, project: str) -> int:
         """The project's next ticket number, never one given out before. Lock held."""
-        row = self.con.execute("SELECT last FROM ticket_numbers WHERE project = ?",
+        row = self.sc.execute("SELECT last FROM ticket_numbers WHERE project = ?",
                                [project]).fetchone()
-        top = self.con.execute("SELECT max(number) FROM tickets WHERE project = ?",
+        top = self.sc.execute("SELECT max(number) FROM tickets WHERE project = ?",
                                [project]).fetchone()[0] or 0
         n = max(row[0] if row else 0, top) + 1
-        self.con.execute("INSERT INTO ticket_numbers (project, last) VALUES (?, ?) ON CONFLICT "
+        self.sc.execute("INSERT INTO ticket_numbers (project, last) VALUES (?, ?) ON CONFLICT "
                          "(project) DO UPDATE SET last = excluded.last", [project, n])
         return n
 
     def _factory_forget_project(self, uid: str) -> None:
         """A project is deleted: its factory rows go. Lock held."""
-        self.con.execute("DELETE FROM milestones WHERE project = ?", [uid])
-        self.con.execute("DELETE FROM ticket_numbers WHERE project = ?", [uid])
-        self.con.execute("DELETE FROM ticket_history WHERE project = ?", [uid])
-        self.con.execute("DELETE FROM assumptions WHERE project = ?", [uid])
-        self.con.execute("DELETE FROM ticket_checks WHERE project = ?", [uid])
-        self.con.execute("DELETE FROM reviews WHERE project = ?", [uid])
-        self.con.execute("DELETE FROM review_findings WHERE project = ?", [uid])
-        self.con.execute("DELETE FROM desk_items WHERE project = ?", [uid])
-        self.con.execute("DELETE FROM grants WHERE project = ?", [uid])
-        self.con.execute("DELETE FROM decisions WHERE project = ?", [uid])
-        self.con.execute("DELETE FROM handovers WHERE project = ?", [uid])
-        self.con.execute("DELETE FROM handover_overrides WHERE project = ?", [uid])
-        self.con.execute("DELETE FROM spec_questions WHERE project = ?", [uid])
-        self.con.execute("DELETE FROM signoffs WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM milestones WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM ticket_numbers WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM ticket_history WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM assumptions WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM ticket_checks WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM reviews WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM review_findings WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM desk_items WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM grants WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM decisions WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM handovers WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM handover_overrides WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM spec_questions WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM signoffs WHERE project = ?", [uid])
 
     # ── milestones (TR-411) ───────────────────────────────────────────────────
     _MS_COLS = "id, project, owner, external_id, name, goal, checks, position, created_at, updated_at"
@@ -412,12 +449,12 @@ class FactoryStore:
                          owner: str = "tares", external_id: str | None = None) -> str:
         mid = "ms_" + uuid.uuid4().hex[:10]
         ts = now_utc()
-        with self._lock:
+        with self._swrite:
             if position is None:
-                last = self.con.execute("SELECT max(position) FROM milestones WHERE project = ?",
+                last = self.sc.execute("SELECT max(position) FROM milestones WHERE project = ?",
                                         [project]).fetchone()[0]
                 position = (last or 0) + 1
-            self.con.execute(
+            self.sc.execute(
                 f"INSERT INTO milestones ({self._MS_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [mid, project, owner, external_id, name, goal or "",
                  json.dumps(checks or []), float(position), ts, ts])
@@ -433,12 +470,12 @@ class FactoryStore:
                 v = json.dumps(v or [])
             sets.append(f"{col} = ?"); vals.append(v)
         vals.append(mid)
-        with self._lock:
-            self.con.execute(f"UPDATE milestones SET {', '.join(sets)} WHERE id = ?", vals)
+        with self._swrite:
+            self.sc.execute(f"UPDATE milestones SET {', '.join(sets)} WHERE id = ?", vals)
 
     def list_milestones(self, project: str) -> list[dict]:
-        with self._lock:
-            rows = self.con.execute(f"SELECT {self._MS_COLS} FROM milestones WHERE project = ? "
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._MS_COLS} FROM milestones WHERE project = ? "
                                     "ORDER BY position, created_at", [project]).fetchall()
         return [self._ms_row(r) for r in rows]
 
@@ -447,8 +484,8 @@ class FactoryStore:
         ref = (ref or "").strip()
         if not ref:
             return None
-        with self._lock:
-            r = self.con.execute(
+        with self._sread:
+            r = self.sc.execute(
                 f"SELECT {self._MS_COLS} FROM milestones WHERE project = ? AND (id = ? OR "
                 "external_id = ? OR lower(name) = lower(?)) ORDER BY position LIMIT 1",
                 [project, ref, ref, ref]).fetchone()
@@ -458,14 +495,14 @@ class FactoryStore:
     def _crew_id(self, name: str, person_id: str, machine: str, at) -> str:
         """The id of the crew (person, name, machine), made on first sight; last_seen moves up
         to `at`. Lock held (or no other thread yet)."""
-        r = self.con.execute("SELECT id, last_seen FROM crews WHERE person_id = ? AND name = ? "
+        r = self.sc.execute("SELECT id, last_seen FROM crews WHERE person_id = ? AND name = ? "
                              "AND machine = ?", [person_id, name, machine]).fetchone()
         if r:
             if at is not None and (r[1] is None or at > r[1]):
-                self.con.execute("UPDATE crews SET last_seen = ? WHERE id = ?", [at, r[0]])
+                self.sc.execute("UPDATE crews SET last_seen = ? WHERE id = ?", [at, r[0]])
             return r[0]
         cid = "c_" + uuid.uuid4().hex[:10]
-        self.con.execute("INSERT INTO crews (id, name, person_id, machine, first_seen, last_seen) "
+        self.sc.execute("INSERT INTO crews (id, name, person_id, machine, first_seen, last_seen) "
                          "VALUES (?, ?, ?, ?, ?, ?)", [cid, name, person_id, machine, at, at])
         return cid
 
@@ -474,14 +511,14 @@ class FactoryStore:
         """The crew a station line belongs to: the crew's name (`crew` when the line names none),
         the person whose recording it is (`local` when it carries none) and the machine ('' when
         unknown). Made on first sight."""
-        with self._lock:
+        with self._swrite:
             return self._crew_id((name or "").strip() or "crew", person_id or "local",
                                  (machine or "").strip(), at)
 
     def list_crews(self) -> list[dict]:
         """Every crew the cell has seen, with its person's name, newest activity first."""
-        with self._lock:
-            rows = self.con.execute("SELECT id, name, person_id, machine, first_seen, last_seen "
+        with self._sread:
+            rows = self.sc.execute("SELECT id, name, person_id, machine, first_seen, last_seen "
                                     "FROM crews ORDER BY last_seen DESC, id").fetchall()
         refs = self._person_refs(r[2] for r in rows)
         return [{"id": r[0], "name": r[1], "machine": r[3] or "", "first_seen": r[4],
@@ -491,8 +528,8 @@ class FactoryStore:
     # ── stations (TR-418, TR-420) ─────────────────────────────────────────────
     def set_session_station(self, session: str, station: str, role: str, parent: str,
                             project: str | None, at, crew_id: str | None = None) -> None:
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO session_stations (session, station, role, parent, project, seen_at, "
                 "crew_id) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (session) DO UPDATE SET "
                 "station = excluded.station, role = excluded.role, parent = excluded.parent, "
@@ -501,8 +538,8 @@ class FactoryStore:
                 [session, station, role or None, parent or None, project, at, crew_id])
 
     def session_station(self, session: str) -> dict | None:
-        with self._lock:
-            r = self.con.execute("SELECT station, role, parent, project FROM session_stations "
+        with self._sread:
+            r = self.sc.execute("SELECT station, role, parent, project FROM session_stations "
                                  "WHERE session = ?", [session]).fetchone()
         return {"station": r[0], "role": r[1], "parent": r[2], "project": r[3]} if r else None
 
@@ -510,47 +547,83 @@ class FactoryStore:
         """Every session that played a station, with its station, role, parent and project, when
         it started and last did something (from its lines on `source`), its state, and the
         project it last named (project_sessions), newest activity first."""
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT ss.session, ss.station, ss.role, ss.parent, ss.project, ss.seen_at, "
-                "min(e.event_time), max(e.event_time), count(e.key_value), "
                 "st.state, st.reason, st.state_at, "
                 "(SELECT p.project FROM project_sessions p WHERE p.session = ss.session "
                 " ORDER BY p.linked_at DESC LIMIT 1), ss.crew_id "
                 "FROM session_stations ss "
-                "LEFT JOIN events e ON e.source = ? AND e.key_value = ss.session "
-                "LEFT JOIN session_states st ON st.session = ss.session "
-                "GROUP BY ss.session, ss.station, ss.role, ss.parent, ss.project, ss.seen_at, "
-                "ss.crew_id, st.state, st.reason, st.state_at "
-                "ORDER BY coalesce(max(e.event_time), ss.seen_at) DESC", [source]).fetchall()
-        return [{"session": r[0], "station": r[1], "role": r[2], "parent": r[3],
-                 "project": r[4] or r[12], "seen_at": r[5], "started_at": r[6] or r[5],
-                 "last_at": r[7] or r[5], "lines": int(r[8] or 0), "state": r[9],
-                 "state_reason": r[10], "state_at": r[11], "crew_id": r[13]} for r in rows]
+                "LEFT JOIN session_states st ON st.session = ss.session").fetchall()
+        act = self.session_activity(source, [r[0] for r in rows])
+        out = []
+        for r in rows:
+            first, last, n = act.get(r[0], (None, None, 0))
+            out.append({"session": r[0], "station": r[1], "role": r[2], "parent": r[3],
+                        "project": r[4] or r[9], "seen_at": r[5], "started_at": first or r[5],
+                        "last_at": last or r[5], "lines": n, "state": r[6],
+                        "state_reason": r[7], "state_at": r[8], "crew_id": r[10]})
+        out.sort(key=lambda s: s["last_at"].timestamp() if s["last_at"] else float("-inf"),
+                 reverse=True)
+        return out
 
     # ── the ledger's history (TR-427) ─────────────────────────────────────────
     def add_ticket_history(self, ticket: str, project: str, field: str, value: str | None,
                            reason: str | None, by_station: str | None, by_role: str | None,
                            at, person_id: str | None = None) -> None:
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO ticket_history (ticket, project, changed_at, field, value, reason, "
                 "by_station, by_role, person_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [ticket, project, at, field, value, reason or None, by_station or None,
                  by_role or None, person_id or None])
 
     def ticket_history(self, ticket: str) -> list[dict]:
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT changed_at, field, value, reason, by_station, by_role, person_id "
                 "FROM ticket_history WHERE ticket = ? ORDER BY changed_at", [ticket]).fetchall()
         return self._with_people([{"at": r[0], "field": r[1], "value": r[2], "reason": r[3],
                                    "by": r[4], "role": r[5], "person_id": r[6]} for r in rows])
 
+    def entered_stage(self, tickets: list[str], stage: str) -> dict:
+        """{ticket: when it last moved to `stage`} in one query (TR-648). Tickets that never
+        did are absent."""
+        if not tickets:
+            return {}
+        marks = ", ".join("?" for _ in tickets)
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT ticket, max(changed_at) FROM ticket_history WHERE ticket IN "
+                f"({marks}) AND field = 'stage' AND value = ? GROUP BY ticket",
+                list(tickets) + [stage]).fetchall()
+        return dict(rows)
+
+    def review_tickets(self) -> list[tuple[str, dict]]:
+        """Every ticket in review with its project's name, in the order the projects were made
+        and then the list's own order, in one query (TR-648)."""
+        with self._sread:
+            rows = self.sc.execute(
+                f"SELECT {self._TICKET_COLS}, pname FROM (SELECT t.*, u.name AS pname, "
+                "u.created_at AS pcreated FROM tickets t JOIN usecases u ON u.id = t.project "
+                "WHERE t.stage = 'review') ORDER BY pcreated, position, created_at").fetchall()
+        return [(r[-1], self._ticket_row(r)) for r in rows]
+
+    def milestone_statuses(self, milestones: list[str]) -> list[dict]:
+        """Project, milestone, id and status of every ticket in these milestones (TR-648)."""
+        if not milestones:
+            return []
+        marks = ", ".join("?" for _ in milestones)
+        with self._sread:
+            rows = self.sc.execute(
+                f"SELECT project, milestone, id, status FROM tickets WHERE milestone IN ({marks})",
+                list(milestones)).fetchall()
+        return [{"project": r[0], "milestone": r[1], "id": r[2], "status": r[3]} for r in rows]
+
     def history_between(self, since, until) -> list[dict]:
         """Every ticket change in [since, until), oldest first, for every project (the standup)."""
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT ticket, project, changed_at, field, value, reason, by_station, person_id "
                 "FROM ticket_history WHERE changed_at >= ? AND changed_at < ? "
                 "ORDER BY changed_at", [since, until]).fetchall()
@@ -589,8 +662,8 @@ class FactoryStore:
     def factory_ref_elsewhere(self, uid: str, repo: str, ref: str) -> bool:
         """Another project has a ticket called `ref` in the work whose PRs live in `repo`: a
         branch named after the ref could be either's, so it is not linked by name."""
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT t.project, t.number, t.identifier, t.stage FROM tickets t WHERE "
                 "t.project <> ? AND t.project IN (SELECT project FROM tickets WHERE "
                 "json_extract_string(pr, '$.repo') = ?)", [uid, repo]).fetchall()
@@ -599,6 +672,18 @@ class FactoryStore:
             if lab.upper() == ref.upper() and stage in ("doing", "review", "changes", "blocked"):
                 return True
         return False
+
+    def _station_of(self, sessions: set) -> dict:
+        """{session: station} for the sessions among `sessions` that played one."""
+        sessions = sorted(s for s in sessions if s)
+        out = {}
+        for i in range(0, len(sessions), 500):
+            chunk = sessions[i:i + 500]
+            with self._sread:
+                out.update(self.sc.execute(
+                    "SELECT session, station FROM session_stations "
+                    f"WHERE session IN ({', '.join('?' * len(chunk))})", chunk).fetchall())
+        return out
 
     def protocol_messages(self, source: str, limit: int = 3000) -> list[dict]:
         """The crew's recorded protocol messages (TR-429): SendMessage calls whose text starts
@@ -613,14 +698,15 @@ class FactoryStore:
             return hit[1]
         with self._lock:
             rows = self.con.execute(
-                "SELECT e.key_value, e.event_time, e.payload, ss.station FROM events e "
-                "LEFT JOIN session_stations ss ON ss.session = e.key_value "
+                "SELECT e.key_value, e.event_time, e.payload FROM events e "
                 "WHERE e.source = ? AND e.event_type = 'tool_use' "
                 "AND e.text LIKE '%SendMessage%' "
                 "AND CAST(e.payload AS VARCHAR) LIKE '%[TF:%' "
                 "ORDER BY e.event_time DESC LIMIT ?", [source, limit]).fetchall()
+        stations = self._station_of({r[0] for r in rows})
         out = []
-        for sid, at, pj, station in reversed(rows):
+        for sid, at, pj in reversed(rows):
+            station = stations.get(sid)
             try:
                 o = json.loads(pj) if pj else {}
             except (TypeError, ValueError):
@@ -642,6 +728,49 @@ class FactoryStore:
         self._proto_cache = ((source, n), out)
         return out
 
+    def coordination_calls(self, source: str, sessions: list[str]) -> dict[str, int]:
+        """Per session, how many tool calls only coordinate the crew (TR-683, factory.is_coordination).
+        A session is parsed again only when it has new tool calls, whichever sessions are asked for."""
+        from .factory import is_coordination
+        if not sessions:
+            return {}
+        marks = ", ".join("?" for _ in sessions)
+        with self._lock:
+            # count and newest call together: a prune that drops old calls while new ones arrive
+            # leaves the count alone but moves the newest
+            sizes = {sid: (n, newest) for sid, n, newest in self.con.execute(
+                f"SELECT key_value, count(*), max(event_time) FROM events WHERE source = ? AND "
+                f"event_type = 'tool_use' AND key_value IN ({marks}) GROUP BY key_value",
+                [source, *sessions]).fetchall()}
+            cache = self.__dict__.setdefault("_coord_cache", {})
+            for sid in sessions:
+                if sid not in sizes:   # every call of it is gone (pruned): forget its count
+                    cache.pop((source, sid), None)
+            fresh = [sid for sid in sizes if cache.get((source, sid), (None,))[0] != sizes[sid]]
+            rows = []
+            if fresh:
+                fmarks = ", ".join("?" for _ in fresh)
+                # the rendered text names each tool as "→ name(": a cheap filter before the parse
+                rows = self.con.execute(
+                    f"SELECT key_value, payload FROM events WHERE source = ? AND key_value IN ({fmarks}) "
+                    "AND event_type = 'tool_use' AND (text LIKE '%→ mcp__%' OR text LIKE '%→ SendMessage(%' "
+                    "OR text LIKE '%→ ListAgents(%' OR text LIKE '%→ Skill(%' OR text LIKE '%→ Cron%')",
+                    [source, *fresh]).fetchall()
+        found: dict[str, int] = {}
+        for sid, pj in rows:
+            try:
+                o = json.loads(pj) if pj else {}
+            except (TypeError, ValueError):
+                continue
+            msg = o.get("message") if isinstance(o.get("message"), dict) else {}
+            for b in msg.get("content") or []:
+                if isinstance(b, dict) and b.get("type") == "tool_use" and is_coordination(b.get("name")):
+                    found[sid] = found.get(sid, 0) + 1
+        for sid in fresh:
+            cache[(source, sid)] = (sizes[sid], found.get(sid, 0))
+        out = {sid: cache[(source, sid)][1] for sid in sessions if (source, sid) in cache}
+        return {sid: n for sid, n in out.items() if n}
+
     # ── assumptions (TR-433) ──────────────────────────────────────────────────
     _AS_COLS = ("id, project, number, question, choice, why, affects, tickets, state, words, batch, "
                 "made_by, made_role, made_at, decided_at, person_id")
@@ -658,16 +787,16 @@ class FactoryStore:
                        tickets: list[str], made_by: str, made_role: str, at,
                        person_id: str | None = None) -> dict:
         aid = "as_" + uuid.uuid4().hex[:10]
-        with self._lock:
-            n = (self.con.execute("SELECT max(number) FROM assumptions WHERE project = ?",
+        with self._swrite:
+            n = (self.sc.execute("SELECT max(number) FROM assumptions WHERE project = ?",
                                   [project]).fetchone()[0] or 0) + 1
-            self.con.execute(
+            self.sc.execute(
                 f"INSERT INTO assumptions ({self._AS_COLS}) VALUES "
                 "(?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, NULL, ?, ?, ?, NULL, ?)",
                 [aid, project, n, question, choice, why, affects or None,
                  json.dumps(tickets) if tickets else None, made_by or None, made_role or None, at,
                  person_id or None])
-            r = self.con.execute(f"SELECT {self._AS_COLS} FROM assumptions WHERE id = ?",
+            r = self.sc.execute(f"SELECT {self._AS_COLS} FROM assumptions WHERE id = ?",
                                  [aid]).fetchone()
         return self._with_people([self._as_row(r)], "made_by")[0]
 
@@ -677,24 +806,24 @@ class FactoryStore:
         vals: list = [project]
         if state:
             q += " AND state = ?"; vals.append(state)
-        with self._lock:
-            rows = self.con.execute(q + " ORDER BY number", vals).fetchall()
+        with self._sread:
+            rows = self.sc.execute(q + " ORDER BY number", vals).fetchall()
         out = [self._as_row(r) for r in rows]
         out = [a for a in out if ticket in a["tickets"]] if ticket else out
         return self._with_people(out, "made_by")
 
     def get_assumption(self, project: str, ref: str) -> dict | None:
         m = re.match(r"^[Aa]?(\d{1,6})$", (ref or "").strip())
-        with self._lock:
-            r = self.con.execute(
+        with self._sread:
+            r = self.sc.execute(
                 f"SELECT {self._AS_COLS} FROM assumptions WHERE project = ? AND (id = ? OR "
                 "number = ?)", [project, ref, int(m.group(1)) if m else -1]).fetchone()
         return self._with_people([self._as_row(r)], "made_by")[0] if r else None
 
     def decide_assumption(self, aid: str, state: str, words: str | None, batch: str | None,
                           at) -> None:
-        with self._lock:
-            self.con.execute("UPDATE assumptions SET state = ?, words = ?, batch = ?, "
+        with self._swrite:
+            self.sc.execute("UPDATE assumptions SET state = ?, words = ?, batch = ?, "
                              "decided_at = ? WHERE id = ?", [state, words, batch, at, aid])
 
     # ── checks (TR-435) ───────────────────────────────────────────────────────
@@ -702,8 +831,8 @@ class FactoryStore:
                   broke_test: str, by_station: str, by_session: str, at,
                   person_id: str | None = None) -> str:
         cid = "ck_" + uuid.uuid4().hex[:10]
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO ticket_checks (id, project, ticket, command, result, commit_sha, "
                 "broke_test, by_station, by_session, checked_at, person_id) VALUES (?, ?, ?, ?, ?, "
                 "?, ?, ?, ?, ?, ?)", [cid, project, ticket, command, result, commit or None,
@@ -712,8 +841,8 @@ class FactoryStore:
         return cid
 
     def ticket_checks(self, ticket: str, limit: int = 50) -> list[dict]:
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT id, command, result, commit_sha, broke_test, by_station, checked_at, person_id "
                 "FROM ticket_checks WHERE ticket = ? ORDER BY checked_at DESC LIMIT ?",
                 [ticket, limit]).fetchall()
@@ -728,10 +857,10 @@ class FactoryStore:
         """A review round: earlier findings marked fixed or still open as `resolved` says
         ({F<n> or id: fixed|open}), the new findings numbered on from the ticket's last."""
         rid = "rv_" + uuid.uuid4().hex[:10]
-        with self._lock:
-            rnd = (self.con.execute("SELECT max(round) FROM reviews WHERE ticket = ?",
+        with self._swrite:
+            rnd = (self.sc.execute("SELECT max(round) FROM reviews WHERE ticket = ?",
                                     [ticket]).fetchone()[0] or 0) + 1
-            self.con.execute(
+            self.sc.execute(
                 "INSERT INTO reviews (id, project, ticket, round, pr, head, verdict, verified, "
                 "not_verified, by_station, reviewed_at, person_id) VALUES "
                 "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -739,15 +868,15 @@ class FactoryStore:
                  by or None, at, person_id or None])
             for ref, st in (resolved or {}).items():
                 m = re.match(r"^[Ff]?(\d{1,6})$", str(ref).strip())
-                self.con.execute(
+                self.sc.execute(
                     "UPDATE review_findings SET state = ?, fixed_in = ? WHERE ticket = ? AND "
                     "(id = ? OR number = ?)", [st, rid if st == "fixed" else None, ticket, ref,
                                                int(m.group(1)) if m else -1])
-            n = self.con.execute("SELECT max(number) FROM review_findings WHERE ticket = ?",
+            n = self.sc.execute("SELECT max(number) FROM review_findings WHERE ticket = ?",
                                  [ticket]).fetchone()[0] or 0
             for f in findings:
                 n += 1
-                self.con.execute(
+                self.sc.execute(
                     "INSERT INTO review_findings (id, project, ticket, review, number, severity, "
                     "file, line, blocking, text, kind, state, fixed_in, found_at) VALUES "
                     "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?)",
@@ -757,11 +886,11 @@ class FactoryStore:
         return {"id": rid, "round": rnd}
 
     def ticket_reviews(self, ticket: str) -> list[dict]:
-        with self._lock:
-            revs = self.con.execute(
+        with self._sread:
+            revs = self.sc.execute(
                 "SELECT id, round, pr, head, verdict, verified, not_verified, by_station, "
                 "reviewed_at, person_id FROM reviews WHERE ticket = ? ORDER BY round", [ticket]).fetchall()
-            fs = self.con.execute(
+            fs = self.sc.execute(
                 "SELECT id, review, number, severity, file, line, blocking, text, kind, state, "
                 "fixed_in FROM review_findings WHERE ticket = ? ORDER BY number",
                 [ticket]).fetchall()
@@ -777,14 +906,42 @@ class FactoryStore:
                         "person_id": r[9], "findings": mine, "fixed": fixed_here})
         return self._with_people(out)
 
+    def last_reviews(self, tickets: list[str]) -> dict[str, dict]:
+        """Each ticket's latest review round, shaped like an element of ticket_reviews(), in two
+        queries for any number of tickets (TR-657). Tickets never reviewed are absent."""
+        if not tickets:
+            return {}
+        marks = ", ".join("?" for _ in tickets)
+        with self._sread:
+            revs = self.sc.execute(
+                "SELECT id, round, pr, head, verdict, verified, not_verified, by_station, "
+                "reviewed_at, ticket FROM (SELECT *, row_number() OVER (PARTITION BY ticket "
+                f"ORDER BY round DESC) AS rn FROM reviews WHERE ticket IN ({marks})) r "
+                "WHERE rn = 1",
+                list(tickets)).fetchall()
+            ids = [r[0] for r in revs]
+            fs = self.sc.execute(
+                "SELECT id, review, number, severity, file, line, blocking, text, kind, state, "
+                f"fixed_in FROM review_findings WHERE review IN ({', '.join('?' for _ in ids)}) "
+                f"OR fixed_in IN ({', '.join('?' for _ in ids)}) ORDER BY number",
+                ids + ids).fetchall() if ids else []
+        finds = [{"id": f[0], "review": f[1], "label": f"F{f[2]}", "severity": f[3], "file": f[4],
+                  "line": f[5], "blocking": bool(f[6]), "text": f[7], "kind": f[8],
+                  "state": f[9], "fixed_in": f[10]} for f in fs]
+        return {r[9]: {"id": r[0], "round": r[1], "pr": r[2], "head": r[3], "verdict": r[4],
+                       "verified": r[5], "not_verified": r[6], "by": r[7], "at": r[8],
+                       "findings": [f for f in finds if f["review"] == r[0]],
+                       "fixed": [f["label"] for f in finds if f["fixed_in"] == r[0]]}
+                for r in revs}
+
     def open_findings(self, ticket: str) -> list[dict]:
         return [f for r in self.ticket_reviews(ticket) for f in r["findings"] if f["state"] == "open"]
 
     def repo_findings(self, repo: str, since) -> list[dict]:
         """Every reviewer finding on tickets whose PR lives in `repo` since `since`, with the
         ticket and project (TR-443)."""
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT f.ticket, f.project, f.kind, f.text, f.severity, f.found_at FROM "
                 "review_findings f JOIN tickets t ON t.id = f.ticket WHERE "
                 "json_extract_string(t.pr, '$.repo') = ? AND f.found_at >= ?",
@@ -793,20 +950,20 @@ class FactoryStore:
                  "at": r[5]} for r in rows]
 
     # ── what the recording says (TR-440, TR-442) ──────────────────────────────
+    CHALLENGE_TYPES = ("challenge_commit", "challenge_waived", "challenge_plan")
+
     def challenge_events(self, source: str, project: str, ref: str) -> list[dict]:
         """The Codex challenger's reviews and waivers on a ticket's branch (factory/<ref>...) in
         the project `project` (its id), oldest first. A line stamped with the project's name (any
         case) or id counts; an unstamped one only from a session tied to the project."""
-        with self._lock:
-            name = (self.con.execute("SELECT name FROM usecases WHERE id = ?", [project]).fetchone()
+        with self._sread:
+            name = (self.sc.execute("SELECT name FROM usecases WHERE id = ?", [project]).fetchone()
                     or [project])[0]
-            rows = self.con.execute(
-                "SELECT event_time, event_type, payload, key_value FROM events WHERE source = ? "
-                "AND event_type IN ('challenge_commit', 'challenge_waived', 'challenge_plan') "
-                "AND (json_extract_string(labels, '$.branch') = ? OR "
-                "     json_extract_string(labels, '$.branch') LIKE ?) "
-                "AND (lower(json_extract_string(labels, '$.tares_project')) IN (lower(?), lower(?)) "
-                "     OR (json_extract_string(labels, '$.tares_project') IS NULL AND key_value IN "
+            rows = self.sc.execute(
+                "SELECT event_time, event_type, payload, key_value FROM challenges "
+                "WHERE source = ? AND (branch = ? OR branch LIKE ?) "
+                "AND (lower(tares_project) IN (lower(?), lower(?)) "
+                "     OR (tares_project IS NULL AND key_value IN "
                 "         (SELECT session FROM project_sessions WHERE project = ?))) "
                 "ORDER BY event_time", [source, f"factory/{ref}", f"factory/{ref}-%",
                                         name, project, project]).fetchall()
@@ -819,6 +976,27 @@ class FactoryStore:
             ch = o.get("challenge") if isinstance(o.get("challenge"), dict) else {}
             out.append({"at": at, "type": typ, "session": sid, "challenge": ch})
         return out
+
+    def _record_challenges(self, rows: list[tuple]) -> None:
+        """Keep the challenger's lines (source, key, time, type, branch, project, payload) in
+        `challenges`. Idempotent: a line already kept is skipped."""
+        for i in range(0, len(rows), 500):
+            self.sc.executemany(
+                "INSERT INTO challenges (source, key_value, event_time, event_type, branch, "
+                "tares_project, payload) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                rows[i:i + 500])
+
+    def _challenges_fill(self) -> None:
+        """Copy challenger lines stored before `challenges` existed, or while a write to it
+        failed. One scan of the events at open, then only the lines `append` records."""
+        rows = self.con.execute(
+            "SELECT source, coalesce(key_value, ''), event_time, event_type, "
+            "coalesce(json_extract_string(labels, '$.branch'), ''), "
+            "json_extract_string(labels, '$.tares_project'), payload FROM events "
+            "WHERE event_type IN ('challenge_commit', 'challenge_waived', 'challenge_plan')"
+            ).fetchall()
+        if rows:
+            self._record_challenges(rows)
 
     def recorded_commands(self, source: str, sessions: list[str], limit: int = 6000) -> list[dict]:
         """The shell commands the sessions ran (their subagents included), each with what it
@@ -870,32 +1048,80 @@ class FactoryStore:
             out.append({**u, **r})
         return sorted(out, key=lambda x: x["at"])
 
+    # ── repo maps (TR-681) ────────────────────────────────────────────────────
+    def get_repo_map(self, repo: str) -> dict | None:
+        repo = repo.lower()   # GitHub names a repo the same whatever the case
+        with self._sread:
+            r = self.sc.execute("SELECT body, updated_at, updated_by FROM repo_maps WHERE repo = ?",
+                                 [repo]).fetchone()
+        return {"repo": repo, "body": r[0], "updated_at": r[1], "updated_by": r[2]} if r else None
+
+    def set_repo_map(self, repo: str, body: str, note: str, by: str, project: str | None,
+                     at, base: str = "") -> bool:
+        """Replace the repo's map and add a line to its history, as one write. `base` is the
+        version of the map the writer read (factory.map_version, "" when there was none): another
+        version in place raises MapChanged, so a stale copy cannot overwrite a newer map. False,
+        and nothing written, when the map is the one already there."""
+        from .factory import map_version
+        repo = repo.lower()
+        with self._swrite:
+            cur = self.sc.execute("SELECT body, updated_at, updated_by FROM repo_maps WHERE repo = ?",
+                                   [repo]).fetchone()
+            if cur and cur[0] == body:
+                return False
+            if map_version(cur[0] if cur else None) != (base or ""):
+                raise MapChanged({"repo": repo, "body": cur[0], "updated_at": cur[1],
+                                  "updated_by": cur[2]} if cur else None)
+            self.sc.execute("BEGIN TRANSACTION")
+            try:
+                self.sc.execute(
+                    "INSERT INTO repo_maps (repo, body, updated_at, updated_by) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT (repo) DO UPDATE SET body = excluded.body, "
+                    "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+                    [repo, body, at, by])
+                self.sc.execute("INSERT INTO repo_map_history (repo, changed_at, by_station, project, note) "
+                                 "VALUES (?, ?, ?, ?, ?)", [repo, at, by, project, note])
+                self.sc.execute("COMMIT")
+            except Exception:
+                self.sc.execute("ROLLBACK")
+                raise
+        return True
+
+    def repo_map_history(self, repo: str, limit: int = 10) -> list[dict]:
+        """Newest first."""
+        repo = repo.lower()
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT changed_at, by_station, project, note FROM repo_map_history WHERE repo = ? "
+                "ORDER BY changed_at DESC LIMIT ?", [repo, limit]).fetchall()
+        return [{"at": r[0], "by": r[1], "project": r[2], "note": r[3]} for r in rows]
+
     # ── rule proposals (TR-443) ───────────────────────────────────────────────
     def upsert_rule_proposal(self, repo: str, kind: str, project: str | None, scope: str,
                              text: str, tickets: list[str], at) -> dict | None:
         """Offer a rule for (repo, kind) unless one was already offered; an open offer gets its
         ticket list refreshed. None when it was decided before (never offered again)."""
-        with self._lock:
-            cur = self.con.execute("SELECT id, state FROM rule_proposals WHERE repo = ? AND "
+        with self._swrite:
+            cur = self.sc.execute("SELECT id, state FROM rule_proposals WHERE repo = ? AND "
                                    "kind = ?", [repo, kind]).fetchone()
             if cur and cur[1] != "open":
                 return None
             if cur:
-                self.con.execute("UPDATE rule_proposals SET tickets = ?, scope = ?, project = ?, "
+                self.sc.execute("UPDATE rule_proposals SET tickets = ?, scope = ?, project = ?, "
                                  "text = ? WHERE id = ?",
                                  [json.dumps(tickets), scope, project, text, cur[0]])
                 pid = cur[0]
             else:
                 pid = "rp_" + uuid.uuid4().hex[:10]
-                self.con.execute(
+                self.sc.execute(
                     "INSERT INTO rule_proposals (id, repo, kind, project, scope, text, tickets, "
                     "state, created_at, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, NULL)",
                     [pid, repo, kind, project, scope, text, json.dumps(tickets), at])
         return self.get_rule_proposal(pid)
 
     def get_rule_proposal(self, pid: str) -> dict | None:
-        with self._lock:
-            r = self.con.execute("SELECT id, repo, kind, project, scope, text, tickets, state, "
+        with self._sread:
+            r = self.sc.execute("SELECT id, repo, kind, project, scope, text, tickets, state, "
                                  "created_at, decided_at FROM rule_proposals WHERE id = ?",
                                  [pid]).fetchone()
         return ({"id": r[0], "repo": r[1], "kind": r[2], "project": r[3], "scope": r[4],
@@ -907,19 +1133,19 @@ class FactoryStore:
         vals: list = []
         if state:
             q += " WHERE state = ?"; vals.append(state)
-        with self._lock:
-            ids = [r[0] for r in self.con.execute(q + " ORDER BY created_at", vals).fetchall()]
+        with self._sread:
+            ids = [r[0] for r in self.sc.execute(q + " ORDER BY created_at", vals).fetchall()]
         return [self.get_rule_proposal(i) for i in ids]
 
     def decide_rule_proposal(self, pid: str, state: str, text: str | None, at) -> None:
-        with self._lock:
-            self.con.execute("UPDATE rule_proposals SET state = ?, text = coalesce(?, text), "
+        with self._swrite:
+            self.sc.execute("UPDATE rule_proposals SET state = ?, text = coalesce(?, text), "
                              "decided_at = ? WHERE id = ?", [state, text, at, pid])
 
     def station_session_ids(self, station: str) -> list[str]:
         """The sessions that played `station` or a helper it started."""
-        with self._lock:
-            return [r[0] for r in self.con.execute(
+        with self._sread:
+            return [r[0] for r in self.sc.execute(
                 "SELECT session FROM session_stations WHERE station = ? OR parent = ?",
                 [station, station]).fetchall()]
 
@@ -953,9 +1179,9 @@ class FactoryStore:
                       station: str | None = None, command: str | None = None,
                       person_id: str | None = None, to_person_id: str | None = None) -> dict:
         did = "dk_" + uuid.uuid4().hex[:10]
-        with self._lock:
-            n = (self.con.execute("SELECT max(number) FROM desk_items").fetchone()[0] or 0) + 1
-            self.con.execute(
+        with self._swrite:
+            n = (self.sc.execute("SELECT max(number) FROM desk_items").fetchone()[0] or 0) + 1
+            self.sc.execute(
                 f"INSERT INTO desk_items ({self._DK_COLS}) VALUES "
                 "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, NULL, ?, ?, ?, ?)",
                 [did, n, project, question, context or None, json.dumps(options or []),
@@ -966,8 +1192,8 @@ class FactoryStore:
 
     def get_desk_item(self, ref: str) -> dict | None:
         m = re.match(r"^[Dd]?(\d{1,6})$", (ref or "").strip())
-        with self._lock:
-            r = self.con.execute(f"SELECT {self._DK_COLS} FROM desk_items WHERE id = ? OR "
+        with self._sread:
+            r = self.sc.execute(f"SELECT {self._DK_COLS} FROM desk_items WHERE id = ? OR "
                                  "number = ?", [ref, int(m.group(1)) if m else -1]).fetchone()
         return self._dk_people([self._dk_row(r)])[0] if r else None
 
@@ -977,13 +1203,13 @@ class FactoryStore:
             q += " AND state = ?"; vals.append(state)
         if project:
             q += " AND project = ?"; vals.append(project)
-        with self._lock:
-            rows = self.con.execute(q + " ORDER BY blocking DESC, created_at", vals).fetchall()
+        with self._sread:
+            rows = self.sc.execute(q + " ORDER BY blocking DESC, created_at", vals).fetchall()
         return self._dk_people([self._dk_row(r) for r in rows])
 
     def close_desk_item(self, did: str, state: str, reason: str | None, at) -> None:
-        with self._lock:
-            self.con.execute("UPDATE desk_items SET state = ?, reason = ?, closed_at = ? WHERE "
+        with self._swrite:
+            self.sc.execute("UPDATE desk_items SET state = ?, reason = ?, closed_at = ? WHERE "
                              "id = ?", [state, reason, at, did])
 
     def add_decision(self, project: str | None, desk_item: str, question: str, words: str,
@@ -991,8 +1217,8 @@ class FactoryStore:
                      granted: bool, tickets: list[str], at, via: str | None = None,
                      person_id: str | None = None) -> dict:
         did = "dc_" + uuid.uuid4().hex[:10]
-        with self._lock:
-            self.con.execute(
+        with self._swrite:
+            self.sc.execute(
                 "INSERT INTO decisions (id, project, desk_item, question, words, choice, standing, "
                 "scope, matched, session, granted, tickets, decided_at, via, person_id) VALUES "
                 "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1012,8 +1238,8 @@ class FactoryStore:
             q += " WHERE d.project = ?"; vals.append(project)
         elif project:
             q += " WHERE d.project = ? OR d.project IS NULL"; vals.append(project)
-        with self._lock:
-            rows = self.con.execute(q + " ORDER BY d.decided_at DESC", vals).fetchall()
+        with self._sread:
+            rows = self.sc.execute(q + " ORDER BY d.decided_at DESC", vals).fetchall()
         return self._with_people(
             [{"id": r[0], "project": r[1], "desk_item": r[2], "question": r[3], "words": r[4],
               "choice": r[5], "standing": bool(r[6]), "scope": r[7], "matched": bool(r[8]),
@@ -1034,7 +1260,8 @@ class FactoryStore:
              "coalesce(json_extract_string(labels, '$.sidechain'), 'false') <> 'true'")
         # Claude Code also writes other sessions' messages, scheduled prompts, task notifications
         # and compaction summaries as user lines; none of them is the person typing (TR-634)
-        q += (" AND coalesce(json_extract_string(payload, '$.isMeta'), 'false') <> 'true'"
+        q += (" AND coalesce(json_extract_string(labels, '$.meta'), 'false') <> 'true'"
+              " AND coalesce(json_extract_string(payload, '$.isMeta'), 'false') <> 'true'"
               " AND coalesce(json_extract_string(payload, '$.isCompactSummary'), 'false') <> 'true'"
               " AND coalesce(json_extract_string(payload, '$.origin.kind'), 'human') = 'human'")
         vals: list = [source, since]
@@ -1052,8 +1279,8 @@ class FactoryStore:
         return [{"session": r[0], "at": r[1], "text": r[2] or ""} for r in rows]
 
     def role_sessions(self, role: str) -> list[str]:
-        with self._lock:
-            return [r[0] for r in self.con.execute(
+        with self._sread:
+            return [r[0] for r in self.sc.execute(
                 "SELECT session FROM session_stations WHERE role = ?", [role]).fetchall()]
 
     # ── hand-over to the crew (TR-425) ────────────────────────────────────────
@@ -1068,10 +1295,10 @@ class FactoryStore:
         appended to a log (`list_handover_overrides`), so a later one does not replace it."""
         first = next((r["path"] for r in repos if r.get("path")), None)
         # the hand-over and its entry in the override log are saved together or not at all
-        with self._lock:
-            self.con.execute("BEGIN TRANSACTION")
+        with self._swrite:
+            self.sc.execute("BEGIN TRANSACTION")
             try:
-                self.con.execute(
+                self.sc.execute(
                     "INSERT INTO handovers (project, repo, handed_by, handed_at, repos, autonomy, "
                     "person_id, crew, override_reason, override_at, override_person_id) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
@@ -1093,22 +1320,22 @@ class FactoryStore:
                      at if override_reason else None,
                      (person_id or None) if override_reason else None])
                 if override_reason:
-                    self.con.execute(
+                    self.sc.execute(
                         "INSERT INTO handover_overrides (project, \"at\", reason, person_id, "
                         "handed_by) VALUES (?, ?, ?, ?, ?)",
                         [project, at, override_reason, person_id or None, by or None])
-                self.con.execute("COMMIT")
+                self.sc.execute("COMMIT")
             except Exception:
-                self.con.execute("ROLLBACK")
+                self.sc.execute("ROLLBACK")
                 raise
 
     def list_handover_overrides(self, project: str) -> list[dict]:
         """Every hand-over the lead pushed through without all sign-offs, oldest first:
         {at, reason, person, by_label}."""
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 "SELECT \"at\", reason, person_id, handed_by FROM handover_overrides WHERE project = ? "
-                "ORDER BY \"at\", rowid", [project]).fetchall()
+                "ORDER BY \"at\"", [project]).fetchall()
         refs = self._person_refs(r[2] for r in rows)
         return [{"at": r[0], "reason": r[1], "person": refs.get(r[2]),
                  "by_label": by_label(refs.get(r[2]), r[3])} for r in rows]
@@ -1130,13 +1357,13 @@ class FactoryStore:
             where.append("taken_at IS NULL")
         if where:
             q += " WHERE " + " AND ".join(where)
-        with self._lock:
-            return [r[0] for r in self.con.execute(q).fetchall()]
+        with self._sread:
+            return [r[0] for r in self.sc.execute(q).fetchall()]
 
     def finish_handover(self, project: str, words: str, decision: str | None, by: str | None,
                         at, person_id: str | None = None) -> None:
-        with self._lock:
-            self.con.execute("UPDATE handovers SET finished_at = ?, finished_words = ?, "
+        with self._swrite:
+            self.sc.execute("UPDATE handovers SET finished_at = ?, finished_words = ?, "
                              "finished_decision = ?, finished_by = ?, finished_person_id = ? "
                              "WHERE project = ?",
                              [at, words, decision, by, person_id or None, project])
@@ -1145,19 +1372,19 @@ class FactoryStore:
                   person_id: str | None = None) -> None:
         """The person takes the project back from the crew (TR-520); released once the
         orchestrator has stopped its builders."""
-        with self._lock:
-            self.con.execute("UPDATE handovers SET taken_at = ?, taken_words = ?, taken_by = ?, "
+        with self._swrite:
+            self.sc.execute("UPDATE handovers SET taken_at = ?, taken_words = ?, taken_by = ?, "
                              "taken_person_id = ?, released_at = NULL WHERE project = ?",
                              [at, words, by, person_id or None, project])
 
     def release_takeover(self, project: str, at) -> None:
-        with self._lock:
-            self.con.execute("UPDATE handovers SET released_at = ? WHERE project = ?",
+        with self._swrite:
+            self.sc.execute("UPDATE handovers SET released_at = ? WHERE project = ?",
                              [at, project])
 
     def get_handover(self, project: str) -> dict | None:
-        with self._lock:
-            r = self.con.execute("SELECT repo, handed_by, handed_at, repos, autonomy, "
+        with self._sread:
+            r = self.sc.execute("SELECT repo, handed_by, handed_at, repos, autonomy, "
                                  "finished_at, finished_words, finished_decision, finished_by, "
                                  "taken_at, taken_words, taken_by, released_at, person_id, "
                                  "finished_person_id, taken_person_id, crew, override_reason, "
@@ -1206,20 +1433,20 @@ class FactoryStore:
                           asked_by: str | None, at) -> dict:
         """Q<n>, n one past the project's highest, chosen and inserted in one transaction under
         the lock, so parallel asks never share a number."""
-        with self._lock:
-            self.con.execute("BEGIN TRANSACTION")
+        with self._swrite:
+            self.sc.execute("BEGIN TRANSACTION")
             try:
-                top = self.con.execute(
+                top = self.sc.execute(
                     "SELECT max(CAST(substr(id, 2) AS INTEGER)) FROM spec_questions "
                     "WHERE project = ?", [project]).fetchone()[0] or 0
                 qid = f"Q{top + 1}"
-                self.con.execute(
+                self.sc.execute(
                     f"INSERT INTO spec_questions ({self._SQ_COLS}) VALUES "
                     "(?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'open')",
                     [project, qid, to_person_id, repo, text, asked_by or None, at])
-                self.con.execute("COMMIT")
+                self.sc.execute("COMMIT")
             except Exception:
-                self.con.execute("ROLLBACK")
+                self.sc.execute("ROLLBACK")
                 raise
         return self.get_spec_question(project, qid)
 
@@ -1228,8 +1455,8 @@ class FactoryStore:
         m = re.match(r"^[Qq]?(\d{1,6})$", (ref or "").strip())
         if not m:
             return None
-        with self._lock:
-            r = self.con.execute(f"SELECT {self._SQ_COLS} FROM spec_questions WHERE project = ? "
+        with self._sread:
+            r = self.sc.execute(f"SELECT {self._SQ_COLS} FROM spec_questions WHERE project = ? "
                                  "AND id = ?", [project, f"Q{int(m.group(1))}"]).fetchone()
         return self._sq_rows([r])[0] if r else None
 
@@ -1240,16 +1467,16 @@ class FactoryStore:
             if v:
                 q += f" AND {col} = ?"
                 vals.append(v)
-        with self._lock:
-            rows = self.con.execute(
+        with self._sread:
+            rows = self.sc.execute(
                 q + " ORDER BY asked_at, project, CAST(substr(id, 2) AS INTEGER)", vals).fetchall()
         return self._sq_rows(rows)
 
     def answer_spec_question(self, project: str, qid: str, answer: str, by: str | None,
                              at) -> bool:
         """Record the answer of an open question; False when it was not open."""
-        with self._lock:
-            hit = self.con.execute(
+        with self._swrite:
+            hit = self.sc.execute(
                 "UPDATE spec_questions SET answer = ?, answered_by = ?, answered_at = ?, "
                 "state = 'answered' WHERE project = ? AND id = ? AND state = 'open' RETURNING id",
                 [answer, by or None, at, project, qid]).fetchone()
@@ -1258,16 +1485,16 @@ class FactoryStore:
     def add_signoff(self, project: str, repo: str, person_id: str, at) -> None:
         """The area owner's sign-off for a repo. Signing again keeps the first time; when the
         area has a new owner, their sign-off replaces the old owner's."""
-        with self._lock:
-            self.con.execute("INSERT INTO signoffs (project, repo, person_id, \"at\") "
+        with self._swrite:
+            self.sc.execute("INSERT INTO signoffs (project, repo, person_id, \"at\") "
                              "VALUES (?, ?, ?, ?) ON CONFLICT (project, repo) DO UPDATE SET "
                              "person_id = excluded.person_id, \"at\" = excluded.\"at\" "
                              "WHERE signoffs.person_id <> excluded.person_id",
                              [project, repo, person_id, at])
 
     def list_signoffs(self, project: str) -> list[dict]:
-        with self._lock:
-            rows = self.con.execute("SELECT repo, person_id, \"at\" FROM signoffs WHERE project = ? "
+        with self._sread:
+            rows = self.sc.execute("SELECT repo, person_id, \"at\" FROM signoffs WHERE project = ? "
                                     "ORDER BY \"at\", repo", [project]).fetchall()
         refs = self._person_refs(r[1] for r in rows)
         return [{"repo": r[0], "person_id": r[1], "person": refs.get(r[1]), "at": r[2]}
@@ -1275,9 +1502,9 @@ class FactoryStore:
 
     def delete_milestone(self, mid: str) -> None:
         """The milestone goes; its tickets stay, without a milestone."""
-        with self._lock:
-            self.con.execute("UPDATE tickets SET milestone = NULL WHERE milestone = ?", [mid])
-            self.con.execute("DELETE FROM milestones WHERE id = ?", [mid])
+        with self._swrite:
+            self.sc.execute("UPDATE tickets SET milestone = NULL WHERE milestone = ?", [mid])
+            self.sc.execute("DELETE FROM milestones WHERE id = ?", [mid])
 
     # ── grants by kind (TR-630) ───────────────────────────────────────────────
     _GRANT_COLS = ("id, kind, project, holder_person_id, words, given_by, given_at, areas, consents, "
@@ -1296,41 +1523,41 @@ class FactoryStore:
                       areas: list[str] | None = None, consents: list[dict] | None = None,
                       state: str = "active", given_at=None, needs_lead: bool = False) -> dict:
         """One grant, numbered G1, G2... for the cell; nothing is checked here."""
-        with self._lock:
-            top = self.con.execute("SELECT max(CAST(substr(id, 2) AS INTEGER)) FROM grants"
+        with self._swrite:
+            top = self.sc.execute("SELECT max(CAST(substr(id, 2) AS INTEGER)) FROM grants"
                                    ).fetchone()[0] or 0
             gid = f"G{top + 1}"
-            self.con.execute(
+            self.sc.execute(
                 f"INSERT INTO grants ({self._GRANT_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [gid, kind, project, holder, words, given_by, given_at or now_utc(),
                  json.dumps(areas or []), json.dumps(consents or []), state, needs_lead])
         return self.get_grant_row(gid)
 
     def get_grant_row(self, gid: str) -> dict | None:
-        with self._lock:
-            r = self.con.execute(f"SELECT {self._GRANT_COLS} FROM grants WHERE id = ?",
+        with self._sread:
+            r = self.sc.execute(f"SELECT {self._GRANT_COLS} FROM grants WHERE id = ?",
                                  [str(gid or "").strip().upper()]).fetchone()
         return self._grant_row(r) if r else None
 
     def all_grant_rows(self) -> list[dict]:
         """Every grant of every kind and state, oldest first."""
-        with self._lock:
-            rows = self.con.execute(f"SELECT {self._GRANT_COLS} FROM grants").fetchall()
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._GRANT_COLS} FROM grants").fetchall()
         return sorted((self._grant_row(r) for r in rows),
                       key=lambda g: int(g["id"][1:]))
 
     def update_grant_row(self, gid: str, state: str | None = None,
                          consents: list[dict] | None = None, areas: list[str] | None = None,
                          needs_lead: bool | None = None) -> None:
-        with self._lock:
+        with self._swrite:
             if areas is not None:
-                self.con.execute("UPDATE grants SET areas = ? WHERE id = ?",
+                self.sc.execute("UPDATE grants SET areas = ? WHERE id = ?",
                                  [json.dumps(areas), gid])
             if needs_lead is not None:
-                self.con.execute("UPDATE grants SET needs_lead = ? WHERE id = ?",
+                self.sc.execute("UPDATE grants SET needs_lead = ? WHERE id = ?",
                                  [needs_lead, gid])
             if state is not None:
-                self.con.execute("UPDATE grants SET state = ? WHERE id = ?", [state, gid])
+                self.sc.execute("UPDATE grants SET state = ? WHERE id = ?", [state, gid])
             if consents is not None:
-                self.con.execute("UPDATE grants SET consents = ? WHERE id = ?",
+                self.sc.execute("UPDATE grants SET consents = ? WHERE id = ?",
                                  [json.dumps(consents), gid])

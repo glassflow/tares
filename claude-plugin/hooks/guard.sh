@@ -51,11 +51,24 @@ scan=$(perl -0777 -pe '
     $rest =~ s{("(?:[^"\\]|\\.)*"|\x27[^\x27]*\x27)}{my $q = $1; ($q =~ /^"/ && $q =~ /\$\(|`/) ? $q : "_"}ge;
     "$c$rest"
   }ge;
+  # A folder named factory handed to a reader (`ls ~/factory down`) is an argument, not the CLI. Only commands
+  # that neither run their arguments nor print text for a shell to run are listed: find, xargs, env, the
+  # shells, echo, printf and rg (--pre) are not. The reader must sit at the start of a command outside any
+  # quote, and its arguments are plain words or whole quoted strings: a quoted string is skipped as a unit,
+  # so `X="` NL `ls a" factory down` (the quote ends before factory, which then runs) is not blanked.
+  my $q = qr/"(?:[^"\\]|\\.)*"|\x27[^\x27]*\x27/s;
+  s{($q)|((?:^|[;&|(`\n])[ \t]*(?:ls|cd|pushd|cat|head|tail|less|more|wc|stat|file|du|tree|grep|test|realpath)(?:[ \t]+(?:[^\s;&|()`"\x27\\]|\\.|$q)+)*?[ \t]+)(?:[^\s;&|()`"\x27]*/)?factory(?=[ \t])}{defined $1 ? $1 : "$2_"}gme;
 ' <<<"$cmd")
+
+# The factory CLI by its name, whatever its path or quoting: `factory x`, `/abs/path/bin/factory x`,
+# `(factory x)`, `$(factory x)`, `"factory" x`, `bash -c "factory x"`. A leading dot (`.factory`) is a
+# folder, not the command. FACTORY_END closes a verb: anything but a letter, digit, `_` or `-`, or the end.
+FACTORY_CLI='(^|[;&|[:space:](`])["'"'"']?([^[:space:];&|"'"'"']*/)?factory["'"'"']?[[:space:]]+'
+FACTORY_END='([^[:alnum:]_-]|$)'
 
 # While the crew is halted (factory crew halt), nothing risky starts: merges, pushes, deploys, tags, sessions.
 if [ -n "${FACTORY_HOME:-}" ] && [ -f "$FACTORY_HOME/HALT" ]; then
-  if grep -Eq '(gh[[:space:]]+pr[[:space:]]+merge|git[[:space:]]+push|git[[:space:]]+tag[[:space:]]+[^-]|gh[[:space:]]+release[[:space:]]+create|kubectl([[:space:]]+[^[:space:];&|]+)*[[:space:]]+(apply|rollout|delete|scale|set|patch|replace|create)([[:space:]]|$)|helm([[:space:]]+[^[:space:];&|]+)*[[:space:]]+(install|upgrade|uninstall|rollback)([[:space:]]|$)|factory[[:space:]]+(spawn|revive)|claude[[:space:]]+(--bg|--background))' <<<"$scan"; then
+  if grep -Eq '(gh[[:space:]]+pr[[:space:]]+merge|git[[:space:]]+push|git[[:space:]]+tag[[:space:]]+[^-]|gh[[:space:]]+release[[:space:]]+create|kubectl([[:space:]]+[^[:space:];&|]+)*[[:space:]]+(apply|rollout|delete|scale|set|patch|replace|create)([[:space:]]|$)|helm([[:space:]]+[^[:space:];&|]+)*[[:space:]]+(install|upgrade|uninstall|rollback)([[:space:]]|$)|claude[[:space:]]+(--bg|--background))' <<<"$scan" || grep -Eq "$FACTORY_CLI"'(spawn|revive)'"$FACTORY_END" <<<"$scan"; then
     deny "The crew is halted ($(jq -r '.reason // "no reason given"' "$FACTORY_HOME/HALT" 2>/dev/null)). Finish your current step safely and start nothing new; \`factory crew resume\` lifts the halt."
   fi
 fi
@@ -69,7 +82,7 @@ while IFS= read -r part; do
   fi
 done < <(perl -pe 's/\|\||&&|[;&|]/\n/g' <<<"$scan")
 
-grep -Eq '(^|[;&|[:space:]])factory[[:space:]]+finish([[:space:]]|$)' <<<"$scan" && \
+grep -Eq "$FACTORY_CLI"'finish'"$FACTORY_END" <<<"$scan" && \
   deny "Only the person marks a project done from their terminal. Ask them on the desk, record their answer with desk_answer, then call finish_project."
 grep -Eq 'gh[[:space:]]+pr[[:space:]]+review' <<<"$scan" && \
   deny "Factory sessions share one GitHub account and GitHub refuses self-approval. The reviewer posts a PR comment plus the factory/review commit status instead."
@@ -77,6 +90,7 @@ grep -Eq 'gh[[:space:]]+pr[[:space:]]+merge|gh[[:space:]]+api[^;&|]*pulls/[0-9]+
 grep -Eq 'statuses/' <<<"$scan" && grep -Eq 'gh[[:space:]]+api' <<<"$scan" && owner_only reviewer "set commit statuses"
 grep -Eq '(git[[:space:]]+tag[[:space:]]+[^-]|git[[:space:]]+push[^;&|]*[[:space:]:](--tags|refs/tags|v[0-9]))|gh[[:space:]]+release[[:space:]]+(create|edit|delete)' <<<"$scan" && owner_only releaser "create tags or releases"
 grep -Eq '(kubectl([[:space:]]+[^[:space:];&|]+)*[[:space:]]+(apply|rollout|delete|scale|set|patch|replace|create)([[:space:]]|$)|helm([[:space:]]+[^[:space:];&|]+)*[[:space:]]+(install|upgrade|uninstall|rollback)([[:space:]]|$))' <<<"$scan" && owner_only releaser "deploy, roll out or roll back"
-grep -Eq '(^|[;&|[:space:]])(claude[[:space:]]+(--bg|--background|stop|kill|rm|respawn)|factory[[:space:]]+(spawn|retire|revive|restart|down|halt)|factory[[:space:]]+crew[[:space:]]+(up|down|halt|resume))([[:space:]]|$)' <<<"$scan" && owner_only orchestrator "start, stop or revive stations"
+grep -Eq '(^|[;&|[:space:]])claude[[:space:]]+(--bg|--background|stop|kill|rm|respawn)([[:space:]]|$)' <<<"$scan" && owner_only orchestrator "start, stop or revive stations"
+grep -Eq "$FACTORY_CLI"'((spawn|retire|revive|restart|down|halt)|crew[[:space:]]+(up|down|halt|resume|freeze|unfreeze|update|restart))'"$FACTORY_END" <<<"$scan" && owner_only orchestrator "start, stop or revive stations"
 
 exit 0

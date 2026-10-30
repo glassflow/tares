@@ -94,6 +94,37 @@ jq --arg v "$mine" '.plugins["tares@tares"][0].version = $v' "$HOME/.claude/plug
 check "the same version installed is fine" '! grep -q "another version of the tares plugin" <<<"$("$F" doctor 2>&1)"'
 rm -f "$HOME/.claude/plugins/installed_plugins.json"
 
+# cmux says "Waiting for you" about a minute after any station's turn ends (its agentIdleReminder, on by
+# default). Claude Code has no setting for dropping only that notice, so doctor reads the person's cmux
+# file and says what to set; it never edits it, and the stations' settings keep cmux's permission alerts.
+cmuxf="$HOME/.config/cmux/cmux.json"
+"$F" doctor >"$T/cmux0.out" 2>&1
+check "no cmux, nothing said about it" '! grep -qi cmux "$T/cmux0.out"'
+mkdir -p "$HOME/.config/cmux"
+# cmux's own file shape: a $schema URL, a trailing comma after the last key, then only comment lines.
+cmuxfile() { # $1 = extra line(s) before the trailing comments, or empty
+  printf '{\n  "$schema": "https://raw.githubusercontent.com/manaflow-ai/cmux/main/web/data/cmux.schema.json",\n  "schemaVersion": 1,\n%s\n  // This file uses JSON with comments (JSONC).\n  //   "app" : {\n  //     "language" : "system"\n  //   },\n}\n' "$1" > "$cmuxf"
+}
+cmuxfile ''
+"$F" doctor >"$T/cmux1.out" 2>&1
+check "cmux with its default file (trailing comma): doctor says what to set" 'grep -q "warn  cmux shows \"Waiting for you\" about a minute after every station.s turn ends" "$T/cmux1.out" && grep -q "agentIdleReminder\": false} in $cmuxf" "$T/cmux1.out" && ! grep -q "could not parse" "$T/cmux1.out"'
+cmuxfile '  "notifications": {"agentIdleReminder": false},'
+"$F" doctor >"$T/cmux2.out" 2>&1
+check "cmux idle reminder off in cmux's file shape: doctor is content" 'grep -q "ok    cmux.s idle reminder is off" "$T/cmux2.out" && ! grep -q "Waiting for you" "$T/cmux2.out"'
+cmuxfile '  "notifications": {"agentIdleReminder": true},'
+"$F" doctor >"$T/cmux3.out" 2>&1
+check "cmux idle reminder on: doctor warns" 'grep -q "warn  cmux shows" "$T/cmux3.out"'
+printf '{"notifications": {"agentIdleReminder": false}}\n' > "$cmuxf"
+"$F" doctor >"$T/cmux5.out" 2>&1
+check "cmux file without a trailing comma still reads" 'grep -q "ok    cmux.s idle reminder is off" "$T/cmux5.out"'
+printf '{not json' > "$cmuxf"
+"$F" doctor >"$T/cmux4.out" 2>&1
+check "an unparseable cmux file is said, not guessed" 'grep -q "warn  could not parse $cmuxf" "$T/cmux4.out"'
+check "doctor never edits the cmux file" '[ "$(cat "$cmuxf")" = "{not json" ]'
+"$F" settings crew-builder-x builder >"$T/station-settings.json"; srt=$?
+check "stations leave cmux hooks on, so its permission alerts stay" '[ $srt = 0 ] && jq -e ".env | has(\"CMUX_CLAUDE_HOOKS_DISABLED\") | not" "$T/station-settings.json" >/dev/null'
+rm -rf "$HOME/.config/cmux"
+
 # A second run asks nothing and starts nothing new.
 "$F" crew up </dev/null >"$T/up2.out" 2>&1
 check "second crew up asks nothing" '! grep -q "Choice \[" "$T/up2.out"'
@@ -107,7 +138,7 @@ api POST "/api/projects/$P1/handover" "$(jq -cn --arg r "$repo" '{repos: [{path:
 b=links-app-build-m1
 check "builder recorded" '[ "$(st $b .role)" = builder ]'
 check "builder runs in its repo" '[ "$(jq -r "select(.args[2] == \"$b\") | .cwd" "$FAKE_CLAUDE_STATE/calls.jsonl")" = "$repo" ]'
-check "builder TARES_PROJECT" '[ "$(envof $b TARES_PROJECT)" = "Links App" ]'
+check "builder TARES_PROJECT is the project id, the name beside it" '[ "$(envof $b TARES_PROJECT)" = "$P1" ] && [ "$(envof $b TARES_PROJECT_NAME)" = "Links App" ]'
 check "builder FACTORY_PARENT" '[ "$(envof $b FACTORY_PARENT)" = crew-orchestrator ]'
 check "builder FACTORY_REPO" '[ "$(envof $b FACTORY_REPO)" = "$repo" ]'
 check "builder worktrees in its repo" '[ "$(envof $b FACTORY_WORKTREES)" = "$repo/.factory/worktrees" ]'
@@ -132,14 +163,14 @@ check "builders_max is honoured" 'grep -q "builders_max is 3" "$T/max.out"'
 hand_over "Crew Tools" "$repo3" >/dev/null
 "$F" spawn builder "Crew Tools" m1 "$repo3" "x" >"$T/crewname.out" 2>&1
 check "a project can't be named like the crew" 'grep -q "can.t start with" "$T/crewname.out" && [ -z "$(st crew-tools-build-m1 .role)" ]'
-check "roster lists project" '"$F" roster | grep -q "^links-app-build-m1	builder	Links App	working$"'
+check "roster lists project" '"$F" roster | grep -q "^links-app-build-m1	builder	Links App	working"'
 "$F" projects >"$T/projects.out" 2>&1
 check "projects lists each handed-over project with its builders and repos" 'grep -E "^Links App +0/0 +- +1 +.*$repo" "$T/projects.out" >/dev/null && grep -E "^shop +0/0 +- +2 " "$T/projects.out" >/dev/null'
 # A helper keeps the parent's project and works under its role.
 "$F" spawn helper "$b" rebase "rebase T2" >/dev/null 2>&1
 check "helper name" '[ "$(st $b-rebase .role)" = helper ]'
 check "helper parent" '[ "$(envof $b-rebase FACTORY_PARENT)" = $b ]'
-check "helper project" '[ "$(envof $b-rebase TARES_PROJECT)" = "Links App" ]'
+check "helper project" '[ "$(envof $b-rebase TARES_PROJECT)" = "$P1" ] && [ "$(envof $b-rebase TARES_PROJECT_NAME)" = "Links App" ]'
 # Retire tells Tares the station ended (TR-565): give it a session on Tares first, as the plugin would.
 api POST /api/sources '{"name":"claude_code","connector":"claude_code","poll":"10s","config":{"push":true}}' >/dev/null
 jq -cn --arg n "$b-rebase" --arg at "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
@@ -233,7 +264,7 @@ wait "$racer"
 # A dead station reads as gone, so the orchestrator's roster check revives it even with no watch running.
 agent_gone() { local tmp; tmp=$(mktemp); jq --arg id "$(st "$1" .id)" 'map(if .id == $id then .state = "done" | del(.pid) else . end)' "$FAKE_CLAUDE_STATE/agents.json" > "$tmp" && mv "$tmp" "$FAKE_CLAUDE_STATE/agents.json"; }
 agent_gone crew-reviewer
-check "roster shows a finished station with no process as gone" '"$F" roster | grep -q "^crew-reviewer	reviewer		gone$"'
+check "roster shows a finished station with no process as gone" '"$F" roster | grep -q "^crew-reviewer	reviewer		gone"'
 "$F" revive crew-reviewer >/dev/null 2>&1
 dup=$(st crew-reviewer .id)
 tmp=$(mktemp); jq --arg id "$dup" '. + [(.[] | select(.id == $id) | .id = "0000dup1")]' "$FAKE_CLAUDE_STATE/agents.json" > "$tmp" && mv "$tmp" "$FAKE_CLAUDE_STATE/agents.json"
@@ -249,7 +280,7 @@ before=$(launches)
 FAKE_CLAUDE_STOP_KEEPS_STATE=1 FACTORY_STOP_WAIT=2 "$F" restart crew-orchestrator >"$T/cron-restart.out" 2>&1
 check "restart of a station with a schedule armed goes through" '[ $(( $(launches) - before )) = 1 ] && ! grep -q "did not stop" "$T/cron-restart.out"'
 tmp=$(mktemp); jq --arg id "$(st crew-orchestrator .id)" 'map(if .id == $id then .state = "working" | del(.pid, .status) else . end)' "$FAKE_CLAUDE_STATE/agents.json" > "$tmp" && mv "$tmp" "$FAKE_CLAUDE_STATE/agents.json"
-check "listed as working with no process: roster says gone" '"$F" roster | grep -q "^crew-orchestrator	orchestrator		gone$"'
+check "listed as working with no process: roster says gone" '"$F" roster | grep -q "^crew-orchestrator	orchestrator		gone"'
 before=$(launches)
 "$F" crew watch --once >/dev/null 2>&1
 check "listed as working with no process: revived" '[ $(( $(launches) - before )) = 1 ]'
