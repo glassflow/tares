@@ -87,3 +87,4 @@ test_edition
 test_factory_close
 test_words_sync
 test_services
+test_budget_period

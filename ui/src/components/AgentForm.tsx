@@ -104,7 +104,11 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
     initial?.max_rounds ? String(initial.max_rounds) : "");
   const [budget, setBudget] = useState<string>(
     initial?.budget_usd ? String(initial.budget_usd) : "");
-  const [advancedOpen, setAdvancedOpen] = useState(!!initial?.max_rounds || !!initial?.budget_usd);
+  // What the budget counts: all spend, or only this calendar month's (resets on the 1st, UTC).
+  const [budgetPeriod, setBudgetPeriod] = useState<"lifetime" | "month">(
+    initial?.budget_period === "month" ? "month" : "lifetime");
+  const [advancedOpen, setAdvancedOpen] = useState(
+    !!initial?.max_rounds || !!initial?.budget_usd || initial?.budget_period === "month");
   // When it concludes: verdict -> the project agent that takes over (TR-334)
   const [handoffs, setHandoffs] = useState<Handoff[]>(initial?.handoffs ?? []);
   // How a run ends: always with conclude, and the verdicts it may give (its words, each with when)
@@ -224,6 +228,7 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
       github: ghCred,
       max_rounds: maxRounds.trim() ? Number(maxRounds) : null,
       budget_usd: budget.trim() ? Number(budget) : null,
+      budget_period: budgetPeriod,
       handoffs: handoffs.map((h) => ({ verdict: h.verdict.trim().toLowerCase(), agent: h.agent,
                                       cooldown: h.cooldown.trim() || "30m" })),
       concludes,
@@ -557,9 +562,17 @@ export default function AgentForm({ initial, prefill, deliveryKind, presetTrigge
             <input type="number" min={0} step={1} value={budget} placeholder="no budget"
                    onChange={(e) => setBudget(e.target.value)}
                    style={{ width: 110 }} aria-label="budget in US dollars" />
+            <span className="lbl" style={{ marginLeft: 12 }}>budget covers</span>
+            <select value={budgetPeriod} aria-label="what the budget covers"
+                    onChange={(e) => setBudgetPeriod(e.target.value === "month" ? "month" : "lifetime")}>
+              <option value="lifetime">All time</option>
+              <option value="month">Each month (starts again on the 1st)</option>
+            </select>
             <span className="help" style={{ display: "block", marginTop: 4, marginBottom: 10 }}>
-              what this agent may spend in all, from its runs so far; once reached, its runs stop
-              before calling the model. Blank means no budget.
+              {budgetPeriod === "month"
+                ? "what this agent may spend in a calendar month (UTC); once reached, its runs stop before calling the model until the 1st."
+                : "what this agent may spend in all, from its runs so far; once reached, its runs stop before calling the model."}
+              {" "}Blank means no budget.
               {initial?.stats?.cost_usd != null && <> Spent so far: ${initial.stats.cost_usd.toFixed(2)}.</>}
             </span>
             <span className="lbl">max rounds</span>

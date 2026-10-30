@@ -366,6 +366,8 @@ _MIGRATIONS = [
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS external_tools JSON",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS max_rounds INTEGER",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS budget_usd DOUBLE",
+    # NULL reads as lifetime, so no backfill (TR-770)
+    "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS budget_period TEXT",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS daily_cap INTEGER",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS max_rounds INTEGER",
     # extra, non-secret headers an MCP server wants on every request (toolset selection, read-only
@@ -650,6 +652,20 @@ def _bound_duckdb_memory(con, path: str) -> None:
         con.execute(f"PRAGMA temp_directory='{tmp}'")
     except Exception as e:                 # never let tuning block startup
         print(f"taresd: could not bound DuckDB memory ({e})")
+
+
+_MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September",
+           "October", "November", "December")
+
+
+def month_name(when) -> str:
+    """"October" for a date or datetime in October (English whatever the machine's locale)."""
+    return _MONTHS[when.month - 1]
+
+
+def day_month_words(when) -> str:
+    """"1 Nov": the day a monthly budget starts again."""
+    return f"{when.day} {_MONTHS[when.month - 1][:3]}"
 
 
 class StoreUnavailable(RuntimeError):
@@ -1657,7 +1673,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                              handoffs: list[dict] | None = None,
                              concludes: bool | None = None,
                              verdicts: list[dict] | None = None,
-                             github: str | None = None) -> None:
+                             github: str | None = None,
+                             budget_period: str | None = None) -> None:
+        # budget_period: None and "lifetime" both store NULL (lifetime); "month" resets on the 1st
         # handoffs, concludes, verdicts, github: None keeps what is stored (a caller that does
         # not know about them, such as a template re-plan, must not wipe them); [] / False / ""
         # clears
@@ -1668,14 +1686,15 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 "(name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, max_rounds, budget_usd, "
                 "webhook_key_label, provider, daily_cap, handoffs, concludes, verdicts, github, "
-                "created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "budget_period, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (name) DO UPDATE SET trigger = excluded.trigger, "
                 "prompt = excluded.prompt, slack_webhook = excluded.slack_webhook, "
                 "model = excluded.model, slack_channel = excluded.slack_channel, "
                 "webhook_url = excluded.webhook_url, webhook_token = excluded.webhook_token, "
                 "mcp_servers = excluded.mcp_servers, max_rounds = excluded.max_rounds, "
                 "budget_usd = excluded.budget_usd, "
+                "budget_period = excluded.budget_period, "
                 "webhook_key_label = excluded.webhook_key_label, "
                 "provider = excluded.provider, daily_cap = excluded.daily_cap, "
                 "handoffs = COALESCE(excluded.handoffs, catalog_agents.handoffs), "
@@ -1690,7 +1709,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                  None if handoffs is None else json.dumps(handoffs),
                  None if concludes is None else bool(concludes),
                  None if verdicts is None else json.dumps(verdicts),
-                 None if github is None else github, ts, ts],
+                 None if github is None else github,
+                 "month" if budget_period == "month" else None, ts, ts],
             )
             # the agent's trigger and handoffs are the wiring of the project that made it
             # (P-TR-216); one not placed yet is wired when it is (_wire_owner)
@@ -1754,7 +1774,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             rows = self.sc.execute(
                 "SELECT name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, updated_at, max_rounds, budget_usd, owned_by, customized, "
-                "webhook_key_label, provider, daily_cap, handoffs, concludes, verdicts, github "
+                "webhook_key_label, provider, daily_cap, handoffs, concludes, verdicts, github, budget_period "
                 "FROM catalog_agents ORDER BY name"
             ).fetchall()
             wiring = self.sc.execute(
@@ -1784,7 +1804,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 "handoffs": hands.get((where, r[0]), [] if w or (where, r[0]) in hands
                                       else (json.loads(r[17]) if r[17] else [])),
                 "concludes": bool(r[18]), "verdicts": json.loads(r[19]) if r[19] else [],
-                "github": r[20] or "", "enabled": bool(on)})
+                "github": r[20] or "", "enabled": bool(on),
+                "budget_period": r[21] or "lifetime"})
         return out
 
     def get_catalog_agent(self, name: str, project: str | None = None) -> dict | None:
@@ -2125,6 +2146,40 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             r = self.sc.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM agent_runs "
                                  "WHERE agent = ?", [agent]).fetchone()
         return float(r[0] or 0)
+
+    @staticmethod
+    def month_start(now: datetime | None = None) -> datetime:
+        """The first of `now`'s month at 00:00 UTC: where a monthly budget starts counting."""
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        now = now.astimezone(timezone.utc)
+        return datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+
+    def agent_cost_since(self, agent: str, since: datetime) -> float:
+        """Spend of one agent from `since` on, from the run log."""
+        with self._sread:
+            r = self.sc.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM agent_runs "
+                                 "WHERE agent = ? AND started_at >= ?", [agent, since]).fetchone()
+        return float(r[0] or 0)
+
+    def agent_budget_spend(self, agent: dict, now: datetime | None = None) -> float:
+        """The spend an agent's `budget_usd` is compared with: this calendar month's for
+        `budget_period` "month", all of it otherwise. The runner, project health and anything
+        that words a budget read this one rule (TR-770)."""
+        if agent.get("budget_period") == "month":
+            return self.agent_cost_since(agent["name"], self.month_start(now))
+        return self.agent_cost_total(agent["name"])
+
+    @classmethod
+    def budget_resets_on(cls, agent: dict, now: datetime | None = None):
+        """The day a monthly budget starts again (the 1st of next month, UTC); None for a
+        lifetime budget, which never does."""
+        if agent.get("budget_period") != "month":
+            return None
+        start = cls.month_start(now)
+        return (start.replace(year=start.year + 1, month=1) if start.month == 12
+                else start.replace(month=start.month + 1)).date()
 
     def agent_runs_today(self, agent: str, exclude_run_id: str | None = None,
                          include_practice: bool = True) -> int:
