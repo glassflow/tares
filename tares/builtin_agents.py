@@ -1435,7 +1435,65 @@ class AgentRunner:
                                     verdict=verdict, headline=headline, next_step=next_step,
                                     what_changed=what_changed, since_at=since, failing=failing,
                                     likely_cause=likely_cause)
+        self._note_incident({"name": agent_label, "owned_by": project}, key, finding, verdict,
+                            label, run_id)
         return run_id
+
+    def _note_incident(self, agent: dict, key: str, finding: str, verdict: str | None,
+                       label: str | None, run_id: str | None) -> dict | None:
+        """File the run's note under an incident when it is one (TR-744): the incident it
+        joined or opened, else None. It writes the incident tables only, on every edition, and
+        a failure is printed and never breaks the run (the rule `_hand_off` follows)."""
+        if not run_id:
+            return None
+        try:
+            from . import incidents
+            run = self.store.get_agent_run(run_id)
+            if run is None:
+                return None
+            # the run row is still open when its note is recorded: judge it as it will end
+            run = {**run, "status": "ok", "outcome": "finding", "verdict": verdict,
+                   "finding": finding}
+            catalog = self.runtime.catalog
+            if not incidents.is_note(self.store, catalog, agent, run):
+                return None
+            return incidents.on_note(self.store, catalog, agent, run_id, key, label, run=run)
+        except Exception as e:
+            print(f"[agent {agent.get('name')}] incident: {type(e).__name__}: {e}")
+            return None
+
+    def _thread_of(self, incident: dict | None, run_id: str | None, channel: str) -> str | None:
+        """The `ts` of the message a joined note is posted under: the incident's first message,
+        when this note is not that message's own and it sits in this agent's channel. AI SRE cells
+        only; every other edition posts each note as a message of its own, as before."""
+        try:
+            from .edition import edition
+            slack = (incident or {}).get("slack") or {}
+            if not slack.get("ts") or slack.get("channel") != channel:
+                return None
+            if edition(self.store)[0] != "sre":
+                return None
+            notes = self.store.incident_notes(incident["id"])
+            if not notes or notes[0]["run_id"] == run_id:
+                return None
+            return str(slack["ts"])
+        except Exception as e:
+            print(f"[agent] incident thread: {type(e).__name__}: {e}")
+            return None
+
+    def _keep_slack(self, incident: dict | None, run_id: str | None, posted: dict) -> None:
+        """Store where a note was posted: on the note, and on the incident when it has no
+        message yet (the first note posted). A pure addition, on every edition."""
+        if not incident or not posted.get("ts"):
+            return
+        try:
+            channel, ts = posted.get("channel"), posted["ts"]
+            if run_id:
+                self.store.set_note_slack(run_id, channel, ts)
+            if not incident.get("slack"):
+                self.store.set_incident_slack(incident["id"], channel, ts)
+        except Exception as e:
+            print(f"[agent] incident slack: {type(e).__name__}: {e}")
 
     async def _record(self, agent: dict, trigger_name: str, key: str, finding: str,
                       verdict: str | None = None, label: str | None = None,
@@ -1461,8 +1519,13 @@ class AgentRunner:
         # what the Slack message shows beside the note (TR-275)
         meta = {"verdict": verdict, "model": model, "run_id": run_id, "when": now_utc().isoformat()}
         meta.update(self._title_meta(key, finding, headline, parts or {}))
+        incident = self._note_incident(agent, key, finding, verdict, label, run_id)
         if channel:
-            if await self._slack_channel(agent["name"], channel, trigger_name, key, finding, meta):
+            posted: dict = {}
+            thread_ts = self._thread_of(incident, run_id, channel)
+            if await self._slack_channel(agent["name"], channel, trigger_name, key, finding, meta,
+                                         thread_ts=thread_ts, posted=posted):
+                self._keep_slack(incident, run_id, posted)
                 return [{"kind": "slack", "label": f"Slack {channel}"}]
         elif hook:
             if await self._slack(agent["name"], hook, trigger_name, key, finding, meta):
@@ -1565,12 +1628,17 @@ class AgentRunner:
         return "failed", f"after {attempts} attempts: {err}"
 
     async def _slack_channel(self, agent_name: str, channel: str, trigger_name: str,
-                             key: str, finding: str, meta: dict | None = None) -> bool:
+                             key: str, finding: str, meta: dict | None = None,
+                             thread_ts: str | None = None, posted: dict | None = None) -> bool:
         """Post the finding through the workspace bot (`chat.postMessage`): the entity, a grid of
         fields, the note and buttons in the channel (TR-275). A note too long for one message
         block gets an excerpt in the channel and the full note as a reply in the message's thread,
         so it cannot fill the channel; a shorter one is posted whole, with no thread. The credential is the one bot token the
         instance holds, and the target is a channel picked from a list.
+
+        `thread_ts` posts the note as a reply under that message (a note joining an incident,
+        TR-744). `posted`, when given, is filled with the channel and `ts` Slack answered, so the
+        caller can keep them; the return value stays whether the note went out.
 
         One attempt, verdict from `slack.classify` (Slack answers HTTP 200 with ok:false), failure
         printed — a notification failing must never lose the finding, which is already stored."""
@@ -1585,8 +1653,11 @@ class AgentRunner:
         headers = {"authorization": f"Bearer {token}"}
         try:
             async with httpx.AsyncClient(timeout=15) as cx:
+                body = {"channel": channel, **msg}
+                if thread_ts:
+                    body["thread_ts"] = thread_ts
                 r = await cx.post(f"{_slack_mod.API_BASE}/chat.postMessage",
-                                  json={"channel": channel, **msg}, headers=headers)
+                                  json=body, headers=headers)
                 try:
                     data = r.json()
                 except Exception:
@@ -1596,11 +1667,13 @@ class AgentRunner:
                     print(f"[agent {agent_name}] slack: {error}")
                     return False
                 ts = (data or {}).get("ts")
+                if posted is not None and ts:
+                    posted.update({"channel": (data or {}).get("channel") or channel, "ts": ts})
                 if threaded and ts:
                     # The full note under the message. Failing here still leaves the finding in
                     # the channel with its excerpt and buttons, so the post counts as delivered.
                     r2 = await cx.post(f"{_slack_mod.API_BASE}/chat.postMessage", headers=headers,
-                                       json={"channel": channel, "thread_ts": ts,
+                                       json={"channel": channel, "thread_ts": thread_ts or ts,
                                              "text": f"Full note from {agent_name} on {key}",
                                              "blocks": _slack_mod.build_finding_thread(finding),
                                              "unfurl_links": False, "unfurl_media": False})
