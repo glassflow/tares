@@ -2324,6 +2324,7 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
   --color-popover: var(--panel);
   --color-popover-foreground: var(--ink);
   --color-primary: var(--btn-primary-bg);
+  --color-primary-hover: var(--btn-primary-bg-hover);
   --color-primary-foreground: var(--btn-primary-ink);
   --color-secondary: var(--hover);
   --color-secondary-foreground: var(--ink);

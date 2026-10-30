@@ -7,12 +7,12 @@ import { cn } from "@/lib/utils";
 // The console's own `button` element rules are unlayered and would beat these utilities, so the
 // ones they also set (display, size, padding, border, fill, colour) are marked important.
 const buttonVariants = cva(
-  "inline-flex! items-center justify-center gap-2 whitespace-nowrap text-sm! font-medium! transition-colors disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+  "inline-flex! items-center justify-center gap-2 whitespace-nowrap no-underline! text-sm! font-medium! transition-colors motion-reduce:transition-none disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",
   {
     variants: {
       variant: {
         default:
-          "border! border-primary! bg-primary! text-primary-foreground! hover:border-primary/90! hover:bg-primary/90! hover:text-primary-foreground!",
+          "border! border-primary! bg-primary! text-primary-foreground! hover:border-primary-hover! hover:bg-primary-hover! hover:text-primary-foreground!",
         destructive:
           "border! border-destructive! bg-card! text-destructive! hover:bg-destructive/10! hover:text-destructive! hover:border-destructive!",
         outline:
@@ -21,7 +21,7 @@ const buttonVariants = cva(
           "border! border-border! bg-secondary! text-secondary-foreground! hover:border-border! hover:bg-secondary/70! hover:text-secondary-foreground!",
         ghost:
           "border! border-transparent! bg-transparent! text-foreground! hover:border-transparent! hover:bg-accent! hover:text-accent-foreground!",
-        link: "border-0! bg-transparent! p-0! text-foreground! underline-offset-4 hover:text-foreground! hover:underline",
+        link: "border-0! bg-transparent! text-foreground! underline! underline-offset-4 hover:text-[var(--accent-deep)]!",
       },
       size: {
         default: "h-9 px-4! py-2!",
@@ -30,6 +30,8 @@ const buttonVariants = cva(
         icon: "size-9 p-0!",
       },
     },
+    // The link variant has no padding at any size; a compound variant comes after the size classes.
+    compoundVariants: [{ variant: "link", class: "px-0! py-0!" }],
     defaultVariants: { variant: "default", size: "default" },
   },
 );
