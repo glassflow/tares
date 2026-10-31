@@ -1507,7 +1507,9 @@ class AgentRunner:
             channel, ts = posted.get("channel"), posted["ts"]
             if run_id:
                 self.store.set_note_slack(run_id, channel, ts)
-            if not incident.get("slack"):
+            # only the first note's message is what a click rebuilds, so only it is the incident's
+            notes = self.store.incident_notes(incident["id"])
+            if not incident.get("slack") and notes and notes[0]["run_id"] == run_id:
                 self.store.set_incident_slack(incident["id"], channel, ts)
         except Exception as e:
             print(f"[agent] incident slack: {type(e).__name__}: {e}")

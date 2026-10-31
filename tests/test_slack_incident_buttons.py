@@ -23,6 +23,7 @@ import os
 import sys
 import tempfile
 import threading
+import types
 import time
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -127,7 +128,7 @@ def buttons(msg):
 
 
 def contexts(msg):
-    return [b["elements"][0]["text"] for b in msg["blocks"] if b["type"] == "context"]
+    return [b["elements"][0]["text"] for b in msg.get("blocks", []) if b["type"] == "context"]
 
 
 def digest(msg):
@@ -328,7 +329,7 @@ async def cell():
                         and "is on it" in b["text"]])
         inc = store.get_incident(iid)
         eq("on it, by the person who clicked", (inc["state"], inc["owner"], inc["owner_name"]),
-           ("on_it", "U111", "Alex"))
+           ("on_it", "slack:U111", "Alex"))
         ck("the log says it came from Slack",
            ("on_it", "slack") in [(e["action"], e["via"]) for e in store.incident_log(iid)])
         resp = calls("/resp")[-1]
@@ -354,7 +355,7 @@ async def cell():
         await wait_for(lambda: store.get_incident(iid)["state"] == "resolved")
         inc = store.get_incident(iid)
         eq("resolved by them", (inc["state"], inc["resolved_by"], inc["resolved_by_name"]),
-           ("resolved", "U111", "Alex"))
+           ("resolved", "slack:U111", "Alex"))
         ck("via Slack", ("resolved", "slack") in [(e["action"], e["via"])
                                                   for e in store.incident_log(iid)])
         eq("its notes count as handled by them", store.get_agent_run(n1)["handled_by"], "Alex")
@@ -489,22 +490,38 @@ async def cell():
         row = store.feedback_for([n1])[n1][0]
         eq("recorded for the person, via Slack",
            (row["person"], row["person_name"], row["via"], row["worth"], row["watcher"]),
-           ("U111", "Alex", "slack", True, "watcher"))
+           ("slack:U111", "Alex", "slack", True, "watcher"))
         await wait_for(lambda: [b for b in calls("/chat.postMessage")
                                 if b.get("text") == "Alex says this was worth raising"])
         eq("the thread acknowledges it", bool([b for b in calls("/chat.postMessage")
                                                if b.get("text") == "Alex says this was worth raising"]), True)
+        await wait_for(lambda: [c for c in calls("/resp") if "Alex said worth raising" in contexts(c)])
+        resp = [c for c in calls("/resp") if "Alex said worth raising" in contexts(c)][-1]
+        eq("the message is replaced with the answer and keeps both buttons",
+           (resp["replace_original"], [i for i in action_ids(resp) if i.startswith("tares_worth_")]),
+           (True, ["tares_worth_yes", "tares_worth_no"]))
+        t1 = len([b for b in calls("/chat.postMessage") if "worth raising" in b.get("text", "")])
+        await click("tares_worth_yes", wv)
+        await asyncio.sleep(0.4)
+        eq("the same answer again says nothing new in the thread",
+           len([b for b in calls("/chat.postMessage") if "worth raising" in b.get("text", "")]), t1)
         await click("tares_worth_no", wv)
         await wait_for(lambda: not store.feedback_for([n1])[n1][0]["worth"])
         rows = store.feedback_for([n1])[n1]
         eq("the same person answering again keeps one row", [(x["person"], x["worth"]) for x in rows],
-           [("U111", False)])
+           [("slack:U111", False)])
         await click("tares_worth_yes", wv, user=("U222", "Kim"))
         await wait_for(lambda: len(store.feedback_for([n1])[n1]) == 2)
         eq("a second person adds one", sorted((x["person_name"], x["worth"], x["via"])
                                               for x in store.feedback_for([n1])[n1]),
            [("Alex", False, "slack"), ("Kim", True, "slack")])
+        await wait_for(lambda: [c for c in calls("/resp")
+                                if "1 said worth raising, 1 said not worth raising" in contexts(c)])
         r0 = len(calls("/resp"))
+        await click("tares_worth_maybe", wv, user=("U333", "Lee"))
+        await asyncio.sleep(0.3)
+        eq("a worth button that is neither yes nor no stores nothing",
+           len(store.feedback_for([n1])[n1]), 2)
         await click("tares_worth_yes", {"r": "run_gone", "w": "team-a"})
         await wait_for(lambda: len(calls("/resp")) > r0)
         eq("a result that is gone gets an ephemeral reply", calls("/resp")[-1]["text"],
@@ -519,9 +536,50 @@ async def cell():
            "Only what the watcher raised can be answered")
         eq("and no answer is kept", store.feedback_for(["run_quiet"])["run_quiet"], [])
 
+        print("== a name is escaped and capped; a note that is gone ==")
+        t2 = len(calls("/chat.postMessage"))
+        await click("tares_worth_no", wv, user=("U444", "<!here> & " + "x" * 100))
+        await wait_for(lambda: len(calls("/chat.postMessage")) > t2)
+        said = [b["text"] for b in calls("/chat.postMessage")[t2:] if "not worth raising" in b["text"]][0]
+        ck("the name cannot mention anyone", "<!here>" not in said and "&lt;!here&gt; &amp; " in said, said)
+        raw_name = "<!here> & " + "x" * 100
+        eq("and is kept cut at 80 characters",
+           [x["person_name"] for x in store.feedback_for([n1])[n1] if x["person"] == "slack:U444"],
+           [raw_name[:80]])
+        real = slack.build_incident_message
+        slack.build_incident_message = lambda *a, **k: None
+        try:
+            r0 = len(calls("/resp"))
+            await click("tares_incident_resolve", value)
+            await wait_for(lambda: len(calls("/resp")) > r0)
+        finally:
+            slack.build_incident_message = real
+        eq("a click on a message whose note is gone says so", calls("/resp")[-1]["text"],
+           slack_actions.GONE_NOTE)
+
+        print("== which message the incident keeps ==")
+        class Fake:
+            def __init__(self, first):
+                self.first, self.set_on = first, []
+            def incident_notes(self, i):
+                return [{"run_id": self.first}]
+            def set_note_slack(self, run_id, channel, ts):
+                pass
+            def set_incident_slack(self, i, channel, ts):
+                self.set_on.append(ts)
+        keep = type(runner)._keep_slack
+        fake = Fake("run_first")
+        keep(types.SimpleNamespace(store=fake), {"id": "i"}, "run_later", {"channel": "C1", "ts": "2"})
+        keep(types.SimpleNamespace(store=fake), {"id": "i"}, "run_first", {"channel": "C1", "ts": "1"})
+        eq("a later note's post is not the incident's message", fake.set_on, ["1"])
+
         print("== the rebuilt message and the words ==")
+        store.set_service(store.get_incident(iid)["service"], "tester", display="Edge Proxy")
         inc = store.get_incident(iid)
         msg = slack.build_incident_message(store, inc, "team-a")
+        eq("with the service's display name", [f["text"] for b in msg["blocks"] if b["type"] == "section"
+                                                for f in b.get("fields", []) if f["text"].startswith("*Service")]
+           , ["*Service*\nEdge Proxy"])
         ck("it is the first note's message", msg is not None and
            msg["text"].startswith("investigator on edge-proxy:"), str(msg and msg["text"]))
         every = [b.get("text", "") for b in calls("/chat.postMessage")[-8:]]

@@ -388,6 +388,10 @@ async def cell():
         r = await cx.put("/api/settings/edition", json={"edition": "platform"})
         eq("edition set to platform", r.status_code, 200)
         clock[0] = base + timedelta(minutes=60)
+        seen = -1
+        while seen != len(SLACK):   # the thread reply to the console resolve above may still be on its way
+            seen = len(SLACK)
+            await asyncio.sleep(0.5)
         n_slack = len(SLACK)
         await investigate("plat-svc", w1, outcome="finding", verdict="rca",
                           summary="plat-svc fails its health check.")

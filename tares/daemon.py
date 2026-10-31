@@ -3160,12 +3160,16 @@ def make_app() -> FastAPI:
                                                _slack_workspace)) if inc else None
                 if msg is not None:
                     await _slack_respond(response_url, {**msg, "replace_original": True})
+                else:
+                    await _slack_respond(response_url, {
+                        "response_type": "ephemeral", "replace_original": False,
+                        "text": slack_actions.GONE_NOTE})
             if result.get("thread"):
                 container = payload.get("container") or {}
                 message = payload.get("message") or {}
                 channel = (payload.get("channel") or {}).get("id") or container.get("channel_id")
                 ts = message.get("thread_ts") or container.get("message_ts") or message.get("ts")
-                token, _origin = slack_mod.resolve_token(store)
+                token, _origin = await asyncio.to_thread(slack_mod.resolve_token, store)
                 if token and channel and ts:
                     await _slack_post(token, "chat.postMessage", {
                         "channel": channel, "thread_ts": ts, "text": result["thread"],

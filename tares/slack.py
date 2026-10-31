@@ -645,7 +645,8 @@ def build_finding_message(agent_name: str, trigger: str, key: str, finding: str,
                           run_id: str | None = None, when: str | None = None,
                           full_note: bool = False, title: str | None = None,
                           service: str | None = None, incident: dict | None = None,
-                          workspace: str | None = None, worth_run: str | None = None) -> dict:
+                          workspace: str | None = None, worth_run: str | None = None,
+                          worth_said: str | None = None) -> dict:
     """Block Kit body for a Tares agent's finding (TR-275): the entity as the header, a grid of
     fields, a short excerpt of the note, and buttons into Tares. With a `title` (TR-745: the AI
     SRE edition's "service: what changed since when") the header is the title and the fields add
@@ -659,8 +660,8 @@ def build_finding_message(agent_name: str, trigger: str, key: str, finding: str,
 
     AI SRE cells pass `incident` (incidents.view(): the state line and the buttons that take,
     resolve or reopen it), `workspace` (this cell's slug, carried in every button value) and
-    `worth_run` (the run a "Was this worth raising?" answer is about). Without them the message is
-    exactly as it was."""
+    `worth_run` (the run a "Was this worth raising?" answer is about) and `worth_said` (the answers
+    so far, one line, shown above those buttons). Without them the message is exactly as it was."""
     # the entity is the header, so the fields say who wrote the note and why
     fields = [("Agent", agent_name), ("Trigger", f"`{trigger}`"), ("Verdict", verdict),
               ("Model", model)]
@@ -679,6 +680,8 @@ def build_finding_message(agent_name: str, trigger: str, key: str, finding: str,
     if incident:
         blocks.append(_incident_buttons(incident, workspace))
     if worth_run:
+        if worth_said:
+            blocks.append(_context(worth_said))
         blocks.append(_worth_buttons(worth_run, workspace))
     actions = _buttons([("View in Tares", run_url(agent_name, run_id), "primary"),
                         ("Open timeline", entity_url(key), None)])
@@ -693,21 +696,35 @@ def build_incident_message(store, incident: dict, workspace: str | None = None) 
     """The incident's first message as it reads now (an AI SRE cell's): built from its first note
     with the current state, for chat.update and a button click's response. None when the incident
     has no note left to build it from."""
-    from . import feedback, incidents
+    from . import feedback, goal, incidents
     notes = store.incident_notes(incident["id"])
     run = store.get_agent_run(notes[0]["run_id"]) if notes else None
     if run is None:
         return None
-    from .goal import _iso
-    view = incidents.view(store, incident, notes=notes)
+    settings = store.service_settings()
+    view = incidents.view(store, incident, notes=notes, settings=settings)
     finding = run.get("finding") or ""
     worth = run["id"] if feedback.answerable(store, run["id"]) else None
     return build_finding_message(
         run.get("agent") or "", run.get("trigger") or "", run.get("key") or incident["service"],
         finding, verdict=run.get("verdict"), model=run.get("model"), run_id=run["id"],
-        when=_iso(run.get("started_at")), full_note=not needs_thread(finding),
-        title=view["title"], service=incident["service"], incident=view, workspace=workspace,
-        worth_run=worth)
+        when=goal._iso(notes[0].get("joined_at") or run.get("started_at")),
+        full_note=not needs_thread(finding), title=view["title"],
+        service=goal.service_name(incident["service"], settings), incident=view,
+        workspace=workspace, worth_run=worth,
+        worth_said=worth_line(store.feedback_for([run["id"]])[run["id"]]) if worth else None)
+
+
+def worth_line(answers: list[dict]) -> str | None:
+    """"Alex said worth raising", or the count when several people answered. None when nobody has."""
+    if not answers:
+        return None
+    if len(answers) == 1:
+        a = answers[0]
+        words = "worth raising" if a["worth"] else "not worth raising"
+        return f"{escape_text(a.get('person_name') or 'Someone')} said {words}"
+    yes = sum(1 for a in answers if a["worth"])
+    return f"{yes} said worth raising, {len(answers) - yes} said not worth raising"
 
 
 def needs_thread(finding: str) -> bool:

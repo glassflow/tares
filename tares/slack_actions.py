@@ -19,6 +19,7 @@ click already updated the message.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
@@ -28,6 +29,7 @@ from . import slack as slack_mod
 
 GONE_INCIDENT = "This incident is no longer in Tares."
 GONE_RESULT = "This result is no longer in Tares."
+GONE_NOTE = "Your click was saved, but the note this message shows is gone, so it was not refreshed."
 
 _tasks: set = set()     # keeps the hook's background tasks referenced
 
@@ -59,7 +61,7 @@ def _incident(store, action: dict, user: dict, workspace: str | None) -> dict:
     if before is None:
         return {"ephemeral": GONE_INCIDENT}
     kind = str(action.get("action_id") or "")[len("tares_incident_"):]
-    who = (user.get("id"), user.get("name"))
+    who = (_person(user), user.get("name"))
     if kind == "on_it":
         after, said = incidents.take(store, iid, *who, via="slack"), "is on it"
     elif kind == "resolve":
@@ -76,20 +78,38 @@ def _incident(store, action: dict, user: dict, workspace: str | None) -> dict:
     return out
 
 
+def _person(user: dict) -> str:
+    """How a Slack person is stored: `slack:` and their user id, so it never collides with a
+    console person."""
+    return "slack:" + user["id"]
+
+
 def _worth(store, action: dict, user: dict, workspace: str | None) -> dict:
     val = _value(action)
     if val is None or _foreign(val, workspace):
         return {}
+    suffix = str(action.get("action_id") or "")[len("tares_worth_"):]
+    if suffix not in ("yes", "no"):
+        return {}
     run_id = str(val.get("r") or "")
-    worth = str(action.get("action_id")) == slack_mod.WORTH_ACTIONS["yes"]
+    worth = suffix == "yes"
+    person = _person(user)
     try:
-        feedback.answer(store, run_id, worth, user["id"], user["name"], "slack")
+        # a click that repeats the person's answer changes nothing, so it says nothing in the thread
+        before = [r for r in store.feedback_for([run_id])[run_id] if r["person"] == person]
+        feedback.answer(store, run_id, worth, person, user["name"], "slack")
     except KeyError:
         return {"ephemeral": GONE_RESULT}
     except feedback.NotRaised as e:
         return {"ephemeral": str(e)}
-    who = slack_mod.escape_text(user["name"])
-    return {"thread": f"{who} says this was {'worth raising' if worth else 'not worth raising'}"}
+    out: dict = {}
+    inc = store.incident_for_run(run_id)
+    if inc:
+        out["incident_id"] = inc["id"]
+    if not before or bool(before[0]["worth"]) != worth:
+        who = slack_mod.escape_text(user["name"])
+        out["thread"] = f"{who} says this was {'worth raising' if worth else 'not worth raising'}"
+    return out
 
 
 # the action id's prefix -> its handler: (store, action, slack user, workspace) -> result dict
@@ -147,11 +167,15 @@ def _change_words(store, inc: dict) -> str:
 
 
 async def _tell_slack(store, inc: dict) -> None:
-    token, _origin = slack_mod.resolve_token(store)
+    # read the incident again: two quick changes must each show what the incident is now
+    inc = await asyncio.to_thread(store.get_incident, inc["id"]) or inc
+    token, _origin = await asyncio.to_thread(slack_mod.resolve_token, store)
     where = inc.get("slack") or {}
     if not token or not where.get("channel") or not where.get("ts"):
         return
-    msg = slack_mod.build_incident_message(store, inc, slack_mod.cell_workspace())
+    msg = await asyncio.to_thread(slack_mod.build_incident_message, store, inc,
+                                  slack_mod.cell_workspace())
+    words = await asyncio.to_thread(_change_words, store, inc)
     headers = {"authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(timeout=15) as cx:
         if msg is not None:
@@ -160,7 +184,7 @@ async def _tell_slack(store, inc: dict) -> None:
             _check("chat.update", r)
         r = await cx.post(f"{slack_mod.API_BASE}/chat.postMessage", headers=headers,
                           json={"channel": where["channel"], "thread_ts": where["ts"],
-                                "text": _change_words(store, inc), "unfurl_links": False,
+                                "text": words, "unfurl_links": False,
                                 "unfurl_media": False})
         _check("thread reply", r)
 
