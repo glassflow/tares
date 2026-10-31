@@ -2499,6 +2499,11 @@ def make_app() -> FastAPI:
                          "max_rounds": a.get("max_rounds"),
                          "budget_usd": a.get("budget_usd"),
                          "budget_period": a.get("budget_period") or "lifetime",
+                         # this month's spend, for the page to put next to a month budget (a
+                         # lifetime budget reads the card's total cost)
+                         "budget_spent_usd": (round(store.agent_budget_spend(a), 4)
+                                              if a.get("budget_usd") and a.get("budget_period") == "month"
+                                              else None),
                          "daily_cap": a.get("daily_cap"),
                          "handoffs": a.get("handoffs") or [],
                          "concludes": bool(a.get("concludes")),

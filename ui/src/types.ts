@@ -260,6 +260,7 @@ export interface BuiltinAgent {
   max_rounds: number | null;   // model rounds per run; null = the default for its shape
   budget_usd?: number | null;  // spend cap in USD over budget_period; null = no budget
   budget_period?: "lifetime" | "month";  // "month" resets on the 1st, 00:00 UTC; absent = lifetime
+  budget_spent_usd?: number | null;  // this month's spend, set for a month budget only
   handoffs?: Handoff[];        // who takes over when a run concludes with a verdict (TR-334)
   concludes?: boolean;         // every run ends with the conclude tool, whatever the prompt says
   verdicts?: Verdict[];        // the only verdicts it may give; empty: any word, or none

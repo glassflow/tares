@@ -926,9 +926,7 @@ class AgentRunner:
         # is the one rule, so the runner, project health and the watch state agree.
         budget = agent.get("budget_usd")
         now = _clock()
-        # Called on the class, not the instance: tests/test_agent_daily_cap.py runs this path
-        # against a stand-in store that only has agent_cost_total, which a lifetime budget needs.
-        if budget and Store.agent_budget_spend(self.store, agent, now) >= float(budget):
+        if budget and self.store.agent_budget_spend(agent, now) >= float(budget):
             if agent.get("budget_period") == "month":
                 msg = (f"budget of ${float(budget):.2f} for {month_name(now)} reached; it starts "
                        f"again on {day_month_words(Store.budget_resets_on(agent, now))}, or raise "
