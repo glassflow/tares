@@ -102,10 +102,14 @@ def _worth(store, action: dict, user: dict, workspace: str | None) -> dict:
         return {"ephemeral": GONE_RESULT}
     except feedback.NotRaised as e:
         return {"ephemeral": str(e)}
-    out: dict = {}
+    # the clicked message is rebuilt as what it is: the incident's opening message, or this
+    # note's own (a thread reply, or a finding that opened no incident)
+    out: dict = {"run_id": run_id}
     inc = store.incident_for_run(run_id)
     if inc:
-        out["incident_id"] = inc["id"]
+        notes = store.incident_notes(inc["id"])
+        if notes and notes[0]["run_id"] == run_id:
+            out = {"incident_id": inc["id"]}
     if not before or bool(before[0]["worth"]) != worth:
         who = slack_mod.escape_text(user["name"])
         out["thread"] = f"{who} says this was {'worth raising' if worth else 'not worth raising'}"

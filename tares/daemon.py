@@ -3144,8 +3144,8 @@ def make_app() -> FastAPI:
 
     async def _slack_interaction(payload: dict) -> None:
         """A click on a button that acts: run its handler, then replace the clicked message with
-        the incident as it reads now (through the payload's response_url) and say who did what in
-        the message's thread. Never raises: it runs detached from the request."""
+        the incident, or the note, as it reads now (through the payload's response_url) and say
+        who did what in the message's thread. Never raises: it runs detached from the request."""
         try:
             result = await asyncio.to_thread(slack_actions.dispatch, store, payload,
                                              _slack_workspace)
@@ -3154,10 +3154,14 @@ def make_app() -> FastAPI:
                 await _slack_respond(response_url, {"response_type": "ephemeral",
                                                     "replace_original": False,
                                                     "text": result["ephemeral"]})
-            if result.get("incident_id") and response_url:
-                inc = await asyncio.to_thread(store.get_incident, result["incident_id"])
-                msg = (await asyncio.to_thread(slack_mod.build_incident_message, store, inc,
-                                               _slack_workspace)) if inc else None
+            if (result.get("incident_id") or result.get("run_id")) and response_url:
+                if result.get("incident_id"):
+                    inc = await asyncio.to_thread(store.get_incident, result["incident_id"])
+                    msg = (await asyncio.to_thread(slack_mod.build_incident_message, store, inc,
+                                                   _slack_workspace)) if inc else None
+                else:
+                    msg = await asyncio.to_thread(slack_mod.build_run_message, store,
+                                                  result["run_id"], _slack_workspace)
                 if msg is not None:
                     await _slack_respond(response_url, {**msg, "replace_original": True})
                 else:

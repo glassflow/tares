@@ -402,6 +402,20 @@ async def cell():
         await wait_for(lambda: calls("/chat.postMessage")[-1]["text"] == f"{who} reopened this in Tares")
         eq("so does a reopen", calls("/chat.postMessage")[-1]["text"], f"{who} reopened this in Tares")
 
+        print("== two quick changes: the message shows where the incident is now ==")
+        stale = store.get_incident(iid)
+        eq("a copy taken while it was open", stale["state"], "open")
+        out = store.set_incident_state(iid, "resolved", "console:pat", "Pat", "console",
+                                       resolution="person", expect="open")
+        u0, p0 = len(calls("/chat.update")), len(calls("/chat.postMessage"))
+        await slack_actions._tell_slack(store, stale)
+        eq("the message is updated once", len(calls("/chat.update")), u0 + 1)
+        ck("and shows the resolve, not the copy", any(c.startswith("Resolved by Pat at")
+                                                       for c in contexts(calls("/chat.update")[-1])),
+           str(contexts(calls("/chat.update")[-1])))
+        eq("the thread says the resolve", calls("/chat.postMessage")[-1]["text"], "Pat resolved this in Tares")
+        incidents.reopen(store, iid, None, None, via="slack")   # back to open, no copy
+
         print("== the sweep follows into Slack ==")
         u0, p0 = len(calls("/chat.update")), len(calls("/chat.postMessage"))
         inc = store.get_incident(iid)
@@ -536,6 +550,36 @@ async def cell():
            "Only what the watcher raised can be answered")
         eq("and no answer is kept", store.feedback_for(["run_quiet"])["run_quiet"], [])
 
+        print("== a worth click keeps the message it was made on ==")
+        first_resp = [c for c in calls("/resp") if "Alex said worth raising" in contexts(c)][-1]
+        ck("the incident's first note keeps the incident buttons",
+           [i for i in action_ids(first_resp) if i.startswith("tares_incident_")] != [],
+           str(action_ids(first_resp)))
+        ck("and the first note's text", "14:02 deploy" in json.dumps(first_resp))
+        sam = ("U555", "Sam")
+        await click("tares_worth_yes", {"r": n2, "w": "team-a"}, user=sam)
+        await wait_for(lambda: [c for c in calls("/resp") if "Sam said worth raising" in contexts(c)])
+        joined = [c for c in calls("/resp") if "Sam said worth raising" in contexts(c)][-1]
+        eq("a joined note is replaced with itself", joined["replace_original"], True)
+        ck("with its own text, not the incident's first note",
+           "still points at pods" in json.dumps(joined) and "14:02 deploy" not in json.dumps(joined))
+        eq("with no incident buttons and no incident state line",
+           ([i for i in action_ids(joined) if i.startswith("tares_incident_")],
+            [c for c in contexts(joined) if "nobody on it" in c or " is on it" in c]), ([], []))
+        eq("and the worth pair for that note",
+           [json.loads(b["value"]) for k, b in buttons(joined).items() if k.startswith("tares_worth_")],
+           [{"r": n2, "w": "team-a"}, {"r": n2, "w": "team-a"}])
+        ck("a watcher finding that opened no incident", store.incident_for_run(w1) is None)
+        await click("tares_worth_no", {"r": w1, "w": "team-a"}, user=sam)
+        await wait_for(lambda: [c for c in calls("/resp") if "Sam said not worth raising" in contexts(c)])
+        alone = [c for c in calls("/resp") if "Sam said not worth raising" in contexts(c)][-1]
+        eq("is replaced with itself", alone["replace_original"], True)
+        ck("with the watcher's own text", "502s on the edge-proxy rose" in json.dumps(alone)
+           and alone["text"].startswith("watcher on edge-proxy:"), alone.get("text", ""))
+        eq("and no incident on it", [i for i in action_ids(alone) if i.startswith("tares_incident_")], [])
+        eq("the answer is kept", [(x["person"], x["worth"]) for x in store.feedback_for([w1])[w1]],
+           [("slack:U555", False)])
+
         print("== a name is escaped and capped; a note that is gone ==")
         t2 = len(calls("/chat.postMessage"))
         await click("tares_worth_no", wv, user=("U444", "<!here> & " + "x" * 100))
@@ -582,6 +626,15 @@ async def cell():
            , ["*Service*\nEdge Proxy"])
         ck("it is the first note's message", msg is not None and
            msg["text"].startswith("investigator on edge-proxy:"), str(msg and msg["text"]))
+        joined_at = "2020-03-04T05:06:07+00:00"
+        real_notes = store.incident_notes
+        store.incident_notes = lambda i: [{**n, "joined_at": joined_at} for n in real_notes(i)]
+        try:
+            dated = slack.build_incident_message(store, store.get_incident(iid), "team-a")
+        finally:
+            store.incident_notes = real_notes
+        ck("it is dated from when the note joined the incident",
+           slack._slack_date(joined_at) in json.dumps(dated), json.dumps(dated)[:300])
         every = [b.get("text", "") for b in calls("/chat.postMessage")[-8:]]
         ck("the thread replies are clean", all(words.offenders(t) == [] for t in every),
            [words.offenders(t) for t in every])

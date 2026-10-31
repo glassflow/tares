@@ -715,6 +715,31 @@ def build_incident_message(store, incident: dict, workspace: str | None = None) 
         worth_said=worth_line(store.feedback_for([run["id"]])[run["id"]]) if worth else None)
 
 
+def build_run_message(store, run_id: str, workspace: str | None = None) -> dict | None:
+    """One note's own message as it reads now (an AI SRE cell's), with no incident on it: a note
+    that joined an incident (a thread reply), or a watcher's finding that opened none. For the
+    response to a worth click. None when the run is gone."""
+    from datetime import datetime, timezone
+    from . import feedback, goal
+    run = store.get_agent_run(run_id)
+    if run is None:
+        return None
+    settings = store.service_settings()
+    inc = store.incident_for_run(run_id)
+    joined = next((n.get("joined_at") for n in store.incident_notes(inc["id"])
+                   if n["run_id"] == run_id), None) if inc else None
+    tp = goal.title_parts(run, run.get("started_at"), settings)
+    finding = run.get("finding") or ""
+    worth = run_id if feedback.answerable(store, run_id) else None
+    return build_finding_message(
+        run.get("agent") or "", run.get("trigger") or "", run.get("key") or "", finding,
+        verdict=run.get("verdict"), model=run.get("model"), run_id=run_id,
+        when=goal._iso(joined or run.get("started_at")), full_note=not needs_thread(finding),
+        title=goal.title(tp, datetime.now(timezone.utc)), service=tp["service"],
+        workspace=workspace, worth_run=worth,
+        worth_said=worth_line(store.feedback_for([run_id])[run_id]) if worth else None)
+
+
 def worth_line(answers: list[dict]) -> str | None:
     """"Alex said worth raising", or the count when several people answered. None when nobody has."""
     if not answers:
