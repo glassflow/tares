@@ -167,6 +167,8 @@ def compute(store, catalog, now=None) -> dict[str, dict]:
     why = judge(store, catalog, t, found)
     out = {}
     for item in sre.list_services(store, catalog, now):
+        if item.get("seen_via"):   # no events of its own: nothing a watcher could read
+            continue
         name = item["name"]
         prev = rows.get(name)
         cover = [w for w in sre.covers(store, catalog, item, found)

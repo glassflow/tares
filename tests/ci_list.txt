@@ -96,3 +96,4 @@ test_incidents
 test_factory_home_waiting
 test_sre_series
 test_worth_raising
+test_blind_spots
