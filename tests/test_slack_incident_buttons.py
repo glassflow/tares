@@ -389,8 +389,8 @@ async def cell():
         eq("chat.update names the message", (upd["channel"], upd["ts"]), ("C1", first_ts))
         ck("with the new state", any(c.startswith(f"{who} is on it since") for c in contexts(upd)),
            str(contexts(upd)))
-        await wait_for(lambda: len(calls("/chat.postMessage")) > p0)
-        post = calls("/chat.postMessage")[-1]
+        await wait_for(lambda: any(c["text"] == f"{who} is on it in Tares" for c in calls("/chat.postMessage")[p0:]))
+        post = [c for c in calls("/chat.postMessage")[p0:] if c["text"] == f"{who} is on it in Tares"][-1]
         eq("and the thread says it", (post["thread_ts"], post["text"]),
            (first_ts, f"{who} is on it in Tares"))
         r = await cx.post(f"/api/incidents/{iid}/resolve")
@@ -422,8 +422,9 @@ async def cell():
         out = store.set_incident_state(iid, "resolved", None, None, "sweep", resolution="itself",
                                        expect="open")
         incidents._changed(store, out, "sweep")
-        await wait_for(lambda: len(calls("/chat.postMessage")) > p0)
-        eq("the thread says it resolved itself", calls("/chat.postMessage")[-1]["text"],
+        await wait_for(lambda: any(c["text"].startswith("Resolved itself") for c in calls("/chat.postMessage")[p0:]))
+        eq("the thread says it resolved itself", [c["text"] for c in calls("/chat.postMessage")[p0:]
+                                                  if c["text"].startswith("Resolved itself")][-1],
            "Resolved itself, nothing new for 24 hours")
         ck("and the message shows it", any(c == "Resolved itself" for c in contexts(calls("/chat.update")[-1])),
            str(contexts(calls("/chat.update")[-1])))
@@ -583,8 +584,9 @@ async def cell():
         print("== a name is escaped and capped; a note that is gone ==")
         t2 = len(calls("/chat.postMessage"))
         await click("tares_worth_no", wv, user=("U444", "<!here> & " + "x" * 100))
-        await wait_for(lambda: len(calls("/chat.postMessage")) > t2)
-        said = [b["text"] for b in calls("/chat.postMessage")[t2:] if "not worth raising" in b["text"]][0]
+        # an earlier click's thread post can still be on its way: wait for this person's own
+        await wait_for(lambda: any("&lt;!here&gt;" in b["text"] for b in calls("/chat.postMessage")[t2:]))
+        said = [b["text"] for b in calls("/chat.postMessage")[t2:] if "&lt;!here&gt;" in b["text"]][0]
         ck("the name cannot mention anyone", "<!here>" not in said and "&lt;!here&gt; &amp; " in said, said)
         raw_name = "<!here> & " + "x" * 100
         eq("and is kept cut at 80 characters",
