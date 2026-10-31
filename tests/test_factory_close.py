@@ -98,6 +98,9 @@ async def main():
             ck("no tickets: not ready", (await card(cx, ids["project-u"]))
                .get("ready_to_close") is False)
 
+            # finished tickets on a project that is not a software factory project: only its kind
+            # keeps it from offering to close
+            await m.write_ticket("Alpha", status="done", project=plain)
             ck("a plain project: false on the list", (await card(cx, plain))
                .get("ready_to_close") is False, await card(cx, plain))
             ck("a plain project: false in the summary", (await summary(cx, plain))
