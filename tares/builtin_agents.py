@@ -920,10 +920,10 @@ class AgentRunner:
             await self._write_back_skipped(agent, trigger_name, (callback_key, callback_labels),
                                            SKIPPED_DAILY_CAP, msg, refused_dispatch, run_id=run_id)
             return "capped", msg
-        # The agent's own budget, when set: lifetime spend from the run log. Checked before any
-        # model call, so a capped run costs nothing; the message says where to raise it.
-        # A monthly budget (TR-770) counts this calendar month's spend; Store.agent_budget_spend
-        # is the one rule, so the runner, project health and the watch state agree.
+        # The agent's own budget, when set: spend from the run log, this calendar month's for a
+        # monthly budget (TR-770), else lifetime. Checked before any model call, so a capped run
+        # costs nothing; the message says where to raise it. Store.agent_budget_spend is the one
+        # rule, so the runner, project health and the watch state agree.
         budget = agent.get("budget_usd")
         now = _clock()
         if budget and self.store.agent_budget_spend(agent, now) >= float(budget):

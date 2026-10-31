@@ -194,7 +194,7 @@ export default function AgentDetail() {
           <div className="v">{fmtCost(stats?.cost_usd)}
             {!!stats?.uncosted_runs && <small title="runs from before cost tracking, or on a model without a known price">+{stats.uncosted_runs} uncosted</small>}
             {!!agent?.budget_usd && (agent.budget_period === "month"
-              ? <small title="the agent's budget; runs are capped once this month's spend reaches it, and it starts again on the 1st">{fmtCost(agent.budget_spent_usd ?? 0)} this month of ${agent.budget_usd} budget</small>
+              ? <small title="the agent's budget; runs are capped once this month's spend reaches it, and it starts again on the 1st"> {fmtCost(agent.budget_spent_usd ?? 0)} this month of ${agent.budget_usd} budget</small>
               : <small title="the agent's budget; runs are capped once lifetime spend reaches it"> of ${agent.budget_usd} budget</small>)}
           </div>
         </div>
