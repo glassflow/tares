@@ -92,4 +92,5 @@ test_budget_period
 test_factory_home
 test_watch_state
 test_finding_titles
+test_incidents
 test_factory_home_waiting

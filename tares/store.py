@@ -781,6 +781,17 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         self._challenges_fill()
         self._init_source_stats()
         self._init_entity_counts()
+        self._incidents_backfill()
+
+    def _incidents_backfill(self) -> None:
+        """Give the notes written before incidents were tracked their incidents (TR-744). Writes
+        the incident tables only; once per rule version, so a start with nothing to do is one
+        settings read. A failure is printed and never stops the start."""
+        try:
+            from . import incidents
+            incidents.backfill(self)
+        except Exception as e:
+            print(f"taresd: incident backfill: {type(e).__name__}: {e}")
 
     @staticmethod
     def _tables_of(con) -> set:

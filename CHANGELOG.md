@@ -6,6 +6,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Incident notes belong to incidents that someone can take and resolve (`/api/incidents`).
 - `GET /api/services` lists the services a cell receives data for.
 - `PATCH /api/services/{name}` renames, hides or merges a service, and `PUT /api/settings/service-labels` says which label names the services in each source. The computed list is kept for 30 seconds and every change drops it.
 - Each cell has an edition: factory, sre or platform. Existing cells stay as they are.
