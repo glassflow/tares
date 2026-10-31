@@ -109,11 +109,19 @@ def export_rows(store, since=None) -> list[dict]:
             for r in rows]
 
 
+def _cell(v):
+    """A text a spreadsheet would read as a formula (it starts with = + - @, a tab or a return)
+    gets a leading apostrophe, so a note typed in Slack cannot run when the file is opened."""
+    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + v
+    return v
+
+
 def export_csv(rows: list[dict]) -> str:
     out = io.StringIO()
     w = csv.DictWriter(out, fieldnames=EXPORT_COLS, lineterminator="\n")
     w.writeheader()
-    w.writerows(rows)
+    w.writerows({k: _cell(v) for k, v in r.items()} for r in rows)
     return out.getvalue()
 
 
