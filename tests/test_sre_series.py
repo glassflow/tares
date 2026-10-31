@@ -1,8 +1,9 @@
 """Event counts over time and what counts as an error (TR-767).
 
-is_error / is_error_where (a level label in any case, an ERROR or FATAL event type, a status code
-of 500 or more, a span with status.code ERROR; a value that is not a number never matches, and the
-Python and SQL rules agree on every event), series_for (the windows and their buckets), and
+is_error / is_error_where (a level label in any case, an ERROR, FATAL or CRITICAL event type, a
+status code label of 500 or more, an OTLP severityNumber of 17 or more, a span whose payload
+status.code is 2 or STATUS_CODE_ERROR; a value that is not plain digits never matches, and the
+Python and SQL rules agree on every event), events that come in through the OTLP connector, series_for (the windows and their buckets), and
 SreStore.event_series / event_series_many (the right number of buckets aligned to `since`, zeros
 filled, errors_only, a merged service counting the services merged into it, one query for many
 services, the 200,000-event cell answering in under a second).
@@ -27,7 +28,8 @@ os.environ["TARES_WATCH_SECONDS"] = "3600"
 
 from fixtures.sre_cell import build
 from tares import sre
-from tares.connectors import source_type_for
+from tares.config import SourceCfg
+from tares.connectors import build_connector, source_type_for
 from tares.envelope import Envelope
 from tares.store import Store
 
@@ -58,13 +60,14 @@ def fresh(**kw):
     return store, build(store, NOW, **kw)
 
 
-def ev(service, bucket, event_type="INFO", labels=None, source="prod-otlp", text="line"):
+def ev(service, bucket, event_type="INFO", labels=None, source="prod-otlp", text="line",
+       payload=None):
     """An event of `service` that lands in bucket `bucket` of the window."""
     t = SINCE + timedelta(seconds=bucket * BUCKET + 60)
     lab = {"service": service} if source == "prod-otlp" else {"project": service}
     return Envelope(source=source, source_type=source_type_for(
         "otlp" if source == "prod-otlp" else "vercel"), key_value=service, event_type=event_type,
-        text=text, event_time=t, payload={}, labels={**lab, **(labels or {})}, ingest_time=t)
+        text=text, event_time=t, payload=payload or {}, labels={**lab, **(labels or {})}, ingest_time=t)
 
 
 def counts(series):
@@ -73,27 +76,50 @@ def counts(series):
 
 def pure():
     print("== is_error ==")
+    # (labels, event_type) or (labels, event_type, payload)
     yes = [
         ({"level": "error"}, None), ({"level": "ERROR"}, None), ({"level": "Fatal"}, None),
         ({"severity": "critical"}, None), ({"severity_text": "CRITICAL"}, None),
         ({}, "ERROR"), ({}, "FATAL"), ({}, "error"),
+        ({}, "ERROR2"), ({}, "ERROR4"), ({}, "FATAL3"), ({}, "CRITICAL"), ({}, "critical"),
         ({"nginx_status_code": "502"}, None), ({"status": "500"}, None),
-        ({"status_code": 503}, None), ({"http.status_code": "599"}, None),
-        ({"http_status": "504"}, "INFO"),
-        ({"status.code": "ERROR"}, "span"),
+        ({"status_code": 503}, None), ({"status_code": "599"}, None),
+        ({"http_status": "504"}, "INFO"), ({"status": "000500"}, None),
+        ({}, "log", {"severityNumber": 17}), ({}, "INFO", {"severityNumber": 21}),
+        ({}, "log", {"severityNumber": "24"}),
+        ({}, "span", {"status": {"code": 2}}),
+        ({}, "span", {"status": {"code": "STATUS_CODE_ERROR"}}),
+        ({}, "span", {"status": {"code": "2"}}),
     ]
     no = [
         ({"level": "info"}, None), ({"level": "warn"}, "WARN"), ({"severity": "debug"}, None),
         ({"nginx_status_code": "404"}, None), ({"status": "499"}, None), ({"status": "200"}, None),
         ({"status": "n/a"}, None), ({"status_code": ""}, None), ({"status": None}, None),
-        ({}, None), ({}, "INFO"), ({"service": "edge-proxy"}, "log"),
-        ({"status.code": "ERROR"}, "INFO"), ({"status.code": "OK"}, "span"),
+        ({}, None), ({}, "INFO"), ({"service": "edge-proxy"}, "log"), ({}, "ERRORS"),
         ({"level": "info", "status": "200"}, "INFO"),
+        # a status is plain digits: nothing else is read as a number, in Python or in SQL
+        ({"status": "503.0"}, None), ({"status": "500.5"}, None), ({"status": "1e3"}, None),
+        ({"status": "0x1F4"}, None), ({"status": "+500"}, None), ({"status": "-1"}, None),
+        ({"status": " 502"}, None), ({"status": "502 "}, None), ({"status": "1234567"}, None),
+        ({"status": "\u0665\u0660\u0660"}, None),
+        # a severity number below 17, a span that is fine, or not a span at all
+        ({}, "log", {"severityNumber": 16}), ({}, "log", {"severityNumber": 9}),
+        ({}, "log", {"severityNumber": "17.0"}), ({}, "log", {"severityNumber": "abc"}),
+        ({}, "span", {"status": {"code": 1}}), ({}, "span", {"status": {"code": 0}}),
+        ({}, "span", {"status": {"code": "STATUS_CODE_OK"}}), ({}, "span", {"status": {}}),
+        ({}, "span", {"status": "ERROR"}), ({}, "span", {}),
+        ({}, "INFO", {"status": {"code": 2}}), ({}, "log", {"status": {"code": "STATUS_CODE_ERROR"}}),
+        # a dotted label is not a thing: labels are plain names, so it is not read
+        ({"http.status_code": "503"}, None), ({"status.code": "ERROR"}, "span"),
     ]
-    for labels, et in yes:
-        ck(f"error: {labels} {et}", sre.is_error({"labels": labels, "event_type": et}) is True)
-    for labels, et in no:
-        ck(f"not an error: {labels} {et}", sre.is_error({"labels": labels, "event_type": et}) is False)
+    def event_of(case):
+        labels, et, *rest = case
+        return {"labels": labels, "event_type": et, "payload": rest[0] if rest else {}}
+
+    for case in yes:
+        ck(f"error: {case}", sre.is_error(event_of(case)) is True)
+    for case in no:
+        ck(f"not an error: {case}", sre.is_error(event_of(case)) is False)
     eq("an event with no labels key", sre.is_error({}), False)
     eq("the ticket's check", (sre.is_error({"labels": {"nginx_status_code": "502"}}),
                               sre.is_error({"labels": {"nginx_status_code": "404"}})), (True, False))
@@ -101,11 +127,15 @@ def pure():
     print("== the SQL rule says the same as the Python rule, event by event ==")
     store, _ = fresh()
     cases = yes + no
-    store.append([ev("service-b", i, et or "INFO", {k: v for k, v in labels.items() if v is not None},
-                     text=str(i)) for i, (labels, et) in enumerate(cases)])
-    # event types in the cases above that the Envelope needs as text; None means plain
-    want = [sre.is_error({"labels": {k: v for k, v in lab.items() if v is not None},
-                          "event_type": et or "INFO"}) for lab, et in cases]
+    fed = []
+    for i, case in enumerate(cases):
+        e = event_of(case)
+        labels = {k: v for k, v in e["labels"].items() if v is not None}
+        fed.append(ev("service-b", i % N, e["event_type"] or "INFO", labels, text=str(i),
+                      payload=e["payload"]))
+    store.append(fed)
+    want = [sre.is_error({"labels": e.labels, "event_type": e.event_type, "payload": e.payload})
+            for e in fed]
     where, params = sre.is_error_where({"prod-otlp": "service"})
     with store._lock:
         got = store.con.execute(
@@ -191,10 +221,10 @@ def series():
         (ev("service-b", 2, labels={"level": "error"}), True),
         (ev("service-b", 2, labels={"severity": "Fatal"}), True),
         (ev("service-b", 2, labels={"severity_text": "CRITICAL"}), True),
-        (ev("service-b", 3, labels={"http.status_code": "503"}), True),
+        (ev("service-b", 3, labels={"status_code": "503"}), True),
         (ev("service-b", 3, labels={"status": "500"}), True),
-        (ev("service-b", 4, event_type="span", labels={"status.code": "ERROR"}), True),
-        (ev("service-b", 4, event_type="span", labels={"status.code": "OK"}), False),
+        (ev("service-b", 4, event_type="span", payload={"status": {"code": 2}}), True),
+        (ev("service-b", 4, event_type="span", payload={"status": {"code": 1}}), False),
         (ev("service-b", 5, labels={"status": "499"}), False),
         (ev("service-b", 5, labels={"status_code": "abc"}), False),
         (ev("service-b", 5, labels={"level": "warn"}), False),
@@ -207,7 +237,8 @@ def series():
     eq("service-b errors", sum(counts(b_err)), sum(1 for _e, bad in kinds if bad))
     eq("service-b errors by bucket", counts(b_err)[2:5], [4, 2, 1])
     eq("the series agrees with is_error for each", sum(counts(b_err)), sum(
-        1 for e, _ in kinds if sre.is_error({"labels": e.labels, "event_type": e.event_type})))
+        1 for e, _ in kinds if sre.is_error({"labels": e.labels, "event_type": e.event_type,
+                                             "payload": e.payload})))
 
     print("== the window includes `since` and leaves out `until` ==")
 
@@ -230,6 +261,28 @@ def series():
     eq("errors_only: the same as single calls", many_e,
        {n: store.event_series(n, SINCE, UNTIL, BUCKET, True) for n in ("edge-proxy", "service-b")})
     eq("no services, no entries", store.event_series_many([], SINCE, UNTIL, BUCKET), {})
+    eq("the same name twice is one entry, counted once", store.event_series_many(
+        ["edge-proxy", "edge-proxy"], SINCE, UNTIL, BUCKET),
+       {"edge-proxy": store.event_series("edge-proxy", SINCE, UNTIL, BUCKET)})
+    eq("the same name twice, errors_only", store.event_series_many(
+        ["service-b", "edge-proxy", "service-b"], SINCE, UNTIL, BUCKET, True),
+       {n: store.event_series(n, SINCE, UNTIL, BUCKET, True) for n in ("service-b", "edge-proxy")})
+
+    print("== a time without a zone, or a bucket that is not whole seconds, is refused ==")
+    for label, args in (
+            ("a naive since", (SINCE.replace(tzinfo=None), UNTIL, BUCKET)),
+            ("a naive until", (SINCE, UNTIL.replace(tzinfo=None), BUCKET)),
+            ("a bucket of 0", (SINCE, UNTIL, 0)),
+            ("a bucket of 60.5 seconds", (SINCE, UNTIL, 60.5)),
+            ("a bucket of 'x'", (SINCE, UNTIL, "x")),
+            ("a bucket of True", (SINCE, UNTIL, True))):
+        for call in (store.event_series, store.event_series_many):
+            first = "edge-proxy" if call == store.event_series else ["edge-proxy"]
+            try:
+                call(first, *args)
+                ck(f"{label} is refused ({call.__name__})", False)
+            except ValueError:
+                ck(f"{label} is refused ({call.__name__})", True)
 
     print("== a merged service counts what is merged into it ==")
     docs = ev("docs-site", 6, source="docs-site", event_type="deployment")
@@ -251,6 +304,63 @@ def series():
     store.set_service("docs-site", "tester", merged_into=None)
     eq("unmerged, edge-proxy is back to 16", sum(counts(store.event_series(
         "edge-proxy", SINCE, UNTIL, BUCKET))), 16)
+
+
+def otlp():
+    """Events that came in through the OTLP connector, the way a real source labels them:
+    service.name is a resource attribute, so a source reads it from resourceAttributes.service.name,
+    and severityText lands in event_type and the rest in the payload."""
+    print("== events ingested through the OTLP connector ==")
+    store = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "o.duckdb"))
+    labels = [{"name": "service", "field": "resourceAttributes.service.name", "primary": True}]
+    store.upsert_catalog_source("otlp-real", source_type_for("otlp"), "otlp", "5s",
+                                {"labels": labels})
+    cfg = SourceCfg(name="otlp-real", type=source_type_for("otlp"), connector="otlp",
+                    poll_seconds=5, config={"labels": labels})
+    conn = build_connector(cfg, store)
+    ns = str(int((SINCE + timedelta(minutes=10)).timestamp() * 1e9))
+    res = {"attributes": [{"key": "service.name", "value": {"stringValue": "api"}}]}
+
+    def log(text, severity=None, number=None):
+        rec = {"timeUnixNano": ns, "body": {"stringValue": text}}
+        if severity:
+            rec["severityText"] = severity
+        if number is not None:
+            rec["severityNumber"] = number
+        return rec
+
+    def span(name, code=None):
+        sp = {"name": name, "startTimeUnixNano": ns, "endTimeUnixNano": ns}
+        if code is not None:
+            sp["status"] = {"code": code}
+        return sp
+
+    logs = [("error", log("boom", "ERROR", 17)), ("error", log("worse", "ERROR2", 18)),
+            ("error", log("down", "FATAL3", 23)), ("error", log("hot", "CRITICAL")),
+            ("error", log("number only", None, 21)),
+            ("fine", log("hello", "INFO", 9)), ("fine", log("warned", "WARN", 13)),
+            ("fine", log("plain"))]
+    spans = [("error", span("a", 2)), ("error", span("b", "STATUS_CODE_ERROR")),
+             ("fine", span("c", 1)), ("fine", span("d", "STATUS_CODE_OK")), ("fine", span("e"))]
+    envs = conn.map_otlp("logs", {"resourceLogs": [{"resource": res, "scopeLogs": [
+        {"logRecords": [r for _k, r in logs]}]}]})
+    envs += conn.map_otlp("traces", {"resourceSpans": [{"resource": res, "scopeSpans": [
+        {"spans": [sp for _k, sp in spans]}]}]})
+    for e in envs:
+        e.ingest_time = e.event_time
+    kinds = [k for k, _ in logs] + [k for k, _ in spans]
+    store.append(envs)
+    eq("the connector labels them with the service", {e.labels.get("service") for e in envs},
+       {"api"})
+    eq("python says which are errors", [sre.is_error({"labels": e.labels,
+       "event_type": e.event_type, "payload": e.payload}) for e in envs],
+       [k == "error" for k in kinds])
+    all_ = store.event_series("api", SINCE, UNTIL, BUCKET)
+    errs = store.event_series("api", SINCE, UNTIL, BUCKET, errors_only=True)
+    eq("all of them are counted", sum(counts(all_)), len(kinds))
+    eq("the series counts the same errors (5 logs, 2 spans)", sum(counts(errs)), 7)
+    eq("one query says the same", store.event_series_many(["api"], SINCE, UNTIL, BUCKET, True),
+       {"api": errs})
 
 
 def big():
@@ -280,6 +390,7 @@ def big():
 
 pure()
 series()
+otlp()
 big()
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

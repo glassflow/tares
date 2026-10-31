@@ -230,9 +230,13 @@ class SreStore:
 
     @staticmethod
     def _series_points(since, until, bucket_s) -> list:
-        if bucket_s < 1 or until <= since:
+        if since.tzinfo is None or until.tzinfo is None:
+            raise ValueError("since and until need a time zone: a naive time would be read "
+                             "as the server's local time")
+        if not isinstance(bucket_s, int) or isinstance(bucket_s, bool) or bucket_s < 1 \
+                or until <= since:
             raise ValueError("a series needs a window that ends after it starts and a bucket "
-                             "of at least one second")
+                             "of a whole number of seconds, at least one")
         n = math.ceil((until - since).total_seconds() / bucket_s)
         return [(since + timedelta(seconds=i * bucket_s)).astimezone(timezone.utc).isoformat()
                 for i in range(n)]
@@ -242,7 +246,10 @@ class SreStore:
         """For each service, [(bucket start as ISO text, events)] over [since, until) in buckets
         of `bucket_s` seconds aligned to `since`, with 0 for a bucket where nothing arrived.
         errors_only counts only what sre.is_error_where says is an error. A service counts the
-        services merged into it. One query for all of them."""
+        services merged into it. One query for all of them. It counts the events of the
+        service's own sources by arrival time (ingest_time); the deploy events that the services
+        table matches to a service through its repos are not in it, so a service with repos can
+        show fewer here than events_24h there."""
         labels = self._series_points(since, until, bucket_s)
         services = list(dict.fromkeys(services))
         out = {svc: [0] * len(labels) for svc in services}
