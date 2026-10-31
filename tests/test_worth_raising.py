@@ -356,6 +356,43 @@ async def cell():
         ck("each cut to 200 characters", all(len(b) <= 200 for b in bullets), str(max(map(len, bullets))))
         ck("no dash in what it says", chr(0x2014) not in text and chr(0x2013) not in text)
 
+        print("== a result told twice is one line, and a dash in a reason is dropped ==")
+        for who in ("alice", "bob"):
+            store.set_feedback("run_dup", who, who, False, "same \u2014 as \u2013 last week", "console",
+                               "watcher3", "run_w3", None, uid)
+        text = feedback.prompt_section(store, "watcher3")
+        eq("two people on one result make one line", text.count("\n- "), 1)
+        ck("the reason is there", "same" in text and "last week" in text, text)
+        ck("with its dashes taken out", chr(0x2014) not in text and chr(0x2013) not in text, text)
+
+        print("== the hit rate counts a person once per watcher run ==")
+        since = now - timedelta(days=1)
+        for run in ("run_a", "run_b", "run_c"):
+            store.set_feedback(run, "alice", "Alice", True, None, "console", "watcher4", "run_w4",
+                               None, uid)
+        store.set_feedback("run_d", "bob", "Bob", True, None, "console", "watcher4", "run_w5",
+                           None, uid)
+        row = next(r for r in store.watcher_hit_rates(since) if r["watcher"] == "watcher4")
+        eq("three results of one run by alice, plus bob's other run: two answers",
+           (row["answered"], row["yes"], row["no"]), (2, 2, 0))
+        later = now + timedelta(minutes=5)
+        store.set_feedback("run_c", "alice", "Alice", False, "no", "console", "watcher4", "run_w4",
+                           None, uid)
+        with store._swrite:
+            store.sc.execute("UPDATE finding_feedback SET answered_at = ? WHERE run_id = ?",
+                             [later, "run_c"])
+        row = next(r for r in store.watcher_hit_rates(since) if r["watcher"] == "watcher4")
+        eq("her latest answer is the one that counts", (row["answered"], row["yes"], row["no"]),
+           (2, 1, 1))
+
+        print("== a CSV cell that reads as a formula is made inert ==")
+        out = feedback.export_csv([{c: "" for c in feedback.EXPORT_COLS} | {"note": n, "person_name": p}
+                                   for n, p in (("=SUM(A1)", "+1"), ("-2", "@me"), ("\tx", "\rx"),
+                                                ("fine - really", "Alex"))])
+        got = list(csv.DictReader(io.StringIO(out)))
+        eq("notes", [x["note"] for x in got], ["'=SUM(A1)", "'-2", "'\tx", "fine - really"])
+        eq("names", [x["person_name"] for x in got], ["'+1", "'@me", "'\rx", "Alex"])
+
         print("== a platform cell's prompt does not change ==")
         eq("edition set to platform",
            (await cx.put("/api/settings/edition", json={"edition": "platform"})).status_code, 200)
