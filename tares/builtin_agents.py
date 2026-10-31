@@ -1142,7 +1142,9 @@ class AgentRunner:
         skills = self._project_skills(agent)
         skill_names = [sk["name"] for sk in skills]
         system = (agent["prompt"] + (conclude_instructions(agent) if offers_conclude(agent) else "")
-                  + (_skills.prompt_section(skills) if skills else ""))
+                  + (_skills.prompt_section(skills) if skills else "")
+                  + (self._not_worth_section(agent) if not handoff
+                     and self._is_scheduled(trigger_name) else ""))
         # set to conclude: the run may not end without it (asked for it once more, below)
         must_conclude = bool(agent.get("concludes"))
         verdicts = verdict_words(agent)
@@ -1317,6 +1319,19 @@ class AgentRunner:
                     seen.add(sk["name"])
                     out.append(sk)
         return out
+
+    def _not_worth_section(self, agent: dict) -> str:
+        """The watcher's recent "not worth raising" cases (TR-746), told to a scheduled check on an
+        AI SRE cell and to nobody else. Any other edition's prompt is exactly the agent's own."""
+        try:
+            from .edition import edition
+            if edition(self.store)[0] != "sre":
+                return ""
+            from . import feedback
+            return feedback.prompt_section(self.store, agent["name"])
+        except Exception as e:  # noqa: BLE001 — a missing hint must never lose the run
+            print(f"[agent {agent.get('name')}] not-worth section: {type(e).__name__}: {e}")
+            return ""
 
     def _is_scheduled(self, trigger_name: str) -> bool:
         """Whether the run was woken by a schedule trigger (TR-320), which ticks for all its

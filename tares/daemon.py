@@ -64,6 +64,7 @@ from . import edition as edition_mod
 from . import factory_home, sre_home, screens
 from . import sre as sre_mod
 from . import watch as watch_mod
+from . import feedback as feedback_mod
 from . import incidents as incidents_mod
 from . import linear as _linear
 from . import github_tickets as _gh_tickets
@@ -716,7 +717,8 @@ def make_app() -> FastAPI:
     # /ingest, /v1/*, remember), admin (configure: catalog CRUD, discover, credentials, keys).
     # Credentials: the env AUTH_TOKEN is the implicit root (admin, non-revocable), plus revocable
     # scoped keys in the api_keys table (docs/design/api-keys.md).
-    _ADMIN_PATHS = ("/api/catalog/export", "/api/catalog/import", "/api/agent/chat")
+    _ADMIN_PATHS = ("/api/catalog/export", "/api/catalog/import", "/api/agent/chat",
+                    "/api/feedback/export")   # the last one names people
     # the only writes a read key may make: reads that take a body, and a reader's own delivery.
     # Every other write, including a route added later, needs admin.
     _READ_WRITES = ("/read", "/subscribe", "/unsubscribe", "/api/labels/preview")
@@ -3555,7 +3557,8 @@ def make_app() -> FastAPI:
                                        runtime.health_snapshot())
 
     @app.get("/api/projects/{uid}/results")
-    async def project_results(uid: str, limit: int = 20, before: str = "", show: str = ""):
+    async def project_results(uid: str, request: Request, limit: int = 20, before: str = "",
+                              show: str = ""):
         """What the agents concluded, newest first: one result per chain of runs. Page with
         `before` = the previous page's `next_before`. `show`: "findings" leaves out the runs that
         had nothing to report, "worth" leaves out the quiet checks (the response's `quiet` counts
@@ -3569,12 +3572,14 @@ def make_app() -> FastAPI:
                 _err(ValueError("before must be an ISO timestamp, as next_before gives it"))
         if show and show not in ("findings", "worth") and not show.startswith("agent:"):
             _err(ValueError('show is "findings", "worth" or "agent:<name>"'))
-        return await asyncio.to_thread(goal_mod.project_results, store, uid, limit=limit,
-                                       before=at, scheduled=_scheduled(), show=show)
+        out = await asyncio.to_thread(goal_mod.project_results, store, uid, limit=limit,
+                                      before=at, scheduled=_scheduled(), show=show)
+        await asyncio.to_thread(feedback_mod.with_answers, store, out["results"], _who(request)[0])
+        return out
 
     @app.get("/api/findings")
-    async def cell_findings(show: str = "worth", service: str = "", limit: int = 20,
-                            before: str = ""):
+    async def cell_findings(request: Request, show: str = "worth", service: str = "",
+                            limit: int = 20, before: str = ""):
         """The findings of every project in the cell, newest first, with a title, the parts and
         an outcome each (the results of GET /api/projects/{uid}/results, across projects;
         practice results left out). `show` "worth" (default) leaves out the quiet checks and
@@ -3588,8 +3593,10 @@ def make_app() -> FastAPI:
                 _err(ValueError("before must be an ISO timestamp, as next_before gives it"))
         if show not in ("worth", "all"):
             _err(ValueError('show is "worth" or "all"'))
-        return await asyncio.to_thread(goal_mod.cell_results, store, _scheduled(), limit=limit,
-                                       before=at, show=show, service=service)
+        out = await asyncio.to_thread(goal_mod.cell_results, store, _scheduled(), limit=limit,
+                                      before=at, show=show, service=service)
+        await asyncio.to_thread(feedback_mod.with_answers, store, out["findings"], _who(request)[0])
+        return out
 
     @app.get("/api/projects/{uid}/results/{run_id}")
     async def project_result(uid: str, run_id: str):
@@ -5118,6 +5125,60 @@ def make_app() -> FastAPI:
     @app.post("/api/incidents/{incident_id}/reopen")
     def incident_reopen_route(incident_id: str, request: Request):
         return _incident_action(incident_id, request, incidents_mod.reopen)
+
+    # ── "Was this worth raising?" (TR-746) ──
+    def _worth_out(counts: dict, mine) -> dict:
+        return {"ok": True, "worth": {**counts, "mine": mine}}
+
+    @app.put("/api/findings/{run_id}/worth")
+    def put_worth_route(run_id: str, request: Request, body: dict = Body(...)):
+        """{worth: true|false, note?}: the caller's answer on a result the watcher raised. Answering
+        again replaces it. 409 when no watcher raised it."""
+        worth = (body or {}).get("worth")
+        note = (body or {}).get("note")
+        if not isinstance(worth, bool):
+            _err(ValueError("worth must be true or false"))
+        if note is not None and (not isinstance(note, str) or len(note) > feedback_mod.NOTE_MAX):
+            _err(ValueError(f"note must be text of at most {feedback_mod.NOTE_MAX} characters"))
+        who, name = _who(request)
+        try:
+            counts = feedback_mod.answer(store, run_id, worth, who, name, "console", note)
+        except KeyError:
+            _err(LookupError(f"no run {run_id!r}"), 404)
+        except feedback_mod.NotRaised as e:
+            _err(e, 409)
+        return _worth_out(counts, worth)
+
+    @app.delete("/api/findings/{run_id}/worth")
+    def delete_worth_route(run_id: str, request: Request):
+        """Take the caller's answer back."""
+        if store.get_agent_run(run_id) is None:
+            _err(LookupError(f"no run {run_id!r}"), 404)
+        store.clear_feedback(run_id, _who(request)[0])
+        return _worth_out(feedback_mod.counts(store.feedback_for([run_id])[run_id]), None)
+
+    @app.get("/api/watchers/hit-rate")
+    def watcher_hit_rate_route(days: int = 30):
+        """Per watcher, how many of the answers said it was worth raising, over the last `days`."""
+        days = max(1, min(int(days), 365))
+        return {"watchers": feedback_mod.hit_rates(store, days)}
+
+    @app.get("/api/feedback/export")
+    def feedback_export_route(since: str = "", format: str = "json"):
+        """Every answer since `since` (all when empty), with the firing id: JSON, or CSV with a
+        header line. Admin only: it names people."""
+        if format not in ("json", "csv"):
+            _err(ValueError('format is "json" or "csv"'))
+        cut = None
+        if since:
+            try:
+                cut = goal_mod._aware(datetime.fromisoformat(since.replace("Z", "+00:00")))
+            except ValueError:
+                _err(ValueError("since must be a time such as 2026-10-01T12:00:00Z"))
+        rows = feedback_mod.export_rows(store, cut)
+        if format == "csv":
+            return Response(feedback_mod.export_csv(rows), media_type="text/csv")
+        return {"feedback": rows}
 
     @app.get("/api/services/{name:path}")
     async def get_service_route(name: str):

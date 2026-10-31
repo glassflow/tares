@@ -1048,6 +1048,19 @@ def outcome_of(run: dict, is_watcher: bool) -> str:
     return "note_written"
 
 
+def raised_by(path: list, outcome: str, practice: bool, scheduled: set | None) -> dict | None:
+    """The watcher run that raised what the last run of `path` (root first) holds, else None:
+    the nearest scheduled check on the line of parents, and only for something that was raised.
+    A quiet run and a practice result raised nothing, and a watcher's own run counts when its
+    outcome is "raised" (its finding sent nothing on and says there is nothing to do: not raised)."""
+    if practice or outcome == "quiet" or not path:
+        return None
+    root = next((r for r in reversed(path) if is_watcher_run(r, scheduled)), None)
+    if root is not None and root["id"] == path[-1]["id"] and outcome != "raised":
+        return None
+    return root
+
+
 # ── results ──────────────────────────────────────────────────────────────────
 def _concluding(r: dict) -> bool:
     if r.get("status") != "ok":
@@ -1113,6 +1126,7 @@ def result_for(thread: dict, run: dict, parent: dict, scheduled: set | None = No
                if run.get("handled_at") else None)
     outcome = outcome_of(run, is_watcher_run(run, scheduled))
     tp = title_parts(run, thread.get("at"), settings, headline)
+    practice = any(bool(r.get("practice")) for r in path)
     return {"id": run["id"], "thread": thread["id"], "at": _iso(thread.get("at")),
             "entity": run.get("key") or thread.get("entity"),
             "kind": kind_of(outcome, next_step, bool(handled)),
@@ -1127,7 +1141,9 @@ def result_for(thread: dict, run: dict, parent: dict, scheduled: set | None = No
             "duration_ms": sum(int(r.get("duration_ms") or 0) for r in path),
             "handled": handled, "external": run.get("woken_by") == "external",
             # a run the guided setup's "Try it" started, or what it led to: shown, never counted
-            "practice": any(bool(r.get("practice")) for r in path)}
+            "practice": practice,
+            # whether a person can answer "Was this worth raising?" on it (TR-746)
+            "can_answer": raised_by(path, outcome, practice, scheduled) is not None}
 
 
 def thread_result(thread: dict, scheduled: set | None = None, settings: dict | None = None,

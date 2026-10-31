@@ -64,12 +64,31 @@ SRE_SCHEMA = [
     """CREATE TABLE IF NOT EXISTS incident_log (
       incident_id TEXT, at_time TIMESTAMPTZ, action TEXT, by_id TEXT, by_name TEXT, via TEXT
     )""",
+    # TR-746: "Was this worth raising?" One answer per person per result; `watcher` is the agent
+    # at the root of the chain that raised it, `dispatch_id` the firing that woke it.
+    """CREATE TABLE IF NOT EXISTS finding_feedback (
+      run_id      TEXT,
+      person      TEXT,
+      person_name TEXT,
+      worth       BOOLEAN,
+      note        TEXT,
+      via         TEXT,
+      watcher     TEXT,
+      watcher_run TEXT,
+      dispatch_id TEXT,
+      project     TEXT,
+      answered_at TIMESTAMPTZ,
+      PRIMARY KEY (run_id, person)
+    )""",
 ]
 
 INCIDENT_COLS = ("id", "service", "project", "state", "opened_at", "last_note_at", "owner",
                  "owner_name", "owner_at", "resolved_at", "resolved_by", "resolved_by_name",
                  "resolution", "slack", "updated_at")
 _INCIDENT_SELECT = "SELECT " + ", ".join(INCIDENT_COLS) + " FROM incidents "
+
+FEEDBACK_COLS = ("run_id", "person", "person_name", "worth", "note", "via", "watcher",
+                 "watcher_run", "dispatch_id", "project", "answered_at")
 
 UNSET = object()   # a field left out of set_service keeps its value; None clears it
 
@@ -567,3 +586,88 @@ class SreStore:
         with self._lock:
             rows = self.con.execute(sql, [*sources, since, *sources, value]).fetchall()
         return [(r[0], int(r[1])) for r in rows if r[0] not in (None, "")]
+
+    # ── "Was this worth raising?" (TR-746) ────────────────────────────────────
+    def set_feedback(self, run_id: str, person: str, person_name: str | None, worth: bool,
+                     note: str | None, via: str, watcher: str, watcher_run: str,
+                     dispatch_id: str | None, project: str | None) -> None:
+        """One person's answer on one result; answering again replaces it."""
+        vals = [person_name, bool(worth), note or None, via, watcher, watcher_run, dispatch_id,
+                project, now_utc()]
+        with self._swrite:
+            if self.sc.execute("SELECT 1 FROM finding_feedback WHERE run_id = ? AND person = ?",
+                               [run_id, person]).fetchone():
+                self.sc.execute(
+                    "UPDATE finding_feedback SET person_name = ?, worth = ?, note = ?, via = ?, "
+                    "watcher = ?, watcher_run = ?, dispatch_id = ?, project = ?, answered_at = ? "
+                    "WHERE run_id = ? AND person = ?", vals + [run_id, person])
+            else:
+                self.sc.execute(
+                    "INSERT INTO finding_feedback (person_name, worth, note, via, watcher, "
+                    "watcher_run, dispatch_id, project, answered_at, run_id, person) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", vals + [run_id, person])
+
+    def clear_feedback(self, run_id: str, person: str) -> bool:
+        """Take one person's answer back. False when they had none."""
+        with self._swrite:
+            if not self.sc.execute("SELECT 1 FROM finding_feedback WHERE run_id = ? AND person = ?",
+                                   [run_id, person]).fetchone():
+                return False
+            self.sc.execute("DELETE FROM finding_feedback WHERE run_id = ? AND person = ?",
+                            [run_id, person])
+        return True
+
+    @staticmethod
+    def _feedback_row(row) -> dict:
+        out = dict(zip(FEEDBACK_COLS, row))
+        out["worth"] = bool(out["worth"])
+        return out
+
+    def feedback_for(self, run_ids: list[str]) -> dict[str, list[dict]]:
+        """run id -> its answers, oldest first (every id asked about is a key)."""
+        out: dict[str, list[dict]] = {r: [] for r in run_ids}
+        if not run_ids:
+            return out
+        ph = ", ".join(["?"] * len(out))
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT " + ", ".join(FEEDBACK_COLS) + f" FROM finding_feedback "
+                f"WHERE run_id IN ({ph}) ORDER BY answered_at, person", list(out)).fetchall()
+        for row in rows:
+            out[row[0]].append(self._feedback_row(row))
+        return out
+
+    def watcher_hit_rates(self, since) -> list[dict]:
+        """[{watcher, project, answered, yes, no}] for the answers given at or after `since`."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT watcher, project, COUNT(*), SUM(CASE WHEN worth THEN 1 ELSE 0 END) "
+                "FROM finding_feedback WHERE answered_at >= ? GROUP BY watcher, project "
+                "ORDER BY watcher, project", [since]).fetchall()
+        return [{"watcher": w, "project": p, "answered": int(n), "yes": int(y or 0),
+                 "no": int(n) - int(y or 0)} for w, p, n, y in rows]
+
+    def recent_not_worth(self, watcher: str, since, limit: int = 5) -> list[dict]:
+        """The newest "not worth it" answers on what `watcher` raised, one per result."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT " + ", ".join(FEEDBACK_COLS) + " FROM finding_feedback "
+                "WHERE watcher = ? AND answered_at >= ? AND worth = ? ORDER BY answered_at DESC, person",
+                [watcher, since, False]).fetchall()
+        out, seen = [], set()
+        for row in rows:
+            if row[0] not in seen and len(out) < limit:
+                seen.add(row[0])
+                out.append(self._feedback_row(row))
+        return out
+
+    def feedback_export(self, since=None) -> list[dict]:
+        """Every answer at or after `since` (all when None), oldest first."""
+        sql = "SELECT " + ", ".join(FEEDBACK_COLS) + " FROM finding_feedback "
+        args = []
+        if since is not None:
+            sql += "WHERE answered_at >= ? "
+            args.append(since)
+        with self._sread:
+            rows = self.sc.execute(sql + "ORDER BY answered_at, run_id, person", args).fetchall()
+        return [self._feedback_row(r) for r in rows]
