@@ -638,14 +638,25 @@ class SreStore:
         return out
 
     def watcher_hit_rates(self, since) -> list[dict]:
-        """[{watcher, project, answered, yes, no}] for the answers given at or after `since`."""
+        """[{watcher, project, answered, yes, no}] for the answers given at or after `since`. A
+        person who answered several results of one watcher run counts once, by their latest answer
+        (an answer on a result with no watcher run counts on its own)."""
         with self._sread:
             rows = self.sc.execute(
-                "SELECT watcher, project, COUNT(*), SUM(CASE WHEN worth THEN 1 ELSE 0 END) "
-                "FROM finding_feedback WHERE answered_at >= ? GROUP BY watcher, project "
-                "ORDER BY watcher, project", [since]).fetchall()
-        return [{"watcher": w, "project": p, "answered": int(n), "yes": int(y or 0),
-                 "no": int(n) - int(y or 0)} for w, p, n, y in rows]
+                "SELECT watcher, project, COALESCE(watcher_run, run_id), person, worth, answered_at "
+                "FROM finding_feedback WHERE answered_at >= ?", [since]).fetchall()
+        latest: dict = {}
+        for watcher, project, run, person, worth, at in rows:
+            key = (watcher, project, run, person)
+            if key not in latest or at >= latest[key][0]:
+                latest[key] = (at, bool(worth))
+        counts: dict = {}
+        for (watcher, project, _run, _person), (_at, worth) in latest.items():
+            c = counts.setdefault((watcher, project), [0, 0])
+            c[0] += 1
+            c[1] += 1 if worth else 0
+        return [{"watcher": w, "project": p, "answered": n, "yes": y, "no": n - y}
+                for (w, p), (n, y) in sorted(counts.items(), key=lambda kv: (str(kv[0][0]), str(kv[0][1])))]
 
     def recent_not_worth(self, watcher: str, since, limit: int = 5) -> list[dict]:
         """The newest "not worth it" answers on what `watcher` raised, one per result."""

@@ -19,6 +19,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 - `GET /api/blind-spots` lists silent services, services seen only through another, deploys not tied to a service and rules that match nothing. `PATCH /api/services/{name}` takes `repos`, and `GET /api/services/{name}/deploys` and `GET /api/repos` follow.
 - AI SRE cells tell Slack when nobody is watching a service, and when watching starts again. `GET /api/watch` says who watches what and why a watcher stopped.
 - "Was this worth raising?": a person answers yes or no on what a watcher raised (`PUT /api/findings/{id}/worth`, `DELETE` takes it back), results carry the counts and your own answer, `GET /api/watchers/hit-rate` gives each watcher's hit rate, `GET /api/feedback/export` exports the answers with the firing id, and an AI SRE watcher's prompt lists its recent "not worth it" cases.
+- On AI SRE cells the Slack message of a finding has buttons: "I'm on it", Resolve and Reopen on the incident, and "Worth raising" / "Not worth it" on what a watcher raised. A click changes the incident or records the answer, replaces the message and says who did it in its thread, and a change made in the console shows in Slack too. Works on self-hosted cells now, and on Tares Cloud after TR-763.
 
 ### Fixed
 - Incident notes no longer show No action when the note has a numbered next step. A finding with no verdict now counts as a note that waits for a person, on every edition.

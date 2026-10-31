@@ -20,6 +20,7 @@ as a timeout rather than as "invalid_auth".
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from urllib.parse import quote
@@ -127,6 +128,23 @@ def _slack_date(iso: str) -> str:
     return f"<!date^{int(dt.timestamp())}^{{date_short_pretty}} at {{time}}|{iso}>"
 
 
+def _slack_time(iso: str) -> str:
+    """Slack's `<!date^…>` token for a clock time only, in each reader's timezone; the fallback
+    text is the UTC time."""
+    try:
+        dt = datetime.fromisoformat(str(iso).strip().replace("Z", "+00:00"))
+    except (TypeError, ValueError, AttributeError):
+        return str(iso or "")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return f"<!date^{int(dt.timestamp())}^{{time}}|{dt.astimezone(timezone.utc):%H:%M} UTC>"
+
+
+def cell_workspace() -> str | None:
+    """This cell's workspace slug on Tares Cloud (None self-hosted), read from the environment."""
+    return workspace_slug(os.getenv("TARES_SLACK_CONNECT_URL", ""))
+
+
 def _truncate(text: str, limit: int = _MAX_SECTION) -> str:
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
@@ -195,6 +213,70 @@ def _buttons(buttons: list[tuple[str, str, str | None]]) -> dict | None:
 
 def _context(text: str) -> dict:
     return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
+
+
+# ── buttons that act (TR-762) ────────────────────────────────────────────────
+# Action ids the click handlers (tares/slack_actions.py) are keyed by. A click carries the
+# button's value back in a signed request; the value names the incident or run and the workspace.
+INCIDENT_ACTIONS = {"on_it": "tares_incident_on_it", "resolve": "tares_incident_resolve",
+                    "reopen": "tares_incident_reopen"}
+WORTH_ACTIONS = {"yes": "tares_worth_yes", "no": "tares_worth_no"}
+
+
+def escape_text(text: str) -> str:
+    """Slack's three reserved characters, so a name from outside cannot form a mention or link."""
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _acting_button(action_id: str, text: str, value: dict, style: str | None = None) -> dict:
+    b = {"type": "button", "action_id": action_id, "text": {"type": "plain_text", "text": text},
+         "value": json.dumps(value, separators=(",", ":"))}
+    if style:
+        b["style"] = style
+    return b
+
+
+def incident_state_line(incident: dict) -> str:
+    """The incident's state in one line for the message: "Open, nobody on it yet", "Alex is on it
+    since 14:12", "Resolved by Alex at 15:03", "Resolved itself". `incident` is incidents.view()."""
+    state = incident.get("state")
+    if state == "on_it":
+        who = incident.get("who") or {}
+        name = escape_text(who.get("name") or "Someone")
+        since = who.get("since")
+        return f"{name} is on it since {_slack_time(since)}" if since else f"{name} is on it"
+    if state == "resolved":
+        res = incident.get("resolved") or {}
+        if res.get("how") == "itself":
+            return "Resolved itself"
+        if res.get("how") == "before_tracking":
+            return "Closed, from before incidents were tracked"
+        by = res.get("by_name")
+        if by and res.get("at"):
+            return f"Resolved by {escape_text(by)} at {_slack_time(res['at'])}"
+        return f"Resolved by {escape_text(by)}" if by else "Resolved"
+    return "Open, nobody on it yet"
+
+
+def _incident_buttons(incident: dict, workspace: str | None) -> dict:
+    value = {"i": incident["id"], "w": workspace}
+    state = incident.get("state")
+    if state == "resolved":
+        elems = [_acting_button(INCIDENT_ACTIONS["reopen"], "Reopen", value)]
+    elif state == "on_it":
+        elems = [_acting_button(INCIDENT_ACTIONS["resolve"], "Resolve", value, "primary"),
+                 _acting_button(INCIDENT_ACTIONS["on_it"], "Take over", value)]
+    else:
+        elems = [_acting_button(INCIDENT_ACTIONS["on_it"], "I'm on it", value, "primary"),
+                 _acting_button(INCIDENT_ACTIONS["resolve"], "Resolve", value)]
+    return {"type": "actions", "elements": elems}
+
+
+def _worth_buttons(run_id: str, workspace: str | None) -> dict:
+    value = {"r": run_id, "w": workspace}
+    return {"type": "actions", "elements": [
+        _acting_button(WORTH_ACTIONS["yes"], "Worth raising", value),
+        _acting_button(WORTH_ACTIONS["no"], "Not worth it", value)]}
 
 
 def classify(status: int, data: dict | None) -> tuple[bool, str | None, bool]:
@@ -562,7 +644,9 @@ def build_finding_message(agent_name: str, trigger: str, key: str, finding: str,
                           verdict: str | None = None, model: str | None = None,
                           run_id: str | None = None, when: str | None = None,
                           full_note: bool = False, title: str | None = None,
-                          service: str | None = None) -> dict:
+                          service: str | None = None, incident: dict | None = None,
+                          workspace: str | None = None, worth_run: str | None = None,
+                          worth_said: str | None = None) -> dict:
     """Block Kit body for a Tares agent's finding (TR-275): the entity as the header, a grid of
     fields, a short excerpt of the note, and buttons into Tares. With a `title` (TR-745: the AI
     SRE edition's "service: what changed since when") the header is the title and the fields add
@@ -572,7 +656,12 @@ def build_finding_message(agent_name: str, trigger: str, key: str, finding: str,
     behind "Show more". A longer one, like a multi-section incident note, gets an excerpt here and
     the full note in the message's thread (`build_finding_thread`), so it cannot fill the channel.
     The incoming-webhook path cannot thread, so it always posts the note whole. `text` is the
-    notification fallback."""
+    notification fallback.
+
+    AI SRE cells pass `incident` (incidents.view(): the state line and the buttons that take,
+    resolve or reopen it), `workspace` (this cell's slug, carried in every button value) and
+    `worth_run` (the run a "Was this worth raising?" answer is about) and `worth_said` (the answers
+    so far, one line, shown above those buttons). Without them the message is exactly as it was."""
     # the entity is the header, so the fields say who wrote the note and why
     fields = [("Agent", agent_name), ("Trigger", f"`{trigger}`"), ("Verdict", verdict),
               ("Model", model)]
@@ -581,11 +670,19 @@ def build_finding_message(agent_name: str, trigger: str, key: str, finding: str,
     if when:
         fields.append(("When", _slack_date(when)))
     blocks: list[dict] = [_header(title or key), _fields(fields)]
+    if incident:
+        blocks.append(_context(incident_state_line(incident)))
     if full_note:
         blocks += _sections(finding)
     else:
         blocks.append({"type": "section", "text": {"type": "mrkdwn",
                                                     "text": excerpt(finding) or "_(no note)_"}})
+    if incident:
+        blocks.append(_incident_buttons(incident, workspace))
+    if worth_run:
+        if worth_said:
+            blocks.append(_context(worth_said))
+        blocks.append(_worth_buttons(worth_run, workspace))
     actions = _buttons([("View in Tares", run_url(agent_name, run_id), "primary"),
                         ("Open timeline", entity_url(key), None)])
     if actions:
@@ -593,6 +690,66 @@ def build_finding_message(agent_name: str, trigger: str, key: str, finding: str,
     blocks.append(_context("Tares agent finding" + ("" if full_note else " · full note in the thread")))
     return {"text": f"{agent_name} on {key}: {excerpt(finding, 200)}",
             "blocks": blocks, "unfurl_links": False, "unfurl_media": False}
+
+
+def build_incident_message(store, incident: dict, workspace: str | None = None) -> dict | None:
+    """The incident's first message as it reads now (an AI SRE cell's): built from its first note
+    with the current state, for chat.update and a button click's response. None when the incident
+    has no note left to build it from."""
+    from . import feedback, goal, incidents
+    notes = store.incident_notes(incident["id"])
+    run = store.get_agent_run(notes[0]["run_id"]) if notes else None
+    if run is None:
+        return None
+    settings = store.service_settings()
+    view = incidents.view(store, incident, notes=notes, settings=settings)
+    finding = run.get("finding") or ""
+    worth = run["id"] if feedback.answerable(store, run["id"]) else None
+    return build_finding_message(
+        run.get("agent") or "", run.get("trigger") or "", run.get("key") or incident["service"],
+        finding, verdict=run.get("verdict"), model=run.get("model"), run_id=run["id"],
+        when=goal._iso(notes[0].get("joined_at") or run.get("started_at")),
+        full_note=not needs_thread(finding), title=view["title"],
+        service=goal.service_name(incident["service"], settings), incident=view,
+        workspace=workspace, worth_run=worth,
+        worth_said=worth_line(store.feedback_for([run["id"]])[run["id"]]) if worth else None)
+
+
+def build_run_message(store, run_id: str, workspace: str | None = None) -> dict | None:
+    """One note's own message as it reads now (an AI SRE cell's), with no incident on it: a note
+    that joined an incident (a thread reply), or a watcher's finding that opened none. For the
+    response to a worth click. None when the run is gone."""
+    from datetime import datetime, timezone
+    from . import feedback, goal
+    run = store.get_agent_run(run_id)
+    if run is None:
+        return None
+    settings = store.service_settings()
+    inc = store.incident_for_run(run_id)
+    joined = next((n.get("joined_at") for n in store.incident_notes(inc["id"])
+                   if n["run_id"] == run_id), None) if inc else None
+    tp = goal.title_parts(run, run.get("started_at"), settings)
+    finding = run.get("finding") or ""
+    worth = run_id if feedback.answerable(store, run_id) else None
+    return build_finding_message(
+        run.get("agent") or "", run.get("trigger") or "", run.get("key") or "", finding,
+        verdict=run.get("verdict"), model=run.get("model"), run_id=run_id,
+        when=goal._iso(joined or run.get("started_at")), full_note=not needs_thread(finding),
+        title=goal.title(tp, datetime.now(timezone.utc)), service=tp["service"],
+        workspace=workspace, worth_run=worth,
+        worth_said=worth_line(store.feedback_for([run_id])[run_id]) if worth else None)
+
+
+def worth_line(answers: list[dict]) -> str | None:
+    """"Alex said worth raising", or the count when several people answered. None when nobody has."""
+    if not answers:
+        return None
+    if len(answers) == 1:
+        a = answers[0]
+        words = "worth raising" if a["worth"] else "not worth raising"
+        return f"{escape_text(a.get('person_name') or 'Someone')} said {words}"
+    yes = sum(1 for a in answers if a["worth"])
+    return f"{yes} said worth raising, {len(answers) - yes} said not worth raising"
 
 
 def needs_thread(finding: str) -> bool:

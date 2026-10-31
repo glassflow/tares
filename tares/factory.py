@@ -231,7 +231,7 @@ def ready_to_close(project: dict, tickets: list[dict]) -> bool:
     """A project still open whose every ticket is finished and at least one was delivered: the
     console offers to close it. A project whose tickets were all canceled is not ready; it needs
     a person's look."""
-    return (project.get("status") != "done" and bool(tickets)
+    return (project.get("status") != "done"
             and all(finished(t) for t in tickets) and any(delivered(t) for t in tickets))
 
 
