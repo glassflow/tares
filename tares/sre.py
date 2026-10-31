@@ -8,6 +8,8 @@ lives in the `services` table (tares/sre_store.py) and is applied here, in Pytho
 from __future__ import annotations
 
 import json
+import math
+import re
 import time
 from datetime import timedelta, timezone
 
@@ -69,6 +71,98 @@ def canonical(name: str, settings: dict) -> str:
         seen.add(nxt)
         cur = nxt
     return cur
+
+
+# ── what counts as an error, and the charts built on it (TR-767) ─────────────
+ERROR_LEVELS = ("error", "fatal", "critical")
+LEVEL_LABELS = ("level", "severity", "severity_text")
+# OTLP severityText lands in event_type: ERROR2 to ERROR4 and FATAL2 to FATAL4 are the finer steps
+ERROR_TYPES = ("ERROR", "ERROR2", "ERROR3", "ERROR4", "FATAL", "FATAL2", "FATAL3", "FATAL4",
+               "CRITICAL")
+STATUS_LABELS = ("status_code", "status", "nginx_status_code", "http_status")
+ERROR_STATUS = 500
+ERROR_SEVERITY_NUMBER = 17   # OTLP: 17 and up is ERROR or FATAL, whatever the severityText says
+# OTLP over gRPC writes severityNumber as its enum name, not the number
+ERROR_SEVERITY_NAMES = tuple(f"SEVERITY_NUMBER_{n}" for n in (
+    "ERROR", "ERROR2", "ERROR3", "ERROR4", "FATAL", "FATAL2", "FATAL3", "FATAL4"))
+SPAN_ERROR_CODES = ("2", "STATUS_CODE_ERROR")   # payload.status.code, as a number or its name
+WHOLE = r"[0-9]{1,6}"   # what a status or severity number is: plain digits, nothing else
+WINDOWS = {"10m": (timedelta(minutes=10), 1), "1h": (timedelta(hours=1), 60),
+           "2h": (timedelta(hours=2), 60), "24h": (timedelta(hours=24), 60),
+           "7d": (timedelta(days=7), 84)}   # window -> (how long, buckets by default)
+
+
+def _whole(value):
+    """`value` as an int when it is plain digits (a number or its text), else None."""
+    text = str(value)
+    return int(text) if re.fullmatch(WHOLE, text) else None
+
+
+def _whole_sql(expr: str) -> str:
+    """The SQL twin of _whole: the integer in `expr`, NULL when it is not plain digits."""
+    return f"CASE WHEN regexp_full_match({expr}, '{WHOLE}') THEN CAST({expr} AS BIGINT) END"
+
+
+def is_error_where(spec: dict[str, str]) -> tuple[str, list]:
+    """One SQL condition (and its params) that is true for an error event of the sources in
+    `spec` (source -> the label naming a service in it): a level label of error, fatal or
+    critical in any case; an event type of ERROR, ERROR2 to ERROR4, FATAL, FATAL2 to FATAL4 or
+    CRITICAL (OTLP severityText); a payload severityNumber of 17 or more (or its gRPC enum name, SEVERITY_NUMBER_ERROR to
+    SEVERITY_NUMBER_FATAL4); a status code label of
+    500 or more (a value that is not plain digits never matches); or a span whose
+    payload.status.code is 2 or STATUS_CODE_ERROR. is_error() below is the same rule for one
+    event in Python."""
+    if not spec:
+        return "FALSE", []
+    from .store import _label_expr
+    levels = ", ".join(f"'{v}'" for v in ERROR_LEVELS)
+    types = ", ".join(f"'{v}'" for v in ERROR_TYPES)
+    codes = ", ".join(f"'{v}'" for v in SPAN_ERROR_CODES)
+    parts = [f"lower({_label_expr(n)}) IN ({levels})" for n in LEVEL_LABELS]
+    parts.append(f"upper(event_type) IN ({types})")
+    parts += [f"{_whole_sql(_label_expr(n))} >= {ERROR_STATUS}" for n in STATUS_LABELS]
+    severity = "json_extract_string(payload, '$.severityNumber')"
+    names = ", ".join(f"'{v}'" for v in ERROR_SEVERITY_NAMES)
+    parts.append(f"({_whole_sql(severity)} >= {ERROR_SEVERITY_NUMBER} OR {severity} IN ({names}))")
+    parts.append(f"(event_type = 'span' AND json_extract_string(payload, '$.status.code') "
+                 f"IN ({codes}))")
+    sources = sorted(spec)
+    ph = ", ".join(["?"] * len(sources))
+    return f"(source IN ({ph}) AND ({' OR '.join(parts)}))", sources
+
+
+def is_error(event: dict) -> bool:
+    """Whether one event is an error: the rule of is_error_where. `event` has a `labels` dict
+    and may have an `event_type` and a `payload` dict."""
+    labels = event.get("labels") or {}
+    payload = event.get("payload") or {}
+    etype = str(event.get("event_type") or "")
+    if etype.upper() in ERROR_TYPES:
+        return True
+    if any(str(labels.get(n)).lower() in ERROR_LEVELS for n in LEVEL_LABELS if n in labels):
+        return True
+    if any((_whole(labels[n]) or 0) >= ERROR_STATUS for n in STATUS_LABELS if n in labels):
+        return True
+    if "severityNumber" in payload and (
+            (_whole(payload["severityNumber"]) or 0) >= ERROR_SEVERITY_NUMBER
+            or str(payload["severityNumber"]) in ERROR_SEVERITY_NAMES):
+        return True
+    status = payload.get("status")
+    return etype == "span" and isinstance(status, dict) \
+        and str(status.get("code")) in SPAN_ERROR_CODES
+
+
+def series_for(window: str, now, points: int | None = None) -> tuple:
+    """(since, until, bucket_s) for a chart over `window` (10m, 1h, 2h, 24h or 7d) ending at
+    `now`. `points` asks for that many buckets instead of the window's own (24h with 20 points
+    is 20 buckets of 72 minutes); a count that does not divide the window gives fewer."""
+    if window not in WINDOWS:
+        raise ValueError(f"no window {window!r}: use one of {', '.join(WINDOWS)}")
+    span, default = WINDOWS[window]
+    n = default if points is None else points
+    if not isinstance(n, int) or n < 1:
+        raise ValueError("points must be a whole number of 1 or more")
+    return now - span, now, math.ceil(span.total_seconds() / n)
 
 
 def _overrides(store) -> dict:

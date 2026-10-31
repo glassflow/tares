@@ -94,3 +94,4 @@ test_watch_state
 test_finding_titles
 test_incidents
 test_factory_home_waiting
+test_sre_series

@@ -7,7 +7,9 @@ display name, hidden, merged into another, and the repos whose deploys belong to
 from __future__ import annotations
 
 import json
+import math
 import uuid
+from datetime import timedelta, timezone
 
 from .envelope import now_utc
 
@@ -181,6 +183,96 @@ class SreStore:
                     [source, since_24h, *values]).fetchall()
                 names.update(r[0] for r in rows if r[0])
         return sorted(names)[:limit]
+
+    # ── services: event counts over time (TR-767) ─────────────────────────────
+    def _series_scope(self, services: list[str]):
+        """What a chart over `services` reads: ({service: the raw names counted for it}, {source:
+        the label naming a service in it}). A service that is merged into another is charted as
+        that one, and a service counts every name merged into it. The settings (a state table)
+        are read first and only names go into the events query."""
+        from . import sre
+        from .config import catalog_from_db
+        settings = self.service_settings()
+        overrides = sre._overrides(self)
+        spec = {}
+        for s in catalog_from_db(self).sources.values():
+            label = sre.service_label(s, overrides)
+            if label:
+                spec[s.name] = label
+        names = {}
+        for svc in services:
+            top = sre.canonical(svc, settings)
+            names[svc] = {top, svc} | {n for n in settings if sre.canonical(n, settings) == top}
+        return names, spec
+
+    def _series_query(self, spec, names, since, until, bucket_s, errors_only):
+        """(source, raw service name, bucket start, count) rows for the sources in `spec` and the
+        raw `names`. Events live in DuckDB only, so this reads self.con under self._lock."""
+        from . import sre
+        from .store import _label_expr
+        sources = sorted(spec)
+        case = "CASE source " + " ".join(f"WHEN ? THEN {_label_expr(spec[s])}" for s in sources) \
+               + " END"
+        ph_s = ", ".join(["?"] * len(sources))
+        ph_n = ", ".join(["?"] * len(names))
+        sql = (f"SELECT source, svc, b, COUNT(*) FROM (SELECT source, {case} AS svc, "
+               "time_bucket(INTERVAL '" + str(int(bucket_s)) + " seconds', ingest_time, ?) AS b "
+               f"FROM events WHERE ingest_time >= ? AND ingest_time < ? AND source IN ({ph_s})")
+        params = [*sources, since, since, until, *sources]
+        if errors_only:
+            where, wparams = sre.is_error_where(spec)
+            sql += f" AND {where}"
+            params += wparams
+        sql += f") WHERE svc IN ({ph_n}) GROUP BY source, svc, b"
+        params += sorted(names)
+        with self._lock:
+            return self.con.execute(sql, params).fetchall()
+
+    @staticmethod
+    def _series_points(since, until, bucket_s) -> list:
+        if since.tzinfo is None or until.tzinfo is None:
+            raise ValueError("since and until need a time zone: a naive time would be read "
+                             "as the server's local time")
+        if not isinstance(bucket_s, int) or isinstance(bucket_s, bool) or bucket_s < 1 \
+                or until <= since:
+            raise ValueError("a series needs a window that ends after it starts and a bucket "
+                             "of a whole number of seconds, at least one")
+        n = math.ceil((until - since).total_seconds() / bucket_s)
+        return [(since + timedelta(seconds=i * bucket_s)).astimezone(timezone.utc).isoformat()
+                for i in range(n)]
+
+    def event_series_many(self, services: list[str], since, until, bucket_s: int,
+                          errors_only: bool = False) -> dict[str, list[tuple[str, int]]]:
+        """For each service, [(bucket start as ISO text, events)] over [since, until) in buckets
+        of `bucket_s` seconds aligned to `since`, with 0 for a bucket where nothing arrived.
+        errors_only counts only what sre.is_error_where says is an error. A service counts the
+        services merged into it. One query for all of them. It counts the events of the
+        service's own sources by arrival time (ingest_time); the deploy events that the services
+        table matches to a service through its repos are not in it, so a service with repos can
+        show fewer here than events_24h there."""
+        labels = self._series_points(since, until, bucket_s)
+        services = list(dict.fromkeys(services))
+        out = {svc: [0] * len(labels) for svc in services}
+        if services:
+            names, spec = self._series_scope(services)
+            every = set().union(*names.values())
+            if spec:
+                owners = {}
+                for svc, group in names.items():
+                    for n in group:
+                        owners.setdefault(n, []).append(svc)
+                for _src, raw, b, n in self._series_query(spec, every, since, until, bucket_s,
+                                                          errors_only):
+                    i = int((b - since).total_seconds() // bucket_s)
+                    if 0 <= i < len(labels):
+                        for svc in owners.get(raw, ()):
+                            out[svc][i] += int(n)
+        return {svc: list(zip(labels, counts)) for svc, counts in out.items()}
+
+    def event_series(self, service: str, since, until, bucket_s: int,
+                     errors_only: bool = False) -> list[tuple[str, int]]:
+        """event_series_many for one service."""
+        return self.event_series_many([service], since, until, bucket_s, errors_only)[service]
 
     # ── watching: whether anybody is watching each service (TR-743) ───────────
     def watch_rows(self) -> dict[str, dict]:
