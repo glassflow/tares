@@ -299,9 +299,13 @@ class GithubConnector(Connector):
             repo = _normalize_repo(c.get("repo"))
         except ValueError:
             repo = c.get("repo")
-        return {"repo": repo, "branch": c.get("branch") or commit.get("_branch") or "",
-                "author": login, "author_name": cm_author.get("name"),
-                "sha": commit.get("sha", "")}
+        ctx = {"repo": repo, "branch": c.get("branch") or commit.get("_branch") or "",
+               "author": login, "author_name": cm_author.get("name"),
+               "sha": commit.get("sha", "")}
+        if not c.get("branch") and commit.get("_branch"):
+            # no branch configured: the poller followed the repo's default branch, whatever its name
+            ctx["on_default_branch"] = True
+        return ctx
 
     def _commit_envelope(self, commit: dict, repo_or_ctx) -> Envelope:
         sha = commit.get("sha", "")

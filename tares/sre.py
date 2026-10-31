@@ -84,14 +84,24 @@ def canonical(name: str, settings: dict) -> str:
 def via_name(value: str, known: set, namespace: str | None = None) -> str:
     """The service a label value such as an ingress upstream ("default-service-a-ui-80") points
     at: without a trailing port, the longest known service name that ends it, else the part after
-    the event's namespace, else the value as it is."""
-    v = re.sub(r"-\d+$", "", str(value))
-    for k in sorted(known, key=len, reverse=True):
-        if v == k or v.endswith("-" + k):
-            return k
+    the event's namespace, else the value as it is. A name that really ends in digits
+    ("payments-2024") is tried as it stands before the port is cut off."""
+    value = str(value)
+    for v in dict.fromkeys((value, re.sub(r"-\d+$", "", value))):
+        for k in sorted(known, key=len, reverse=True):
+            if v == k or v.endswith("-" + k):
+                return k
+    v = re.sub(r"-\d+$", "", value)
     if namespace and v.startswith(namespace + "-") and len(v) > len(namespace) + 1:
         return v[len(namespace) + 1:]
     return v
+
+
+def is_address(value: str) -> bool:
+    """An upstream such as "10.0.3.4:8080", "[::1]:80" or a comma list of them names a pod or a
+    host, not a service."""
+    return all(re.fullmatch(r"\[?[0-9a-fA-F:.]+\]?(:\d+)?", p.strip()) and re.search(r"[.:]", p)
+               for p in str(value).split(","))
 
 
 def _via_labels(store, svc_sources: dict) -> dict[str, list[str]]:
@@ -297,6 +307,8 @@ def _compute(store, catalog, now) -> dict:
     for sname, labels in _via_labels(store, svc_sources).items():
         for label in labels:
             for carrier, value, ns in store.via_values(sname, svc_sources[sname], label, since_24h):
+                if is_address(value):
+                    continue
                 name, carrier = canonical(via_name(value, known, ns), settings), canonical(carrier, settings)
                 if name not in known and name != carrier:
                     rec(name).setdefault("via", set()).add(carrier)
@@ -669,8 +681,10 @@ def deploys(store, catalog, name: str, since, limit: int = 50) -> list[dict]:
     """The pushes, merges and commits of the repos linked to `name`, newest first, from `since`
     on (None for ever): {at, repo, kind: push | merge | commit, text, url}."""
     repos = _linked_repos(store.service_settings(), name)
+    follow = [s.name for s in catalog.sources.values()
+              if s.connector == "github" and not (s.config or {}).get("branch")]
     return [{**d, "at": _iso(d["at"])} for d in
-            store.deploy_events(github_sources(catalog), repos, since, limit)]
+            store.deploy_events(github_sources(catalog), repos, since, limit, follow)]
 
 
 # ── blind spots (TR-747) ─────────────────────────────────────────────────────
@@ -689,7 +703,7 @@ def _spot(kind, service, rule, title, detail, since, label, action) -> dict:
 
 def _silent(store, c: dict, items: dict, now) -> list[dict]:
     """Services with no event of their own for a day that sent plenty before: a quiet one that
-    never sent much is not a blind spot."""
+    never sent much is not a blind spot. Only the 100 that went quiet most recently are listed."""
     from .goal import span_words
     cut = now - timedelta(hours=SILENT_HOURS)
     quiet = sorted(((n, _own_last(c["recs"][n])) for n in items), key=lambda x: str(x[1]))
@@ -739,7 +753,7 @@ def _stale_rules(store, catalog, c: dict, now) -> list[dict]:
                     if isinstance(f, dict) and f.get("op") == "eq" and f.get("field") in labels), None)
         if svc and c["settings"].get(svc, {}).get("hidden"):
             continue
-        out.append(_spot("rule_matches_nothing", svc, trig.name, "A rule has matched nothing for 30 days",
+        out.append(_spot("rule_matches_nothing", svc, trig.name, f"A rule has matched nothing for {RULE_DAYS} days",
                          goal.wake_sentence(trig, catalog.sources)
                          + (f" It looks for {gone}, which no longer arrives." if gone else ""),
                          None, "Review the rule", "rule"))

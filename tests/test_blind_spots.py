@@ -94,6 +94,67 @@ def pure():
     eq("another namespace leaves the value", sre.via_name("shop-cart-80", set(), "other"), "shop-cart")
     eq("no port, no namespace: the value", sre.via_name("cart", set()), "cart")
     eq("a name that is only digits after the dash is a port", sre.via_name("cart-8080", set()), "cart")
+    eq("a known name that ends in digits is tried before the port is cut",
+       sre.via_name("prod-payments-2024", {"payments-2024", "payments"}), "payments-2024")
+    eq("and a port after it is still cut", sre.via_name("prod-payments-2024-80", {"payments-2024"}),
+       "payments-2024")
+    ck("an address is not a service",
+       all(sre.is_address(v) for v in ("10.0.3.4:8080", "10.0.3.4:8080, 10.0.3.5:8080", "[::1]:80", "10.0.0.1")))
+    ck("a service name is not an address",
+       not any(sre.is_address(v) for v in ("default-service-a-ui-80", "cafe1", "service-a", "10-a")))
+
+
+def default_branch():
+    print("== a polling source follows a default branch that is not main (F1) ==")
+    from tares.config import _source_from_dict
+    from tares.connectors.github import GithubConnector
+    from tares.connectors import source_type_for
+    from tares.envelope import Envelope
+
+    def conn(**cfg):
+        return GithubConnector(_source_from_dict({"name": "poll", "connector": "github", "config": {
+            "repo": "example-org/service-a", **cfg,
+            "labels": [{"name": "repo", "field": "repo", "primary": True}]}}), store=None)
+
+    commit = {"sha": "abc1234", "commit": {"message": "ship it", "author": {
+        "name": "Alex", "date": "2026-10-30T10:00:00Z"}}, "author": {"login": "alex"}}
+    followed = conn()._commit_envelope({**commit, "_branch": "develop"}, "example-org/service-a")
+    eq("a followed default branch is labelled", (followed.labels["branch"], followed.labels.get("on_default_branch")),
+       ("develop", True))
+    named = conn(branch="release")._commit_envelope({**commit, "_branch": "release"}, "example-org/service-a")
+    ck("a branch named in the config is not said to be the default", "on_default_branch" not in named.labels,
+       str(named.labels))
+
+    store = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "d.duckdb"))
+    for name, extra in (("poll", {}), ("pinned", {"branch": "release"})):
+        store.upsert_catalog_source(name, source_type_for("github"), "github", "1h", {
+            "repo": "example-org/service-a", **extra,
+            "labels": [{"name": "repo", "field": "repo", "primary": True}]})
+    cat = catalog_from_db(store)
+    t = NOW - timedelta(minutes=10)
+
+    def put(source, text, labels):
+        store.append([Envelope(source=source, source_type=source_type_for("github"),
+                               key_value="example-org/service-a", event_type="commit", text=text,
+                               event_time=t, payload={}, ingest_time=t,
+                               labels={"repo": "example-org/service-a", **labels})])
+
+    put("poll", "stamped on develop", {"branch": "develop", "on_default_branch": "true"})
+    put("poll", "stored before the stamp", {"branch": "trunk"})
+    put("pinned", "on a pinned branch", {"branch": "release"})
+    put("poll", "no branch at all", {})
+    got = sorted(d["text"] for d in store.deploy_events(
+        sre.github_sources(cat), ["example-org/service-a"], None, 50,
+        [s.name for s in cat.sources.values() if s.name == "poll"]))
+    eq("a stamped commit, an older one from the same source and one with no branch count",
+       got, ["no branch at all", "stamped on develop", "stored before the stamp"])
+    eq("without the source in the fallback, an older develop commit is dropped",
+       sorted(d["text"] for d in store.deploy_events(sre.github_sources(cat), ["example-org/service-a"], None, 50)),
+       ["no branch at all", "stamped on develop"])
+    store.set_service("service-a", "tester", repos=["example-org/service-a"])
+    eq("deploys() works the fallback out from the source's config",
+       sorted(d["text"] for d in sre.deploys(store, cat, "service-a", None)),
+       ["no branch at all", "stamped on develop", "stored before the stamp"])
 
 
 def reading():
@@ -220,6 +281,13 @@ def reading():
     ck("and says the field no longer arrives",
        r[0]["detail"].endswith(" It looks for nginx_status_code, which no longer arrives."), r[0]["detail"])
     ck("without the rule's name", "five-hundreds" not in r[0]["detail"] + r[0]["title"])
+    eq("the title uses RULE_DAYS", r[0]["title"], f"A rule has matched nothing for {sre.RULE_DAYS} days")
+    with store._lock:
+        store._truncate_entity_label("docs-site", "nginx_status_code")
+    ck("a field too busy to count is not said to be gone",
+       "no longer arrives" not in kinds(sre.blind_spots(store, cat, NOW), "rule_matches_nothing")[0]["detail"])
+    with store._lock:
+        store.con.execute("UPDATE entity_label_state SET truncated = FALSE")
     eq("sorted after seen_via_other and before no_deploys", [b["kind"] for b in spots][:3],
        ["silent", "seen_via_other", "rule_matches_nothing"])
 
@@ -399,6 +467,7 @@ async def over_http():
 
 
 pure()
+default_branch()
 reading()
 asyncio.run(over_http())
 print(f"\n{P} passed, {F} failed")

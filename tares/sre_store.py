@@ -719,25 +719,31 @@ class SreStore:
             row = self.con.execute(sql, [*params, min(w[3] for w in wants), *sources]).fetchone()
         return [int(n) for n in row]
 
-    def deploy_events(self, sources: list[str], repos: list[str], since, limit: int) -> list[dict]:
+    def deploy_events(self, sources: list[str], repos: list[str], since, limit: int,
+                      follow_default: list[str] = ()) -> list[dict]:
         """The pushes, merges and commits of `repos` (in the GitHub-type `sources`) from `since` on
         (None for ever), newest first. A push or commit counts when it is on the default branch:
-        its on_default_branch label says so, else its branch is main or master, else it has none."""
+        its on_default_branch label says so, else its branch is main or master, else it has none.
+        `follow_default` names the polling sources that follow the repo's default branch: their
+        commits from before the poller stamped the label count whatever the branch is called."""
         from .store import _label_expr
         if not sources or not repos:
             return []
         repo, action, branch = _label_expr("repo"), _label_expr("action"), _label_expr("branch")
         main = _label_expr("on_default_branch")
         sph, rph = ", ".join(["?"] * len(sources)), ", ".join(["?"] * len(repos))
+        follow = list(follow_default)
+        follow_sql = f"OR source IN ({', '.join(['?'] * len(follow))}) " if follow else ""
         sql = (f"SELECT event_time, {repo}, event_type, {action}, text, "
                f"COALESCE(json_extract_string(payload, '$.html_url'), {_label_expr('url')}) "
                f"FROM events WHERE source IN ({sph}) AND {repo} IN ({rph}) "
                + ("AND event_time >= ? " if since is not None else "")
                + f"AND ((event_type = 'pull_request' AND {action} = 'merged') "
                f"OR (event_type IN ('push', 'commit') AND COALESCE({main}, CASE WHEN {branch} IS "
-               f"NULL OR {branch} IN ('main', 'master') THEN 'true' END, 'false') = 'true')) "
+               f"NULL OR {branch} IN ('main', 'master') {follow_sql}THEN 'true' END, 'false') = 'true')) "
                "ORDER BY event_time DESC LIMIT ?")
-        params = [*sources, *repos] + ([since] if since is not None else []) + [int(limit)]
+        params = ([*sources, *repos] + ([since] if since is not None else []) + follow
+                  + [int(limit)])
         with self._lock:
             rows = self.con.execute(sql, params).fetchall()
         kinds = {"pull_request": "merge", "push": "push", "commit": "commit"}
