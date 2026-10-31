@@ -72,6 +72,7 @@ from . import skills as skills_mod
 from . import providers as providers_mod
 from .runtime import Runtime
 from . import slack as slack_mod
+from . import slack_actions
 from . import slack_verify
 from . import timeline
 from . import goal as goal_mod
@@ -3126,6 +3127,52 @@ def make_app() -> FastAPI:
                 f":warning: {error or 'the assistant returned nothing to say'}", thread_ts)
         await _slack_respond(response_url, body)
 
+    async def _slack_post(token: str, method: str, body: dict) -> None:
+        try:
+            async with httpx.AsyncClient(timeout=15) as cx:
+                r = await cx.post(f"{slack_mod.API_BASE}/{method}", json=body,
+                                  headers={"authorization": f"Bearer {token}"})
+            try:
+                data = r.json()
+            except Exception:
+                data = None
+            ok, error, _retry = slack_mod.classify(r.status_code, data)
+            if not ok:
+                print(f"taresd: slack {method}: {error}", flush=True)
+        except Exception as e:
+            print(f"taresd: slack {method} failed: {type(e).__name__}: {e}", flush=True)
+
+    async def _slack_interaction(payload: dict) -> None:
+        """A click on a button that acts: run its handler, then replace the clicked message with
+        the incident as it reads now (through the payload's response_url) and say who did what in
+        the message's thread. Never raises: it runs detached from the request."""
+        try:
+            result = await asyncio.to_thread(slack_actions.dispatch, store, payload,
+                                             _slack_workspace)
+            response_url = str(payload.get("response_url") or "").strip()
+            if result.get("ephemeral") and response_url:
+                await _slack_respond(response_url, {"response_type": "ephemeral",
+                                                    "replace_original": False,
+                                                    "text": result["ephemeral"]})
+            if result.get("incident_id") and response_url:
+                inc = await asyncio.to_thread(store.get_incident, result["incident_id"])
+                msg = (await asyncio.to_thread(slack_mod.build_incident_message, store, inc,
+                                               _slack_workspace)) if inc else None
+                if msg is not None:
+                    await _slack_respond(response_url, {**msg, "replace_original": True})
+            if result.get("thread"):
+                container = payload.get("container") or {}
+                message = payload.get("message") or {}
+                channel = (payload.get("channel") or {}).get("id") or container.get("channel_id")
+                ts = message.get("thread_ts") or container.get("message_ts") or message.get("ts")
+                token, _origin = slack_mod.resolve_token(store)
+                if token and channel and ts:
+                    await _slack_post(token, "chat.postMessage", {
+                        "channel": channel, "thread_ts": ts, "text": result["thread"],
+                        "unfurl_links": False, "unfurl_media": False})
+        except Exception as e:   # noqa: BLE001 - nobody is waiting on this, so the log is the place
+            print(f"taresd: slack interaction failed: {type(e).__name__}: {e}", flush=True)
+
     @app.post(SLACK_EVENTS_PATH, include_in_schema=False)
     async def slack_events(request: Request):
         """Slack's inbound endpoint: the URL-verification handshake and `/tares ask …`.
@@ -3166,10 +3213,21 @@ def make_app() -> FastAPI:
 
         form = {k: v[0] for k, v in parse_qs(raw.decode("utf-8", "replace")).items()}
         if "payload" in form:
-            # An interaction: someone clicked a button on a message Tares posted (View in Tares,
-            # Open timeline, TR-275). Those buttons are links, so the browser already went where
-            # they point; there is nothing to do but ACK. Without a 200 here Slack puts a warning
-            # triangle next to the button.
+            # An interaction: someone clicked a button on a message Tares posted. The link buttons
+            # (View in Tares, Open timeline, TR-275) already took the browser where they point.
+            # The others act (TR-762: take, resolve or reopen an incident, answer "Was this worth
+            # raising?"), in the background: Slack wants its 200 within 3 seconds, and without it
+            # puts a warning triangle next to the button. Always 200, whatever the payload holds.
+            try:
+                payload = json.loads(form["payload"])
+            except ValueError:
+                payload = None
+            if isinstance(payload, dict) and payload.get("type") == "block_actions":
+                task = asyncio.create_task(_slack_interaction(payload))
+                _ask_tasks.add(task)
+                task.add_done_callback(_ask_tasks.discard)
+            else:
+                print("taresd: ignored a Slack interaction that is not a block action", flush=True)
             return Response(status_code=200)
         response_url = (form.get("response_url") or "").strip()
         thread_ts = (form.get("thread_ts") or "").strip() or None
@@ -5065,6 +5123,8 @@ def make_app() -> FastAPI:
     # ── incidents (TR-744): notes with an owner and an end ──
     if incidents_mod.sweep_hook not in watch_mod.EVERY_TICK:
         watch_mod.EVERY_TICK.append(incidents_mod.sweep_hook)
+    if slack_actions.on_change not in incidents_mod.ON_CHANGE:
+        incidents_mod.ON_CHANGE.append(slack_actions.on_change)   # TR-762: Slack follows the console
 
     def _who(request: Request) -> tuple[str, str]:
         """(id, name) of who acts: the credential's name, "console" with auth off."""

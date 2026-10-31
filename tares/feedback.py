@@ -36,13 +36,17 @@ def scheduled_triggers(store) -> set:
             if isinstance(t.get("condition"), dict) and t["condition"].get("every")}
 
 
-def raised_root(store, run_id: str, scheduled: set | None = None) -> dict | None:
+def raised_root(store, run_id: str, scheduled: set | None = None,
+                as_run: dict | None = None) -> dict | None:
     """The watcher run that raised what `run_id` holds (its agent, id, dispatch_id and project
     are what an answer is credited to), found by walking up the parents at most MAX_ROOT_STEPS;
-    None when no watcher raised it. KeyError when there is no such run."""
+    None when no watcher raised it. KeyError when there is no such run. `as_run` overrides fields
+    of the run (the outcome and verdict of a run that is still open when its note is posted)."""
     run = store.get_agent_run(run_id)
     if run is None:
         raise KeyError(f"no run {run_id!r}")
+    if as_run:
+        run = {**run, **as_run}
     scheduled = scheduled_triggers(store) if scheduled is None else scheduled
     path, cur = [run], run
     while len(path) <= MAX_ROOT_STEPS and cur.get("parent_run_id"):
@@ -53,6 +57,15 @@ def raised_root(store, run_id: str, scheduled: set | None = None) -> dict | None
     path.reverse()
     outcome = goal.outcome_of(run, goal.is_watcher_run(run, scheduled))
     return goal.raised_by(path, outcome, any(r.get("practice") for r in path), scheduled)
+
+
+def answerable(store, run_id: str, as_run: dict | None = None) -> bool:
+    """Whether a person can answer "Was this worth raising?" on this result (the Slack buttons
+    ask before they show). False for a run that is gone or that nothing raised."""
+    try:
+        return raised_root(store, run_id, as_run=as_run) is not None
+    except Exception:
+        return False
 
 
 def counts(rows: list[dict]) -> dict:

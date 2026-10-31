@@ -1540,6 +1540,7 @@ class AgentRunner:
         if channel:
             posted: dict = {}
             thread_ts = self._thread_of(incident, run_id, channel)
+            meta = {**meta, **self._button_meta(incident, run_id, verdict)}
             if await self._slack_channel(agent["name"], channel, trigger_name, key, finding, meta,
                                          thread_ts=thread_ts, posted=posted):
                 self._keep_slack(incident, run_id, posted)
@@ -1548,6 +1549,29 @@ class AgentRunner:
             if await self._slack(agent["name"], hook, trigger_name, key, finding, meta):
                 return [{"kind": "slack", "label": "Slack webhook"}]
         return []
+
+    def _button_meta(self, incident: dict | None, run_id: str | None, verdict: str | None) -> dict:
+        """What the Slack message needs for its buttons that act (TR-762), on an AI SRE cell only:
+        the incident (on the message that opens it, the one a click rebuilds), this cell's
+        workspace slug and the run a "Was this worth raising?" answer is about, when a person
+        can answer it. Every other edition gets nothing, and so the message it always had."""
+        try:
+            from . import feedback, incidents, slack as _slack_mod
+            from .edition import edition
+            if edition(self.store)[0] != "sre":
+                return {}
+            out: dict = {"workspace": _slack_mod.cell_workspace()}
+            if incident:
+                notes = self.store.incident_notes(incident["id"])
+                if notes and notes[0]["run_id"] == run_id:
+                    out["incident"] = incidents.view(self.store, incident)
+            if run_id and feedback.answerable(
+                    self.store, run_id, {"status": "ok", "outcome": "finding", "verdict": verdict}):
+                out["worth_run"] = run_id
+            return out
+        except Exception as e:   # buttons must never cost the notification
+            print(f"[agent] slack buttons: {type(e).__name__}: {e}")
+            return {}
 
     def _title_meta(self, key: str, finding: str, headline: str | None, parts: dict) -> dict:
         """The Slack title and service of a finding (TR-745), on an AI SRE cell only: the other
