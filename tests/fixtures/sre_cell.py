@@ -6,6 +6,10 @@ build(store, now, ...) writes a cell with invented names only:
   docs-site  (vercel, primary label project) logs for docs-site
   github     (github_app, label repo)         commits on example-org/service-a, which
              arrive by webhook, so the source never polls and the tests need no network
+`blind=True` (TR-747) adds what the blind-spot checks need: the ingress lines name the upstream
+(proxy_upstream_name, so service-a-ui is seen only through edge-proxy), service-a-receiver sent 50
+lines 3 days back instead of 2 lines 2 days back, service-b sent 3 lines 3 days back, and github
+has a push to main, a push to a side branch and a merged pull request next to its commits.
 The counts (see the returned dict) are fixed, so a test can name them. `events=N` adds N more
 edge-proxy and service-a log lines spread over the hours between 1 and 24 back: they go in through
 the store's own append in batches of 5,000, the same code path as real ingest, so a 200,000-line
@@ -32,15 +36,23 @@ def _otlp(now, minutes_ago, service, event_type, text, labels=None, payload=None
                     labels={"service": service, **(labels or {})}, ingest_time=t)
 
 
-def _edge(now, minutes_ago, status="200"):
+def _edge(now, minutes_ago, status="200", via=False):
     return _otlp(now, minutes_ago, "edge-proxy", "INFO" if status < "500" else "ERROR",
                  f"GET /ui {status}",
-                 {"proxy_upstream_name": "default-service-a-ui-80", "namespace": "default",
-                  "nginx_status_code": status})
+                 {"namespace": "default", "nginx_status_code": status,
+                  **({"proxy_upstream_name": "default-service-a-ui-80"} if via else {})})
+
+
+def _github(now, minutes_ago, event_type, text, labels=None, payload=None):
+    t = now - timedelta(minutes=minutes_ago)
+    return Envelope(source="github", source_type=source_type_for("github_app"),
+                    key_value="example-org/service-a", event_type=event_type, text=text,
+                    event_time=t, payload=payload or {},
+                    labels={"repo": "example-org/service-a", **(labels or {})}, ingest_time=t)
 
 
 def build(store: Store, now, *, watcher: bool = False, investigator: bool = False,
-          quiet_hours: int = 0, events: int = 0) -> dict:
+          quiet_hours: int = 0, events: int = 0, blind: bool = False) -> dict:
     """Write the cell into `store` as of `now`. Returns the names it made."""
     store.upsert_catalog_source("prod-otlp", source_type_for("otlp"), "otlp", "5s", {
         "labels": [{"name": "service", "field": "service.name", "primary": True},
@@ -52,7 +64,8 @@ def build(store: Store, now, *, watcher: bool = False, investigator: bool = Fals
 
     env = [
         # edge-proxy: 3 lines in the last 10 minutes, 2 more earlier today
-        _edge(now, 2), _edge(now, 5, "502"), _edge(now, 8), _edge(now, 180), _edge(now, 240),
+        _edge(now, 2, via=blind), _edge(now, 5, "502", blind), _edge(now, 8, via=blind),
+        _edge(now, 180, via=blind), _edge(now, 240, via=blind),
         # service-a: a log, a span and a metric point in the last 10 minutes, the same earlier
         _otlp(now, 1, "service-a", "INFO", "started job 41"),
         _otlp(now, 4, "service-a", "span", "POST /jobs", payload={"traceId": "t1"}),
@@ -66,6 +79,11 @@ def build(store: Store, now, *, watcher: bool = False, investigator: bool = Fals
         _otlp(now, 2 * 24 * 60, "service-a-receiver", "INFO", "received batch 7"),
         _otlp(now, 2 * 24 * 60 + 5, "service-a-receiver", "INFO", "received batch 6"),
     ]
+    if blind:
+        env = [e for e in env if e.key_value != "service-a-receiver"]
+        env += [_otlp(now, 3 * 24 * 60 + i, "service-a-receiver", "INFO", f"received batch {50 - i}")
+                for i in range(50)]
+        env += [_otlp(now, 3 * 24 * 60 + i, "service-b", "INFO", f"ran task {i}") for i in range(3)]
     for minutes_ago, text in ((20, "deployed docs-site"), (360, "built docs-site")):
         t = now - timedelta(minutes=minutes_ago)
         env.append(Envelope(source="docs-site", source_type=source_type_for("vercel"),
@@ -78,6 +96,14 @@ def build(store: Store, now, *, watcher: bool = False, investigator: bool = Fals
                             key_value="example-org/service-a", event_type="commit", text=text,
                             event_time=t, payload={}, labels={"repo": "example-org/service-a"},
                             ingest_time=t))
+    if blind:
+        env += [
+            _github(now, 30, "push", "push to main", {"branch": "main"},
+                    {"html_url": "https://example.invalid/example-org/service-a/commit/abc"}),
+            _github(now, 20, "push", "push to a side branch", {"branch": "side"}),
+            _github(now, 45, "pull_request", "merge fix flaky retry",
+                    {"action": "merged", "url": "https://example.invalid/example-org/service-a/pull/7"}),
+        ]
     store.append(env)
 
     # `events` more lines between 1 and 24 hours back, so the 10-minute counts above stay fixed
@@ -85,12 +111,13 @@ def build(store: Store, now, *, watcher: bool = False, investigator: bool = Fals
         batch = []
         for i in range(start, min(start + BATCH, events)):
             minutes_ago = 60 + (i * (23 * 60 - 10)) // max(events, 1)
-            batch.append(_edge(now, minutes_ago) if i % 2 == 0 else
+            batch.append(_edge(now, minutes_ago, via=blind) if i % 2 == 0 else
                          _otlp(now, minutes_ago, "service-a", "INFO", f"handled request {i}"))
         store.append(batch)
 
     made = {"sources": ["prod-otlp", "docs-site", "github"],
-            "services": ["edge-proxy", "service-a", "docs-site", "service-a-receiver"],
+            "services": ["edge-proxy", "service-a", "docs-site", "service-a-receiver"]
+            + (["service-b"] if blind else []),
             "events": events}
     if watcher or investigator:
         made.update(_agents(store, now, investigator, quiet_hours))

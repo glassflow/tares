@@ -5253,6 +5253,38 @@ def make_app() -> FastAPI:
             return Response(feedback_mod.export_csv(rows), media_type="text/csv")
         return {"feedback": rows}
 
+    @app.get("/api/repos")
+    async def repos_route():
+        """The repos GitHub-type sources have sent events for, and the services each is linked to."""
+        known = await asyncio.to_thread(sre_mod.github_repos, store, runtime.catalog)
+        settings = await asyncio.to_thread(store.service_settings)
+        owners: dict = {}
+        for raw, st in settings.items():
+            for repo in st["repos"]:
+                owners.setdefault(repo, set()).add(sre_mod.canonical(raw, settings))
+        return {"repos": [{"repo": r, "last_seen": sre_mod._iso(t),
+                           "services": sorted(owners.get(r, ()))}
+                          for r, t in sorted(known.items())]}
+
+    @app.get("/api/blind-spots")
+    async def blind_spots_route():
+        """What the cell cannot see: silent services, services seen only through another, rules
+        that match nothing and services whose deploys are not tied to them."""
+        return {"blind_spots": await asyncio.to_thread(sre_mod.blind_spots, store, runtime.catalog)}
+
+    # before get_service_route: its {name:path} would take the /deploys tail as part of the name
+    @app.get("/api/services/{name:path}/deploys")
+    async def service_deploys_route(name: str, window: str = "7d"):
+        try:
+            since = sre_mod.series_for(window, now_utc())[0]
+        except ValueError as e:
+            _err(e)
+        if not await asyncio.to_thread(sre_mod.exists, store, runtime.catalog, name):
+            raise HTTPException(status_code=404, detail=f"no service named {name}")
+        canon = sre_mod.canonical(name, await asyncio.to_thread(store.service_settings))
+        return {"deploys": await asyncio.to_thread(sre_mod.deploys, store, runtime.catalog,
+                                                   canon, since)}
+
     @app.get("/api/services/{name:path}")
     async def get_service_route(name: str):
         item = await asyncio.to_thread(sre_mod.get_service, store, runtime.catalog, name)
@@ -5279,6 +5311,15 @@ def make_app() -> FastAPI:
         Replaces the stored mapping and answers it. Admin like every /api/settings route."""
         try:
             return await asyncio.to_thread(sre_mod.set_service_labels, store, runtime.catalog, body)
+        except ValueError as e:
+            _err(e)
+
+    @app.put("/api/settings/via-labels")
+    async def put_via_labels(body: Any = Body(...)):
+        """{source name: [label name, ...]}: the labels that carry another service's name, such as
+        the upstream an ingress forwarded to. Replaces the stored mapping and answers it."""
+        try:
+            return await asyncio.to_thread(sre_mod.set_via_labels, store, body)
         except ValueError as e:
             _err(e)
 

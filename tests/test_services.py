@@ -157,7 +157,7 @@ def reading():
        got["service-a"])
     edge = sre.get_service(store, cat, "edge-proxy", NOW)
     eq("edge-proxy's labels", edge["labels"],
-       ["namespace", "nginx_status_code", "proxy_upstream_name", "service"])
+       ["namespace", "nginx_status_code", "service"])
     eq("a silent service's by_feed", sre.get_service(store, cat, "service-a-receiver", NOW)["by_feed"],
        [{"name": "prod-otlp", "kind": "logs", "events_10m": 0, "events_24h": 0,
          "last_seen": (NOW - timedelta(days=2)).isoformat()}])

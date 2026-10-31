@@ -682,3 +682,107 @@ class SreStore:
         with self._sread:
             rows = self.sc.execute(sql + "ORDER BY answered_at, run_id, person", args).fetchall()
         return [self._feedback_row(r) for r in rows]
+
+    # ── blind spots (TR-747) ──────────────────────────────────────────────────
+    def labels_carried(self, sources: list[str], labels: tuple) -> dict[str, list[str]]:
+        """{source: the labels among `labels` its events carry}, from the maintained counter."""
+        if not sources:
+            return {}
+        sph, lph = ", ".join(["?"] * len(sources)), ", ".join(["?"] * len(labels))
+        with self._lock:
+            rows = self.con.execute(
+                f"SELECT DISTINCT source, label FROM entity_counts WHERE source IN ({sph}) "
+                f"AND label IN ({lph})", [*sources, *labels]).fetchall()
+        out: dict[str, list[str]] = {}
+        for source, label in rows:
+            out.setdefault(source, []).append(label)
+        return {s: sorted(v) for s, v in out.items()}
+
+    def via_values(self, source: str, svc_label: str, via_label: str, since) -> list[tuple]:
+        """[(service, via value, namespace)]: which services' events (in `source`, since `since`)
+        carry which value of `via_label`, with the event's namespace label. Events live in DuckDB
+        only: this reads self.con under self._lock and joins no state table."""
+        from .store import _label_expr
+        via = _label_expr(via_label)
+        sql = (f"SELECT {_label_expr(svc_label)}, {via}, json_extract_string(labels, '$.namespace') "
+               f"FROM events WHERE source = ? AND ingest_time >= ? AND {via} IS NOT NULL "
+               "GROUP BY 1, 2, 3")
+        with self._lock:
+            rows = self.con.execute(sql, [source, since]).fetchall()
+        return [(r[0], r[1], r[2]) for r in rows if r[0] not in (None, "") and r[1] != ""]
+
+    def counts_since(self, wants: list[tuple]) -> list[int]:
+        """For each (source, label, values, since): how many events of the source have the label
+        in `values` from `since` on. One scan for all of them."""
+        from .store import _label_expr
+        if not wants:
+            return []
+        terms, params = [], []
+        for source, label, values, since in wants:
+            ph = ", ".join(["?"] * len(values))
+            terms.append(f"COUNT(*) FILTER (WHERE source = ? AND {_label_expr(label)} IN ({ph}) "
+                         "AND ingest_time >= ?)")
+            params += [source, *values, since]
+        sources = sorted({w[0] for w in wants})
+        sql = (f"SELECT {', '.join(terms)} FROM events WHERE ingest_time >= ? "
+               f"AND source IN ({', '.join(['?'] * len(sources))})")
+        with self._lock:
+            row = self.con.execute(sql, [*params, min(w[3] for w in wants), *sources]).fetchone()
+        return [int(n) for n in row]
+
+    def deploy_events(self, sources: list[str], repos: list[str], since, limit: int,
+                      follow_default: list[str] = ()) -> list[dict]:
+        """The pushes, merges and commits of `repos` (in the GitHub-type `sources`) from `since` on
+        (None for ever), newest first. A push or commit counts when it is on the default branch:
+        its on_default_branch label says so, else its branch is main or master, else it has none.
+        `follow_default` names the polling sources that follow the repo's default branch: their
+        commits from before the poller stamped the label count whatever the branch is called."""
+        from .store import _label_expr
+        if not sources or not repos:
+            return []
+        repo, action, branch = _label_expr("repo"), _label_expr("action"), _label_expr("branch")
+        main = _label_expr("on_default_branch")
+        sph, rph = ", ".join(["?"] * len(sources)), ", ".join(["?"] * len(repos))
+        follow = list(follow_default)
+        follow_sql = f"OR source IN ({', '.join(['?'] * len(follow))}) " if follow else ""
+        sql = (f"SELECT event_time, {repo}, event_type, {action}, text, "
+               f"COALESCE(json_extract_string(payload, '$.html_url'), {_label_expr('url')}) "
+               f"FROM events WHERE source IN ({sph}) AND {repo} IN ({rph}) "
+               + ("AND event_time >= ? " if since is not None else "")
+               + f"AND ((event_type = 'pull_request' AND {action} = 'merged') "
+               f"OR (event_type IN ('push', 'commit') AND COALESCE({main}, CASE WHEN {branch} IS "
+               f"NULL OR {branch} IN ('main', 'master') {follow_sql}THEN 'true' END, 'false') = 'true')) "
+               "ORDER BY event_time DESC LIMIT ?")
+        params = ([*sources, *repos] + ([since] if since is not None else []) + follow
+                  + [int(limit)])
+        with self._lock:
+            rows = self.con.execute(sql, params).fetchall()
+        kinds = {"pull_request": "merge", "push": "push", "commit": "commit"}
+        return [{"at": r[0], "repo": r[1], "kind": kinds[r[2]], "text": r[4] or "", "url": r[5]}
+                for r in rows]
+
+    def labels_last_seen(self, labels: list[str], sources: list[str]) -> dict[str, object]:
+        """{label: the newest ingest_time of an event of `sources` that carried it}. A label that
+        went past the counter's size limit is missing, so is one nothing carried."""
+        if not labels or not sources:
+            return {}
+        lph, sph = ", ".join(["?"] * len(labels)), ", ".join(["?"] * len(sources))
+        with self._lock:
+            rows = self.con.execute(
+                f"SELECT label, MAX(last_ingest) FROM entity_counts WHERE label IN ({lph}) "
+                f"AND source IN ({sph}) GROUP BY label", [*labels, *sources]).fetchall()
+        return dict(rows)
+
+    def trigger_created(self) -> dict:
+        """{trigger name: when it was made}."""
+        with self._sread:
+            return dict(self.sc.execute("SELECT name, created_at FROM catalog_triggers").fetchall())
+
+    def fired_since(self, since) -> set:
+        """The triggers that fired from `since` on, by the dispatch log or the per-key state."""
+        with self._sread:
+            a = self.sc.execute("SELECT DISTINCT trigger FROM dispatch_log WHERE fired_at >= ?",
+                                [since]).fetchall()
+            b = self.sc.execute("SELECT DISTINCT trigger FROM trigger_state WHERE last_fired >= ?",
+                                [since]).fetchall()
+        return {r[0] for r in a + b}

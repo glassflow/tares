@@ -22,7 +22,15 @@ NOT_SERVICES = {"finding", "memory", "claude_code", "reference", "github", "gith
 DEPLOY_CONNECTORS = ("github", "github_app")
 MAX_HOPS = 5
 MAX_LABELS = 20
+MAX_REPOS = 20
 CACHE_SECONDS = 30
+VIA_SETTING = "sre.via_labels"   # JSON {source name: [label, ...]}: labels whose values name another service
+# the labels an ingress or proxy log names its upstream service in (TR-747)
+DEFAULT_VIA = ("proxy_upstream_name", "upstream", "upstream_name", "upstream_service",
+               "backend_service", "k8s_service_name")
+SILENT_HOURS = 24      # a service is silent after this long without an event
+SILENT_MIN_EVENTS = 10   # ... when it sent this many in the 7 days before it went quiet
+RULE_DAYS = 30         # a rule has matched nothing after this long
 cache_clock = time.monotonic   # the cache's clock; a test replaces it instead of sleeping
 
 
@@ -71,6 +79,51 @@ def canonical(name: str, settings: dict) -> str:
         seen.add(nxt)
         cur = nxt
     return cur
+
+
+def via_name(value: str, known: set, namespace: str | None = None) -> str:
+    """The service a label value such as an ingress upstream ("default-service-a-ui-80") points
+    at: without a trailing port, the longest known service name that ends it, else the part after
+    the event's namespace, else the value as it is. A name that really ends in digits
+    ("payments-2024") is tried as it stands before the port is cut off."""
+    value = str(value)
+    for v in dict.fromkeys((value, re.sub(r"-\d+$", "", value))):
+        for k in sorted(known, key=len, reverse=True):
+            if v == k or v.endswith("-" + k):
+                return k
+    v = re.sub(r"-\d+$", "", value)
+    if namespace and v.startswith(namespace + "-") and len(v) > len(namespace) + 1:
+        return v[len(namespace) + 1:]
+    return v
+
+
+def is_address(value: str) -> bool:
+    """An upstream such as "10.0.3.4:8080", "[::1]:80" or a comma list of them names a pod or a
+    host, not a service."""
+    return all(re.fullmatch(r"\[?[0-9a-fA-F:.]+\]?(:\d+)?", p.strip()) and re.search(r"[.:]", p)
+               for p in str(value).split(","))
+
+
+def _via_labels(store, svc_sources: dict) -> dict[str, list[str]]:
+    """{source: the labels whose values name another service}: the sre.via_labels setting, where
+    a source's entry wins (an empty list turns it off), else the DEFAULT_VIA labels it carries."""
+    from .store import _FIELD_RE
+    try:
+        v = json.loads(store.get_setting(VIA_SETTING) or "{}")
+    except ValueError:
+        v = {}
+    v = v if isinstance(v, dict) else {}
+    carried = store.labels_carried([s for s in svc_sources if s not in v], DEFAULT_VIA)
+    out = {}
+    for s in svc_sources:
+        if s in v:
+            labels = [x for x in v[s] if isinstance(x, str) and _FIELD_RE.match(x)] \
+                if isinstance(v[s], list) else []
+        else:
+            labels = carried.get(s, [])
+        if labels:
+            out[s] = labels
+    return out
 
 
 # ── what counts as an error, and the charts built on it (TR-767) ─────────────
@@ -249,6 +302,16 @@ def _compute(store, catalog, now) -> dict:
                 name = canonical(e["value"], settings)
                 kind = signal_kind(src.connector)
             rec(name)["ever"].add((sname, kind, e["last_ingest"]))
+    # services seen only through another: a via label's value names one (TR-747)
+    known = set(recs)
+    for sname, labels in _via_labels(store, svc_sources).items():
+        for label in labels:
+            for carrier, value, ns in store.via_values(sname, svc_sources[sname], label, since_24h):
+                if is_address(value):
+                    continue
+                name, carrier = canonical(via_name(value, known, ns), settings), canonical(carrier, settings)
+                if name not in known and name != carrier:
+                    rec(name).setdefault("via", set()).add(carrier)
     return {"recs": recs, "settings": settings, "since_24h": since_24h,
             "svc_sources": svc_sources}
 
@@ -263,8 +326,8 @@ def _compute_cached(store, catalog, now) -> dict:
     if now is not None:
         return _compute(store, catalog, now)
     overrides = _overrides(store)
-    key = tuple(sorted((s.name, s.connector, service_label(s, overrides) or "")
-                       for s in catalog.sources.values()))
+    key = (tuple(sorted((s.name, s.connector, service_label(s, overrides) or "")
+                        for s in catalog.sources.values())), store.get_setting(VIA_SETTING))
     cache = store.__dict__.setdefault("services_cache", {})
     hit = cache.get("entry")
     if hit and hit["key"] == key and cache_clock() - hit["at"] < CACHE_SECONDS:
@@ -297,10 +360,13 @@ def _item(name: str, r: dict, settings: dict, include_hidden: bool) -> dict | No
         pairs = sorted({(s, k) for s, k, _t in r["ever"]})
     merged = sorted(n for n in settings if n != name and settings[n].get("merged_into")
                     and canonical(n, settings) == name)
-    return {"name": name, "display": st.get("display") or name, "hidden": bool(st.get("hidden")),
+    item = {"name": name, "display": st.get("display") or name, "hidden": bool(st.get("hidden")),
             "merged": merged, "signals": sorted({k for _s, k in pairs}),
             "feeds": [{"name": s, "kind": k} for s, k in pairs],
             "events_10m": n10, "events_24h": n24, "last_seen": _iso(last)}
+    if r.get("via"):   # no events of its own: only another service's events name it
+        item["seen_via"] = sorted(r["via"])
+    return item
 
 
 def list_services(store, catalog, now=None, include_hidden: bool = False) -> list[dict]:
@@ -338,6 +404,10 @@ def get_service(store, catalog, name: str, now=None) -> dict | None:
                                 "events_24h": n[1] if n else 0, "last_seen": _iso(last)})
     scope = {s: (label, [name, *item["merged"]]) for s, label in c["svc_sources"].items()}
     item["labels"] = store.service_label_names(scope, c["since_24h"], MAX_LABELS)
+    item["repos"] = _linked_repos(c["settings"], name)
+    last = deploys(store, catalog, name, None, limit=1)
+    item["last_deploy"] = {"at": last[0]["at"], "text": last[0]["text"]} if last else None
+    item["blind_spots"] = [b for b in _spots(store, catalog, c, now) if b["service"] == name]
     return item
 
 
@@ -448,7 +518,7 @@ def _watched(store, catalog, item: dict, watchers: list | None = None) -> None:
 
 
 # ── what a person changes ────────────────────────────────────────────────────
-PATCH_FIELDS = ("display", "hidden", "merged_into")
+PATCH_FIELDS = ("display", "hidden", "merged_into", "repos")
 MAX_DISPLAY = 100
 MAX_NAME = 200
 
@@ -487,8 +557,8 @@ def _text(body: dict, key: str, limit: int) -> str | None:
 
 
 def patch_service(store, catalog, name: str, body, by: str) -> dict:
-    """Change one service's display name, hidden flag or merge, and return it as get_service
-    does. A field left out stays as it is, null clears it. ValueError (400) when the body is
+    """Change one service's display name, hidden flag, merge or linked repos, and return it as
+    get_service does. A field left out stays as it is, null clears it. ValueError (400) when the body is
     refused, LookupError (404) when the cell knows no such service. The body is checked before
     the name, so a refused merge says why whatever the name is."""
     if not isinstance(body, dict):
@@ -509,6 +579,8 @@ def patch_service(store, catalog, name: str, body, by: str) -> dict:
         if body["hidden"] is not None and not isinstance(body["hidden"], bool):
             raise ValueError("hidden must be true, false or null")
         changes["hidden"] = bool(body["hidden"])
+    if "repos" in body:
+        changes["repos"] = _check_repos(store, catalog, body["repos"])
     settings = store.service_settings()
     if "merged_into" in body:
         target = _text(body, "merged_into", MAX_NAME)
@@ -545,3 +617,186 @@ def set_service_labels(store, catalog, body) -> dict:
     store.set_setting(LABELS_SETTING, json.dumps(out))
     store.clear_services_cache()
     return out
+
+
+def set_via_labels(store, body) -> dict:
+    """Store which labels carry another service's name in which source: {source name: [label
+    name, ...]}. The mapping replaces the one stored; an empty list turns the default off for a
+    source. ValueError (400) for anything else."""
+    from .store import _FIELD_RE
+    if not isinstance(body, dict) or not all(
+            isinstance(v, list) and all(isinstance(x, str) and _FIELD_RE.match(x) for x in v)
+            for v in body.values()):
+        raise ValueError("the body must be a JSON object such as {\"prod-otlp\": "
+                         "[\"proxy_upstream_name\"]}, with label names (letters, digits and "
+                         "underscores) in each list")
+    store.set_setting(VIA_SETTING, json.dumps(body))
+    store.clear_services_cache()
+    return body
+
+
+# ── code changes: the repos a service is built from, and its deploys (TR-747) ─
+def github_sources(catalog) -> list[str]:
+    """The sources that hold GitHub events: the two GitHub connectors, and a webhook that
+    declares the contract's `repo` label."""
+    return [s.name for s in catalog.sources.values() if s.connector in DEPLOY_CONNECTORS or (
+        s.connector == "webhook" and any(isinstance(x, dict) and x.get("name") == "repo"
+                                         for x in (s.config or {}).get("labels") or []))]
+
+
+def github_repos(store, catalog) -> dict:
+    """{repo: when it last sent}, every repo a GitHub-type source has sent events for."""
+    names = github_sources(catalog)
+    if not names:
+        return {}
+    return {e["value"]: e["last_ingest"] for e in store.list_entities("repo", sources=names, limit=10000)}
+
+
+def _check_repos(store, catalog, repos) -> list[str]:
+    if repos is None:
+        return []
+    if not isinstance(repos, list) or not all(isinstance(r, str) for r in repos):
+        raise ValueError("repos must be a list of owner/name, or null")
+    repos = list(dict.fromkeys(r.strip() for r in repos))
+    if len(repos) > MAX_REPOS:
+        raise ValueError(f"a service can link at most {MAX_REPOS} repos, and {len(repos)} were given")
+    known = github_repos(store, catalog) if repos else {}
+    for r in repos:
+        if r not in known:
+            raise ValueError(f"{r} has sent nothing to this workspace yet; connect it first")
+    return repos
+
+
+def _linked_repos(settings: dict, name: str) -> list[str]:
+    """The repos linked to service `name`, or to a name merged into it."""
+    return sorted({r for raw, st in settings.items() if canonical(raw, settings) == name
+                   for r in st["repos"]})
+
+
+def exists(store, catalog, name: str) -> bool:
+    return canonical(name, store.service_settings()) in _compute_cached(store, catalog, None)["recs"]
+
+
+def deploys(store, catalog, name: str, since, limit: int = 50) -> list[dict]:
+    """The pushes, merges and commits of the repos linked to `name`, newest first, from `since`
+    on (None for ever): {at, repo, kind: push | merge | commit, text, url}."""
+    repos = _linked_repos(store.service_settings(), name)
+    follow = [s.name for s in catalog.sources.values()
+              if s.connector == "github" and not (s.config or {}).get("branch")]
+    return [{**d, "at": _iso(d["at"])} for d in
+            store.deploy_events(github_sources(catalog), repos, since, limit, follow)]
+
+
+# ── blind spots (TR-747) ─────────────────────────────────────────────────────
+def _own_last(r: dict):
+    """When a service last sent events of its own (deploys are not its own)."""
+    seen = [f[2] for (_s, k), f in r["feeds"].items() if k != "deploys"]
+    seen += [t for _s, k, t in r["ever"] if k != "deploys"]
+    return max((t for t in seen if t is not None), default=None)
+
+
+def _spot(kind, service, rule, title, detail, since, label, action) -> dict:
+    from .goal import _no_dash
+    return {"kind": kind, "service": service, "rule": rule, "title": _no_dash(title),
+            "detail": _no_dash(detail), "since": _iso(since), "fix": {"label": label, "action": action}}
+
+
+def _silent(store, c: dict, items: dict, now) -> list[dict]:
+    """Services with no event of their own for a day that sent plenty before: a quiet one that
+    never sent much is not a blind spot. Only the 100 that went quiet most recently are listed."""
+    from .goal import span_words
+    cut = now - timedelta(hours=SILENT_HOURS)
+    quiet = sorted(((n, _own_last(c["recs"][n])) for n in items), key=lambda x: str(x[1]))
+    quiet = [(n, t) for n, t in quiet if t is not None and t < cut][-100:]
+    wants, owner = [], []
+    for n, last in quiet:
+        for src in sorted({s for s, k, _t in c["recs"][n]["ever"] if k != "deploys"}):
+            wants.append((src, c["svc_sources"][src], [n, *items[n]["merged"]],
+                          last - timedelta(days=7)))
+            owner.append(n)
+    sent: dict[str, int] = {}
+    for n, count in zip(owner, store.counts_since(wants)):
+        sent[n] = sent.get(n, 0) + count
+    out = []
+    for n, last in quiet:
+        if sent.get(n, 0) >= SILENT_MIN_EVENTS:
+            at = last.astimezone(timezone.utc)
+            out.append(_spot("silent", n, None,
+                             f"{items[n]['display']} has sent nothing for {span_words((now - last).total_seconds())}",
+                             f"It last sent on {at.day} {at:%b}, {at:%H:%M}.", last,
+                             "Check its connection", "service"))
+    return out
+
+
+def _stale_rules(store, catalog, c: dict, now) -> list[dict]:
+    """Rules that have not matched for RULE_DAYS days, with the filter field that no longer
+    arrives when there is one."""
+    from . import goal
+    from .config import FINDINGS_SOURCE
+    from .schedule import is_scheduled
+    from .store import _FIELD_RE, _FILTER_COLS
+    cut = now - timedelta(days=RULE_DAYS)
+    made, fired = store.trigger_created(), store.fired_since(cut)
+    overrides, out = _overrides(store), []
+    for trig in catalog.triggers:
+        born = goal._aware(made.get(trig.name))
+        if (trig.paused or is_scheduled(trig) or list(trig.sources) == [FINDINGS_SOURCE]
+                or born is None or born >= cut or trig.name in fired):
+            continue
+        fields = [f["field"] for f in trig.filters or [] if isinstance(f, dict)
+                  and _FIELD_RE.match(str(f.get("field"))) and f["field"] not in _FILTER_COLS]
+        seen = store.labels_last_seen(fields, trig.sources)
+        gone = next((f for f in fields if (seen.get(f) is None or goal._aware(seen[f]) < now - timedelta(days=7))
+                     and not store.is_label_truncated(f, trig.sources)), None)
+        labels = {service_label(catalog.sources[n], overrides) for n in trig.sources if n in catalog.sources}
+        svc = next((canonical(str(f["value"]), c["settings"]) for f in trig.filters or []
+                    if isinstance(f, dict) and f.get("op") == "eq" and f.get("field") in labels), None)
+        if svc and c["settings"].get(svc, {}).get("hidden"):
+            continue
+        out.append(_spot("rule_matches_nothing", svc, trig.name, f"A rule has matched nothing for {RULE_DAYS} days",
+                         goal.wake_sentence(trig, catalog.sources)
+                         + (f" It looks for {gone}, which no longer arrives." if gone else ""),
+                         None, "Review the rule", "rule"))
+    return out
+
+
+def _blind(store, catalog, c: dict, now) -> list[dict]:
+    """The blind spots of the computed services, in the order they are listed."""
+    from .goal import join_words
+    settings = c["settings"]
+    items = {n: i for n, r in c["recs"].items() if (i := _item(n, r, settings, False)) is not None}
+    silent = _silent(store, c, items, now)
+    via = [_spot("seen_via_other", n, None,
+                 f"{i['display']} is seen only through {join_words(i['seen_via'])}",
+                 "Only errors at the ingress show it. Connect its own logs to see why it fails.",
+                 None, "Connect its logs", "connect") for n, i in sorted(items.items())
+           if i.get("seen_via")]
+    rules = _stale_rules(store, catalog, c, now)
+    tied = {canonical(raw, settings) for raw, st in settings.items() if st["repos"]}
+    loose = [n for n, i in sorted(items.items()) if i["signals"] and n not in tied]
+    if not loose:
+        code = []
+    elif not github_repos(store, catalog):
+        code = [_spot("no_deploys", None, None, "No code changes are connected",
+                      "Deploys cannot be shown next to a service until GitHub is connected.",
+                      None, "Connect GitHub", "connect")]
+    else:
+        code = [_spot("no_deploys", n, None, f"Deploys are not tied to {items[n]['display']}",
+                      "Link the repos it is built from to see its pushes and merges with it.",
+                      None, "Link a repo", "link_repo") for n in loose]
+    return silent + via + sorted(rules, key=lambda b: (b["service"] or "", b["rule"])) + code
+
+
+def _spots(store, catalog, c: dict, now) -> list[dict]:
+    """The blind spots, kept with the computed services `c`: the same 30 seconds, the same writes
+    drop them."""
+    if "blind" not in c:
+        c["blind"] = _blind(store, catalog, c, now or now_utc())
+    return c["blind"]
+
+
+def blind_spots(store, catalog, now=None) -> list[dict]:
+    """What the cell cannot see, as [{kind, service, rule, title, detail, since, fix}]: services
+    silent for a day, services seen only through another, rules that matched nothing for 30
+    days, and services whose deploys are not tied to them. Hidden services produce nothing."""
+    return _spots(store, catalog, _compute_cached(store, catalog, now), now)
