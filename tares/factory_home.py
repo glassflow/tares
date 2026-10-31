@@ -372,3 +372,7 @@ def build(store, fx=None, request=None, now=None) -> dict:
     with _cache_lock:
         _cache[key] = (time.monotonic(), out)
     return out
+
+
+# the builders of the waiting items register themselves on import (TR-769)
+from . import factory_waiting  # noqa: F401,E402

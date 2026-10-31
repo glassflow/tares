@@ -6,12 +6,14 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Incident notes belong to incidents that someone can take and resolve (`/api/incidents`).
 - `GET /api/services` lists the services a cell receives data for.
 - `PATCH /api/services/{name}` renames, hides or merges a service, and `PUT /api/settings/service-labels` says which label names the services in each source. The computed list is kept for 30 seconds and every change drops it.
 - Each cell has an edition: factory, sre or platform. Existing cells stay as they are.
 - Findings carry a title, what is failing, the likely cause and an outcome. `GET /api/findings` lists them across projects, and a project's results take `show=worth` to leave out the quiet checks.
 - `GET /api/projects` and a project's summary say `ready_to_close` for a factory project that is still open with every ticket merged or otherwise finished.
 - `GET /api/home` on a factory cell returns the home page in one call: a headline, what waits for you, the open projects, the crew, the Claude plan and the connected tools.
+- On a factory cell, what waits for you on `GET /api/home` now lists the pull requests the reviewer passed, projects ready to hand to the crew, calls the crew made without you, questions and permission requests on the desk, and milestones whose tickets all merged, oldest first.
 - Console: shadcn/ui primitives on Radix, themed with the Tares tokens, with a /dev/components gallery (part 1 of the component library).
 - A service's event counts over time, all events or only errors, in buckets (`SreStore.event_series`, and `event_series_many` for every service in one query), and one rule for what counts as an error (`sre.is_error`). Nothing in the console reads them yet.
 - AI SRE cells tell Slack when nobody is watching a service, and when watching starts again. `GET /api/watch` says who watches what and why a watcher stopped.

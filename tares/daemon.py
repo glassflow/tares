@@ -64,6 +64,7 @@ from . import edition as edition_mod
 from . import factory_home, sre_home, screens
 from . import sre as sre_mod
 from . import watch as watch_mod
+from . import incidents as incidents_mod
 from . import linear as _linear
 from . import github_tickets as _gh_tickets
 from . import skills as skills_mod
@@ -3613,6 +3614,11 @@ def make_app() -> FastAPI:
             _err(ValueError("handled must be true or false"))
         ident = getattr(request.state, "credential", None)
         store.set_run_handled(run_id, (ident or {}).get("name") or "console" if handled else None)
+        if handled:   # a note handled closes its incident, by the same caller (TR-744)
+            note_of = store.incident_for_run(run_id)
+            if note_of is not None:
+                who = (ident or {}).get("name") or "console"
+                incidents_mod.resolve(store, note_of["id"], who, who, "console")
         run = store.get_agent_run(run_id)
         return {"ok": True, "id": run_id,
                 "handled": ({"at": run["handled_at"], "by": run["handled_by"]}
@@ -4151,21 +4157,29 @@ def make_app() -> FastAPI:
         store.set_project_setup(uid, setup)
         return {"run_id": rid}
 
-    def _flag_practice_finding(uid: str, run_id: str, ident: dict | None) -> None:
-        """An outside agent's finding recorded within ten minutes of a practice firing, by a
-        key of the project (the one setup made, or one made in its place), answers that
-        firing: it is practice."""
+    def _answers_practice(uid: str, ident: dict | None) -> bool:
+        """Whether an outside agent's finding recorded now, by `ident`, answers the project's
+        practice firing: made within ten minutes of it, by a key of the project (the one setup
+        made, or one made in its place). Decided before the finding is recorded, so the run
+        carries the practice flag from the start."""
         setup = store.get_project_setup(uid)
         if not setup or setup.get("practice_kind") != "own" or setup.get("practice_finding"):
-            return
+            return False
         try:
             at = datetime.fromisoformat(str(setup.get("practice_at")))
         except ValueError:
-            return
+            return False
         if (now_utc() - at).total_seconds() > setup_flow.PRACTICE_WINDOW_S:
-            return
+            return False
         if ident is not None and ident.get("project") != uid \
                 and ident.get("id") != f"key:{setup.get('own_key_id')}":
+            return False
+        return True
+
+    def _flag_practice_finding(uid: str, run_id: str) -> None:
+        """Remember that `run_id` is the finding that answered the practice firing."""
+        setup = store.get_project_setup(uid)
+        if not setup:
             return
         store.set_run_practice(run_id)
         setup["practice_finding"] = run_id
@@ -5041,6 +5055,70 @@ def make_app() -> FastAPI:
         """Whether anybody is watching each service, and each watcher's state (TR-743)."""
         return await asyncio.to_thread(watch_mod.view, store, runtime.catalog)
 
+    # ── incidents (TR-744): notes with an owner and an end ──
+    if incidents_mod.sweep_hook not in watch_mod.EVERY_TICK:
+        watch_mod.EVERY_TICK.append(incidents_mod.sweep_hook)
+
+    def _who(request: Request) -> tuple[str, str]:
+        """(id, name) of who acts: the credential's name, "console" with auth off."""
+        name = _by(request) or "console"
+        return name, name
+
+    def _incident_or_404(incident_id: str) -> dict:
+        inc = store.get_incident(incident_id)
+        if inc is None:
+            _err(KeyError(f"no incident {incident_id!r}"), 404)
+        return inc
+
+    @app.get("/api/incidents")
+    def list_incidents_route(state: str = "", service: str = "", limit: int = 50,
+                             before: str = ""):
+        """Newest note first. `state` is open, on_it, resolved or active (open and on_it);
+        `before` is the `next_before` of the page before."""
+        if state and state not in ("open", "on_it", "resolved", "active"):
+            _err(ValueError("state must be open, on_it, resolved or active"))
+        cut = None
+        if before:
+            try:
+                cut = goal_mod._aware(datetime.fromisoformat(before.replace("Z", "+00:00")))
+            except ValueError:
+                _err(ValueError("before must be a time such as 2026-10-01T12:00:00Z"))
+        limit = max(1, min(int(limit), 200))
+        rows = store.list_incidents(state or None, service or None, limit, cut)
+        notes = store.notes_of([r["id"] for r in rows])
+        settings = store.service_settings()
+        now = incidents_mod.clock()
+        return {"incidents": [incidents_mod.view(store, r, notes=notes[r["id"]],
+                                                 settings=settings, now=now) for r in rows],
+                "next_before": (goal_mod._iso(rows[-1]["last_note_at"])
+                                if len(rows) == limit else None),
+                "counts": store.incident_counts(service or None)}
+
+    @app.get("/api/incidents/{incident_id}")
+    def get_incident_route(incident_id: str):
+        return incidents_mod.detail(store, _incident_or_404(incident_id))
+
+    def _incident_action(incident_id: str, request: Request, act) -> dict:
+        _incident_or_404(incident_id)
+        by_id, by_name = _who(request)
+        out = act(store, incident_id, by_id, by_name, "console")
+        if out is None:
+            _err(KeyError(f"no incident {incident_id!r}"), 404)
+        return incidents_mod.detail(store, out)
+
+    @app.post("/api/incidents/{incident_id}/on_it")
+    def incident_on_it_route(incident_id: str, request: Request):
+        """Somebody is on it: the caller. Admin, like every write."""
+        return _incident_action(incident_id, request, incidents_mod.take)
+
+    @app.post("/api/incidents/{incident_id}/resolve")
+    def incident_resolve_route(incident_id: str, request: Request):
+        return _incident_action(incident_id, request, incidents_mod.resolve)
+
+    @app.post("/api/incidents/{incident_id}/reopen")
+    def incident_reopen_route(incident_id: str, request: Request):
+        return _incident_action(incident_id, request, incidents_mod.reopen)
+
     @app.get("/api/services/{name:path}")
     async def get_service_route(name: str):
         item = await asyncio.to_thread(sre_mod.get_service, store, runtime.catalog, name)
@@ -5474,13 +5552,16 @@ def make_app() -> FastAPI:
         if store.get_catalog_agent(agent) is not None:
             _err(ValueError(f"{agent!r} is also the name of a Tares agent; record the finding with "
                             "a key of another name"), 409)
+        practice = _answers_practice(uid, ident)
         run_id = await dispatcher.agents.record_external(uid, agent, entity, finding,
                                                          verdict=verdict, label=label,
+                                                         practice=practice,
                                                          headline=headline, next_step=next_step,
                                                          what_changed=what_changed, since=since,
                                                          failing=failing,
                                                          likely_cause=likely_cause)
-        _flag_practice_finding(uid, run_id, ident)
+        if practice:
+            _flag_practice_finding(uid, run_id)
         return {"ok": True, "run_id": run_id, "agent": agent, "entity": entity,
                 "verdict": verdict}
 

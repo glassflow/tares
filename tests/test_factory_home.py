@@ -34,6 +34,10 @@ from tares import factory_api
 from tares import factory_home as fh
 from tares import words
 
+# this test is about the frame: it fills the builders itself, so the real ones
+# (tares/factory_waiting.py, tested in test_factory_home_waiting.py) stay out
+fh.WAITING_BUILDERS.clear()
+
 P = F = 0
 
 
