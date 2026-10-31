@@ -17,6 +17,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 - Console: shadcn/ui primitives on Radix, themed with the Tares tokens, with a /dev/components gallery (part 1 of the component library).
 - A service's event counts over time, all events or only errors, in buckets (`SreStore.event_series`, and `event_series_many` for every service in one query), and one rule for what counts as an error (`sre.is_error`). Nothing in the console reads them yet.
 - AI SRE cells tell Slack when nobody is watching a service, and when watching starts again. `GET /api/watch` says who watches what and why a watcher stopped.
+- "Was this worth raising?": a person answers yes or no on what a watcher raised (`PUT /api/findings/{id}/worth`, `DELETE` takes it back), results carry the counts and your own answer, `GET /api/watchers/hit-rate` gives each watcher's hit rate, `GET /api/feedback/export` exports the answers with the firing id, and an AI SRE watcher's prompt lists its recent "not worth it" cases.
 
 ### Fixed
 - Incident notes no longer show No action when the note has a numbered next step. A finding with no verdict now counts as a note that waits for a person, on every edition.
