@@ -172,7 +172,8 @@ export function AgentView({ ctx, name }: { ctx: Ctx; name: string }) {
           ["model", <><span className="mono">{agent.model || d.default_models?.[agent.effective_provider ?? ""] || d.default_model}</span>
             {!agent.model && <span className="help"> · provider default</span>}
             <span className="help"> · up to {agent.effective_max_rounds} rounds</span>
-            {agent.budget_usd ? <span className="help"> · budget ${agent.budget_usd}</span> : null}</>],
+            {agent.budget_usd ? <span className="help"> · budget ${agent.budget_usd}{agent.budget_period === "month"
+              && ` a month · ${fmtCost(agent.budget_spent_usd ?? 0)} this month`}</span> : null}</>],
           ["delivers to", <>
             <span className="help">the entity's timeline</span>
             {agent.slack_channel && <span className="help">, a Slack channel</span>}
