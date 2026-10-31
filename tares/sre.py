@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import time
+import math
 from datetime import timedelta, timezone
 
 from .config import FINDINGS_SOURCE, primary_label
@@ -69,6 +70,77 @@ def canonical(name: str, settings: dict) -> str:
         seen.add(nxt)
         cur = nxt
     return cur
+
+
+# ── what counts as an error, and the charts built on it (TR-767) ─────────────
+ERROR_LEVELS = ("error", "fatal", "critical")
+LEVEL_LABELS = ("level", "severity", "severity_text")
+ERROR_TYPES = ("ERROR", "FATAL")
+STATUS_LABELS = ("status_code", "status", "nginx_status_code", "http.status_code", "http_status")
+ERROR_STATUS = 500
+SPAN_STATUS_LABEL = "status.code"
+WINDOWS = {"10m": (timedelta(minutes=10), 1), "1h": (timedelta(hours=1), 60),
+           "2h": (timedelta(hours=2), 60), "24h": (timedelta(hours=24), 60),
+           "7d": (timedelta(days=7), 84)}   # window -> (how long, buckets by default)
+
+
+def label_sql(name: str) -> str:
+    """SQL for label `name`. A name with a dot (http.status_code) is one flat key, so its JSON
+    path is quoted; the rest go through the store's own _label_expr."""
+    from .store import _DOTTED_FIELD_RE, _label_expr
+    if "." in name and _DOTTED_FIELD_RE.match(name):
+        return f"json_extract_string(labels, '$.\"{name}\"')"
+    return _label_expr(name)
+
+
+def is_error_where(spec: dict[str, str]) -> tuple[str, list]:
+    """One SQL condition (and its params) that is true for an error event of the sources in
+    `spec` (source -> the label naming a service in it): a level label of error, fatal or
+    critical in any case; an event type of ERROR or FATAL; a status code label of 500 or more
+    (a value that is not a whole number never matches); or a span whose status.code label is
+    ERROR. is_error() below is the same rule for one event in Python."""
+    if not spec:
+        return "FALSE", []
+    levels = ", ".join(f"'{v}'" for v in ERROR_LEVELS)
+    types = ", ".join(f"'{v}'" for v in ERROR_TYPES)
+    parts = [f"lower({label_sql(n)}) IN ({levels})" for n in LEVEL_LABELS]
+    parts.append(f"upper(event_type) IN ({types})")
+    parts += [f"TRY_CAST({label_sql(n)} AS BIGINT) >= {ERROR_STATUS}" for n in STATUS_LABELS]
+    parts.append(f"(event_type = 'span' AND upper({label_sql(SPAN_STATUS_LABEL)}) = 'ERROR')")
+    sources = sorted(spec)
+    ph = ", ".join(["?"] * len(sources))
+    return f"(source IN ({ph}) AND ({' OR '.join(parts)}))", sources
+
+
+def is_error(event: dict) -> bool:
+    """Whether one event is an error: the rule of is_error_where. `event` has a `labels` dict
+    and may have an `event_type`."""
+    labels = event.get("labels") or {}
+    etype = str(event.get("event_type") or "")
+    if etype.upper() in ERROR_TYPES:
+        return True
+    if any(str(labels.get(n)).lower() in ERROR_LEVELS for n in LEVEL_LABELS if n in labels):
+        return True
+    for n in STATUS_LABELS:
+        try:
+            if n in labels and int(str(labels[n]).strip()) >= ERROR_STATUS:
+                return True
+        except ValueError:
+            pass
+    return etype == "span" and str(labels.get(SPAN_STATUS_LABEL)).upper() == "ERROR"
+
+
+def series_for(window: str, now, points: int | None = None) -> tuple:
+    """(since, until, bucket_s) for a chart over `window` (10m, 1h, 2h, 24h or 7d) ending at
+    `now`. `points` asks for that many buckets instead of the window's own (24h with 20 points
+    is 20 buckets of 72 minutes); a count that does not divide the window gives fewer."""
+    if window not in WINDOWS:
+        raise ValueError(f"no window {window!r}: use one of {', '.join(WINDOWS)}")
+    span, default = WINDOWS[window]
+    n = default if points is None else points
+    if not isinstance(n, int) or n < 1:
+        raise ValueError("points must be a whole number of 1 or more")
+    return now - span, now, math.ceil(span.total_seconds() / n)
 
 
 def _overrides(store) -> dict:
