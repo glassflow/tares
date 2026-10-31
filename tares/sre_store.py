@@ -274,13 +274,18 @@ class SreStore:
             row = self.sc.execute(_INCIDENT_SELECT + "WHERE id = ?", [incident_id]).fetchone()
         return self._incident(row) if row else None
 
-    def open_incident_for(self, service: str, since) -> dict | None:
+    def open_incident_for(self, service: str, since, until=None) -> dict | None:
         """The newest incident of `service` that is not resolved and had a note at or after
-        `since`."""
+        `since`. With `until`, only one opened at or before it: the backfill files an old note
+        and an incident that began after that note is not its incident."""
+        sql = (_INCIDENT_SELECT + "WHERE service = ? AND state <> 'resolved' AND "
+               "last_note_at >= ? ")
+        args = [service, since]
+        if until is not None:
+            sql += "AND opened_at <= ? "
+            args.append(until)
         with self._sread:
-            row = self.sc.execute(
-                _INCIDENT_SELECT + "WHERE service = ? AND state <> 'resolved' AND "
-                "last_note_at >= ? ORDER BY last_note_at DESC LIMIT 1", [service, since]).fetchone()
+            row = self.sc.execute(sql + "ORDER BY last_note_at DESC LIMIT 1", args).fetchone()
         return self._incident(row) if row else None
 
     def add_incident_note(self, incident_id: str, run_id: str, at) -> bool:
@@ -391,10 +396,26 @@ class SreStore:
         return [{"at": r[0], "action": r[1], "by_id": r[2], "by_name": r[3], "via": r[4]}
                 for r in rows]
 
+    def last_reopened(self, incident_ids: list[str]) -> dict:
+        """incident id -> when a person last reopened it (the newest `reopened` log row), for the
+        ones that were."""
+        if not incident_ids:
+            return {}
+        ph = ", ".join(["?"] * len(incident_ids))
+        with self._sread:
+            rows = self.sc.execute(
+                f"SELECT incident_id, at_time FROM incident_log WHERE action = 'reopened' "
+                f"AND incident_id IN ({ph})", list(incident_ids)).fetchall()
+        out: dict = {}
+        for iid, at in rows:
+            if at is not None and (iid not in out or at > out[iid]):
+                out[iid] = at
+        return out
+
     def list_incidents(self, state: str | None = None, service: str | None = None,
-                       limit: int = 50, before=None) -> list[dict]:
+                       limit: int = 50, before=None, offset: int = 0) -> list[dict]:
         """Newest note first. `state` is open, on_it, resolved or active (open and on_it);
-        `before` keeps the incidents whose last note is older than it."""
+        `before` keeps the incidents whose last note is older than it; `offset` pages."""
         where, args = [], []
         if state == "active":
             where.append("state <> 'resolved'")
@@ -409,8 +430,8 @@ class SreStore:
             args.append(before)
         sql = _INCIDENT_SELECT + ("WHERE " + " AND ".join(where) + " " if where else "")
         with self._sread:
-            rows = self.sc.execute(sql + "ORDER BY last_note_at DESC, id LIMIT ?",
-                                   args + [int(limit)]).fetchall()
+            rows = self.sc.execute(sql + "ORDER BY last_note_at DESC, id LIMIT ? OFFSET ?",
+                                   args + [int(limit), max(0, int(offset))]).fetchall()
         return [self._incident(r) for r in rows]
 
     def incident_counts(self, service: str | None = None) -> dict:

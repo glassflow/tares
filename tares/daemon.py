@@ -4157,21 +4157,29 @@ def make_app() -> FastAPI:
         store.set_project_setup(uid, setup)
         return {"run_id": rid}
 
-    def _flag_practice_finding(uid: str, run_id: str, ident: dict | None) -> None:
-        """An outside agent's finding recorded within ten minutes of a practice firing, by a
-        key of the project (the one setup made, or one made in its place), answers that
-        firing: it is practice."""
+    def _answers_practice(uid: str, ident: dict | None) -> bool:
+        """Whether an outside agent's finding recorded now, by `ident`, answers the project's
+        practice firing: made within ten minutes of it, by a key of the project (the one setup
+        made, or one made in its place). Decided before the finding is recorded, so the run
+        carries the practice flag from the start."""
         setup = store.get_project_setup(uid)
         if not setup or setup.get("practice_kind") != "own" or setup.get("practice_finding"):
-            return
+            return False
         try:
             at = datetime.fromisoformat(str(setup.get("practice_at")))
         except ValueError:
-            return
+            return False
         if (now_utc() - at).total_seconds() > setup_flow.PRACTICE_WINDOW_S:
-            return
+            return False
         if ident is not None and ident.get("project") != uid \
                 and ident.get("id") != f"key:{setup.get('own_key_id')}":
+            return False
+        return True
+
+    def _flag_practice_finding(uid: str, run_id: str) -> None:
+        """Remember that `run_id` is the finding that answered the practice firing."""
+        setup = store.get_project_setup(uid)
+        if not setup:
             return
         store.set_run_practice(run_id)
         setup["practice_finding"] = run_id
@@ -5544,13 +5552,16 @@ def make_app() -> FastAPI:
         if store.get_catalog_agent(agent) is not None:
             _err(ValueError(f"{agent!r} is also the name of a Tares agent; record the finding with "
                             "a key of another name"), 409)
+        practice = _answers_practice(uid, ident)
         run_id = await dispatcher.agents.record_external(uid, agent, entity, finding,
                                                          verdict=verdict, label=label,
+                                                         practice=practice,
                                                          headline=headline, next_step=next_step,
                                                          what_changed=what_changed, since=since,
                                                          failing=failing,
                                                          likely_cause=likely_cause)
-        _flag_practice_finding(uid, run_id, ident)
+        if practice:
+            _flag_practice_finding(uid, run_id)
         return {"ok": True, "run_id": run_id, "agent": agent, "entity": entity,
                 "verdict": verdict}
 

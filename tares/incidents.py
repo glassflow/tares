@@ -19,6 +19,7 @@ from .envelope import now_utc
 BACKFILL_SETTING = "sre.incidents_backfilled"
 BACKFILL_VERSION = "2"        # bump when the rule for "is a note" or for joining changes
 SELF_RESOLVE_AFTER = timedelta(hours=24)
+SWEEP_PAGE = 500              # open incidents the sweep reads at a time
 BEFORE_TRACKING_AFTER = timedelta(days=7)
 DEFAULT_COOLDOWN = 3600.0     # seconds, when neither a handoff nor a trigger says
 CARRIER_WINDOW = timedelta(hours=1)
@@ -167,13 +168,14 @@ def resolve(store, incident_id: str, by_id: str | None, by_name: str | None,
 
 def reopen(store, incident_id: str, by_id: str | None, by_name: str | None,
            via: str = "console") -> dict | None:
-    """Open again, with nobody on it."""
+    """Open again, with nobody on it. The sweep counts its quiet period from now, not from the
+    last note, so a reopen lasts."""
     inc = store.get_incident(incident_id)
     if inc is None:
         return None
     if inc["state"] == "open":
         return inc
-    out = store.set_incident_state(incident_id, "open", by_id, by_name, via)
+    out = store.set_incident_state(incident_id, "open", by_id, by_name, via, at=_aware(clock()))
     _changed(store, out, via)
     return out
 
@@ -186,22 +188,30 @@ def _names_of(settings: dict, service: str) -> list[str]:
                               if n != service and sre.canonical(n, settings) == service)
 
 
-def _said_all_clear(store, catalog, inc: dict, settings: dict, roles: dict) -> bool:
+def _said_all_clear(store, catalog, inc: dict, settings: dict, roles: dict,
+                    reopened=None) -> bool:
     """Whether the investigator's latest finding on the service, written after the incident's
-    last note, says there is nothing to do (a verdict such as resolved). A note itself never
-    does, so this is the only way an incident learns the trouble went away."""
+    last note (and after a person last reopened it), says there is nothing to do (a verdict such
+    as resolved). A note itself never does, so this is the only way an incident learns the
+    trouble went away."""
     notes = store.incident_notes(inc["id"])
     last_run = store.get_agent_run(notes[-1]["run_id"]) if notes else None
     after = _aware((last_run or {}).get("started_at") or inc["last_note_at"])
+    if reopened is not None:
+        after = max(after, _aware(reopened))
     names = _names_of(settings, inc["service"])
     ph = ", ".join(["?"] * len(names))
-    rows = store.list_agent_runs(
-        None, limit=20, where_sql=f"key_value IN ({ph}) AND outcome = 'finding' AND status = 'ok'",
-        where_params=names)
-    for r in rows:   # newest first
-        triggers = watcher_triggers(store, catalog, r["agent"], roles)
-        if goal.is_watcher_run(r, triggers):
-            continue   # a watcher's finding is a flag, not the investigator's word
+    where, params = f"key_value IN ({ph}) AND outcome = 'finding' AND status = 'ok'", list(names)
+    # a watcher's finding is a flag, not the investigator's word: leave those runs out here, or
+    # enough newer ones would push the investigator's word out of the rows read
+    pairs = sorted({(w["agent"], w["trigger"]) for w in roles["watchers"]})
+    if pairs:   # goal.is_watcher_run, in SQL: its trigger is a scheduled one and no handoff woke it
+        where += " AND NOT (" + " OR ".join(
+            ["(agent = ? AND trigger = ? AND (woken_by IS NULL OR woken_by <> 'handoff'))"]
+            * len(pairs)) + ")"
+        params += [x for pair in pairs for x in pair]
+    rows = store.list_agent_runs(None, limit=1, where_sql=where, where_params=params)
+    for r in rows:
         if _aware(r["started_at"]) <= after:
             return False
         return str(r.get("verdict") or "").strip().lower() in goal.NO_ACTION_VERDICTS
@@ -209,29 +219,44 @@ def _said_all_clear(store, catalog, inc: dict, settings: dict, roles: dict) -> b
 
 
 def sweep(store, catalog, now=None) -> list[dict]:
-    """Close the open incidents that went quiet: nobody on it, no note for 24 hours and the
-    investigator's latest word on the service says there is nothing to do. One somebody is on
-    is never closed here. Returns the incidents it resolved."""
+    """Close the open incidents that went quiet: nobody on it, no note (and no reopening by a
+    person) for 24 hours and the investigator's latest word on the service says there is nothing
+    to do. One somebody is on is never closed here. Returns the incidents it resolved."""
     from . import sre
     now = _aware(now or clock())
-    stale = store.list_incidents(state="open", before=now - SELF_RESOLVE_AFTER, limit=500)
-    if not stale:
-        return []
+    cutoff = now - SELF_RESOLVE_AFTER
     settings = store.service_settings()
-    roles = sre.roles(store, catalog, include_paused=True)
-    closed = []
-    for inc in stale:
-        try:
-            if not _said_all_clear(store, catalog, inc, settings, roles):
+    roles = None
+    closed, offset = [], 0
+    while True:   # a page at a time: the ones that stay open must not hide the ones after them
+        stale = store.list_incidents(state="open", before=cutoff, limit=SWEEP_PAGE, offset=offset)
+        if not stale:
+            break
+        if roles is None:
+            roles = sre.roles(store, catalog, include_paused=True)
+        reopened = store.last_reopened([i["id"] for i in stale])
+        kept = 0
+        for inc in stale:
+            try:
+                again = reopened.get(inc["id"])
+                if again is not None and _aware(again) > cutoff:
+                    kept += 1
+                    continue   # a person reopened it lately: its quiet period starts there
+                if not _said_all_clear(store, catalog, inc, settings, roles, again):
+                    kept += 1
+                    continue
+                out = store.set_incident_state(inc["id"], "resolved", None, None, "sweep",
+                                               at=now, resolution="itself", expect="open")
+            except Exception as e:
+                print(f"[incidents] sweep {inc['id']}: {type(e).__name__}: {e}")
+                kept += 1
                 continue
-            out = store.set_incident_state(inc["id"], "resolved", None, None, "sweep", at=now,
-                                           resolution="itself", expect="open")
-        except Exception as e:
-            print(f"[incidents] sweep {inc['id']}: {type(e).__name__}: {e}")
-            continue
-        if out is not None:
-            closed.append(out)
-            _changed(store, out, "sweep")
+            if out is not None:
+                closed.append(out)
+                _changed(store, out, "sweep")
+        if len(stale) < SWEEP_PAGE:
+            break
+        offset += kept   # the closed ones left the open list, the rest are still in it
     return closed
 
 
@@ -279,7 +304,8 @@ def backfill(store, catalog=None, now=None) -> int:
         service = seen[memo]
         cooldown = cooldown_for(store, catalog, r)
         with _LOCK:
-            inc = store.open_incident_for(service, at - timedelta(seconds=cooldown))
+            # an incident that opened after this note is not its incident (a live one, on a rerun)
+            inc = store.open_incident_for(service, at - timedelta(seconds=cooldown), until=at)
             if inc:
                 store.add_incident_note(inc["id"], r["id"], at)
                 store.log_incident(inc["id"], "note_joined", None, r["agent"], "backfill", at)

@@ -45,7 +45,8 @@ from fixtures.sre_cell import build  # noqa: E402
 from tares import edition as edition_mod  # noqa: E402
 from tares import incidents  # noqa: E402
 from tares.builtin_agents import AgentRunner, parse_conclude  # noqa: E402
-from tares.envelope import Envelope  # noqa: E402
+from tares.config import catalog_from_db  # noqa: E402
+from tares.envelope import Envelope, now_utc  # noqa: E402
 from tares.store import Store  # noqa: E402
 
 P = F = 0
@@ -337,6 +338,52 @@ async def cell():
         eq("it is the recorded run's", store.incident_for_run(r.json()["run_id"])["id"],
            got["incidents"][0]["id"])
 
+        print("== a practice finding from an outside agent opens no incident ==")
+        pk = (await cx.post("/api/keys", json={"name": "outside", "project": uid})).json()
+        pkey = {"Authorization": f"Bearer {pk['secret']}"}
+
+        def practice_firing():
+            store.set_project_setup(uid, {**(store.get_project_setup(uid) or {}),
+                                          "practice_kind": "own", "practice_finding": None,
+                                          "practice_at": now_utc().isoformat()})
+
+        practice_firing()
+        r = await cx.post(f"/api/projects/{uid}/findings", headers=pkey,
+                          json={"entity": "prac-svc", "verdict": "rca",
+                                "finding": "prac-svc fails its example check."})
+        eq("the practice finding is recorded", r.status_code, 201)
+        eq("flagged practice", store.get_agent_run(r.json()["run_id"])["practice"], True)
+        eq("it filed no note", store.incident_for_run(r.json()["run_id"]), None)
+        eq("so no incident opened", (await active(service="prac-svc"))["incidents"], [])
+        r = await cx.post(f"/api/projects/{uid}/findings", headers=pkey,
+                          json={"entity": "prac-svc", "verdict": "rca",
+                                "finding": "prac-svc really fails its health check."})
+        eq("the next finding is a real one", store.get_agent_run(r.json()["run_id"])["practice"],
+           False)
+        got = await active(service="prac-svc")
+        eq("it opens one, from itself", [(i["notes"]) for i in got["incidents"]], [1])
+        eq("that note is the real run's", store.incident_for_run(r.json()["run_id"])["id"],
+           got["incidents"][0]["id"])
+        practice_firing()
+        r = await cx.post(f"/api/projects/{uid}/findings", headers=pkey,
+                          json={"entity": "prac-svc", "verdict": "rca",
+                                "finding": "prac-svc fails its example check again."})
+        eq("a practice finding joins none", (store.incident_for_run(r.json()["run_id"]),
+                                             [i["notes"] for i in (await active(service="prac-svc"))["incidents"]]),
+           (None, [1]))
+
+        print("== a note marked handled resolves its incident ==")
+        hn = await investigate("hnd-svc", w1, outcome="finding", verdict="rca",
+                               summary="hnd-svc returns errors after a deploy.")
+        hinc = store.incident_for_run(hn)
+        eq("it is open", hinc["state"], "open")
+        r = await cx.post(f"/api/projects/{uid}/results/{hn}/handled", json={"handled": True})
+        eq("handled answers", r.status_code, 200)
+        d = await detail(hinc["id"])
+        eq("the incident is resolved by the caller",
+           (d["state"], (d["resolved"] or {}).get("by_name"), (d["resolved"] or {}).get("how")),
+           ("resolved", "auth token (env)", "person"))
+
         print("== a platform cell keeps its messages, and keeps the incidents ==")
         r = await cx.put("/api/settings/edition", json={"edition": "platform"})
         eq("edition set to platform", r.status_code, 200)
@@ -402,6 +449,107 @@ def backfill_case():
     store.con.close()
 
 
+def rerun_with_live_incident_case():
+    print("== a backfill rerun leaves a live incident its own notes ==")
+    store = Store(os.path.join(TMP, "live.duckdb"))
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    uid = build(store, now, watcher=True, investigator=True)["project"]
+    seed_old_note(store, "old1", "edge-proxy", now - timedelta(days=20), uid)
+    seed_old_note(store, "old2", "edge-proxy", now - timedelta(days=3), uid)
+    seed_old_note(store, "live1", "edge-proxy", now - timedelta(hours=1), uid)
+    live = store.create_incident("edge-proxy", uid, now - timedelta(hours=1))
+    store.add_incident_note(live["id"], "live1", now - timedelta(hours=1))
+    store.log_incident(live["id"], "opened", None, "investigator", "runner",
+                       now - timedelta(hours=1))
+    title = incidents.view(store, store.get_incident(live["id"]))["title"]
+    store.set_setting(incidents.BACKFILL_SETTING, "1")   # a rerun: the first one failed or is older
+    eq("two old notes filed", incidents.backfill(store, now=now), 2)
+    eq("the live incident holds its own note only",
+       [n["run_id"] for n in store.incident_notes(live["id"])], ["live1"])
+    eq("it is still open", store.get_incident(live["id"])["state"], "open")
+    eq("its title is the one it had", incidents.view(store, store.get_incident(live["id"]))["title"],
+       title)
+    eq("each old note has an incident of its own",
+       sorted(len(store.incident_notes(store.incident_for_run(r)["id"])) for r in ("old1", "old2")),
+       [1, 1])
+    eq("and they are not the live one",
+       {store.incident_for_run(r)["id"] for r in ("old1", "old2")} & {live["id"]}, set())
+    store.con.close()
+
+
+def sweep_case():
+    print("== a reopen lasts ==")
+    store = Store(os.path.join(TMP, "sweep.duckdb"))
+    T = datetime.now(timezone.utc).replace(microsecond=0)
+    uid = build(store, T, watcher=True, investigator=True)["project"]
+    catalog = catalog_from_db(store)
+    clk = [T]
+    incidents.clock = lambda: clk[0]
+
+    def quiet_one(svc, note_at=None, clear_at=None):
+        """An open incident whose only note is old, and the investigator's all-clear after it."""
+        note_at = note_at or T - timedelta(hours=30)
+        seed_old_note(store, f"n-{svc}", svc, note_at, uid)
+        inc = store.create_incident(svc, uid, note_at)
+        store.add_incident_note(inc["id"], f"n-{svc}", note_at)
+        seed_old_note(store, f"c-{svc}", svc, clear_at or T - timedelta(hours=10), uid,
+                      verdict="resolved")
+        return inc["id"]
+
+    def state(iid):
+        return store.get_incident(iid)["state"]
+
+    a = quiet_one("reop-a")
+    eq("it resolves itself first", [i["id"] for i in incidents.sweep(store, catalog, now=T)], [a])
+    incidents.reopen(store, a, "u1", "Kim")
+    eq("the person reopened it", state(a), "open")
+    incidents.sweep(store, catalog, now=T + timedelta(minutes=1))
+    eq("a sweep a minute later leaves it open", state(a), "open")
+    incidents.sweep(store, catalog, now=T + timedelta(hours=25))
+    eq("so does one a day on, the all-clear came before the reopen", state(a), "open")
+    seed_old_note(store, "c2-reop-a", "reop-a", T + timedelta(hours=2), uid, verdict="resolved")
+    eq("a new all-clear after the reopen closes it",
+       [i["id"] for i in incidents.sweep(store, catalog, now=T + timedelta(hours=25))], [a])
+
+    b = quiet_one("reop-b")
+    incidents.resolve(store, b, "u1", "Kim")
+    incidents.reopen(store, b, "u1", "Kim")
+    incidents.sweep(store, catalog, now=T + timedelta(minutes=1))
+    eq("resolved by a person, then reopened: a sweep leaves it open", state(b), "open")
+    seed_old_note(store, "c2-reop-b", "reop-b", T + timedelta(seconds=30), uid, verdict="resolved")
+    incidents.sweep(store, catalog, now=T + timedelta(minutes=1))
+    eq("an all-clear just after the reopen does not close it yet", state(b), "open")
+    eq("a day after the reopen it does",
+       [i["id"] for i in incidents.sweep(store, catalog, now=T + timedelta(hours=25))
+        if i["id"] == b], [b])
+
+    print("== the sweep reads past its first page ==")
+    seed_old_note(store, "c-old", "f7-old", T - timedelta(hours=40), uid, verdict="resolved")
+    old = store.create_incident("f7-old", uid, T - timedelta(hours=50))
+    keep = [store.create_incident(f"f7-{i}", uid, T - timedelta(hours=30 + i))["id"]
+            for i in range(3)]   # newer than f7-old, no all-clear: they stay open
+    page = incidents.SWEEP_PAGE
+    incidents.SWEEP_PAGE = 2
+    try:
+        closed = [i["id"] for i in incidents.sweep(store, catalog, now=T)]
+    finally:
+        incidents.SWEEP_PAGE = page
+    eq("the oldest incident closed although newer ones fill the first page", old["id"] in closed,
+       True)
+    eq("the others are open", [state(i) for i in keep], ["open"] * 3)
+
+    print("== a watcher's findings do not hide the investigator's all-clear ==")
+    f6 = quiet_one("f6-svc")
+    for i in range(22):   # newer than the all-clear: the 20 newest rows are all the watcher's
+        rid = f"w-{i}"
+        store.start_agent_run(rid, "watcher", "watch-prod", "", "f6-svc", "h", project=uid)
+        store.finish_agent_run(rid, "ok", finding="f6-svc looks off.", outcome="finding",
+                               verdict="investigate")
+    eq("it still closes", f6 in [i["id"] for i in incidents.sweep(store, catalog, now=T)], True)
+    incidents.clock = incidents.now_utc
+    store.con.close()
+
+
 # ── the pieces that need no cell ─────────────────────────────────────────────
 def words():
     print("== how an incident reads ==")
@@ -434,5 +582,7 @@ if __name__ == "__main__":
     words()
     asyncio.run(cell())
     backfill_case()
+    rerun_with_live_incident_case()
+    sweep_case()
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)

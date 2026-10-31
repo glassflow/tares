@@ -1420,13 +1420,15 @@ class AgentRunner:
                               verdict: str | None = None, label: str | None = None,
                               headline: str | None = None, next_step: str | None = None,
                               what_changed: str | None = None, since=None,
-                              failing: str | None = None, likely_cause: str | None = None) -> str:
+                              failing: str | None = None, likely_cause: str | None = None,
+                              practice: bool = False) -> str:
         """An external agent's finding (TR-336): a run of kind external in the project, ended
         with this finding, plus the finding event every read and findings trigger sees, exactly
-        like a Tares agent's. Returns the run id."""
+        like a Tares agent's. A practice finding (it answers the guided setup's practice firing)
+        is flagged from the start, so no incident takes its note. Returns the run id."""
         run_id = "run_" + uuid.uuid4().hex[:12]
         self.store.start_agent_run(run_id, agent_label, "", "", key, "", None,
-                                   woken_by="external", project=project)
+                                   woken_by="external", project=project, practice=practice)
         self.store.add_run_projects(run_id, [project])
         await self._ingest_finding(agent_label, "", key, finding, "", verdict=verdict,
                                    label=label, run_id=run_id, project=project,
