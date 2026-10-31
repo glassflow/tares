@@ -87,6 +87,10 @@ def pure():
         ({"http_status": "504"}, "INFO"), ({"status": "000500"}, None),
         ({}, "log", {"severityNumber": 17}), ({}, "INFO", {"severityNumber": 21}),
         ({}, "log", {"severityNumber": "24"}),
+        ({}, "log", {"severityNumber": "SEVERITY_NUMBER_ERROR"}),
+        ({}, "log", {"severityNumber": "SEVERITY_NUMBER_ERROR3"}),
+        ({}, "log", {"severityNumber": "SEVERITY_NUMBER_FATAL"}),
+        ({}, "log", {"severityNumber": "SEVERITY_NUMBER_FATAL4"}),
         ({}, "span", {"status": {"code": 2}}),
         ({}, "span", {"status": {"code": "STATUS_CODE_ERROR"}}),
         ({}, "span", {"status": {"code": "2"}}),
@@ -104,6 +108,10 @@ def pure():
         ({"status": "\u0665\u0660\u0660"}, None),
         # a severity number below 17, a span that is fine, or not a span at all
         ({}, "log", {"severityNumber": 16}), ({}, "log", {"severityNumber": 9}),
+        ({}, "log", {"severityNumber": "SEVERITY_NUMBER_WARN4"}),
+        ({}, "log", {"severityNumber": "SEVERITY_NUMBER_INFO"}),
+        ({}, "log", {"severityNumber": "SEVERITY_NUMBER_UNSPECIFIED"}),
+        ({}, "log", {"severityNumber": "severity_number_error"}),
         ({}, "log", {"severityNumber": "17.0"}), ({}, "log", {"severityNumber": "abc"}),
         ({}, "span", {"status": {"code": 1}}), ({}, "span", {"status": {"code": 0}}),
         ({}, "span", {"status": {"code": "STATUS_CODE_OK"}}), ({}, "span", {"status": {}}),
@@ -338,6 +346,10 @@ def otlp():
     logs = [("error", log("boom", "ERROR", 17)), ("error", log("worse", "ERROR2", 18)),
             ("error", log("down", "FATAL3", 23)), ("error", log("hot", "CRITICAL")),
             ("error", log("number only", None, 21)),
+            # over gRPC the enum is its name, and a Collector parser keeps raw text in severityText
+            ("error", log("grpc error", "err", "SEVERITY_NUMBER_ERROR")),
+            ("error", log("grpc fatal", "crit", "SEVERITY_NUMBER_FATAL2")),
+            ("fine", log("grpc info", "info", "SEVERITY_NUMBER_INFO")),
             ("fine", log("hello", "INFO", 9)), ("fine", log("warned", "WARN", 13)),
             ("fine", log("plain"))]
     spans = [("error", span("a", 2)), ("error", span("b", "STATUS_CODE_ERROR")),
@@ -358,7 +370,7 @@ def otlp():
     all_ = store.event_series("api", SINCE, UNTIL, BUCKET)
     errs = store.event_series("api", SINCE, UNTIL, BUCKET, errors_only=True)
     eq("all of them are counted", sum(counts(all_)), len(kinds))
-    eq("the series counts the same errors (5 logs, 2 spans)", sum(counts(errs)), 7)
+    eq("the series counts the same errors (7 logs, 2 spans)", sum(counts(errs)), 9)
     eq("one query says the same", store.event_series_many(["api"], SINCE, UNTIL, BUCKET, True),
        {"api": errs})
 

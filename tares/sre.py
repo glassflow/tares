@@ -82,6 +82,9 @@ ERROR_TYPES = ("ERROR", "ERROR2", "ERROR3", "ERROR4", "FATAL", "FATAL2", "FATAL3
 STATUS_LABELS = ("status_code", "status", "nginx_status_code", "http_status")
 ERROR_STATUS = 500
 ERROR_SEVERITY_NUMBER = 17   # OTLP: 17 and up is ERROR or FATAL, whatever the severityText says
+# OTLP over gRPC writes severityNumber as its enum name, not the number
+ERROR_SEVERITY_NAMES = tuple(f"SEVERITY_NUMBER_{n}" for n in (
+    "ERROR", "ERROR2", "ERROR3", "ERROR4", "FATAL", "FATAL2", "FATAL3", "FATAL4"))
 SPAN_ERROR_CODES = ("2", "STATUS_CODE_ERROR")   # payload.status.code, as a number or its name
 WHOLE = r"[0-9]{1,6}"   # what a status or severity number is: plain digits, nothing else
 WINDOWS = {"10m": (timedelta(minutes=10), 1), "1h": (timedelta(hours=1), 60),
@@ -104,7 +107,8 @@ def is_error_where(spec: dict[str, str]) -> tuple[str, list]:
     """One SQL condition (and its params) that is true for an error event of the sources in
     `spec` (source -> the label naming a service in it): a level label of error, fatal or
     critical in any case; an event type of ERROR, ERROR2 to ERROR4, FATAL, FATAL2 to FATAL4 or
-    CRITICAL (OTLP severityText); a payload severityNumber of 17 or more; a status code label of
+    CRITICAL (OTLP severityText); a payload severityNumber of 17 or more (or its gRPC enum name, SEVERITY_NUMBER_ERROR to
+    SEVERITY_NUMBER_FATAL4); a status code label of
     500 or more (a value that is not plain digits never matches); or a span whose
     payload.status.code is 2 or STATUS_CODE_ERROR. is_error() below is the same rule for one
     event in Python."""
@@ -118,7 +122,8 @@ def is_error_where(spec: dict[str, str]) -> tuple[str, list]:
     parts.append(f"upper(event_type) IN ({types})")
     parts += [f"{_whole_sql(_label_expr(n))} >= {ERROR_STATUS}" for n in STATUS_LABELS]
     severity = "json_extract_string(payload, '$.severityNumber')"
-    parts.append(f"{_whole_sql(severity)} >= {ERROR_SEVERITY_NUMBER}")
+    names = ", ".join(f"'{v}'" for v in ERROR_SEVERITY_NAMES)
+    parts.append(f"({_whole_sql(severity)} >= {ERROR_SEVERITY_NUMBER} OR {severity} IN ({names}))")
     parts.append(f"(event_type = 'span' AND json_extract_string(payload, '$.status.code') "
                  f"IN ({codes}))")
     sources = sorted(spec)
@@ -138,8 +143,9 @@ def is_error(event: dict) -> bool:
         return True
     if any((_whole(labels[n]) or 0) >= ERROR_STATUS for n in STATUS_LABELS if n in labels):
         return True
-    if "severityNumber" in payload and (_whole(payload["severityNumber"]) or 0) \
-            >= ERROR_SEVERITY_NUMBER:
+    if "severityNumber" in payload and (
+            (_whole(payload["severityNumber"]) or 0) >= ERROR_SEVERITY_NUMBER
+            or str(payload["severityNumber"]) in ERROR_SEVERITY_NAMES):
         return True
     status = payload.get("status")
     return etype == "span" and isinstance(status, dict) \
