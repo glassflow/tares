@@ -78,4 +78,4 @@ function expectOneCall(page, route) {
   };
 }
 
-module.exports = { offendersIn, checkWords, expectOneCall, WORDS };
+module.exports = { offendersIn, checkWords, expectOneCall, READ_TEXT, WORDS };

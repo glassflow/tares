@@ -19,6 +19,8 @@ const ROOTS = ["src/editions", "src/components/edition", "src/pages/dev"];
 const SKIP_ATTRS = new Set(["className", "data-testid", "to", "href", "key"]);
 const EXEMPT_ATTRS = new Set(["data-words-exempt", "data-user-text"]);
 const OK_COMMENT = /\/\/\s*words-ok\s*$/;
+// JSX text and JSX attribute strings decode HTML entities, so &mdash; renders as an em dash there.
+const decodeDash = (s) => s.replace(/&(?:mdash|#8212|#x2014);/gi, "\u2014");
 
 function hasExemptAttr(node) {
   const opening = ts.isJsxElement(node) ? node.openingElement : node;
@@ -58,11 +60,12 @@ function scanSource(fileName, text) {
     if (ts.isJsxAttribute(node) && SKIP_ATTRS.has(node.name.getText())) return;
     if (ts.isJsxText(node)) {
       const raw = node.getText(sf);
-      const value = raw.replace(/&(?:mdash|#8212|#x2014);/gi, "\u2014");
-      report(node, value, node.getStart(sf) + (raw.length - raw.trimStart().length));
+      report(node, decodeDash(raw), node.getStart(sf) + (raw.length - raw.trimStart().length));
     } else if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)
                || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) {
-      if (!isKeyOrPath(node) && !(node.text || "").startsWith("/")) report(node, node.text);
+      if (!isKeyOrPath(node) && !(node.text || "").startsWith("/")) {
+        report(node, ts.isJsxAttribute(node.parent) ? decodeDash(node.text) : node.text);
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -96,4 +99,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { scanSource };
+module.exports = { scanSource, listFiles };
