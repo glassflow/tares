@@ -125,6 +125,31 @@ def default_branch():
     ck("a branch named in the config is not said to be the default", "on_default_branch" not in named.labels,
        str(named.labels))
 
+    # the poller itself: a stubbed GitHub, one commit on whatever branch is asked for
+    pstore = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "p.duckdb"))
+
+    def polled(meta_fails=False, **cfg):
+        c = conn(prs=False, **cfg)
+        c.store = pstore
+        c.cfg.name = f"poll-{len(cfg)}-{meta_fails}-{cfg.get('branch', '')}"
+
+        async def fake_get(cx, url, token, params, etag_key, repo):
+            if url.endswith("/commits"):
+                return [commit]
+            if meta_fails:
+                raise ValueError("GitHub returned 500")
+            return {"default_branch": "develop"}
+        c._get = fake_get
+        return asyncio.run(c.poll())
+
+    flags = lambda envs: [(e.labels.get("branch"), e.labels.get("on_default_branch")) for e in envs]
+    eq("polling with no branch follows the default and says so", flags(polled()), [("develop", True)])
+    eq("polling the branch discovery filled in, which is the default, says so too",
+       flags(polled(branch="develop")), [("develop", True)])
+    eq("polling a pinned side branch does not say so", flags(polled(branch="release")), [("release", None)])
+    eq("a default branch GitHub will not name is no reason to lose the commits",
+       flags(polled(meta_fails=True, branch="develop")), [("develop", None)])
+
     store = Store(os.path.join(tempfile.mkdtemp(dir=TMP), "d.duckdb"))
     for name, extra in (("poll", {}), ("pinned", {"branch": "release"})):
         store.upsert_catalog_source(name, source_type_for("github"), "github", "1h", {
@@ -213,6 +238,18 @@ def reading():
          {"label": "Connect its logs", "action": "connect"})])
     ck("service-a-ui has no deploys item (it has no signals)", not kinds(spots, "no_deploys", "service-a-ui"))
     eq("no rule yet", kinds(spots, "rule_matches_nothing"), [])
+
+    print("== an upstream that is an address is not a service (F7) ==")
+    from fixtures.sre_cell import _otlp
+    store.append([_otlp(NOW, 3, "edge-proxy", "INFO", "GET /ui 200",
+                        {"namespace": "default", "nginx_status_code": "200",
+                         "proxy_upstream_name": "10.0.3.4:8080"})])
+    after = sre.list_services(store, cat, NOW)
+    eq("no service is made from the address", sorted(i["name"] for i in after),
+       sorted(i["name"] for i in items))
+    ck("and no seen_via_other item names it", not any(
+        "10.0.3.4" in (b["service"] + b["title"] + b["detail"])
+        for b in kinds(sre.blind_spots(store, cat, NOW), "seen_via_other")))
 
     print("== repo links and deploys ==")
     eq("service-a has a deploys item before it is linked", len(kinds(spots, "no_deploys", "service-a")), 1)
