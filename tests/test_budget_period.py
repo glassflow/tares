@@ -15,7 +15,7 @@ import os
 import sys
 import tempfile
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _env import scrub_os_environ
@@ -153,6 +153,23 @@ async def main():
         eq("December rolls into January",
            store.budget_resets_on(monthly, datetime(2026, 12, 15, tzinfo=UTC)), date(2027, 1, 1))
 
+        print("== the month boundary ==")
+        # a fixed clock and fixed rows either side of the 1st, all UTC
+        edge = {"name": "edge", "budget_period": "month"}
+        spend(store, "edge", 0.01, datetime(2026, 9, 30, 23, 59, 59, tzinfo=UTC))
+        spend(store, "edge", 0.02, datetime(2026, 10, 1, 0, 0, 0, tzinfo=UTC))
+        eq("a run one second before the 1st is last month's",
+           round(store.agent_budget_spend(edge, NOW), 6), 0.02)
+        eq("a run at 00:00:00 on the 1st is this month's",
+           round(store.agent_budget_spend(edge, datetime(2026, 10, 1, 0, 0, 0, tzinfo=UTC)), 6), 0.02)
+        plus2 = timezone(timedelta(hours=2))
+        eq("1 Nov 01:00 at +02:00 is still 31 Oct in UTC",
+           Store.month_start(datetime(2026, 11, 1, 1, 0, tzinfo=plus2)), datetime(2026, 10, 1, tzinfo=UTC))
+        eq("1 Nov 02:00 at +02:00 is the 1st in UTC",
+           Store.month_start(datetime(2026, 11, 1, 2, 0, tzinfo=plus2)), datetime(2026, 11, 1, tzinfo=UTC))
+        eq("31 Oct 22:00 at -05:00 is already 1 Nov in UTC",
+           store.agent_budget_spend(edge, datetime(2026, 10, 31, 22, 0, tzinfo=timezone(timedelta(hours=-5)))), 0)
+
         print("== the run path ==")
 
         async def run(name, at):
@@ -267,6 +284,16 @@ async def main():
         ck("create with budget_period weekly is a 400", r.status_code == 400 and "budget_period" in r.text,
            f"{r.status_code} {r.text}")
         ck("and nothing was created", store.get_catalog_agent("bad-period") is None)
+
+        print("== what the console shows ==")
+        now = datetime.now(UTC)
+        spend(store, "imported", 0.04, now - timedelta(days=40))   # an earlier month
+        spend(store, "imported", 0.01, now)
+        rows = {a["name"]: a for a in (await cx.get("/api/agents/builtin")).json()["agents"]}
+        eq("a month budget reports this month's spend, not lifetime",
+           rows["imported"]["budget_spent_usd"], 0.01)
+        eq("a lifetime budget has none (the card's total cost is its spend)",
+           rows["forever"]["budget_spent_usd"], None)
 
 
 asyncio.run(main())

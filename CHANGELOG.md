@@ -31,6 +31,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 - Agents can have a monthly budget (`budget_period: month`, resets on the 1st UTC); existing budgets stay lifetime.
+- An agent's page shows this month's spend next to a monthly budget (`budget_spent_usd` on `GET /api/agents/builtin`), and a test pins the month boundary in UTC.
 - CI reads its test list from tests/ci_list.txt.
 - Plugin 0.6.1: builders mock a screen first and wait for approval; the reviewer compares screenshots of every state with the approved mock.
 - The factory and AI SRE console editions have a words list (`ui/src/editions/words.json`) and checks

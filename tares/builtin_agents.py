@@ -920,15 +920,13 @@ class AgentRunner:
             await self._write_back_skipped(agent, trigger_name, (callback_key, callback_labels),
                                            SKIPPED_DAILY_CAP, msg, refused_dispatch, run_id=run_id)
             return "capped", msg
-        # The agent's own budget, when set: lifetime spend from the run log. Checked before any
-        # model call, so a capped run costs nothing; the message says where to raise it.
-        # A monthly budget (TR-770) counts this calendar month's spend; Store.agent_budget_spend
-        # is the one rule, so the runner, project health and the watch state agree.
+        # The agent's own budget, when set: spend from the run log, this calendar month's for a
+        # monthly budget (TR-770), else lifetime. Checked before any model call, so a capped run
+        # costs nothing; the message says where to raise it. Store.agent_budget_spend is the one
+        # rule, so the runner, project health and the watch state agree.
         budget = agent.get("budget_usd")
         now = _clock()
-        # Called on the class, not the instance: tests/test_agent_daily_cap.py runs this path
-        # against a stand-in store that only has agent_cost_total, which a lifetime budget needs.
-        if budget and Store.agent_budget_spend(self.store, agent, now) >= float(budget):
+        if budget and self.store.agent_budget_spend(agent, now) >= float(budget):
             if agent.get("budget_period") == "month":
                 msg = (f"budget of ${float(budget):.2f} for {month_name(now)} reached; it starts "
                        f"again on {day_month_words(Store.budget_resets_on(agent, now))}, or raise "
