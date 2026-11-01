@@ -5,6 +5,20 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Project health: when an agent's last run failed, the project page says so ("watcher could not
+  finish its last run (5 min ago): the model provider was busy or over its rate limit (HTTP
+  429)"), with a link to the agent, or to the model provider when it refused the key. Before, a
+  failed run added nothing to "What the agents found" and the page read as a quiet project.
+  Practice runs and capped runs do not raise it, and the next finished run clears it.
+
+### Fixed
+- A busy model provider (HTTP 429, 500, 502, 503, 504 or Anthropic's 529) is asked again up to
+  3 times, after 1 s and 2 s or after its `Retry-After` when that is 20 s or less, before the run
+  fails. Any other error still fails at once. This covers agent runs on Anthropic and every
+  OpenAI-compatible provider (xAI's "resource exhausted" 429 among them); Ask's streamed answers
+  are unchanged.
+
 ## [1.54.1] - 2026-10-29
 
 Grok is named as the challenger when it reviews, xAI agents default to grok-4.6 with grok-4.3
