@@ -5,6 +5,16 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- The Tares MCP server is published to the official MCP registry as `ai.glassflow/tares`, so
+  MCP clients and directories can find it. Each release tag publishes the new version.
+
+### Fixed
+- `tares mcp --transport stdio` works: its startup line went to stdout, which is the MCP channel
+  over stdio, so the client could not read the server's first reply. It now goes to stderr.
+- A tool call while Tares isn't running says so and names the address it tried, instead of "All
+  connection attempts failed".
+
 ## [1.54.1] - 2026-10-29
 
 Grok is named as the challenger when it reviews, xAI agents default to grok-4.6 with grok-4.3
