@@ -11,6 +11,9 @@ import {
   Activity, Chat, ChevronLeft, ChevronRight, Database, ExternalLink, Eye, Flag, GitHub, Grid, Lock,
   Moon, Plug, Settings, SignOut, Sun, Terminal, Zap,
 } from "./components/icons";
+import { signOut } from "./editions/account";
+import { useEdition } from "./editions/edition";
+import EditionShell from "./editions/Shell";
 import { applyTheme, currentTheme, type Theme } from "./theme";
 
 const link = ({ isActive }: { isActive: boolean }) => "navlink" + (isActive ? " active" : "");
@@ -140,14 +143,6 @@ function Breadcrumbs() {
   );
 }
 
-/** Forget this console's key. On Tares Cloud (logout_url set, TR-377) then end the Tares Cloud
- *  session too, which lands on its sign-in page; self-hosted, back to the login form. */
-function signOut(logoutUrl?: string) {
-  auth.clear();
-  if (logoutUrl) window.location.assign(logoutUrl);
-  else window.location.reload();
-}
-
 function ThemeToggle() {
   const [theme, setTheme] = useState<Theme>(currentTheme);
   const toggle = () => {
@@ -175,7 +170,15 @@ function rememberCollapsed(collapsed: boolean) {
   } catch { /* private window: for this visit only */ }
 }
 
+/** The factory and sre editions have their own shell; the platform edition is the console as it was. */
 export default function App() {
+  const { edition } = useEdition();
+  if (edition === undefined) return null;
+  if (edition !== "platform") return <EditionShell />;
+  return <PlatformApp />;
+}
+
+function PlatformApp() {
   const [version, setVersion] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const toggleCollapsed = () => {

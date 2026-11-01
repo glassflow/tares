@@ -96,7 +96,7 @@ const scrollToEnd = () => {
   el.scrollTop = el.scrollHeight;
 };
 
-export default function AskChat({ history = false }: { history?: boolean }) {
+export default function AskChat({ history = false, initial = "" }: { history?: boolean; initial?: string }) {
   const [ready, setKeyReady] = useState<boolean>();      // is a key configured on the server?
   const [urlReady, setUrlReady] = useState<boolean>();      // is an url configured on the server?
   const [providerName, setProviderName] = useState<string>();   // the cell default Ask answers on
@@ -104,6 +104,10 @@ export default function AskChat({ history = false }: { history?: boolean }) {
   const [input, setInput] = useState("");
   const { send: stream, stop, streaming: busy } = useAgentStream();
   const [decisions, setDecisions] = useState<DecisionMap>({});
+  // `initial` is asked once, after the latest session has been resumed (so it lands at the end of
+  // it) and once a key is known to be set.
+  const [resumed, setResumed] = useState(false);
+  const sentInitial = useRef(false);
   // Follow the tail only while the reader is at the tail. The old code called scrollTo() on every
   // streamed chunk unconditionally, so scrolling up to re-read something was undone by the next
   // token and a long answer could not be read until it finished.
@@ -160,8 +164,14 @@ export default function AskChat({ history = false }: { history?: boolean }) {
       if (!r.sessions.length) return;
       const full = await api.askSession(r.sessions[0].id);
       restore(full.id, full.state);
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setResumed(true));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!initial.trim() || !resumed || !ready || sentInitial.current) return;
+    sentInitial.current = true;
+    send(initial);
+  }, [initial, resumed, ready]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Save when a turn settles (stream finished, or a proposal decided) — never per token. The
   // debounce coalesces the decision clicks that land in a burst.
