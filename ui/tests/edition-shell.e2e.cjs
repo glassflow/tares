@@ -185,6 +185,7 @@ async function waitFor(url, tries = 150) {
         await shot(page, `${e}-${w}-account.png`);
         ck(`${tag}: opening the account menu reads the version once`, reads.filter((p) => p === "/api/capabilities").length === atLoad + 1,
            `${atLoad} at load, ${reads.filter((p) => p === "/api/capabilities").length} after`);
+        await menu.getByRole("menuitem").first().focus();
         await page.keyboard.press("Escape");
         ck(`${tag}: Escape closes it`, (await menu.count()) === 0);
         ck(`${tag}: and returns to the account button`, await page.getByTestId("account-button").evaluate((el) => el === document.activeElement));
@@ -205,6 +206,7 @@ async function waitFor(url, tries = 150) {
           ck(`${tag}: the drawer is 260 wide`, Math.abs((await nav.boundingBox()).width - 260) < 1);
           await shellWords(page, `${tag} drawer`);
           await shot(page, `${e}-390-drawer.png`);
+          await nav.getByRole("link").first().focus();
           await page.keyboard.press("Escape");
           ck(`${tag}: Escape closes the drawer`, (await nav.count()) === 0);
           ck(`${tag}: and returns to the Menu button`, await page.getByTestId("menu-button").evaluate((el) => el === document.activeElement));
@@ -248,7 +250,7 @@ async function waitFor(url, tries = 150) {
       const { page, ctx } = await open(e, 1440, { askKey: true });
       await visit(page, e, expect[e].page);
       const posts = [];
-      page.on("request", (r) => { if (r.method() === "POST" && r.url().includes("/api/ask")) posts.push(r.url()); });
+      page.on("request", (r) => { if (r.method() === "POST" && r.url().includes("/api/agent/chat")) posts.push(r.url()); });
       const search = page.getByTestId("edition-search");
       await search.fill("what changed today");
       await search.press("Enter");
@@ -282,6 +284,10 @@ async function waitFor(url, tries = 150) {
       return { page, ctx };
     };
     for (const e of ["factory", "sre"]) {
+      const plain = await open(e, 1440);
+      await visit(plain.page, e, expect[e].page);
+      const plainHeight = await plain.page.getByTestId("edition-header").evaluate((el) => el.getBoundingClientRect().height);
+      await plain.ctx.close();
       let { page, ctx } = await cloudPage(e, 1440);
       await visit(page, e, expect[e].page);
       const sw = page.getByTestId("workspace-switcher");
@@ -292,6 +298,9 @@ async function waitFor(url, tries = 150) {
       await shot(page, `${e}-1440-switcher.png`);
       await page.keyboard.press("Escape");
       await fits(page, `${e} cloud 1440`);
+      const swHeight = await page.getByTestId("edition-header").evaluate((el) => el.getBoundingClientRect().height);
+      ck(`${e}: the header is as tall with the switcher as without (${plainHeight})`, Math.abs(swHeight - plainHeight) < 1, `${swHeight}`);
+      ck(`${e}: the switcher keeps no margin of its own`, await sw.locator(".ws-wrap").evaluate((el) => getComputedStyle(el).marginBottom === "0px"));
       await ctx.close();
 
       ({ page, ctx } = await cloudPage(e, 390));
@@ -307,6 +316,7 @@ async function waitFor(url, tries = 150) {
       await fits(page, `${e} cloud 390`);
       await page.getByTestId("menu-button").click();
       ck(`${e}: narrow, the switcher is at the top of the menu`, await page.locator('nav[aria-label="Main"] [data-testid="workspace-switcher"]').isVisible());
+      ck(`${e}: and keeps no margin of its own`, await page.locator('nav[aria-label="Main"] .ws-wrap').evaluate((el) => getComputedStyle(el).marginBottom === "0px"));
       await shellWords(page, `${e} cloud drawer`);
       if (e === "sre") await shot(page, "sre-390-long-name.png");
       await ctx.close();

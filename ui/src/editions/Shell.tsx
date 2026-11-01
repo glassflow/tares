@@ -180,7 +180,7 @@ export default function EditionShell() {
           {!narrow && switcher && (
             <>
               <span aria-hidden className="shrink-0 text-base text-[var(--ink-faint)]">/</span>
-              <div data-testid="workspace-switcher" className="min-w-0 max-w-[280px] [&_.ws-wrap]:m-0">{switcher}</div>
+              <div data-testid="workspace-switcher" className="min-w-0 max-w-[280px] [&_.ws-wrap]:m-0! [&_.ws-switch]:py-1.5!">{switcher}</div>
             </>
           )}
           {cellName && (
@@ -232,7 +232,7 @@ export default function EditionShell() {
           <div data-testid="edition-scrim" className="fixed inset-x-0 bottom-0 top-[57px] z-40 bg-[var(--overlay)]" onClick={() => setDrawer(false)} />
           <nav id="edition-drawer" aria-label="Main" data-testid="edition-menu"
                className="fixed bottom-0 left-0 top-[57px] z-50 flex w-[260px] flex-col gap-0.5 border-r border-foreground bg-card px-3 py-4 shadow-[6px_0_18px_var(--sheet-shadow)]">
-            {switcher && <div data-testid="workspace-switcher" className="mb-3 [&_.ws-wrap]:m-0">{switcher}</div>}
+            {switcher && <div data-testid="workspace-switcher" className="mb-3 [&_.ws-wrap]:m-0!">{switcher}</div>}
             <MenuLinks entries={entries} narrow />
           </nav>
         </>
