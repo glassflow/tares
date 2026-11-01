@@ -43,12 +43,14 @@ jobs:
         run: |
           pip install -e ".[postgres-state]"
           export TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres
+          bash tests/check_ci_list.sh tests/ci_list.txt
           for t in $(grep -vE '^\s*(#|$)' tests/ci_list.txt); do
             echo "== $t =="
             python "tests/$t.py"
           done
       - name: Factory CLI — tests (bash, against a real Tares)
         run: |
+          bash tests/check_ci_list.sh tests/factory/ci_list.txt
           for t in $(grep -vE '^\s*(#|$)' tests/factory/ci_list.txt); do
             echo "== factory $t =="
             bash "tests/factory/${t}_test.sh"
@@ -88,6 +90,7 @@ jobs:
           pip install -e ".[postgres-state]"
           export TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres
           export PYTHONPATH="$PWD/tests/pg_harness"
+          bash tests/check_ci_list.sh tests/ci_list.txt
           for t in $(grep -vE '^\s*(#|$)' tests/ci_list.txt | grep -vxE 'test_state_postgres|test_duckdb_memory'); do
             echo "== $t (state in Postgres) =="
             python "tests/$t.py"
@@ -96,6 +99,7 @@ jobs:
         run: |
           export TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres
           export PYTHONPATH="$PWD/tests/pg_harness"
+          bash tests/check_ci_list.sh tests/factory/ci_list.txt
           for t in $(grep -vE '^\s*(#|$)' tests/factory/ci_list.txt); do
             echo "== factory $t (state in Postgres) =="
             bash "tests/factory/${t}_test.sh"

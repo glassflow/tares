@@ -114,3 +114,4 @@ test_include_payload
 test_shared_code_context
 test_otlp_grpc
 test_postgres
+test_ci_check
