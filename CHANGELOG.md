@@ -5,6 +5,12 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.55.0] - 2026-11-01
+
+The MCP server is listed in the official MCP registry, `tares mcp --transport stdio` works, and
+two fixes for cloud cells with their state in Postgres: a scrape of `/metrics` no longer opens a
+database connection, and a cell that could not reach its database at start restarts itself.
+
 ### Added
 - The Tares MCP server is published to the official MCP registry as `ai.glassflow/tares`, so
   MCP clients and directories can find it. Each release tag publishes the new version.
@@ -14,6 +20,13 @@ the project follows [Semantic Versioning](https://semver.org/).
   over stdio, so the client could not read the server's first reply. It now goes to stderr.
 - A tool call while Tares isn't running says so and names the address it tried, instead of "All
   connection attempts failed".
+- `/metrics` no longer reads the state database. On a cell with its state in Postgres
+  (`TARES_STATE_DSN`), every scrape opened a connection to it, so idle cells held about a fifth of
+  the database's connections between them. `/api/usage` still reports the run and delivery counts.
+- A cell whose state database could not be reached at start (no DNS, a connect timeout, no free
+  connection slots) answers `/health` with 503 while degraded, so the liveness probe restarts it
+  and it tries again. Before, it stayed degraded until someone restarted it. Every other degraded
+  cause still answers 200 and waits for a person.
 
 ## [1.54.1] - 2026-10-29
 

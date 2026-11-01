@@ -3,7 +3,7 @@
   "name": "ai.glassflow/tares",
   "title": "Tares",
   "description": "Always-on AI agents: a software factory for Claude Code, or an AI SRE that watches your systems.",
-  "version": "1.54.1",
+  "version": "1.55.0",
   "websiteUrl": "https://docs.glassflow.ai/tares",
   "repository": {
     "url": "https://github.com/glassflow/tares",
@@ -15,7 +15,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "tares",
-      "version": "1.54.1",
+      "version": "1.55.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
