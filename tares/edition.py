@@ -30,10 +30,14 @@ def settle(store) -> str | None:
     """Run once at startup, before any seeding or catalog import (a seeded empty cell would
     otherwise be settled as platform by its own seed). Returns the stored edition, or None
     when the cell has none yet and the first run has to ask."""
+    raw = (os.getenv(EDITION_ENV) or "").strip()
+    if raw and not _valid(raw):
+        print(f"taresd: {EDITION_ENV}={raw!r} is not an edition "
+              f"(use {', '.join(EDITIONS[:-1])} or {EDITIONS[-1]}); ignored")
     stored = _valid(store.get_setting(EDITION_SETTING))
     if stored:
         return stored
-    chosen = _valid(os.getenv(EDITION_ENV))
+    chosen = _valid(raw)
     if not chosen and store_has_data(store):
         chosen = DEFAULT
     if chosen:

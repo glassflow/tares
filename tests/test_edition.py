@@ -5,6 +5,8 @@ stored value wins on every later start, and PUT /api/settings/edition (admin) is
 GET /api/home answers per edition, and the screen registry starts empty.
 """
 import asyncio
+import contextlib
+import io
 import os
 import signal
 import subprocess
@@ -75,8 +77,34 @@ def unit():
     check("env is trimmed and lowercased", ed.settle(s) == "sre" and s.kv["edition"] == "sre")
     s = Fake()
     os.environ[ed.EDITION_ENV] = "bogus"
-    check("an unknown env value leaves it unset", ed.settle(s) is None and "edition" not in s.kv)
+    with contextlib.redirect_stdout(io.StringIO()):
+        got = ed.settle(s)
+    check("an unknown env value leaves it unset", got is None and "edition" not in s.kv)
     os.environ.pop(ed.EDITION_ENV)
+
+    print("== a misspelt TARES_EDITION is logged ==")
+
+    def said(env, **kv):
+        buf = io.StringIO()
+        if env is None:
+            os.environ.pop(ed.EDITION_ENV, None)
+        else:
+            os.environ[ed.EDITION_ENV] = env
+        with contextlib.redirect_stdout(buf):
+            ed.settle(Fake(**kv))
+        os.environ.pop(ed.EDITION_ENV, None)
+        return buf.getvalue()
+
+    out = said("bogus")
+    check("an unknown env value is logged with the accepted ones",
+          "bogus" in out and all(e in out for e in ed.EDITIONS) and "ignored" in out, repr(out))
+    out = said("bogus", edition="sre")
+    check("and logged when an edition is already stored", "bogus" in out, repr(out))
+    check("nothing is printed for an unset env", said(None) == "")
+    check("nothing is printed for a blank env", said("  ") == "")
+    check("nothing is printed for a valid value", said("SRE ") == "")
+    check("nothing is printed for a valid value over a stored one", said("factory", edition="sre") == "")
+
     s = Fake(projects=["Default"])
     check("only the Default project is not data", ed.settle(s) is None)
     s = Fake(projects=["Default", "project-x"])
@@ -166,6 +194,21 @@ async def api():
             rd = {"Authorization": f"Bearer {k['secret']}"}
             w = (await cx.get(f"{B}/api/whoami", headers=rd)).json()
             check("a read key sees it too", w.get("edition") == "factory", str(w))
+            root_w = (await cx.get(f"{B}/api/whoami", headers=root)).json()
+            r = await cx.post(f"{B}/api/projects", headers=root,
+                              json={"template": "custom", "name": "project-x", "objects": []})
+            check("a project exists", r.status_code in (200, 201), r.text)
+            r = await cx.post(f"{B}/api/keys", headers=root, json={"name": "p", "project": "project-x"})
+            check("a project key is made", r.status_code == 201 and r.json().get("project"), r.text)
+            pk = {"Authorization": f"Bearer {r.json()['secret']}"}
+            w = (await cx.get(f"{B}/api/whoami", headers=pk)).json()
+            check("a project key sees the same edition keys as root",
+                  all(w.get(x) == root_w.get(x) for x in ("edition", "edition_name", "edition_needed"))
+                  and w.get("edition") == "factory" and "edition_needed" in w, str(w))
+            r = await cx.put(f"{B}/api/settings/edition", headers=pk, json={"edition": "sre"})
+            check("a project key cannot switch it", r.status_code == 403, r.text)
+            w = (await cx.get(f"{B}/api/whoami", headers=pk)).json()
+            check("and nothing changed for it", w.get("edition") == "factory", str(w))
             r = await cx.put(f"{B}/api/settings/edition", headers=rd, json={"edition": "sre"})
             check("a read key cannot switch it", r.status_code == 403, r.text)
             w = (await cx.get(f"{B}/api/whoami", headers=rd)).json()
