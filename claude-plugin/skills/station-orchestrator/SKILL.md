@@ -96,6 +96,14 @@ When a station sends `ASK`:
 2. Otherwise, if it isn't one of the always-ask categories (protocol rule 4), decide: record it with `assume`, answer the station, and leave it for the milestone batch.
 3. Otherwise put it on the desk.
 
+A builder's mock `ASK` (a screen ticket: "Approve this mock for <screen>?", with a file path in the message) is always the person's to answer. Before you put it on the desk:
+
+1. Read the mock file from the path in the `ASK`.
+2. Keep it as the project doc "Mock: <screen>" with `write_doc` (kind and project as the doc tools take them), so the reviewer can read it later with `list_docs` and `get_doc`. The mock is never committed to a repo.
+3. Put the question on the desk with `desk_add(..., project="<the project>")`. Without `project` the approval does not show in `list_decisions(project)`, which is where the reviewer's design check reads it.
+
+Relay the answer with `ANSWER`, quoting the person and naming the `D<n>`: the builder writes it in its PR body as `Mock: "Mock: <screen>" (desk D<n>)`.
+
 ## The desk
 
 The person answers only here, in your session (`tares factory crew attach orchestrator`). The Crew page and the project page on Tares show the desk; the one thing the person can do there is allow a permission request (below).
