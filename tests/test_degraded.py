@@ -21,6 +21,7 @@ SEED = "/tmp/degraded_catalog.yaml"
 with open(SEED, "w") as fh:
     fh.write("sources:\n  - name: evt\n    connector: webhook\n    poll: 5s\n    config: {}\n")
 OK_DB, BAD_DB, LOCK_DB = "/tmp/degraded_ok.duckdb", "/tmp/degraded_bad.duckdb", "/tmp/degraded_lock.duckdb"
+STATE_DB = "/tmp/degraded_state.duckdb"
 PORT, PORT2 = "8811", "8812"
 
 
@@ -57,7 +58,7 @@ def _rm(*paths):
 
 
 async def main():
-    _rm(OK_DB, BAD_DB, LOCK_DB)
+    _rm(OK_DB, BAD_DB, LOCK_DB, STATE_DB)
 
     # ── 1. healthy: /health proves the store answers, and reports usage on the 0-100 scale ──
     proc = _boot(OK_DB, PORT)
@@ -134,7 +135,37 @@ async def main():
             if p:
                 p.terminate(); p.wait(timeout=10)
 
-    _rm(OK_DB, BAD_DB, LOCK_DB)
+    # ── 4. state database out of reach: degraded, and /health says so to the liveness probe ──
+    # A cell (TARES_STATE_DSN) that starts while its Postgres cannot be reached would otherwise
+    # stay degraded until restarted by hand; a 503 from /health gets the probe to restart it.
+    try:
+        import psycopg  # noqa: F401
+    except ImportError:
+        print("  skip state database out of reach (psycopg not installed)")
+    else:
+        proc = _boot(STATE_DB, PORT, TARES_STATE_CONNECT_WAIT="0",
+                     TARES_STATE_DSN="postgresql://u:p@127.0.0.1:1/db?connect_timeout=1")
+        try:
+            r = None
+            for _ in range(80):
+                try:
+                    async with httpx.AsyncClient() as cx:
+                        r = await cx.get(f"http://127.0.0.1:{PORT}/health", timeout=1)
+                    break
+                except Exception:
+                    await asyncio.sleep(0.25)
+            ck("daemon starts with its state database out of reach", r is not None)
+            ck("/health answers 503, so the liveness probe restarts it",
+               r is not None and r.status_code == 503, r and r.status_code)
+            ck("…and still says why", r is not None and r.json().get("status") == "down"
+               and "database" in (r.json().get("detail") or ""), r and r.text)
+            async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{PORT}") as cx:
+                r = await cx.get("/api/triggers", timeout=5)
+                ck("its API is 503", r.status_code == 503, r.status_code)
+        finally:
+            proc.terminate(); proc.wait(timeout=10)
+
+    _rm(OK_DB, BAD_DB, LOCK_DB, STATE_DB)
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
 
