@@ -8,8 +8,10 @@ export type EditionInfo = {
   edition?: Edition;
   /** the edition's display name, as the cell gives it */
   name?: string;
-  /** what the key this console signs in with is called */
+  /** what the key this console signs in with is called; unset on a cell with no sign-in */
   credentialName?: string;
+  /** the cell has no sign-in at all (whoami answers "open"), so there is no one to name */
+  open?: boolean;
 };
 
 const EditionContext = createContext<EditionInfo>({});
@@ -21,7 +23,7 @@ export function EditionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let live = true;
     api.whoami()
-      .then((w) => { if (live) setInfo({ edition: w.edition, name: w.edition_name, credentialName: w.name }); })
+      .then((w) => { if (live) setInfo({ edition: w.edition ?? "platform", name: w.edition_name, open: w.id === "open", credentialName: w.id === "open" ? undefined : w.name }); })
       .catch(() => { if (live) setInfo({ edition: "platform" }); });
     return () => { live = false; };
   }, []);

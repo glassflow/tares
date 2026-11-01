@@ -19,14 +19,14 @@ export const MENUS: Record<"factory" | "sre", MenuEntry[]> = {
     { key: "home", label: "Home", to: "/", today: true },
     { key: "services", label: "Services", to: "/services", today: false },
     { key: "incidents", label: "Incidents", to: "/incidents", today: false },
-    { key: "timeline", label: "Timeline", to: "/timeline", today: true },
+    { key: "timeline", label: "Timeline", to: "/explore", today: true },   // Explore until the timeline page exists (TR-752)
     { key: "runbooks", label: "Runbooks and memory", to: "/runbooks", today: false },
     SETTINGS_ENTRY,
   ],
 };
 
 /** The entries to show, in order, without Settings. An entry with no page is left out, not greyed. */
-export function visibleEntries(edition: Edition, hasPage: (entry: MenuEntry) => boolean = () => false): MenuEntry[] {
+export function visibleEntries(edition: Edition, hasPage: (to: string) => boolean = () => false): MenuEntry[] {
   if (edition === "platform") return [];
-  return MENUS[edition].filter((e) => e.key !== SETTINGS_ENTRY.key && (e.today || hasPage(e)));
+  return MENUS[edition].filter((e) => e.key !== SETTINGS_ENTRY.key && (e.today || hasPage(e.to)));
 }

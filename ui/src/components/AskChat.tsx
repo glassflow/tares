@@ -101,13 +101,11 @@ export default function AskChat({ history = false, initial = "" }: { history?: b
   const [urlReady, setUrlReady] = useState<boolean>();      // is an url configured on the server?
   const [providerName, setProviderName] = useState<string>();   // the cell default Ask answers on
   const [msgs, setMsgs] = useState<Msg[]>([]);
-  const [input, setInput] = useState("");
+  // `initial` is a question the edition shell's search handed over: it fills the field and the
+  // person sends it, so it never lands in the middle of an earlier conversation.
+  const [input, setInput] = useState(initial);
   const { send: stream, stop, streaming: busy } = useAgentStream();
   const [decisions, setDecisions] = useState<DecisionMap>({});
-  // `initial` is asked once, after the latest session has been resumed (so it lands at the end of
-  // it) and once a key is known to be set.
-  const [resumed, setResumed] = useState(false);
-  const sentInitial = useRef(false);
   // Follow the tail only while the reader is at the tail. The old code called scrollTo() on every
   // streamed chunk unconditionally, so scrolling up to re-read something was undone by the next
   // token and a long answer could not be read until it finished.
@@ -118,6 +116,7 @@ export default function AskChat({ history = false, initial = "" }: { history?: b
   const stick = useRef(true);
   const [showJump, setShowJump] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { if (initial && taRef.current) growTextarea(taRef.current); }, [ready]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refreshKey = () => api.capabilities()
   .then((c) => {
@@ -164,14 +163,8 @@ export default function AskChat({ history = false, initial = "" }: { history?: b
       if (!r.sessions.length) return;
       const full = await api.askSession(r.sessions[0].id);
       restore(full.id, full.state);
-    }).catch(() => {}).finally(() => setResumed(true));
+    }).catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!initial.trim() || !resumed || !ready || sentInitial.current) return;
-    sentInitial.current = true;
-    send(initial);
-  }, [initial, resumed, ready]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Save when a turn settles (stream finished, or a proposal decided) — never per token. The
   // debounce coalesces the decision clicks that land in a burst.

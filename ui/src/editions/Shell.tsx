@@ -4,6 +4,7 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { api, auth } from "../api";
 import { useCloud, useWorkspaceOverview } from "../cloud";
 import CommandPalette from "../components/CommandPalette";
+import WorkspaceSwitcher from "../components/WorkspaceSwitcher";
 import { Search } from "../components/icons";
 import { Button } from "../components/edition";
 import { Initials } from "../components/edition/Initials";
@@ -62,16 +63,19 @@ function AccountMenu({ who, small, workspaceUrl, logoutUrl }: {
   const [theme, setTheme] = useState<Theme>(currentTheme);
   const [version, setVersion] = useState<string | null>(null);
   const box = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
   const here = useLocation().pathname;
 
+  // The version is read when the menu first opens, so the frame itself adds no read call.
   useEffect(() => {
-    api.capabilities().then((c) => setVersion(c.version ?? null)).catch(() => {});
-  }, []);
+    if (!open || version !== null) return;
+    api.capabilities().then((c) => setVersion(c.version ?? "")).catch(() => {});
+  }, [open, version]);
   useEffect(() => { setOpen(false); }, [here]);
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setOpen(false); button.current?.focus(); } };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
@@ -85,9 +89,9 @@ function AccountMenu({ who, small, workspaceUrl, logoutUrl }: {
 
   return (
     <div ref={box} className="relative">
-      <button type="button" data-testid="account-button" aria-label="Account menu" aria-haspopup="menu" aria-expanded={open}
+      <button ref={button} type="button" data-testid="account-button" aria-label="Account menu" aria-haspopup="menu" aria-expanded={open}
               onClick={() => setOpen((o) => !o)} className="block! border-0! bg-transparent! p-0! hover:bg-transparent!">
-        <Initials name={Array.from(who)[0] ?? "?"} title={who} aria-hidden />
+        <Initials name={who} aria-hidden />
       </button>
       {open && (
         <div role="menu" data-testid="account-menu"
@@ -122,7 +126,7 @@ function AccountMenu({ who, small, workspaceUrl, logoutUrl }: {
 }
 
 export default function EditionShell() {
-  const { edition, name, credentialName } = useEdition();
+  const { edition, name, credentialName, open: openCell } = useEdition();
   const narrow = useNarrow();
   const [drawer, setDrawer] = useState(false);
   const [text, setText] = useState("");
@@ -138,14 +142,18 @@ export default function EditionShell() {
   const overview = useWorkspaceOverview(logoutUrl ? cloud.health?.workspace_api_url || undefined : undefined);
   const email = overview.result?.status === "ok" ? overview.result.data.you?.email : undefined;
   const who = email || credentialName || "Account";
-  const small = email ? "Signed in to this workspace" : "Signed in with an API key";
-  const cellName = edition === "sre" ? cloud.current?.slug : undefined;
+  const small = email ? "Signed in to this workspace" : openCell ? "This cell has no sign-in" : "Signed in with an API key";
+  // Wide, the workspace switcher sits in the header (it names the workspace, so it is the cell name
+  // too). Narrow, it moves to the top of the menu and an AI SRE header keeps the plain name.
+  const switcher = cloud.switcher ? <WorkspaceSwitcher cloud={cloud} /> : null;
+  const cellName = narrow && edition === "sre" ? cloud.current?.slug : undefined;
+  const menuButton = useRef<HTMLButtonElement>(null);
 
   useEffect(() => { setDrawer(false); }, [here]);
   useEffect(() => { if (!narrow) setDrawer(false); }, [narrow]);
   useEffect(() => {
     if (!drawer) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setDrawer(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setDrawer(false); menuButton.current?.focus(); } };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [drawer]);
@@ -158,7 +166,7 @@ export default function EditionShell() {
               className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-border bg-card px-3 py-2.5 md:px-6 md:py-3.5">
         <div className="flex min-w-0 items-center gap-2.5">
           {narrow && (
-            <Button variant="secondary" data-testid="menu-button" aria-expanded={drawer} aria-controls="edition-drawer"
+            <Button ref={menuButton} variant="secondary" data-testid="menu-button" aria-expanded={drawer} aria-controls="edition-drawer"
                     className="mr-1.5 px-3!" onClick={() => setDrawer((d) => !d)}>
               Menu
             </Button>
@@ -167,7 +175,14 @@ export default function EditionShell() {
             <i className="block size-2 bg-[var(--accent)]" />
           </span>
           <b className="text-base tracking-tight">Tares</b>
-          <span data-testid="edition-name" className="shrink-0 whitespace-nowrap text-base text-muted-foreground">{name}</span>
+          <span data-testid="edition-name"
+                className={"whitespace-nowrap text-base text-muted-foreground " + (cellName ? "shrink-0" : "min-w-0 truncate")}>{name}</span>
+          {!narrow && switcher && (
+            <>
+              <span aria-hidden className="shrink-0 text-base text-[var(--ink-faint)]">/</span>
+              <div data-testid="workspace-switcher" className="min-w-0 max-w-[280px] [&_.ws-wrap]:m-0">{switcher}</div>
+            </>
+          )}
           {cellName && (
             <>
               <span aria-hidden className="shrink-0 text-base text-[var(--ink-faint)]">/</span>
@@ -187,7 +202,7 @@ export default function EditionShell() {
               <Input data-testid="edition-search" aria-label="Search or ask" placeholder="Search or ask" value={text}
                      className="pl-9!" onChange={(e) => setText(e.target.value)}
                      onKeyDown={(e) => {
-                       if (e.key !== "Enter") return;
+                       if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
                        e.preventDefault();
                        const q = text.trim();
                        if (!q) return;
@@ -217,6 +232,7 @@ export default function EditionShell() {
           <div data-testid="edition-scrim" className="fixed inset-x-0 bottom-0 top-[57px] z-40 bg-[var(--overlay)]" onClick={() => setDrawer(false)} />
           <nav id="edition-drawer" aria-label="Main" data-testid="edition-menu"
                className="fixed bottom-0 left-0 top-[57px] z-50 flex w-[260px] flex-col gap-0.5 border-r border-foreground bg-card px-3 py-4 shadow-[6px_0_18px_var(--sheet-shadow)]">
+            {switcher && <div data-testid="workspace-switcher" className="mb-3 [&_.ws-wrap]:m-0">{switcher}</div>}
             <MenuLinks entries={entries} narrow />
           </nav>
         </>
