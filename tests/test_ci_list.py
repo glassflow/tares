@@ -29,6 +29,7 @@ sh = check("bash", ROOT / "tests" / "factory" / "ci_list.txt", lambda n: f"{n}_t
 ck("python list holds this test", "test_ci_list" in py)
 
 ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+ci = re.sub(r"(?m)^\s*#.*$", "", ci)  # a commented-out step is not a step
 ck("ci.yml has no inline python test list", "for t in test_" not in ci)
 
 
@@ -40,19 +41,21 @@ def jobs(text):
 
 
 def loops(job):
-    """The list each `for t in $(...)` loop of a job reads: (file, filter) pairs, in order."""
+    """The loops of a job that read a list: (file, filter, body) in order; body is what runs per name."""
     out = []
-    for m in re.finditer(r"for t in \$\(grep -vE '\^\\s\*\(#\|\$\)' (tests/(?:factory/)?ci_list\.txt)((?: \| [^)]*)?)\)", job):
-        out.append((m.group(1), m.group(2).strip()))
+    for m in re.finditer(r"for t in \$\(grep -vE '\^\\s\*\(#\|\$\)' (tests/(?:factory/)?ci_list\.txt)((?: \| [^)]*)?)\); do\n(.*?)\n\s*done", job, re.S):
+        body = [ln.strip() for ln in m.group(3).splitlines() if ln.strip() and not ln.strip().startswith("echo ")]
+        out.append((m.group(1), m.group(2).strip(), body))
     return out
 
 
 PY, SH = "tests/ci_list.txt", "tests/factory/ci_list.txt"
+RUN_PY, RUN_SH = ['python "tests/$t.py"'], ['bash "tests/factory/${t}_test.sh"']
 SKIP = "| grep -vxE 'test_state_postgres|test_duckdb_memory'"
 js = jobs(ci)
 ck("ci.yml has the jobs test, backend-postgres and secrets", {"test", "backend-postgres", "secrets"} <= set(js), str(sorted(js)))
-ck("job test: runs the python list, then the bash list, both unfiltered", loops(js.get("test", "")) == [(PY, ""), (SH, "")], str(loops(js.get("test", ""))))
-ck("job backend-postgres: runs the python list without test_state_postgres and test_duckdb_memory, then the bash list unfiltered", loops(js.get("backend-postgres", "")) == [(PY, SKIP), (SH, "")], str(loops(js.get("backend-postgres", ""))))
+ck("job test: runs the python list, then the bash list, both unfiltered, each running its test", loops(js.get("test", "")) == [(PY, "", RUN_PY), (SH, "", RUN_SH)], str(loops(js.get("test", ""))))
+ck("job backend-postgres: runs the python list without test_state_postgres and test_duckdb_memory, then the bash list unfiltered, each running its test", loops(js.get("backend-postgres", "")) == [(PY, SKIP, RUN_PY), (SH, "", RUN_SH)], str(loops(js.get("backend-postgres", ""))))
 ck("job secrets: runs no test list", loops(js.get("secrets", "")) == [] and "ci_list" not in js.get("secrets", ""))
 ck("no other job reads a list", all(loops(j) == [] for n, j in js.items() if n not in ("test", "backend-postgres")))
 ck("every list in ci.yml is read by a loop (none is read some other way)", ci.count("ci_list.txt") == sum(len(loops(j)) for j in js.values()), str(ci.count("ci_list.txt")))
