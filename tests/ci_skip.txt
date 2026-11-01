@@ -1,0 +1,4 @@
+# Tests under tests/ that CI does not run, one per line as `name: reason`. A test is either in
+# ci_list.txt or here; tests/test_ci_list.py fails for a test file in neither. Remove the line
+# when the reason no longer holds and add the test to ci_list.txt.
+# Empty today: every test runs.

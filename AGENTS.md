@@ -17,6 +17,8 @@ https://docs.glassflow.ai/tares; this file is about the repo itself.
 Tests are plain Python scripts, not pytest. Run one with `python tests/test_x.py`; it exits
 non-zero on failure. CI runs the tests named in `tests/ci_list.txt` (Python) and
 `tests/factory/ci_list.txt` (bash). A new test adds one line there; never list tests in ci.yml.
+A Python test CI should not run goes in `tests/ci_skip.txt` as `name: reason`; `test_ci_list` fails for a
+`tests/test_*.py` in neither file.
 
 ```bash
 uv venv && uv pip install -e ".[otlp-grpc]"

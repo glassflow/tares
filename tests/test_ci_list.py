@@ -28,6 +28,17 @@ py = check("python", ROOT / "tests" / "ci_list.txt", lambda n: f"{n}.py")
 sh = check("bash", ROOT / "tests" / "factory" / "ci_list.txt", lambda n: f"{n}_test.sh")
 ck("python list holds this test", "test_ci_list" in py)
 
+# Every tests/test_*.py runs in CI or is skipped on purpose: it is in ci_list.txt, or in ci_skip.txt with a reason.
+skips = {}
+for ln in names(ROOT / "tests" / "ci_skip.txt"):
+    name, _, why = ln.partition(":")
+    skips[name.strip()] = why.strip()
+ck("skip list: every line is `name: reason`", all(skips.values()) and len(skips) == len(names(ROOT / "tests" / "ci_skip.txt")), str(skips))
+ck("skip list: every name has its file", all((ROOT / "tests" / f"{n}.py").is_file() for n in skips), ", ".join(n for n in skips if not (ROOT / "tests" / f"{n}.py").is_file()))
+ck("skip list: no test is also in the CI list", not (set(skips) & set(py)), ", ".join(sorted(set(skips) & set(py))))
+unlisted = sorted(f.stem for f in (ROOT / "tests").glob("test_*.py") if f.stem not in py and f.stem not in skips)
+ck("every tests/test_*.py is in tests/ci_list.txt or tests/ci_skip.txt", not unlisted, "in neither list: " + ", ".join(unlisted))
+
 ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
 ci = re.sub(r"(?m)^\s*#.*$", "", ci)  # a commented-out step is not a step
 ck("ci.yml has no inline python test list", "for t in test_" not in ci)
