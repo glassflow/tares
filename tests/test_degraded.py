@@ -141,7 +141,13 @@ async def main():
     try:
         import psycopg  # noqa: F401
     except ImportError:
+        psycopg = None
+    if psycopg is None:
         print("  skip state database out of reach (psycopg not installed)")
+    elif os.getenv("TARES_TEST_PG"):
+        # CI's Postgres run (tests/pg_harness) points every store at its own database, so the
+        # unreachable DSN below would never be used; the plain run covers this case
+        print("  skip state database out of reach (the Postgres harness replaces the DSN)")
     else:
         proc = _boot(STATE_DB, PORT, TARES_STATE_CONNECT_WAIT="0",
                      TARES_STATE_DSN="postgresql://u:p@127.0.0.1:1/db?connect_timeout=1")
