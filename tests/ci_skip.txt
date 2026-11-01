@@ -1,0 +1,7 @@
+# Tests under tests/ that CI does not run, one per line as `name: reason`. A test is either in
+# ci_list.txt or here; tests/test_ci_list.py fails for a test file in neither. Remove the line
+# when the reason no longer holds and add the test to ci_list.txt.
+test_include_payload: fails today (the fake GitHub no longer matches the connector); needs its own fix before it can run
+test_shared_code_context: fails today (the fake GitHub no longer matches the connector); needs its own fix before it can run
+test_otlp_grpc: skips itself unless the otlp-grpc extra is installed, and CI installs only postgres-state
+test_postgres: skips itself unless a Postgres with the demo database is reachable (PG_TEST_DSN)

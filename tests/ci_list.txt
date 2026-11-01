@@ -99,3 +99,14 @@ test_worth_raising
 test_blind_spots
 test_slack_incident_buttons
 test_factory_orchestrator_mock
+test_agent
+test_agent_rounds
+test_github
+test_ingest_key
+test_mcp_auth
+test_mcp_remote
+test_mcp_setup
+test_otlp
+test_push_wins
+test_trigger_debounce
+test_vercel
