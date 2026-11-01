@@ -4,6 +4,7 @@ import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom"
 
 import App from "./App";
 import AuthGate from "./components/AuthGate";
+import { EditionProvider } from "./editions/edition";
 import AgentActivity, { ConnectPage } from "./pages/Activity";
 import Ask from "./pages/Ask";
 import CatalogExport from "./pages/CatalogExport";
@@ -130,7 +131,9 @@ const router = createBrowserRouter([
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <AuthGate>
-      <RouterProvider router={router} />
+      <EditionProvider>
+        <RouterProvider router={router} />
+      </EditionProvider>
     </AuthGate>
   </React.StrictMode>,
 );

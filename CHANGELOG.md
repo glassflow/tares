@@ -6,6 +6,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Console: the factory and AI SRE editions get their own frame, a header with search and an account menu, and a left menu that lists only the pages that exist. The platform edition keeps the console as it was.
 - Incident notes belong to incidents that someone can take and resolve (`/api/incidents`).
 - `GET /api/services` lists the services a cell receives data for.
 - `PATCH /api/services/{name}` renames, hides or merges a service, and `PUT /api/settings/service-labels` says which label names the services in each source. The computed list is kept for 30 seconds and every change drops it.
