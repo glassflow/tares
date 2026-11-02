@@ -60,10 +60,10 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     "/services/:name": { page: null, fallback: { redirect: "/" } },
 
     // TR-751
-    "/incidents": { page: null, fallback: { redirect: "/" } },
+    "/incidents": { page: React.lazy(() => import("./sre/Incidents")), fallback: { redirect: "/" } },
 
     // TR-751
-    "/incidents/:id": { page: null, fallback: { redirect: "/" } },
+    "/incidents/:id": { page: React.lazy(() => import("./sre/Incidents").then((m) => ({ default: m.IncidentPage }))), fallback: { redirect: "/" } },
 
     // TR-752
     "/timeline": { page: React.lazy(() => import("./sre/Timeline")), fallback: "today" },
