@@ -110,8 +110,7 @@ function loadSample(env) {
       await page.waitForLoadState("networkidle");
       await page.locator("main, .main").first().waitFor();
     };
-    // Moves inside the console without a page load. /docs is the daemon's own API reference on a page load,
-    // so the console's /docs is reachable only this way until its page ticket moves the API reference.
+    // Moves inside the console without a page load.
     const goInApp = async (page, to) => {
       await page.evaluate((t) => { history.pushState({}, "", t); window.dispatchEvent(new PopStateEvent("popstate")); }, to);
       await page.waitForLoadState("networkidle");
@@ -159,9 +158,9 @@ function loadSample(env) {
 
       await go(page, e, "/reviews");
       ck("factory: /reviews lands on /crew", where(page) === "/crew", where(page));
-      await go(page, e, "/projects");
-      await goInApp(page, "/docs");
-      ck("factory: /docs lands on /projects", where(page) === "/projects", where(page));
+      await go(page, e, "/docs");
+      ck("factory: /docs is the Docs and memory page, on a full page load", where(page) === "/docs"
+         && await page.getByRole("heading", { name: "Docs and memory", exact: true }).isVisible(), where(page));
       await go(page, e, "/projects/x/tickets/T1");
       ck("factory: a ticket address lands on its project", where(page) === "/projects/x?view=ticket:T1", where(page));
       const home = await homeOf(page, e);
@@ -173,9 +172,9 @@ function loadSample(env) {
 
       await go(page, e, "/projects");
       const items = await menuLabels(page);
-      ck("factory: the menu is Home, Projects, Crew, Settings", items.join(",") === "Home,Projects,Crew,Settings", items.join(","));
+      ck("factory: the menu is Home, Projects, Crew, Docs and memory, Settings", items.join(",") === "Home,Projects,Crew,Docs and memory,Settings", items.join(","));
       ck("factory: no Reviews entry", !items.includes("Reviews") && (await page.getByTestId("menu-reviews").count()) === 0);
-      ck("factory: no Docs entry", !items.some((t) => /^Docs/.test(t)) && (await page.getByTestId("menu-docs").count()) === 0);
+      ck("factory: the Docs and memory entry opens /docs", (await page.locator('nav[aria-label="Main"] a', { hasText: "Docs and memory" }).getAttribute("href")) === "/docs");
 
       // the sample address alone changes nothing on a live cell
       await go(page, e, "/");
