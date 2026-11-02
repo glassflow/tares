@@ -114,6 +114,7 @@ test_sre_home
 test_sre_incidents
 test_sre_runbooks
 test_sre_series
+test_sre_services
 test_sre_settings
 test_sre_timeline
 test_startup_fill

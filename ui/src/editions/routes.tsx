@@ -54,10 +54,10 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     "/": { page: null, fallback: "today" },
 
     // TR-750
-    "/services": { page: null, fallback: { redirect: "/" } },
+    "/services": { page: React.lazy(() => import("./sre/Services")), fallback: { redirect: "/" } },
 
     // TR-750
-    "/services/:name": { page: null, fallback: { redirect: "/" } },
+    "/services/:name": { page: React.lazy(() => import("./sre/Service")), fallback: { redirect: "/" } },
 
     // TR-751
     "/incidents": { page: React.lazy(() => import("./sre/Incidents")), fallback: { redirect: "/" } },
