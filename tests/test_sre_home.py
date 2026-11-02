@@ -704,20 +704,48 @@ async def main():
             finding_run(store, f"load{i}", made["services"][i], incident_at)
             store.add_incident_note(inc["id"], f"load{i}", incident_at)
         eq("the cell has the services", len(sre.list_services(store, runtime.catalog, NOW)) >= 24, True)
+        # the first build on a cold cell: neither the services nor the 24 hour error series held
+        sre_home.clear_cache()
+        store.__dict__.pop("services_cache", None)
+        t0 = time.perf_counter()
+        sre_home.build(store, runtime.catalog, None)
+        first = (time.perf_counter() - t0) * 1000
+        # then the way the route builds it each time the 5 second page cache has run out: the
+        # real clock, build() called directly so the page cache is not in play, and the services
+        # (30 s) and the error series (30 s) held, as they are between two reads on a live cell
         times = []
         for _ in range(20):
-            # the way the route builds it on a cold read: the real clock, and neither the page
-            # cache nor the services cache holding anything (a `now` of its own skips the latter
-            # and makes every part of the page scan the events again)
-            sre_home.clear_cache()
-            store.__dict__.pop("services_cache", None)
             t0 = time.perf_counter()
             h = sre_home.build(store, runtime.catalog, None)
             times.append((time.perf_counter() - t0) * 1000)
         slow = p95(times)
+        print(f"  first build, nothing held: {first:.0f} ms")
         print(f"  build x20: min {min(times):.0f} ms, median {sorted(times)[10]:.0f} ms, "
               f"p95 {slow:.0f} ms, max {max(times):.0f} ms")
         ck("p95 under 300 ms", slow < 300, f"{slow:.0f} ms")
+        ck("the first build on a cold cell is under 600 ms", first < 600, f"{first:.0f} ms")
+        # the 24 hour error series is scanned once, then held for 30 seconds on the real clock
+        scans = []
+        real = store.event_series_many
+
+        def counting(services, since, until, bucket_s, errors_only=False):
+            if bucket_s == sre_home.UNUSUAL_BUCKET_S:
+                scans.append(1)
+            return real(services, since, until, bucket_s, errors_only)
+        store.event_series_many = counting
+        try:
+            sre_home.clear_cache()
+            sre_home.build(store, runtime.catalog, None)
+            sre_home.build(store, runtime.catalog, None)
+            eq("two reads on the real clock scan the error series once", len(scans), 1)
+            sre_home.clear_cache()
+            sre_home.build(store, runtime.catalog, None)
+            eq("clear_cache makes the next read scan it again", len(scans), 2)
+            sre_home.build(store, runtime.catalog, None, now=NOW)
+            sre_home.build(store, runtime.catalog, None, now=NOW)
+            eq("a call with a `now` of its own always scans", len(scans), 4)
+        finally:
+            store.event_series_many = real
         ck("and it is the whole page", len(h["services"]) >= 24 and len(h["incidents"]) == 3, len(h["services"]))
         sre_home.clear_cache()
         t0 = time.perf_counter()

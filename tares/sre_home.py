@@ -20,6 +20,7 @@ from .envelope import now_utc
 from .store import day_month_words
 
 CACHE_SECONDS = 5
+SERIES_SECONDS = 30          # the 24 hour error series, the dearest read of the page, as long as the services
 SPARK_POINTS = 24            # the sparkline of a service: its errors over 24 hours, one point an hour
 UNUSUAL_BUCKET_S = 600       # "unusual" compares the last 10 minutes with the 143 before them
 UNUSUAL_TIMES = 3
@@ -38,12 +39,36 @@ _CHANNEL_ID = re.compile(r"^[CGD][A-Z0-9]{6,}$")
 _LOCK = threading.Lock()
 _CACHE: dict = {}
 _GEN = [0]      # bumped by clear_cache, so a read that was building then does not store
+_SERIES: dict = {}
 
 
 def clear_cache() -> None:
     with _LOCK:
         _CACHE.clear()
+        _SERIES.clear()
         _GEN[0] += 1
+
+
+def _errors_24h(store, names: list, t, now) -> dict:
+    """Errors per 10 minutes over the 24 hours before `t` for each service, one scan. On the real
+    clock (`now` None) it is kept for SERIES_SECONDS, like the services in tares/sre.py, because
+    the scan is most of what a build costs; a call with a `now` of its own always scans."""
+    if not names:
+        return {}
+    key = (id(store), tuple(names))
+    if now is None:
+        with _LOCK:
+            hit = _SERIES.get(key)
+            gen = _GEN[0]
+        if hit and time.monotonic() - hit[0] < SERIES_SECONDS:
+            return hit[1]
+    out = store.event_series_many(names, t - timedelta(hours=24), t, UNUSUAL_BUCKET_S,
+                                  errors_only=True)
+    if now is None:
+        with _LOCK:
+            if gen == _GEN[0]:
+                _SERIES[key] = (time.monotonic(), out)
+    return out
 
 
 def cached(store, catalog, health, by) -> dict:
@@ -438,8 +463,7 @@ def build(store, catalog, health=None, now=None, person=None) -> dict:
 
     # services
     names = [i["name"] for i in items]
-    errors = store.event_series_many(names, t - timedelta(hours=24), t, UNUSUAL_BUCKET_S,
-                                     errors_only=True) if names else {}
+    errors = _errors_24h(store, names, t, now)
     services = []
     for item in items:
         row = state.get(item["name"])
