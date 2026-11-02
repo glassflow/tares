@@ -64,6 +64,9 @@ SRE_SCHEMA = [
     """CREATE TABLE IF NOT EXISTS incident_log (
       incident_id TEXT, at_time TIMESTAMPTZ, action TEXT, by_id TEXT, by_name TEXT, via TEXT
     )""",
+    # TR-751: the link to the incident's Slack message, asked of Slack once and kept. It is added
+    # here and not in store._MIGRATIONS because that list runs before the incidents table exists.
+    "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS slack_url TEXT",
     # TR-746: "Was this worth raising?" One answer per person per result; `watcher` is the agent
     # at the root of the chain that raised it, `dispatch_id` the firing that woke it.
     """CREATE TABLE IF NOT EXISTS finding_feedback (
@@ -84,7 +87,7 @@ SRE_SCHEMA = [
 
 INCIDENT_COLS = ("id", "service", "project", "state", "opened_at", "last_note_at", "owner",
                  "owner_name", "owner_at", "resolved_at", "resolved_by", "resolved_by_name",
-                 "resolution", "slack", "updated_at")
+                 "resolution", "slack", "updated_at", "slack_url")
 _INCIDENT_SELECT = "SELECT " + ", ".join(INCIDENT_COLS) + " FROM incidents "
 
 FEEDBACK_COLS = ("run_id", "person", "person_name", "worth", "note", "via", "watcher",
@@ -437,9 +440,20 @@ class SreStore:
                             "WHERE run_id = ?", [channel, ts, run_id])
 
     def set_incident_slack(self, incident_id: str, channel: str, ts: str) -> None:
-        with self._swrite:
-            self.sc.execute("UPDATE incidents SET slack = ? WHERE id = ?",
+        with self._swrite:   # a new message has a new link: the one kept is dropped
+            self.sc.execute("UPDATE incidents SET slack = ?, slack_url = NULL WHERE id = ?",
                             [json.dumps({"channel": channel, "ts": ts}), incident_id])
+
+    def set_incident_slack_url(self, incident_id: str, url: str | None) -> None:
+        """Keep the link Slack gave for the incident's message (TR-751)."""
+        with self._swrite:
+            self.sc.execute("UPDATE incidents SET slack_url = ? WHERE id = ?", [url, incident_id])
+
+    def incident_services(self) -> list[str]:
+        """The services that have an incident."""
+        with self._sread:
+            rows = self.sc.execute("SELECT DISTINCT service FROM incidents").fetchall()
+        return sorted(r[0] for r in rows if r[0])
 
     def notes_of(self, incident_ids: list[str]) -> dict[str, list[dict]]:
         """incident id -> its notes, oldest first: {run_id, joined_at, slack_channel, slack_ts}."""

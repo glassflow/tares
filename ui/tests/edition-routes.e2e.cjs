@@ -4,9 +4,9 @@
  * Factory: /settings/advanced is today's Settings page with an Advanced tab that links Connections
  * (/sources) and Explore your data (/explore); /reviews opens the Reviews page (TR-735), /docs lands
  * on /projects, a ticket address on its project with ?view=ticket:<ref>; /sources still opens today's
- * page; the menu is Home, Projects, Reviews, Crew, Settings, with no Docs entry;
+ * page; the menu is Home, Projects, Tickets, Reviews, Crew, Docs and memory, Settings;
  * ?sample=busy without the browser flag renders the same as /.
- * AI SRE: /timeline is today's Explore; /incidents lands on /; /services and /runbooks are their own pages.
+ * AI SRE: /timeline is today's Explore; /incidents is the Incidents page (TR-751); /services and /runbooks are their own pages.
  * Platform: /settings/advanced lands on /settings, /reviews on /, Settings has no Advanced tab.
  * Every edition: /welcome/edition lands on /. The Advanced tab passes the words check, and is shot at
  * 1440 and 390 wide. useSample (src/editions/sample.ts) is run as written, with a fake browser, for
@@ -176,7 +176,7 @@ function loadSample(env) {
 
       await go(page, e, "/projects");
       const items = await menuLabels(page);
-      ck("factory: the menu is Home, Projects, Reviews, Crew, Docs and memory, Settings", items.join(",") === "Home,Projects,Reviews,Crew,Docs and memory,Settings", items.join(","));
+      ck("factory: the menu is Home, Projects, Tickets, Reviews, Crew, Docs and memory, Settings", items.join(",") === "Home,Projects,Tickets,Reviews,Crew,Docs and memory,Settings", items.join(","));
       ck("factory: the Reviews entry links to /reviews", (await page.getByTestId("menu-reviews").getAttribute("href")) === "/reviews");
       ck("factory: the Docs and memory entry opens /docs", (await page.locator('nav[aria-label="Main"] a', { hasText: "Docs and memory" }).getAttribute("href")) === "/docs");
 
@@ -209,10 +209,14 @@ function loadSample(env) {
       const home = await homeOf(page, e);
       await go(page, e, "/services");
       ck("sre: /services stays on its address and shows the Services page", where(page) === "/services" && (await page.getByTestId("sre-services").count()) === 1, where(page));
-      for (const p of ["/incidents", "/incidents/i-1", "/reviews", "/welcome/edition"]) {
+      for (const p of ["/reviews", "/tickets", "/welcome/edition"]) {
         await go(page, e, p);
         ck(`sre: ${p} lands on /`, where(page) === home && !(await page.locator("main").innerText()).includes("does not exist"), where(page));
       }
+      await go(page, e, "/incidents");
+      ck("sre: /incidents stays on its address", where(page) === "/incidents", where(page));
+      await go(page, e, "/incidents/i-1");
+      ck("sre: and so does an incident's address", where(page) === "/incidents/i-1", where(page));
       await goInApp(page, "/docs");
       ck("sre: /docs lands on /", where(page) === home, where(page));
       await go(page, e, "/settings");
@@ -224,7 +228,7 @@ function loadSample(env) {
          && (await page.getByTestId("advanced-panel").locator('a[href="/sources"]').count()) === 1);
       await go(page, e, "/projects");
       const items = await menuLabels(page);
-      ck("sre: the menu is Home, Services, Timeline, Runbooks and memory, Settings", items.join(",") === "Home,Services,Timeline,Runbooks and memory,Settings", items.join(","));
+      ck("sre: the menu is Home, Services, Incidents, Timeline, Runbooks and memory, Settings", items.join(",") === "Home,Services,Incidents,Timeline,Runbooks and memory,Settings", items.join(","));
       await ctx.close();
     }
 
@@ -240,7 +244,7 @@ function loadSample(env) {
       ck("platform: ?tab=advanced shows no Advanced panel", (await page.getByTestId("advanced-panel").count()) === 0
          && (await advancedTab(page).count()) === 0);
       const home = await homeOf(page, e);
-      for (const p of ["/reviews", "/services", "/incidents", "/timeline", "/runbooks", "/welcome/edition"]) {
+      for (const p of ["/reviews", "/tickets", "/services", "/incidents", "/timeline", "/runbooks", "/welcome/edition"]) {
         await go(page, e, p);
         ck(`platform: ${p} lands on /`, where(page) === home && !(await page.locator("main, .main").first().innerText()).includes("does not exist"), where(page));
       }

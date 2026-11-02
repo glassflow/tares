@@ -12,6 +12,7 @@ items; TR-769 fills it, so does every other ticket that adds a kind of item.
 from __future__ import annotations
 
 import hashlib
+import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -19,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from . import claude_usage
 from . import factory as factory_mod
 from . import linear as linear_mod
+from . import start_steps
 from .envelope import now_utc
 
 CACHE_SECONDS = 5
@@ -369,6 +371,27 @@ def _plan(store, now: datetime, names: dict) -> dict:
 
 # ── the page ──────────────────────────────────────────────────────────────────
 
+def _start_ctx(store, stations: list[dict], tickets: dict, linear: bool) -> start_steps.StartCtx:
+    """What the Start checklist needs, from the store alone (`tickets` is the open projects'
+    tickets, already read)."""
+    names = {c.get("name") for c in store.list_catalog_sources() if c.get("connector") == "claude_code"}
+    events = any(s.get("source") in names and (s.get("events") or 0) > 0 for s in store.event_stats())
+    keys = [k for k in store.list_api_keys() if not k.get("revoked_at")]
+    spec = any(tickets.values())
+    if not spec:
+        done = [p["id"] for p in store.list_projects()
+                if p.get("kind") == "software_factory" and p["status"] == "done"]
+        spec = any(store.tickets_by_project(done).values())
+    return start_steps.StartCtx(
+        cloud=bool(os.getenv("TARES_LOGIN_URL", "").strip()),
+        github_connect_url=os.getenv("TARES_GITHUB_CONNECT_URL", "").strip(),
+        linear_connect_url=os.getenv("TARES_LINEAR_CONNECT_URL", "").strip(),
+        key_used=any(k.get("last_used_at") for k in keys), claude_code_events=events,
+        github_connected=bool(store.list_github_credentials()), linear_connected=bool(linear),
+        github_issues_linked=bool(store.github_projects()), stations=len(stations),
+        spec_with_tickets=spec)
+
+
 def home(store, fx, now, credential_key: str = "open") -> dict:
     """Everything the home page shows, from one read of the projects, their tickets, the stations,
     the plan and the desk."""
@@ -402,11 +425,22 @@ def home(store, fx, now, credential_key: str = "open") -> dict:
                       {"name": "Linear", "connected": bool(linear)},
                       {"name": "Claude Code", "connected": bool(stations) or any(
                           c["connector"] == "claude_code" for c in store.list_catalog_sources())}],
+            "start": start_steps.checklist(
+                store, start_steps.factory_steps(_start_ctx(store, stations, tickets, linear)),
+                "console" if credential_key == "open" else credential_key),
             "now": now.isoformat()}
 
 
 _cache: dict = {}
 _cache_lock = threading.Lock()
+
+
+def drop_cache(store, request) -> None:
+    """Forget the kept home of the request's credential, so its next read shows a change made
+    just now (the start block's hide and show)."""
+    cred = getattr(getattr(request, "state", None), "credential", None)
+    with _cache_lock:
+        _cache.pop((id(store), (cred or {}).get("name") or "open"), None)
 
 
 def build(store, fx=None, request=None, now=None) -> dict:

@@ -49,6 +49,7 @@ test_factory_review
 test_factory_reviews_page
 test_factory_settings_page
 test_factory_setup
+test_factory_start
 test_factory_takeover
 test_factory_tickets
 test_finding_titles
@@ -110,6 +111,7 @@ test_slack_finding_post
 test_slack_incident_buttons
 test_slack_verify
 test_sre_home
+test_sre_incidents
 test_sre_runbooks
 test_sre_series
 test_sre_services

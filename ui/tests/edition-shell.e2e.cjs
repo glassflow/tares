@@ -121,7 +121,7 @@ async function waitFor(url, tries = 150) {
     };
 
     const expect = {
-      factory: { name: "Software Factory", menu: ["Home", "Projects", "Reviews", "Crew", "Docs and memory", "Settings"], page: "/crew", call: "/api/crew" },
+      factory: { name: "Software Factory", menu: ["Home", "Projects", "Tickets", "Reviews", "Crew", "Docs and memory", "Settings"], page: "/crew", call: "/api/crew" },
       // The AI SRE menu grows as each screen merges (Services, Incidents, Timeline, Settings): the menu must
       // keep the full order, start with Home, end with Settings and hold the entries that exist today.
       // The exact list is pinned per screen ticket in edition-routes.e2e.cjs.
