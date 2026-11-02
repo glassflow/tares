@@ -186,6 +186,24 @@ class SreStore:
                  "n10": int(r[4]), "n24": int(r[5]), "last": r[6]}
                 for r in rows if r[1] not in (None, "")]
 
+    def memory_notes(self, sources: list[str], per_key: int = 20) -> dict[str, list[tuple]]:
+        """{key: [(event_time, text, payload)]}, newest first, at most `per_key` for each key, of
+        the events the agents wrote with remember() into the memory `sources` (TR-753). Events
+        live in DuckDB only, so this reads self.con under self._lock and joins nothing."""
+        if not sources:
+            return {}
+        ph = ", ".join(["?"] * len(sources))
+        sql = ("SELECT key_value, event_time, text, payload FROM (SELECT key_value, event_time, "
+               "text, payload, ROW_NUMBER() OVER (PARTITION BY key_value ORDER BY event_time DESC) "
+               f"AS rn FROM events WHERE source IN ({ph})) WHERE rn <= ? "
+               "ORDER BY key_value, event_time DESC")
+        with self._lock:
+            rows = self.con.execute(sql, [*sources, int(per_key)]).fetchall()
+        out: dict[str, list[tuple]] = {}
+        for key, at, text, payload in rows:
+            out.setdefault(key, []).append((at, text, payload))
+        return out
+
     def service_label_names(self, scope: dict[str, tuple], since_24h, limit: int = 20) -> list[str]:
         """The label names on the events of one service in the last 24 hours. `scope` maps a
         source to (the label naming a service in it, the raw service names to match)."""
