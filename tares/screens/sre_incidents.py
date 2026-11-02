@@ -333,6 +333,10 @@ def register(app, store, h, ctx):
             points = store.event_series(inc["service"], start, end, bucket, errors_only=True)
         except Exception:
             points = []
+        try:   # every event of the service, to read the errors against
+            traffic = store.event_series(inc["service"], start, end, bucket)
+        except Exception:
+            traffic = []
         try:
             ds = sre.deploys(store, catalog(), inc["service"], start, DEPLOYS_MAX)
         except Exception:
@@ -341,7 +345,8 @@ def register(app, store, h, ctx):
                  for d in reversed(ds) if _aware(d["at"]) <= end]
         return {"label": f"Errors from {name}, last {goal.span_words((end - start).total_seconds())}"
                 if inc["state"] != "resolved" else f"Errors from {name}",
-                "points": [[t, int(n)] for t, n in points], "deploys": marks}
+                "points": [[t, int(n)] for t, n in points],
+                "traffic": [[t, int(n)] for t, n in traffic], "deploys": marks}
 
     def note_parts(inc: dict, run_id: str, run: dict) -> dict:
         """failing, likely_cause, next_step, the steps and whether a person can answer, for the
