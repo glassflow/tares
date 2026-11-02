@@ -62,7 +62,7 @@ export function LineMarks({ marks, className, ...props }: { marks: LineMark[] } 
   // A time that does not parse goes last, under its raw text.
   const sorted = marks.map((m) => ({ ...m, ms: Date.parse(m.at) })).sort((a, b) => (Number.isNaN(a.ms) ? Infinity : a.ms) - (Number.isNaN(b.ms) ? Infinity : b.ms));
   return (
-    <ul aria-label="Marks" className={cn("m-0 grid list-none gap-1 p-0 text-xs", className)} data-marks-list {...props}>
+    <ul aria-label="Marks" className={cn("m-0! grid list-none! gap-1 p-0! text-xs", className)} data-marks-list {...props}>
       {sorted.map((m, i) => (
         <li key={`${m.at}-${m.label}-${i}`} className="flex flex-wrap gap-x-2">
           <time dateTime={Number.isNaN(m.ms) ? undefined : m.at} className="font-mono text-muted-foreground">
@@ -156,7 +156,7 @@ export function LineChart({ series, marks = [], marksList = false, height = 160,
           </div>
         </div>
       </div>
-      <ul className="m-0 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 text-xs">
+      <ul className="m-0! flex list-none! flex-wrap gap-x-4 gap-y-1 p-0! text-xs">
         {shown.map((s, i) => (
           <li key={s.label} className="flex items-center gap-2">
             <span aria-hidden className={cn("inline-block h-0.5 w-4", SWATCH[i])} />

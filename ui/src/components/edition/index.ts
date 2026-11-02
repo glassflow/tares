@@ -10,6 +10,7 @@ export { ListRow, type ListRowProps } from "./ListRow";
 export { ListSection, type ListSectionProps } from "./ListSection";
 export { Panel, type PanelProps } from "./Panel";
 export { ProgressBar, type ProgressBarProps } from "./ProgressBar";
+export { ServiceRows, type ServiceRowItem, type ServiceRowsProps } from "./ServiceRows";
 export { Select, type SelectOption, type SelectProps } from "./Select";
 export { Skeleton, SkeletonRows, type SkeletonProps } from "./Skeleton";
 export { Sparkline, type SparklineProps } from "./Sparkline";
