@@ -20,7 +20,7 @@ type Entry = { page: Page; fallback: Fallback };
 export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, Entry>> = {
   factory: {
     // TR-730 sample page, TR-732 live page
-    "/": { page: null, fallback: "today" },
+    "/": { page: React.lazy(() => import("./factory/FactoryHome")), fallback: "today" },
 
     // TR-733
     "/projects": { page: null, fallback: "today" },
