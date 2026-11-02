@@ -84,7 +84,8 @@ jobs:
   # Chromium comes with it. Screenshots are uploaded only when a shard fails.
   e2e:
     name: e2e (${{ matrix.shard }}/2)
-    runs-on: ubuntu-latest
+    # Pinned: Playwright does not install Chromium on the Ubuntu that ubuntu-latest points at now.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
