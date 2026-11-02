@@ -172,18 +172,22 @@ async def main():
                     f"- Keep one fact per line. ({day(9)}, crew-orchestrator)\n"
                     f"- Expand the questions first. ({day(3)}, project-x-build-m1)\n"
                     f"- Checks come before review. ({day(1)}, console)\n"
-                    f"- A line with no stamp.\n")
+                    f"- A line with no stamp.\n"
+                    f"- Not a real day. (2026-02-30, someone)\n")
             store.update_doc(mem_id, body=body, by="project-x-build-m1")
             d = await doc_of(cx, mem_id)
             clean("project memory", d)
             L = d["lines"]
             ck("the note that opens the memory is not a line",
                [x["text"] for x in L] == ["Keep one fact per line.", "Expand the questions first.",
-                                          "Checks come before review.", "A line with no stamp."], L)
+                                          "Checks come before review.", "A line with no stamp.",
+                                          "Not a real day. (2026-02-30, someone)"], L)
             ck("a stamp becomes who and when, in role words", (L[0]["by"], L[0]["when"]) == ("the Lead", "9 days ago")
                and (L[1]["by"], L[1]["when"]) == ("the Builder", "3 days ago")
                and (L[2]["by"], L[2]["when"]) == ("you", "1 day ago"), L)
             ck("a line without a stamp has no author", (L[3]["by"], L[3]["when"]) == ("", ""), L[3])
+            ck("an impossible date stays in the line as written, with no author and no 500",
+               (L[4]["text"], L[4]["by"], L[4]["when"]) == ("Not a real day. (2026-02-30, someone)", "", ""), L[4])
             ck("the header names who changed it and when",
                d["changed"] == "Changed by the Builder, just now" and d["project"] == {"id": px, "name": "project-x"}
                and d["shared"] is False and d["kind"] == "memory", d)
@@ -196,11 +200,11 @@ async def main():
             L2 = (await doc_of(cx, mem_id))["lines"]
             ck("it is the last line, by you, just now",
                L2[-1]["text"] == "Run the checks twice." and (L2[-1]["by"], L2[-1]["when"]) == ("you", "just now")
-               and len(L2) == 5, L2[-1])
+               and len(L2) == 6, L2[-1])
             r = await cx.post(d["add"]["path"], json={"text": "Run the checks twice.", "by": "console"})
             ck("the same line again is refused, and the server says so (added false)",
                r.status_code == 201 and r.json()["added"] is False, r.text)
-            ck("and nothing changed", len((await doc_of(cx, mem_id))["lines"]) == 5)
+            ck("and nothing changed", len((await doc_of(cx, mem_id))["lines"]) == 6)
             r = await cx.post(d["add"]["path"], json={"text": "   ", "by": "console"})
             ck("an empty line is refused with a sentence", r.status_code == 400 and "one line" in r.text, r.text)
 

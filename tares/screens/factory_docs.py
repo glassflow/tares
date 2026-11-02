@@ -183,11 +183,14 @@ def register(app, store, h, ctx):
             r["by"], r["when"] = "", ""
             if project and kind == "memory" and r["kind"] == "li":
                 m = STAMP.search(r["text"])
-                if m:
+                try:
+                    day = (datetime.combine(datetime.fromisoformat(m.group(1)).date(), time(),
+                                            tzinfo=timezone.utc) if m else None)
+                except ValueError:
+                    day = None   # an impossible date (2026-02-30): the line stays as written
+                if m and day is not None:
                     r["text"] = r["text"][:m.start()].rstrip()
                     r["by"] = who(m.group(2), station_roles)
-                    day = datetime.combine(datetime.fromisoformat(m.group(1)).date(), time(),
-                                           tzinfo=timezone.utc)
                     fresh = (i == last and _dt(d.get("updated_at")) is not None
                              and _dt(d["updated_at"]).date() == now.date() == day.date())
                     r["when"] = ago(d["updated_at"] if fresh else day, now) if (
