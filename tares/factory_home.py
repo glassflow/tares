@@ -127,9 +127,10 @@ def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, sinc
 
 
 def waiting_items(store, fx, now) -> list[dict]:
-    """Every builder's items, oldest first."""
+    """Every builder's items, oldest first. A project ready to close holds nothing up, so its
+    sign-off rows come after the rest, oldest first among themselves."""
     items = [i for build in WAITING_BUILDERS for i in build(store, fx, now)]
-    items.sort(key=lambda i: _dt(i["since"]) or now)
+    items.sort(key=lambda i: (i["kind"] == "signoff", _dt(i["since"]) or now))
     return items
 
 
@@ -323,10 +324,16 @@ def _headline(crew: dict, projects: list[dict], finished: int, working: int, wai
         part = "The crew is idle with nothing on its desk."
     if not waiting:
         return part + " Nothing waits for you."
-    waited = "less than a minute" if waiting[0]["waited"] == "just now" else waiting[0]["waited"]
-    if len(waiting) == 1:
+    # how long it has waited is told by what holds the crew up; a finished project waiting to be
+    # closed does not count, however long it has been ready
+    held = [w for w in waiting if w["kind"] != "signoff"]
+    n = len(waiting)
+    if not held:
+        return part + (" 1 thing waits for you." if n == 1 else f" {n} things wait for you.")
+    waited = "less than a minute" if held[0]["waited"] == "just now" else held[0]["waited"]
+    if n == 1:
         return part + f" 1 thing waits for you, for {waited}."
-    return part + f" {len(waiting)} things wait for you, the oldest for {waited}."
+    return part + f" {n} things wait for you, the oldest for {waited}."
 
 
 # ── the plan and the tools ────────────────────────────────────────────────────

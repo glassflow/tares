@@ -14,7 +14,7 @@ from .mcp_server import TARESD, _cx, create_project, mcp, writable
 @mcp.tool()
 async def what_needs_me() -> str:
     """What is waiting for the person right now: the same list the home page shows under
-    "Waiting for you", oldest first, each with what it is, which project it belongs to and how
+    "Waiting for you", oldest first with the projects ready to close last, each with what it is, which project it belongs to and how
     long it has waited. Start here when the person asks what to do next or what is stuck."""
     async with _cx(15) as cx:
         r = await cx.get(f"{TARESD}/api/home")
