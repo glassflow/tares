@@ -590,8 +590,8 @@ function AccessTab() {
   const admin = !!me?.scopes.includes("admin");
   return (
     <>
-      <AccessPanel />
-      <PeoplePanel people={people} admin={admin} err={err} onChanged={loadPeople} />
+      <AccessPanel me={me} />
+      <PeoplePanel people={people} admin={admin} err={err} onChanged={loadPeople} me={me} />
       <ApiKeysPanel people={people ?? []} admin={admin} me={me?.person?.id} />
     </>
   );
@@ -615,9 +615,13 @@ function extraEmails(d: PersonDraft): string[] {
 }
 
 // Who is on the cell. Everyone who can read sees the list; an admin adds people and edits them.
-function PeoplePanel({ people, admin, err: loadErr, onChanged }: {
-  people?: Person[]; admin: boolean; err?: string; onChanged: () => void;
+// With auth on, the boot person `local` is not whoever is looking: it owns what was made while
+// auth was off and acts for keys that belong to no one. It is called "You" only on an open cell.
+function PeoplePanel({ people, admin, err: loadErr, onChanged, me }: {
+  people?: Person[]; admin: boolean; err?: string; onChanged: () => void; me?: Whoami;
 }) {
+  const authOn = !!me && me.kind !== "open";
+  const shownName = (p: Person) => authOn && p.id === "local" && p.name === "You" ? "Local (no login)" : p.name;
   const [editing, setEditing] = useState<PersonDraft>();   // id "new": the add form
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
@@ -722,8 +726,15 @@ function PeoplePanel({ people, admin, err: loadErr, onChanged }: {
                 <tr key={p.id}><td colSpan={5}>{form(editing)}</td></tr>
               ) : (
                 <tr key={p.id}>
-                  <td><strong>{p.name}</strong></td>
-                  <td className="help">{p.email ?? ""}</td>
+                  <td>
+                    <strong>{shownName(p)}</strong>
+                    {authOn && p.id === me?.person?.id && <span className="badge" style={{ marginLeft: 8 }}>you</span>}
+                  </td>
+                  <td className="help">
+                    {authOn && p.id === "local" && !p.email
+                      ? "Owns what was made before login was turned on, and acts for keys with no person."
+                      : p.email ?? ""}
+                  </td>
                   <td className="mono help">{p.github ?? ""}</td>
                   <td className="help">{p.is_admin ? "yes" : "no"}</td>
                   <td style={{ textAlign: "right" }}>
@@ -741,7 +752,7 @@ function PeoplePanel({ people, admin, err: loadErr, onChanged }: {
 // Auth is set at launch: `tares up` is open; `tares up --auth` requires a login (a root token
 // printed to the terminal). This box states which mode you're in — there's no runtime toggle, so
 // it's status, not a control.
-function AccessPanel() {
+function AccessPanel({ me }: { me?: Whoami }) {
   const [authRequired, setAuthRequired] = useState<boolean>();
   useEffect(() => {
     api.health().then((h) => setAuthRequired(h.auth_required)).catch(() => setAuthRequired(undefined));
@@ -755,9 +766,13 @@ function AccessPanel() {
           <p style={{ margin: 0 }}>
             <span className="badge ok">auth on</span>{" "}
             <span className="help">
-              the console and API require a login. You signed in with the root token printed by{" "}
-              <code>tares up --auth</code>. Hand machines their own scoped <strong>API keys</strong>{" "}
-              below; never the root token.
+              the console and API require a login.{" "}
+              {!me ? null
+                : me.kind === "system" ? <>You signed in with the root token printed by <code>tares up --auth</code>.{" "}</>
+                : me.kind === "project" ? <>You signed in with a project key for {me.project_name ?? me.project}.{" "}</>
+                : <>You signed in with the API key <strong>{me.name}</strong>
+                    {me.person ? <>, which belongs to {me.person.name}</> : <>, which belongs to no one</>}.{" "}</>}
+              Hand machines their own scoped <strong>API keys</strong> below; never the root token.
             </span>
           </p>
         ) : (
