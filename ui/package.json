@@ -13,6 +13,7 @@
     "test:raise-limit": "vite build && node tests/raise-limit.e2e.cjs",
     "test:projects-list": "vite build && node tests/projects-list.e2e.cjs",
     "test:factory-docs": "vite build && node tests/factory-docs.e2e.cjs",
+    "test:factory-crew": "vite build && node tests/factory-crew.e2e.cjs",
     "test:project-idle": "vite build && node tests/project-idle.e2e.cjs",
     "test:edition-shell": "vite build && node tests/edition-shell.e2e.cjs",
     "test:factory-projects": "vite build && node tests/factory-projects.e2e.cjs",
