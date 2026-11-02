@@ -3597,7 +3597,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 f"WHERE id IN (SELECT * FROM pr) {b.format(col='started_at')}"
                 "AND COALESCE(dispatch_id, '') = '' "
                 "AND NOT COALESCE(r.parent_run_id IN (SELECT * FROM pr), FALSE)"
-                ") ORDER BY ts DESC, id DESC LIMIT ?",
+                ") AS roots ORDER BY ts DESC, id DESC LIMIT ?",
                 [project, project, *args, *args, int(limit)]).fetchall()
 
     def dispatches_where(self, column: str, values: list, project: str | None = None) -> list[dict]:
