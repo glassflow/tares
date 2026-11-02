@@ -1,15 +1,15 @@
-# Tests CI runs, one per line. Add your test's name on its own line. On a merge conflict keep both sides.
-parse
+# Tests CI runs, one per line, in sorted order. Add your test's name on its own line in its sorted place. On a merge conflict keep both sides.
+claude_update
+crew
+freeze
 guard
 heavy
-tidy
-spec
-session
-tares
-crew
-usage
-freeze
 idle_wake
-pace
-claude_update
 lsp
+pace
+parse
+session
+spec
+tares
+tidy
+usage
