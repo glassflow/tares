@@ -1,7 +1,8 @@
 """The cell's edition (TR-724): factory, sre or platform, stored in the cell's settings.
 
 TARES_EDITION seeds it on the first start; after that the stored value wins and
-PUT /api/settings/edition is the only way to switch a running cell.
+PUT /api/settings/edition switches a running cell; the AI SRE Settings page does the same through
+PUT /api/sre/settings/edition, which asks for a confirmation first.
 """
 from __future__ import annotations
 

@@ -35,8 +35,12 @@ from .factory_tickets import KEYS
 
 _VERDICT_TEXT = {"pass": "passed", "changes": "asked for changes", "block": "blocked"}
 _CALL_STATE = {"open": "waiting for you", "kept": "confirmed", "overturned": "you changed it"}
-# a folder under a home directory that is not the crew's own: show its last name
-_HOME_PATH = re.compile(r"(?:/Users|/home)/[^/\s'\"`]+(?:/[^\s'\"`]*)?|~/[^\s'\"`]*")
+# a folder under a home directory that is not the crew's own: show its last name. It has to start
+# there, not inside a word or a longer path (ui/src/components/Users/List.tsx, a link ending in
+# /home/guide stay as written).
+_HOME_PATH = re.compile(r"(?<![\w.~/-])(?:(?:/Users|/home)/[^/\s'\"`]+(?:/[^\s'\"`]*)?|~/[^\s'\"`]*)")
+# a station of the crew named by its own pattern (crew-reviewer), whether or not it has a session
+_CREW_NAME = re.compile(r"(?<![\w-])crew-(?:orchestrator|reviewer|releaser|builder|helper)(?![\w-])")
 
 
 def _state_label(st: str) -> str:
@@ -80,12 +84,6 @@ def register(app, store, h, ctx):
             if base:
                 hidden[base] = r.get("name") or base.rsplit("/", 1)[-1] or "the repo"
 
-        def clean(text):
-            out = str(text or "")
-            for path in sorted(hidden, key=len, reverse=True):
-                out = out.replace(path, hidden[path])
-            return _HOME_PATH.sub(lambda m: m.group(0).rstrip("/").rsplit("/", 1)[-1], out)
-
         def by_words(station, role=None) -> str | None:
             name = str(station or "").strip()
             role = role or roles.get(name)
@@ -96,6 +94,22 @@ def register(app, store, h, ctx):
             if role == "github":
                 return "GitHub"
             return _ROLE_BY.get(role or "") or ("the crew" if name else None)
+
+        # a station named in free text reads as its role: the stations that have a session, the ones
+        # that hold a ticket here, and the crew's own names
+        stations = {n for n in [*roles, *(x.get("holder") for x in tickets)] if n}
+        station_re = (re.compile(r"(?<![\w-])(?:" + "|".join(
+            re.escape(n) for n in sorted(stations, key=len, reverse=True)) + r")(?![\w-])")
+                      if stations else None)
+
+        def clean(text):
+            out = str(text or "")
+            for path in sorted(hidden, key=len, reverse=True):
+                out = out.replace(path, hidden[path])
+            out = _HOME_PATH.sub(lambda m: m.group(0).rstrip("/").rsplit("/", 1)[-1], out)
+            if station_re:
+                out = station_re.sub(lambda m: by_words(m.group(0)) or "the crew", out)
+            return _CREW_NAME.sub(lambda m: by_words(m.group(0)) or "the crew", out)
 
         def state_of(x: dict) -> str:
             done = factory_mod.finished(x)
@@ -182,10 +196,15 @@ def register(app, store, h, ctx):
                 terminal = [{"label": "Open the builder's session",
                              "command": factory_mod.attach_command(holder)}]
 
-        waiting = [other(by_id[d]) for d in t["depends_on"]
-                   if d in by_id and not factory_mod.finished(by_id[d])]
-        reason = ("Waiting for " + " and ".join(f"{o['ref']}, {o['title']}" for o in waiting) + "."
-                  if st == "blocked" and waiting else None)
+        # what a blocked ticket waits for: the tickets it depends on that have not delivered (a
+        # canceled one did not), or, when a station marked it blocked, that no ticket is named
+        waiting = [by_id[d] for d in t["depends_on"] if d in by_id and not factory_mod.delivered(by_id[d])]
+        reason = None
+        if st == "blocked":
+            reason = ("Waiting for " + " and ".join(
+                f"{factory_mod.label(w)}, {clean(w['title'])}"
+                + (" (canceled)" if w.get("status") == "canceled" else "") for w in waiting) + "."
+                if waiting else "Blocked, but no other ticket is in the way.")
 
         owner = t.get("owner")
         return {"ref": ref, "title": clean(t["title"]), "state": KEYS[st],
