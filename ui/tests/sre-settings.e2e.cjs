@@ -228,6 +228,14 @@ async function waitFor(url, tries = 150) {
     await group(page, "people").waitFor();
     ck("after a reload the secret is gone, the key stays", (await T(page, "created-key").count()) === 0 && !(await page.locator("body").innerText()).includes(secret) && (await page.locator("[data-testid=key-row]").count()) === 1);
     ck("a key made here shows in the cell", (await read(BASE)).people.keys.some((k) => k.name === "Alex laptop"));
+    // an address with a group in it opens at that group on a fresh load (about:blank first: a hash change on the same page scrolls natively)
+    for (const g of ["people", "tools"]) {
+      await page.goto("about:blank");
+      await page.goto(`${BASE}/settings#${g}`, { waitUntil: "load" });
+      await group(page, g).waitFor();
+      await page.waitForTimeout(400);
+      ck(`a fresh load of /settings#${g} scrolls to that group`, (await page.evaluate(() => window.scrollY)) > 100, String(await page.evaluate(() => window.scrollY)));
+    }
     await T(page, "key-revoke").click();
     await page.locator("[data-testid=key-row]").waitFor({ state: "detached" });
     ck("Revoke removes it from the page and the cell", (await page.locator("[data-testid=key-row]").count()) === 0 && !(await read(BASE)).people.keys.some((k) => k.name === "Alex laptop"));

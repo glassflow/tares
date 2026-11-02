@@ -419,6 +419,13 @@ async def main():
         eq("with a plain message", r.json()["detail"], "The key's name: it must be text.")
         r = await put("people", {"create": {"name": "x", "scopes": ["findings"]}})
         eq("and a scope it can have", r.status_code, 400)
+        eq("the home notes point at groups this page has",
+           {v for v in sre_home.NOTES_PLACE.values() if v.startswith("/settings#")},
+           {"/settings#tools", "/settings#watching"})
+        ck("and each of them is a group in the answer", {"tools", "watching"} <= set((await get()).json()))
+        for label, bad in (("a number", 7), ("a text", "read"), ("a list with a number", ["read", 3]), ("a list of lists", [["read"]])):
+            r = await put("people", {"create": {"name": "x", "scopes": bad}})
+            eq(f"scopes as {label} is a 400, not a crash", r.status_code, 400)
         r = await put("people", {"revoke": made["id"]})
         eq("a key is revoked", r.status_code, 200)
         ck("and gone from the list", "grafana" not in [k["name"] for k in r.json()["people"]["keys"]], r.json()["people"])

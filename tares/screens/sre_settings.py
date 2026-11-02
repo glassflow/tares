@@ -680,7 +680,11 @@ def _write_people(store, body: dict):
         name = _text(create.get("name"), 80)
     except Refused as e:
         return JSONResponse({"detail": f"The key's name: {e}"}, status_code=400), None
-    scopes = sorted(set(create.get("scopes") or []))
+    raw = create.get("scopes") or []
+    if not isinstance(raw, list) or not all(isinstance(x, str) for x in raw):
+        return JSONResponse({"detail": "Pick what the key may do: " + _join(SCOPE_WORDS[s] for s in KEY_SCOPES) + "."},
+                            status_code=400), None
+    scopes = sorted(set(raw))
     if not name:
         return JSONResponse({"detail": "Give the key a name."}, status_code=400), None
     if not scopes or not set(scopes) <= set(KEY_SCOPES):

@@ -534,10 +534,10 @@ export default function Settings() {
   const { hash } = useLocation();
   const scrolled = React.useRef("");
   React.useEffect(() => {
-    if (!data || !hash || scrolled.current === hash) return;
+    if (!served || !hash || scrolled.current === hash) return;
     scrolled.current = hash;
     document.getElementById(hash.slice(1))?.scrollIntoView();
-  }, [data, hash]);
+  }, [served, hash]);
 
   const [edits, setEdits] = React.useState<Edits>({});
   const [saving, setSaving] = React.useState<FieldGroupName | null>(null);
