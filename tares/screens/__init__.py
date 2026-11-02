@@ -6,7 +6,7 @@ import importlib
 SCREENS = [
     # "factory_projects",      # TR-733
 
-    # "factory_project",       # TR-734
+    "factory_project",         # TR-734
 
     # "factory_ticket",        # TR-760
 
