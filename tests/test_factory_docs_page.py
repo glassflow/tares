@@ -75,6 +75,9 @@ async def main():
         transport=httpx.ASGITransport(app=app), base_url="http://t",
         headers={"Authorization": f"Bearer {token}"} if token else {})
 
+    async def doc_of(cx, doc_id):
+        return (await cx.get(f"/api/factory/docs/{doc_id}")).json()["doc"]
+
     def clean(label, body):
         found = words.offenders_in(body, ("title", "name", "text"))
         ck(label + ": no forbidden word or dash outside the documents", found == [], found)
@@ -90,7 +93,8 @@ async def main():
                and [s["id"] for s in a["shared"]] == ["agents", "memory"]
                and a["projects"] == [] and a["finished"] == [], a)
             r = await cx.get("/api/factory/docs/memory")
-            d = r.json()
+            d = r.json()["doc"]
+            ck("with no document the list's own open document is none", a["doc"] is None, a)
             ck("a shared document nobody wrote yet is empty and takes a first line",
                r.status_code == 200 and d["empty"] is True and d["lines"] == []
                and d["changed"] == "Nothing here yet." and d["shared"] is True
@@ -146,6 +150,13 @@ async def main():
                [p["name"] for p in a["finished"]] == ["project-y"], a)
             ck("the list has no body", all("body" not in d and "lines" not in d
                                            for p in a["projects"] for d in p["docs"]), a)
+            ck("the list route opens the first shared document", a["doc"]["id"] == a["shared"][0]["id"]
+               and a["doc"]["label"] == "Rules", a["doc"] and a["doc"]["id"])
+            one = (await cx.get(f"/api/factory/docs/{mem_id}")).json()
+            ck("one document's route answers the same page with that document open",
+               {k: one[k] for k in ("shared", "projects", "finished", "empty")}
+               == {k: a[k] for k in ("shared", "projects", "finished", "empty")}
+               and one["doc"]["id"] == mem_id, one["doc"]["id"])
 
             print("== who and when ==")
             # a builder session, and a memory line from 3 days ago written by it
@@ -163,7 +174,7 @@ async def main():
                     f"- Checks come before review. ({day(1)}, console)\n"
                     f"- A line with no stamp.\n")
             store.update_doc(mem_id, body=body, by="project-x-build-m1")
-            d = (await cx.get(f"/api/factory/docs/{mem_id}")).json()
+            d = await doc_of(cx, mem_id)
             clean("project memory", d)
             L = d["lines"]
             ck("the note that opens the memory is not a line",
@@ -182,20 +193,20 @@ async def main():
             print("== a line added from the page ==")
             r = await cx.post(d["add"]["path"], json={"text": "Run the checks twice.", "by": "console"})
             ck("added", r.status_code == 201 and r.json()["added"] is True, r.text)
-            L2 = (await cx.get(f"/api/factory/docs/{mem_id}")).json()["lines"]
+            L2 = (await doc_of(cx, mem_id))["lines"]
             ck("it is the last line, by you, just now",
                L2[-1]["text"] == "Run the checks twice." and (L2[-1]["by"], L2[-1]["when"]) == ("you", "just now")
                and len(L2) == 5, L2[-1])
             r = await cx.post(d["add"]["path"], json={"text": "Run the checks twice.", "by": "console"})
             ck("the same line again is refused, and the server says so (added false)",
                r.status_code == 201 and r.json()["added"] is False, r.text)
-            ck("and nothing changed", len((await cx.get(f"/api/factory/docs/{mem_id}")).json()["lines"]) == 5)
+            ck("and nothing changed", len((await doc_of(cx, mem_id))["lines"]) == 5)
             r = await cx.post(d["add"]["path"], json={"text": "   ", "by": "console"})
             ck("an empty line is refused with a sentence", r.status_code == 400 and "one line" in r.text, r.text)
 
             print("== the shared documents and the project's other documents ==")
             a = (await cx.get("/api/factory/docs")).json()
-            rules = (await cx.get(f"/api/factory/docs/{a['shared'][0]['id']}")).json()
+            rules = await doc_of(cx, a['shared'][0]['id'])
             clean("the shared rules", rules)
             ck("the shared rules: the opening note and each line, no title, no author per line",
                [x["text"] for x in rules["lines"]][-2:] == ["Stop only processes you started.",
@@ -205,7 +216,7 @@ async def main():
             ck("the shared rules say who changed them, as a whole", rules["changed"] == "Changed by the Reviewer, just now",
                rules["changed"])
             r = await cx.post(rules["add"]["path"], json={"text": "Name the ticket in each commit.", "by": "console"})
-            rules2 = (await cx.get(f"/api/factory/docs/{rules['id']}")).json()
+            rules2 = await doc_of(cx, rules['id'])
             ck("a line added to the shared rules is the last one, and the header says you",
                r.status_code == 200 and rules2["lines"][-1]["text"] == "Name the ticket in each commit."
                and rules2["changed"] == "Changed by you, just now", rules2["changed"])
@@ -214,10 +225,10 @@ async def main():
             r = await cx.post("/api/docs/global/memory/lines", json={"text": "Alex prefers short PRs.", "by": "console"})
             a = (await cx.get("/api/factory/docs")).json()
             ck("the shared memory shows the line",
-               [x["text"] for x in (await cx.get(f"/api/factory/docs/{a['shared'][1]['id']}")).json()["lines"]]
+               [x["text"] for x in (await doc_of(cx, a['shared'][1]['id']))["lines"]]
                == ["Alex prefers short PRs."], a["shared"])
             plan_id = next(x["id"] for x in a["projects"][0]["docs"] if x["kind"] == "plan")
-            plan = (await cx.get(f"/api/factory/docs/{plan_id}")).json()
+            plan = await doc_of(cx, plan_id)
             clean("the plan", plan)
             ck("a plan: headings and rows in order, the title left to the header, no way to add",
                [(x["kind"], x["text"]) for x in plan["lines"]]

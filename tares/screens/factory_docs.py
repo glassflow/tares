@@ -8,13 +8,17 @@ are exempt from the word check; the rest of the answer is checked by tests/test_
 Who and when per line exists only for a project's memory: its lines end with "(2026-10-25, name)".
 Everywhere else the page says who changed the whole document and when. A line is added through the
 routes that already exist (`add.path` in the answer), so there is no write route here.
+
+Each route answers the whole page in one read (the list and one open document), so a page load is
+one call whichever way it was reached: /docs gives the first shared document, /docs?doc=<id> that
+one.
 """
 from __future__ import annotations
 
 import re
 from datetime import datetime, time, timezone
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException
 
 from .. import docs as docs_mod
 from ..envelope import now_utc
@@ -119,10 +123,7 @@ def register(app, store, h, ctx):
                 found[d["kind"]] = d
         return [{"id": found[k]["id"], "kind": k, "label": LABEL[k]} for k in SHOWN if k in found]
 
-    @app.get("/api/factory/docs")
-    def list_docs():
-        """The documents, grouped: the two shared ones, then each open project's own, then the
-        finished projects'. `empty` is true when no document exists yet."""
+    def listing() -> dict:
         ids = h.global_ids()
         gids = set(ids.values())
         shared = [{"id": ids.get(k, k), "kind": k, "label": LABEL[k],
@@ -138,8 +139,7 @@ def register(app, store, h, ctx):
         return {"empty": not gids and not open_ and not done, "shared": shared,
                 "projects": open_, "finished": done}
 
-    @app.get("/api/factory/docs/{doc_id}")
-    def get_doc(doc_id: str, request: Request):
+    def view(doc_id: str) -> dict:
         """One document as the rows the page shows, with who changed it and when, and where a
         line is added (`add`, null when the page does not add to it)."""
         now = now_utc()
@@ -194,3 +194,19 @@ def register(app, store, h, ctx):
                 "project": project, "shared": project is None,
                 "changed": "Nothing here yet." if empty else changed(d, station_roles, now),
                 "empty": empty, "lines": rows, "add": add}
+
+    @app.get("/api/factory/docs")
+    def list_docs():
+        """The page in one call: the documents, grouped (the two shared ones, each open project's
+        own, then the finished projects'), and in `doc` the first shared one, open. `empty` is
+        true when no document exists yet, and then `doc` is null."""
+        out = listing()
+        out["doc"] = None if out["empty"] else view(out["shared"][0]["id"])
+        return out
+
+    @app.get("/api/factory/docs/{doc_id}")
+    def get_doc(doc_id: str):
+        """The same page with `doc` set to this one (404 for a document the page does not show)."""
+        out = listing()
+        out["doc"] = view(doc_id)
+        return out
