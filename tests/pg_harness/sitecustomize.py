@@ -1,4 +1,4 @@
-"""CI's Postgres run (backend-postgres in .github/workflows/ci.yml): with this directory on
+"""CI's Postgres run (the postgres suite of tests/ci_run.py): with this directory on
 PYTHONPATH and TARES_TEST_PG set, every Store keeps its state in Postgres, in a schema of its own
 per DuckDB file. The schema's name is kept next to the file (<file>.pgschema), so a test that
 reopens the file, or starts a daemon on it, finds the same state, and a file deleted and made again

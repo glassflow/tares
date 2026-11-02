@@ -7,21 +7,16 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A newer push to the same PR cancels the run it replaces; runs on main always finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
-  test:
+  console:
     runs-on: ubuntu-latest
-    # a cell's state in Postgres (TARES_STATE_DSN): test_state_postgres moves a store into it
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_PASSWORD: pg
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -33,33 +28,21 @@ jobs:
           npx tsc --noEmit
           node tests/words.selftest.cjs
           node tests/words.check.cjs
-          npm run build          # produces ui/dist, which the daemon serves and the wheel bundles
+          npm run build
         working-directory: ui
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Backend — install + tests
-        run: |
-          pip install -e ".[postgres-state]"
-          export TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres
-          bash tests/check_ci_list.sh tests/ci_list.txt
-          for t in $(grep -vE '^\s*(#|$)' tests/ci_list.txt); do
-            echo "== $t =="
-            python "tests/$t.py"
-          done
-      - name: Factory CLI — tests (bash, against a real Tares)
-        run: |
-          bash tests/check_ci_list.sh tests/factory/ci_list.txt
-          for t in $(grep -vE '^\s*(#|$)' tests/factory/ci_list.txt); do
-            echo "== factory $t =="
-            bash "tests/factory/${t}_test.sh"
-          done
-
-  # The same tests with every cell's state in Postgres (TARES_STATE_DSN), as a cloud cell keeps it:
-  # tests/pg_harness gives each Store its own schema. In parallel with the DuckDB run above.
-  backend-postgres:
+  # The tests named in tests/ci_list.txt and tests/factory/ci_list.txt, split into shards that run
+  # in parallel (tests/ci_run.py balances them). Once with each cell's state in DuckDB, once with it in
+  # Postgres as a cloud cell keeps it: tests/pg_harness gives each Store its own schema.
+  test:
+    name: test (${{ matrix.suite }} ${{ matrix.shard }}/5)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [duckdb, postgres]
+        shard: [1, 2, 3, 4, 5]
+    # test_state_postgres moves a store into it; the postgres suite keeps every store in it
     services:
       postgres:
         image: postgres:16-alpine
@@ -85,25 +68,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Backend — tests with the state in Postgres
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Backend + factory CLI — tests
         run: |
           pip install -e ".[postgres-state]"
           export TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres
-          export PYTHONPATH="$PWD/tests/pg_harness"
           bash tests/check_ci_list.sh tests/ci_list.txt
-          for t in $(grep -vE '^\s*(#|$)' tests/ci_list.txt | grep -vxE 'test_state_postgres|test_duckdb_memory'); do
-            echo "== $t (state in Postgres) =="
-            python "tests/$t.py"
-          done
-      - name: Factory CLI — tests with the state in Postgres
-        run: |
-          export TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres
-          export PYTHONPATH="$PWD/tests/pg_harness"
           bash tests/check_ci_list.sh tests/factory/ci_list.txt
-          for t in $(grep -vE '^\s*(#|$)' tests/factory/ci_list.txt); do
-            echo "== factory $t (state in Postgres) =="
-            bash "tests/factory/${t}_test.sh"
-          done
+          if [ "${{ matrix.suite }}" = postgres ]; then export PYTHONPATH="$PWD/tests/pg_harness"; fi
+          python tests/ci_run.py --suite ${{ matrix.suite }} --shard ${{ matrix.shard }} --of 5
 
   secrets:
     runs-on: ubuntu-latest
