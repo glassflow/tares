@@ -15,7 +15,7 @@ https://docs.glassflow.ai/tares; this file is about the repo itself.
 ## Tests
 
 Tests are plain Python scripts, not pytest. Run one with `python tests/test_x.py`; it exits
-non-zero on failure. CI runs the list in `.github/workflows/ci.yml`; add a new test file to that
+non-zero on failure. CI runs the list in `tests/ci_run.py` (in parallel shards); add a new test file to that
 list or it never runs.
 
 ```bash
