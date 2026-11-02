@@ -1,7 +1,7 @@
-"""Connector registry — maps catalog `connector:` names to implementations.
+"""Connector registry - maps catalog `connector:` names to implementations.
 
 SPECS describes each connector's config surface so the UI can render forms and validate input
-without hardcoding connector knowledge — the registry is self-describing (GET /api/connectors).
+without hardcoding connector knowledge - the registry is self-describing (GET /api/connectors).
 Field types: string | number | json. `required` fields gate source creation.
 """
 from __future__ import annotations
@@ -29,6 +29,7 @@ from .finding import FindingConnector
 from .http_poll import HttpPollConnector
 from .linear import LinearConnector
 from .reference import ReferenceConnector
+from .threat_intel import ThreatIntelConnector
 from .vercel import VercelConnector
 from .webhook import WebhookConnector
 
@@ -48,13 +49,14 @@ REGISTRY = {
     "postgres": PostgresConnector,
     "claude_code": ClaudeCodeConnector,
     "finding": FindingConnector,
+    "threat_intel": ThreatIntelConnector,
     "http_poll": HttpPollConnector,
     "linear": LinearConnector,
     "github_issues": GitHubIssuesConnector,
 }
 
 # Connector metadata for the UI. The `fields` of each are GENERATED from the connector's
-# CONFIG_SCHEMA at the bottom of this module (single source of truth — no parallel definition).
+# CONFIG_SCHEMA at the bottom of this module (single source of truth - no parallel definition).
 SPECS = {
     "prometheus": {"label": "Prometheus", "mode": "poll", "discover": True,
                    "description": "Instant-query snapshots of PromQL expressions on every poll tick."},
@@ -115,6 +117,12 @@ SPECS = {
                  "description": "Polls a table incrementally (cursor by an id or updated_at); one "
                                 "event per new/changed row, keyed by an entity column (tenant_id). "
                                 "Your application's source-of-truth data in the timeline."},
+    "threat_intel": {"label": "Threat-intel feed", "mode": "poll", "discover": True, "poll": "5m",
+                     "description": "Polls a JSON indicator feed (MISP/OTX/AbuseIPDB-shaped "
+                                    "export, or a local file); one event per new indicator, keyed "
+                                    "by the indicator itself (an IP, domain, or hash) so it lands "
+                                    "on the same timeline as anything else keyed by that value - "
+                                    "auth logs, account activity, whatever else you already run."},
     "claude_code": {"label": "Claude Code sessions", "mode": "poll",
                     "description": "Tails local Claude Code session transcripts "
                                    "(~/.claude/projects/*.jsonl) into the data plane; one event per "
@@ -122,7 +130,7 @@ SPECS = {
                                    "token-usage fields. Sub-agents roll up into the same source. "
                                    "Secrets are redacted before storage."},
     # `internal`: provisioned by Tares itself (the first finding creates it), never offered in
-    # "Add source". Still a first-class source everywhere else — it appears on timelines, in the
+    # "Add source". Still a first-class source everywhere else - it appears on timelines, in the
     # catalog and in exports like any other.
     "finding": {"label": "Agent findings", "mode": "push", "internal": True,
                 "description": "What Tares agents conclude when a trigger fires; one finding per "
@@ -143,6 +151,8 @@ SPECS = {
 
 
 # A source's signal type is a property of its connector, not something the user authors. Mostly
+# descriptive - EXCEPT "reference", which the read path treats specially (always surfaced, never
+# time-windowed; see store.read_view_window).
 # descriptive — EXCEPT "reference", which the read path treats specially (always surfaced, never
 # time-windowed; see store.read_window).
 _SOURCE_TYPES = {"docker_logs": "application_log", "loki": "application_log",
@@ -172,7 +182,7 @@ REDACTED_SECRET = "••••••••"
 
 def secret_field_names(connector: str) -> set:
     """Config keys a connector marks `secret: True` in its CONFIG_SCHEMA (e.g. github `token`,
-    postgres `dsn`). These must never be serialized to a client — including the built-in agent and
+    postgres `dsn`). These must never be serialized to a client - including the built-in agent and
     MCP, which read source config over /api/sources."""
     schema = full_schema(connector)
     if not schema:
@@ -232,7 +242,7 @@ def _coerce_labels(val) -> list:
         row = {"name": str(spec["name"]),
                **({"const": str(spec["const"])} if "const" in spec else {"field": str(spec["field"])})}
         # value normalization (field labels only): one regex substitution, then one exact-alias
-        # map — validated here so a bad pattern is a save-time 400, never a per-event failure
+        # map - validated here so a bad pattern is a save-time 400, never a per-event failure
         # (docs/design/label-value-normalization.md)
         if any(k in spec for k in ("pattern", "replace", "map")):
             if "const" in spec:
@@ -255,7 +265,7 @@ def _coerce_labels(val) -> list:
                                        "observed-value -> canonical-value strings")
                 row["map"] = {str(k): str(v) for k, v in spec["map"].items()}
         # typed labels (v0.1.25): number labels are the aggregatable ones. Preserve the declared
-        # type through normalization — dropping it here silently reverts a number label to a string
+        # type through normalization - dropping it here silently reverts a number label to a string
         # (not aggregatable). Validation (config._validate_labels) already rejects bad types / a
         # numeric primary, so we only need to carry a valid value forward.
         if spec.get("type") in ("string", "number"):
@@ -346,7 +356,7 @@ def _normalize_against(schema: dict, raw, where: str) -> dict:
 
 
 def normalize_label_specs(specs: list) -> list:
-    """Validate/canonicalize label specs alone (same rules as a config save) — for callers that
+    """Validate/canonicalize label specs alone (same rules as a config save) - for callers that
     work with a label spec outside a full source config, e.g. the normalization preview."""
     return _coerce_labels(specs or [])
 
@@ -380,7 +390,7 @@ def _fields_from_schema(schema: dict) -> list:
     for name, spec in schema.items():
         if spec["type"] == "labels" or spec.get("advanced"):
             continue  # labels get the dedicated editor; advanced/legacy keys are kept in the
-                      # schema (so they round-trip) but hidden from the form — set via a primary label
+                      # schema (so they round-trip) but hidden from the form - set via a primary label
         if spec["type"] == "list":
             fields.append({"name": name, "type": "list", "required": spec.get("required", False),
                            "help": spec.get("help", ""),
