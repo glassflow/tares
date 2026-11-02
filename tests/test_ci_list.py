@@ -1,4 +1,4 @@
-"""The CI test lists: every name has its file, none is listed twice, and ci.yml reads the lists."""
+"""The CI test lists: every name has its file, none is listed twice, they are sorted, and ci.yml reads the lists."""
 import re
 from pathlib import Path
 
@@ -14,6 +14,16 @@ def names(path):
     return [ln.strip() for ln in path.read_text().splitlines() if ln.strip() and not ln.strip().startswith("#")]
 
 
+def out_of_order(got):
+    """A plain message naming the first line that sorts before the one above it, or "" when sorted.
+    New tests go in their sorted place, so two PRs rarely touch the same lines of the list."""
+    for i in range(1, len(got)):
+        if got[i] < got[i - 1]:
+            return (f"line {i + 1} of the names, {got[i]!r}, belongs before {got[i - 1]!r}: "
+                    "put each name in its sorted place (the same order as `sort`)")
+    return ""
+
+
 def check(label, listfile, filename):
     got = names(listfile)
     ck(f"{label}: the list is not empty", len(got) > 0)
@@ -21,6 +31,7 @@ def check(label, listfile, filename):
     ck(f"{label}: every name has its file", not missing, ", ".join(missing))
     dupes = sorted({n for n in got if got.count(n) > 1})
     ck(f"{label}: no name is listed twice", not dupes, ", ".join(dupes))
+    ck(f"{label}: the list is sorted", not out_of_order(got), out_of_order(got))
     return got
 
 
