@@ -131,8 +131,15 @@ def unit():
     check("and settles to platform", ed.settle(store) == "platform" and ed.edition(store) == ("platform", False))
 
     print("== the screen registry ==")
-    check("no screens yet", screens.SCREENS == [])
-    check("register_all with none does nothing", screens.register_all(None, None, None, None) is None)
+    import importlib
+    check("every listed screen has a register function",
+          all(callable(getattr(importlib.import_module(f"tares.screens.{n}"), "register", None)) for n in screens.SCREENS))
+    listed = screens.SCREENS
+    screens.SCREENS = []
+    try:
+        check("register_all with none does nothing", screens.register_all(None, None, None, None) is None)
+    finally:
+        screens.SCREENS = listed
 
 
 def start(tmp, **env):
