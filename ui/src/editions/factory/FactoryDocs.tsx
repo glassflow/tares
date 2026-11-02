@@ -93,7 +93,7 @@ function AddLine({ doc, sample, reload }: { doc: DocView; sample: string | null;
     <form onSubmit={submit} className="border-t border-border bg-[var(--wash)] px-5 py-3.5" data-testid="doc-add">
       <label htmlFor={inputId} className="mb-1.5 block text-xs text-muted-foreground">{add.hint}</label>
       <div className="flex gap-2">
-        <Input id={inputId} value={text} maxLength={500} placeholder="One short line" className="min-w-0 flex-1"
+        <Input id={inputId} value={text} maxLength={500} placeholder="One short line" className="min-w-0 flex-1 bg-[var(--white)]!"
                aria-invalid={error ? true : undefined} aria-describedby={error ? `${inputId}-error` : undefined}
                onChange={(e) => { setText(e.target.value); if (error) setError(""); }} />
         <Button type="submit" busy={busy}>Add line</Button>
@@ -120,7 +120,7 @@ function DocPane({ doc, sample, stale, reload }: { doc: DocView; sample: string 
           <>
             {cut > 0 && (
               <button type="button" onClick={() => setAll(true)} data-testid="doc-earlier"
-                      className="block! w-full border-0! border-b! border-dotted! border-border! bg-transparent! px-0! py-2.5! text-left text-[13px]! font-normal! text-[color:var(--accent-deep)]! underline">
+                      className="block! w-full border-0! border-b! border-dotted! border-border! bg-transparent! px-0! py-2.5! text-left text-[13px]! font-normal! text-[color:var(--accent-deep)]! underline! cursor-pointer">
                 Show {cut.toLocaleString("en")} earlier lines
               </button>
             )}
@@ -160,7 +160,7 @@ function DocList({ page, openId, finishedOpen, setFinishedOpen, to }: {
       {finishedOpen && page.finished.map(group)}
       {n > 0 && (
         <button type="button" onClick={() => setFinishedOpen(!finishedOpen)} data-testid="doc-finished"
-                className="mt-1 block! w-full border-0! border-t! border-border! bg-transparent! px-3.5! py-2.5! text-left text-[13px]! font-normal! text-[color:var(--accent-deep)]! underline">
+                className="mt-1 block! w-full border-0! border-t! border-border! bg-transparent! px-3.5! py-2.5! text-left text-[13px]! font-normal! text-[color:var(--accent-deep)]! underline! cursor-pointer">
           {finishedOpen ? "Hide finished projects" : `Show ${n} finished ${n === 1 ? "project" : "projects"}`}
         </button>
       )}
@@ -178,7 +178,7 @@ function DocSelect({ page, openId, pick }: { page: DocsPage; openId: string | nu
       </optgroup>
       {[...page.projects, ...page.finished].map((p) => (
         <optgroup key={p.id} label={p.name}>
-          {p.docs.map((d) => <option key={d.id} value={d.id} data-user-text>{`${p.name}: ${d.label}`}</option>)}
+          {p.docs.map((d) => <option key={d.id} value={d.id} data-user-text>{`${d.label}: ${p.name}`}</option>)}
         </optgroup>
       ))}
     </select>
@@ -244,7 +244,7 @@ export default function FactoryDocs() {
 
       {error && (
         <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
-          <b>Documents did not load.</b> The cell did not answer. Try again in a moment.
+          <b>Documents did not load.</b> <span className="text-foreground">The cell did not answer. Try again in a moment.</span>
         </Banner>
       )}
       {!data && !error && <Loading />}
