@@ -15,6 +15,7 @@ forbids are turned into plain ones here and nowhere else. The note and the agent
 """
 from __future__ import annotations
 
+import logging
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -24,9 +25,18 @@ from fastapi import HTTPException, Request
 
 from .. import feedback, goal, incidents, sre, words
 from .. import slack as slack_mod
+from .. import sre_home
+
+log = logging.getLogger(__name__)
 
 ACTIONS = ("on_it", "resolve", "reopen", "worth_yes", "worth_no")
 STATE_ACTIONS = {"on_it": incidents.take, "resolve": incidents.resolve, "reopen": incidents.reopen}
+REFUSED = {   # a state change the incident's state does not allow -> what the person is told
+    ("open", "reopen"): "This incident is already open.",
+    ("on_it", "on_it"): "Someone is already on this incident.",
+    ("resolved", "on_it"): "This incident is resolved now; reopen it first.",
+    ("resolved", "resolve"): "This incident is already resolved.",
+}
 GROUPS = (("open", "Open"), ("on_it", "Someone on it"), ("resolved", "Resolved"))
 RESOLVED_PAGE = 20          # resolved incidents on a page of the list
 ACTIVE_CAP = 200            # open and on_it incidents the list holds
@@ -286,8 +296,9 @@ def register(app, store, h, ctx):
         next_before = None
         for s in wanted:
             if s == "resolved":
-                got = store.list_incidents("resolved", key or None, RESOLVED_PAGE, cut)
-                if len(got) == RESOLVED_PAGE:
+                got = store.list_incidents("resolved", key or None, RESOLVED_PAGE + 1, cut)
+                if len(got) > RESOLVED_PAGE:   # a 21st exists: there is a next page
+                    got = got[:RESOLVED_PAGE]
                     next_before = goal._iso(got[-1]["last_note_at"])
             else:
                 got = store.list_incidents(s, key or None, ACTIVE_CAP) if cut is None else []
@@ -332,14 +343,17 @@ def register(app, store, h, ctx):
         try:
             points = store.event_series(inc["service"], start, end, bucket, errors_only=True)
         except Exception:
+            log.exception("incident chart: the error series of %s did not load", inc["service"])
             points = []
         try:   # every event of the service, to read the errors against
             traffic = store.event_series(inc["service"], start, end, bucket)
         except Exception:
+            log.exception("incident chart: the traffic series of %s did not load", inc["service"])
             traffic = []
         try:
             ds = sre.deploys(store, catalog(), inc["service"], start, DEPLOYS_MAX)
         except Exception:
+            log.exception("incident chart: the deploys of %s did not load", inc["service"])
             ds = []
         marks = [{"at": d["at"], "label": plain(d.get("text") or f"{d.get('kind') or 'deploy'} on {d.get('repo')}")}
                  for d in reversed(ds) if _aware(d["at"]) <= end]
@@ -446,8 +460,15 @@ def register(app, store, h, ctx):
             raise not_found()
         who = person(request)
         if action in STATE_ACTIONS:
+            # on_it by someone else on an incident someone is on takes it over, as the button says
+            takeover = (action == "on_it" and inc["state"] == "on_it"
+                        and not (inc["owner"] == who and inc["owner_name"] == who))
+            if action not in actions_of(inc) and not takeover:
+                raise HTTPException(409, REFUSED.get((inc["state"], action)) or
+                                    "That does not apply to this incident now.")
             if STATE_ACTIONS[action](store, incident_id, who, who, "console") is None:
                 raise not_found()
+            sre_home.clear_cache()   # the home page counts open incidents
         else:
             notes = store.incident_notes(incident_id)
             if not notes:

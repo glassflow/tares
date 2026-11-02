@@ -161,6 +161,17 @@ export default function Incidents() {
   const count = (t: Tab) => (t === "all" ? total : c[t]);
   const services = [{ value: ALL_SERVICES, label: "All services" }, ...[...new Set([...data.services, ...(service ? [service] : [])])].map((s) => ({ value: s, label: s }))];
 
+  // The way to the raised findings, and back, does not depend on there being quiet checks to count.
+  const quietLine = (
+    <p className="m-0 text-[13px] text-muted-foreground" data-testid="quiet-line">
+      {data.quiet_checks_words && <><span data-testid="quiet-words">{data.quiet_checks_words}.</span>{" "}</>}
+      <button type="button" className={LINK_BTN} data-testid="show-all-findings"
+              onClick={() => setParam("show", showAll ? null : "all")}>
+        {showAll ? "Show incidents only" : "Show all findings"}
+      </button>
+    </p>
+  );
+
   return (
     <div className="grid gap-6 md:gap-8" data-testid="incidents-page">
       <div>
@@ -171,6 +182,7 @@ export default function Incidents() {
       {nothing ? (
         <div className="border border-dashed border-border bg-card" data-testid="incidents-empty">
           <EmptyState title="No incidents">The watcher has raised nothing that needed a note.</EmptyState>
+          <div className="border-t border-border px-[18px] py-3">{quietLine}</div>
         </div>
       ) : (
         <div className={cn("grid gap-4 md:gap-5", stale && "opacity-60")} aria-busy={stale || undefined}>
@@ -211,15 +223,7 @@ export default function Incidents() {
             ))
           )}
 
-          {data.quiet_checks_words && (
-            <p className="m-0 text-[13px] text-muted-foreground" data-testid="quiet-line">
-              <span data-testid="quiet-words">{data.quiet_checks_words}.</span>{" "}
-              <button type="button" className={LINK_BTN} data-testid="show-all-findings"
-                      onClick={() => setParam("show", showAll ? null : "all")}>
-                {showAll ? "Show incidents only" : "Show all findings"}
-              </button>
-            </p>
-          )}
+          {quietLine}
         </div>
       )}
       <Toaster />
@@ -411,7 +415,14 @@ function IncidentView({ id }: { id: string }) {
       setChanging(false);
       if (!sample) reload();
     } catch (e) {
-      toast(e instanceof ApiError && e.status === 403 ? READ_ONLY : NOT_SAVED);
+      if (e instanceof ApiError && e.status === 409) {
+        // The incident is not in a state that allows this: say so and show it as it is now.
+        toast(e.message);
+        setChanging(false);
+        if (!sample) reload();
+      } else {
+        toast(e instanceof ApiError && e.status === 403 ? READ_ONLY : NOT_SAVED);
+      }
     } finally {
       setBusy(null);
     }

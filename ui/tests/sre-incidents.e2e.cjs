@@ -417,6 +417,10 @@ async function waitFor(url, tries = 150) {
           await p.getByTestId("incidents-empty").waitFor();
           ck(label(n) + ": says there are no incidents", /No incidents/.test(await txt(p.getByTestId("incidents-empty"))) && /The watcher has raised nothing that needed a note\./.test(await txt(p.getByTestId("incidents-empty"))));
           ck(label(n) + ": has no tabs", (await p.getByRole("tab").count()) === 0);
+          ck(label(n) + ": no quiet checks, yet the way to every finding is there", (await p.getByTestId("quiet-words").count()) === 0 && (await txt(p.getByTestId("show-all-findings"))) === "Show all findings");
+          await p.getByTestId("show-all-findings").click();
+          await p.waitForFunction(() => /Show incidents only/.test(document.querySelector("[data-testid=show-all-findings]")?.textContent || ""));
+          ck(label(n) + ": and the way back stays", new URL(p.url()).searchParams.get("show") === "all" && (await txt(p.getByTestId("show-all-findings"))) === "Show incidents only");
         } else {
           await p.getByTestId("incident-row").first().waitFor();
           if (n === "list-normal") {

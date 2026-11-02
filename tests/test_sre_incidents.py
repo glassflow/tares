@@ -20,6 +20,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -268,6 +269,8 @@ async def cell():
         ck("the title names the service", "edge-proxy" in by_id[a]["title"], by_id[a]["title"])
         no_forbidden("no forbidden word in the list", s)
         no_dash("no em dash in the list", s)
+        eq("one quiet check is counted and worded", s["quiet_checks_words"],
+           "1 quiet check today is not shown")
 
         print("== paging, filters, show=all ==")
         p2 = (await cx.get("/api/sre/incidents", params={"before": s["next_before"]})).json()
@@ -275,6 +278,27 @@ async def cell():
         eq("the rest of the resolved", len(items(p2, "resolved")), 5)
         eq("and no more pages", p2["next_before"], None)
         ck("none of them repeats", not ({i["id"] for i in res} & {i["id"] for i in items(p2, "resolved")}))
+        # exactly one page of resolved: no next page (a full page alone does not mean there is more)
+        for i in range(20):
+            t = base - timedelta(days=4, minutes=i * 5)
+            incident("exact-twenty", t, [], state="resolved", resolved_at=t + timedelta(minutes=3),
+                     resolution="itself")
+        ex = (await cx.get("/api/sre/incidents", params={"service": "exact-twenty"})).json()
+        eq("exactly 20 resolved: all 20 are shown", len(items(ex, "resolved")), 20)
+        eq("exactly 20 resolved: the count agrees", ex["counts"]["resolved"], 20)
+        eq("exactly 20 resolved: no next page", ex["next_before"], None)
+        # quiet checks: a second one makes it plural, none makes the line go
+        run("i-q2", "investigator", "service-a", "Nothing to do.", base - timedelta(minutes=4),
+            verdict="rca", outcome="no_op")
+        eq("two quiet checks are counted and worded",
+           (await cx.get("/api/sre/incidents")).json()["quiet_checks_words"],
+           "2 quiet checks today are not shown")
+        with store._swrite:
+            store.sc.execute("UPDATE agent_runs SET outcome = 'finding' WHERE id IN ('i-g', 'i-q2')")
+        eq("no quiet checks: no words", (await cx.get("/api/sre/incidents")).json()["quiet_checks_words"],
+           None)
+        with store._swrite:
+            store.sc.execute("UPDATE agent_runs SET outcome = 'no_op' WHERE id IN ('i-g', 'i-q2')")
         one = (await cx.get("/api/sre/incidents", params={"state": "on_it"})).json()
         eq("one state, one group", [g["state"] for g in one["groups"]], ["on_it"])
         flt = (await cx.get("/api/sre/incidents", params={"service": "edge-proxy"})).json()
@@ -378,6 +402,25 @@ async def cell():
         eq("and the link is null", rj.json()["slack"]["url"], None)
         eq("the place is still named", rj.json()["slack"]["where"], "#alerts")
         eq("nothing is kept", store.get_incident(j)["slack_url"], None)
+        asked = len(got("GET", "/chat.getPermalink"))
+        await cx.get(f"/api/sre/incidents/{j}")
+        eq("a link Slack refused is not asked for again inside the minute",
+           len(got("GET", "/chat.getPermalink")), asked)
+        wait = sre_incidents._slack_failed[("C3", "1790000000.000010")] - time.monotonic()
+        ck("and it is asked again within a minute", 0 < wait <= 60, str(wait))
+        # the page waits at most 3 seconds for Slack
+        timeouts: list = []
+        real_get = httpx.get
+
+        def spy_get(*a, **kw):
+            timeouts.append(kw.get("timeout"))
+            return real_get(*a, **kw)
+        httpx.get = spy_get
+        sre_incidents._slack_failed.clear()
+        await cx.get(f"/api/sre/incidents/{j}")
+        httpx.get = real_get
+        ck("Slack is asked", len(timeouts) >= 1, str(timeouts))
+        eq("and never for longer than 3 seconds", [t_ for t_ in timeouts if t_ != 3.0], [])
         # Slack unreachable
         old_base = sre_incidents.slack_mod.API_BASE
         sre_incidents.slack_mod.API_BASE = "http://127.0.0.1:1"
@@ -442,6 +485,40 @@ async def cell():
            [False])
         eq("a note nobody raised cannot be answered (409)",
            (await cx.post(f"/api/sre/incidents/{g}/worth_yes")).status_code, 409)
+
+        print("== an action the state does not allow ==")
+        r = await cx.post("/api/keys", json={"name": "alex-key", "scopes": ["admin"]})
+        ak = r.json()["secret"]
+        eq("the home page lists the open incident", h_ in [i["id"] for i in (
+            await cx.get("/api/home", headers=H(ak))).json()["incidents"]], True)
+        r = await cx.post(f"/api/sre/incidents/{h_}/reopen", headers=H(ak))
+        eq("reopen on an open incident: 409", r.status_code, 409)
+        eq("and says why", r.json()["detail"], "This incident is already open.")
+        eq("and nothing changed", (store.get_incident(h_)["state"], len(store.incident_log(h_))), ("open", 0))
+        eq("on_it by a key: 200", (await cx.post(f"/api/sre/incidents/{h_}/on_it", headers=H(ak))).status_code, 200)
+        eq("the change is recorded under the key's name",
+           (store.get_incident(h_)["owner"], store.get_incident(h_)["owner_name"]), ("alex-key", "alex-key"))
+        r = await cx.post(f"/api/sre/incidents/{h_}/on_it", headers=H(ak))
+        eq("on_it by the one who is on it: 409", (r.status_code, r.json()["detail"]),
+           (409, "Someone is already on this incident."))
+        eq("on_it by another person takes it over",
+           (await cx.post(f"/api/sre/incidents/{h_}/on_it")).status_code, 200)
+        eq("... and they hold it now", store.get_incident(h_)["owner"] != "alex-key", True)
+        eq("the home page still lists it", h_ in [i["id"] for i in (
+            await cx.get("/api/home", headers=H(ak))).json()["incidents"]], True)
+        eq("resolve: 200", (await cx.post(f"/api/sre/incidents/{h_}/resolve", headers=H(ak))).status_code, 200)
+        eq("the home page drops it at once", h_ in [i["id"] for i in (
+            await cx.get("/api/home", headers=H(ak))).json()["incidents"]], False)
+        was = store.get_incident(h_)
+        log_n = len(store.incident_log(h_))
+        for act, why in (("on_it", "This incident is resolved now; reopen it first."),
+                         ("resolve", "This incident is already resolved.")):
+            r = await cx.post(f"/api/sre/incidents/{h_}/{act}", headers=H(ak))
+            eq(f"{act} on a resolved incident: 409", (r.status_code, r.json()["detail"]), (409, why))
+        now_ = store.get_incident(h_)
+        eq("a resolved incident keeps its resolution", (now_["state"], now_["resolution"], now_["resolved_by"],
+           now_["resolved_at"]), (was["state"], "person", "alex-key", was["resolved_at"]))
+        eq("and its log is untouched", len(store.incident_log(h_)), log_n)
 
         print("== refused ==")
         r = await cx.post("/api/keys", json={"name": "viewer", "scopes": ["read"]})
