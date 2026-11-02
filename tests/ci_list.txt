@@ -112,6 +112,7 @@ test_slack_verify
 test_sre_home
 test_sre_runbooks
 test_sre_series
+test_sre_services
 test_startup_fill
 test_state_postgres
 test_status
