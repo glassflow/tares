@@ -1,5 +1,6 @@
 """The AI SRE Runbooks and memory screen (TR-753): GET /api/sre/runbooks, and the two writes
-POST /api/sre/runbooks/{service}/lines and DELETE /api/sre/runbooks/{service}/lines/{index}.
+POST /api/sre/runbooks/{service}/lines and DELETE /api/sre/runbooks/{service}/lines/{index}
+(the service may hold a slash, so the route takes the whole path before /lines).
 
 Per service, what the investigator should know. A runbook is written by people and read by the
 agents; memory is what the agents wrote back with remember(), shown beside it and never edited here.
@@ -182,10 +183,13 @@ def register(app, store, h, ctx):
     def screen(service: str | None = None) -> dict:
         return build(store, runtime.catalog, resolve(service) if service else None)
 
-    def wired_projects() -> list[str]:
+    def role_projects() -> list[str]:
         roles = sre.roles(store, runtime.catalog, include_paused=True)
         found = [w["project"] for w in roles["watchers"]] + [i["project"] for i in roles["investigators"]]
-        out = list(dict.fromkeys(p for p in found if p))
+        return list(dict.fromkeys(p for p in found if p))
+
+    def wired_projects() -> list[str]:
+        out = role_projects()
         if not out:
             raise HTTPException(409, "Set up a watcher and an investigator first, so there is "
                                      "someone to read the runbook.")
@@ -239,7 +243,12 @@ def register(app, store, h, ctx):
                 for p in store.skill_users(name):
                     store.delete_skill(p, name)
             else:
-                save(name, svc, "\n".join(kept) + "\n", who, wired_projects())
+                # a line can be removed after the watcher and investigator are gone: keep the
+                # projects that already hold the runbook
+                holders = list(dict.fromkeys(role_projects() + store.skill_users(name)))
+                if not holders:
+                    wired_projects()
+                save(name, svc, "\n".join(kept) + "\n", who, holders)
         return screen()
 
     @app.get("/api/sre/runbooks")
@@ -247,7 +256,7 @@ def register(app, store, h, ctx):
         only_sre()
         return await asyncio.to_thread(screen, service.strip() or None)
 
-    @app.post("/api/sre/runbooks/{service}/lines")
+    @app.post("/api/sre/runbooks/{service:path}/lines")
     async def post_line(service: str, request: Request):
         only_sre()
         try:
@@ -258,7 +267,7 @@ def register(app, store, h, ctx):
         return await asyncio.to_thread(add_line, service, text,
                                        _clean_who(h.by(request) or "console"))
 
-    @app.delete("/api/sre/runbooks/{service}/lines/{index}")
+    @app.delete("/api/sre/runbooks/{service:path}/lines/{index}")
     async def delete_line(service: str, index: int, request: Request):
         only_sre()
         return await asyncio.to_thread(remove_line, service, index,

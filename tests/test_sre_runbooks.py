@@ -97,7 +97,8 @@ async def main():
         #    second project with a watcher of its own ──
         build(store, now, watcher=True, investigator=True)
         store.append([_otlp(now, 2, "Pay.Gateway", "INFO", "charged 3"),
-                      _otlp(now, 3, "pay-gateway", "INFO", "charged 4")])
+                      _otlp(now, 3, "pay-gateway", "INFO", "charged 4"),
+                      _otlp(now, 4, "org/repo", "INFO", "built 1")])
         uid2 = "prj-second"
         store.create_project(uid2, "custom", "second-watch", {}, goal="Keep pay-gateway healthy")
         store.upsert_catalog_trigger("watch-2", ["prod-otlp"], {"every": "10m"}, {}, "10m")
@@ -272,6 +273,10 @@ async def main():
         eq("the watcher reading it is worded too",
            entry((await cx.get("/api/sre/runbooks")).json(), SVC)["used_words"], "Read by the watcher and the investigator 5 times this week")
 
+        finished_run(store, "run_w2", "watcher", ["runbook-docs-site"])
+        eq("only the watcher reading it is worded too",
+           entry((await cx.get("/api/sre/runbooks")).json(), "docs-site")["used_words"], "Read by the watcher once this week")
+
         print("== a service name that is not a skill name ==")
         for n in ("service-a", "Pay.Gateway", "pay-gateway", "x" * 100, "...", "Ünï"):
             ck(f"{n[:20]!r} gives a valid skill name", skills.NAME_RE.match(sre_runbooks.skill_name(n)) is not None,
@@ -283,6 +288,43 @@ async def main():
         s = r.json()
         eq("it is Pay.Gateway's", [l["text"] for l in entry(s, "Pay.Gateway")["runbook"]], ["Check the card network status"])
         eq("and not pay-gateway's", entry(s, "pay-gateway")["runbook"], [])
+
+        print("== lines people write ==")
+        for text in ("-Xmx512m is required", "--force only after the drain", "- one bullet marker is dropped"):
+            r = await cx.post("/api/sre/runbooks/pay-gateway/lines", headers=oncall, json={"text": text})
+            eq(f"{text[:20]!r} is accepted", r.status_code, 200)
+        eq("the dashes of a flag stay, one bullet marker goes",
+           [l["text"] for l in entry(r.json(), "pay-gateway")["runbook"]],
+           ["-Xmx512m is required", "--force only after the drain", "one bullet marker is dropped"])
+        eq("the same flag again is a duplicate",
+           (await cx.post("/api/sre/runbooks/pay-gateway/lines", headers=oncall, json={"text": "-Xmx512m is required"})).status_code, 409)
+
+        print("== a service name with a slash ==")
+        for how, base in (("a plain slash", "org/repo"), ("an encoded slash", "org%2Frepo")):
+            r = await cx.post(f"/api/sre/runbooks/{base}/lines", headers=oncall, json={"text": f"Check the build via {how}"})
+            eq(f"a line for org/repo through {how}", r.status_code, 200)
+        eq("both are org/repo's", [l["text"] for l in entry(r.json(), "org/repo")["runbook"]],
+           ["Check the build via a plain slash", "Check the build via an encoded slash"])
+        r = await cx.delete("/api/sre/runbooks/org%2Frepo/lines/0", headers=oncall)
+        eq("a line of org/repo is removed", (r.status_code, [l["text"] for l in entry(r.json(), "org/repo")["runbook"]]),
+           (200, ["Check the build via an encoded slash"]))
+        eq("an unknown service with a slash is a 404", (await cx.post("/api/sre/runbooks/no/such/lines", headers=oncall, json={"text": "a"})).status_code, 404)
+
+        print("== no watcher or investigator left ==")
+        real_roles = sre_runbooks.sre.roles
+        sre_runbooks.sre.roles = lambda *a, **k: {"watchers": [], "investigators": []}
+        try:
+            r = await cx.post("/api/sre/runbooks/pay-gateway/lines", headers=oncall, json={"text": "A line with nobody to read it"})
+            eq("adding a line is refused", r.status_code, 409)
+            msg = r.json().get("detail", "")
+            ck("with a plain sentence", msg.endswith(".") and not words.offenders(msg) and DASH not in msg, msg)
+            r = await cx.delete("/api/sre/runbooks/pay-gateway/lines/0", headers=oncall)
+            eq("removing a line still works", r.status_code, 200)
+            eq("and keeps the rest", [l["text"] for l in entry(r.json(), "pay-gateway")["runbook"]],
+               ["--force only after the drain", "one bullet marker is dropped"])
+            eq("the projects that held the runbook still hold it", len(store.skill_users(sre_runbooks.skill_name("pay-gateway"))) > 0, True)
+        finally:
+            sre_runbooks.sre.roles = real_roles
 
         print("== a read key ==")
         eq("a read key reads", (await cx.get("/api/sre/runbooks", headers=read)).status_code, 200)
