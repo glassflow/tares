@@ -130,7 +130,9 @@ Creating projects and writing docs needs an admin key in `access_token` on a sec
 
 Every Claude Code hook receives `transcript_path` on stdin. `ship.py` reads the new bytes since a
 per-session offset (kept in `${CLAUDE_PLUGIN_DATA}`), POSTs the complete new lines as NDJSON, and only
-advances the offset on success (so failures retry). It runs on `UserPromptSubmit`, `PostToolUse`
+advances the offset on success (so failures retry). Each hook sends at most 2 MB, so a long backlog
+goes out over the next few hooks. A single line larger than that goes out alone. A line over 8 MB is
+skipped, with a note in its place. It runs on `UserPromptSubmit`, `PostToolUse`
 (async, non-blocking) and `SessionEnd` (flush). Local *or* remote — it just posts to `tares_url`.
 
 ## Notes / caveats (prototype)

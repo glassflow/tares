@@ -570,6 +570,89 @@ def ship_subagents(cfg: dict, hook: dict, flow: str, project: str) -> None:
                 open(off_file[:-len(".off")] + ".cut", "w").write("1")
 
 
+# ── the session's own transcript (TR-809) ────────────────────────────────────
+# Read from the saved offset, at most MAX_MAIN_READ bytes per hook: one POST of a long session's
+# whole backlog can outlast the post timeout, fail on every hook, and leave the offset stuck. The
+# offset moves after each chunk that ships, so a backlog drains over the next hooks. A single line
+# larger than the read goes out alone; one larger than MAX_MAIN_LINE is stepped over with a note.
+
+MAX_MAIN_READ = 2 * 1024 * 1024      # bytes read from the session's transcript per hook
+MAX_MAIN_LINE = 8 * 1024 * 1024      # a line longer than this is not sent
+
+
+def _main_chunk(path: str, offset: int) -> tuple:
+    """(complete lines to ship, the offset after them, size of a line too large to send or 0)."""
+    with open(path, "rb") as f:
+        f.seek(offset)
+        chunk = f.read(MAX_MAIN_READ)
+        last_nl = chunk.rfind(b"\n")
+        if last_nl >= 0:
+            return chunk[: last_nl + 1], offset + last_nl + 1, 0
+        if len(chunk) < MAX_MAIN_READ:
+            return b"", offset, 0            # a line still being written: wait for its end
+        # one line larger than a whole read: find its end, keeping it only while it is sendable
+        line, end = chunk, offset + len(chunk)
+        while True:
+            more = f.read(MAX_MAIN_READ)
+            if not more:
+                return b"", offset, 0        # not finished yet
+            nl = more.find(b"\n")
+            piece = more if nl < 0 else more[: nl + 1]
+            end += len(piece)
+            if line is not None:
+                line = line + piece if len(line) + len(piece) <= MAX_MAIN_LINE else None
+            if nl >= 0:
+                break
+    if line is None:
+        return b"", end, end - offset
+    return line, end, 0
+
+
+def ship_main(cfg: dict, hook: dict, transcript: str, flow: str) -> tuple:
+    """Ship the next chunk of the session's transcript. Returns (shipped ok, flow after it)."""
+    data_dir = cfg["data_dir"]
+    session_id = str(hook.get("session_id") or "")
+    off_dir = os.path.join(data_dir, "offsets")
+    os.makedirs(off_dir, exist_ok=True)
+    off_file = os.path.join(off_dir, hashlib.sha1(transcript.encode()).hexdigest()[:16] + ".off")
+    try:
+        offset = int(open(off_file).read().strip())
+    except Exception:
+        offset = 0
+
+    size = os.path.getsize(transcript)
+    if offset > size:      # transcript rotated/truncated — start over
+        offset = 0
+    if offset >= size:
+        return True, flow
+    data, new_offset, skipped = _main_chunk(transcript, offset)
+    if skipped:
+        ok = ship_lines(cfg, [synthetic_line(hook, "transcript_truncated", flow,
+                                             note=f"a transcript line of {skipped} bytes was too "
+                                                  "large to record")])
+        if ok:
+            with open(off_file, "w") as f:
+                f.write(str(new_offset))
+        return ok, flow
+    if not data:
+        return True, flow
+
+    raw_lines = data.decode("utf-8", "replace").splitlines()
+    objs, flow, changed = process_lines(raw_lines, flow, hook)
+    if changed and session_id:
+        write_flow(data_dir, session_id, flow)   # the local hooks gate on this
+    project = read_project(data_dir, session_id) if session_id else ""
+    objs, project, p_changed = stamp_project(objs, project, hook)
+    ok = ship_lines(cfg, stamp_station(objs))
+    if ok and p_changed and session_id:
+        # only once shipped: a failed post retries these lines, the session_project line with them
+        write_project(data_dir, session_id, project)
+    if ok:
+        with open(off_file, "w") as f:
+            f.write(str(new_offset))   # advance only on success; failures retry next hook
+    return ok, flow
+
+
 # ── SessionStart: hand accepted memory to Claude ─────────────────────────────
 
 def memory_context(cfg: dict, cwd: str) -> str:
@@ -643,38 +726,7 @@ def main() -> None:
 
     shipped_ok = True
     if transcript and os.path.isfile(transcript):
-        off_dir = os.path.join(data_dir, "offsets")
-        os.makedirs(off_dir, exist_ok=True)
-        off_file = os.path.join(off_dir, hashlib.sha1(transcript.encode()).hexdigest()[:16] + ".off")
-        try:
-            offset = int(open(off_file).read().strip())
-        except Exception:
-            offset = 0
-
-        size = os.path.getsize(transcript)
-        if offset > size:      # transcript rotated/truncated — start over
-            offset = 0
-        if offset < size:
-            with open(transcript, "rb") as f:
-                f.seek(offset)
-                chunk = f.read()
-            last_nl = chunk.rfind(b"\n")      # only ship complete lines
-            if last_nl >= 0:
-                raw_lines = chunk[: last_nl + 1].decode("utf-8", "replace").splitlines()
-                new_offset = offset + last_nl + 1
-                objs, flow, changed = process_lines(raw_lines, flow, hook)
-                if changed and session_id:
-                    write_flow(data_dir, session_id, flow)   # the local hooks gate on this
-                project = read_project(data_dir, session_id) if session_id else ""
-                objs, project, p_changed = stamp_project(objs, project, hook)
-                shipped_ok = ship_lines(cfg, stamp_station(objs))
-                if shipped_ok and p_changed and session_id:
-                    # only once shipped: a failed post retries these lines, the session_project
-                    # line with them
-                    write_project(data_dir, session_id, project)
-                if shipped_ok:
-                    with open(off_file, "w") as f:
-                        f.write(str(new_offset))   # advance only on success; failures retry next hook
+        shipped_ok, flow = ship_main(cfg, hook, transcript, flow)
 
     if session_id and shipped_ok:
         ship_subagents(cfg, hook, flow, read_project(data_dir, session_id))
