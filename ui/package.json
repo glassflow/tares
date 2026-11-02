@@ -26,6 +26,7 @@
     "test:sre-timeline": "vite build && node tests/sre-timeline.e2e.cjs",
     "test:platform": "vite build && node tests/capped-runs.e2e.cjs && node tests/raise-limit.e2e.cjs && node tests/session-picker.e2e.cjs && node tests/projects-list.e2e.cjs && node tests/project-idle.e2e.cjs && node tests/login-handoff.e2e.cjs",
     "test:components": "vite build && node tests/component-gallery.e2e.cjs",
+    "test:sre-settings": "vite build && node tests/sre-settings.e2e.cjs",
     "test:words": "node tests/words.selftest.cjs && node tests/words.check.cjs"
   },
   "dependencies": {

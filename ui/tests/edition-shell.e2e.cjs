@@ -121,9 +121,23 @@ async function waitFor(url, tries = 150) {
     };
 
     const expect = {
-      factory: { name: "Software Factory", menu: ["Home", "Projects", "Crew", "Docs and memory", "Settings"], page: "/crew", call: "/api/crew" },
-      sre: { name: "AI SRE", menu: ["Home", "Timeline", "Settings"], page: "/explore", call: null },
+      factory: { name: "Software Factory", menu: ["Home", "Projects", "Reviews", "Crew", "Docs and memory", "Settings"], page: "/crew", call: "/api/crew" },
+      // The AI SRE menu grows as each screen merges (Services, Incidents, Timeline, Settings): the menu must
+      // keep the full order, start with Home, end with Settings and hold the entries that exist today.
+      // The exact list is pinned per screen ticket in edition-routes.e2e.cjs.
+      sre: { name: "AI SRE", order: ["Home", "Services", "Incidents", "Timeline", "Runbooks and memory", "Settings"],
+             must: ["Home", "Timeline", "Runbooks and memory", "Settings"], page: "/explore", call: null },
     };
+    // True when the menu is the edition's: the exact list for factory; for AI SRE a run of its full order
+    // with the entries that exist today and Home first, Settings last.
+    const menuIs = (e, items) => {
+      const x = expect[e];
+      if (x.menu) return items.join(",") === x.menu.join(",");
+      let at = -1;
+      const inOrder = items.every((t) => (at = x.order.indexOf(t, at + 1)) >= 0);
+      return inOrder && x.must.every((t) => items.includes(t)) && items[0] === "Home" && items[items.length - 1] === "Settings";
+    };
+    const menuText = (e) => expect[e].menu ? expect[e].menu.join(", ") : expect[e].must.join(", ") + " (in this order: " + expect[e].order.join(", ") + ")";
 
     // 1. each edition at 1440: header, menu, the pages the menu leads to
     for (const e of ["factory", "sre"]) {
@@ -133,7 +147,7 @@ async function waitFor(url, tries = 150) {
       ck(`${e}: the header says Tares`, /Tares/.test(htext), htext);
       ck(`${e}: and the edition name`, (await page.getByTestId("edition-name").innerText()) === expect[e].name);
       const items = (await labels(page)).map((t) => t.trim());
-      ck(`${e}: the menu is ${expect[e].menu.join(", ")}`, items.join(",") === expect[e].menu.join(","), items.join(","));
+      ck(`${e}: the menu is ${menuText(e)}`, menuIs(e, items), items.join(","));
       ck(`${e}: nothing in the menu says Sources`, !items.includes("Sources"));
       ck(`${e}: Settings is the last row`, items[items.length - 1] === "Settings");
       ck(`${e}: the old sidebar is not there`, (await page.locator(".sidebar").count()) === 0);
@@ -146,7 +160,7 @@ async function waitFor(url, tries = 150) {
          active.join(",") === (e === "factory" ? "Projects" : ""), active.join(","));
 
       // every row of the menu leads to a page
-      for (const label of expect[e].menu) {
+      for (const label of items) {
         await page.locator('nav[aria-label="Main"]').getByRole("link", { name: label, exact: true }).click();
         await page.waitForLoadState("networkidle");
         ck(`${e}: ${label} lands on a page`, (await page.locator("main").innerText()).includes("does not exist") === false);
@@ -202,7 +216,7 @@ async function waitFor(url, tries = 150) {
           const nav = page.locator('nav[aria-label="Main"]');
           await nav.waitFor();
           const items = (await labels(page)).map((t) => t.trim());
-          ck(`${tag}: the drawer has the same entries`, items.join(",") === expect[e].menu.join(","), items.join(","));
+          ck(`${tag}: the drawer has the same entries`, menuIs(e, items), items.join(","));
           ck(`${tag}: the drawer is 260 wide`, Math.abs((await nav.boundingBox()).width - 260) < 1);
           await shellWords(page, `${tag} drawer`);
           await shot(page, `${e}-390-drawer.png`);
@@ -216,6 +230,8 @@ async function waitFor(url, tries = 150) {
           await page.getByTestId("menu-button").click();
           await nav.getByRole("link", { name: "Settings" }).click();
           await page.waitForURL(/\/settings/);
+          // The URL changes first and the shell closes the drawer in the render after it: wait for that.
+          await nav.waitFor({ state: "detached" });
           ck(`${tag}: choosing a link closes the drawer`, (await nav.count()) === 0);
           await shellWords(page, `${tag} settings`);
         }

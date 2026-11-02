@@ -8,6 +8,8 @@ SCREENS = [
 
     "factory_project",         # TR-734
 
+    "factory_tickets",         # TR-806
+
     # "factory_ticket",        # TR-760
 
     "factory_reviews",       # TR-735
@@ -30,7 +32,7 @@ SCREENS = [
 
     "sre_runbooks",            # TR-753
 
-    # "sre_settings",          # TR-764
+    "sre_settings",          # TR-764
 ]
 
 

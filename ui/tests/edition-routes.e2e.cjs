@@ -215,8 +215,9 @@ function loadSample(env) {
       await goInApp(page, "/docs");
       ck("sre: /docs lands on /", where(page) === home, where(page));
       await go(page, e, "/settings");
-      ck("sre: /settings stays today's page, not the factory Settings", where(page) === "/settings" && (await page.getByTestId("section-crew").count()) === 0
-         && (await page.locator("section[id]").count()) !== 6 && (await advancedTab(page).count()) === 1);
+      ck("sre: /settings is the AI SRE Settings page, not the factory Settings or today's page", where(page) === "/settings"
+         && (await page.getByTestId("group-watching").count()) === 1 && (await page.getByTestId("section-crew").count()) === 0
+         && (await page.locator("section[id]").count()) !== 6 && (await advancedTab(page).count()) === 0);
       await go(page, e, "/settings/advanced");
       ck("sre: /settings/advanced has the Advanced tab open", (await advancedTab(page).getAttribute("aria-current")) === "page"
          && (await page.getByTestId("advanced-panel").locator('a[href="/sources"]').count()) === 1);

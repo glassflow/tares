@@ -279,10 +279,13 @@ async def main():
            and px_perm["meta"] == "Asked by the crew, 4 days ago", px_perm)
         ck("answer, and allow in one click", px_perm["actions"] == [
             {"label": "Answer", "primary": False, "href": f"/projects/{px}#desk-{px_perm['id'].split(':')[1]}"},
-            {"label": "Allow", "primary": True, "do": "allow", "desk": pq["label"]}], px_perm["actions"])
+            {"label": "Allow", "primary": True, "do": "allow", "desk": pq["label"], "may_limit": True}],
+           px_perm["actions"])
         cp = perms[None]
         ck("a crew station's request is the reviewer's, for every project", cp["title"] == "Every project"
            and cp["detail"] == "The reviewer wants to use: `gh pr comment 12 --body ok`", cp)
+        ck("a crew station's grant cannot be limited to one project, a builder's can",
+           cp["actions"][-1].get("may_limit") is False and px_perm["actions"][-1]["may_limit"] is True)
         ck("the answered question is not there", all("Which font?" not in i["detail"] for i in w))
 
         print("== milestones to check ==")
@@ -388,7 +391,26 @@ async def main():
         ck("the row: label, title, count without the canceled ticket, wait from the last ticket to finish",
            so["label"] == "Ready to close" and so["title"] == "project-v" and so["id"] == f"signoff:{pv}"
            and so["detail"] == "All 2 tickets are merged. Close the project when you have checked the result."
-           and so["meta"] == "Ready 5 hours ago" and so["waited"] == "5 hours", so)
+           and so["meta"] == "Ready for 5 hours" and so["waited"] == "5 hours", so)
+        ck("a project ready to close sorts after what holds the crew up, however long it has waited",
+           [i["kind"] for i in (await get_home())["waiting_for_you"]][-2:].count("signoff") == 2
+           and [i["kind"] for i in (await get_home())["waiting_for_you"]][0] == "permission",
+           [i["kind"] for i in (await get_home())["waiting_for_you"]])
+        ck("the headline age is the oldest thing that holds the crew up, not a sign-off",
+           (await get_home())["headline"].endswith("3 things wait for you, the oldest for 40 minutes."),
+           (await get_home())["headline"])
+        ck("a headline with only sign-offs gives no age", fh._headline(
+            {"running": True, "desk_open": 0}, [{}], 0, 0, [so, sv["project-q"]], None).endswith(
+            "2 things wait for you.") and fh._headline(
+            {"running": True, "desk_open": 0}, [{}], 0, 0, [so], None).endswith("1 thing waits for you."))
+        ps = project("project-s")
+        s1 = ticket(ps, "Built", stage="merged", status="done")
+        s2 = ticket(ps, "Dropped later", status="canceled")
+        back("tickets", s1, "updated_at", hours=30)
+        back("tickets", s2, "updated_at", hours=2)
+        ss = {i["project"]["name"]: i for i in by_kind(await get_home()).get("signoff", [])}["project-s"]
+        ck("the wait counts from the last ticket to finish, a canceled one too",
+           ss["waited"] == "2 hours" and ss["meta"] == "Ready for 2 hours", ss)
         ck("one ticket reads in the singular", sv["project-q"]["detail"]
            == "Its ticket is merged. Close the project when you have checked the result.", sv["project-q"])
         ck("open the project, or close it", so["actions"] == [
@@ -401,6 +423,14 @@ async def main():
         ck("closing it ends the item", r.status_code == 200
            and "project-v" not in {i["project"]["name"] for i in by_kind(await get_home()).get("signoff", [])},
            r.text)
+
+        store.add_desk_item(pu, "crew-reviewer was refused a command. Allow it?", "", [],
+                            "crew-reviewer may comment on a pull request", "it posts its verdict",
+                            "", [], False, "crew-orchestrator", [], ago(minutes=5),
+                            station="crew-reviewer", command="gh pr comment 12 --body ok")
+        cu = [i for i in by_kind(await get_home())["permission"] if (i["project"] or {}).get("name") == "project-u"]
+        ck("a crew station's request inside a project still cannot be limited to it",
+           len(cu) == 1 and cu[0]["actions"][-1]["may_limit"] is False, cu)
 
         print("== the cost of a read ==")
         for i in range(50):
@@ -428,7 +458,10 @@ async def main():
         print(f"       home() over 55 projects, {n} waiting: p95 {p95:.0f} ms, slowest {max(took):.0f} ms")
         ck("p95 under 300 ms", p95 < 300, f"{p95:.0f} ms")
         h2 = fh.waiting_items(store, fx, now_utc())
-        ck("the list is still oldest first", [i["since"] for i in h2] == sorted(i["since"] for i in h2))
+        rest = [i for i in h2 if i["kind"] != "signoff"]
+        ck("the list is still oldest first, ready-to-close rows last",
+           [i["since"] for i in rest] == sorted(i["since"] for i in rest)
+           and [i["kind"] for i in h2] == [i["kind"] for i in rest] + [i["kind"] for i in h2 if i["kind"] == "signoff"])
 
 
 asyncio.run(main())
