@@ -50,6 +50,7 @@ test_factory_reviews_page
 test_factory_settings_page
 test_factory_setup
 test_factory_takeover
+test_factory_tickets
 test_finding_titles
 test_github
 test_github_app
