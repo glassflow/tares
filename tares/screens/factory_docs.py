@@ -27,6 +27,8 @@ from ..factory_home import _dt, plain_ago
 # the documents the page shows, in reading order, and the word for each
 SHOWN = ("spec", "plan", "agents", "memory")
 LABEL = {"spec": "Spec", "plan": "Plan", "agents": "Rules", "memory": "Memory"}
+# the title of a shared document; a project's own is "<word>: <project name>"
+SHARED_TITLE = {"agents": "Rules for every project", "memory": "Memory for every project"}
 # who a crew member is called, by its role
 ROLE_WORD = {"orchestrator": "the Lead", "reviewer": "the Reviewer", "releaser": "the Releaser",
              "builder": "the Builder", "helper": "the Helper"}
@@ -127,7 +129,7 @@ def register(app, store, h, ctx):
         ids = h.global_ids()
         gids = set(ids.values())
         shared = [{"id": ids.get(k, k), "kind": k, "label": LABEL[k],
-                   "title": docs_mod.GLOBAL_DOCS[k][0]} for k in ("agents", "memory")]
+                   "title": SHARED_TITLE[k]} for k in ("agents", "memory")]
         open_, done = [], []
         for p in store.list_projects():
             if p.get("kind") != "software_factory":
@@ -150,8 +152,8 @@ def register(app, store, h, ctx):
             gkind = doc_id   # a shared document nobody has written yet
         if gkind:
             d = store.get_doc(None, ids[gkind]) if gkind in ids else None
-            d = d or {"id": gkind, "kind": gkind, "title": docs_mod.GLOBAL_DOCS[gkind][0],
-                      "body": "", "updated_at": None, "updated_by": None}
+            d = d or {"id": gkind, "kind": gkind, "body": "", "updated_at": None, "updated_by": None}
+            title = SHARED_TITLE[gkind]
             project = None
             word = "the shared rules" if gkind == "agents" else "the shared memory"
             add = {"path": f"/api/docs/global/{gkind}/lines",
@@ -164,6 +166,7 @@ def register(app, store, h, ctx):
             if p is None or p.get("kind") != "software_factory":
                 raise HTTPException(404, f"no document {doc_id!r}")
             project = {"id": p["id"], "name": p["name"]}
+            title = f"{LABEL[d['kind']]}: {p['name']}"
             add = ({"path": f"/api/projects/{p['id']}/memory/lines",
                     "hint": "Add a line to this memory. The crew reads it from the next task."}
                    if d["kind"] == "memory" else None)
@@ -190,7 +193,7 @@ def register(app, store, h, ctx):
                     r["when"] = ago(d["updated_at"] if fresh else day, now) if (
                         fresh or day.date() < now.date()) else "today"
         empty = not rows
-        return {"id": doc_id, "kind": kind, "label": LABEL.get(kind, kind), "title": d["title"],
+        return {"id": doc_id, "kind": kind, "label": LABEL.get(kind, kind), "title": title,
                 "project": project, "shared": project is None,
                 "changed": "Nothing here yet." if empty else changed(d, station_roles, now),
                 "empty": empty, "lines": rows, "add": add}

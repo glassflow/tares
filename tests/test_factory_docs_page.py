@@ -234,6 +234,9 @@ async def main():
                [(x["kind"], x["text"]) for x in plan["lines"]]
                == [("h2", "M1: pages"), ("p", "Goal: pages live."), ("li", "T1 Home page")]
                and plan["add"] is None and plan["project"]["name"] == "project-x", plan["lines"])
+            ck("titles are in words: shared ones and '<word>: <project>'",
+               [x["title"] for x in a["shared"]] == ["Rules for every project", "Memory for every project"]
+               and rules["title"] == "Rules for every project" and plan["title"] == "Plan: project-x", plan["title"])
             ck("a plan has no author on its lines", all(x["by"] == "" for x in plan["lines"]))
             note = next(x for x in store.list_docs(px) if x["kind"] == "note")
             r = await cx.get(f"/api/factory/docs/{note['id']}")
