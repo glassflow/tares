@@ -23,7 +23,7 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     "/": { page: React.lazy(() => import("./factory/FactoryHome")), fallback: "today" },
 
     // TR-733
-    "/projects": { page: null, fallback: "today" },
+    "/projects": { page: React.lazy(() => import("./factory/FactoryProjects")), fallback: "today" },
 
     // TR-734
     "/projects/:id": { page: null, fallback: "today" },
