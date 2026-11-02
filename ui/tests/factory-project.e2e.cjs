@@ -221,6 +221,10 @@ async function waitFor(url, tries = 100) {
     const ready = T("waiting-row").and(page.locator("[data-kind=signoff]"));
     ck("the Waiting list has a Ready to close row with its own words",
        (await raw(ready)).includes("Ready to close") && (await txt(ready)).includes("All 3 tickets are merged") && (await txt(ready)).includes("Close the project when you have checked the result."), await txt(ready));
+    // the cell's own row (a Close button and an Open project link to this very page): one Close, no self link
+    ck("the Ready to close row has one Close button and no link to this page",
+       (await ready.count()) === 1 && (await ready.getByTestId("waiting-close").count()) === 1
+       && (await ready.getByRole("link").count()) === 0 && !(await txt(ready)).includes("Open project"), await txt(ready));
     ck("and the milestone to check, with the address from the cell",
        (await T("waiting-row").and(page.locator("[data-kind=milestone_to_check]")).getByRole("link").first().getAttribute("href")).startsWith(`/projects/${z}#milestone-ms_`));
     ck("Waiting counts both", (await txt(T("waiting-count"))) === "2 things");

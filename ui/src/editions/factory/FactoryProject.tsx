@@ -542,7 +542,10 @@ export function FactoryProjectView({ data: d, onClose, onDecide, start }: {
   const [gone, setGone] = React.useState<string[]>([]);
 
   const finished = d.state === "finished";
-  const items = d.can_close && !d.waiting.some((w) => w.actions.some((a) => a.do === "close")) ? [...d.waiting, readyRow(d)] : d.waiting;
+  // a button that opens this very page has no place on it
+  const here = `/projects/${d.id}`;
+  const own = d.waiting.map((w) => ({ ...w, actions: w.actions.filter((a) => a.href !== here) }));
+  const items = d.can_close && !own.some((w) => w.actions.some((a) => a.do === "close")) ? [...own, readyRow(d)] : own;
 
   // an address with a #section scrolls to it once the page is there; a #desk-* one waits in Waiting
   React.useEffect(() => {
