@@ -318,7 +318,7 @@ function cleanEnv(extra) {
         await liveShot(page, "start", width);
         await checkWords(page, ck, t("page"));
         ck(t("no horizontal scroll"), (await overflow(page)) <= 0, `${await overflow(page)}px over`);
-        ck(t("the headline is the daemon's"), /^The crew is not running\. 5 things wait for you/.test(await page.getByTestId("home-headline").innerText()), await page.getByTestId("home-headline").innerText());
+        ck(t("the headline is the daemon's"), /^The crew is not running\. 6 things wait for you/.test(await page.getByTestId("home-headline").innerText()), await page.getByTestId("home-headline").innerText());
         ck(t("the first 5 of 7 waiting rows, then 2 more"), (await rows.count()) === 5 && (await page.getByRole("button", { name: "2 more" }).count()) === 1, String(await rows.count()));
         await page.getByRole("button", { name: "2 more" }).click();
         ck(t("7 waiting rows: two Close, a call, a spec, three permissions"), (await rows.count()) === 7, String(await rows.count()));
@@ -366,7 +366,7 @@ function cleanEnv(extra) {
         await page.getByText("Kept 2 calls.", { exact: true }).waitFor();
         ck(t("Keep: the home page is read again at once"), ctl.reads > before, `${ctl.reads} vs ${before}`);
         await page.unroute("**/assumptions/*/state");
-        await page.waitForFunction(() => /^The crew is not running\. 4 things wait for you/.test(document.querySelector('[data-testid="home-headline"]')?.textContent || ""), null, { timeout: 9000 });
+        await page.waitForFunction(() => /^The crew is not running\. 5 things wait for you/.test(document.querySelector('[data-testid="home-headline"]')?.textContent || ""), null, { timeout: 9000 });
         ck(t("Keep: and again once the daemon's own answer has moved on, the row is still gone"), (await calls.count()) === 0 && (await api("GET", `/api/projects/${ids["Billing export"]}/assumptions?state=open`)).body.assumptions.length === 0);
 
         // Allow
