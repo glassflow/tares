@@ -16,7 +16,7 @@ SCREENS = [
 
     "factory_docs",            # TR-737
 
-    # "factory_settings",      # TR-738
+    "factory_settings",        # TR-738
 
     # "start",                 # TR-756
 
@@ -28,7 +28,7 @@ SCREENS = [
 
     # "sre_timeline",          # TR-752
 
-    # "sre_runbooks",          # TR-753
+    "sre_runbooks",            # TR-753
 
     # "sre_settings",          # TR-764
 ]

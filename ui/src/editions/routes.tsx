@@ -41,7 +41,7 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     "/docs": { page: React.lazy(() => import("./factory/FactoryDocs")), fallback: { redirect: "/projects" } },
 
     // TR-738
-    "/settings": { page: null, fallback: "today" },
+    "/settings": { page: React.lazy(() => import("./factory/FactorySettings")), fallback: "today" },
 
     // TR-732: the factory home is /, so Start (the login landing) goes there
     "/start": { page: null, fallback: { redirect: "/" } },
@@ -66,7 +66,7 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     "/timeline": { page: null, fallback: "today" },
 
     // TR-753
-    "/runbooks": { page: null, fallback: { redirect: "/" } },
+    "/runbooks": { page: React.lazy(() => import("./sre/Runbooks")), fallback: { redirect: "/" } },
 
     // TR-764
     "/settings": { page: null, fallback: "today" },
