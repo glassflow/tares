@@ -26,7 +26,7 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     "/projects": { page: React.lazy(() => import("./factory/FactoryProjects")), fallback: "today" },
 
     // TR-734
-    "/projects/:id": { page: React.lazy(() => import("./factory/FactoryProject")), fallback: "today" },
+    "/projects/:id": { page: React.lazy(() => import("./factory/ProjectRoute")), fallback: "today" },
 
     // TR-760 (the colon after "ticket" belongs to the address; the second one starts :ref)
     "/projects/:id/tickets/:ref": { page: null, fallback: { redirect: "/projects/:id?view=ticket::ref" } },

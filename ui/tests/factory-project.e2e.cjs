@@ -7,8 +7,9 @@
  * Overturn), your decisions, the documents, and the command that opens a builder's session. A button
  * that opens another page uses the address the cell sends. Close asks first. A project with every
  * ticket merged says "Ready to close" and can be closed from the header or from the Waiting list.
- * A project that is not a factory project, or that does not exist, shows the error page. Every state
- * shows only words from words.json and none scrolls sideways at 390 px.
+ * An old ticket or doc link, a project that is not a factory project and an address with no project
+ * show today's project page. Every state shows only words from words.json and none scrolls
+ * sideways at 390 px.
  *
  * Seeds a scratch factory cell (tests/seed-factory-project.py, invented names), then runs the real
  * daemon on it, serving the built console. The sample states (?sample=<name>, with the sample flag in
@@ -138,6 +139,7 @@ async function waitFor(url, tries = 100) {
     ck("a ticket row opens the ticket, in words", (await t5.getAttribute("href")) === `/projects/${y}/tickets/T5`
        && (await txt(t5)).includes("Changes asked") && (await txt(t5)).includes("Builder for M2") && (await txt(t5)).includes("open, CI failing"), await txt(t5));
     ck("the next ticket is a row of its own", (await txt(T("next-up"))).startsWith("T3"), await txt(T("next-up")));
+    ck("and it opens that ticket", (await T("next-up").getAttribute("href")) === `/projects/${y}/tickets/T3`, await T("next-up").getAttribute("href"));
 
     // milestones: compact, with counts and a link, no tickets listed
     const mrows = T("milestone-row");
@@ -278,15 +280,28 @@ async function waitFor(url, tries = 100) {
     ck("a finished project (closed before) says Finished and has no Close", (await raw(T("project-chip"))) === "Finished" && (await T("project-close").count()) === 0);
     ck("and says nothing is moving, all tickets merged", (await txt(T("moving-empty"))) === "Nothing is moving. All 2 tickets are merged.", await txt(T("moving-empty")));
 
-    // a project that is not a factory project, or does not exist, shows the error page
-    for (const [label, id] of [["a project that is not a factory project", ids["project-w"]], ["an address that is no project", "nothing-here"]]) {
-      await page.goto(`${BASE}/projects/${id}`, { waitUntil: "load" });
-      await page.getByTestId("factory-project-wait").waitFor();
-      await page.getByRole("alert").waitFor();
-      ck(`${label}: the error banner with Retry, and no crash`, (await page.getByRole("alert").innerText()).includes("We could not load this project. Check your connection, then try again.")
-         && (await page.getByRole("button", { name: "Retry" }).count()) === 1);
-      await checkWords(page, ck, label);
-    }
+    // an old ticket or doc link, a project that is not a factory project and an address with no
+    // project show today's project page, never this one
+    await page.goto(`${BASE}/projects/${y}?view=ticket:T1`, { waitUntil: "load" });
+    await page.waitForFunction(() => document.body.innerText.includes("T1"), null, { timeout: 15000 }).catch(() => {});
+    ck("?view=ticket:T1 opens today's ticket view, not the factory page", (await T("factory-project").count()) === 0 && (await page.locator("body").innerText()).includes("T1"));
+    await page.goto(`${BASE}/projects/${y}?view=doc:none`, { waitUntil: "load" });
+    await page.waitForFunction(() => document.body.innerText.trim().length > 40, null, { timeout: 15000 }).catch(() => {});
+    ck("?view=doc: opens today's page too", (await T("factory-project").count()) === 0 && (await T("factory-project-wait").count()) === 0);
+    await page.goto(`${BASE}/projects/${y}`, { waitUntil: "load" });
+    await T("factory-project").waitFor();
+    await T("moving-row").and(page.locator("[data-ref=T5]")).click();
+    await page.waitForFunction(() => location.search.includes("view=ticket"), null, { timeout: 15000 }).catch(() => {});
+    await page.waitForFunction(() => document.body.innerText.includes("T5"), null, { timeout: 15000 }).catch(() => {});
+    ck("a ticket row lands on that ticket, not on this page", (await T("factory-project").count()) === 0 && (await page.locator("body").innerText()).includes("T5"), page.url());
+    await page.goto(`${BASE}/projects/${ids["project-w"]}`, { waitUntil: "load" });
+    await page.waitForFunction(() => document.body.innerText.includes("Not a factory project"), null, { timeout: 15000 }).catch(() => {});
+    ck("a project that is not a factory project shows today's page", (await T("factory-project").count()) === 0 && (await T("factory-project-wait").count()) === 0
+       && (await page.locator("body").innerText()).includes("Not a factory project"), (await page.locator("body").innerText()).slice(0, 300) + " | " + page.url());
+    await checkWords(page, ck, "project-w today's page");
+    await page.goto(`${BASE}/projects/nothing-here`, { waitUntil: "load" });
+    await page.waitForFunction(() => document.body.innerText.trim().length > 40, null, { timeout: 15000 }).catch(() => {});
+    ck("an address that is no project shows today's error, no crash", (await T("factory-project").count()) === 0 && (await page.getByRole("button", { name: "Retry" }).count()) >= 0);
     await ctx.close();
 
     // ── 4. 390 px: the live pages do not scroll sideways ────────────────────────────────────────

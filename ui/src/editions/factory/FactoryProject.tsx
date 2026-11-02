@@ -269,7 +269,7 @@ function Moving({ d }: { d: FactoryProjectData }) {
         {d.next && (
           <>
             <div className="border-y border-border bg-muted px-4 py-2 text-xs font-semibold text-muted-foreground">Next up</div>
-            <Link to={`${d.tickets_href}`} data-testid="next-up"
+            <Link to={`/projects/${encodeURIComponent(d.id)}/tickets/${encodeURIComponent(d.next.ticket)}`} data-testid="next-up"
                   className="grid grid-cols-[46px_minmax(0,1fr)_14px] items-start gap-x-3.5 gap-y-1 px-3.5 py-3 text-foreground! no-underline! hover:bg-[var(--row-hover)] md:grid-cols-[48px_minmax(0,1fr)_14px] md:px-4">
               <span className="pt-0.5 font-mono text-xs font-medium [overflow-wrap:anywhere]">{d.next.ticket}</span>
               <span className="min-w-0">
@@ -446,14 +446,16 @@ function Docs({ items }: { items: FactoryProjectData["docs"] }) {
 }
 
 function Command({ label, command }: { label: string; command: string }) {
-  const [copied, setCopied] = React.useState(false);
+  const [copied, setCopied] = React.useState<"" | "yes" | "failed">("");
   React.useEffect(() => {
     if (!copied) return;
-    const t = setTimeout(() => setCopied(false), 2000);
+    const t = setTimeout(() => setCopied(""), 2000);
     return () => clearTimeout(t);
   }, [copied]);
   const copy = () => {
-    navigator.clipboard.writeText(command).then(() => setCopied(true), () => setCopied(false));
+    // a cell served over plain http has no clipboard: the command stays on the page to select
+    if (!navigator.clipboard) { setCopied("failed"); return; }
+    navigator.clipboard.writeText(command).then(() => setCopied("yes"), () => setCopied("failed"));
   };
   return (
     <div data-testid="command">
@@ -461,7 +463,7 @@ function Command({ label, command }: { label: string; command: string }) {
       <div className="flex items-stretch gap-2">
         <code data-words-exempt data-testid="command-text"
               className="flex min-w-0 flex-1 items-center border border-border bg-[var(--white)] px-2 py-1.5 font-mono text-[12.5px] [overflow-wrap:anywhere]">{command}</code>
-        <Button variant="secondary" className="h-auto min-h-[30px] text-[13px]!" onClick={copy} data-testid="command-copy">{copied ? "Copied" : "Copy"}</Button>
+        <Button variant="secondary" className="h-auto min-h-[30px] text-[13px]!" onClick={copy} data-testid="command-copy">{copied === "yes" ? "Copied" : copied === "failed" ? "Select it to copy" : "Copy"}</Button>
       </div>
     </div>
   );
@@ -550,7 +552,8 @@ export function FactoryProjectView({ data: d, onClose, onDecide, start }: {
   // an address with a #section scrolls to it once the page is there; a #desk-* one waits in Waiting
   React.useEffect(() => {
     if (!hash) return;
-    const id = decodeURIComponent(hash.slice(1));
+    let id = hash.slice(1);
+    try { id = decodeURIComponent(id); } catch { /* a malformed address keeps its raw text */ }
     const el = document.getElementById(id) ?? (id.startsWith("desk-") ? document.getElementById("waiting") : null);
     el?.scrollIntoView({ block: "start" });
   }, [hash]);
@@ -643,13 +646,17 @@ export function FactoryProjectView({ data: d, onClose, onDecide, start }: {
   );
 }
 
-export default function FactoryProject() {
+export default function FactoryProject({ onOther }: { onOther?: () => void } = {}) {
   const { id = "" } = useParams();
   const named = useSample();
   const sample = isSample(named) ? named : null;
   const [closedHere, setClosedHere] = React.useState(false);
   const { data, error, reload } = usePagePolling<FactoryProjectData>(
-    () => (sample ? sampleLoad(sample) : factoryProject(id)), POLL_MS);
+    () => (sample ? sampleLoad(sample) : factoryProject(id).catch((e) => {
+      // the cell answers 404 for a project this page is not for: today's page takes it
+      if (e instanceof ApiError && e.status === 404 && onOther) onOther();
+      throw e;
+    })), POLL_MS);
 
   // a sample has no cell to close on: `fail` answers as the cell does, any other moves the page on this copy
   const close = async () => {
