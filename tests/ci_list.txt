@@ -110,6 +110,7 @@ test_slack_incident_buttons
 test_slack_verify
 test_sre_home
 test_sre_series
+test_sre_settings
 test_startup_fill
 test_state_postgres
 test_status
