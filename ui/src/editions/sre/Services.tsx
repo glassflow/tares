@@ -10,9 +10,9 @@ import { sreServices, type SreServiceRow, type SreServices } from "./Services.ap
 import { isListSample, sampleServices } from "./sample/services";
 import { count, serviceHref, STATE_TONE, up } from "./serviceWords";
 
-// Services: every service as one row, from one read (GET /api/sre/services). The rows are the
-// cell's order, busiest first. The first PAGE_SIZE show and "Show more" adds that many again; the
-// "Showing N of M" line counts the rows on the page. Hidden services stay out until the person asks
+// Services: every service as one row, from one read (GET /api/sre/services). The rows come in
+// this order: incident, not watched, unusual, silent, no signal of its own, normal, then by name.
+// The first PAGE_SIZE show and "Show more" adds that many again; the "Showing N of M" line counts the rows on the page. Hidden services stay out until the person asks
 // (a second read with ?hidden=1). A name or what the person calls it is their own text.
 
 const POLL_MS = 30_000;

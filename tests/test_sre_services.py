@@ -159,8 +159,10 @@ async def main():
         body = r.json()
         eq("the list has these keys", set(body), {"services", "hidden_count", "merged_words"})
         names = [s["name"] for s in body["services"]]
-        want = [i["name"] for i in sre.list_services(store, cat)]
-        eq("busiest first, the order the services have", names, want)
+        order = ("incident", "not_watched", "unusual", "silent", "no_own_signal", "normal")
+        want = [s["name"] for s in sorted(body["services"], key=lambda s: (order.index(s["state"]), s["name"]))]
+        eq("incident first, then not watched, unusual, silent, no signal of its own, normal; then by name",
+           names, want)
         eq("every service is there", set(names), set(made["services"]) | {"service-a-ui"})
         eq("a row has these keys", {frozenset(s) for s in body["services"]}, {frozenset(LIST_KEYS)})
         eq("nothing is hidden or merged", (body["hidden_count"], body["merged_words"]), (0, None))
@@ -177,7 +179,7 @@ async def main():
         direct = sre_services.services_screen(store, cat, NOW)
         SEEN.append(direct)
         home_rows = {s["name"]: s for s in home["services"]}
-        eq("the same services", [s["name"] for s in direct["services"]], [s["name"] for s in home["services"]])
+        eq("the same services", sorted(s["name"] for s in direct["services"]), sorted(s["name"] for s in home["services"]))
         for s in direct["services"]:
             h = home_rows[s["name"]]
             eq(f"{s['name']}: state, words and about are the home page's",

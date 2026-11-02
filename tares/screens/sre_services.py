@@ -94,15 +94,25 @@ def _row(store, ctx: dict, item: dict, errors: list) -> dict:
             "hidden": bool(item.get("hidden"))}
 
 
+# the order the ticket asks for: what needs a look first, then by name
+STATE_ORDER = ("incident", "not_watched", "unusual", "silent", "no_own_signal", "normal")
+
+
+def _rank(row: dict) -> tuple:
+    state = row["state"]
+    return (STATE_ORDER.index(state) if state in STATE_ORDER else len(STATE_ORDER), row["name"])
+
+
 def services_screen(store, catalog, now=None, include_hidden: bool = False) -> dict:
-    """The Services page: one row per service, busiest first. Hidden ones are left out and
+    """The Services page: one row per service, what needs a look first. Hidden ones are left out and
     counted, or listed with hidden true when `include_hidden`."""
     ctx = _context(store, catalog, now, True)
     everything = ctx["items"]
     shown = everything if include_hidden else [i for i in everything if not i.get("hidden")]
     errors = sre_home._errors_24h(store, [i["name"] for i in shown], ctx["t"], now)
     merged = sum(len(i["merged"]) for i in shown)
-    return {"services": [_row(store, ctx, i, errors.get(i["name"])) for i in shown],
+    rows = sorted((_row(store, ctx, i, errors.get(i["name"])) for i in shown), key=_rank)
+    return {"services": rows,
             "hidden_count": sum(1 for i in everything if i.get("hidden")),
             "merged_words": None if not merged else
             (f"{_count_words(merged, 'name')} {'is' if merged == 1 else 'are'} counted under another service")}
