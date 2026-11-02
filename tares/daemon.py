@@ -706,7 +706,8 @@ def make_app() -> FastAPI:
         runtime.shutdown()
         tracing.shutdown()   # flush the last spans; a lost trace is not a lost run
 
-    app = FastAPI(title="taresd", lifespan=lifespan)
+    # the interactive API reference lives under /api so /docs is the console's Docs and memory page
+    app = FastAPI(title="taresd", lifespan=lifespan, docs_url="/api/reference", redoc_url=None)
     app.state.store = store   # for in-process tests; DuckDB is single-writer, so no second Store
     app.state.runtime = runtime
     app.state.agents = dispatcher.agents   # the Tares agent runner, for in-process tests

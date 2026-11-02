@@ -7,6 +7,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 - Console: a factory cell has a home page at `/`: a greeting, what waits for you, your projects with their progress, the crew and its memory, your Claude plan use and the connected tools. It shows sample data behind the sample flag for now; the live page comes next.
+- Console: on a factory cell, Docs and memory (`/docs`) shows the crew's shared rules and memory and each project's spec, plan, rules and memory, with who wrote each memory line and when, and adds a line from the page. `GET /api/factory/docs` and `GET /api/factory/docs/{id}` serve it; the daemon's own API reference moves from `/docs` to `/api/reference`.
 - Console: on factory and AI SRE cells, Settings, Advanced (`/settings/advanced`) lists Connections, Explore, All resources, Connect and Reads, and one route table holds every page of both editions with a fallback until its page exists. Old addresses keep working; platform cells are unchanged.
 - Console: the factory and AI SRE editions get their own frame, a header with search and an account menu, and a left menu that lists only the pages that exist. The platform edition keeps the console as it was.
 - Incident notes belong to incidents that someone can take and resolve (`/api/incidents`).
