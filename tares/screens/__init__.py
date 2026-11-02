@@ -16,7 +16,7 @@ SCREENS = [
 
     "factory_docs",            # TR-737
 
-    # "factory_settings",      # TR-738
+    "factory_settings",        # TR-738
 
     # "start",                 # TR-756
 

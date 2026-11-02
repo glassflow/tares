@@ -122,3 +122,4 @@ test_sre_home
 test_factory_reviews_page
 test_factory_crew_page
 test_mcp_editions
+test_factory_settings_page
