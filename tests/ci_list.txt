@@ -118,3 +118,4 @@ test_ci_check
 test_factory_docs_page
 test_factory_project_page
 test_factory_projects_page
+test_sre_home
