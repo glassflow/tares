@@ -24,7 +24,8 @@ const WARN_AT = 80;
 const SECTION_H = "m-0! text-base!";
 const KIND = "font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-[color:var(--accent-deep)]";
 const MUTED = "text-xs text-muted-foreground";
-const WARN_FILL = "[&>div:first-child]:bg-[var(--warn)]";
+const INK_FILL = "[&>div:first-child]:bg-foreground!";
+const WARN_FILL = "[&>div:first-child]:bg-[var(--kit-accent)]!";
 
 const CHIP_TONES: Record<HomeProjectState, string> = {
   building: "border-[color:var(--ok-border)] bg-[var(--ok-soft)] text-[color:var(--ok)]",
@@ -155,7 +156,7 @@ function Projects({ projects, finished }: { projects: HomeProject[]; finished: n
   return (
     <section aria-label="Projects" className="min-w-0">
       <SectionHead title="Projects" aside={projects.length > 0 || finished > 0 ? (
-        <Link to="/projects" className="text-xs text-[color:var(--accent-deep)]">All projects, {finished} finished</Link>
+        <Link to="/projects" className="text-xs text-[color:var(--accent-deep)]! underline">All projects, {finished} finished</Link>
       ) : undefined} />
       <div className="border border-border bg-card">
         {projects.length === 0 ? (
@@ -194,7 +195,7 @@ function Member({ m }: { m: HomeCrewMember }) {
         {m.memory_pct !== null && (
           <>
             <ProgressBar value={m.memory_pct} aria-label={`Memory of ${m.name}`}
-                         className={cn("mt-1 h-1", high && WARN_FILL)} data-testid={high ? "memory-warn" : "memory"} />
+                         className={cn("mt-1 h-1", high ? WARN_FILL : INK_FILL)} data-testid={high ? "memory-warn" : "memory"} />
             <div className="mt-0.5 text-[11px] text-muted-foreground">{m.memory ?? `memory ${m.memory_pct}% full`}</div>
           </>
         )}
@@ -233,7 +234,7 @@ function PlanCard({ data }: { data: HomeData }) {
                 <span>{l.label}</span>
                 <span className="text-muted-foreground">{l.text}</span>
               </div>
-              <ProgressBar value={l.pct} aria-label={l.label} className="mt-1 h-1" />
+              <ProgressBar value={l.pct} aria-label={l.label} className={cn("mt-1 h-1", INK_FILL)} />
             </div>
           ))}
           {plan.share_text && (
@@ -348,7 +349,7 @@ export default function FactoryHome() {
   const sample = useSample();
   const { toast } = useToast();
   const [tries, setTries] = React.useState(0);
-  const known = sample === "loading" || sample === "error" || (sample !== null && sample in HOME_SAMPLES);
+  const known = sample === "loading" || sample === "error" || (sample !== null && Object.prototype.hasOwnProperty.call(HOME_SAMPLES, sample));
   // No sample, or a name we do not know: today's `/`. The live page replaces this in TR-732.
   if (!sample || !known) return <Home />;
 

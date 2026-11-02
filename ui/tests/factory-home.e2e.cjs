@@ -138,6 +138,30 @@ function cleanEnv(extra) {
          && (await page.getByText("memory 82% full").count()) === 1);
       ck(`busy @${width}: only the member at 80% or more has the amber memory bar`, (await page.getByTestId("memory-warn").count()) === 1
          && (await page.getByTestId("memory").count()) === 2);
+      const fillOf = (loc) => loc.evaluate((e) => {
+        const probe = document.createElement("i"); document.body.appendChild(probe);
+        const c = (v) => { probe.style.backgroundColor = v; return getComputedStyle(probe).backgroundColor; };
+        probe.className = "bg-foreground";   // the same utility the project bar's merged part uses
+        const ink = getComputedStyle(probe).backgroundColor; probe.className = "";
+        const out = { fill: getComputedStyle(e.querySelector(":scope > div")).backgroundColor, ink, amber: c("var(--kit-accent)") };
+        probe.remove(); return out;
+      });
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
+        await page.waitForTimeout(600);   // colours ease between themes
+        const warn = await fillOf(page.getByTestId("memory-warn").first());
+        const calm = await fillOf(page.getByTestId("memory").first());
+        const plan = await fillOf(page.getByRole("progressbar", { name: "Current 5 hours" }));
+        ck(`busy @${width} (${theme}): the memory bar at 80% or more is amber`, warn.fill === warn.amber, `${warn.fill} vs ${warn.amber}`);
+        ck(`busy @${width} (${theme}): a calmer memory bar is ink`, calm.fill === calm.ink, `${calm.fill} vs ${calm.ink}`);
+        ck(`busy @${width} (${theme}): a plan bar is ink`, plan.fill === plan.ink, `${plan.fill} vs ${plan.ink}`);
+      }
+      await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
+      const link = page.getByRole("link", { name: "All projects, 4 finished" });
+      ck(`busy @${width}: the All projects link takes the deep accent colour`, await link.evaluate((e) => {
+        const probe = document.createElement("i"); probe.style.color = "var(--accent-deep)"; document.body.appendChild(probe);
+        const c = getComputedStyle(probe).color; probe.remove(); return getComputedStyle(e).color === c;
+      }));
       ck(`busy @${width}: How far it may go links to Settings`, (await page.getByRole("link", { name: "How far it may go" }).getAttribute("href")) === "/settings#crew");
       ck(`busy @${width}: the plan card shows both limits`, (await page.getByText("1% used · resets 21:50").count()) === 1
          && (await page.getByText("11% used · resets Fri").count()) === 1);
@@ -172,6 +196,8 @@ function cleanEnv(extra) {
       // manyWaiting
       await open(page, "manyWaiting");
       ck(`manyWaiting @${width}: 5 rows`, (await rows.count()) === 5, String(await rows.count()));
+      ck(`manyWaiting @${width}: a primary action listed first still comes last`,
+         (await rows.first().locator("a, button").allInnerTexts()).join("|") === "Open project|Close project");
       const more = page.getByRole("button", { name: "15 more" });
       ck(`manyWaiting @${width}: a "15 more" button`, (await more.count()) === 1);
       await more.click();

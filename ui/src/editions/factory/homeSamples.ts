@@ -134,7 +134,11 @@ const many: HomeItem[] = Array.from({ length: 20 }, (_, i) =>
     : item(`signoff:project-${i}`, {
         kind: "signoff", label: "Ready to close", title: `project-${i}`,
         detail: "All tickets are merged. Close the project when you have checked the result.", meta: `Ready for ${20 - i} days`,
-        waited: `${20 - i} days`, actions: [{ label: "Open project", primary: true, href: `/projects/project-${i}` }],
+        waited: `${20 - i} days`,
+        // The first row lists its primary action first, so the page has to put it last.
+        actions: i === 0
+          ? [{ label: "Close project", primary: true, do: "close" }, { label: "Open project", primary: false, href: `/projects/project-${i}` }]
+          : [{ label: "Open project", primary: true, href: `/projects/project-${i}` }],
       }),
 );
 
