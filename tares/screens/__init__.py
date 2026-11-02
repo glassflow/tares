@@ -12,7 +12,7 @@ SCREENS = [
 
     "factory_reviews",       # TR-735
 
-    # "factory_crew",          # TR-736
+    "factory_crew",            # TR-736
 
     "factory_docs",            # TR-737
 
