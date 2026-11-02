@@ -119,3 +119,4 @@ test_factory_docs_page
 test_factory_project_page
 test_factory_projects_page
 test_sre_home
+test_factory_reviews_page
