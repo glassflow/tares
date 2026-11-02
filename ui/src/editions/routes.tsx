@@ -63,7 +63,7 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     "/incidents/:id": { page: null, fallback: { redirect: "/" } },
 
     // TR-752
-    "/timeline": { page: null, fallback: "today" },
+    "/timeline": { page: React.lazy(() => import("./sre/Timeline")), fallback: "today" },
 
     // TR-753
     "/runbooks": { page: React.lazy(() => import("./sre/Runbooks")), fallback: { redirect: "/" } },
