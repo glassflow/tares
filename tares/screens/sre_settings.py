@@ -676,7 +676,10 @@ def _write_people(store, body: dict):
     if not isinstance(create, dict):
         return JSONResponse({"detail": "Send create with a name and scopes, or revoke with a key id."},
                             status_code=400), None
-    name = _text(create.get("name"), 80)
+    try:
+        name = _text(create.get("name"), 80)
+    except Refused as e:
+        return JSONResponse({"detail": f"The key's name: {e}"}, status_code=400), None
     scopes = sorted(set(create.get("scopes") or []))
     if not name:
         return JSONResponse({"detail": "Give the key a name."}, status_code=400), None

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import { Banner, Button, Dialog, Skeleton, StatusLabel, Toaster, useToast, type Tone } from "../../components/edition";
@@ -529,6 +529,15 @@ export default function Settings() {
 
   const [served, setServed] = React.useState<SreSettings>();
   React.useEffect(() => { if (data) setServed(data); }, [data]);
+
+  // an address like /settings#watching opens at that group once the page has loaded
+  const { hash } = useLocation();
+  const scrolled = React.useRef("");
+  React.useEffect(() => {
+    if (!data || !hash || scrolled.current === hash) return;
+    scrolled.current = hash;
+    document.getElementById(hash.slice(1))?.scrollIntoView();
+  }, [data, hash]);
 
   const [edits, setEdits] = React.useState<Edits>({});
   const [saving, setSaving] = React.useState<FieldGroupName | null>(null);
