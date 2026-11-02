@@ -24,6 +24,7 @@
     "test:factory-home": "vite build && node tests/factory-home.e2e.cjs",
     "test:factory-start": "vite build && node tests/factory-start.e2e.cjs",
     "test:factory-reviews": "vite build && node tests/factory-reviews.e2e.cjs",
+    "test:sre-incidents": "vite build && node tests/sre-incidents.e2e.cjs",
     "test:factory-tickets": "vite build && node tests/factory-tickets.e2e.cjs",
     "test:platform": "vite build && node tests/capped-runs.e2e.cjs && node tests/raise-limit.e2e.cjs && node tests/session-picker.e2e.cjs && node tests/projects-list.e2e.cjs && node tests/project-idle.e2e.cjs && node tests/login-handoff.e2e.cjs",
     "test:components": "vite build && node tests/component-gallery.e2e.cjs",
