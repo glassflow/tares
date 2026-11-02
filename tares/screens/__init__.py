@@ -26,7 +26,7 @@ SCREENS = [
 
     # "sre_incidents",         # TR-751
 
-    # "sre_timeline",          # TR-752
+    "sre_timeline",            # TR-752
 
     "sre_runbooks",            # TR-753
 

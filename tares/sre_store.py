@@ -311,6 +311,134 @@ class SreStore:
         """event_series_many for one service."""
         return self.event_series_many([service], since, until, bucket_s, errors_only)[service]
 
+    # ── the timeline: raw rows, alerts, metrics, incident changes (TR-752) ────
+    def _event_case(self, spec: dict[str, str]) -> tuple[str, list, list[str]]:
+        """(SQL naming the service of an event of the sources in `spec`, its params, the
+        sources in the order used)."""
+        from .store import _label_expr
+        sources = sorted(spec)
+        case = "CASE source " + " ".join(f"WHEN ? THEN {_label_expr(spec[s])}" for s in sources) \
+               + " END"
+        return case, list(sources), sources
+
+    @staticmethod
+    def _json_of(value) -> dict:
+        if isinstance(value, dict):
+            return value
+        try:
+            out = json.loads(value) if isinstance(value, str) else {}
+        except ValueError:
+            return {}
+        return out if isinstance(out, dict) else {}
+
+    def service_events(self, services: list[str], since, until, limit: int) -> tuple[list[dict], int]:
+        """The events of `services` that arrived in [since, until) (by ingest_time), newest first:
+        ([{service, source, at, event_type, text, labels, payload}], how many there are in all).
+        A service counts the services merged into it, the same names event_series_many counts.
+        Events live in DuckDB only, so this reads self.con under self._lock and joins no state
+        table."""
+        names, spec = self._series_scope(list(dict.fromkeys(services)))
+        every = sorted(set().union(*names.values())) if names else []
+        if not spec or not every:
+            return [], 0
+        case, cparams, sources = self._event_case(spec)
+        ph_s, ph_n = ", ".join(["?"] * len(sources)), ", ".join(["?"] * len(every))
+        inner = (f"SELECT source, {case} AS svc, ingest_time, event_type, text, labels, payload "
+                 f"FROM events WHERE ingest_time >= ? AND ingest_time < ? AND source IN ({ph_s})")
+        base = [*cparams, since, until, *sources]
+        with self._lock:
+            total = self.con.execute(
+                f"SELECT COUNT(*) FROM ({inner}) WHERE svc IN ({ph_n})", [*base, *every]
+            ).fetchone()[0]
+            rows = self.con.execute(
+                f"SELECT * FROM ({inner}) WHERE svc IN ({ph_n}) ORDER BY ingest_time DESC LIMIT ?",
+                [*base, *every, int(limit)]).fetchall()
+        owner = {}
+        for svc, group in names.items():
+            for n in group:
+                owner.setdefault(n, svc)
+        return ([{"service": owner.get(r[1], r[1]), "source": r[0], "at": r[2], "event_type": r[3],
+                  "text": r[4] or "", "labels": self._json_of(r[5]), "payload": self._json_of(r[6])}
+                 for r in rows], int(total))
+
+    def alert_events(self, sources: list[str], since, until, limit: int = 2000) -> list[dict]:
+        """The events of the alert `sources` from [since, until) by event_time, newest first:
+        [{source, at, event_type, text, key, labels, payload}]. DuckDB only."""
+        if not sources:
+            return []
+        ph = ", ".join(["?"] * len(sources))
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT source, event_time, event_type, text, key_value, labels, payload "
+                f"FROM events WHERE source IN ({ph}) AND event_time >= ? AND event_time < ? "
+                "ORDER BY event_time DESC LIMIT ?", [*sources, since, until, int(limit)]).fetchall()
+        return [{"source": r[0], "at": r[1], "event_type": r[2], "text": r[3] or "", "key": r[4],
+                 "labels": self._json_of(r[5]), "payload": self._json_of(r[6])} for r in rows]
+
+    def metric_buckets(self, services: list[str], since, until, bucket_s: int,
+                       prometheus: list[str] = (), limit: int = 20000) -> list[dict]:
+        """The average value of each metric of `services` per bucket of `bucket_s` seconds
+        (aligned to `since`) in [since, until): [{service, metric, bucket, value, unit}],
+        oldest first. A metric is an OTLP event with a metricType or any event of the
+        `prometheus` sources; its value is payload.value, asDouble or asInt. DuckDB only."""
+        names, spec = self._series_scope(list(dict.fromkeys(services)))
+        every = sorted(set().union(*names.values())) if names else []
+        if not spec or not every:
+            return []
+        case, cparams, sources = self._event_case(spec)
+        prom = [s for s in prometheus if s in spec]
+        ph_s, ph_n = ", ".join(["?"] * len(sources)), ", ".join(["?"] * len(every))
+        is_metric = "json_extract_string(payload, '$.metricType') IS NOT NULL"
+        if prom:
+            is_metric = f"({is_metric} OR source IN ({', '.join(['?'] * len(prom))}))"
+        value = ("TRY_CAST(COALESCE(json_extract_string(payload, '$.value'), "
+                 "json_extract_string(payload, '$.asDouble'), "
+                 "json_extract_string(payload, '$.asInt')) AS DOUBLE)")
+        sql = ("SELECT svc, event_type, b, AVG(v), MAX(unit) FROM (SELECT "
+               f"{case} AS svc, event_type, "
+               f"time_bucket(INTERVAL '{int(bucket_s)} seconds', ingest_time, ?) AS b, "
+               f"{value} AS v, json_extract_string(payload, '$.unit') AS unit "
+               f"FROM events WHERE ingest_time >= ? AND ingest_time < ? AND source IN ({ph_s}) "
+               f"AND {is_metric}) WHERE svc IN ({ph_n}) AND v IS NOT NULL "
+               "GROUP BY svc, event_type, b ORDER BY b LIMIT ?")
+        params = [*cparams, since, since, until, *sources, *prom, *every, int(limit)]
+        with self._lock:
+            rows = self.con.execute(sql, params).fetchall()
+        owner = {}
+        for svc, group in names.items():
+            for n in group:
+                owner.setdefault(n, svc)
+        return [{"service": owner.get(r[0], r[0]), "metric": r[1], "bucket": r[2],
+                 "value": float(r[3]), "unit": r[4] or ""} for r in rows]
+
+    def incident_changes(self, since, until, services: list[str] | None = None,
+                         limit: int = 200) -> tuple[list[dict], dict[str, list[dict]]]:
+        """The incidents that were opened before `until` and touched at or after `since` (newest
+        first), with their log rows inside [since, until): (incidents, {incident id: [log rows
+        {at, action, by_id, by_name, via}, oldest first]}). `services` keeps the incidents of
+        those service keys. State tables only; `?` placeholders, so it runs on either store."""
+        where, args = ["opened_at < ?", "COALESCE(updated_at, opened_at) >= ?"], [until, since]
+        if services is not None:
+            if not services:
+                return [], {}
+            where.append(f"service IN ({', '.join(['?'] * len(services))})")
+            args += list(services)
+        with self._sread:
+            rows = self.sc.execute(
+                _INCIDENT_SELECT + "WHERE " + " AND ".join(where) + " ORDER BY opened_at DESC, id "
+                "LIMIT ?", args + [int(limit)]).fetchall()
+            incs = [self._incident(r) for r in rows]
+            log: dict[str, list[dict]] = {i["id"]: [] for i in incs}
+            if incs:
+                ph = ", ".join(["?"] * len(incs))
+                for r in self.sc.execute(
+                        "SELECT incident_id, at_time, action, by_id, by_name, via FROM incident_log "
+                        f"WHERE incident_id IN ({ph}) AND at_time >= ? AND at_time < ? "
+                        "ORDER BY at_time", [*log, since, until]).fetchall():
+                    log[r[0]].append({"at": r[1], "action": r[2], "by_id": r[3], "by_name": r[4],
+                                      "via": r[5]})
+        return incs, log
+
     # ── watching: whether anybody is watching each service (TR-743) ───────────
     def watch_rows(self) -> dict[str, dict]:
         """service -> {watched, reason, since, agent, project, told_at, told_where}, every row."""
@@ -749,12 +877,13 @@ class SreStore:
         return [int(n) for n in row]
 
     def deploy_events(self, sources: list[str], repos: list[str], since, limit: int,
-                      follow_default: list[str] = ()) -> list[dict]:
+                      follow_default: list[str] = (), detail: bool = False) -> list[dict]:
         """The pushes, merges and commits of `repos` (in the GitHub-type `sources`) from `since` on
         (None for ever), newest first. A push or commit counts when it is on the default branch:
         its on_default_branch label says so, else its branch is main or master, else it has none.
         `follow_default` names the polling sources that follow the repo's default branch: their
-        commits from before the poller stamped the label count whatever the branch is called."""
+        commits from before the poller stamped the label count whatever the branch is called.
+        `detail` adds author, branch and commits (the push's commit count) to each row."""
         from .store import _label_expr
         if not sources or not repos:
             return []
@@ -763,8 +892,9 @@ class SreStore:
         sph, rph = ", ".join(["?"] * len(sources)), ", ".join(["?"] * len(repos))
         follow = list(follow_default)
         follow_sql = f"OR source IN ({', '.join(['?'] * len(follow))}) " if follow else ""
+        extra = (f", {_label_expr('author')}, {branch}, {_label_expr('commits')}" if detail else "")
         sql = (f"SELECT event_time, {repo}, event_type, {action}, text, "
-               f"COALESCE(json_extract_string(payload, '$.html_url'), {_label_expr('url')}) "
+               f"COALESCE(json_extract_string(payload, '$.html_url'), {_label_expr('url')}){extra} "
                f"FROM events WHERE source IN ({sph}) AND {repo} IN ({rph}) "
                + ("AND event_time >= ? " if since is not None else "")
                + f"AND ((event_type = 'pull_request' AND {action} = 'merged') "
@@ -776,8 +906,13 @@ class SreStore:
         with self._lock:
             rows = self.con.execute(sql, params).fetchall()
         kinds = {"pull_request": "merge", "push": "push", "commit": "commit"}
-        return [{"at": r[0], "repo": r[1], "kind": kinds[r[2]], "text": r[4] or "", "url": r[5]}
-                for r in rows]
+        out = [{"at": r[0], "repo": r[1], "kind": kinds[r[2]], "text": r[4] or "", "url": r[5]}
+               for r in rows]
+        if detail:
+            for d, r in zip(out, rows):
+                d["author"], d["branch"] = r[6] or None, r[7] or None
+                d["commits"] = int(r[8]) if str(r[8] or "").isdigit() else None
+        return out
 
     def labels_last_seen(self, labels: list[str], sources: list[str]) -> dict[str, object]:
         """{label: the newest ingest_time of an event of `sources` that carried it}. A label that
