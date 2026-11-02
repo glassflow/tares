@@ -20,7 +20,7 @@ SCREENS = [
 
     # "start",                 # TR-756
 
-    # "sre_home_actions",      # TR-748
+    "sre_home_actions",      # TR-748
 
     # "sre_services",          # TR-750
 

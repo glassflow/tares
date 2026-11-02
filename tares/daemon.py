@@ -5113,8 +5113,8 @@ def make_app() -> FastAPI:
         if value == "factory":
             return await asyncio.to_thread(factory_home.build, store, fx, request)
         if value == "sre":
-            return await asyncio.to_thread(sre_home.build, store, runtime.catalog,
-                                           runtime.health_snapshot())
+            return await asyncio.to_thread(sre_home.cached, store, runtime.catalog,
+                                           runtime.health_snapshot, _by(request) or "console")
         return JSONResponse({"error": "no home on this edition"}, status_code=404)
 
     # ── services (TR-742): the services this cell receives data for, read from the events ──
