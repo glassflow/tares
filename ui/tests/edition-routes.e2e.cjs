@@ -149,7 +149,8 @@ function loadSample(env) {
          && await page.getByRole("heading", { name: "Sources", exact: true }).isVisible(), where(page));
 
       await go(page, e, "/settings");
-      ck("factory: /settings is Settings, its tab as before", where(page) === "/settings" && (await advancedTab(page).count()) === 1);
+      await page.getByTestId("section-advanced").waitFor();
+      ck("factory: /settings is the new Settings page, six sections", where(page) === "/settings" && (await page.locator("section[id]").count()) === 6 && (await advancedTab(page).count()) === 0);
       await go(page, e, "/sources");
       ck("factory: /sources still opens today's Sources page", where(page) === "/sources"
          && await page.getByRole("heading", { name: "Sources", exact: true }).isVisible(), where(page));
@@ -212,6 +213,9 @@ function loadSample(env) {
       }
       await goInApp(page, "/docs");
       ck("sre: /docs lands on /", where(page) === home, where(page));
+      await go(page, e, "/settings");
+      ck("sre: /settings stays today's page, not the factory Settings", where(page) === "/settings" && (await page.getByTestId("section-crew").count()) === 0
+         && (await page.locator("section[id]").count()) !== 6 && (await advancedTab(page).count()) === 1);
       await go(page, e, "/settings/advanced");
       ck("sre: /settings/advanced has the Advanced tab open", (await advancedTab(page).getAttribute("aria-current")) === "page"
          && (await page.getByTestId("advanced-panel").locator('a[href="/sources"]').count()) === 1);
