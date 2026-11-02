@@ -32,7 +32,7 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     "/projects/:id/tickets/:ref": { page: null, fallback: { redirect: "/projects/:id?view=ticket::ref" } },
 
     // TR-735
-    "/reviews": { page: null, fallback: { redirect: "/crew" } },
+    "/reviews": { page: React.lazy(() => import("./factory/FactoryReviews")), fallback: { redirect: "/crew" } },
 
     // TR-736
     "/crew": { page: null, fallback: "today" },
