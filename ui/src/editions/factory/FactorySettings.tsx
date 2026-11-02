@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, Navigate, useLocation } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import { Banner, Button, Dialog, ListRow, Skeleton, StatusDot, Textarea } from "../../components/edition";
@@ -312,7 +312,7 @@ function Loading() {
   );
 }
 
-export default function FactorySettings() {
+function SettingsPage() {
   const named = useSample();
   const sample = isSample(named) ? named : null;
   const { hash } = useLocation();
@@ -374,4 +374,13 @@ export default function FactorySettings() {
       {page && <FactorySettingsView page={page} problem={problem} onCrew={onCrew} onGrant={onGrant} onSwitch={onSwitch} />}
     </div>
   );
+}
+
+// Old addresses such as /settings?tab=github (the GitHub App return, the Tares Cloud return and the
+// console's own links) name a tab of the full settings. They go there with the same query.
+export default function FactorySettings() {
+  const { search } = useLocation();
+  const q = new URLSearchParams(search);
+  if (q.has("tab") || q.has("cloud")) return <Navigate to={`/settings/advanced${search}`} replace />;
+  return <SettingsPage />;
 }

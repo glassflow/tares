@@ -242,6 +242,24 @@ const until = async (fn, tries = 40) => {
       const top = await page.getByTestId(`section-${id}`).evaluate((s) => Math.round(s.getBoundingClientRect().top));
       ck(`/settings#${id} scrolls to ${id}`, id === "tools" ? top < 200 : top < 200 && (await page.evaluate(() => window.scrollY)) > 0, `top ${top}`);
     }
+
+    // 11. the old addresses that name a tab still reach it (the GitHub App return, the Tares Cloud return)
+    {
+      const tabOpen = (name) => page.locator('nav[aria-label="Settings"]').getByRole("button", { name, exact: true });
+      await page.goto(`${BASE}/settings?tab=github&installed=1`, { waitUntil: "load" });
+      await page.waitForURL((u) => u.pathname === "/settings/advanced");
+      const u = new URL(page.url());
+      ck("/settings?tab=github lands on /settings/advanced with the same query", u.searchParams.get("tab") === "github" && u.searchParams.get("installed") === "1", page.url());
+      ck("and the GitHub tab is the one open", (await tabOpen("GitHub").getAttribute("aria-current")) === "page");
+      ck("and this page's sections are not drawn", (await page.getByTestId("section-crew").count()) === 0);
+      await page.goto(`${BASE}/settings?cloud=github-connected`, { waitUntil: "load" });
+      await page.waitForURL((x) => x.pathname === "/settings/advanced");
+      ck("/settings?cloud= lands on the GitHub tab", (await tabOpen("GitHub").getAttribute("aria-current")) === "page");
+      ck("and shows what the cloud said", await page.getByText("GitHub is connected.", { exact: false }).first().isVisible());
+      await page.goto(`${BASE}/settings`, { waitUntil: "load" });
+      await page.getByTestId("section-crew").waitFor();
+      ck("/settings without a tab stays on this page", new URL(page.url()).pathname === "/settings");
+    }
     await ctx.close();
 
     // 11. a read key: everything dimmed and disabled, no way to switch the edition
