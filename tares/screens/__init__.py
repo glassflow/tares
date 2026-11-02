@@ -20,7 +20,7 @@ SCREENS = [
 
     "factory_settings",        # TR-738
 
-    # "start",                 # TR-756
+    "start",                 # TR-756
 
     "sre_home_actions",      # TR-748
 

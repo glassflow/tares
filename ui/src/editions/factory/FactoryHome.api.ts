@@ -1,6 +1,8 @@
 import { request } from "../../api";
 import type { HomeData } from "./home.types";
 
+export { hideStart, showStart } from "../StartChecklist.api";
+
 // The calls of the live factory home. Edition code stays here, so nothing is added to the shared
 // api.ts. Each path and body is the one the daemon reads (tares/factory_api.py, tares/daemon.py).
 
