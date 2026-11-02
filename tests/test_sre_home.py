@@ -706,9 +706,13 @@ async def main():
         eq("the cell has the services", len(sre.list_services(store, runtime.catalog, NOW)) >= 24, True)
         times = []
         for _ in range(20):
+            # the way the route builds it on a cold read: the real clock, and neither the page
+            # cache nor the services cache holding anything (a `now` of its own skips the latter
+            # and makes every part of the page scan the events again)
             sre_home.clear_cache()
+            store.__dict__.pop("services_cache", None)
             t0 = time.perf_counter()
-            h = sre_home.build(store, runtime.catalog, None, now=NOW)
+            h = sre_home.build(store, runtime.catalog, None)
             times.append((time.perf_counter() - t0) * 1000)
         slow = p95(times)
         print(f"  build x20: min {min(times):.0f} ms, median {sorted(times)[10]:.0f} ms, "
