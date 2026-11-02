@@ -24,9 +24,9 @@ SCREENS = [
 
     "sre_home_actions",      # TR-748
 
-    # "sre_services",          # TR-750
+    "sre_services",          # TR-750
 
-    # "sre_incidents",         # TR-751
+    "sre_incidents",           # TR-751
 
     # "sre_timeline",          # TR-752
 
