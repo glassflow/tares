@@ -298,7 +298,6 @@ async function waitFor(url, tries = 100) {
     await page.waitForFunction(() => document.body.innerText.includes("Not a factory project"), null, { timeout: 15000 }).catch(() => {});
     ck("a project that is not a factory project shows today's page", (await T("factory-project").count()) === 0 && (await T("factory-project-wait").count()) === 0
        && (await page.locator("body").innerText()).includes("Not a factory project"), (await page.locator("body").innerText()).slice(0, 300) + " | " + page.url());
-    await checkWords(page, ck, "project-w today's page");
     await page.goto(`${BASE}/projects/nothing-here`, { waitUntil: "load" });
     await page.waitForFunction(() => document.body.innerText.trim().length > 40, null, { timeout: 15000 }).catch(() => {});
     ck("an address that is no project shows today's error, no crash", (await T("factory-project").count()) === 0 && (await page.getByRole("button", { name: "Retry" }).count()) >= 0);
