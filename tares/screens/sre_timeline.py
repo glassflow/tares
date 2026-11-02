@@ -472,7 +472,9 @@ def timeline_screen(store, catalog, service: str = "", start=None, end=None, kin
 
     if want is not None:
         items = [i for i in items if i["kind"] in want]
-    items.sort(key=lambda i: (KIND_ORDER[i["kind"]], i["id"]))
+    # newest end first; at one moment a point comes before a span that ends there (the console puts
+    # that span under the hour before the point), then by kind, then by id
+    items.sort(key=lambda i: (i["end"] is not None, KIND_ORDER[i["kind"]], i["id"]))
     items.sort(key=lambda i: i["_t"], reverse=True)
     # a cursor per item, strictly falling: items that share a moment (every service's window ends
     # on the same one) are told apart by a microsecond each, so a page cut inside them is exact

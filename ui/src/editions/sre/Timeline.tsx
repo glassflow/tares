@@ -63,9 +63,9 @@ const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-/** The hour an item sits under. A span that ends on the hour belongs to the hour before. */
+/** The hour an item sits under. A span that ends exactly on the hour belongs to the hour before. */
 const hourOf = (it: TimelineItem) => {
-  const t = it.end ? ms(it.end) - 1000 : ms(it.at);
+  const t = it.end ? ms(it.end) - 1 : ms(it.at);
   return Math.floor(t / HOUR) * HOUR;
 };
 const hourWords = (hour: number, now: number) => {
@@ -77,10 +77,10 @@ const hourWords = (hour: number, now: number) => {
   return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${clock}`;
 };
 
-// ── the list: newest end first, ties as the cell breaks them
+// ── the list: newest end first; at one moment a point before a span, then kind, then id, as the cell sorts
 const RANK: Record<TimelineItem["kind"], number> = { incident: 0, alert: 1, window: 2, check: 3, deploy: 4, metric: 5, quiet: 6 };
 const endOf = (it: TimelineItem) => ms(it.end ?? it.at);
-const order = (a: TimelineItem, b: TimelineItem) => endOf(b) - endOf(a) || RANK[a.kind] - RANK[b.kind] || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+const order = (a: TimelineItem, b: TimelineItem) => endOf(b) - endOf(a) || Number(a.end !== null) - Number(b.end !== null) || RANK[a.kind] - RANK[b.kind] || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 /** `incoming` over `have` by id, newest first, without what is older than `from`. */
 function merge(have: TimelineItem[], incoming: TimelineItem[], from: number | null): TimelineItem[] {
@@ -399,8 +399,8 @@ export default function Timeline() {
   const rangeWords = range === "custom" ? fresh?.rangeWords : RANGES.find((r) => r.key === range)?.words;
   const items = fresh?.items ?? [];
 
-  // one heading per hour, newest first. A point on the hour and a span that ends on it tie in the list
-  // (the span belongs to the hour before), so an hour is found by its number, not by the item before.
+  // one heading per hour, newest first. A point on the hour sorts before a span that ends on it (the span
+  // belongs to the hour before), so the headings follow the list; an hour is still found by its number.
   const groups: { hour: number; items: TimelineItem[] }[] = [];
   for (const it of items) {
     const h = hourOf(it);

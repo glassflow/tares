@@ -449,6 +449,17 @@ def extras():
            "metric-svc: edge_metric 15, up from 10",
            "metric-svc: from_zero 3, up from 0",
            "metric-svc: went_down 8, down from 20"]))
+    store.append(burst("metric-svc", 20, 10, 12, errors=12))   # a bad window that ends where the metrics step
+    allk = st.timeline_screen(store, cat, service="metric-svc", now=NOW,
+                              start=NOW - timedelta(minutes=40), end=NOW)["items"]
+    moment = lambda i: i["end"] or i["at"]   # noqa: E731
+    ties = [(x, y) for x, y in zip(allk, allk[1:]) if moment(x) == moment(y)]
+    ck("a metric and a span end at the same moment in this list", any(
+        {x["kind"], y["kind"]} & {"metric"} and (x["end"] is None) != (y["end"] is None)
+        for x, y in ties), [(x["id"], y["id"]) for x, y in ties])
+    ck("at one moment a point comes before a span that ends there (the console heads the span with the hour before)",
+       all(not (x["end"] is not None and y["end"] is None) for x, y in ties),
+       [(x["id"], y["id"]) for x, y in ties])
     every = store.metric_buckets(["metric-svc"], NOW - timedelta(minutes=50), NOW, 600)
     newest = sorted({r["bucket"] for r in every})[-2:]
     got = store.metric_buckets(["metric-svc"], NOW - timedelta(minutes=50), NOW, 600, limit=10)
