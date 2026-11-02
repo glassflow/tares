@@ -200,6 +200,10 @@ the project follows [Semantic Versioning](https://semver.org/).
   crew has a station of the same name.
 
 ### Fixed
+- Settings, Access on a cell with people: it said "You signed in with the root token" to everyone.
+  It now names how you signed in (the root token, your API key and whose it is, or a project key).
+  The People list marks your own row and shows the boot person as "Local (no login)" instead of
+  "You"; on a cell without auth it is still "You".
 - The sign-off section of the project page: a cell of one person no longer shows its own repos as
   "No area owner" or "Waiting" (they read "Lead's own repo, no sign-off needed" and count as ready).
   `hand_over` no longer says "handed over without every sign-off" after a later hand-over that needed
