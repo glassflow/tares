@@ -10,7 +10,7 @@ SCREENS = [
 
     "factory_tickets",         # TR-806
 
-    # "factory_ticket",        # TR-760
+    "factory_ticket",          # TR-760
 
     "factory_reviews",       # TR-735
 
