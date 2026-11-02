@@ -107,10 +107,16 @@ async def factory():
         ck("the crew's tools stay", "list_tickets" in n and "desk_list" in n and "hand_over" in n, str(n))
         ck("a hidden tool answers in a sentence",
            await call("read", {"selector": {"a": "b"}}) == "This tool is off on this Tares. An admin "
-           "can turn it on under Settings, Advanced.")
+           "can turn on the building-block tools under Settings, Access and API keys, Agent tools.")
         ck("create_source is off too", "off on this Tares" in await call("create_source", {"name": "x"}))
         st = {"X-Tares-Role": "builder"}
         ck("a station sees the building blocks", "read" in await names({**ROOT, **st}))
+        # The server keeps one tool cache for every caller: once a station has listed `read`, the
+        # person's call to it must still get the sentence, not an output check error.
+        ck("a hidden tool answers after a station listed it",
+           "off on this Tares" in await call("read", {"selector": {"a": "b"}}))
+        ck("a station can call a hidden tool", "off on this Tares" not in
+           await call("list_connectors", {}, {**ROOT, **st}))
 
         started = await call("start_project", {"name": "alpha", "goal": "ship the thing"})
         ck("start_project makes a project", '"name": "alpha"' in started, started)
@@ -128,12 +134,18 @@ async def factory():
             r = await cx.put("/api/settings/mcp", json={"object_tools": True},
                              headers={"Authorization": f"Bearer {k['secret']}"})
             ck("a read key cannot change it", r.status_code == 403, r.text)
+        async with httpx.AsyncClient(base_url=D, headers=ROOT, timeout=10) as cx:
+            home = (await cx.get("/api/home")).json()
         waits = json.loads(await call("what_needs_me", {}))
+        ck("what_needs_me keeps the home headline", waits["headline"] == home["headline"] and home["headline"],
+           str(waits.get("headline")))
         ck("what_needs_me returns the home items", isinstance(waits.get("waiting_for_you"), list)
            and "headline" in waits and any("colour" in json.dumps(i) for i in waits["waiting_for_you"]),
            str(waits)[:300])
         row = json.loads(await call("how_is_project", {"project": "alpha"}))
         ck("how_is_project returns the project's row", row.get("name") == "alpha" and "tickets" in row, str(row))
+        byid = json.loads(await call("how_is_project", {"project": row.get("id", "x")}))
+        ck("how_is_project finds a project by id", byid.get("name") == "alpha" and row.get("id"), str(byid))
         miss = await call("how_is_project", {"project": "nope"})
         ck("an unknown project names the ones there are", miss == "No project called nope. Projects: alpha.", miss)
         sent = await call("hand_project_to_crew", {"project": "alpha", "repos": [
@@ -145,12 +157,19 @@ async def factory():
             ck("an admin turns object tools on", r.status_code == 200 and r.json()["object_tools"] is True, r.text)
         n = await names()
         ck("the building blocks come back", set(OBJECTS) <= set(n), str(sorted(set(OBJECTS) - set(n))))
+        ck("and a building block runs", "off on this Tares" not in await call("list_connectors", {}))
         ck("and the outcome tools still lead", n[:4] == list(OUTCOMES), str(n[:6]))
         ck("a hidden tool runs again", "off on this Tares" not in await call("list_connectors", {}))
         async with httpx.AsyncClient(base_url=D, headers=ROOT, timeout=10) as cx:
             r = await cx.put("/api/settings/mcp", json={"object_tools": None})
             ck("null clears the choice", r.status_code == 200 and r.json()["object_tools"] is False, r.text)
         ck("and they are hidden again", "read" not in await names())
+        ck("a call after they were listed and turned off gets the sentence",
+           "off on this Tares" in await call("read", {"selector": {"a": "b"}}))
+        ck("a bad key fails open to every tool and the call says 401",
+           set(OBJECTS) <= set(await names({"Authorization": "Bearer nope"})))
+        ck("what_needs_me reports an error from the daemon",
+           (await call("what_needs_me", {}, {"Authorization": "Bearer nope"})).startswith("error 401"))
     finally:
         _stop(m, d)
 
@@ -168,6 +187,13 @@ async def sre():
         ck("no factory outcome tool", not set(OUTCOMES) & set(n), str(sorted(set(OUTCOMES) & set(n))))
         ck("the crew's tools stay", "list_tickets" in n and "desk_list" in n)
         ck("create_source answers in a sentence", "off on this Tares" in await call("create_source", {"name": "x"}))
+        ck("an outcome tool says it is not part of this edition",
+           "not part of the sre edition" in await call("what_needs_me", {}))
+        async with httpx.AsyncClient(base_url=D, headers=ROOT, timeout=10) as cx:
+            r = await cx.put("/api/settings/mcp", json={"object_tools": True})
+        n = await names()
+        ck("object tools on, the factory outcome tools stay hidden on sre",
+           set(OBJECTS) <= set(n) and not set(OUTCOMES) & set(n), str(sorted(set(OUTCOMES) & set(n))))
     finally:
         _stop(m, d)
 
@@ -179,8 +205,18 @@ async def platform():
         if not await up():
             ck("daemon and mcp up", False); return
         n = await names()
-        ck("every tool is listed", set(OBJECTS) | set(OUTCOMES) <= set(n) and "list_tickets" in n,
-           str(sorted((set(OBJECTS) | set(OUTCOMES)) - set(n))))
+        want = set(OBJECTS) | {"start_project", "hand_project_to_crew"}
+        ck("every tool but the two home readers is listed", want <= set(n) and "list_tickets" in n,
+           str(sorted(want - set(n))))
+        ck("the two tools that read the factory home stay off", not {"what_needs_me", "how_is_project"} & set(n))
+        async with httpx.AsyncClient(base_url=D, headers=ROOT, timeout=10) as cx:
+            async def whoami():
+                return (await cx.get("/api/whoami")).json()["mcp_object_tools"]
+            ck("platform has object tools by default", await whoami() is True)
+            await cx.put("/api/settings/mcp", json={"object_tools": False})
+            ck("an admin can turn them off", await whoami() is False and "read" not in await names())
+            await cx.put("/api/settings/mcp", json={"object_tools": None})
+            ck("null brings the default back", await whoami() is True)
     finally:
         _stop(m, d)
 
@@ -193,6 +229,8 @@ async def unreachable():
             ck("mcp up", False); return
         n = await names()
         ck("it fails open to every tool", set(OBJECTS) | set(OUTCOMES) <= set(n), str(n))
+        ck("a call runs rather than answering the off sentence",
+           "off on this Tares" not in await call("create_source", {"name": "x"}))
     finally:
         _stop(m, d)
 
@@ -206,8 +244,95 @@ def words():
     ck("no forbidden word or em dash in a name or description", not any(b for _, b in bad), str(bad))
 
 
+class _Resp:
+    def __init__(self, status, body):
+        self.status_code, self._body = status, body
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(self.status_code)
+    def json(self):
+        return self._body
+
+
+async def unit():
+    print("== the surface cache and the settings order, in process ==")
+    from tares import mcp_server as ms, edition as ed
+
+    class Store:
+        def __init__(self, v=""): self.v = v
+        def get_setting(self, k): return self.v
+
+    saved = os.environ.pop(ed.OBJECT_TOOLS_ENV, None)
+    try:
+        ck("platform defaults on", ed.object_tools(Store(), "platform") is True)
+        ck("factory defaults off", ed.object_tools(Store(), "factory") is False)
+        ck("a stored 0 beats the default", ed.object_tools(Store("0"), "platform") is False)
+        ck("a stored 1 wins", ed.object_tools(Store("1"), "factory") is True)
+        os.environ[ed.OBJECT_TOOLS_ENV] = "1"
+        ck("the env turns them on when nothing is stored", ed.object_tools(Store(), "factory") is True)
+        ck("a stored 0 beats the env", ed.object_tools(Store("0"), "factory") is False)
+        os.environ[ed.OBJECT_TOOLS_ENV] = "0"
+        ck("the env turns them off on platform", ed.object_tools(Store(), "platform") is False)
+    finally:
+        os.environ.pop(ed.OBJECT_TOOLS_ENV, None)
+        if saved is not None:
+            os.environ[ed.OBJECT_TOOLS_ENV] = saved
+
+    calls = []
+    answer = {"r": _Resp(200, {"edition": "factory", "mcp_object_tools": False})}
+
+    class FakeCx:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, url):
+            calls.append(url)
+            return answer["r"]
+
+    real = (ms._cx, ms.AUTH_TOKEN, ms._HTTP)
+    ms._cx = lambda *a, **k: FakeCx()
+    ms._HTTP = False
+    old_ttl = os.environ.get("TARES_MCP_SURFACE_TTL")
+    try:
+        os.environ["TARES_MCP_SURFACE_TTL"] = "30"
+        ms._SURFACES.clear(); ms.AUTH_TOKEN = "t1"
+        a = await ms._surface(); b = await ms._surface()
+        ck("a second look within the TTL reuses the answer", a == b == ("factory", False) and len(calls) == 1, str(calls))
+        ms.AUTH_TOKEN = "t2"
+        await ms._surface()
+        ck("each token has its own answer", len(calls) == 2, str(calls))
+        os.environ["TARES_MCP_SURFACE_TTL"] = "0"
+        await ms._surface()
+        ck("a TTL of 0 asks every time", len(calls) == 3, str(calls))
+        os.environ["TARES_MCP_SURFACE_TTL"] = "junk"
+        await ms._surface()
+        ck("a TTL that is not a number falls back to 30 s", len(calls) == 3, str(calls))
+        os.environ["TARES_MCP_SURFACE_TTL"] = "30"
+        ms._SURFACES.clear()
+        for i in range(260):
+            ms.AUTH_TOKEN = f"k{i}"
+            await ms._surface()
+        ck("the cache is emptied past 256 tokens", len(ms._SURFACES) < 260, str(len(ms._SURFACES)))
+        ms._SURFACES.clear(); ms.AUTH_TOKEN = "t9"
+        answer["r"] = _Resp(401, {})
+        ck("a 401 gives the unknown edition and every tool", await ms._surface() == ("", True))
+        ms._SURFACES.clear()
+        answer["r"] = _Resp(200, {"edition": "factory"})
+        ck("a body with no mcp_object_tools fails open", await ms._surface() == ("", True))
+        ck("an unknown edition shows the factory tools and the building blocks",
+           ms._visible("what_needs_me", "", True, False) and ms._visible("read", "", True, False))
+    finally:
+        ms._cx, ms.AUTH_TOKEN, ms._HTTP = real
+        ms._SURFACES.clear()
+        if old_ttl is None:
+            os.environ.pop("TARES_MCP_SURFACE_TTL", None)
+        else:
+            os.environ["TARES_MCP_SURFACE_TTL"] = old_ttl
+
+
 async def main():
     words()
+    await unit()
     await factory()
     await sre()
     await platform()

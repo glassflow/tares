@@ -68,6 +68,9 @@ def main():
     e = c.map_payload(waived)[0]
     ck("challenge_waived text", e.text == "Challenger finding waived\n[P2] Missing test", e.text)
 
+    async def _no_cell():   # no daemon here: list every tool without asking one
+        return ("", True)
+    mcp_server._surface = _no_cell
     tools = asyncio.run(mcp_server.mcp.list_tools())
     ck("set_session_flow is an MCP tool", any(t.name == "set_session_flow" for t in tools))
     ack = asyncio.run(mcp_server.set_session_flow("challenger"))

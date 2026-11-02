@@ -636,14 +636,16 @@ function McpToolsPanel() {
     <div className="panel">
       <h2 style={{ marginTop: 0 }}>Agent tools</h2>
       {err && <div className="alert error">{err}</div>}
-      <label className="field" style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
-        <input type="checkbox" checked={!!on} disabled={busy || on === undefined}
+      <label className="field" style={{ flexDirection: "row", gap: 10, alignItems: "flex-start" }}>
+        <input type="checkbox" checked={!!on} disabled={busy || on === undefined} style={{ marginTop: 3 }}
                onChange={(e) => toggle(e.target.checked)} />
         <span>
           <strong>Let agents use the building blocks (connections, raw data, rules)</strong><br />
           <span className="help">
             Agents that connect over MCP get the low-level tools as well as the ones named for what you want done.
-            Crew sessions always have them. This only shortens the list; what a key may do is set by its scopes.
+            Crew sessions always have them. Project keys lose these tools unless this is on. Agents that are
+            already connected need to reconnect after a change. This only shortens the list; what a key may do
+            is set by its scopes.
           </span>
         </span>
       </label>

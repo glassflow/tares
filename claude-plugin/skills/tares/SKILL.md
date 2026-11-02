@@ -19,7 +19,7 @@ this service healthy", "what has this customer done recently" — read Tares ins
   to named `sources` when you know which matter.
 - Treat the timeline as ground truth for *what happened and when*; cite specific events.
 - On a Software Factory cell the building-block tools (`read`, `create_source`, `create_trigger` and
-  the like) appear only when an admin turns them on under Settings, Advanced. Use
+  the like) appear only when an admin turns them on under Settings, Access and API keys, Agent tools. Use
   `what_needs_me`, `how_is_project`, `start_project` and `hand_project_to_crew` instead.
 
 This plugin also streams the current Claude Code session into Tares (the `claude_code` source) when

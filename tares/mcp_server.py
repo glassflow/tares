@@ -17,6 +17,7 @@ import time
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp import types
 from mcp.types import TextContent
 
 def _factory_token() -> str:
@@ -123,11 +124,22 @@ OBJECT_TOOLS = frozenset({
     "discover_docker", "test_source", "create_source", "list_sources", "source_fields",
     "create_trigger", "update_trigger", "subscribe"})
 SRE_KEEP = frozenset({"read"})   # the outside AI SRE investigator reads timelines
-# The outcome tools, in the order they are listed (tares/mcp_outcomes.py registers them).
+# The outcome tools, listed first on a factory cell (tares/mcp_outcomes.py registers them).
+# The two that read the home page need the factory home, so they stay off platform and sre.
 FACTORY_TOOLS = frozenset({"what_needs_me", "how_is_project", "start_project",
                            "hand_project_to_crew"})
+FACTORY_ONLY = frozenset({"what_needs_me", "how_is_project"})
 SRE_TOOLS: frozenset = frozenset()   # TR-766 fills it
-_OFF = ("This tool is off on this Tares. An admin can turn it on under Settings, Advanced.")
+_OFF = ("This tool is off on this Tares. An admin can turn on the building-block tools under "
+        "Settings, Access and API keys, Agent tools.")
+
+
+
+def _off_text(name: str, edition: str) -> str:
+    if name in OBJECT_TOOLS:
+        return _OFF
+    return f"This tool is not part of the {edition} edition of this Tares."
+
 
 # A tidy tool list, not a permission boundary: the daemon checks every call with the caller's own
 # key, and X-Tares-Role is a plain header any client can send. Hiding a tool only keeps the list
@@ -137,11 +149,15 @@ _SURFACES: dict[str, tuple[float, tuple[str, bool]]] = {}
 
 async def _surface() -> tuple[str, bool]:
     """(edition, object tools on) as the daemon says for this caller's token, kept for
-    TARES_MCP_SURFACE_TTL seconds (30). Any error gives ("platform", True): every tool, as before."""
+    TARES_MCP_SURFACE_TTL seconds (30). Any error gives ("", True): an unknown edition shows every tool."""
     tok = _caller("token")
     now = time.monotonic()
     hit = _SURFACES.get(tok)
-    if hit and now - hit[0] < float(os.getenv("TARES_MCP_SURFACE_TTL", "30") or 30):
+    try:
+        ttl = float(os.getenv("TARES_MCP_SURFACE_TTL", "30"))
+    except ValueError:
+        ttl = 30.0
+    if hit and now - hit[0] < ttl:
         return hit[1]
     try:
         async with _cx(5) as cx:
@@ -150,7 +166,7 @@ async def _surface() -> tuple[str, bool]:
         who = r.json()
         out = (str(who["edition"]), bool(who["mcp_object_tools"]))
     except Exception:
-        return ("platform", True)
+        return ("", True)
     if len(_SURFACES) > 256:
         _SURFACES.clear()
     _SURFACES[tok] = (now, out)
@@ -159,10 +175,12 @@ async def _surface() -> tuple[str, bool]:
 
 def _visible(name: str, edition: str, object_tools: bool, station: bool) -> bool:
     """Whether a tool is listed (and runs) for this caller on this edition."""
-    if station:
+    if station or edition not in ("factory", "sre", "platform"):   # unknown edition: every tool
         return True
     if name in OBJECT_TOOLS:
         return object_tools or (edition == "sre" and name in SRE_KEEP)
+    if name in FACTORY_ONLY:
+        return edition == "factory"
     if name in FACTORY_TOOLS:
         return edition in ("factory", "platform")
     if name in SRE_TOOLS:
@@ -175,16 +193,19 @@ class TaresMCP(FastMCP):
 
     async def list_tools(self):
         tools = await super().list_tools()
+        if _caller("role"):   # a crew station sees every tool, so it needs no look at the cell
+            return tools
         edition, object_tools = await _surface()
-        station = bool(_caller("role"))
-        tools = [t for t in tools if _visible(t.name, edition, object_tools, station)]
+        tools = [t for t in tools if _visible(t.name, edition, object_tools, False)]
         first = FACTORY_TOOLS if edition == "factory" else SRE_TOOLS if edition == "sre" else frozenset()
         return sorted(tools, key=lambda t: t.name not in first)   # stable: outcome tools first
 
     async def call_tool(self, name, arguments):
-        edition, object_tools = await _surface()
-        if not _visible(name, edition, object_tools, bool(_caller("role"))):
-            return [TextContent(type="text", text=_OFF)]
+        if not _caller("role"):
+            edition, object_tools = await _surface()
+            if not _visible(name, edition, object_tools, False):
+                # A CallToolResult skips the output check the server runs on a listed tool.
+                return types.CallToolResult(content=[TextContent(type="text", text=_off_text(name, edition))])
         return await super().call_tool(name, arguments)
 
 
