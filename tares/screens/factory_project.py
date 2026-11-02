@@ -171,9 +171,9 @@ def register(app, store, h, ctx):
     @app.get("/api/factory/projects/{uid}")
     def factory_project(uid: str):
         """The whole project page in one read (404 for a project that is not a software factory
-        project)."""
+        project, and for a draft, which opens at its setup on today's page)."""
         p = store.get_project(uid)
-        if p is None or p.get("kind") != "software_factory":
+        if p is None or p.get("kind") != "software_factory" or p.get("status") == "draft":
             raise HTTPException(404, f"no factory project {uid!r}")
         now = now_utc()
         tickets = store.list_tickets(uid)

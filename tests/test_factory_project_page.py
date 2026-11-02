@@ -444,6 +444,13 @@ async def main():
             ck("a finished plan has no next ticket", n is None, n)
             e = (await cx.get(f"/api/factory/projects/{pw}"))
             ck("a project that is not a factory project is 404", e.status_code == 404, e.status_code)
+            store.update_project(pw, status="draft")
+            store.set_project_kind(pw, "software_factory")
+            e = (await cx.get(f"/api/factory/projects/{pw}"))
+            ck("a draft factory project is 404 too, it opens at its setup", e.status_code == 404, e.status_code)
+            store.update_project(pw, status="active")
+            ck("and the same project is answered once it is past its setup", (await cx.get(f"/api/factory/projects/{pw}")).status_code == 200)
+            store.set_project_kind(pw, None)
 
             print("== can_close ==")
             ck("a fully merged project can close", (await cx.get(f"/api/factory/projects/{pm}")).json()["can_close"] is True)
