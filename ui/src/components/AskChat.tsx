@@ -96,12 +96,14 @@ const scrollToEnd = () => {
   el.scrollTop = el.scrollHeight;
 };
 
-export default function AskChat({ history = false }: { history?: boolean }) {
+export default function AskChat({ history = false, initial = "" }: { history?: boolean; initial?: string }) {
   const [ready, setKeyReady] = useState<boolean>();      // is a key configured on the server?
   const [urlReady, setUrlReady] = useState<boolean>();      // is an url configured on the server?
   const [providerName, setProviderName] = useState<string>();   // the cell default Ask answers on
   const [msgs, setMsgs] = useState<Msg[]>([]);
-  const [input, setInput] = useState("");
+  // `initial` is a question the edition shell's search handed over: it fills the field and the
+  // person sends it, so it never lands in the middle of an earlier conversation.
+  const [input, setInput] = useState(initial);
   const { send: stream, stop, streaming: busy } = useAgentStream();
   const [decisions, setDecisions] = useState<DecisionMap>({});
   // Follow the tail only while the reader is at the tail. The old code called scrollTo() on every
@@ -114,6 +116,7 @@ export default function AskChat({ history = false }: { history?: boolean }) {
   const stick = useRef(true);
   const [showJump, setShowJump] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { if (initial && taRef.current) growTextarea(taRef.current); }, [ready]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refreshKey = () => api.capabilities()
   .then((c) => {
