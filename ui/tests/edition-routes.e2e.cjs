@@ -2,9 +2,10 @@
  * Browser e2e for TR-768: the route table of the factory and sre editions and Settings, Advanced.
  *
  * Factory: /settings/advanced is today's Settings page with an Advanced tab that links Connections
- * (/sources) and Explore your data (/explore); /reviews lands on /crew, /docs on /projects, a ticket
- * address on its project with ?view=ticket:<ref>; /sources still opens today's page; the menu has no
- * Reviews or Docs entry; ?sample=busy without the browser flag renders the same as /.
+ * (/sources) and Explore your data (/explore); /reviews opens the Reviews page (TR-735), /docs lands
+ * on /projects, a ticket address on its project with ?view=ticket:<ref>; /sources still opens today's
+ * page; the menu is Home, Projects, Reviews, Crew, Settings, with no Docs entry;
+ * ?sample=busy without the browser flag renders the same as /.
  * AI SRE: /timeline is today's Explore; /services, /incidents and /runbooks land on /.
  * Platform: /settings/advanced lands on /settings, /reviews on /, Settings has no Advanced tab.
  * Every edition: /welcome/edition lands on /. The Advanced tab passes the words check, and is shot at
@@ -157,7 +158,9 @@ function loadSample(env) {
          && await page.getByRole("heading", { name: "Explore", exact: true }).isVisible(), where(page));
 
       await go(page, e, "/reviews");
-      ck("factory: /reviews lands on /crew", where(page) === "/crew", where(page));
+      ck("factory: /reviews opens the Reviews page", where(page) === "/reviews"
+         && await page.getByRole("heading", { name: "Reviews", exact: true }).isVisible()
+         && (await page.getByTestId("factory-reviews").count()) === 1, where(page));
       await go(page, e, "/docs");
       ck("factory: /docs is the Docs and memory page, on a full page load", where(page) === "/docs"
          && await page.getByRole("heading", { name: "Docs and memory", exact: true }).isVisible(), where(page));
@@ -172,8 +175,8 @@ function loadSample(env) {
 
       await go(page, e, "/projects");
       const items = await menuLabels(page);
-      ck("factory: the menu is Home, Projects, Crew, Docs and memory, Settings", items.join(",") === "Home,Projects,Crew,Docs and memory,Settings", items.join(","));
-      ck("factory: no Reviews entry", !items.includes("Reviews") && (await page.getByTestId("menu-reviews").count()) === 0);
+      ck("factory: the menu is Home, Projects, Reviews, Crew, Docs and memory, Settings", items.join(",") === "Home,Projects,Reviews,Crew,Docs and memory,Settings", items.join(","));
+      ck("factory: the Reviews entry links to /reviews", (await page.getByTestId("menu-reviews").getAttribute("href")) === "/reviews");
       ck("factory: the Docs and memory entry opens /docs", (await page.locator('nav[aria-label="Main"] a', { hasText: "Docs and memory" }).getAttribute("href")) === "/docs");
 
       // the sample address alone changes nothing on a live cell

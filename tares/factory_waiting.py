@@ -62,16 +62,56 @@ def _ref(project: dict) -> dict:
 
 # ── pull requests the reviewer passed ─────────────────────────────────────────
 
+DEFAULT_AUTONOMY = "L3-review"
+
+
+def effective_autonomy(store, fx, project: str, crew: str | None = None) -> str:
+    """The autonomy a project's pull requests are merged at: the one its hand-over set, else the
+    crew's, else L3-review. `crew` is the crew's setting when the caller has read it already."""
+    own = (store.get_handover(project) or {}).get("autonomy")
+    if crew is None and fx is not None:
+        crew = (fx.settings() or {}).get("autonomy")
+    return own or crew or DEFAULT_AUTONOMY
+
+
+def review_split(store, fx, rows: list[dict] | None = None) -> tuple[list[dict], list[dict]]:
+    """THE rule for who merges (assumption A10): the queue rows (`fx.queue()`) split into
+    (waits for the person, with the crew). A pull request waits for the person when its project's
+    autonomy is L3-review and the reviewer passed it on its current commit; every other one is with
+    the crew (waiting for the reviewer, the builder, CI, or the crew's own merge). The Home page
+    and the Reviews page both read this and nowhere else, so their lists are always the same."""
+    if fx is None:
+        return [], []
+    rows = fx.queue() if rows is None else rows
+    crew = (fx.settings() or {}).get("autonomy")
+    level: dict[str, str] = {}
+    mine, theirs = [], []
+    for q in rows:
+        v = q.get("verdict") or {}
+        if q["project"] not in level:
+            level[q["project"]] = effective_autonomy(store, fx, q["project"], crew)
+        if (level[q["project"]] == DEFAULT_AUTONOMY and v.get("verdict") == "pass"
+                and v.get("current")):
+            mine.append(q)
+        else:
+            theirs.append(q)
+    return mine, theirs
+
+
+def waits_for_person(store, fx) -> list[dict]:
+    """The queue rows that wait for the person to merge: the first half of review_split."""
+    return review_split(store, fx)[0]
+
+
 def prs_to_review(store, fx, now) -> list[dict]:
-    """Per project, the pull requests the crew reviewer passed on their current commit: those wait
-    for the person. The others wait for the reviewer or the builder."""
+    """Per project, the pull requests that wait for the person (waits_for_person): the reviewer
+    passed them on their current commit and the project's autonomy leaves the merge to the person.
+    The others wait for the reviewer, the builder or the crew."""
     if fx is None:
         return []
     by: dict[str, list[dict]] = {}
-    for q in fx.queue():
-        v = q.get("verdict") or {}
-        if v.get("verdict") == "pass" and v.get("current"):
-            by.setdefault(q["project"], []).append(q)
+    for q in waits_for_person(store, fx):
+        by.setdefault(q["project"], []).append(q)
     out = []
     for pid, rows in by.items():
         n = len(rows)
