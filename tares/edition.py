@@ -50,3 +50,21 @@ def edition(store) -> tuple[str, bool]:
     stored. Read on every call so a switch applies on the next request."""
     stored = _valid(store.get_setting(EDITION_SETTING))
     return (stored or DEFAULT), stored is None
+
+
+OBJECT_TOOLS_SETTING = "mcp_object_tools"
+OBJECT_TOOLS_ENV = "TARES_MCP_OBJECT_TOOLS"
+
+
+def object_tools(store, edition_value: str) -> bool:
+    """Whether the MCP server lists the building-block tools (connections, raw data, rules) to a
+    person's agent: the stored choice, else TARES_MCP_OBJECT_TOOLS, else on only for platform."""
+    stored = str(store.get_setting(OBJECT_TOOLS_SETTING) or "").strip()
+    if stored in ("1", "0"):
+        return stored == "1"
+    raw = (os.getenv(OBJECT_TOOLS_ENV) or "").strip().lower()
+    if raw in ("1", "true"):
+        return True
+    if raw in ("0", "false"):
+        return False
+    return edition_value == "platform"
