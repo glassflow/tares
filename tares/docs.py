@@ -56,7 +56,7 @@ def append_line(body: str, text) -> tuple[str, bool]:
         raise DocError("say what to add: one line")
     if len(line) > MAX_LINE:
         raise DocError(f"the line is {len(line)} characters; keep it to {MAX_LINE}")
-    entry = f"- {line.lstrip('- ').strip()}"
+    entry = f"- {line[2:].strip() if line.startswith('- ') else line}"   # one bullet marker, not the dashes of a flag
     if entry in body.splitlines():
         return body, False
     sep = "" if not body or body.endswith("\n") else "\n"
