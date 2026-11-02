@@ -221,6 +221,9 @@ def desk_items(store, fx, now) -> list[dict]:
         answer = {"label": "Answer", "primary": not d.get("command"), "href": href}
         if d.get("command"):
             who = _role_of_station(d.get("station"))
+            # the grant may hold in its project alone unless a crew station asked: the crew serves
+            # every project (the Crew page decides the same way, by the station's name)
+            may_limit = bool(pid) and not str(d.get("station") or "the station").startswith("crew-")
             # the command is the crew's own text, in backticks so the page can show it in a
             # monospace span
             out.append(fh.home_item(
@@ -229,7 +232,8 @@ def desk_items(store, fx, now) -> list[dict]:
                 meta="Asked by the crew, " + fh.plain_ago(d["created_at"], now),
                 since=d["created_at"], now=now, project=project, id=f"permission:{d['label']}",
                 actions=[{**answer, "primary": False},
-                         {"label": "Allow", "primary": True, "do": "allow", "desk": d["label"]}]))
+                         {"label": "Allow", "primary": True, "do": "allow", "desk": d["label"],
+                          "may_limit": may_limit}]))
         else:
             out.append(fh.home_item(
                 "question", label="Question for you", title=names[pid] if pid else "Every project",
@@ -273,6 +277,12 @@ def milestones_to_check(store, fx, now) -> list[dict]:
 
 # ── projects whose work is all merged ─────────────────────────────────────────
 
+def _ready_for(since, now) -> str:
+    """How long the project has been ready: Ready for 3 days, or Ready just now."""
+    w = fh.plain_wait(fh._minutes(since, now))
+    return "Ready just now" if w == "just now" else f"Ready for {w}"
+
+
 def projects_to_close(store, fx, now) -> list[dict]:
     """Open projects whose every ticket is finished and at least one merged: the console offers
     Close. Closing runs the project's own finish route, so the item ends with the project."""
@@ -292,7 +302,7 @@ def projects_to_close(store, fx, now) -> list[dict]:
             "signoff", label="Ready to close", title=p["name"],
             detail=(f"All {n} tickets are merged" if n > 1 else "Its ticket is merged")
                    + ". Close the project when you have checked the result.",
-            meta="Ready " + fh.plain_ago(since, now), since=since, now=now, project=_ref(p),
+            meta=_ready_for(since, now), since=since, now=now, project=_ref(p),
             id=f"signoff:{p['id']}",
             actions=[{"label": "Open project", "primary": False, "href": f"/projects/{p['id']}"},
                      {"label": "Close project", "primary": True, "do": "close"}]))

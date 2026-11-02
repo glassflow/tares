@@ -10,17 +10,25 @@ def ck(l, c, d=""):
     print(("  ok   " if c else "  FAIL ") + l + ("" if c else f"  {d}"))
 
 
+def entries(path):
+    """(line number in the file, name) for each name: blank lines and # comments are skipped but still counted."""
+    return [(n, ln.strip()) for n, ln in enumerate(path.read_text().splitlines(), 1)
+            if ln.strip() and not ln.strip().startswith("#")]
+
+
 def names(path):
-    return [ln.strip() for ln in path.read_text().splitlines() if ln.strip() and not ln.strip().startswith("#")]
+    return [name for _, name in entries(path)]
 
 
-def out_of_order(got):
-    """A plain message naming the first line that sorts before the one above it, or "" when sorted.
-    New tests go in their sorted place, so two PRs rarely touch the same lines of the list."""
+def out_of_order(got, where="the list"):
+    """A plain message naming the first name that sorts before the one above it, with its line number in the
+    file, or "" when sorted. `got` is entries(). New tests go in their sorted place, so two PRs rarely touch
+    the same lines of the list. The order is byte order, which is what `LC_ALL=C sort` gives."""
     for i in range(1, len(got)):
-        if got[i] < got[i - 1]:
-            return (f"line {i + 1} of the names, {got[i]!r}, belongs before {got[i - 1]!r}: "
-                    "put each name in its sorted place (the same order as `sort`)")
+        if got[i][1] < got[i - 1][1]:
+            return (f"line {got[i][0]} of {where}, {got[i][1]!r}, belongs before {got[i - 1][1]!r} "
+                    f"(line {got[i - 1][0]}): put each name in its sorted place, in byte order "
+                    "(`LC_ALL=C sort`)")
     return ""
 
 
@@ -31,7 +39,9 @@ def check(label, listfile, filename):
     ck(f"{label}: every name has its file", not missing, ", ".join(missing))
     dupes = sorted({n for n in got if got.count(n) > 1})
     ck(f"{label}: no name is listed twice", not dupes, ", ".join(dupes))
-    ck(f"{label}: the list is sorted", not out_of_order(got), out_of_order(got))
+    where = str(listfile.relative_to(ROOT))
+    msg = out_of_order(entries(listfile), where)
+    ck(f"{label}: the list is sorted", not msg, msg)
     return got
 
 

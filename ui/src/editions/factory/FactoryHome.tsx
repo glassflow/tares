@@ -142,7 +142,7 @@ function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAc
   const more = items.length - shown.length;
   return (
     <section aria-label="Waiting for you" className="min-w-0">
-      <SectionHead title="Waiting for you" aside={<span className={MUTED}>oldest first</span>} />
+      <SectionHead title="Waiting for you" aside={<span className={MUTED}>oldest first, ready to close last</span>} />
       <div className="border border-border bg-card">
         {items.length === 0 ? (
           <EmptyState title="Nothing waits for you." className="py-6" />
@@ -402,7 +402,8 @@ function permissionParts(item: HomeItem): { who: string; command: string } {
  *  reads as one; one too long for a grant is cut at a word, so the grant covers how it starts. */
 function grantWords(who: string, command: string, where: string): string {
   const cmd = command.split("\n").map((l) => l.trim().replace(/\s*\\$/, "")).filter(Boolean).join(" ");
-  const say = (c: string) => `${who} may use \`${c}\` ${where}`;
+  // "run" is the verb for a command here, as on the Crew page, not the crew's own word for a pass
+  const say = (c: string) => `${who} may run \`${c}\` ${where}`; // words-ok
   const room = GRANT_MAX - say("").length;
   if (cmd.length <= room) return say(cmd);
   const cut = cmd.slice(0, Math.max(room - 4, 0));
@@ -411,13 +412,14 @@ function grantWords(who: string, command: string, where: string): string {
 
 interface Done { item?: string; project?: string }
 
-function AllowDialog({ item, desk, onClose, onDone }: {
-  item: HomeItem; desk: string; onClose: () => void; onDone: (r: AllowedGrant) => void;
+function AllowDialog({ item, desk, mayLimit, onClose, onDone }: {
+  item: HomeItem; desk: string; mayLimit: boolean; onClose: () => void; onDone: (r: AllowedGrant) => void;
 }) {
   const { who, command } = permissionParts(item);
   const project = item.project;
-  // Only a builder's grant may hold in its project alone; the crew serves every project.
-  const either = !!project && who.toLowerCase() === "the builder";
+  // Only a builder's grant may hold in its project alone; the crew serves every project. The cell
+  // says which (`may_limit`), by the same rule as the Crew page.
+  const either = !!project && mayLimit;
   const [scope, setScope] = React.useState<"project" | "all">(either ? "project" : "all");
   const where = (sc: "project" | "all") => (sc === "project" && project ? `in ${project.name}` : "in every project");
   const [words, setWords] = React.useState(() => grantWords(who, command, where(scope)));
@@ -462,7 +464,9 @@ function AllowDialog({ item, desk, onClose, onDone }: {
             </label>
           </fieldset>
         ) : (
-          <p className="m-0 text-[13px] text-muted-foreground">Kept for every project: the crew works for all of them.</p>
+          <p className="m-0 text-[13px] text-muted-foreground">
+            Kept for every project{project ? `: ${who.toLowerCase()} works for all of them` : ""}.
+          </p>
         )}
         {err && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-[color:var(--err)]" data-words-exempt>{err}</p>}
       </div>
@@ -483,14 +487,13 @@ function CloseDialog({ item, project, onClose, onDone }: {
   };
   return (
     <Dialog open onOpenChange={(o) => { if (!o && !busy) onClose(); }} data-testid="close-dialog"
-      title="Close this project?" description="It moves to your finished projects. Handing the crew more work on it opens it again."
+      title={`Close ${name}?`} description="It moves to Done. Handing it to the crew again opens it."
       footer={(
         <>
           <Button variant="secondary" disabled={busy} onClick={onClose}>Cancel</Button>
-          <Button busy={busy} onClick={submit}>Close project</Button>
+          <Button busy={busy} onClick={submit} data-testid="close-confirm">Close</Button>
         </>
       )}>
-      <p className="m-0 font-bold" data-user-text>{name}</p>
       {err && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-[color:var(--err)]" data-words-exempt>{err}</p>}
     </Dialog>
   );
@@ -501,7 +504,7 @@ function CloseDialog({ item, project, onClose, onDone }: {
 function useHomeActions(live: boolean, changed: (done?: Done) => void) {
   const { toast } = useToast();
   const [rows, setRows] = React.useState<Record<string, RowState>>({});
-  const [allow, setAllow] = React.useState<{ item: HomeItem; desk: string } | null>(null);
+  const [allow, setAllow] = React.useState<{ item: HomeItem; desk: string; mayLimit: boolean } | null>(null);
   const [close, setClose] = React.useState<{ item: HomeItem; project: string } | null>(null);
   const working = React.useRef(new Set<string>());
   const timers = React.useRef(new Set<ReturnType<typeof setTimeout>>());
@@ -539,7 +542,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
       void (async () => {
         try {
           for (const ref of refs) await keepAssumption(project, ref);
-          toast(refs.length === 1 ? "Kept the call." : `Kept ${refs.length} calls.`);
+          toast(`${refs.length === 1 ? "Kept it" : refs.length === 2 ? "Kept both" : `Kept all ${refs.length}`}. The crew carries on.`);
           update(item.id, () => null);
           changed({ item: item.id });
         } catch (e) {
@@ -550,7 +553,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
         }
       })();
     } else if (a.do === "allow") {
-      if (typeof a.desk === "string") setAllow({ item, desk: a.desk });
+      if (typeof a.desk === "string") setAllow({ item, desk: a.desk, mayLimit: a.may_limit === true });
     } else if (a.do === "close") {
       const project = String(a.project ?? item.project?.id ?? "");
       if (project) setClose({ item, project });
@@ -560,7 +563,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
   const dialogs = (
     <>
       {allow && (
-        <AllowDialog key={allow.item.id} item={allow.item} desk={allow.desk} onClose={() => setAllow(null)}
+        <AllowDialog key={allow.item.id} item={allow.item} desk={allow.desk} mayLimit={allow.mayLimit} onClose={() => setAllow(null)}
           onDone={(r) => {
             toast(r.added ? "Allowed. The crew restarts it with the permission once it is between turns."
               : "That grant was already kept, so nothing changed.");
@@ -571,7 +574,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
       {close && (
         <CloseDialog key={close.item.id} item={close.item} project={close.project} onClose={() => setClose(null)}
           onDone={() => {
-            toast(`Closed ${close.item.project?.name ?? close.item.title}.`);
+            toast(`${close.item.project?.name ?? close.item.title} is closed. It moved to Done.`);
             setClose(null);
             changed({ item: close.item.id, project: close.project });
           }} />
