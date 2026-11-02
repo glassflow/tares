@@ -899,6 +899,12 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
                         "title": t["title"], "holder": t["holder"],
                         "repo": t.get("repo") or (t["pr"] or {}).get("repo"),
                         "pr": (t["pr"] or {}).get("url"), "head": (t["pr"] or {}).get("head"),
+                        # the pull request's number, its own title (`title` is the ticket's), what
+                        # CI said when Tares last read it (success, failure, pending, none, or
+                        # null before a read) and the ticket's milestone (TR-735)
+                        "number": (t["pr"] or {}).get("number"),
+                        "pr_title": (t["pr"] or {}).get("title"),
+                        "ci": (t["pr"] or {}).get("ci"), "milestone": t["milestone"],
                         "waiting_since": since,
                         "blocks_milestone": blocks,
                         "layer1_clean": layer["clean"],
