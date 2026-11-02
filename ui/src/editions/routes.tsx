@@ -43,8 +43,8 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     // TR-738
     "/settings": { page: null, fallback: "today" },
 
-    // TR-732 turns this fallback into a redirect to /
-    "/start": { page: null, fallback: "today" },
+    // TR-732: the factory home is /, so Start (the login landing) goes there
+    "/start": { page: null, fallback: { redirect: "/" } },
   },
   sre: {
     // TR-749

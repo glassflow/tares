@@ -1,5 +1,5 @@
 /*
- * Browser e2e for TR-730: the factory home page, drawn from its samples.
+ * Browser e2e for TR-730 and TR-732: the factory home page, drawn from its samples and then live.
  *
  * Starts one scratch daemon with an empty factory cell (TARES_EDITION=factory) on TARES_E2E_PORT
  * (default 8833), MCP port +1, in a clean environment and a fresh data directory, and stops only it.
@@ -9,10 +9,19 @@
  * Toast, goals clamped to two lines with the full goal in the title, no horizontal scroll at 390, the
  * words check in every state, and that without the flag ?sample=busy shows no sample.
  * Run:  npm run test:factory-home     (builds first: the daemon serves ui/dist; tares installed in ../.venv or on PATH)
+ * Live mode (TR-732) comes last: tests/seed-factory-home.py fills the same daemon through its API (calls to confirm,
+ * permission requests, a spec not handed over, a project ready to close, one that is not, one finished), and the page
+ * is opened without the sample flag. Checks: the one read call, the rows and links from the server, Copy, Keep (its
+ * calls, the busy button, the row gone at once and for good), the Allow dialog (words, scope, Cancel, a refusal), the
+ * Close dialog (confirm, a refusal), a failed read that keeps the old data under a warning, a first read that fails,
+ * and the words check in each state. The daemon offers the Close row of Link counter itself; the script adds one
+ * more to the answer of GET /api/home, for Retry uploads, which the daemon would not offer, to prove a refusal shows the
+ * daemon's sentence. Closing itself is the daemon's real POST /api/projects/<id>/finish. Needs python3 for the seed
+ * (TARES_E2E_PYTHON to choose another). Shots: factory-home-live-<state>-<width>.png.
  * Set SHOTS_DIR to keep screenshots. TARES_E2E_CHROME points Playwright at another Chrome binary.
  */
 const http = require("http");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -20,7 +29,7 @@ const path = require("path");
 const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
 const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
-const { checkWords } = require("./words.cjs");
+const { checkWords, expectOneCall } = require("./words.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8833);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -170,7 +179,7 @@ function cleanEnv(extra) {
       const copy = page.getByRole("button", { name: "Copy the hand-over command" });
       ck(`busy @${width}: the copy action is a button`, (await copy.count()) === 1);
       await copy.click();
-      await page.getByText("Copied. Paste it into your Claude Code session.", { exact: true }).waitFor();
+      await page.getByText("Copied. Paste it in Claude Code to hand the project over.", { exact: true }).waitFor();
       ck(`busy @${width}: copying shows the Toast`, true);
       ck(`busy @${width}: and the text it copies is the action's`, JSON.stringify(await page.evaluate(() => window.__copied)) === JSON.stringify(["/tares:ship project-z"]));
       await checkWords(page, ck, `busy @${width} with the Toast`);
@@ -227,15 +236,265 @@ function cleanEnv(extra) {
       await ctx.close();
     }
 
-    // without the flag the address alone shows no sample
+    // ── live: the same daemon, seeded through its API, the page opened without the sample flag ──
+    const seeded = spawnSync(process.env.TARES_E2E_PYTHON || "python3", [path.join(__dirname, "seed-factory-home.py"), String(PORT)],
+                             { cwd: REPO, encoding: "utf8", env: cleanEnv({ PYTHONPATH: REPO }) });
+    ck("seed ran", seeded.status === 0, (seeded.stderr || seeded.stdout || "").slice(-300));
+    const ids = seeded.status === 0 ? JSON.parse(seeded.stdout.trim().split("\n").pop()) : {};
+    const api = async (method, p, body) => {
+      const r = await fetch(BASE + p, { method, headers: { "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+      return { status: r.status, body: await r.json().catch(() => ({})) };
+    };
+
+    // A context without the sample flag, a stand-in clipboard, and GET /api/home answered by the daemon with one Close
+    // row added: Retry uploads, which is not ready, so the daemon refuses it. `ctl.fail` makes the read fail, `ctl.hold` keeps it waiting.
+    const liveContext = async (width) => {
+      const ctx = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 } });
+      await ctx.addInitScript(() => {
+        window.__copied = [];
+        Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: (t) => { window.__copied.push(t); return Promise.resolve(); } } });
+      });
+      const page = await ctx.newPage();
+      const ctl = { fail: false, hold: null, reads: 0, finishes: [], keeps: [], allows: [] };
+      await page.route("**/api/home", async (route) => {
+        ctl.reads++;
+        if (ctl.hold) await ctl.hold;
+        if (ctl.fail) return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "down" }) });
+        const res = await route.fetch();
+        const data = await res.json();
+        const close = [];
+        for (const name of ["Retry uploads"]) {
+          const p = data.projects.find((x) => x.name === name);
+          if (!p) continue;
+          close.push({ id: `close:${p.id}`, kind: "signoff", label: "Ready to close", title: name, detail: "Every ticket of this project is finished.",
+                       meta: "Waiting less than a minute", project: { id: p.id, name }, repo: null, from: null, since: new Date().toISOString(), waited: "just now",
+                       actions: [{ label: "Open project", primary: false, href: `/projects/${p.id}` },
+                                 { label: "Close project", primary: true, do: "close", project: p.id }] });
+        }
+        data.waiting_for_you = [...close, ...data.waiting_for_you];
+        await route.fulfill({ response: res, json: data });
+      });
+      page.on("request", (req) => {
+        const u = new URL(req.url());
+        if (req.method() !== "POST") return;
+        if (/\/finish$/.test(u.pathname)) ctl.finishes.push(u.pathname);
+        if (/\/assumptions\/[^/]+\/state$/.test(u.pathname)) ctl.keeps.push({ path: u.pathname, body: req.postDataJSON() });
+        if (/\/api\/desk\/[^/]+\/allow$/.test(u.pathname)) ctl.allows.push({ path: u.pathname, body: req.postDataJSON() });
+      });
+      return { ctx, page, ctl };
+    };
+    const liveShot = async (page, name, width) => {
+      if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `factory-home-live-${name}-${width}.png`), fullPage: true });
+    };
+    const reread = (page) => page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    const row = (page, text) => page.getByTestId("waiting-row").filter({ hasText: text });
+
+    if (seeded.status === 0) {
+      // the first read, held: placeholders, then the page; and exactly one read call
+      {
+        const { ctx, page, ctl } = await liveContext(1440);
+        let release; ctl.hold = new Promise((r) => { release = r; });
+        const oneRead = expectOneCall(page, "/api/home");
+        await page.goto(`${BASE}/`, { waitUntil: "load" });
+        await page.getByTestId("factory-home-loading").waitFor();
+        ck("live: placeholders while the first read is out", (await page.getByTestId("waiting-row").count()) === 0
+           && (await page.getByRole("status", { name: "Loading" }).count()) >= 3);
+        await checkWords(page, ck, "live loading");
+        release(); ctl.hold = null;
+        await page.getByTestId("factory-home").waitFor();
+        await oneRead(ck, "live");
+        await ctx.close();
+      }
+
+      // 390 first: it only looks, so the seeded state is whole for 1440, which acts on it
+      for (const width of [390, 1440]) {
+        const { ctx, page, ctl } = await liveContext(width);
+        const rows = page.getByTestId("waiting-row");
+        const projects = page.getByTestId("project-row");
+        const t = (s) => `live @${width}: ${s}`;
+        await page.goto(`${BASE}/`, { waitUntil: "load" });
+        await page.getByTestId("factory-home").waitFor();
+        await page.waitForLoadState("networkidle");
+        await liveShot(page, "start", width);
+        await checkWords(page, ck, t("page"));
+        ck(t("no horizontal scroll"), (await overflow(page)) <= 0, `${await overflow(page)}px over`);
+        ck(t("the headline is the daemon's"), /^The crew is not running\. 6 things wait for you/.test(await page.getByTestId("home-headline").innerText()), await page.getByTestId("home-headline").innerText());
+        ck(t("the first 5 of 7 waiting rows, then 2 more"), (await rows.count()) === 5 && (await page.getByRole("button", { name: "2 more" }).count()) === 1, String(await rows.count()));
+        await page.getByRole("button", { name: "2 more" }).click();
+        ck(t("7 waiting rows: two Close, a call, a spec, three permissions"), (await rows.count()) === 7, String(await rows.count()));
+        ck(t("4 project rows, 1 finished"), (await projects.count()) === 4 && (await page.getByRole("link", { name: "All projects, 1 finished" }).count()) === 1);
+        ck(t("a link action keeps the daemon's address"),
+           (await row(page, "2 calls to confirm").getByRole("link", { name: "Read them" }).getAttribute("href")) === `/projects/${ids["Billing export"]}#calls`
+           && (await row(page, "Docs search").getByRole("link", { name: "Read the spec" }).getAttribute("href")) === `/projects/${ids["Docs search"]}`
+           && (await row(page, "reviewer").getByRole("link", { name: "Answer" }).getAttribute("href")) === `/crew#desk-${ids["allow-crew"]}`);
+        ck(t("the permission names its command in a monospace span"), (await row(page, "npm run test").locator("code").innerText()) === "npm run test -- --watch=false");
+        ck(t("a project row links to the project"), (await projects.filter({ hasText: "Billing export" }).getAttribute("href")) === `/projects/${ids["Billing export"]}`);
+        if (width === 390) { await ctx.close(); continue; }
+
+        // Copy
+        const copy = page.getByRole("button", { name: "Copy the hand-over command" });
+        await copy.click();
+        await page.getByText("Copied. Paste it in Claude Code to hand the project over.", { exact: true }).waitFor();
+        ck(t("Copy: the toast, and the project's own command on the clipboard"), JSON.stringify(await page.evaluate(() => window.__copied)) === JSON.stringify(["/tares:ship Docs search"]));
+        ck(t("Copy: the button says Copied"), (await row(page, "Docs search").getByRole("button", { name: "Copied" }).count()) === 1);
+        await row(page, "Docs search").getByRole("button", { name: "Copy the hand-over command" }).waitFor({ timeout: 3500 });
+        ck(t("Copy: and the label comes back after 2 seconds"), true);
+
+        // Keep: a refusal first, then the real thing, slowed so the busy button can be seen
+        const calls = row(page, "2 calls to confirm");
+        await page.route("**/assumptions/*/state", (r) => r.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "A1 is gone." }) }));
+        await calls.getByRole("button", { name: "Keep both" }).click();
+        await calls.getByTestId("row-error").waitFor();
+        ck(t("Keep refused: the row says why and stays"), (await calls.getByTestId("row-error").innerText()) === "A1 is gone."
+           && (await calls.getByRole("button", { name: "Keep both" }).isEnabled()));
+        await page.unroute("**/assumptions/*/state");
+        await page.route("**/assumptions/*/state", async (r) => { await new Promise((res) => setTimeout(res, 800)); await r.continue(); });
+        ctl.keeps.length = 0;
+        // let the daemon's 5 second answer expire, then read the page: that answer is new, so the read right after Keep
+        // gets the old one and only the later read shows the change
+        await page.waitForTimeout(5300);
+        const fresh = ctl.reads;
+        await reread(page);
+        while (ctl.reads === fresh) await page.waitForTimeout(50);
+        await page.waitForTimeout(300);
+        const before = ctl.reads;
+        await calls.getByRole("button", { name: "Keep both" }).click();
+        ck(t("Keep: the button says Keeping... and is off"), (await calls.getByRole("button", { name: "Keeping..." }).isDisabled()));
+        await calls.waitFor({ state: "detached" });
+        ck(t("Keep: one call per call of the crew, kept"), ctl.keeps.length === 2 && ctl.keeps.every((k) => k.body.state === "kept")
+           && ctl.keeps.map((k) => k.path).join() === `/api/projects/${ids["Billing export"]}/assumptions/A1/state,/api/projects/${ids["Billing export"]}/assumptions/A2/state`, JSON.stringify(ctl.keeps));
+        await page.getByText("Kept 2 calls.", { exact: true }).waitFor();
+        ck(t("Keep: the home page is read again at once"), ctl.reads > before, `${ctl.reads} vs ${before}`);
+        await page.unroute("**/assumptions/*/state");
+        await page.waitForFunction(() => /^The crew is not running\. 5 things wait for you/.test(document.querySelector('[data-testid="home-headline"]')?.textContent || ""), null, { timeout: 9000 });
+        ck(t("Keep: and again once the daemon's own answer has moved on, the row is still gone"), (await calls.count()) === 0 && (await api("GET", `/api/projects/${ids["Billing export"]}/assumptions?state=open`)).body.assumptions.length === 0);
+
+        // Allow
+        const dialog = page.getByTestId("allow-dialog");
+        const builder = row(page, "npm run test");
+        await builder.getByRole("button", { name: "Allow" }).click();
+        await dialog.waitFor();
+        const words = dialog.getByTestId("allow-words");
+        ck(t("Allow: the box offers a grant in words, with the command and the project"),
+           (await words.inputValue()) === "The builder may use `npm run test -- --watch=false` in Billing export", await words.inputValue());
+        ck(t("Allow: a builder's grant may hold in its project only"), (await dialog.getByRole("radio").count()) === 2 && (await dialog.getByRole("radio").first().isChecked()));
+        await liveShot(page, "allow", width);
+        await checkWords(page, ck, t("allow dialog"));
+        await dialog.getByRole("radio").nth(1).check();
+        ck(t("Allow: Every project rewrites the words"), (await words.inputValue()) === "The builder may use `npm run test -- --watch=false` in every project");
+        await words.fill((await words.inputValue()) + " (my words)");
+        await dialog.getByRole("radio").first().check();
+        ck(t("Allow: words the person edited stay"), (await words.inputValue()).endsWith("(my words)"));
+        await dialog.getByRole("radio").nth(1).check();
+        await dialog.getByRole("button", { name: "Cancel" }).click();
+        await dialog.waitFor({ state: "detached" });
+        ck(t("Allow: Cancel asks the daemon for nothing"), ctl.allows.length === 0 && (await builder.count()) === 1);
+        await builder.getByRole("button", { name: "Allow" }).click();
+        await dialog.waitFor();
+        await dialog.getByRole("radio").nth(1).check();
+        await words.fill("The builder may use `npm run test` in every project");
+        await dialog.getByRole("button", { name: "Allow", exact: true }).click();
+        await builder.waitFor({ state: "detached" });
+        ck(t("Allow: the words and the scope go to the daemon"), ctl.allows.length === 1 && ctl.allows[0].path === `/api/desk/${ids["allow-builder"]}/allow`
+           && ctl.allows[0].body.scope === "all" && ctl.allows[0].body.words === "The builder may use `npm run test` in every project", JSON.stringify(ctl.allows));
+        await page.getByText("Allowed. The crew restarts it with the permission once it is between turns.", { exact: true }).waitFor();
+        ck(t("Allow: the toast, the row gone, the request answered"), (await api("GET", "/api/desk?state=open")).body.items?.every?.((d) => d.label !== ids["allow-builder"]) ?? true);
+        // a crew station serves every project: no choice of scope
+        const crew = row(page, "gh pr view");
+        await crew.getByRole("button", { name: "Allow" }).click();
+        await dialog.waitFor();
+        ck(t("Allow: a crew station's grant is for every project, with no choice"), (await dialog.getByRole("radio").count()) === 0
+           && (await dialog.getByText("Kept for every project").count()) === 1 && (await words.inputValue()).startsWith("The reviewer may use `gh pr view 12 --json state`"));
+        await dialog.getByRole("button", { name: "Cancel" }).click();
+        await dialog.waitFor({ state: "detached" });
+        // a refusal: the request was withdrawn while the box was open
+        const withdrawn = row(page, "make seed");
+        await withdrawn.getByRole("button", { name: "Allow" }).click();
+        await dialog.waitFor();
+        await api("POST", `/api/desk/${ids["allow-withdraw"]}/withdraw`, { reason: "not needed" });
+        await dialog.getByRole("button", { name: "Allow", exact: true }).click();
+        await dialog.getByTestId("dialog-error").waitFor();
+        ck(t("Allow refused: the box stays open and says why"), /already withdrawn/.test(await dialog.getByTestId("dialog-error").innerText())
+           && (await dialog.getByRole("button", { name: "Allow", exact: true }).isEnabled()), await dialog.getByTestId("dialog-error").innerText());
+        await liveShot(page, "allow-refused", width);
+        await dialog.getByRole("button", { name: "Cancel" }).click();
+        await dialog.waitFor({ state: "detached" });
+
+        // Close: a refusal (an open ticket), then Cancel, then the real one
+        const closer = page.getByTestId("close-dialog");
+        const retry = row(page, "Retry uploads");
+        await retry.getByRole("button", { name: "Close project" }).click();
+        await closer.waitFor();
+        ck(t("Close: asks first, naming the project"), (await closer.getByText("Close this project?").count()) === 1 && (await closer.getByText("Retry uploads").count()) === 1);
+        await liveShot(page, "close", width);
+        await checkWords(page, ck, t("close dialog"));
+        await closer.getByRole("button", { name: "Close project" }).click();
+        await closer.getByTestId("dialog-error").waitFor();
+        ck(t("Close refused: the daemon's sentence in the box, the box open"), /still has open tickets: T2/.test(await closer.getByTestId("dialog-error").innerText()), await closer.getByTestId("dialog-error").innerText());
+        await closer.getByRole("button", { name: "Cancel" }).click();
+        await closer.waitFor({ state: "detached" });
+        ck(t("Close refused: the row stays"), (await retry.count()) === 1 && (await projects.filter({ hasText: "Retry uploads" }).count()) === 1);
+        const link = row(page, "Link counter");
+        await link.getByRole("button", { name: "Close project" }).click();
+        await closer.waitFor();
+        await closer.getByRole("button", { name: "Cancel" }).click();
+        await closer.waitFor({ state: "detached" });
+        const asked = ctl.finishes.length;
+        await link.getByRole("button", { name: "Close project" }).click();
+        await closer.waitFor();
+        await closer.getByRole("button", { name: "Close project" }).click();
+        await link.waitFor({ state: "detached" });
+        ck(t("Close: confirmed, one call to finish the project, and Cancel made none"), ctl.finishes.length === asked + 1 && ctl.finishes.at(-1) === `/api/projects/${ids["Link counter"]}/finish`, ctl.finishes.join());
+        await page.getByText("Closed Link counter.", { exact: true }).waitFor();
+        ck(t("Close: the project leaves the list at once and joins the finished"), (await projects.filter({ hasText: "Link counter" }).count()) === 0
+           && (await page.getByRole("link", { name: "All projects, 2 finished" }).count()) === 1);
+        await page.waitForTimeout(6500);
+        ck(t("Close: and it stays closed after the daemon's own answer"), (await projects.filter({ hasText: "Link counter" }).count()) === 0 && (await link.count()) === 0
+           && (await page.getByRole("link", { name: "All projects, 2 finished" }).count()) === 1);
+        await liveShot(page, "after", width);
+
+        // a read that fails after data: the old data stays under a warning with the time of the last good read
+        ctl.fail = true;
+        await reread(page);
+        const stale = page.getByTestId("stale-banner");
+        await stale.waitFor();
+        ck(t("stale: the warning names the time of the last good read"), /^Could not refresh\. Showing what we had at ([01]\d|2[0-3]):[0-5]\d\.$/.test((await stale.innerText()).trim()), await stale.innerText());
+        ck(t("stale: and the page still shows what it had"), (await rows.count()) >= 3 && (await projects.count()) === 3);
+        await liveShot(page, "stale", width);
+        await checkWords(page, ck, t("stale"));
+        ctl.fail = false;
+        await reread(page);
+        await stale.waitFor({ state: "detached" });
+        ck(t("stale: a good read takes the warning away"), true);
+        await ctx.close();
+      }
+
+      // a first read that fails: the error with Retry, and Retry reads again
+      {
+        const { ctx, page, ctl } = await liveContext(1440);
+        ctl.fail = true;
+        await page.goto(`${BASE}/`, { waitUntil: "load" });
+        await page.getByTestId("factory-home-error").waitFor();
+        await liveShot(page, "error", 1440);
+        await checkWords(page, ck, "live first read failed");
+        ck("live: a first read that fails shows the error, no rows", (await page.getByRole("button", { name: "Retry" }).count()) === 1 && (await page.getByTestId("waiting-row").count()) === 0);
+        ctl.fail = false;
+        await page.getByRole("button", { name: "Retry" }).click();
+        await page.getByTestId("factory-home").waitFor();
+        ck("live: Retry reads again and shows the page", (await page.getByTestId("waiting-row").count()) >= 3);
+        await ctx.close();
+      }
+    }
+
+    // without the flag the address alone shows no sample, but the cell's own page
     {
       const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
       const page = await ctx.newPage();
       await page.goto(`${BASE}/?sample=busy`, { waitUntil: "load" });
+      await page.getByTestId("factory-home").waitFor();
       await page.waitForLoadState("networkidle");
-      await page.waitForTimeout(500);
-      ck("no flag: ?sample=busy does not show the busy sample", (await page.getByTestId("factory-home").count()) === 0
-         && (await page.getByText("4 PRs to review in project-x").count()) === 0 && (await page.getByTestId("waiting-row").count()) === 0);
+      ck("no flag: ?sample=busy does not show the busy sample", (await page.getByText("4 PRs to review in project-x").count()) === 0
+         && (await page.getByText("project-x").count()) === 0);
       await ctx.close();
     }
   } finally {

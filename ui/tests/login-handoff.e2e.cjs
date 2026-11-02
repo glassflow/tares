@@ -1,7 +1,7 @@
 /*
- * Browser e2e for the cloud login handoff (NAVFLOW_LOGIN_URL). Runs the REAL daemon serving the
+ * Browser e2e for the cloud login handoff (TARES_LOGIN_URL). Runs the REAL daemon serving the
  * built console behind a stub "control plane", and drives the actual AuthGate with Playwright:
- *   1. /health advertises login_url when NAVFLOW_LOGIN_URL is set
+ *   1. /health advertises login_url when TARES_LOGIN_URL is set
  *   2. logged out + login_url present  → redirect to  {login_url}?return=<cell host>
  *   3. ?code= present                  → POST {origin}/exchange, store the real key, strip the URL,
  *                                        and authenticate against the daemon (token persists)
@@ -9,7 +9,9 @@
  * No cloud, no release. The stub mints a real scoped key on the daemon (as the control plane does),
  * so the exchanged token actually works — the console stays authed instead of bouncing to login.
  *
- * Run:  npm run test:e2e   (builds the console first, then this)
+ * Run:  node tests/login-handoff.e2e.cjs     (after a console build; npm run test:platform does both)
+ *       TARES_EDITION=factory node tests/login-handoff.e2e.cjs   (the same, on a factory cell)
+ * TARES_EDITION picks the cell's edition (default platform); both must land signed in on "/".
  * Needs: the tares daemon importable (repo .venv or system python with tares installed).
  */
 const http = require("http");
@@ -26,6 +28,7 @@ const DAEMON_PORT = 8808;
 const CP_PORT = 8809;
 const ROOT_TOKEN = "root-secret";
 const LOGIN_URL = `http://localhost:${CP_PORT}/login`;
+const EDITION = process.env.TARES_EDITION || "platform";
 
 let pass = 0, fail = 0;
 const ck = (label, cond, detail = "") => {
@@ -98,15 +101,19 @@ function waitFor(url, tries = 100) {
   fs.writeFileSync(seed, "sources:\n  - name: evt\n    connector: webhook\n    poll: 5s\n    config: {}\n");
 
   cp.listen(CP_PORT);
-  const daemon = spawn(py, ["-c", "from navflow.cli import run_daemon; run_daemon()"], {
-    cwd: REPO,
-    env: { ...process.env, NAVFLOW_DB: db, NAVFLOW_CATALOG: seed, NAVFLOW_PORT: String(DAEMON_PORT),
-           NAVFLOW_OTLP_GRPC_PORT: "off", NAVFLOW_AUTH_TOKEN: ROOT_TOKEN, NAVFLOW_LOGIN_URL: LOGIN_URL,
-           NAVFLOW_UI_DIST: path.join(UI_DIR, "dist") },
-    stdio: "ignore",
+  // A clean environment: only what the shell needs, so no inherited TARES_*, model or Slack keys leak in.
+  const base0 = {};
+  for (const k of ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "VIRTUAL_ENV"]) if (process.env[k]) base0[k] = process.env[k];
+  const env = { ...base0, TARES_DB: db, TARES_CATALOG: seed, TARES_PORT: String(DAEMON_PORT),
+                TARES_MCP_PORT: String(DAEMON_PORT + 2), TARES_OTLP_GRPC_PORT: "off",
+                TARES_AUTH_TOKEN: ROOT_TOKEN, TARES_LOGIN_URL: LOGIN_URL,
+                TARES_UI_DIST: path.join(UI_DIR, "dist"), TARES_EDITION: EDITION, PYTHONPATH: REPO };
+  const daemon = spawn(py, ["-c", "from tares.cli import run_daemon; run_daemon()"], {
+    cwd: REPO, env, stdio: "ignore",
   });
 
   const base = `http://localhost:${DAEMON_PORT}`;
+  console.log(`edition: ${EDITION}`);
   ck("daemon up + serving", await waitFor(`${base}/health`));
 
   const health = await new Promise((res) =>
@@ -137,15 +144,20 @@ function waitFor(url, tries = 100) {
       await page.goto(`${base}/?code=ABC123`, { waitUntil: "domcontentloaded" });
       let token = null;
       try {
-        await page.waitForFunction(() => !!localStorage.getItem("navflow_token"), { timeout: 8000 });
-        token = await page.evaluate(() => localStorage.getItem("navflow_token"));
+        await page.waitForFunction(() => !!localStorage.getItem("tares_token"), { timeout: 8000 });
+        token = await page.evaluate(() => localStorage.getItem("tares_token"));
       } catch {}
       ck("?code= exchanged → real cell key stored", !!token && token.startsWith("nvf_"), "token=" + token);
       ck("?code= stripped from the URL", !page.url().includes("code="), "url=" + page.url());
       await page.waitForTimeout(2000); // authed API calls would clear a bad token; a real key persists
-      const still = await page.evaluate(() => localStorage.getItem("navflow_token"));
+      const still = await page.evaluate(() => localStorage.getItem("tares_token"));
       ck("token persists (console authenticates, no clear)", !!still, "token=" + still);
       ck("stays on the cell (no redirect once authed)", page.url().startsWith(base), "url=" + page.url());
+      // A factory cell lands on its home page. A platform cell keeps Home.tsx: with no project yet
+      // it moves on to /start.
+      const landing = EDITION === "factory" ? "/" : "/start";
+      ck(`lands on ${landing} signed in (${EDITION})`, new URL(page.url()).pathname === landing, "url=" + page.url());
+      ck("the app shows, not the login page", !(await page.content()).includes("STUB LOGIN") && (await page.locator("#root *").count()) > 3);
       await ctx.close();
     }
   } finally {

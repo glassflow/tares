@@ -2,23 +2,30 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 
 import {
-  Banner, Button, EmptyState, ListRow, Panel, ProgressBar, Skeleton, SkeletonRows, StatusDot, Toaster, useToast,
-  type Tone,
+  Banner, Button, Dialog, EmptyState, ListRow, Panel, ProgressBar, Skeleton, SkeletonRows, StatusDot, Textarea,
+  Toaster, useToast, type Tone,
 } from "../../components/edition";
 import { cn } from "@/lib/utils";
-import Home from "../../pages/Home";
+import { ApiError } from "../../api";
 import { useEdition } from "../edition";
 import { useSample } from "../sample";
+import { usePagePolling } from "../usePagePolling";
+import { allowDesk, finishProject, getHome, keepAssumption, type AllowedGrant } from "./FactoryHome.api";
 import type {
-  HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeItem, HomeProject, HomeProjectState,
+  HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeItem, HomeProject, HomeProjectState, HomeVerb,
 } from "./home.types";
 import { HOME_SAMPLES } from "./homeSamples";
 
 // The factory home: what waits for the person, the projects, the crew, the Claude plan and the
 // connected tools. FactoryHomeView is pure: it draws the HomeData it is given. The default export
-// shows a sample while the sample flag is on, and today's `/` otherwise (the live page is TR-732).
+// shows a sample while the sample flag is on and the live page (GET /api/home, every 15 seconds)
+// otherwise; the buttons that do something are handled there, never in the view.
 
 const SHOW_FIRST = 5;
+const POLL_MS = 15000;
+const COPIED_MS = 2000;
+const CACHE_MS = 5600;   // the daemon keeps its home answer for 5 seconds; read again just after
+const GRANT_MAX = 400;
 const WARN_AT = 80;
 
 const SECTION_H = "m-0! text-base!";
@@ -58,8 +65,16 @@ function SectionHead({ title, aside }: { title: string; aside?: React.ReactNode 
   );
 }
 
-function ActionButton({ action, item, onAction }: {
-  action: HomeAction; item?: HomeItem; onAction?: (a: HomeAction, item?: HomeItem) => void;
+/** What one waiting row is doing: a button at work (`busy`), the sentence of a refusal, or a copy just made. */
+export interface RowState { busy?: HomeVerb; error?: string; copied?: boolean }
+type OnAction = (a: HomeAction, item?: HomeItem) => void;
+
+const BUSY_LABEL: Partial<Record<HomeVerb, string>> = {
+  keep_assumptions: "Keeping...", allow: "Allowing...", close: "Closing...",
+};
+
+function ActionButton({ action, item, onAction, state }: {
+  action: HomeAction; item?: HomeItem; onAction?: OnAction; state?: RowState;
 }) {
   // Row actions are outlined; the main one gets the dark outline, as in the approved mock.
   const variant = "secondary";
@@ -73,14 +88,30 @@ function ActionButton({ action, item, onAction }: {
       </Button>
     );
   }
+  const working = state?.busy !== undefined;
+  const mine = working && state?.busy === action.do;
+  const label = mine ? (BUSY_LABEL[action.do as HomeVerb] ?? action.label)
+    : action.do === "copy" && state?.copied ? "Copied" : action.label;
   return (
-    <Button variant={variant} className={cls} onClick={() => onAction?.(action, item)}>
-      {action.label}
+    <Button variant={variant} className={cls} busy={mine} disabled={working && !mine} onClick={() => onAction?.(action, item)}>
+      {label}
     </Button>
   );
 }
 
-function WaitingRow({ item, onAction }: { item: HomeItem; onAction?: (a: HomeAction, item?: HomeItem) => void }) {
+/** The crew's text puts a command in backticks; the page shows it in a monospace span. */
+function Detail({ text }: { text: string }) {
+  const parts = text.split(/`([^`]+)`/);
+  return (
+    <>
+      {parts.map((part, i) => (i % 2 === 1
+        ? <code key={i} className="bg-muted px-1 font-mono text-[12.5px]" data-words-exempt>{part}</code>
+        : part))}
+    </>
+  );
+}
+
+function WaitingRow({ item, onAction, state }: { item: HomeItem; onAction?: OnAction; state?: RowState }) {
   // Outline buttons first, the primary one last.
   const actions = [...item.actions].sort((a, b) => Number(a.primary) - Number(b.primary));
   return (
@@ -88,19 +119,24 @@ function WaitingRow({ item, onAction }: { item: HomeItem; onAction?: (a: HomeAct
       <div className="min-w-0 flex-[1_1_280px]">
         <div className={KIND}>{item.label}</div>
         <div className="my-0.5 font-bold" data-user-text>{item.title}</div>
-        <div className="line-clamp-3" title={item.detail} data-user-text>{item.detail}</div>
+        <div className="line-clamp-3" title={item.detail} data-user-text><Detail text={item.detail} /></div>
         <div className={cn(MUTED, "mt-0.5")} data-user-text>{item.meta}</div>
       </div>
       {actions.length > 0 && (
         <div className="flex max-w-full flex-none flex-wrap gap-2">
-          {actions.map((a) => <ActionButton key={a.label} action={a} item={item} onAction={onAction} />)}
+          {actions.map((a) => <ActionButton key={a.label} action={a} item={item} onAction={onAction} state={state} />)}
+        </div>
+      )}
+      {state?.error && (
+        <div role="alert" data-testid="row-error" className="basis-full text-[13px] text-[color:var(--err)]" data-words-exempt>
+          {state.error}
         </div>
       )}
     </ListRow>
   );
 }
 
-function Waiting({ items, onAction }: { items: HomeItem[]; onAction?: (a: HomeAction, item?: HomeItem) => void }) {
+function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAction; rows?: Record<string, RowState> }) {
   const [all, setAll] = React.useState(false);
   const shown = all ? items : items.slice(0, SHOW_FIRST);
   const more = items.length - shown.length;
@@ -112,7 +148,7 @@ function Waiting({ items, onAction }: { items: HomeItem[]; onAction?: (a: HomeAc
           <EmptyState title="Nothing waits for you." className="py-6" />
         ) : (
           <>
-            {shown.map((it) => <WaitingRow key={it.id} item={it} onAction={onAction} />)}
+            {shown.map((it) => <WaitingRow key={it.id} item={it} onAction={onAction} state={rows?.[it.id]} />)}
             {more > 0 && (
               <ListRow>
                 <Button variant="quiet" className="px-0! text-[color:var(--accent-deep)]!" onClick={() => setAll(true)}>
@@ -289,15 +325,18 @@ const COLS = "flex flex-wrap items-start gap-8";
 const LEFT = "flex min-w-0 flex-[2_1_560px] flex-col gap-8";
 const RIGHT = "flex min-w-0 flex-[1_1_300px] flex-col gap-6";
 
-export function FactoryHomeView({ data, onAction }: { data: HomeData; onAction?: (a: HomeAction, item?: HomeItem) => void }) {
+export function FactoryHomeView({ data, onAction, rows, notice }: {
+  data: HomeData; onAction?: OnAction; rows?: Record<string, RowState>; notice?: React.ReactNode;
+}) {
   const { credentialName } = useEdition();
   const name = firstName(credentialName);
   return (
     <div className={PAGE} data-testid="factory-home">
       <TopBar name={name} headline={<p className="m-0! max-w-[640px] text-[15px] text-muted-foreground" data-testid="home-headline">{data.headline}</p>} />
+      {notice}
       <div className={COLS}>
         <div className={LEFT}>
-          <Waiting items={data.waiting_for_you} onAction={onAction} />
+          <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />
           <Projects projects={data.projects} finished={data.finished_count} />
         </div>
         <aside className={RIGHT}>
@@ -345,31 +384,283 @@ export function FactoryHomeError({ onRetry }: { onRetry?: () => void }) {
   );
 }
 
-export default function FactoryHome() {
-  const sample = useSample();
-  const { toast } = useToast();
-  const [tries, setTries] = React.useState(0);
-  const known = sample === "loading" || sample === "error" || (sample !== null && Object.prototype.hasOwnProperty.call(HOME_SAMPLES, sample));
-  // No sample, or a name we do not know: today's `/`. The live page replaces this in TR-732.
-  if (!sample || !known) return <Home />;
+// ── actions ────────────────────────────────────────────────────────────────────
 
-  const onAction = (a: HomeAction) => {
-    if (a.do !== "copy") return;
-    const text = typeof a.text === "string" ? a.text : "";
-    navigator.clipboard.writeText(text).then(
-      () => toast("Copied. Paste it into your Claude Code session."),
-      () => toast("Could not copy. Try again in a moment."),
-    );
+/** The sentence of a refusal, or a plain one when the cell could not be reached. */
+function reason(e: unknown): string {
+  return e instanceof ApiError && e.message ? e.message : "Could not reach the cell. Try again in a moment.";
+}
+
+/** The command a permission item names, in backticks, and the role that wants it ("The builder"). */
+function permissionParts(item: HomeItem): { who: string; command: string } {
+  const m = /`([\s\S]+)`/.exec(item.detail);
+  const who = item.detail.split(" wants to use")[0] || "The crew";
+  return { who, command: m ? m[1] : "" };
+}
+
+/** The grant as the box first offers it: who, the command and where. A command split over lines
+ *  reads as one; one too long for a grant is cut at a word, so the grant covers how it starts. */
+function grantWords(who: string, command: string, where: string): string {
+  const cmd = command.split("\n").map((l) => l.trim().replace(/\s*\\$/, "")).filter(Boolean).join(" ");
+  const say = (c: string) => `${who} may use \`${c}\` ${where}`;
+  const room = GRANT_MAX - say("").length;
+  if (cmd.length <= room) return say(cmd);
+  const cut = cmd.slice(0, Math.max(room - 4, 0));
+  return say(`${cut.slice(0, Math.max(cut.lastIndexOf(" "), 1))} ...`);
+}
+
+interface Done { item?: string; project?: string }
+
+function AllowDialog({ item, desk, onClose, onDone }: {
+  item: HomeItem; desk: string; onClose: () => void; onDone: (r: AllowedGrant) => void;
+}) {
+  const { who, command } = permissionParts(item);
+  const project = item.project;
+  // Only a builder's grant may hold in its project alone; the crew serves every project.
+  const either = !!project && who.toLowerCase() === "the builder";
+  const [scope, setScope] = React.useState<"project" | "all">(either ? "project" : "all");
+  const where = (sc: "project" | "all") => (sc === "project" && project ? `in ${project.name}` : "in every project");
+  const [words, setWords] = React.useState(() => grantWords(who, command, where(scope)));
+  const [edited, setEdited] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState<string | null>(null);
+  const length = words.split(/\s+/).join(" ").trim().length;
+  const pick = (sc: "project" | "all") => {
+    setScope(sc);
+    if (!edited) setWords(grantWords(who, command, where(sc)));
+  };
+  const submit = async () => {
+    setBusy(true); setErr(null);
+    try { onDone(await allowDesk(desk, words, scope)); }
+    catch (e) { setErr(reason(e)); setBusy(false); }
+  };
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o && !busy) onClose(); }} data-testid="allow-dialog"
+      title="Allow this command?" description="Tares keeps the grant in the words below. Change them if you want it narrower."
+      footer={(
+        <>
+          <Button variant="secondary" disabled={busy} onClick={onClose}>Cancel</Button>
+          <Button busy={busy} disabled={!length || length > GRANT_MAX} onClick={submit}>Allow</Button>
+        </>
+      )}>
+      <div className="flex min-w-0 flex-col gap-3">
+        <pre className="m-0 max-h-32 overflow-auto whitespace-pre-wrap border border-border bg-muted p-2 font-mono text-[12.5px]" data-words-exempt>
+          {command}
+        </pre>
+        <Textarea label="The grant, kept in your words" rows={3} value={words} disabled={busy} data-testid="allow-words"
+          onChange={(e) => { setWords(e.target.value); setEdited(true); }} />
+        {length > GRANT_MAX && <p className="m-0 text-[13px] text-[color:var(--err)]">The grant is {length} characters; keep it to {GRANT_MAX}.</p>}
+        {either ? (
+          <fieldset className="m-0 flex flex-wrap gap-x-4 gap-y-1 border-0 p-0" disabled={busy}>
+            <label className="flex items-center gap-1.5 text-sm">
+              <input type="radio" name="allow-scope" checked={scope === "project"} onChange={() => pick("project")} />
+              Only <span data-user-text>{project?.name}</span>
+            </label>
+            <label className="flex items-center gap-1.5 text-sm">
+              <input type="radio" name="allow-scope" checked={scope === "all"} onChange={() => pick("all")} />
+              Every project
+            </label>
+          </fieldset>
+        ) : (
+          <p className="m-0 text-[13px] text-muted-foreground">Kept for every project: the crew works for all of them.</p>
+        )}
+        {err && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-[color:var(--err)]" data-words-exempt>{err}</p>}
+      </div>
+    </Dialog>
+  );
+}
+
+function CloseDialog({ item, project, onClose, onDone }: {
+  item: HomeItem; project: string; onClose: () => void; onDone: () => void;
+}) {
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState<string | null>(null);
+  const name = item.project?.name ?? item.title;
+  const submit = async () => {
+    setBusy(true); setErr(null);
+    try { await finishProject(project); onDone(); }
+    catch (e) { setErr(reason(e)); setBusy(false); }
+  };
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o && !busy) onClose(); }} data-testid="close-dialog"
+      title="Close this project?" description="It moves to your finished projects. Handing the crew more work on it opens it again."
+      footer={(
+        <>
+          <Button variant="secondary" disabled={busy} onClick={onClose}>Cancel</Button>
+          <Button busy={busy} onClick={submit}>Close project</Button>
+        </>
+      )}>
+      <p className="m-0 font-bold" data-user-text>{name}</p>
+      {err && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-[color:var(--err)]" data-words-exempt>{err}</p>}
+    </Dialog>
+  );
+}
+
+/** Everything the buttons of the page do. With `live` off (a sample) only Copy works, so a sample
+ *  never calls the cell. `changed` tells the page what to hide at once and to read again. */
+function useHomeActions(live: boolean, changed: (done?: Done) => void) {
+  const { toast } = useToast();
+  const [rows, setRows] = React.useState<Record<string, RowState>>({});
+  const [allow, setAllow] = React.useState<{ item: HomeItem; desk: string } | null>(null);
+  const [close, setClose] = React.useState<{ item: HomeItem; project: string } | null>(null);
+  const working = React.useRef(new Set<string>());
+  const timers = React.useRef(new Set<ReturnType<typeof setTimeout>>());
+  React.useEffect(() => () => { timers.current.forEach(clearTimeout); }, []);
+
+  const update = (id: string, f: (s: RowState) => RowState | null) => setRows((r) => {
+    const next = f(r[id] ?? {});
+    const out = { ...r };
+    if (next && Object.keys(next).length) out[id] = next; else delete out[id];
+    return out;
+  });
+
+  const onAction = (a: HomeAction, item?: HomeItem) => {
+    if (a.do === "copy") {
+      const text = typeof a.text === "string" ? a.text : "";
+      navigator.clipboard.writeText(text).then(
+        () => {
+          toast("Copied. Paste it in Claude Code to hand the project over.");
+          if (!item) return;
+          update(item.id, (s) => ({ ...s, copied: true }));
+          const t = setTimeout(() => { timers.current.delete(t); update(item.id, ({ copied: _c, ...s }) => s); }, COPIED_MS);
+          timers.current.add(t);
+        },
+        () => toast("Could not copy. Try again in a moment."),
+      );
+      return;
+    }
+    if (!live || !item || working.current.has(item.id)) return;
+    if (a.do === "keep_assumptions") {
+      const project = String(a.project ?? item.project?.id ?? "");
+      const refs = Array.isArray(a.refs) ? a.refs.map(String) : [];
+      if (!project || refs.length === 0) return;
+      working.current.add(item.id);
+      update(item.id, () => ({ busy: "keep_assumptions" }));
+      void (async () => {
+        try {
+          for (const ref of refs) await keepAssumption(project, ref);
+          toast(refs.length === 1 ? "Kept the call." : `Kept ${refs.length} calls.`);
+          update(item.id, () => null);
+          changed({ item: item.id });
+        } catch (e) {
+          update(item.id, () => ({ error: reason(e) }));
+          changed();   // some may have been kept: read again
+        } finally {
+          working.current.delete(item.id);
+        }
+      })();
+    } else if (a.do === "allow") {
+      if (typeof a.desk === "string") setAllow({ item, desk: a.desk });
+    } else if (a.do === "close") {
+      const project = String(a.project ?? item.project?.id ?? "");
+      if (project) setClose({ item, project });
+    }
   };
 
+  const dialogs = (
+    <>
+      {allow && (
+        <AllowDialog key={allow.item.id} item={allow.item} desk={allow.desk} onClose={() => setAllow(null)}
+          onDone={(r) => {
+            toast(r.added ? "Allowed. The crew restarts it with the permission once it is between turns."
+              : "That grant was already kept, so nothing changed.");
+            setAllow(null);
+            changed({ item: allow.item.id });
+          }} />
+      )}
+      {close && (
+        <CloseDialog key={close.item.id} item={close.item} project={close.project} onClose={() => setClose(null)}
+          onDone={() => {
+            toast(`Closed ${close.item.project?.name ?? close.item.title}.`);
+            setClose(null);
+            changed({ item: close.item.id, project: close.project });
+          }} />
+      )}
+    </>
+  );
+  return { rows, onAction, dialogs };
+}
+
+// ── pages ──────────────────────────────────────────────────────────────────────
+
+function SampleHome({ sample }: { sample: string }) {
+  const [tries, setTries] = React.useState(0);
+  const { rows, onAction, dialogs } = useHomeActions(false, () => {});
   let body: React.ReactNode;
   if (sample === "loading") body = <FactoryHomeLoading />;
   else if (sample === "error") body = <FactoryHomeError key={tries} onRetry={() => setTries((n) => n + 1)} />;
-  else body = <FactoryHomeView data={HOME_SAMPLES[sample]} onAction={onAction} />;
+  else body = <FactoryHomeView data={HOME_SAMPLES[sample]} onAction={onAction} rows={rows} />;
   return (
     <>
       {body}
+      {dialogs}
       <Toaster />
     </>
   );
+}
+
+/** What the page shows at once after a change, until the daemon's own answer catches up. */
+interface Overlay { items: Set<string>; projects: Set<string>; until: number }
+
+function hhmm(d: Date): string {
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function LiveHome() {
+  const { data, error, reload } = usePagePolling(getHome, POLL_MS);
+  const [readAt, setReadAt] = React.useState<Date>();
+  const [overlay, setOverlay] = React.useState<Overlay | null>(null);
+  const timer = React.useRef<ReturnType<typeof setTimeout>>();
+  React.useEffect(() => { if (data) setReadAt(new Date()); }, [data]);
+  // the daemon keeps its answer for a few seconds: once that has passed, the next read is the truth
+  React.useEffect(() => {
+    if (data && overlay && Date.now() >= overlay.until) setOverlay(null);
+  }, [data, overlay]);
+  React.useEffect(() => () => clearTimeout(timer.current), []);
+
+  const { rows, onAction, dialogs } = useHomeActions(true, (done) => {
+    if (done) {
+      setOverlay((o) => ({
+        items: new Set([...(o?.items ?? []), ...(done.item ? [done.item] : [])]),
+        projects: new Set([...(o?.projects ?? []), ...(done.project ? [done.project] : [])]),
+        until: Date.now() + CACHE_MS,
+      }));
+    }
+    reload();
+    clearTimeout(timer.current);
+    timer.current = setTimeout(reload, CACHE_MS);
+  });
+
+  let body: React.ReactNode;
+  if (!data) {
+    body = error ? <FactoryHomeError onRetry={reload} /> : <FactoryHomeLoading />;
+  } else {
+    const shown: HomeData = overlay ? {
+      ...data,
+      waiting_for_you: data.waiting_for_you.filter((i) => !overlay.items.has(i.id)),
+      projects: data.projects.filter((p) => !overlay.projects.has(p.id)),
+      finished_count: data.finished_count + data.projects.filter((p) => overlay.projects.has(p.id)).length,
+    } : data;
+    const notice = error ? (
+      <Banner tone="warn" data-testid="stale-banner">
+        Could not refresh. Showing what we had at {hhmm(readAt ?? new Date())}.
+      </Banner>
+    ) : undefined;
+    body = <FactoryHomeView data={shown} onAction={onAction} rows={rows} notice={notice} />;
+  }
+  return (
+    <>
+      {body}
+      {dialogs}
+      <Toaster />
+    </>
+  );
+}
+
+export default function FactoryHome() {
+  const sample = useSample();
+  if (sample && (sample === "loading" || sample === "error" || Object.prototype.hasOwnProperty.call(HOME_SAMPLES, sample))) {
+    return <SampleHome sample={sample} />;
+  }
+  return <LiveHome />;
 }

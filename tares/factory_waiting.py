@@ -231,5 +231,33 @@ def milestones_to_check(store, fx, now) -> list[dict]:
     return out
 
 
+# ── projects whose work is all merged ─────────────────────────────────────────
+
+def projects_to_close(store, fx, now) -> list[dict]:
+    """Open projects whose every ticket is finished and at least one merged: the console offers
+    Close. Closing runs the project's own finish route, so the item ends with the project."""
+    projects = _open_projects(store)
+    if not projects:
+        return []
+    tickets = store.tickets_by_project([p["id"] for p in projects])
+    out = []
+    for p in projects:
+        ts = tickets.get(p["id"]) or []
+        if not factory_mod.ready_to_close(p, ts):
+            continue
+        n = sum(1 for t in ts if factory_mod.delivered(t))
+        since = max((t["updated_at"] for t in ts if t.get("updated_at")),
+                    key=lambda t: fh._dt(t) or now, default=p.get("updated_at") or now)
+        out.append(fh.home_item(
+            "signoff", label="Ready to close", title=p["name"],
+            detail=(f"All {n} tickets are merged" if n > 1 else "Its ticket is merged")
+                   + ". Close the project when you have checked the result.",
+            meta="Ready " + fh.plain_ago(since, now), since=since, now=now, project=_ref(p),
+            id=f"signoff:{p['id']}",
+            actions=[{"label": "Open project", "primary": False, "href": f"/projects/{p['id']}"},
+                     {"label": "Close project", "primary": True, "do": "close"}]))
+    return out
+
+
 fh.WAITING_BUILDERS.extend([prs_to_review, ready_to_start, calls_to_confirm, desk_items,
-                            milestones_to_check])
+                            milestones_to_check, projects_to_close])
