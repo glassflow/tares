@@ -18,6 +18,9 @@ Tests are plain Python scripts, not pytest. Run one with `python tests/test_x.py
 non-zero on failure. CI runs the tests named in `tests/ci_list.txt` (Python) and
 `tests/factory/ci_list.txt` (bash), in parallel shards (`tests/ci_run.py`). A new test adds its line
 there, in its sorted place (byte order, `LC_ALL=C sort`); never list tests in ci.yml.
+The console's browser suites (`ui/tests/*.e2e.cjs`) are named in `ui/tests/e2e_suites.txt`, same rule (sorted,
+one name per line); the `e2e` job runs them in shards (`tests/ci_e2e.py`, one port per suite). Run one by hand with
+`cd ui && npm run build && TARES_E2E_PORT=<free port> node tests/<name>.e2e.cjs`.
 A Python test CI should not run goes in `tests/ci_skip.txt` as `name: reason`; `test_ci_list` fails for a
 `tests/test_*.py` in neither file.
 

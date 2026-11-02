@@ -1,0 +1,18 @@
+# Browser e2e suites CI runs, one per line, in sorted order (byte order, LC_ALL=C sort). Each is ui/tests/<name>.e2e.cjs. Add your suite's name on its own line in its sorted place. On a merge conflict keep both sides.
+capped-runs
+component-gallery
+edition-routes
+edition-shell
+factory-crew
+factory-docs
+factory-home
+factory-project
+factory-projects
+factory-reviews
+factory-settings
+login-handoff
+project-idle
+projects-list
+raise-limit
+session-picker
+sre-runbooks

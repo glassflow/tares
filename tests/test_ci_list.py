@@ -1,4 +1,5 @@
-"""The CI test lists: every name has its file, none is listed twice, they are sorted, and ci.yml reads the lists."""
+"""The CI test lists (Python, bash and the console's browser e2e suites): every name has its file, none is listed twice, they are sorted, and ci.yml reads the lists."""
+import json
 import re
 from pathlib import Path
 
@@ -73,7 +74,7 @@ def jobs(text):
 
 
 js = jobs(ci)
-ck("ci.yml has the jobs console, test and secrets", {"console", "test", "secrets"} <= set(js), str(sorted(js)))
+ck("ci.yml has the jobs console, test, e2e and secrets", {"console", "test", "e2e", "secrets"} <= set(js), str(sorted(js)))
 test = js.get("test", "")
 RUN = "python tests/ci_run.py --suite ${{ matrix.suite }} --shard ${{ matrix.shard }} --of 5"
 ck("job test: runs tests/ci_run.py per suite and shard", RUN in test and re.search(r"suite: \[duckdb, postgres\]", test) and re.search(r"shard: \[1, 2, 3, 4, 5\]", test), test[:400])
@@ -82,6 +83,43 @@ ck("job test: tests/check_ci_list.sh checks both lists in the step before ci_run
    all(re.search(r"(?m)^\s*bash tests/check_ci_list\.sh " + re.escape(f) + r"\s*$", step) for f in ("tests/ci_list.txt", "tests/factory/ci_list.txt")), step)
 ck("tests/check_ci_list.sh exists and tests/test_ci_check.py is in the list", (ROOT / "tests" / "check_ci_list.sh").is_file() and "test_ci_check" in py)
 ck("no job but test names a list", all("ci_list" not in j and "ci_run" not in j for n, j in js.items() if n != "test"))
+
+# The console's browser e2e suites: ui/tests/e2e_suites.txt, run by tests/ci_e2e.py in the e2e job.
+e2e_list = ROOT / "ui" / "tests" / "e2e_suites.txt"
+e2e = names(e2e_list)
+ck("e2e: the list is not empty", len(e2e) > 0)
+missing = [n for n in e2e if not (e2e_list.parent / f"{n}.e2e.cjs").is_file()]
+ck("e2e: every name has its ui/tests/<name>.e2e.cjs", not missing, ", ".join(missing))
+dupes = sorted({n for n in e2e if e2e.count(n) > 1})
+ck("e2e: no name is listed twice", not dupes, ", ".join(dupes))
+msg = out_of_order(entries(e2e_list), "ui/tests/e2e_suites.txt")
+ck("e2e: the list is sorted", not msg, msg)
+unlisted = sorted(f.name[:-len(".e2e.cjs")] for f in e2e_list.parent.glob("*.e2e.cjs") if f.name[:-len(".e2e.cjs")] not in e2e)
+ck("e2e: every ui/tests/*.e2e.cjs is in the list", not unlisted, "not listed: " + ", ".join(unlisted))
+pkg = json.loads((ROOT / "ui" / "package.json").read_text())["scripts"]
+platform = re.findall(r"tests/([\w-]+)\.e2e\.cjs", pkg["test:platform"])
+ck("e2e: every suite in `npm run test:platform` is in the list", platform and set(platform) <= set(e2e),
+   ", ".join(sorted(set(platform) - set(e2e))))
+e2e_job = js.get("e2e", "")
+ck("job e2e: runs tests/ci_e2e.py for each shard of its matrix",
+   re.search(r"python tests/ci_e2e\.py --shard \$\{\{ matrix\.shard \}\} --of (\d+)", e2e_job) is not None
+   and re.search(r"shard: \[1(, \d+)*\]", e2e_job) is not None, e2e_job[:300])
+of = int(re.search(r"--of (\d+)", e2e_job).group(1)) if "--of" in e2e_job else 0
+ck("job e2e: the matrix lists shards 1 to N for --of N",
+   re.search(r"shard: \[" + ", ".join(str(i) for i in range(1, of + 1)) + r"\]", e2e_job) is not None, f"--of {of}")
+ck("job e2e: screenshots are uploaded only when the run fails", "if: failure()" in e2e_job and "upload-artifact" in e2e_job)
+
+import sys
+sys.path.insert(0, str(ROOT / "tests"))
+import ci_e2e
+ck("ci_e2e.py reads ui/tests/e2e_suites.txt", ci_e2e.names() == e2e)
+got = [t for i in range(1, of + 1) for t in ci_e2e.shard(e2e, i, of)]
+ck(f"ci_e2e.py: the {of} shards run every listed suite once", sorted(got) == sorted(e2e) and len(got) == len(set(got)),
+   f"missing {sorted(set(e2e) - set(got))}, extra {sorted(set(got) - set(e2e))}")
+ports = [ci_e2e.port(n, e2e) for n in e2e]
+ck("ci_e2e.py: every suite has its own port, far enough apart for its daemons", len(set(ports)) == len(ports)
+   and all(b - a >= 30 for a, b in zip(ports, ports[1:])), str(ports))
+ck("ci_e2e.py: only listed names carry a weight", set(ci_e2e.WEIGHT) <= set(e2e), ", ".join(sorted(set(ci_e2e.WEIGHT) - set(e2e))))
 
 # tests/ci_run.py reads the two lists, and its shards together run each suite exactly once.
 import sys
