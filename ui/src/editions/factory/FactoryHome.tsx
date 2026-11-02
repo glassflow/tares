@@ -142,7 +142,7 @@ function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAc
   const more = items.length - shown.length;
   return (
     <section aria-label="Waiting for you" className="min-w-0">
-      <SectionHead title="Waiting for you" aside={<span className={MUTED}>oldest first</span>} />
+      <SectionHead title="Waiting for you" aside={<span className={MUTED}>oldest first, ready to close last</span>} />
       <div className="border border-border bg-card">
         {items.length === 0 ? (
           <EmptyState title="Nothing waits for you." className="py-6" />
