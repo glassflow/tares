@@ -574,6 +574,48 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
       await ctx.close();
     }
 
+    // 12b2. a list of two pages: a poll before "Load earlier" must not leave the old stretch behind
+    {
+      const { ctx, page } = await newPage(1440);
+      await page.clock.install();
+      let firstPageReads = 0, earlierReads = 0;
+      let head = null;
+      await page.route(TL_URL, async (route) => {
+        const resp = await route.fetch();
+        const body = await resp.json();
+        const asked = new URL(route.request().url()).searchParams.has("before");
+        if (asked) {
+          earlierReads++;
+          body.items = [{ ...head.tail, id: "quiet:burst-01:B" }];   // the older page: the same stretch, start moved
+          body.next_before = null;
+        } else {
+          firstPageReads++;
+          head = head || { items: body.items.slice(0, 3), tail: body.items[3] };
+          body.items = firstPageReads === 1 ? [...head.items, { ...head.tail, id: "quiet:burst-01:A" }]
+            : firstPageReads === 3 ? [...head.items, { ...head.items[0], id: "quiet:burst-01:B" }]   // the older stretch has moved up into the first page
+            : head.items;
+          body.next_before = "2020-01-01T00:00:00Z";
+        }
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+      });
+      await page.goto(`${BASE}/timeline`, { waitUntil: "load" });
+      await items(page).first().waitFor();
+      eq("two pages: the first read lists the stretch as it started", (await ids(page)).includes("quiet:burst-01:A"), true);
+      await page.clock.fastForward(31_000);
+      await page.waitForTimeout(500);
+      const polled = await ids(page);
+      eq("two pages: a poll before any earlier page replaces the list", [firstPageReads, polled.includes("quiet:burst-01:A"), polled.length], [2, false, 3]);
+      await page.getByTestId("timeline-earlier").click();
+      await page.waitForTimeout(500);
+      const both = await ids(page);
+      eq("two pages: Load earlier adds the stretch once", [earlierReads, both.filter((i) => i.startsWith("quiet:burst-01:")), both.length], [1, ["quiet:burst-01:B"], 4]);
+      await page.clock.fastForward(31_000);
+      await page.waitForTimeout(500);
+      const again = await ids(page);
+      eq("two pages: a poll after Load earlier keeps the older page and still lists the stretch once", [firstPageReads, again.filter((i) => i.startsWith("quiet:burst-01:")), again.length], [3, ["quiet:burst-01:B"], 4]);
+      await ctx.close();
+    }
+
     // 12c. a range in the address without range=custom is a custom range; a range that ends is not polled
     {
       const from = new Date(B.getTime() - 120 * 60e3), to = new Date(B.getTime() - 10 * 60e3);

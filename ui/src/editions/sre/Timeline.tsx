@@ -91,15 +91,17 @@ function merge(have: TimelineItem[], incoming: TimelineItem[], from: number | nu
 }
 
 /** A poll's first page over what is held. The first page is replaced by what the cell sent, so an
- *  item the cell stopped sending (a quiet stretch whose start moved with the range) goes. Of the
- *  earlier pages already loaded, only what sorts strictly below the last item of the new first page
- *  stays. With no way on, the first page is the whole list. */
-function mergePoll(have: TimelineItem[], fresh: TimelineItem[], hasMore: boolean, from: number | null): TimelineItem[] {
-  const keep = (it: TimelineItem) => from === null || endOf(it) >= from;
+ *  item the cell stopped sending (a quiet stretch whose start moved with the range) goes. With no
+ *  way on, or no earlier page loaded yet, the first page is the whole list: the next "Load earlier"
+ *  starts again from the new first page's cursor. Once earlier pages are loaded, what sorts strictly
+ *  below the last item of the new first page stays, except an id the first page now carries. */
+function mergePoll(have: TimelineItem[], fresh: TimelineItem[], hasMore: boolean, older: boolean, from: number | null): TimelineItem[] {
   const head = merge([], fresh, from);
   const last = head[head.length - 1];
-  if (!hasMore || !last) return head;
-  return [...head, ...have.filter((it) => keep(it) && order(it, last) > 0)].sort(order);
+  if (!hasMore || !older || !last) return head;
+  const sent = new Set(head.map((it) => it.id));
+  const keep = (it: TimelineItem) => (from === null || endOf(it) >= from) && !sent.has(it.id) && order(it, last) > 0;
+  return [...head, ...have.filter(keep)].sort(order);
 }
 
 interface Acc {
@@ -319,7 +321,7 @@ export default function Timeline() {
     setServices(d.services);
     const more = d.next_before !== null;
     setAcc((prev) => prev && prev.key === res.key
-      ? { ...prev, from: res.from, items: mergePoll(prev.items, d.items, more, res.from),
+      ? { ...prev, from: res.from, items: mergePoll(prev.items, d.items, more, prev.older, res.from),
           cursor: more && prev.older ? prev.cursor : d.next_before, older: more && prev.older,
           rangeWords: d.range_words, emptyWords: d.empty_words }
       : { key: res.key, from: res.from, items: merge([], d.items, res.from), cursor: d.next_before, older: false,
