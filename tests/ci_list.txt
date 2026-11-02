@@ -109,6 +109,7 @@ test_slack_finding_post
 test_slack_incident_buttons
 test_slack_verify
 test_sre_home
+test_sre_incidents
 test_sre_runbooks
 test_sre_series
 test_startup_fill
