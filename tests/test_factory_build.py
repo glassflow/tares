@@ -168,8 +168,9 @@ def main_backlog():
         ck("every line ships once, in order, the large one alone",
            [t[:3].rstrip("x") for t in texts] == [f"m{i}" for i in range(41)] + ["m42"]
            and texts[40] == "m40" + "x" * 5000, [t[:4] for t in texts])
-        ck("the line too large to send is stepped over with a note",
-           any(o.get("type") == "transcript_truncated" for o in sent))
+        notes = [o for o in sent if o.get("type") == "session_warning"]
+        ck("the line too large to send is stepped over with a warning Tares renders",
+           len(notes) == 1 and "too large to record" in notes[0]["warning"], notes)
         sent.clear()
         ok, _ = ship.ship_main(cfg, hook, transcript, "")
         ck("nothing ships twice", ok and sent == [], sent)
@@ -181,6 +182,24 @@ def main_backlog():
             f.write("\n")
         ship.ship_main(cfg, hook, transcript, "")
         ck("and ships once it ends", len(sent) == 1 and sent[0]["message"]["content"].startswith("m43"))
+
+        # SessionEnd: no hook follows, so the whole backlog goes out in that one hook
+        with open(transcript, "a") as f:
+            for i in range(44, 84):
+                f.write(msg(i, 200))
+        sent.clear()
+        before = len(posts)
+        ship.drain_main(cfg, hook, transcript, "")
+        ck("SessionEnd drains the whole backlog in chunks",
+           offset() == os.path.getsize(transcript) and len(posts) - before > 1
+           and [o["message"]["content"][:3] for o in sent] == [f"m{i}" for i in range(44, 84)],
+           (offset(), os.path.getsize(transcript), len(posts) - before))
+        with open(transcript, "a") as f:
+            f.write(msg(84, 200))
+        fail[0] = True
+        ship.drain_main(cfg, hook, transcript, "")
+        ck("a failed post stops the drain without moving the offset",
+           offset() == os.path.getsize(transcript) - len(msg(84, 200)))
     finally:
         ship.ship_lines, ship.MAX_MAIN_READ, ship.MAX_MAIN_LINE = real
 
