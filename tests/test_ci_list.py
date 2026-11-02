@@ -51,40 +51,27 @@ def jobs(text):
     return {parts[i]: parts[i + 1] for i in range(1, len(parts), 2)}
 
 
-def loops(job):
-    """The loops of a job that read a list: (file, filter, body) in order; body is what runs per name."""
-    out = []
-    for m in re.finditer(r"for t in \$\(grep -vE '\^\\s\*\(#\|\$\)' (tests/(?:factory/)?ci_list\.txt)((?: \| [^)]*)?)\); do\n(.*?)\n\s*done", job, re.S):
-        body = [ln.strip() for ln in m.group(3).splitlines() if ln.strip() and not ln.strip().startswith("echo ")]
-        out.append((m.group(1), m.group(2).strip(), body))
-    return out
-
-
-LOOP = r"for t in \$\(grep -vE '\^\\s\*\(#\|\$\)' (tests/(?:factory/)?ci_list\.txt)(?: \| [^)]*)?\); do"
-
-
-def unguarded(job):
-    """The lists a job loops over without `bash tests/check_ci_list.sh <list>` earlier in the same step."""
-    out = []
-    for m in re.finditer(LOOP, job):
-        step = job[max(job.rfind("run: |", 0, m.start()), 0):m.start()]
-        if not re.search(r"(?m)^\s*bash tests/check_ci_list\.sh " + re.escape(m.group(1)) + r"\s*$", step):
-            out.append(m.group(1))
-    return out
-
-
-PY, SH = "tests/ci_list.txt", "tests/factory/ci_list.txt"
-RUN_PY, RUN_SH = ['python "tests/$t.py"'], ['bash "tests/factory/${t}_test.sh"']
-SKIP = "| grep -vxE 'test_state_postgres|test_duckdb_memory'"
 js = jobs(ci)
-ck("ci.yml has the jobs test, backend-postgres and secrets", {"test", "backend-postgres", "secrets"} <= set(js), str(sorted(js)))
-ck("job test: runs the python list, then the bash list, both unfiltered, each running its test", loops(js.get("test", "")) == [(PY, "", RUN_PY), (SH, "", RUN_SH)], str(loops(js.get("test", ""))))
-ck("job backend-postgres: runs the python list without test_state_postgres and test_duckdb_memory, then the bash list unfiltered, each running its test", loops(js.get("backend-postgres", "")) == [(PY, SKIP, RUN_PY), (SH, "", RUN_SH)], str(loops(js.get("backend-postgres", ""))))
-ck("jobs test and backend-postgres: every loop over a list is preceded, in its step, by tests/check_ci_list.sh on that list (a missing or empty list fails the job)", all(unguarded(js.get(n, "")) == [] for n in ("test", "backend-postgres")) and sum(len(re.findall(LOOP, js.get(n, ""))) for n in ("test", "backend-postgres")) == 4, str({n: unguarded(js.get(n, "")) for n in ("test", "backend-postgres")}))
+ck("ci.yml has the jobs console, test and secrets", {"console", "test", "secrets"} <= set(js), str(sorted(js)))
+test = js.get("test", "")
+RUN = "python tests/ci_run.py --suite ${{ matrix.suite }} --shard ${{ matrix.shard }} --of 5"
+ck("job test: runs tests/ci_run.py per suite and shard", RUN in test and re.search(r"suite: \[duckdb, postgres\]", test) and re.search(r"shard: \[1, 2, 3, 4, 5\]", test), test[:400])
+step = test[test.rfind("run: |", 0, max(test.find(RUN), 0)):test.find(RUN)]
+ck("job test: tests/check_ci_list.sh checks both lists in the step before ci_run.py (a missing or empty list fails the job)",
+   all(re.search(r"(?m)^\s*bash tests/check_ci_list\.sh " + re.escape(f) + r"\s*$", step) for f in ("tests/ci_list.txt", "tests/factory/ci_list.txt")), step)
 ck("tests/check_ci_list.sh exists and tests/test_ci_check.py is in the list", (ROOT / "tests" / "check_ci_list.sh").is_file() and "test_ci_check" in py)
-ck("job secrets: runs no test list", loops(js.get("secrets", "")) == [] and "ci_list" not in js.get("secrets", ""))
-ck("no other job reads a list", all(loops(j) == [] for n, j in js.items() if n not in ("test", "backend-postgres")))
-ck("every list in ci.yml is read by a loop (none is read some other way)", re.sub(r"(?m)^\s*bash tests/check_ci_list\.sh \S+\s*$", "", ci).count("ci_list.txt") == sum(len(loops(j)) for j in js.values()), str(ci.count("ci_list.txt")))
+ck("no job but test names a list", all("ci_list" not in j and "ci_run" not in j for n, j in js.items() if n != "test"))
+
+# tests/ci_run.py reads the two lists, and its shards together run each suite exactly once.
+import sys
+sys.path.insert(0, str(ROOT / "tests"))
+import ci_run
+want = {"duckdb": py + [f"factory:{n}" for n in sh],
+        "postgres": [n for n in py if n not in ("test_state_postgres", "test_duckdb_memory")] + [f"factory:{n}" for n in sh]}
+for suite, w in want.items():
+    got = [t for i in range(1, 6) for t in ci_run.shard(ci_run.items(suite), i, 5)]
+    ck(f"ci_run.py, suite {suite}: the 5 shards run every listed test once", sorted(got) == sorted(w) and len(got) == len(set(got)),
+       f"missing {sorted(set(w) - set(got))}, extra {sorted(set(got) - set(w))}")
 
 print(f"\n{P} passed, {F} failed")
 raise SystemExit(1 if F else 0)
