@@ -5,6 +5,11 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.55.1] - 2026-11-02
+
+A long Claude Code session keeps reaching Tares however large its unsent backlog grows. Claude
+Code plugin 0.6.2.
+
 ### Fixed
 - Plugin: a long session no longer stops reaching Tares. The hook sent the session's whole unsent
   backlog in one request, and once that took longer than the 5 s timeout every hook failed the
