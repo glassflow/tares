@@ -6,12 +6,12 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- Console: `GET /api/factory/projects/{id}` answers a factory project's whole page in one read: where it stands, what waits for you on it, the next ticket, milestones with their tickets, decisions, open calls, documents, the command that opens a builder's session and where the tickets live.
-- Console: a factory cell has a home page at `/`: a greeting, what waits for you, your projects with their progress, the crew and its memory, your Claude plan use and the connected tools. It shows sample data behind the sample flag, and live data otherwise.
+- Console: `GET /api/factory/projects/{id}` answers a factory project's whole page in one read: where it stands, what waits for you on it, how many tickets are in each state, the few moving now, the next ticket, milestones as compact rows with their counts and a link to their tickets, decisions, open calls, documents, the command that opens a builder's session and where the tickets live.
 - Console: the factory home now shows live data, refreshed every 15 seconds, and its buttons work: Copy, Keep the crew's calls, Allow a permission, and Close a finished project. The factory Start address goes to the home page.
 - Console: on a factory cell, Docs and memory (`/docs`) shows the crew's shared rules and memory and each project's spec, plan, rules and memory, with who wrote each memory line and when, and adds a line from the page. `GET /api/factory/docs` and `GET /api/factory/docs/{id}` serve it; the daemon's own API reference moves from `/docs` to `/api/reference`.
 - Console: on a factory cell, Projects (`/projects`) lists every project as one row with its goal, state, current milestone, tickets merged and blocked, repos and last activity, filtered by state, and closes a project whose tickets are all merged. `GET /api/factory/projects` serves it in one call.
 - Console: on factory and AI SRE cells, Settings, Advanced (`/settings/advanced`) lists Connections, Explore, All resources, Connect and Reads, and one route table holds every page of both editions with a fallback until its page exists. Old addresses keep working; platform cells are unchanged.
+- `GET /api/home` on an AI SRE cell returns the home page in one call: a headline, whether and why nobody is watching, the open incidents with their chart, the services with one state each, who is on watch and the blind spots. `POST /api/home/actions/raise_budget` adds to a spent watcher's budget and turns it back on.
 - Console: the factory and AI SRE editions get their own frame, a header with search and an account menu, and a left menu that lists only the pages that exist. The platform edition keeps the console as it was.
 - Incident notes belong to incidents that someone can take and resolve (`/api/incidents`).
 - `GET /api/services` lists the services a cell receives data for.

@@ -1,8 +1,9 @@
 """The factory project page (TR-734): GET /api/factory/projects/{uid}.
 
 One read answers the whole page: the stage, what waits on this project (and only this project),
-the next ticket, the milestones with their tickets in plain words, the decisions, the open calls,
-the documents, the command that opens a builder's session and where the tickets live. Nothing in
+the counts of tickets by state, the few that move now, the next ticket, the milestones as
+compact rows (counts, checks, a link to their tickets), the decisions, the open calls, the
+documents, the command that opens a builder's session and where the tickets live. Nothing in
 the answer may name a station, a session or a folder of the crew's machine, and every shown word
 passes the edition words list. `stage_of` is checked against every branch of phaseOf() in
 ui/src/components/project/factory.tsx.
@@ -36,6 +37,7 @@ import httpx
 
 import tares
 from tares import factory as factory_mod
+from tares import factory_home as fh
 from tares import words
 from tares.screens import factory_project as fp
 from tares.store import now_utc
@@ -87,8 +89,40 @@ def stages():
     for label, start, tickets, want in cases:
         got = fp.stage_of(start, tickets)
         ck(f"stage_of: {label} is {want}", got == want, got)
+    merged_by_stage = {"id": "t9", "status": "in_progress", "stage": "merged"}
+    shipped = {"id": "t8", "status": "todo", "stage": "shipped"}
+    ck("stage_of: a ticket merged by its stage is done even when its status still says in progress",
+       fp.stage_of(True, [merged_by_stage, shipped]) == "done"
+       and fp.stage_of(True, [t(1, "done"), merged_by_stage]) == "done",
+       fp.stage_of(True, [merged_by_stage, shipped]))
+    ck("stage_of: a ticket merged by its stage is not what is left (only the last is left)",
+       fp.stage_of(True, [t(1, "done"), merged_by_stage, t(3, "todo")]) == "review")
     ck("a project the crew closed is done whatever its tickets say",
        fp.stage_of(False, [t(1, "todo")], True) == "done" and fp.stage_of(True, [], True) == "done")
+
+
+def pull_requests():
+    print("== a pull request and a review in words ==")
+    url = "https://github.com/example-org/docs-site/pull/7"
+    out = lambda t: fp._pr_out(t)
+    ck("closed without merging", out({"pr": {"number": 7, "url": url, "state": "closed"}})["state_text"]
+       == "closed without merging")
+    ck("merged by its flag", out({"pr": {"number": 7, "url": url, "state": "closed", "merged": True}})["state_text"]
+       == "merged")
+    ck("merged by the stage when the pull request has no state",
+       out({"stage": "merged", "pr": {"number": 7, "url": url}})["state_text"] == "merged"
+       and out({"stage": "shipped", "pr": {"number": 7, "url": url}})["state_text"] == "merged")
+    ck("without a state and not merged it is open",
+       out({"stage": "review", "pr": {"number": 7, "url": url}})["state_text"] == "open")
+    ck("open with CI", out({"pr": {"number": 7, "state": "open", "ci": "pending"}})["state_text"]
+       == "open, CI running")
+    ck("the number comes from the link", out({"pr": {"url": url, "state": "open"}})["number"] == 7)
+    ck("no pull request, no answer", out({}) is None and out({"pr": {}}) is None)
+    last = {"verdict": "block", "head": "aaaaaaa1111", "round": 3, "at": None}
+    ck("a review that still counts", fp._review_out(last, {"pr": {"head": "aaaaaaa1111"}}) == "round 3: blocked")
+    ck("a review for an older commit says the pull request changed",
+       fp._review_out(last, {"pr": {"head": "bbbbbbb2222"}}) == "round 3: blocked, then the pull request changed")
+    ck("no review, no words", fp._review_out(None, {}) is None)
 
 
 def holders():
@@ -201,13 +235,68 @@ async def main():
         pc = project("project-c")                # every ticket canceled
         ticket(pc, "Gone", status="canceled")
         pw = project("project-w", factory=False)
-        pp = project("project-p")                # a title that names the crew's folder; one live and one ended builder
+        pp = project("project-p")                # a title that names the crew's folder; builders in every state
         PATH_P = "/Users/kim/code/project-p"
         store.set_handover(pp, [{"path": PATH_P, "name": "example-org/project-p"}], None, None, now_utc())
-        ticket(pp, f"Fix the build in {PATH_P}/src")
+        ticket(pp, f"Fix the build in {PATH_P}/src", status="in_progress")
         store.set_session_station("sess-p-live", "project-p-build-m1", "builder", "crew-orchestrator", pp, now_utc())
+        store.set_session_station("sess-p-live2", "project-p-build-m1", "builder", "crew-orchestrator", pp,
+                                  now_utc())        # a second session on the same station: one command
         store.set_session_station("sess-p-old", "project-p-build-m0", "builder", "crew-orchestrator", pp, now_utc())
         store.set_session_state("sess-p-old", "ended", None, now_utc())
+        # m2: an older session still working, a newer one ended: the station is over
+        store.set_session_station("sess-p2-old", "project-p-build-m2", "builder", "crew-orchestrator", pp, ago(hours=3))
+        store.set_session_state("sess-p2-old", "working", None, now_utc())
+        store.set_session_station("sess-p2-new", "project-p-build-m2", "builder", "crew-orchestrator", pp, ago(minutes=1))
+        store.set_session_state("sess-p2-new", "ended", None, now_utc())
+        # m3: an older ended session, a newer one working but silent for hours (shown quiet): still offered
+        store.set_session_station("sess-p3-old", "project-p-build-m3", "builder", "crew-orchestrator", pp, ago(hours=5))
+        store.set_session_state("sess-p3-old", "ended", None, ago(hours=5))
+        store.set_session_station("sess-p3-new", "project-p-build-m3", "builder", "crew-orchestrator", pp, ago(hours=3))
+        store.set_session_state("sess-p3-new", "working", None, ago(hours=3))
+        # a reviewer of project-p and project-y's builder are not project-p's builders
+        store.set_session_station("sess-p-rev", "crew-reviewer-p", "reviewer", "crew-orchestrator", pp, now_utc())
+        store.set_session_station("sess-y-b", "project-y-build-m1", "builder", "crew-orchestrator", py, now_utc())
+
+        # project-n: seven tickets in motion, so the list is capped; created out of the page's order
+        pn = project("project-n")
+        ticket(pn, "Blocked one", stage="blocked", status="in_progress")
+        tn_doing = ticket(pn, "Doing one", stage="doing", status="in_progress",
+                          pr=pr(22, state="closed", merged=False))
+        tn_review = ticket(pn, "Review one", stage="review", status="in_progress",
+                           pr=pr(21, state="open", head="bbbbbbb2222"))
+        ticket(pn, "Changes one", stage="changes", status="in_progress")
+        ticket(pn, "Status only", status="in_progress")
+        ticket(pn, "Changes two", stage="changes", status="in_progress")
+        ticket(pn, "Blocked two", stage="blocked", status="in_progress")
+        store.add_review(pn, tn_review, None, "aaaaaaa1111", "pass", "ran the tests", None, STATIONS[3],
+                         [], {}, factory_mod.finding_kind, now_utc())
+
+        # project-s: merged by stage while the status says in progress; an empty milestone
+        ps = project("project-s")
+        store.create_doc(ps, "start", "Start", "Build it.")
+        ms_a = store.create_milestone(ps, "M1: base", "The base is in.", [])
+        ms_b = store.create_milestone(ps, "M2: extras", "", [])
+        ticket(ps, "Merged by stage", milestone=ms_a, stage="merged", status="in_progress", holder=STATIONS[0])
+        ticket(ps, "Merged by status", milestone=ms_a, status="done")
+        ticket(ps, "Dropped idea", milestone=ms_a, status="canceled")
+
+        # project-t: a hand-over path that ends in a slash, named in a ticket, a goal, a check
+        # and a waiting item; documents made in the opposite order of the page's
+        pt = project("project-t")
+        PATH_T = "/Users/lee/code/docs-site/"
+        store.set_handover(pt, [{"path": PATH_T, "name": REPO}], None, None, now_utc())
+        ticket(pt, f"Fix links in {PATH_T}src and {PATH_T[:-1]}", status="in_progress")
+        store.create_milestone(pt, "M1: links", f"Links work under {PATH_T[:-1]} and {PATH_T}src.",
+                               [{"check": f"open {PATH_T}index.html", "expect": f"it is the one in {PATH_T[:-1]}"}])
+        for kind, title in (("working", "Working notes: T1"), ("note", "A note"), ("memory", "Memory"),
+                            ("agents", "Rules"), ("plan", "Plan"), ("spec", "Spec"), ("start", "Start")):
+            store.create_doc(pt, kind, title, "text", by="Lee")
+        fh_kind = fh.KINDS[0]
+        fh.WAITING_BUILDERS.append(lambda st, fx, now: [fh.home_item(
+            fh_kind, label=f"Look at {PATH_T}", title=f"Check {PATH_T}src", detail=f"See {PATH_T[:-1]}/notes",
+            meta=f"in {PATH_T}", since=now, now=now, project={"id": pt, "name": "project-t"},
+            actions=[{"label": f"Open {PATH_T}", "href": f"/projects/{pt}", "primary": True}])])
 
         async with cx_() as cx:
             print("== the answer ==")
@@ -216,8 +305,10 @@ async def main():
             a = r.json()
             ck("the top level has exactly the fields of the page",
                set(a) == {"id", "name", "goal", "stage", "stage_label", "state", "state_label", "waiting",
-                          "next", "milestones", "no_milestone", "decisions", "calls", "docs", "terminal",
-                          "linked", "can_close", "now"}, sorted(a))
+                          "counts", "moving", "moving_total", "tickets_href", "next", "milestones",
+                          "decisions", "calls", "docs", "terminal", "linked", "can_close", "now"}, sorted(a))
+            ck("no ticket lists under the milestones and no no_milestone", "no_milestone" not in a
+               and all("tickets" not in m for m in a["milestones"]), sorted(a))
             ck("identity and stage", a["id"] == px and a["name"] == "project-x"
                and a["goal"] == "A project for the test" and a["stage"] == "build"
                and a["stage_label"] == "Build", [a["id"], a["stage"], a["stage_label"]])
@@ -225,41 +316,48 @@ async def main():
                and a["state_label"] in ("Building", "Waiting on you"), [a["state"], a["state_label"]])
 
             ms = {m["name"]: m for m in a["milestones"]}
-            ck("two milestones in order with their goals, checks and done flag",
+            ck("two milestones in order with their goals, checks, numbers and done flag",
                [m["name"] for m in a["milestones"]] == ["M1: pages", "M2: search"]
+               and [m["number"] for m in a["milestones"]] == ["M1", "M2"]
                and ms["M1: pages"]["goal"] == "The pages are live."
                and ms["M1: pages"]["checks"] == [{"check": "open the home page", "expect": "it loads"}]
                and ms["M1: pages"]["done"] is False and ms["M2: search"]["done"] is False
-               and all(set(m) == {"id", "name", "goal", "done", "checks", "tickets"} for m in a["milestones"]), ms)
-            tk = {t["title"]: t for m in a["milestones"] for t in m["tickets"]}
-            tk.update({t["title"]: t for t in a["no_milestone"]})
-            ck("a ticket has the fields of the page", all(
+               and all(set(m) == {"id", "number", "name", "goal", "done", "counts", "checks", "tickets_href"}
+                       for m in a["milestones"]), ms)
+            ck("a milestone counts its tickets and leaves the canceled one out",
+               ms["M1: pages"]["counts"] == {"total": 3, "merged": 1}
+               and ms["M2: search"]["counts"] == {"total": 3, "merged": 0}, [m["counts"] for m in a["milestones"]])
+            ck("a milestone links to its tickets", ms["M1: pages"]["tickets_href"]
+               == f"/tickets?project={px}&milestone={m1}" and ms["M2: search"]["tickets_href"]
+               == f"/tickets?project={px}&milestone={m2}", [m["tickets_href"] for m in a["milestones"]])
+            ck("the project links to its tickets", a["tickets_href"] == f"/tickets?project={px}", a["tickets_href"])
+            ck("counts: every ticket by state, canceled in the total", a["counts"] == {
+                "total": 9, "merged": 1, "to_do": 2, "in_progress": 1, "in_review": 1, "changes_asked": 1,
+                "blocked": 2, "canceled": 1}, a["counts"])
+            tk = {t["title"]: t for t in a["moving"]}
+            ck("a ticket has the fields of the page", tk and all(
                 set(t) == {"ref", "title", "state", "who", "pr", "review", "blocked_by", "href"}
                 for t in tk.values()), [sorted(t) for t in tk.values()][:1])
-            ck("tickets sit under their milestone, the rest under no_milestone",
-               [t["title"] for t in ms["M1: pages"]["tickets"]]
-               == ["Add the header", "Add the footer", "Add the sitemap"]
-               and [t["title"] for t in ms["M2: search"]["tickets"]]
-               == ["Add the search box", "Add the results page", "Add the news page", "Drop the old theme"]
-               and [t["title"] for t in a["no_milestone"]] == ["Write the release notes", "Tidy the readme"])
-            want = {"Add the header": "merged", "Add the footer": "in review", "Add the sitemap": "changes asked",
+            ck("moving: changes asked, in review, in progress, then blocked, in the project's order",
+               [t["title"] for t in a["moving"]] == ["Add the sitemap", "Add the footer", "Add the search box",
+                                                     "Add the results page", "Write the release notes"]
+               and a["moving_total"] == 5, [t["title"] for t in a["moving"]])
+            ck("moving leaves out merged, canceled and to do",
+               not {"Add the header", "Drop the old theme", "Add the news page", "Tidy the readme"} & set(tk))
+            want = {"Add the footer": "in review", "Add the sitemap": "changes asked",
                     "Add the search box": "in progress", "Add the results page": "blocked",
-                    "Add the news page": "to do", "Drop the old theme": "canceled",
-                    "Write the release notes": "blocked", "Tidy the readme": "to do"}
+                    "Write the release notes": "blocked"}
             ck("every state is a plain word", {k: v["state"] for k, v in tk.items()} == want,
                {k: v["state"] for k, v in tk.items()})
-            ck("refs and links", tk["Add the header"]["ref"] == "T1"
-               and tk["Add the header"]["href"] == f"/projects/{px}/tickets/T1", tk["Add the header"])
+            ck("refs and links", tk["Add the footer"]["ref"] == "T2"
+               and tk["Add the footer"]["href"] == f"/projects/{px}/tickets/T2", tk["Add the footer"])
             ck("who is a role in words, with the milestone for a builder",
                tk["Add the footer"]["who"] == "Builder for M1" and tk["Add the sitemap"]["who"] == "Builder for M1"
                and tk["Add the search box"]["who"] == "Builder for M2"
-               and tk["Write the release notes"]["who"] == "Lead"
-               and tk["Add the header"]["who"] is None and tk["Tidy the readme"]["who"] is None,
-               {k: v["who"] for k, v in tk.items()})
+               and tk["Write the release notes"]["who"] == "Lead", {k: v["who"] for k, v in tk.items()})
             ck("a pull request: number, link and its state in words",
-               tk["Add the header"]["pr"] == {"number": 11, "url": f"https://github.com/{REPO}/pull/11",
-                                              "state_text": "merged"}
-               and tk["Add the footer"]["pr"]["state_text"] == "open, CI green"
+               tk["Add the footer"]["pr"] == {"number": 12, "url": f"https://github.com/{REPO}/pull/12",
+                                              "state_text": "open, CI green"}
                and tk["Add the sitemap"]["pr"]["state_text"] == "open, CI failing"
                and tk["Add the search box"]["pr"] is None, [tk[k]["pr"] for k in tk])
             ck("the last review round, and whether it still counts",
@@ -314,7 +412,8 @@ async def main():
                PATH in json.dumps(hand), hand.get("handover"))
             ck("free text that names the folder shows the repo instead",
                a["decisions"][1]["words"] == f"Tabs, as in {REPO}/style.md", a["decisions"][1])
-            bad = [(p, k, s) for p, k, s in strings(a) if s[:1] in ("/", "~") and k not in ("url", "href")]
+            bad = [(p, k, s) for p, k, s in strings(a)
+                   if s[:1] in ("/", "~") and k not in ("url", "href", "tickets_href")]
             ck("no value starts with / or ~ except a link", bad == [], bad)
             shown = {k: v for k, v in a.items() if k != "terminal"}
             hits = [n for n in STATIONS + SESSIONS if n in json.dumps(shown)]
@@ -359,16 +458,72 @@ async def main():
             ck("once closed it is finished and can no longer close", r.status_code == 200 and m["can_close"] is False
                and m["state"] == "finished" and m["state_label"] == "Finished" and m["stage"] == "done",
                [r.status_code, m["state"], m["can_close"]])
-            ck("a plain milestone is done when every ticket in it is finished",
+            ck("a milestone with an open ticket is not done",
                (await cx.get(f"/api/factory/projects/{px}")).json()["milestones"][0]["done"] is False)
 
-            print("== a title that names a folder, and an ended builder ==")
+            print("== a title that names a folder, and the builders' sessions ==")
             b = (await cx.get(f"/api/factory/projects/{pp}")).json()
             ck("a ticket title shows the repo, not the folder",
-               [t["title"] for t in b["no_milestone"]] == ["Fix the build in example-org/project-p/src"]
-               and PATH_P not in json.dumps(b), [t["title"] for t in b["no_milestone"]])
-            ck("only the live builder's command is offered",
-               [t["command"] for t in b["terminal"]] == ["tares factory crew attach project-p-build-m1"], b["terminal"])
+               [t["title"] for t in b["moving"]] == ["Fix the build in example-org/project-p/src"]
+               and PATH_P not in json.dumps(b), [t["title"] for t in b["moving"]])
+            ck("the newest session of each builder station decides: working and quiet ones are offered, "
+               "an ended one is not, an older working session does not bring it back, two sessions are one command",
+               sorted(t["command"] for t in b["terminal"]) ==
+               ["tares factory crew attach project-p-build-m1", "tares factory crew attach project-p-build-m3"],
+               b["terminal"])
+            ck("a reviewer is not offered", "crew-reviewer-p" not in json.dumps(b["terminal"]))
+            by = (await cx.get(f"/api/factory/projects/{py}")).json()
+            ck("another project's builder is that project's only",
+               [t["command"] for t in by["terminal"]] == ["tares factory crew attach project-y-build-m1"]
+               and "project-y-build-m1" not in json.dumps(b["terminal"]), [by["terminal"], b["terminal"]])
+
+            print("== moving is capped, counts cover every ticket ==")
+            n = (await cx.get(f"/api/factory/projects/{pn}")).json()
+            ck("the first five in the page's order, and how many there are", n["moving_total"] == 7
+               and [t["title"] for t in n["moving"]]
+               == ["Changes one", "Changes two", "Review one", "Doing one", "Status only"],
+               [n["moving_total"], [t["title"] for t in n["moving"]]])
+            ck("counts hold all seven", n["counts"] == {
+                "total": 7, "merged": 0, "to_do": 0, "in_progress": 2, "in_review": 1, "changes_asked": 2,
+                "blocked": 2, "canceled": 0}, n["counts"])
+            mv = {t["title"]: t for t in n["moving"]}
+            ck("a status of in progress with no stage shows as in progress", mv["Status only"]["state"] == "in progress"
+               and mv["Doing one"]["state"] == "in progress", {k: v["state"] for k, v in mv.items()})
+            ck("a closed pull request says it closed without merging",
+               mv["Doing one"]["pr"]["state_text"] == "closed without merging", mv["Doing one"]["pr"])
+            ck("a review of an older commit says the pull request changed",
+               mv["Review one"]["review"] == "round 1: passed, then the pull request changed", mv["Review one"])
+
+            print("== merged by stage, and milestones ==")
+            c = (await cx.get(f"/api/factory/projects/{ps}")).json()
+            ck("a ticket merged by its stage counts as merged and the project is done", c["stage"] == "done"
+               and c["counts"] == {"total": 3, "merged": 2, "to_do": 0, "in_progress": 0, "in_review": 0,
+                                   "changes_asked": 0, "blocked": 0, "canceled": 1}
+               and c["moving"] == [] and c["moving_total"] == 0, [c["stage"], c["counts"]])
+            ck("a milestone is done when every ticket but the canceled ones is merged; an empty one is not",
+               [(m["number"], m["done"], m["counts"]) for m in c["milestones"]]
+               == [("M1", True, {"total": 2, "merged": 2}), ("M2", False, {"total": 0, "merged": 0})],
+               c["milestones"])
+            ck("tickets_href of the milestones", [m["tickets_href"] for m in c["milestones"]]
+               == [f"/tickets?project={ps}&milestone={ms_a}", f"/tickets?project={ps}&milestone={ms_b}"])
+
+            print("== the hand-over path with a trailing slash, in every text ==")
+            t = (await cx.get(f"/api/factory/projects/{pt}")).json()
+            ck("a ticket shows the repo whether the text ends the folder with a slash or not",
+               [x["title"] for x in t["moving"]] == [f"Fix links in {REPO}/src and {REPO}"], t["moving"])
+            ck("a milestone's goal and checks show the repo", t["milestones"][0]["goal"]
+               == f"Links work under {REPO} and {REPO}/src." and t["milestones"][0]["checks"]
+               == [{"check": f"open {REPO}/index.html", "expect": f"it is the one in {REPO}"}], t["milestones"])
+            w = t["waiting"][0] if t["waiting"] else {}
+            ck("a waiting item shows the repo in its words", (w.get("label"), w.get("title"), w.get("detail"), w.get("meta"))
+               == (f"Look at {REPO}/", f"Check {REPO}/src", f"See {REPO}/notes", f"in {REPO}/"), w)
+            ck("and keeps its links and what it does", w.get("actions") == [
+                {"label": f"Open {REPO}/", "href": f"/projects/{pt}", "primary": True}] and w.get("project")
+               == {"id": pt, "name": "project-t"}, w.get("actions"))
+            ck("no folder anywhere in the answer", "/Users/" not in json.dumps(t), json.dumps(t)[:200])
+            ck("documents come in reading order whatever order they were made in",
+               [d["kind_label"] for d in t["docs"]]
+               == ["Spec", "Plan", "Rules", "Memory", "Notes", "Working notes"], t["docs"])
 
             print("== not found and not allowed ==")
             e = await cx.get("/api/factory/projects/uc_nope")
@@ -398,6 +553,7 @@ async def main():
 
 
 stages()
+pull_requests()
 holders()
 print("== the code under test ==")
 ck("the module comes from this checkout", os.path.abspath(tares.__file__).startswith(ROOT), tares.__file__)

@@ -234,7 +234,8 @@ async def api():
 
             print("== /api/home ==")
             r = await cx.get(f"{B}/api/home", headers=root)
-            check("sre home", r.status_code == 200 and r.json() == {"edition": "sre"}, r.text)
+            check("sre home", r.status_code == 200 and r.json().get("edition") == "sre"
+                  and "headline" in r.json() and "watch" in r.json(), r.text)
             await cx.put(f"{B}/api/settings/edition", headers=root, json={"edition": "platform"})
             r = await cx.get(f"{B}/api/home", headers=root)
             check("platform has no home", r.status_code == 404 and r.json() == {"error": "no home on this edition"}, r.text)

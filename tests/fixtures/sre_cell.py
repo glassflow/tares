@@ -14,6 +14,9 @@ The counts (see the returned dict) are fixed, so a test can name them. `events=N
 edge-proxy and service-a log lines spread over the hours between 1 and 24 back: they go in through
 the store's own append in batches of 5,000, the same code path as real ingest, so a 200,000-line
 cell takes about 40 seconds to build and no test needs a second way in.
+`services=N` (TR-748) adds N more services on prod-otlp, extra-svc-01 to extra-svc-NN: each sends
+two lines in the last 10 minutes (one of them an error) and a line every 90 minutes over the
+last day, so a list of 24 services has a sparkline and an error count to draw.
 
 seed_cell(data_dir, edition="sre", **kw) is what ui/tests/seed-sre-*.py call.
 """
@@ -52,7 +55,7 @@ def _github(now, minutes_ago, event_type, text, labels=None, payload=None):
 
 
 def build(store: Store, now, *, watcher: bool = False, investigator: bool = False,
-          quiet_hours: int = 0, events: int = 0, blind: bool = False) -> dict:
+          quiet_hours: int = 0, events: int = 0, blind: bool = False, services: int = 0) -> dict:
     """Write the cell into `store` as of `now`. Returns the names it made."""
     store.upsert_catalog_source("prod-otlp", source_type_for("otlp"), "otlp", "5s", {
         "labels": [{"name": "service", "field": "service.name", "primary": True},
@@ -104,6 +107,10 @@ def build(store: Store, now, *, watcher: bool = False, investigator: bool = Fals
             _github(now, 45, "pull_request", "merge fix flaky retry",
                     {"action": "merged", "url": "https://example.invalid/example-org/service-a/pull/7"}),
         ]
+    extra = [f"extra-svc-{n:02d}" for n in range(1, services + 1)]
+    for name in extra:
+        env += [_otlp(now, 1, name, "ERROR", "request failed"), _otlp(now, 3, name, "INFO", "handled")]
+        env += [_otlp(now, 30 + 90 * i, name, "INFO", f"handled {i}") for i in range(15)]
     store.append(env)
 
     # `events` more lines between 1 and 24 hours back, so the 10-minute counts above stay fixed
@@ -117,7 +124,7 @@ def build(store: Store, now, *, watcher: bool = False, investigator: bool = Fals
 
     made = {"sources": ["prod-otlp", "docs-site", "github"],
             "services": ["edge-proxy", "service-a", "docs-site", "service-a-receiver"]
-            + (["service-b"] if blind else []),
+            + (["service-b"] if blind else []) + extra,
             "events": events}
     if watcher or investigator:
         made.update(_agents(store, now, investigator, quiet_hours))
