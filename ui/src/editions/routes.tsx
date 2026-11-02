@@ -51,7 +51,7 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
   },
   sre: {
     // TR-749
-    "/": { page: null, fallback: "today" },
+    "/": { page: React.lazy(() => import("./sre/Home")), fallback: "today" },
 
     // TR-750
     "/services": { page: React.lazy(() => import("./sre/Services")), fallback: { redirect: "/" } },
@@ -74,8 +74,8 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     // TR-764
     "/settings": { page: React.lazy(() => import("./sre/Settings")), fallback: "today" },
 
-    // TR-749 turns this fallback into a redirect to /
-    "/start": { page: null, fallback: "today" },
+    // TR-749: the AI SRE home is /, so Start (the login landing) goes there
+    "/start": { page: null, fallback: { redirect: "/" } },
   },
   any: {
     // TR-755 sets the chooser page

@@ -20,6 +20,7 @@
     "test:factory-projects": "vite build && node tests/factory-projects.e2e.cjs",
     "test:factory-project": "vite build && node tests/factory-project.e2e.cjs",
     "test:sre-services": "vite build && node tests/sre-services.e2e.cjs",
+    "test:sre-home": "vite build && node tests/sre-home.e2e.cjs",
     "test:edition-routes": "vite build && node tests/edition-routes.e2e.cjs",
     "test:sre-runbooks": "vite build && node tests/sre-runbooks.e2e.cjs",
     "test:factory-home": "vite build && node tests/factory-home.e2e.cjs",

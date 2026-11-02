@@ -1,0 +1,55 @@
+import { Link } from "react-router-dom";
+
+import { Button, ListSection } from "../../components/edition";
+import type { HomeRaised } from "./Home.api";
+
+/** "Last things raised": what the watcher raised, how it came out, and the person's answer to
+ *  whether it was worth raising. An item nobody can answer for links to its note instead. */
+export function RaisedList({ items, note, busy, onAnswer }: {
+  items: HomeRaised[];
+  note: string | null;
+  /** The answer in flight ("<id>:worth"), or null. */
+  busy: string | null;
+  onAnswer: (id: string, worth: boolean) => void;
+}) {
+  return (
+    <ListSection
+      title="Last things raised"
+      aside={<Link to="/incidents?show=all" className="text-foreground underline underline-offset-2" data-testid="all-findings">All findings</Link>}
+      data-testid="raised"
+    >
+      {items.length === 0 ? (
+        <p className="m-0! px-[18px] py-4 text-[13px] text-muted-foreground" data-testid="raised-empty">Nothing has been raised yet.</p>
+      ) : (
+        <ul className="m-0! list-none! p-0!">
+          {items.map((r) => {
+            const mine = busy === `${r.id}:worth`;
+            return (
+              <li key={r.id} className="grid gap-x-4 gap-y-2 border-t border-border px-[18px] py-3 first:border-t-0 sm:grid-cols-[64px_minmax(0,1fr)_auto]" data-testid="raised-row" data-run={r.id}>
+                <div className="font-mono text-xs text-muted-foreground">{r.when_words}</div>
+                <div className="min-w-0 text-[14px] [overflow-wrap:anywhere]">
+                  <div><b data-user-text>{r.service}</b> <span data-user-text>· {r.what}</span></div>
+                  <div className="text-[13px] text-muted-foreground">{r.outcome_words}</div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-[13px]">
+                  {r.worth != null ? (
+                    <span className="text-muted-foreground" data-testid="raised-answer">{r.worth ? "You said it was worth raising." : "You said it was not worth raising."}</span>
+                  ) : r.can_answer ? (
+                    <>
+                      <span className="text-muted-foreground">Was this worth raising?</span>
+                      <Button variant="secondary" className="h-8 text-[13px]!" busy={mine} disabled={busy !== null && !mine} onClick={() => onAnswer(r.id, true)} data-testid="worth-yes">Yes</Button>
+                      <Button variant="secondary" className="h-8 text-[13px]!" disabled={busy !== null} onClick={() => onAnswer(r.id, false)} data-testid="worth-no">No</Button>
+                    </>
+                  ) : (
+                    <Link to={`/incidents/${encodeURIComponent(r.id)}`} className="text-foreground underline underline-offset-2" data-testid="read-note">Read the note</Link>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {note && <p className="m-0! border-t border-border px-[18px] py-3 text-[13px] text-muted-foreground" data-testid="raised-note">{note}</p>}
+    </ListSection>
+  );
+}
