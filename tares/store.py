@@ -496,6 +496,8 @@ _MIGRATIONS = [
     "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS pr JSON",
     # The GitHub repo (owner/name) a ticket changes, when its project spans several (TR-456)
     "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS repo TEXT",
+    # Who last changed a shared skill, when a person did it from a page (TR-753); NULL otherwise
+    "ALTER TABLE shared_skills ADD COLUMN IF NOT EXISTS updated_by TEXT",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -2586,16 +2588,19 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             self._use_skill(project, name)
         return True
 
-    def upsert_skill(self, project: str, name: str, description: str, body: str) -> bool:
+    def upsert_skill(self, project: str, name: str, description: str, body: str,
+                     updated_by: str | None = None) -> bool:
         """Create or replace the skill (shared: every project that uses it sees the change), and
-        have the project use it. Returns True when the project did not have it before."""
+        have the project use it. Returns True when the project did not have it before.
+        `updated_by` is who changed it, when a person did (a page, TR-753); NULL otherwise."""
         ts = now_utc()
         with self._swrite:
             self.sc.execute(
                 "INSERT INTO shared_skills (name, description, body, made_by, created_at, "
-                "updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (name) DO UPDATE SET "
-                "description = excluded.description, body = excluded.body, "
-                "updated_at = excluded.updated_at", [name, description, body, project, ts, ts])
+                "updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (name) DO UPDATE "
+                "SET description = excluded.description, body = excluded.body, "
+                "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+                [name, description, body, project, ts, ts, updated_by])
             return self._use_skill(project, name)
 
     def delete_skill(self, project: str, name: str) -> bool:
@@ -3058,6 +3063,25 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             for n in json.loads(names or "[]"):
                 if agent not in out.setdefault(n, []):
                     out[n].append(agent)
+        return out
+
+    def skill_load_counts(self, agents: list[str], days: int = 7) -> dict[str, dict[str, int]]:
+        """{skill: {agent: runs}}: how many runs of `agents` in the last `days` loaded each skill
+        (skill_loads says which agents did, not how often)."""
+        if not agents:
+            return {}
+        from datetime import timedelta
+        since = now_utc() - timedelta(days=days)
+        marks = ", ".join("?" for _ in agents)
+        with self._sread:
+            rows = self.sc.execute(
+                f"SELECT agent, skills FROM agent_runs WHERE agent IN ({marks}) "
+                "AND skills IS NOT NULL AND started_at >= ?", [*agents, since]).fetchall()
+        out: dict[str, dict[str, int]] = {}
+        for agent, names in rows:
+            for n in set(json.loads(names or "[]")):
+                per = out.setdefault(n, {})
+                per[agent] = per.get(agent, 0) + 1
         return out
 
     # ── project membership: every object is in a project ─────────────────────

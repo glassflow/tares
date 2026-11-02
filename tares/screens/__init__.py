@@ -28,7 +28,7 @@ SCREENS = [
 
     # "sre_timeline",          # TR-752
 
-    # "sre_runbooks",          # TR-753
+    "sre_runbooks",            # TR-753
 
     # "sre_settings",          # TR-764
 ]
