@@ -6,6 +6,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Console: on factory and AI SRE cells, Settings, Advanced (`/settings/advanced`) lists Connections, Explore, All resources, Connect and Reads, and one route table holds every page of both editions with a fallback until its page exists. Old addresses keep working; platform cells are unchanged.
 - Console: the factory and AI SRE editions get their own frame, a header with search and an account menu, and a left menu that lists only the pages that exist. The platform edition keeps the console as it was.
 - Incident notes belong to incidents that someone can take and resolve (`/api/incidents`).
 - `GET /api/services` lists the services a cell receives data for.

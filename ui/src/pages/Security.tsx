@@ -10,6 +10,8 @@ import type { ApiKey, Edition, EditionSettings, GithubAppTest, GithubCredential,
 import { UsagePanels } from "../components/UsagePanels";
 import LinearSettings from "../components/LinearSettings";
 import OwnerOnly from "../components/OwnerOnly";
+import AdvancedPanel from "../editions/AdvancedPanel";
+import { useEdition } from "../editions/edition";
 import WorkspaceSettings from "./WorkspaceSettings";
 
 // Four distinct credential concepts, one box each:
@@ -21,7 +23,7 @@ import WorkspaceSettings from "./WorkspaceSettings";
 // The per-source ingest URL is an address, not a secret — it lives on the source page, not here.
 //   · Workspace  (Tares Cloud only) team, plan, storage, credit and delete, held by the control
 //                  plane (TR-375); shown first, and the default tab, when /health has workspace_api_url
-type SettingsTab = "workspace" | "usage" | "access" | "edition" | "anthropic" | "agents" | "github" | "linear" | "slack" | "observability";
+type SettingsTab = "workspace" | "usage" | "access" | "edition" | "anthropic" | "agents" | "github" | "linear" | "slack" | "observability" | "advanced";
 // The tabs as a second sidebar (TR-521): the workspace itself on top, then one group per concern.
 const TABS: { key: SettingsTab; label: string; group?: string }[] = [
   { key: "workspace", label: "Workspace" },
@@ -34,6 +36,7 @@ const TABS: { key: SettingsTab; label: string; group?: string }[] = [
   { key: "github", label: "GitHub", group: "Integrations" },
   { key: "linear", label: "Linear", group: "Integrations" },
   { key: "slack", label: "Slack", group: "Integrations" },
+  { key: "advanced", label: "Advanced" },   // factory and sre cells only
 ];
 
 // Coming back from a Tares Cloud connect page (contract §3): `cloud` says what happened and
@@ -57,7 +60,10 @@ export const CLOUD_BACK: Record<string, { tab?: SettingsTab; text: string; kind:
   cancelled: { kind: "", text: "Cancelled. Nothing was changed." },
 };
 
-export default function Security() {
+export default function Security({ initialTab }: { initialTab?: SettingsTab } = {}) {
+  // The Advanced tab holds the building blocks on the factory and sre editions; a platform cell has no such tab.
+  const { edition } = useEdition();
+  const hasAdvanced = edition !== undefined && edition !== "platform";
   const [cloudBack] = useState(() => {
     const q = new URLSearchParams(window.location.search);
     const m = CLOUD_BACK[q.get("cloud") ?? ""];
@@ -66,7 +72,7 @@ export default function Security() {
   // the tab the address or a click asked for; none: Workspace on Tares Cloud, else Access
   const [picked, setPicked] = useState<SettingsTab | undefined>(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
-    return cloudBack?.tab ?? TABS.find((x) => x.key === t)?.key;
+    return cloudBack?.tab ?? TABS.find((x) => x.key === t)?.key ?? initialTab;
   });
   const [backTab] = useState(picked);   // the tab the cloud message belongs to
   useEffect(() => {   // the message is shown once; a reload starts clean
@@ -95,13 +101,15 @@ export default function Security() {
   // Workspace exists only on Tares Cloud; asked for elsewhere (an old link), Access shows instead.
   // With no tab asked for, the default waits for /health (Workspace on Tares Cloud, else Access),
   // so a hard load does not show Access and then jump.
-  const tab: SettingsTab | undefined = workspaceApiUrl ? (picked ?? "workspace")
-    : picked === "workspace" ? (cloud.ready ? "access" : "workspace")
-    : picked ?? (cloud.ready ? "access" : undefined);
+  const want = picked === "advanced" && !hasAdvanced ? undefined : picked;
+  const tab: SettingsTab | undefined = workspaceApiUrl ? (want ?? "workspace")
+    : want === "workspace" ? (cloud.ready ? "access" : "workspace")
+    : want ?? (cloud.ready ? "access" : undefined);
   // Tares Cloud: Workspace (team, plan, storage, credit, model spend). Self-hosted: Usage (model
   // spend and storage) in its place.
   const tabs = TABS.filter((t) => t.key === "workspace" ? !!workspaceApiUrl
-    : t.key === "usage" ? !workspaceApiUrl : true);
+    : t.key === "usage" ? !workspaceApiUrl
+    : t.key === "advanced" ? hasAdvanced : true);
   const groups = [...new Set(tabs.map((t) => t.group))];
   const link = (t: (typeof TABS)[number]) => (
     <button key={t.key} type="button" aria-current={tab === t.key ? "page" : undefined}
@@ -159,6 +167,7 @@ export default function Security() {
       {tab === "slack" && (slackConnectUrl ? <SlackCloudPanel cloud={cloud} connectUrl={slackConnectUrl} />
         : <><SlackTokenPanel /><SlackSigningSecretPanel /></>)}
       {tab === "observability" && <TracingPanel />}
+      {tab === "advanced" && <AdvancedPanel />}
       </div>
       </div>
     </>

@@ -153,7 +153,7 @@ function unauthorized() {
   window.dispatchEvent(new Event("tares-auth-required"));
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
     headers: {
