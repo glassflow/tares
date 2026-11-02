@@ -3,7 +3,7 @@
  *
  * Factory: /settings/advanced is today's Settings page with an Advanced tab that links Connections
  * (/sources) and Explore your data (/explore); /reviews opens the Reviews page (TR-735), /docs lands
- * on /projects, a ticket address on its project with ?view=ticket:<ref>; /sources still opens today's
+ * on /projects, a ticket address opens the ticket page (the old ?view=ticket:<ref> goes there too); /sources still opens today's
  * page; the menu is Home, Projects, Reviews, Crew, Settings, with no Docs entry;
  * ?sample=busy without the browser flag renders the same as /.
  * AI SRE: /timeline is today's Explore; /services and /incidents land on /; /runbooks is its own page.
@@ -166,7 +166,8 @@ function loadSample(env) {
       ck("factory: /docs is the Docs and memory page, on a full page load", where(page) === "/docs"
          && await page.getByRole("heading", { name: "Docs and memory", exact: true }).isVisible(), where(page));
       await go(page, e, "/projects/x/tickets/T1");
-      ck("factory: a ticket address lands on its project", where(page) === "/projects/x?view=ticket:T1", where(page));
+      await page.getByTestId("ticket-notfound").waitFor();
+      ck("factory: a ticket address opens the ticket page, here with no such ticket", where(page) === "/projects/x/tickets/T1", where(page));
       const home = await homeOf(page, e);
       ck("factory: / is Home, which opens Start on a cell with no project", home === "/" || home === "/start", home);
       for (const p of ["/welcome/edition", "/timeline", "/services", "/services/service-a", "/incidents", "/incidents/i-1", "/runbooks"]) {
