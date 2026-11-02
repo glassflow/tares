@@ -352,6 +352,11 @@ export const api = {
   setEdition: (edition: Edition) =>
     request<EditionSettings & { ok: boolean }>("/api/settings/edition",
       { method: "PUT", body: JSON.stringify({ edition }) }),
+  // Whether agents over MCP see the building-block tools (TR-757); null clears the choice.
+  mcpSettings: () => request<{ object_tools: boolean }>("/api/settings/mcp"),
+  setMcpObjectTools: (object_tools: boolean | null) =>
+    request<{ ok: boolean; object_tools: boolean }>("/api/settings/mcp",
+      { method: "PUT", body: JSON.stringify({ object_tools }) }),
 
   // Runs per agent per day (TR-325): the console value, else the environment, else the default.
   agentLimits: () => request<AgentLimits>("/api/settings/agents"),

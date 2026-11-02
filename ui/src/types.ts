@@ -1107,6 +1107,7 @@ export interface Whoami {
   edition: Edition;
   edition_name: string;
   edition_needed: boolean;
+  mcp_object_tools?: boolean;
 }
 
 export interface EditionSettings {
