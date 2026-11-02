@@ -242,6 +242,29 @@ the project follows [Semantic Versioning](https://semver.org/).
   The Claude Code retry marks are kept per person and crew, so two people's crews with the same
   station names no longer overwrite each other's marks. A personal PUT of `{"kit": null}` is no change.
 
+## [1.55.0] - 2026-11-01
+
+The MCP server is listed in the official MCP registry, `tares mcp --transport stdio` works, and
+two fixes for cloud cells with their state in Postgres: a scrape of `/metrics` no longer opens a
+database connection, and a cell that could not reach its database at start restarts itself.
+
+### Added
+- The Tares MCP server is published to the official MCP registry as `ai.glassflow/tares`, so
+  MCP clients and directories can find it. Each release tag publishes the new version.
+
+### Fixed
+- `tares mcp --transport stdio` works: its startup line went to stdout, which is the MCP channel
+  over stdio, so the client could not read the server's first reply. It now goes to stderr.
+- A tool call while Tares isn't running says so and names the address it tried, instead of "All
+  connection attempts failed".
+- `/metrics` no longer reads the state database. On a cell with its state in Postgres
+  (`TARES_STATE_DSN`), every scrape opened a connection to it, so idle cells held about a fifth of
+  the database's connections between them. `/api/usage` still reports the run and delivery counts.
+- A cell whose state database could not be reached at start (no DNS, a connect timeout, no free
+  connection slots) answers `/health` with 503 while degraded, so the liveness probe restarts it
+  and it tries again. Before, it stayed degraded until someone restarted it. Every other degraded
+  cause still answers 200 and waits for a person.
+
 ## [1.54.1] - 2026-10-29
 
 Grok is named as the challenger when it reviews, xAI agents default to grok-4.6 with grok-4.3

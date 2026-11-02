@@ -297,11 +297,33 @@ def _serve_ui(path: str):
     return FileResponse(UI_DIST / "index.html")
 
 
-def _degraded_app(reason: str) -> FastAPI:
+def _state_db_unreachable(e: BaseException) -> bool:
+    """True when the store failed because the Postgres state database (TARES_STATE_DSN) could not
+    be reached or refused the login: no DNS, a connect timeout, no connection slots left. Those
+    pass on their own, unlike a locked or corrupt DuckDB file or a state database that does not
+    hold this cell's state."""
+    try:
+        import psycopg
+    except ImportError:
+        return False
+    x = e.__cause__ or e.__context__
+    while x is not None:
+        if isinstance(x, psycopg.OperationalError):
+            return True
+        x = x.__cause__ or x.__context__
+    return False
+
+
+def _degraded_app(reason: str, retry: bool = False) -> FastAPI:
     """The app we serve when the store could not be opened. It exists so the failure reaches a
     human instead of ERR_CONNECTION_REFUSED: the console still loads and every data route answers
     503 with the reason, so the UI can name the problem. No runtime, no connectors, no ingest —
-    nothing that would need the store. Restart once the DB is reachable again."""
+    nothing that would need the store. Restart once the DB is reachable again.
+
+    `retry`: the failure passes on its own (_state_db_unreachable), so /health answers 503 and the
+    liveness probe restarts the daemon, which tries the database again. Left at 200, a cell that
+    started during a DNS outage or a burst of restarts that filled the database's connection slots
+    stayed degraded until someone restarted it by hand (2026-10-31: twelve cells)."""
     app = FastAPI(title="taresd (degraded)")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                        allow_headers=["*"])
@@ -314,7 +336,7 @@ def _degraded_app(reason: str) -> FastAPI:
                 "sources": [], "pct_used": None}
         if LOGIN_URL:
             body["login_url"] = LOGIN_URL
-        return body
+        return JSONResponse(body, status_code=503) if retry else body
 
     async def unavailable():
         return JSONResponse({"detail": f"database unavailable; {reason}", "status": "down"},
@@ -578,6 +600,10 @@ def make_app() -> FastAPI:
         # traceback (degraded mode explains the failure to the user, it does not hide it from the
         # operator) and serve the console + 503s instead of exiting before uvicorn ever binds.
         traceback.print_exc()
+        if _state_db_unreachable(e):
+            print(f"taresd: DEGRADED; {e.reason}. Serving the console and 503s; /health answers "
+                  f"503 too, so the liveness probe restarts this daemon to try again.", flush=True)
+            return _degraded_app(e.reason, retry=True)
         print(f"taresd: DEGRADED; {e.reason}. Serving the console and 503s; fix the database "
               f"and restart.", flush=True)
         return _degraded_app(e.reason)
@@ -647,7 +673,7 @@ def make_app() -> FastAPI:
         runtime.start_all()
         # the daemon's own counters (/metrics, TR-308): storage gauges read on scrape, the event
         # loop watched by a one-second timer for the whole life of the process
-        _metrics.set_storage_probe(lambda: {**store.usage(), **{
+        _metrics.set_storage_probe(lambda: {**store.storage_usage(), **{
             k: v for k, v in storage_state(store, DB_PATH).items()
             if k in ("max_bytes", "pct_used", "paused")}})
         try:

@@ -1,6 +1,6 @@
 [project]
 name = "tares"
-version = "1.54.1"
+version = "1.55.0"
 description = "Open-source platform for always-on AI agents: a software factory for Claude Code that takes your projects from tickets to merged pull requests, or an AI SRE that watches your systems."
 readme = "README.md"
 keywords = ["tares", "software-factory", "claude-code", "autonomous-agents", "coding-agents", "multi-agent", "agent-orchestration", "ai-sre", "ai-monitoring", "incident-response", "observability", "mcp"]
