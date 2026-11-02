@@ -121,7 +121,7 @@ async function waitFor(url, tries = 150) {
     };
 
     const expect = {
-      factory: { name: "Software Factory", menu: ["Home", "Projects", "Crew", "Docs and memory", "Settings"], page: "/crew", call: "/api/crew" },
+      factory: { name: "Software Factory", menu: ["Home", "Projects", "Tickets", "Reviews", "Crew", "Docs and memory", "Settings"], page: "/crew", call: "/api/crew" },
       sre: { name: "AI SRE", menu: ["Home", "Timeline", "Settings"], page: "/explore", call: null },
     };
 

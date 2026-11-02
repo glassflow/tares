@@ -4,7 +4,7 @@
  * Factory: /settings/advanced is today's Settings page with an Advanced tab that links Connections
  * (/sources) and Explore your data (/explore); /reviews opens the Reviews page (TR-735), /docs lands
  * on /projects, a ticket address on its project with ?view=ticket:<ref>; /sources still opens today's
- * page; the menu is Home, Projects, Reviews, Crew, Settings, with no Docs entry;
+ * page; the menu is Home, Projects, Tickets, Reviews, Crew, Docs and memory, Settings;
  * ?sample=busy without the browser flag renders the same as /.
  * AI SRE: /timeline is today's Explore; /services, /incidents and /runbooks land on /.
  * Platform: /settings/advanced lands on /settings, /reviews on /, Settings has no Advanced tab.
@@ -175,7 +175,7 @@ function loadSample(env) {
 
       await go(page, e, "/projects");
       const items = await menuLabels(page);
-      ck("factory: the menu is Home, Projects, Reviews, Crew, Docs and memory, Settings", items.join(",") === "Home,Projects,Reviews,Crew,Docs and memory,Settings", items.join(","));
+      ck("factory: the menu is Home, Projects, Tickets, Reviews, Crew, Docs and memory, Settings", items.join(",") === "Home,Projects,Tickets,Reviews,Crew,Docs and memory,Settings", items.join(","));
       ck("factory: the Reviews entry links to /reviews", (await page.getByTestId("menu-reviews").getAttribute("href")) === "/reviews");
       ck("factory: the Docs and memory entry opens /docs", (await page.locator('nav[aria-label="Main"] a', { hasText: "Docs and memory" }).getAttribute("href")) === "/docs");
 
@@ -206,7 +206,7 @@ function loadSample(env) {
       ck("sre: /timeline stays on its address", where(page) === "/timeline", where(page));
       ck("sre: and shows today's Explore", await page.getByRole("heading", { name: "Explore", exact: true }).isVisible());
       const home = await homeOf(page, e);
-      for (const p of ["/services", "/services/service-a", "/incidents", "/incidents/i-1", "/runbooks", "/reviews", "/welcome/edition"]) {
+      for (const p of ["/services", "/services/service-a", "/incidents", "/incidents/i-1", "/runbooks", "/reviews", "/tickets", "/welcome/edition"]) {
         await go(page, e, p);
         ck(`sre: ${p} lands on /`, where(page) === home && !(await page.locator("main").innerText()).includes("does not exist"), where(page));
       }
@@ -233,7 +233,7 @@ function loadSample(env) {
       ck("platform: ?tab=advanced shows no Advanced panel", (await page.getByTestId("advanced-panel").count()) === 0
          && (await advancedTab(page).count()) === 0);
       const home = await homeOf(page, e);
-      for (const p of ["/reviews", "/services", "/incidents", "/timeline", "/runbooks", "/welcome/edition"]) {
+      for (const p of ["/reviews", "/tickets", "/services", "/incidents", "/timeline", "/runbooks", "/welcome/edition"]) {
         await go(page, e, p);
         ck(`platform: ${p} lands on /`, where(page) === home && !(await page.locator("main, .main").first().innerText()).includes("does not exist"), where(page));
       }

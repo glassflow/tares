@@ -122,6 +122,7 @@ const router = createBrowserRouter([
       { path: "settings", element: <ByEdition path="/settings" today={<Security />} /> },
       { path: "settings/advanced", element: <AdvancedSettings /> },
       // pages only the factory or sre edition has; a cell of the other edition lands on Home
+      { path: "tickets", element: <ByEdition path="/tickets" today={<Navigate to="/" replace />} /> },
       { path: "reviews", element: <ByEdition path="/reviews" today={<Navigate to="/" replace />} /> },
       { path: "docs", element: <ByEdition path="/docs" today={<Navigate to="/" replace />} /> },
       { path: "services", element: <ByEdition path="/services" today={<Navigate to="/" replace />} /> },
