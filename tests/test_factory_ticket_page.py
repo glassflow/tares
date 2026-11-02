@@ -115,6 +115,13 @@ async def main():
         t5 = ticket(px, "Add the search box", owner="linear", milestone=m1)
         t6 = ticket(px, "Add the 404 page", stage="doing", status="in_progress", depends_on=[t4])
         store.update_ticket(t5, identifier="PX-5", url="https://linear.app/example/issue/PX-5")
+        # blocked in three ways: on a merged and an unfinished ticket, on a canceled one, on none
+        t7 = ticket(px, "Add the about page", stage="blocked", status="in_progress", holder=LEAD,
+                    depends_on=[t1, t4])
+        t8 = ticket(px, "Add the print page", status="canceled")
+        t9 = ticket(px, "Add the share button", depends_on=[t8])
+        t10 = ticket(px, "Add the legal page", stage="blocked", status="in_progress", holder=LEAD,
+                     depends_on=[t1])
 
         # t2: three review rounds, a finding fixed in a later round, one still open
         r1 = store.add_review(px, t2, None, "aaaaaaa1111", "changes", "ran the tests",
@@ -132,8 +139,16 @@ async def main():
                          REVIEWER, [], {"F3": "open"}, factory_mod.finding_kind, ago(days=1))
         store.add_review(px, t1, None, "aaaaaaa1111", "pass", "ran the tests", None, REVIEWER, [], {},
                          factory_mod.finding_kind, ago(days=5))
-        store.add_review(px, t3, None, "aaaaaaa1111", "block", "read the diff", None, REVIEWER, [], {},
-                         factory_mod.finding_kind, ago(days=1))
+        # paths that look like a home folder but are not one stay as written; a folder outside a home
+        # directory shows its last name
+        LOOKS = ["ui/src/pages/home/index.tsx", "https://github.com/acme/web/blob/main/home/page.tsx",
+                 "https://docs.example.com/home/guide/setup", "ui/src/components/Users/List.tsx"]
+        store.add_review(px, t3, None, "aaaaaaa1111", "block", "read the diff", None, REVIEWER,
+                         [{"severity": "high", "file": "/private/tmp/x/footer.ts", "line": 3,
+                           "blocking": True, "text": "Not in the repo, " + ", ".join(LOOKS)},
+                          {"severity": "low", "file": LOOKS[3], "line": 1, "blocking": False,
+                           "text": f"See {LOOKS[0]} and {LOOKS[1]}"}],
+                         {}, factory_mod.finding_kind, ago(days=1))
 
         store.add_check(px, t2, f"cd {PATH} && npm test", "12 passed, 0 failed", "ccccccc3333", "",
                         BUILDER, "sess-b1", ago(hours=4))
@@ -163,6 +178,9 @@ async def main():
                              ago(days=1))
         store.add_decision(px, "", "Tabs or spaces?", f"Tabs, as in {PATH}/style.md", "tabs", False,
                            "project", False, None, False, ["T2"], ago(days=3))
+        store.add_decision(px, "", f"Let {BUILDER} and crew-releaser push?",
+                           f"Yes, {LEAD} and {REVIEWER} can too", "yes", False, "project", False, None, False,
+                           ["T2"], ago(days=2))
         store.add_decision(px, "", "Which licence?", "MIT", "MIT", False, "project", False, None, False,
                            [], ago(hours=2))
 
@@ -236,9 +254,12 @@ async def main():
                and calls[a3["label"]]["state_text"] == "you changed it"
                and calls[a3["label"]]["words"] == "Use the brand font"
                and calls[a1["label"]]["why"] == f"it sorts, see {REPO}/dates", calls)
-            ck("the person's decisions that name the ticket, not the others",
-               a["decisions"] == [{"question": "Tabs or spaces?", "words": f"Tabs, as in {REPO}/style.md",
-                                   "when": "3 days ago"}], a["decisions"])
+            ck("the person's decisions that name the ticket, not the others, a station named as its role",
+               sorted(a["decisions"], key=lambda d: d["question"]) == [
+                   {"question": "Let the builder and the releaser push?",
+                    "words": "Yes, the lead and the reviewer can too", "when": "2 days ago"},
+                   {"question": "Tabs or spaces?", "words": f"Tabs, as in {REPO}/style.md",
+                    "when": "3 days ago"}], a["decisions"])
             hs = a["history"]
             ck("history newest first, in words", [x["what"] for x in hs] == [
                 "Moved to in review", "Taken off whoever had it", "Changes asked",
@@ -274,6 +295,27 @@ async def main():
                a["blocked_reason"] is None and t1_["blocked_reason"] is None
                and t6_["state_label"] == "In progress" and t6_["depends_on"][0]["ref"] == "T4"
                and t6_["blocked_reason"] is None, t6_)
+
+            print("== what a blocked ticket waits for ==")
+            t7_, t9_, t10_ = [(await cx.get(f"/api/factory/projects/{px}/tickets/{r_}")).json()
+                              for r_ in ("T7", "T9", "T10")]
+            ck("a finished ticket it depended on is not named, an unfinished one is",
+               t7_["state_label"] == "Blocked" and t7_["blocked_reason"] == "Waiting for T4, Tidy the readme."
+               and [d["ref"] for d in t7_["depends_on"]] == ["T1", "T4"], t7_)
+            ck("a canceled ticket it depends on is named as canceled",
+               t9_["state_label"] == "Blocked"
+               and t9_["blocked_reason"] == "Waiting for T8, Add the print page (canceled).", t9_)
+            ck("blocked with no ticket in the way says so, in words",
+               t10_["state_label"] == "Blocked"
+               and t10_["blocked_reason"] == "Blocked, but no other ticket is in the way.", t10_)
+
+            print("== findings: paths ==")
+            t3f = (await cx.get(f"/api/factory/projects/{px}/tickets/T3")).json()["reviews"][0]["findings"]
+            ck("a path outside the repo and outside a home folder shows its last name",
+               t3f[0]["file"] == "footer.ts", t3f[0])
+            ck("a path or link that only looks like a home folder stays as written",
+               t3f[0]["text"] == "Not in the repo, " + ", ".join(LOOKS)
+               and t3f[1]["text"] == f"See {LOOKS[0]} and {LOOKS[1]}" and t3f[1]["file"] == LOOKS[3], t3f)
 
             print("== other tickets ==")
             t4_ = (await cx.get(f"/api/factory/projects/{px}/tickets/T4")).json()
