@@ -363,7 +363,7 @@ function cleanEnv(extra) {
         await calls.waitFor({ state: "detached" });
         ck(t("Keep: one call per call of the crew, kept"), ctl.keeps.length === 2 && ctl.keeps.every((k) => k.body.state === "kept")
            && ctl.keeps.map((k) => k.path).join() === `/api/projects/${ids["Billing export"]}/assumptions/A1/state,/api/projects/${ids["Billing export"]}/assumptions/A2/state`, JSON.stringify(ctl.keeps));
-        await page.getByText("Kept 2 calls.", { exact: true }).waitFor();
+        await page.getByText("Kept both. The crew carries on.", { exact: true }).waitFor();
         ck(t("Keep: the home page is read again at once"), ctl.reads > before, `${ctl.reads} vs ${before}`);
         await page.unroute("**/assumptions/*/state");
         await page.waitForFunction(() => /^The crew is not running\. 5 things wait for you/.test(document.querySelector('[data-testid="home-headline"]')?.textContent || ""), null, { timeout: 9000 });
@@ -376,12 +376,12 @@ function cleanEnv(extra) {
         await dialog.waitFor();
         const words = dialog.getByTestId("allow-words");
         ck(t("Allow: the box offers a grant in words, with the command and the project"),
-           (await words.inputValue()) === "The builder may use `npm run test -- --watch=false` in Billing export", await words.inputValue());
+           (await words.inputValue()) === "The builder may run `npm run test -- --watch=false` in Billing export", await words.inputValue());
         ck(t("Allow: a builder's grant may hold in its project only"), (await dialog.getByRole("radio").count()) === 2 && (await dialog.getByRole("radio").first().isChecked()));
         await liveShot(page, "allow", width);
         await checkWords(page, ck, t("allow dialog"));
         await dialog.getByRole("radio").nth(1).check();
-        ck(t("Allow: Every project rewrites the words"), (await words.inputValue()) === "The builder may use `npm run test -- --watch=false` in every project");
+        ck(t("Allow: Every project rewrites the words"), (await words.inputValue()) === "The builder may run `npm run test -- --watch=false` in every project");
         await words.fill((await words.inputValue()) + " (my words)");
         await dialog.getByRole("radio").first().check();
         ck(t("Allow: words the person edited stay"), (await words.inputValue()).endsWith("(my words)"));
@@ -392,11 +392,11 @@ function cleanEnv(extra) {
         await builder.getByRole("button", { name: "Allow" }).click();
         await dialog.waitFor();
         await dialog.getByRole("radio").nth(1).check();
-        await words.fill("The builder may use `npm run test` in every project");
+        await words.fill("The builder may run `npm run test` in every project");
         await dialog.getByRole("button", { name: "Allow", exact: true }).click();
         await builder.waitFor({ state: "detached" });
         ck(t("Allow: the words and the scope go to the daemon"), ctl.allows.length === 1 && ctl.allows[0].path === `/api/desk/${ids["allow-builder"]}/allow`
-           && ctl.allows[0].body.scope === "all" && ctl.allows[0].body.words === "The builder may use `npm run test` in every project", JSON.stringify(ctl.allows));
+           && ctl.allows[0].body.scope === "all" && ctl.allows[0].body.words === "The builder may run `npm run test` in every project", JSON.stringify(ctl.allows));
         await page.getByText("Allowed. The crew restarts it with the permission once it is between turns.", { exact: true }).waitFor();
         ck(t("Allow: the toast, the row gone, the request answered"), (await api("GET", "/api/desk?state=open")).body.items?.every?.((d) => d.label !== ids["allow-builder"]) ?? true);
         // a crew station serves every project: no choice of scope
@@ -404,7 +404,7 @@ function cleanEnv(extra) {
         await crew.getByRole("button", { name: "Allow" }).click();
         await dialog.waitFor();
         ck(t("Allow: a crew station's grant is for every project, with no choice"), (await dialog.getByRole("radio").count()) === 0
-           && (await dialog.getByText("Kept for every project").count()) === 1 && (await words.inputValue()).startsWith("The reviewer may use `gh pr view 12 --json state`"));
+           && (await dialog.getByText("Kept for every project").count()) === 1 && (await words.inputValue()).startsWith("The reviewer may run `gh pr view 12 --json state`"));
         await dialog.getByRole("button", { name: "Cancel" }).click();
         await dialog.waitFor({ state: "detached" });
         // a refusal: the request was withdrawn while the box was open
@@ -425,10 +425,10 @@ function cleanEnv(extra) {
         const retry = row(page, "Retry uploads");
         await retry.getByRole("button", { name: "Close project" }).click();
         await closer.waitFor();
-        ck(t("Close: asks first, naming the project"), (await closer.getByText("Close this project?").count()) === 1 && (await closer.getByText("Retry uploads").count()) === 1);
+        ck(t("Close: asks first, naming the project"), (await closer.getByText("Close Retry uploads?").count()) === 1 && (await closer.getByText("It moves to Done. Handing it to the crew again opens it.").count()) === 1);
         await liveShot(page, "close", width);
         await checkWords(page, ck, t("close dialog"));
-        await closer.getByRole("button", { name: "Close project" }).click();
+        await closer.getByTestId("close-confirm").click();
         await closer.getByTestId("dialog-error").waitFor();
         ck(t("Close refused: the daemon's sentence in the box, the box open"), /still has open tickets: T2/.test(await closer.getByTestId("dialog-error").innerText()), await closer.getByTestId("dialog-error").innerText());
         await closer.getByRole("button", { name: "Cancel" }).click();
@@ -442,10 +442,10 @@ function cleanEnv(extra) {
         const asked = ctl.finishes.length;
         await link.getByRole("button", { name: "Close project" }).click();
         await closer.waitFor();
-        await closer.getByRole("button", { name: "Close project" }).click();
+        await closer.getByTestId("close-confirm").click();
         await link.waitFor({ state: "detached" });
         ck(t("Close: confirmed, one call to finish the project, and Cancel made none"), ctl.finishes.length === asked + 1 && ctl.finishes.at(-1) === `/api/projects/${ids["Link counter"]}/finish`, ctl.finishes.join());
-        await page.getByText("Closed Link counter.", { exact: true }).waitFor();
+        await page.getByText("Link counter is closed. It moved to Done.", { exact: true }).waitFor();
         ck(t("Close: the project leaves the list at once and joins the finished"), (await projects.filter({ hasText: "Link counter" }).count()) === 0
            && (await page.getByRole("link", { name: "All projects, 2 finished" }).count()) === 1);
         await page.waitForTimeout(6500);

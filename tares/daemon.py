@@ -745,8 +745,8 @@ def make_app() -> FastAPI:
                               # not needing the auth token — they have their own scope
         if _public(method, path):
             return None
-        if path == "/api/whoami":
-            return "any"
+        if path == "/api/whoami" or path == "/api/home/start/hide":
+            return "any"   # the second one only changes what the caller's own home shows
         # /api/settings holds instance credentials (the Anthropic key): admin even to READ, since
         # a read tells you whether and where a credential is configured.
         if path == "/api/setup/github-suggestion":

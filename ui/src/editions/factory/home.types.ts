@@ -1,3 +1,5 @@
+import type { StartBlock } from "../StartChecklist.api";
+
 // The body of GET /api/home on a factory cell (tares/factory_home.py). Every string is worded for
 // people and shown as it is.
 
@@ -127,5 +129,7 @@ export interface HomeData {
   crew: HomeCrew;
   plan: HomePlan;
   tools: HomeTool[];
+  // The Start checklist (tares/start_steps.py); absent in older answers and in samples that skip it.
+  start?: StartBlock;
   now: string;
 }

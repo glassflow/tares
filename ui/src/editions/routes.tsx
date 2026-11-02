@@ -31,6 +31,9 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     // TR-760 (the colon after "ticket" belongs to the address; the second one starts :ref)
     "/projects/:id/tickets/:ref": { page: null, fallback: { redirect: "/projects/:id?view=ticket::ref" } },
 
+    // TR-806
+    "/tickets": { page: React.lazy(() => import("./factory/FactoryTickets")), fallback: { redirect: "/projects" } },
+
     // TR-735
     "/reviews": { page: React.lazy(() => import("./factory/FactoryReviews")), fallback: { redirect: "/crew" } },
 
@@ -69,7 +72,7 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     "/runbooks": { page: React.lazy(() => import("./sre/Runbooks")), fallback: { redirect: "/" } },
 
     // TR-764
-    "/settings": { page: null, fallback: "today" },
+    "/settings": { page: React.lazy(() => import("./sre/Settings")), fallback: "today" },
 
     // TR-749 turns this fallback into a redirect to /
     "/start": { page: null, fallback: "today" },

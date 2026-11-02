@@ -12,6 +12,7 @@ items; TR-769 fills it, so does every other ticket that adds a kind of item.
 from __future__ import annotations
 
 import hashlib
+import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -19,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from . import claude_usage
 from . import factory as factory_mod
 from . import linear as linear_mod
+from . import start_steps
 from .envelope import now_utc
 
 CACHE_SECONDS = 5
@@ -127,9 +129,10 @@ def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, sinc
 
 
 def waiting_items(store, fx, now) -> list[dict]:
-    """Every builder's items, oldest first."""
+    """Every builder's items, oldest first. A project ready to close holds nothing up, so its
+    sign-off rows come after the rest, oldest first among themselves."""
     items = [i for build in WAITING_BUILDERS for i in build(store, fx, now)]
-    items.sort(key=lambda i: _dt(i["since"]) or now)
+    items.sort(key=lambda i: (i["kind"] == "signoff", _dt(i["since"]) or now))
     return items
 
 
@@ -323,10 +326,16 @@ def _headline(crew: dict, projects: list[dict], finished: int, working: int, wai
         part = "The crew is idle with nothing on its desk."
     if not waiting:
         return part + " Nothing waits for you."
-    waited = "less than a minute" if waiting[0]["waited"] == "just now" else waiting[0]["waited"]
-    if len(waiting) == 1:
+    # how long it has waited is told by what holds the crew up; a finished project waiting to be
+    # closed does not count, however long it has been ready
+    held = [w for w in waiting if w["kind"] != "signoff"]
+    n = len(waiting)
+    if not held:
+        return part + (" 1 thing waits for you." if n == 1 else f" {n} things wait for you.")
+    waited = "less than a minute" if held[0]["waited"] == "just now" else held[0]["waited"]
+    if n == 1:
         return part + f" 1 thing waits for you, for {waited}."
-    return part + f" {len(waiting)} things wait for you, the oldest for {waited}."
+    return part + f" {n} things wait for you, the oldest for {waited}."
 
 
 # ── the plan and the tools ────────────────────────────────────────────────────
@@ -362,6 +371,27 @@ def _plan(store, now: datetime, names: dict) -> dict:
 
 # ── the page ──────────────────────────────────────────────────────────────────
 
+def _start_ctx(store, stations: list[dict], tickets: dict, linear: bool) -> start_steps.StartCtx:
+    """What the Start checklist needs, from the store alone (`tickets` is the open projects'
+    tickets, already read)."""
+    names = {c.get("name") for c in store.list_catalog_sources() if c.get("connector") == "claude_code"}
+    events = any(s.get("source") in names and (s.get("events") or 0) > 0 for s in store.event_stats())
+    keys = [k for k in store.list_api_keys() if not k.get("revoked_at")]
+    spec = any(tickets.values())
+    if not spec:
+        done = [p["id"] for p in store.list_projects()
+                if p.get("kind") == "software_factory" and p["status"] == "done"]
+        spec = any(store.tickets_by_project(done).values())
+    return start_steps.StartCtx(
+        cloud=bool(os.getenv("TARES_LOGIN_URL", "").strip()),
+        github_connect_url=os.getenv("TARES_GITHUB_CONNECT_URL", "").strip(),
+        linear_connect_url=os.getenv("TARES_LINEAR_CONNECT_URL", "").strip(),
+        key_used=any(k.get("last_used_at") for k in keys), claude_code_events=events,
+        github_connected=bool(store.list_github_credentials()), linear_connected=bool(linear),
+        github_issues_linked=bool(store.github_projects()), stations=len(stations),
+        spec_with_tickets=spec)
+
+
 def home(store, fx, now, credential_key: str = "open") -> dict:
     """Everything the home page shows, from one read of the projects, their tickets, the stations,
     the plan and the desk."""
@@ -395,11 +425,22 @@ def home(store, fx, now, credential_key: str = "open") -> dict:
                       {"name": "Linear", "connected": bool(linear)},
                       {"name": "Claude Code", "connected": bool(stations) or any(
                           c["connector"] == "claude_code" for c in store.list_catalog_sources())}],
+            "start": start_steps.checklist(
+                store, start_steps.factory_steps(_start_ctx(store, stations, tickets, linear)),
+                "console" if credential_key == "open" else credential_key),
             "now": now.isoformat()}
 
 
 _cache: dict = {}
 _cache_lock = threading.Lock()
+
+
+def drop_cache(store, request) -> None:
+    """Forget the kept home of the request's credential, so its next read shows a change made
+    just now (the start block's hide and show)."""
+    cred = getattr(getattr(request, "state", None), "credential", None)
+    with _cache_lock:
+        _cache.pop((id(store), (cred or {}).get("name") or "open"), None)
 
 
 def build(store, fx=None, request=None, now=None) -> dict:
