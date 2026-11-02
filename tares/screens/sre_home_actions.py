@@ -18,7 +18,7 @@ MAX_AMOUNT_USD = 10000
 def register(app, store, h, ctx):
     runtime = ctx.runtime
 
-    def raise_budget(body: dict):
+    def raise_budget(body: dict, person: str):
         try:
             amount = float(body.get("amount_usd", sre_home.RAISE_STEP_USD))
         except (TypeError, ValueError):
@@ -39,11 +39,14 @@ def register(app, store, h, ctx):
             return h.err(KeyError(f"unknown agent {name!r}"), 404)
         if providers.resolve_for_agent(store, agent)[0] is None:
             return h.err(ValueError("no AI model is set up for the watcher, so it cannot restart"), 400)
+        # the trigger is the maker's wiring: a project that only uses the agent leaves it alone,
+        # as PUT /api/agents/builtin/{name} does
+        trigger = (store.get_catalog_agent(name) or agent)["trigger"]
         budget = round(float(agent.get("budget_usd") or 0) + amount, 2)
         # upsert blanks a field it is given as None, so every stored field goes back as it was;
         # handoffs, concludes, verdicts and github stay as stored when passed as None
         store.upsert_catalog_agent(
-            name, agent["trigger"], agent["prompt"], agent.get("slack_webhook", ""),
+            name, trigger, agent["prompt"], agent.get("slack_webhook", ""),
             agent.get("model", ""), agent.get("slack_channel", ""), agent.get("webhook_url", ""),
             agent.get("webhook_token", ""), agent.get("mcp_servers") or [], agent.get("max_rounds"),
             budget, webhook_key_label=agent.get("webhook_key_label", ""),
@@ -55,7 +58,8 @@ def register(app, store, h, ctx):
         runtime.reload_catalog()
         watch.sync(store, runtime.catalog)
         sre_home.clear_cache()
-        return {"ok": True, "home": sre_home.build(store, runtime.catalog, runtime.health_snapshot())}
+        return {"ok": True, "home": sre_home.build(store, runtime.catalog, runtime.health_snapshot(),
+                                                      person=person)}
 
     @app.post("/api/home/actions/{action}")
     async def home_action(action: str, request: Request):
@@ -65,4 +69,5 @@ def register(app, store, h, ctx):
             body = await request.json()
         except Exception:
             body = {}
-        return await asyncio.to_thread(raise_budget, body if isinstance(body, dict) else {})
+        body = body if isinstance(body, dict) else {}
+        return await asyncio.to_thread(raise_budget, body, h.by(request) or "console")

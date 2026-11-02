@@ -41,13 +41,13 @@ os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-not-a-real-key"
 
 import httpx
 
-from fixtures.sre_cell import PROJECT, _otlp, build
+from fixtures.sre_cell import PROJECT, _agents, _otlp, build
 from tares import sre, sre_home
 from tares import watch as W
 from tares import words
 from tares.builtin_agents import AgentRunner
 from tares.envelope import Envelope
-from tares.store import Store
+from tares.store import Store, day_month_words
 
 P = F = 0
 
@@ -197,8 +197,39 @@ async def main():
         eq("GET /api/home answers on the new cell", (r.status_code, r.json()["edition"],
                                                       r.json()["headline"]["tone"]), (200, "sre", "new"))
 
+        # ── a watcher that stopped, on a cell that has no services yet ────────
+        print("== a stopped watcher and no services yet ==")
+        _agents(store, NOW, True, 0)
+        runtime.reload_catalog()
+        h = home()
+        eq("a running watcher, no services", (h["services"], h["watch"]["on"]), ([], True))
+        store.set_agent_enabled("watcher", False, project=UID)
+        sre_home.clear_cache()
+        r = await cx.get("/api/home")
+        eq("a watcher turned off: the route answers", r.status_code, 200)
+        h = r.json()
+        SEEN.append(h)
+        eq("watch is off and says why", (h["watch"]["on"], h["watch"]["reason"]), (False, "agent_off"))
+        eq("with no services the headline is still the new one", h["headline"]["tone"], "new")
+        eq("the watcher shows as stopped", [w["state"] for w in h["on_watch"] if w["role"] == "watcher"], ["stopped"])
+        ck("and the page can say since when", h["watch"]["every_words"] == "every 10 minutes", h["watch"])
+        store.set_agent_enabled("watcher", True, project=UID)
+        sre_home.clear_cache()
+        key = os.environ.pop("ANTHROPIC_API_KEY")
+        try:
+            r = await cx.get("/api/home")
+            h = r.json()
+            SEEN.append(h)
+        finally:
+            os.environ["ANTHROPIC_API_KEY"] = key
+        eq("a watcher with no model: the route answers", r.status_code, 200)
+        eq("watch is off for the model", (h["watch"]["on"], h["watch"]["reason"]), (False, "no_model"))
+        eq("the watcher shows as stopped there too",
+           [w["state"] for w in h["on_watch"] if w["role"] == "watcher"], ["stopped"])
+        sre_home.clear_cache()
+
         # ── the cell: a watcher, an investigator, six services ─────────────
-        made = build(store, NOW, watcher=True, investigator=True, blind=True)
+        made = build(store, NOW, blind=True)
         store.set_service("service-a", "test", repos=["example-org/service-a"])
         # two calm-or-not services for the 'unusual' rule: an error in each of the other 143
         # ten-minute buckets of the day, and 6 (or 4) in the last one
@@ -279,6 +310,10 @@ async def main():
         ck("every service has a spark of 24 numbers", all(isinstance(s["spark"], list) and len(s["spark"]) == 24
                                                           and all(isinstance(n, (int, float)) for n in s["spark"])
                                                           for s in h["services"]))
+        ck("a service with errors has a spark that shows them",
+           sum(svc(h, "svc-unusual")["spark"]) >= 100 and max(svc(h, "svc-unusual")["spark"]) > 0
+           and svc(h, "svc-unusual")["spark"][-1] > 0, svc(h, "svc-unusual")["spark"])
+        eq("and one with none is flat", sum(svc(h, "service-a-receiver")["spark"]), 0)
         eq("the list says which feeds the services come from", h["services_from_words"],
            sre_home._feeds_words(sre.list_services(store, runtime.catalog, NOW)))
 
@@ -293,9 +328,15 @@ async def main():
         print("== one incident open ==")
         store.append([_otlp(NOW, 35, "service-a", "ERROR", "job 41 failed"),
                       _otlp(NOW, 31, "service-a", "ERROR", "job 42 failed")])
-        incident(store, "service-a", 30, failing="Jobs fail after the retry.",
-                 likely_cause="The retry change.", next_step="Roll back the retry change.")
+        first = incident(store, "service-a", 30, failing="Jobs fail after the retry.",
+                         likely_cause="The retry change.", next_step="Roll back the retry change.")
         h = home()
+        eq("Slack has not been told: nothing posted", h["incidents"][0]["posted"], None)
+        said_ts = f"{int((NOW - timedelta(minutes=29)).timestamp())}.000100"
+        store.set_incident_slack(first["id"], "ops-alerts", said_ts)
+        h = home()
+        eq("once it is posted, where and when", h["incidents"][0]["posted"],
+           {"where": "#ops-alerts", "at": datetime.fromtimestamp(float(said_ts), UTC).isoformat()})
         eq("the headline", (h["headline"]["text"], h["headline"]["tone"]),
            ("1 incident open on service-a", "broken"))
         ck("the sub counts the others and the last check",
@@ -357,7 +398,16 @@ async def main():
         eq("watch is off for the budget", (w["on"], w["reason"]), (False, "budget_used"))
         ck("it says how long and how many checks it missed", bool(w["off_for_words"]) and w["missed_checks"] == 3, w)
         ck("what it spent is for the month", w["spent_words"].endswith("this month"), w["spent_words"])
-        ck("and when it starts again", w["resets_on"], w["resets_on"])
+        next_month = (MONTH + timedelta(days=32)).replace(day=1)
+        eq("and when it starts again, in words", w["resets_on"], day_month_words(next_month))
+        eq("nobody was told yet", w["told"], None)
+        W.sync(store, runtime.catalog)
+        names = list(store.watch_rows())
+        told_at = NOW - timedelta(minutes=5)
+        store.mark_told(names, told_at, "ops-alerts")
+        h = home()
+        eq("Slack was told, where and when", h["watch"]["told"],
+           {"where": "#ops-alerts", "at": told_at.isoformat()})
         eq("the first way out is raising the budget", w["ways_out"][0]["action"], "raise_budget")
         ck("it is the main button and names the amount", w["ways_out"][0]["primary"] is True
            and w["ways_out"][0]["amount_usd"] == 25 and "$25" in w["ways_out"][0]["label"], w["ways_out"])
@@ -418,6 +468,77 @@ async def main():
         ck("each says what it does and what it costs", all(w["doing"] and w["model_words"] and w["cost_words"]
                                                             for w in h["on_watch"]), h["on_watch"])
         ck("no such role", NO_SUCH_ROLE not in json.dumps(h))
+        eq("no channel for the notes", h["notes_go_to"], None)
+        set_agent(store, "investigator", slack_channel="ops-alerts")
+        h = home()
+        eq("the notes go to the investigator's channel", h["notes_go_to"], {"label": "#ops-alerts in Slack"})
+        set_agent(store, "investigator", slack_channel="C0123ABCDEF")
+        eq("a channel id is not shown as a code", home()["notes_go_to"], {"label": "a Slack channel"})
+        set_agent(store, "investigator", slack_channel="")
+        set_agent(store, "investigator", budget_usd=0.05, budget_period="month")
+        spend(store, "investigator", 0.06, ago(30))
+        h = home()
+        inv = next(w for w in h["on_watch"] if w["role"] == "investigator")
+        eq("an investigator that used its budget says stopped", inv["state"], "stopped")
+        ck("and says why", "budget" in inv["doing"].lower(), inv["doing"])
+        eq("the watcher is not", next(w for w in h["on_watch"] if w["role"] == "watcher")["state"], "running")
+        set_agent(store, "investigator", budget_usd=25.0, budget_period="lifetime")
+
+        # ── what the watcher raised, and what it did today ──────────────────
+        print("== what the watcher raised ==")
+        reset()
+        store.sc.execute("DELETE FROM agent_runs")
+
+        def watcher_run(rid, service, minutes, outcome="finding", cost=0.0):
+            """A finished check of the watcher that started `minutes` back (never before midnight)."""
+            at = max(NOW - timedelta(minutes=minutes), MIDNIGHT + timedelta(seconds=300 - minutes))
+            store.start_agent_run(rid, "watcher", "watch-prod", "", service, "h", project=UID)
+            if outcome == "finding":
+                store.finish_agent_run(rid, "ok", finding=f"{service} returns errors.", outcome="finding",
+                                       verdict="investigate")
+            else:
+                store.finish_agent_run(rid, "ok", finding="Nothing changed.", outcome="no_op")
+            with store._swrite:
+                store.sc.execute("UPDATE agent_runs SET started_at = ?, cost_usd = ? WHERE id = ?",
+                                 [at, cost, rid])
+            return at
+        names7 = ["service-a", "edge-proxy", "docs-site", "service-b", "svc-calm", "svc-unusual", "service-a-receiver"]
+        for n, name in enumerate(names7):                   # raised 70, 60, ... 10 minutes back
+            watcher_run(f"raise{n}", name, 70 - 10 * n, cost=0.01)
+        watcher_run("calm1", "service-a", 5, outcome="quiet")
+        h = home()
+        eq("seven were raised: the newest five show", len(h["raised"]), 5)
+        eq("newest first", [r["id"] for r in h["raised"]], [f"raise{n}" for n in (6, 5, 4, 3, 2)])
+        ats = [r["at"] for r in h["raised"]]
+        ck("by their time", ats == sorted(ats, reverse=True), ats)
+        ck("in UTC like every other time", all(a.endswith("+00:00") for a in ats), ats)
+        eq("each says which service", [r["service"] for r in h["raised"]], names7[::-1][:5])
+        ck("and can be answered", all(r["can_answer"] is True for r in h["raised"]), h["raised"])
+        eq("nobody answered yet", [r["worth"] for r in h["raised"]], [None] * 5)
+        eq("the quiet check since is said", h["raised_note"], "Every check since then came back quiet.")
+        store.set_feedback("raise5", "alice", "Alice", True, None, "console", "watcher", "raise5", None, UID)
+        store.set_feedback("raise4", "alice", "Alice", False, None, "console", "watcher", "raise4", None, UID)
+        store.set_feedback("raise3", "bob", "Bob", True, None, "console", "watcher", "raise3", None, UID)
+        h = home(person="alice")
+        eq("the caller's own answers show", {r["id"]: r["worth"] for r in h["raised"]},
+           {"raise6": None, "raise5": True, "raise4": False, "raise3": None, "raise2": None})
+        eq("someone else sees theirs", {r["id"]: r["worth"] for r in home(person="bob")["raised"]}["raise3"], True)
+        eq("a caller who has answered nothing sees none",
+           [r["worth"] for r in home(person="carol")["raised"]], [None] * 5)
+        eq("the newest raised is first", h["raised"][0]["when_words"], sre_home._when_words(h["raised"][0]["at"], NOW))
+        watcher_run("raise7", "edge-proxy", 2)
+        h = home()
+        eq("a raise after the quiet check: no note", h["raised_note"], None)
+        eq("and it is the first", h["raised"][0]["id"], "raise7")
+        eq("still five", len(h["raised"]), 5)
+        eq("today counts the checks, the quiet ones and the cost",
+           (h["today"]["checks"], h["today"]["quiet"], h["today"]["spent_usd"]), (9, 1, 0.07))
+        spend(store, "investigator", 0.02, max(NOW - timedelta(minutes=1), MIDNIGHT + timedelta(seconds=1)))
+        h = home()
+        eq("and what the investigator did", (h["today"]["investigated"], h["today"]["spent_usd"]), (1, 0.09))
+        spend(store, "watcher", 5.0, max(NOW - timedelta(minutes=1), MIDNIGHT + timedelta(seconds=1)), practice=True)
+        eq("a practice run is not counted", home()["today"]["spent_usd"], 0.09)
+        store.sc.execute("DELETE FROM agent_runs")
 
         # ── the button ──────────────────────────────────────────────────────
         print("== raise the budget ==")
@@ -441,6 +562,57 @@ async def main():
         eq("and the next read agrees", (after["watch"]["on"], after["watch"]["reason"]), (True, None))
         r = await cx.post("/api/home/actions/raise_budget", json={"amount_usd": -3})
         eq("a bad amount is refused", r.status_code, 400)
+
+        print("== raise the budget of a watcher that was turned off ==")
+        reset()
+        store.sc.execute("DELETE FROM agent_runs")
+        at = max(NOW - timedelta(minutes=20), MIDNIGHT + timedelta(seconds=20))
+        store.start_agent_run("mine1", "watcher", "watch-prod", "", "service-a", "h", project=UID)
+        store.finish_agent_run("mine1", "ok", finding="service-a returns errors.", outcome="finding",
+                               verdict="investigate")
+        with store._swrite:
+            store.sc.execute("UPDATE agent_runs SET started_at = ? WHERE id = ?", [at, "mine1"])
+        r = await cx.put("/api/findings/mine1/worth", json={"worth": True})
+        eq("the caller answers a raised finding", r.status_code, 200)
+        store.set_agent_enabled("watcher", False, project=UID)
+        sre_home.clear_cache()
+        before = (await cx.get("/api/home")).json()
+        eq("the watcher is off", (before["watch"]["on"], before["watch"]["reason"]), (False, "agent_off"))
+        eq("the home knows the caller's answer", [x["worth"] for x in before["raised"]], [True])
+        r = await cx.post("/api/home/actions/raise_budget", json={"amount_usd": 5})
+        eq("the button works on it", (r.status_code, r.json().get("ok")), (200, True))
+        eq("watch is on in the answer", r.json()["home"]["watch"]["on"], True)
+        eq("the watcher is enabled again", store.agent_enabled("watcher", project=UID), True)
+        eq("with the five dollars added", store.get_catalog_agent("watcher")["budget_usd"], 30.0)
+        eq("the answer is built for the caller", [x["worth"] for x in r.json()["home"]["raised"]], [True])
+        eq("and the next read agrees", (await cx.get("/api/home")).json()["watch"]["on"], True)
+        store.sc.execute("DELETE FROM finding_feedback")
+
+        print("== raise the budget when another project uses the watcher ==")
+        OTHER = "prj-other-watch"
+        store.create_project(OTHER, "custom", "other-watch", {}, goal="Watch from a second project")
+        store.upsert_catalog_trigger("watch-other", ["prod-otlp"], {"every": "20m"}, {}, "20m")
+        store.put_in_project("trigger", "watch-other", OTHER)
+        before_wakes = store.list_wakes(project=UID)
+        store.remove_wakes(project=UID)        # so the second project's wake is the one the button finds
+        store.set_wake(OTHER, "watch-other", "watcher", enabled=False)
+        runtime.reload_catalog()
+        sre_home.clear_cache()
+        eq("the maker's trigger is watch-prod", store.get_catalog_agent("watcher")["trigger"], "watch-prod")
+        r = await cx.post("/api/home/actions/raise_budget", json={"amount_usd": 5})
+        eq("the button works", (r.status_code, r.json().get("ok")), (200, True))
+        eq("it turned the watcher on in the project that uses it", store.agent_enabled("watcher", project=OTHER), True)
+        eq("and left the maker's trigger as it was", store.get_catalog_agent("watcher")["trigger"], "watch-prod")
+        eq("the second project still wakes it with its own", store.get_catalog_agent("watcher", project=OTHER)["trigger"],
+           "watch-other")
+        store.remove_wakes(project=OTHER, agent="watcher")
+        store.delete_project(OTHER)
+        store.delete_catalog_trigger("watch-other")
+        for w in before_wakes:
+            store.set_wake(UID, w["trigger"], w["agent"], enabled=w["enabled"])
+        set_agent(store, "watcher", budget_usd=30.0)
+        runtime.reload_catalog()
+        sre_home.clear_cache()
         r = await cx.post("/api/home/actions/raise_budget", json={"amount_usd": "lots"})
         eq("so is a word", r.status_code, 400)
         r = await cx.post("/api/home/actions/" + NO_SUCH_ROLE)
@@ -449,7 +621,7 @@ async def main():
         read = {"Authorization": f"Bearer {key['secret']}"}
         r = await cx.post("/api/home/actions/raise_budget", headers=read, json={"amount_usd": 25})
         eq("a read key may not press it", r.status_code, 403)
-        eq("and nothing changed", store.get_catalog_agent("watcher")["budget_usd"], 25.05)
+        eq("and nothing changed", store.get_catalog_agent("watcher")["budget_usd"], 30.0)
         eq("but it may read the home", (await cx.get("/api/home", headers=read)).status_code, 200)
         eq("no key at all is 401", (await httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://t").post(
@@ -483,6 +655,17 @@ async def main():
             sre_home._CACHE[k] = (t - 6, v)
         sre_home.cached(store, runtime.catalog, health, "key-a")
         eq("after 5 seconds it is built again", len(calls), 3)
+        sre_home.clear_cache()
+        seen_gen = []
+
+        def clears_while_building():
+            seen_gen.append(1)
+            sre_home.clear_cache()      # a button pressed while this read is being built
+            return {}
+        sre_home.cached(store, runtime.catalog, clears_while_building, "key-c")
+        ck("a body built while the cache was cleared is not kept", not sre_home._CACHE, list(sre_home._CACHE))
+        sre_home.cached(store, runtime.catalog, clears_while_building, "key-c")
+        eq("so the next read builds again", len(seen_gen), 2)
 
         print("== a platform cell still has no AI SRE home ==")
         r = await cx.put("/api/settings/edition", json={"edition": "platform"})

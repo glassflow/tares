@@ -37,11 +37,13 @@ _CHANNEL_ID = re.compile(r"^[CGD][A-Z0-9]{6,}$")
 
 _LOCK = threading.Lock()
 _CACHE: dict = {}
+_GEN = [0]      # bumped by clear_cache, so a read that was building then does not store
 
 
 def clear_cache() -> None:
     with _LOCK:
         _CACHE.clear()
+        _GEN[0] += 1
 
 
 def cached(store, catalog, health, by) -> dict:
@@ -52,9 +54,12 @@ def cached(store, catalog, health, by) -> dict:
         hit = _CACHE.get(key)
         if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
             return hit[1]
+        gen = _GEN[0]
     body = build(store, catalog, health() if callable(health) else health, person=by or None)
     with _LOCK:
-        _CACHE[key] = (time.monotonic(), body)
+        # a clear_cache() that landed while this was building means the body may be stale
+        if gen == _GEN[0]:
+            _CACHE[key] = (time.monotonic(), body)
     return body
 
 
@@ -69,6 +74,11 @@ def _nd(text):
 
 def _plural(n: int, word: str) -> str:
     return goal._plural(n, word)
+
+
+def _utc(when):
+    """A time in UTC from a datetime or the ISO string a watcher block holds."""
+    return goal._aware(when).astimezone(timezone.utc) if when else None
 
 
 def _since_phrase(when, now, clock: bool = True) -> str:
@@ -224,8 +234,7 @@ def _watch_part(store, catalog, state, rows, pairs, t) -> tuple:
         else:
             stopped = next(((w, b) for w, b in pairs if b["state"] == "stopped"), None)
             if stopped:
-                reason, since = stopped[1]["reason"], watch._aware(stopped[1]["since"]) \
-                    if stopped[1]["since"] else None
+                reason, since = stopped[1]["reason"], _utc(stopped[1]["since"])
                 agent, project = stopped[0]["agent"], stopped[0]["project"]
             else:
                 reason = "no_agent"
@@ -239,14 +248,14 @@ def _watch_part(store, catalog, state, rows, pairs, t) -> tuple:
            "missed_checks": None, "every_words": block["every_words"] if block else None,
            "last_check": None, "cost_per_check_usd": block["cost_per_check_usd"] if block else None,
            "spent_words": block["spent_words"] if block and block["budget_usd"] else None,
-           "resets_on": block["resets_on"] if block else None, "told": None, "ways_out": []}
+           "resets_on": day_month_words(_utc(block["resets_on"])) if block and block["resets_on"] else None, "told": None, "ways_out": []}
     if block and block["last_check_at"]:
         out["last_check"] = {"at": block["last_check_at"], "said": block["last_check_words"]}
     if not on:
         out["reason_words"] = watch.reason_words(reason, agent_row, store, t,
                                                  main[0]["trigger"] if main else None)
         if since is not None:
-            since = watch._aware(since)
+            since = _utc(since)
             out["since"] = sre._iso(since)
             out["off_for_words"] = goal.span_words((t - since).total_seconds())
             every = getattr(getattr(trig, "condition", None), "every", None) if trig else None
@@ -256,7 +265,7 @@ def _watch_part(store, catalog, state, rows, pairs, t) -> tuple:
                      if n in rows and rows[n].get("told_at") and rows[n].get("told_where")), None)
         if told:
             out["told"] = {"where": _channel_words(told["told_where"]) or "a Slack channel",
-                           "at": sre._iso(watch._aware(told["told_at"]))}
+                           "at": sre._iso(_utc(told["told_at"]))}
         if reason == "budget_used":
             out["ways_out"] = [{"action": "raise_budget",
                                 "label": f"Add {watch._money(RAISE_STEP_USD)} and restart",
@@ -269,7 +278,7 @@ def _raised(store, catalog, person, on, t) -> tuple:
     worth = goal.cell_results(store, scheduled, limit=RAISED_SHOWN, show="worth", now=t)["findings"]
     feedback.with_answers(store, worth, person)
     newest = goal.cell_results(store, scheduled, limit=1, show="all", now=t)["findings"]
-    items = [{"id": r["id"], "at": r["at"], "when_words": _when_words(r["at"], t),
+    items = [{"id": r["id"], "at": sre._iso(_utc(r["at"])), "when_words": _when_words(r["at"], t),
               "service": r["title_parts"]["service"], "what": r["title_parts"]["what"],
               "outcome_words": r["outcome_words"], "worth": (r.get("worth") or {}).get("mine"),
               "can_answer": r["can_answer"]} for r in worth]
