@@ -90,6 +90,18 @@ function merge(have: TimelineItem[], incoming: TimelineItem[], from: number | nu
   return [...byId.values()].filter((it) => from === null || endOf(it) >= from).sort(order);
 }
 
+/** A poll's first page over what is held. The first page is replaced by what the cell sent, so an
+ *  item the cell stopped sending (a quiet stretch whose start moved with the range) goes. Of the
+ *  earlier pages already loaded, only what sorts strictly below the last item of the new first page
+ *  stays. With no way on, the first page is the whole list. */
+function mergePoll(have: TimelineItem[], fresh: TimelineItem[], hasMore: boolean, from: number | null): TimelineItem[] {
+  const keep = (it: TimelineItem) => from === null || endOf(it) >= from;
+  const head = merge([], fresh, from);
+  const last = head[head.length - 1];
+  if (!hasMore || !last) return head;
+  return [...head, ...have.filter((it) => keep(it) && order(it, last) > 0)].sort(order);
+}
+
 interface Acc {
   key: string;
   from: number | null;
@@ -240,7 +252,8 @@ export default function Timeline() {
   const dflt = sample ? sampleQuery(sample) : LIVE_DEFAULT;
   const service = params.has("service") ? params.get("service") ?? "" : dflt.service;
   const asked = params.get("range");
-  const range: RangeKey = isRange(asked) ? asked : dflt.range;
+  // a from or a to in the address without a range is a custom range (a link made by hand)
+  const range: RangeKey = isRange(asked) ? asked : params.has("from") || params.has("to") ? "custom" : dflt.range;
   const kindsAsked = params.has("kinds") ? params.get("kinds") ?? "" : dflt.kinds;
   const picked = KIND_GROUPS.filter((k) => kindsAsked.split(",").includes(k));
   const kinds = picked.length ? picked : KIND_GROUPS;
@@ -282,6 +295,8 @@ export default function Timeline() {
     return { q, fromMs };
   };
 
+  // a range that ends at a set time does not change: it is read once, and again only on a click
+  const live = !(range === "custom" && customTo);
   const polled = usePagePolling<Polled>(async () => {
     const { q, fromMs } = query();
     const from = sample ? null : fromMs;
@@ -290,7 +305,7 @@ export default function Timeline() {
     } catch {
       return { key, from };
     }
-  }, POLL_MS);
+  }, live ? POLL_MS : 0);
 
   const [acc, setAcc] = React.useState<Acc | null>(null);
   const [failed, setFailed] = React.useState<string | null>(null); // the key whose read failed
@@ -302,19 +317,25 @@ export default function Timeline() {
     const d = res.data;
     setFailed(null);
     setServices(d.services);
+    const more = d.next_before !== null;
     setAcc((prev) => prev && prev.key === res.key
-      ? { ...prev, from: res.from, items: merge(prev.items, d.items, res.from), cursor: prev.older ? prev.cursor : d.next_before,
+      ? { ...prev, from: res.from, items: mergePoll(prev.items, d.items, more, res.from),
+          cursor: more && prev.older ? prev.cursor : d.next_before, older: more && prev.older,
           rangeWords: d.range_words, emptyWords: d.empty_words }
       : { key: res.key, from: res.from, items: merge([], d.items, res.from), cursor: d.next_before, older: false,
           rangeWords: d.range_words, emptyWords: d.empty_words });
   }, [res]);
 
   // a changed bar reads again at once; the first load is the hook's own
+  // (when the bar also flips between a live and a fixed range, the hook starts over and reads by itself)
   const seen = React.useRef(key);
+  const wasLive = React.useRef(live);
   React.useEffect(() => {
     if (seen.current === key) return;
     seen.current = key;
-    polled.reload();
+    const flipped = wasLive.current !== live;
+    wasLive.current = live;
+    if (!flipped) polled.reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
@@ -455,7 +476,7 @@ export default function Timeline() {
       {showError && (
         <Banner tone="error" data-testid="timeline-error"
                 action={<Button variant="secondary" onClick={polled.reload} data-testid="timeline-retry" className="h-[30px]">Try now</Button>}>
-          <b>The timeline did not load.</b> <span className="text-foreground">Tares could not read it just now. It will try again in 30 seconds.</span>
+          <b>The timeline did not load.</b> <span className="text-foreground">Tares could not read it just now.{live && " It will try again in 30 seconds."}</span>
         </Banner>
       )}
 

@@ -379,8 +379,9 @@ class SreStore:
                        prometheus: list[str] = (), limit: int = 20000) -> list[dict]:
         """The average value of each metric of `services` per bucket of `bucket_s` seconds
         (aligned to `since`) in [since, until): [{service, metric, bucket, value, unit}],
-        oldest first. A metric is an OTLP event with a metricType or any event of the
-        `prometheus` sources; its value is payload.value, asDouble or asInt. DuckDB only."""
+        oldest first (past `limit` buckets it is the oldest that are dropped). A metric is an
+        OTLP event with a metricType or any event of the `prometheus` sources; its value is
+        payload.value, asDouble or asInt. DuckDB only."""
         names, spec = self._series_scope(list(dict.fromkeys(services)))
         every = sorted(set().union(*names.values())) if names else []
         if not spec or not every:
@@ -400,7 +401,7 @@ class SreStore:
                f"{value} AS v, json_extract_string(payload, '$.unit') AS unit "
                f"FROM events WHERE ingest_time >= ? AND ingest_time < ? AND source IN ({ph_s}) "
                f"AND {is_metric}) WHERE svc IN ({ph_n}) AND v IS NOT NULL "
-               "GROUP BY svc, event_type, b ORDER BY b LIMIT ?")
+               "GROUP BY svc, event_type, b ORDER BY b DESC LIMIT ?")
         params = [*cparams, since, since, until, *sources, *prom, *every, int(limit)]
         with self._lock:
             rows = self.con.execute(sql, params).fetchall()
@@ -409,7 +410,7 @@ class SreStore:
             for n in group:
                 owner.setdefault(n, svc)
         return [{"service": owner.get(r[0], r[0]), "metric": r[1], "bucket": r[2],
-                 "value": float(r[3]), "unit": r[4] or ""} for r in rows]
+                 "value": float(r[3]), "unit": r[4] or ""} for r in reversed(rows)]
 
     def incident_changes(self, since, until, services: list[str] | None = None,
                          limit: int = 200) -> tuple[list[dict], dict[str, list[dict]]]:
@@ -877,9 +878,10 @@ class SreStore:
         return [int(n) for n in row]
 
     def deploy_events(self, sources: list[str], repos: list[str], since, limit: int,
-                      follow_default: list[str] = (), detail: bool = False) -> list[dict]:
+                      follow_default: list[str] = (), detail: bool = False,
+                      until=None) -> list[dict]:
         """The pushes, merges and commits of `repos` (in the GitHub-type `sources`) from `since` on
-        (None for ever), newest first. A push or commit counts when it is on the default branch:
+        (None for ever) and before `until` (None for no end), newest first. A push or commit counts when it is on the default branch:
         its on_default_branch label says so, else its branch is main or master, else it has none.
         `follow_default` names the polling sources that follow the repo's default branch: their
         commits from before the poller stamped the label count whatever the branch is called.
@@ -897,12 +899,13 @@ class SreStore:
                f"COALESCE(json_extract_string(payload, '$.html_url'), {_label_expr('url')}){extra} "
                f"FROM events WHERE source IN ({sph}) AND {repo} IN ({rph}) "
                + ("AND event_time >= ? " if since is not None else "")
+               + ("AND event_time < ? " if until is not None else "")
                + f"AND ((event_type = 'pull_request' AND {action} = 'merged') "
                f"OR (event_type IN ('push', 'commit') AND COALESCE({main}, CASE WHEN {branch} IS "
                f"NULL OR {branch} IN ('main', 'master') {follow_sql}THEN 'true' END, 'false') = 'true')) "
                "ORDER BY event_time DESC LIMIT ?")
-        params = ([*sources, *repos] + ([since] if since is not None else []) + follow
-                  + [int(limit)])
+        params = ([*sources, *repos] + ([since] if since is not None else [])
+                  + ([until] if until is not None else []) + follow + [int(limit)])
         with self._lock:
             rows = self.con.execute(sql, params).fetchall()
         kinds = {"pull_request": "merge", "push": "push", "commit": "commit"}

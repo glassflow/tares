@@ -8,7 +8,12 @@ item, a deploy only from a linked repo, the check roll-up, the incident item and
 service and kind filters, paging with `before`, the raw route (count, limit, newest first), the
 empty words, no forbidden word or em dash in any item, hour windows for a long range, bad input
 answered 400, a read key calling both routes, and a 24-hour range on a 200,000-event cell of 20
-services answering in under 2 seconds.
+services answering in under 2 seconds. The edge cases follow in extras(): a range in the past with
+more than 200 later deploys and more later checks than a read pages through, the incidents of one
+service among 200 noisy ones, a metric that steps (and one that does not), hidden services, an
+incident from before tracking, a pending alert, a page of exactly PAGE items, the current window
+counted for the part that has passed, the 10 events a change in volume needs, the share of errors
+that makes a window bad, and the raw read capped at 1,000 rows.
 
 Run: .venv/bin/python tests/test_sre_timeline.py
 """
@@ -346,6 +351,236 @@ def cell():
     return iid
 
 
+# ── the edge cases ───────────────────────────────────────────────────────────
+def other(source, connector, key, kind, text, minutes_ago, labels, payload=None):
+    t = NOW - timedelta(minutes=minutes_ago)
+    return Envelope(source=source, source_type=source_type_for(connector), key_value=key,
+                    event_type=kind, text=text, event_time=t, payload=payload or {}, labels=labels,
+                    ingest_time=t)
+
+
+def bare(name):
+    """A cell with its sources and no timeline items of its own (its lines are 10 days back)."""
+    store = Store(os.path.join(TMP, name + ".duckdb"))
+    build(store, NOW - timedelta(days=10))
+    return store, catalog_from_db(store)
+
+
+def burst(service, minutes_from, minutes_to, n, errors=0):
+    """`n` lines of `service` spread over the minutes between `minutes_to` and `minutes_from` ago."""
+    step = (minutes_from - minutes_to) / (n + 1)
+    return [_otlp(NOW, minutes_to + step * (i + 1), service, "ERROR" if i < errors else "INFO",
+                  f"line {i}") for i in range(n)]
+
+
+def only(out, service, kind=None):
+    return [i for i in out["items"] if i["service"] == service and (kind is None or i["kind"] == kind)]
+
+
+def extras():
+    print("== a range in the past: deploys ==")
+    store, cat, _ = (*fresh_seeded("past"),)
+    store.set_service("service-a", "tester", repos=["example-org/service-a"])
+    store.append([other("github", "github_app", "example-org/service-a", "push", "push to main",
+                        0.05 + i * 0.09, {"repo": "example-org/service-a", "branch": "main",
+                                          "author": "Sam", "commits": "1"}) for i in range(205)])
+    out = st.timeline_screen(store, cat, service="service-a", kinds="deploys", now=NOW,
+                             start=NOW - timedelta(minutes=60), end=NOW - timedelta(minutes=30))
+    eq("205 later pushes do not push the one in the range out",
+       [i["text"] for i in out["items"]],
+       ["example-org/service-a pushed to main by Alex: 3 commits"])
+    out = st.timeline_screen(store, cat, service="service-a", kinds="deploys", now=NOW,
+                             start=NOW - timedelta(minutes=25), end=NOW)
+    eq("and the range of the later ones fills the page", len(out["items"]), st.PAGE)
+    eq("deploy_events stops before `until`", len(store.deploy_events(
+        sre_github(cat), ["example-org/service-a"], NOW - timedelta(minutes=60), 500, (), False,
+        NOW - timedelta(minutes=30))), 1)
+
+    print("== a range in the past: checks ==")
+    def past_checks():
+        out = st.timeline_screen(store, cat, kinds="checks", now=NOW,
+                                 start=NOW - timedelta(minutes=60), end=NOW - timedelta(minutes=30))
+        return sorted(i["text"] for i in out["items"] if i["kind"] == "check")
+    before = past_checks()
+    ck("the range holds checks", "service-a: 2 checks, all quiet" in before, before)
+    keep = st.MAX_CHECK_PAGES
+    st.MAX_CHECK_PAGES = 1   # one page of 100: the 120 newer checks below fill it
+    try:
+        uid = store.list_projects()[0]["id"]
+        for i in range(120):
+            run(store, uid, f"n{i}", "service-a", 0.1 + i * 0.2, "Nothing unusual on service-a.",
+                "no_op")
+        after = past_checks()
+    finally:
+        st.MAX_CHECK_PAGES = keep
+    eq("120 newer checks do not hide the ones in the range", after, before)
+
+    print("== one service among noisy incidents ==")
+    store, cat, _ = (*fresh_seeded("noisy"),)
+    uid = store.list_projects()[0]["id"]
+    for i in range(210):
+        n = store.create_incident("service-b", uid, NOW - timedelta(minutes=20 - i * 0.04))
+        store.log_incident(n["id"], "opened", None, "watcher", "runner", NOW - timedelta(minutes=19))
+    out = of(store, cat, service="edge-proxy", kinds="incident")
+    eq("the 210 incidents of another service do not cut the chosen one's three",
+       [i["tone"] for i in out["items"]], ["ok", "warn", "bad"])
+    store.set_service("edge-proxy-old", "tester", merged_into="edge-proxy")
+    old = store.create_incident("edge-proxy-old", uid, NOW - timedelta(minutes=15))
+    store.log_incident(old["id"], "opened", None, "watcher", "runner", NOW - timedelta(minutes=15))
+    out = of(store, cat, service="edge-proxy", kinds="incident")
+    eq("an incident opened under a name merged into the service is the service's",
+       [i["tone"] for i in out["items"]].count("bad"), 2)
+
+    print("== a metric that steps ==")
+    store, cat = bare("metrics")
+    pts = {"queue_depth": (10, 10, 16, 17), "edge_metric": (10, 10, 10, 15),
+           "from_zero": (0, 0, 0, 3), "went_down": (20, 20, 20, 8), "flat_zero": (0, 0, 0, 0)}
+    env = []
+    for metric, vals in pts.items():
+        for k, v in enumerate(vals):   # k 0 is the oldest of four 10-minute buckets before NOW
+            env.append(_otlp(NOW, 35 - 10 * k, "metric-svc", metric, f"{metric} {v}",
+                             payload={"metricType": "gauge", "value": v}))
+    store.append(env)
+    out = st.timeline_screen(store, cat, service="metric-svc", kinds="metrics", now=NOW,
+                             start=NOW - timedelta(minutes=40), end=NOW)
+    eq("a step of more than half is an item, a small one is not, nor is zero to zero",
+       sorted(texts(out)), sorted([
+           "metric-svc: queue_depth 16, up from 10",
+           "metric-svc: edge_metric 15, up from 10",
+           "metric-svc: from_zero 3, up from 0",
+           "metric-svc: went_down 8, down from 20"]))
+    every = store.metric_buckets(["metric-svc"], NOW - timedelta(minutes=50), NOW, 600)
+    newest = sorted({r["bucket"] for r in every})[-2:]
+    got = store.metric_buckets(["metric-svc"], NOW - timedelta(minutes=50), NOW, 600, limit=10)
+    ck("there are more buckets than the limit", len(every) > 10, len(every))
+    eq("past the limit it is the oldest buckets that go", sorted({r["bucket"] for r in got}), newest)
+    eq("and what is left is oldest first", [r["bucket"] for r in got],
+       sorted(r["bucket"] for r in got))
+
+    print("== hidden services, before tracking, pending ==")
+    store, cat, iid = fresh_seeded("hidden")
+    uid = store.list_projects()[0]["id"]
+    store.append([other("alerts-prod", "alertmanager", "service-a", "DiskFull", "disk is full", 14,
+                        {"service": "service-a", "severity": "page", "status": "firing"})])
+    live = store.create_incident("service-a", uid, NOW - timedelta(minutes=13))
+    store.log_incident(live["id"], "opened", None, "watcher", "runner", NOW - timedelta(minutes=13))
+    seen = {k: [i for i in of(store, cat, kinds=k)["items"] if i["service"] == "edge-proxy"]
+            for k in ("alerts", "incident", "checks")}
+    ck("edge-proxy shows an alert, an incident and a check before it is hidden",
+       all(seen.values()), {k: len(v) for k, v in seen.items()})
+    store.set_service("edge-proxy", "tester", hidden=True)
+    for kind in ("alerts", "incident", "checks"):
+        out = of(store, cat, kinds=kind)
+        ck(f"a hidden service's {kind} are not listed",
+           not [i for i in out["items"] if i["service"] == "edge-proxy" or "edge-proxy" in i["text"]
+                or i["link"] == f"/incidents/{iid}"], texts(out))
+        ck(f"while another service's {kind} still are",
+           any(i["service"] == "service-a" for i in out["items"]), texts(out))
+    store.set_service("edge-proxy", "tester", hidden=False)
+
+    gone = store.create_incident("service-a", uid, NOW - timedelta(minutes=20), state="resolved",
+                                 resolved_at=NOW - timedelta(minutes=15),
+                                 resolution="before_tracking")
+    store.log_incident(gone["id"], "opened", None, "watcher", "runner", NOW - timedelta(minutes=20))
+    kept = store.create_incident("service-a", uid, NOW - timedelta(minutes=18))
+    store.log_incident(kept["id"], "opened", None, "watcher", "runner", NOW - timedelta(minutes=18))
+    links = {i["link"] for i in of(store, cat, service="service-a", kinds="incident")["items"]}
+    eq("an incident from before tracking is not listed, a live one is",
+       (f"/incidents/{gone['id']}" in links, f"/incidents/{kept['id']}" in links), (False, True))
+
+    store.append([other("alerts-prod", "alertmanager", "service-a", "SlowJobs", "jobs are slow", 12,
+                        {"service": "service-a", "severity": "warning", "status": "pending"})])
+    eq("a pending alert is worded as pending",
+       [(i["text"], i["tone"]) for i in of(store, cat, service="service-a", kinds="alerts")["items"]
+        if "SlowJobs" in i["text"]],
+       [("Alert SlowJobs is pending on service-a (severity warning)", "warn")])
+
+    print("== a page of exactly PAGE items ==")
+    store, cat, _ = (*fresh_seeded("page"),)
+    total = len(of(store, cat)["items"])
+    keep = st.PAGE
+    try:
+        st.PAGE = total
+        exact = of(store, cat)
+        st.PAGE = total - 1
+        short = of(store, cat)
+    finally:
+        st.PAGE = keep
+    eq("a list of exactly PAGE items has no next page", (len(exact["items"]), exact["next_before"]),
+       (total, None))
+    eq("one more than PAGE has one", (len(short["items"]), short["next_before"] is not None),
+       (total - 1, True))
+
+    print("== the current window counts for the part that has passed ==")
+    store, cat = bare("frac")
+    end = NOW - timedelta(minutes=5)   # the window [NOW-10, NOW) has run for half
+    env = []
+    for svc, last in (("frac-fell", 10), ("frac-rose", 40)):
+        for k, n in ((4, 30), (3, 30), (2, 30)):   # whole windows of 30 before the current one
+            env += burst(svc, 10 * k, 10 * k - 10, n)
+        env += burst(svc, 9.8, 5.2, last)
+    store.append(env)
+    kw = dict(kinds="logs", now=NOW, start=NOW - timedelta(minutes=30), end=end)
+    out = st.timeline_screen(store, cat, service="frac-fell", **kw)
+    eq("10 events in the 5 minutes that have passed of a window that had 30 are normal",
+       [i["kind"] for i in out["items"]], ["quiet"])
+    out = st.timeline_screen(store, cat, service="frac-rose", **kw)
+    eq("40 in them are more than twice the 15 that half a window would hold",
+       [(i["kind"], i["text"]) for i in out["items"]][:1],
+       [("window", "frac-rose: 40 events, events up 2.7x on the 10 minutes before")])
+
+    print("== a change in volume needs 10 events ==")
+    store, cat = bare("steps")
+    cases = {"up-small": (3, 9, False), "up-edge": (10, 20, True), "up-short": (10, 19, False),
+             "start-small": (0, 9, False), "start-edge": (0, 10, True),
+             "stop-small": (9, 0, False), "stop-edge": (10, 0, True),
+             "down-small": (12, 6, False), "down-edge": (20, 10, True), "down-long": (19, 9, True)}
+    env = []
+    for svc, (before, now_n, _w) in cases.items():
+        env += burst(svc, 20, 10, before) + burst(svc, 10, 0, now_n)
+    store.append(env)
+    out = st.timeline_screen(store, cat, kinds="logs", now=NOW, start=NOW - timedelta(minutes=10),
+                             end=NOW)
+    for svc, (before, now_n, want) in cases.items():
+        ck(f"{svc}: {before} then {now_n} events is {'' if want else 'not '}a change",
+           bool(only(out, svc, "window")) == want, texts(out))
+    eq("a rise of exactly twice is worded", [i["text"] for i in only(out, "up-edge", "window")],
+       ["up-edge: 20 events, events up 2x on the 10 minutes before"])
+
+    print("== one error in ten ==")
+    store, cat = bare("share")
+    cases = {"ten": (50, 5, 50, 5, "bad"), "eleven": (51, 5, 51, 5, "warn"),
+             "new-five": (100, 0, 100, 5, "bad"), "new-four": (100, 0, 100, 4, "warn")}
+    env = []
+    for svc, (pn, pe, n, e, _t) in cases.items():
+        env += burst(svc, 20, 10, pn, pe) + burst(svc, 10, 0, n, e)
+    store.append(env)
+    out = st.timeline_screen(store, cat, kinds="logs", now=NOW, start=NOW - timedelta(minutes=10),
+                             end=NOW)
+    for svc, (pn, pe, n, e, tone) in cases.items():
+        eq(f"{svc}: {e} errors in {n} events is {tone}",
+           [i["tone"] for i in only(out, svc, "window")], [tone])
+
+    print("== the raw read stops at 1,000 rows ==")
+    store, cat = bare("rawmax")
+    store.append(burst("big-svc", 10, 0, 1200))
+    raw = st.raw_screen(store, cat, "big-svc", NOW - timedelta(minutes=10), NOW, limit=99999,
+                        now=NOW)
+    eq("1,200 lines, a limit of 99,999", (len(raw["rows"]), raw["count"], raw["more"]),
+       (st.RAW_MAX, 1200, True))
+
+
+def fresh_seeded(name):
+    store = Store(os.path.join(TMP, name + ".duckdb"))
+    iid = seed(store)
+    return store, catalog_from_db(store), iid
+
+
+def sre_github(cat):
+    from tares import sre
+    return sre.github_sources(cat)
+
+
 # ── the routes ───────────────────────────────────────────────────────────────
 async def routes():
     from tares.daemon import make_app
@@ -419,6 +654,7 @@ def speed():
 
 if __name__ == "__main__":
     cell()
+    extras()
     asyncio.run(routes())
     speed()
     print(f"\n{P} passed, {F} failed")

@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from "react";
 /** Loads on mount and again every `ms`, like `usePolling`, and returns the same thing. While the
  *  tab is hidden the timer is stopped, so a background tab makes no calls; when the tab is visible
  *  again it loads once straight away and starts the timer again. The first load always runs, even
- *  in a hidden tab, so a page never shows its empty state for data it has not asked for. */
+ *  in a hidden tab, so a page never shows its empty state for data it has not asked for. With
+ *  `ms` of 0 it loads once and never again by itself (only `reload` reads again). */
 export function usePagePolling<T>(fn: () => Promise<T>, ms: number): {
   data: T | undefined;
   error: string | undefined;
@@ -31,6 +32,7 @@ export function usePagePolling<T>(fn: () => Promise<T>, ms: number): {
       start();
     };
     load();
+    if (ms <= 0) return () => { live = false; };
     if (!document.hidden) start();
     document.addEventListener("visibilitychange", onChange);
     return () => { live = false; stop(); document.removeEventListener("visibilitychange", onChange); };

@@ -5,8 +5,10 @@
  * (GET /api/sre/timeline). The service, the range and the kinds live in the address, so a link
  * lands on the same list and a reload keeps it. A window or a folded quiet stretch has lines
  * behind it; they are read only when a person opens them (GET /api/sre/timeline/raw), 20 at
- * first and 200 more each time. The list refreshes every 30 seconds, and "Load earlier" asks for
- * the page before the last one. Every state shows only words from words.json and none scrolls
+ * first and 200 more each time. The list refreshes every 30 seconds (replacing the first page, so a
+ * quiet stretch whose start moved is not listed twice), except for a range that has an end, and
+ * "Load earlier" asks for the page before the last one. A from and to in the address are a custom
+ * range even without range=custom. Every state shows only words from words.json and none scrolls
  * sideways at 390 px.
  *
  * Seeds a scratch AI SRE cell (tests/seed-sre-timeline.py, invented names, times relative to now),
@@ -546,6 +548,61 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
       await page.clock.fastForward(30_000);
       await page.waitForTimeout(400);
       eq("poll: open lines stay open through a refresh", [seen.list.length, await row(page, warn.id).getByTestId("timeline-raw-row").count()], [3, 20]);
+      await ctx.close();
+    }
+
+    // 12b. a refresh replaces the first page: a quiet stretch whose start moved is one line, not two
+    {
+      const { ctx, page } = await newPage(1440);
+      await page.clock.install();
+      let reads = 0;
+      await page.route(TL_URL, async (route) => {
+        const resp = await route.fetch();
+        const body = await resp.json();
+        reads++;
+        body.items[0] = { ...body.items[0], id: `quiet:burst-01:${reads === 1 ? "A" : "B"}` };   // the same stretch, its start moved
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+      });
+      await page.goto(`${BASE}/timeline`, { waitUntil: "load" });
+      await items(page).first().waitFor();
+      const first = await ids(page);
+      eq("refresh: the first read has the stretch as it started", [first.includes("quiet:burst-01:A"), first.includes("quiet:burst-01:B")], [true, false]);
+      await page.clock.fastForward(31_000);
+      await page.waitForTimeout(500);
+      const after = await ids(page);
+      eq("refresh: after a poll only the new stretch is listed, and the list is no longer", [reads, after.includes("quiet:burst-01:A"), after.includes("quiet:burst-01:B"), after.length], [2, false, true, first.length]);
+      await ctx.close();
+    }
+
+    // 12c. a range in the address without range=custom is a custom range; a range that ends is not polled
+    {
+      const from = new Date(B.getTime() - 120 * 60e3), to = new Date(B.getTime() - 10 * 60e3);
+      const { ctx, page } = await newPage(1440);
+      await page.clock.install();
+      const seen = track(page);
+      await page.goto(`${BASE}/timeline?service=edge-proxy&from=${local(from)}&to=${local(to)}`, { waitUntil: "load" });
+      await page.getByTestId("timeline-custom").waitFor();
+      await settle(page);
+      eq("deep link: from and to alone open the custom range", [await pressed(page, "timeline-range-custom"), await page.getByTestId("timeline-custom-from").inputValue(), await page.getByTestId("timeline-custom-to").inputValue()],
+         ["true", local(from), local(to)]);
+      eq("deep link: the cell is asked for that range and that service", [seen.list.length, seen.list[0].get("from"), seen.list[0].get("to"), seen.list[0].get("service")],
+         [1, `${local(from)}:00Z`, `${local(to)}:00Z`, "edge-proxy"]);
+      await page.clock.fastForward(95_000);
+      await page.waitForTimeout(500);
+      eq("fixed range: no read after 95 seconds, it cannot change", seen.list.length, 1);
+      await ctx.close();
+    }
+    {
+      const from = new Date(B.getTime() - 120 * 60e3);
+      const { ctx, page } = await newPage(1440);
+      await page.clock.install();
+      const seen = track(page);
+      await page.goto(`${BASE}/timeline?range=custom&from=${local(from)}`, { waitUntil: "load" });
+      await page.getByTestId("timeline-custom").waitFor();
+      await settle(page);
+      await page.clock.fastForward(31_000);
+      await page.waitForTimeout(500);
+      eq("open-ended range: a start with no end still reads every 30 seconds", seen.list.length, 2);
       await ctx.close();
     }
 

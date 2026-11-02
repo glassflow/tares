@@ -279,7 +279,7 @@ def _check_items(store, catalog, start, end, now, settings, display, want_key, h
     """The checks the agents ran in the range. Quiet ones that follow each other for a service
     are one item; one that raised something, looked into it or wrote a note is an item each."""
     scheduled = {t.name for t in catalog.triggers if getattr(t.condition, "every", None)}
-    found, before = [], None
+    found, before = [], end   # page back from the end of the range, so a past range reads its own rows
     for _ in range(MAX_CHECK_PAGES):
         page = goal.cell_results(store, scheduled, limit=100, before=before, show="all",
                                  service=display or "", now=now)
@@ -321,7 +321,10 @@ INCIDENT_TONE = {"opened": "bad", "on_it": "warn", "resolved": "ok", "resolved_i
 
 
 def _incident_items(store, start, end, now, settings, display_of, want_key, hidden) -> list[dict]:
-    incs, log = store.incident_changes(start, end)
+    # the chosen service by every name merged into it, since an incident keeps the name it was opened with
+    names = [n for n in settings if sre.canonical(n, settings) == want_key] + [want_key] \
+        if want_key else None
+    incs, log = store.incident_changes(start, end, services=names)
     out = []
     for inc in incs:
         key = sre.canonical(inc["service"] or "", settings)
@@ -450,11 +453,11 @@ def timeline_screen(store, catalog, service: str = "", start=None, end=None, kin
                               [n for _t, n in errors[k]], since, sc.end, w)
     if keys and on("deploy"):
         for k in keys:
-            for d in sre.deploys(store, catalog, k, sc.start, limit=PAGE, detail=True):
-                at = _when(d["at"], "at")
-                if at < sc.end:
-                    items.append(_item("deploy", f"deploy:{d['repo']}:{d['at']}:{d['kind']}:{k}",
-                                       at, None, sc.display_of(k), _deploy_text(d), "info"))
+            for d in sre.deploys(store, catalog, k, sc.start, limit=PAGE, detail=True,
+                                 until=sc.end):
+                items.append(_item("deploy", f"deploy:{d['repo']}:{d['at']}:{d['kind']}:{k}",
+                                   _when(d["at"], "at"), None, sc.display_of(k), _deploy_text(d),
+                                   "info"))
     if keys and on("alert"):
         items += _alert_items(store, catalog, sc.start, sc.end, sc.settings, sc.display_of,
                               sc.want_key, sc.hidden)
