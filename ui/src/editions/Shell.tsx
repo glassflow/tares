@@ -13,6 +13,7 @@ import { applyTheme, currentTheme, type Theme } from "../theme";
 import { signOut } from "./account";
 import { useEdition } from "./edition";
 import { SETTINGS_ENTRY, visibleEntries, type MenuEntry } from "./menus";
+import { hasPage } from "./routes";
 
 // The shell of the factory and sre editions: a header, a left menu, and the page in between.
 // The page keeps its own heading; the shell adds no breadcrumbs.
@@ -131,7 +132,7 @@ export default function EditionShell() {
   const [drawer, setDrawer] = useState(false);
   const [text, setText] = useState("");
   const here = useLocation().pathname;
-  const entries = visibleEntries(edition ?? "platform");
+  const entries = visibleEntries(edition ?? "platform", (to) => hasPage(edition, to));
 
   // Same sources as the platform sidebar: the cloud's workspace link, the control plane's sign-out
   // address and who is signed in there.

@@ -4,7 +4,8 @@ import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom"
 
 import App from "./App";
 import AuthGate from "./components/AuthGate";
-import { EditionProvider } from "./editions/edition";
+import { EditionProvider, useEdition } from "./editions/edition";
+import { ByEdition } from "./editions/routes";
 import AgentActivity, { ConnectPage } from "./pages/Activity";
 import Ask from "./pages/Ask";
 import CatalogExport from "./pages/CatalogExport";
@@ -47,6 +48,20 @@ function UsecasesRedirect() {
   return <Navigate to={`/projects${rest}${window.location.search}`} replace />;
 }
 
+/** Settings, Advanced: today's Settings page with its Advanced tab on the factory and sre editions.
+ *  A platform cell has no such tab, so the address lands on Settings. */
+function AdvancedSettings() {
+  const { edition } = useEdition();
+  if (edition === "platform") return <Navigate to="/settings" replace />;
+  return <Security initialTab="advanced" />;
+}
+
+/** /timeline is Explore on an AI SRE cell until its own page exists; any other cell lands on Home. */
+function TimelineToday() {
+  const { edition } = useEdition();
+  return edition === "sre" ? <Explore /> : <Navigate to="/" replace />;
+}
+
 const router = createBrowserRouter([
   {
     path: "/",
@@ -54,10 +69,10 @@ const router = createBrowserRouter([
     children: [
       // `/` opens Start on a cell with no project of the person's own, else Projects. The cloud
       // login handoff (TARES_LOGIN_URL) lands here.
-      { index: true, element: <Home /> },
-      { path: "start", element: <Start /> },
-      { path: "projects", element: <Projects /> },
-      { path: "crew", element: <Crew /> },
+      { index: true, element: <ByEdition path="/" today={<Home />} /> },
+      { path: "start", element: <ByEdition path="/start" today={<Start />} /> },
+      { path: "projects", element: <ByEdition path="/projects" today={<Projects />} /> },
+      { path: "crew", element: <ByEdition path="/crew" today={<Crew />} /> },
       // Create new is the goal-first setup: goal, plan, connect, try it. The template gallery and
       // the by-hand path are links from its first step.
       { path: "projects/new", element: <ProjectSetup /> },
@@ -68,7 +83,9 @@ const router = createBrowserRouter([
       // :template fallback, which would read "assist" as a template key.
       { path: "projects/new/assist", element: <Navigate to="/projects/new" replace /> },
       { path: "projects/new/:template", element: <ProjectNewGeneric /> },
-      { path: "projects/:id", element: <ProjectDetail /> },
+      { path: "projects/:id", element: <ByEdition path="/projects/:id" today={<ProjectDetail />} /> },
+      // a ticket's own page (edition cells); a platform cell has no such address
+      { path: "projects/:id/tickets/:ref", element: <ByEdition path="/projects/:id/tickets/:ref" today={<NotFound />} /> },
       // a project set up goal first, resumed at the step it stored
       { path: "projects/:id/setup", element: <ProjectSetup /> },
       { path: "sources", element: <Sources /> },
@@ -102,7 +119,18 @@ const router = createBrowserRouter([
       { path: "agents/new", element: <NewInProjectRedirect kind="agents" /> },
       { path: "agents/:name", element: <AgentRedirect /> },
       { path: "ask", element: <Ask /> },
-      { path: "settings", element: <Security /> },
+      { path: "settings", element: <ByEdition path="/settings" today={<Security />} /> },
+      { path: "settings/advanced", element: <AdvancedSettings /> },
+      // pages only the factory or sre edition has; a cell of the other edition lands on Home
+      { path: "reviews", element: <ByEdition path="/reviews" today={<Navigate to="/" replace />} /> },
+      { path: "docs", element: <ByEdition path="/docs" today={<Navigate to="/" replace />} /> },
+      { path: "services", element: <ByEdition path="/services" today={<Navigate to="/" replace />} /> },
+      { path: "services/:name", element: <ByEdition path="/services/:name" today={<Navigate to="/" replace />} /> },
+      { path: "incidents", element: <ByEdition path="/incidents" today={<Navigate to="/" replace />} /> },
+      { path: "incidents/:id", element: <ByEdition path="/incidents/:id" today={<Navigate to="/" replace />} /> },
+      { path: "timeline", element: <ByEdition path="/timeline" today={<TimelineToday />} /> },
+      { path: "runbooks", element: <ByEdition path="/runbooks" today={<Navigate to="/" replace />} /> },
+      { path: "welcome/edition", element: <ByEdition path="/welcome/edition" today={<Navigate to="/" replace />} /> },
       // legacy paths → new homes (bookmarks, the old Entities/Activity/Catalog nav). Catalog
       // dissolved: source schema/freshness now lives on the source detail; the agent's-eye read
       // is Explore's "What the agent gets" toggle.
