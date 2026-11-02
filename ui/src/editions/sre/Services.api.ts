@@ -33,7 +33,7 @@ export interface SreServiceRow {
 export interface SreServices {
   services: SreServiceRow[];
   hidden_count: number;
-  /** "2 names are counted under another service", or null when none is. */
+  /** "service-a-receiver is shown as part of service-a", or null when none is. */
   merged_words: string | null;
 }
 

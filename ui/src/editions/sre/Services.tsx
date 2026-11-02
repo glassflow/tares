@@ -93,7 +93,7 @@ export function ServicesView({ data, showHidden = false, onToggleHidden }: {
         {toggle && <div>{toggle}</div>}
         <div className="border border-border bg-card" data-testid="services-empty">
           {allHidden ? (
-            <EmptyState title="Every service is hidden">Show hidden to see them. Hidden services are still watched.</EmptyState>
+            <EmptyState title="Every service is hidden">Show hidden to see them. Hidden services are not checked.</EmptyState>
           ) : (
             <EmptyState
               title="No services yet"

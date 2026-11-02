@@ -6,7 +6,7 @@
  * on /projects, a ticket address on its project with ?view=ticket:<ref>; /sources still opens today's
  * page; the menu is Home, Projects, Reviews, Crew, Settings, with no Docs entry;
  * ?sample=busy without the browser flag renders the same as /.
- * AI SRE: /timeline is today's Explore; /services and /incidents land on /; /runbooks is its own page.
+ * AI SRE: /timeline is today's Explore; /incidents lands on /; /services and /runbooks are their own pages.
  * Platform: /settings/advanced lands on /settings, /reviews on /, Settings has no Advanced tab.
  * Every edition: /welcome/edition lands on /. The Advanced tab passes the words check, and is shot at
  * 1440 and 390 wide. useSample (src/editions/sample.ts) is run as written, with a fake browser, for
@@ -207,7 +207,9 @@ function loadSample(env) {
       ck("sre: /timeline stays on its address", where(page) === "/timeline", where(page));
       ck("sre: and shows today's Explore", await page.getByRole("heading", { name: "Explore", exact: true }).isVisible());
       const home = await homeOf(page, e);
-      for (const p of ["/services", "/services/service-a", "/incidents", "/incidents/i-1", "/reviews", "/welcome/edition"]) {
+      await go(page, e, "/services");
+      ck("sre: /services stays on its address and shows the Services page", where(page) === "/services" && (await page.getByTestId("sre-services").count()) === 1, where(page));
+      for (const p of ["/incidents", "/incidents/i-1", "/reviews", "/welcome/edition"]) {
         await go(page, e, p);
         ck(`sre: ${p} lands on /`, where(page) === home && !(await page.locator("main").innerText()).includes("does not exist"), where(page));
       }
@@ -221,7 +223,7 @@ function loadSample(env) {
          && (await page.getByTestId("advanced-panel").locator('a[href="/sources"]').count()) === 1);
       await go(page, e, "/projects");
       const items = await menuLabels(page);
-      ck("sre: the menu is Home, Timeline, Runbooks and memory, Settings", items.join(",") === "Home,Timeline,Runbooks and memory,Settings", items.join(","));
+      ck("sre: the menu is Home, Services, Timeline, Runbooks and memory, Settings", items.join(",") === "Home,Services,Timeline,Runbooks and memory,Settings", items.join(","));
       await ctx.close();
     }
 

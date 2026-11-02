@@ -245,7 +245,7 @@ const getJson = (p) => new Promise((res, rej) => http.get(BASE + p, (r) => {
     ck("and it says what is counted under it", (await text(page.getByTestId("merged-names"))).includes("extra-svc-22"));
     await page.goto(`${BASE}/services`, { waitUntil: "load" });
     await rows.first().waitFor();
-    ck("the list says how many names are counted under another", /counted under another service/.test(await text(page.getByTestId("services-merged"))), await text(page.getByTestId("services-merged")));
+    ck("the list names what is shown as part of another service", /extra-svc-22 is shown as part of /.test(await text(page.getByTestId("services-merged"))), await text(page.getByTestId("services-merged")));
 
     // ── a name the cell does not know ───────────────────────────────────────
     await page.goto(`${BASE}/services/nope`, { waitUntil: "load" });
@@ -281,7 +281,7 @@ const getJson = (p) => new Promise((res, rej) => http.get(BASE + p, (r) => {
         if (width === 1440) {
           if (name === "normal") {
             ck("list normal: the rows", (await p.getByTestId("service-row").count()) === 8);
-            ck("list normal: Show hidden (1) and the merged note", (await text(p.getByTestId("toggle-hidden"))) === "Show hidden (1)" && (await text(p.getByTestId("services-merged"))) === "2 names are counted under another service");
+            ck("list normal: Show hidden (1) and the merged note", (await text(p.getByTestId("toggle-hidden"))) === "Show hidden (1)" && (await text(p.getByTestId("services-merged"))) === "service-a-receiver and service-a-worker are shown as part of service-a");
             await p.getByTestId("toggle-hidden").click();
             await p.locator("[data-testid=service-row][data-name=service-b]").waitFor();
             ck("list normal: Show hidden adds the hidden one, marked", (await p.getByTestId("service-row").count()) === 9 && (await text(p.locator("[data-testid=service-row][data-name=service-b]"))).includes("Hidden"));

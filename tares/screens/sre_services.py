@@ -64,7 +64,9 @@ def _watch_row(ctx: dict, name: str):
     return row
 
 
-def _watch_words(store, ctx: dict, name: str) -> str:
+def _watch_words(store, ctx: dict, name: str, hidden: bool = False) -> str:
+    if hidden:
+        return "Not checked, it is hidden"
     row = ctx["state"].get(name)
     if row is None:
         return "Nothing to watch, it has no events of its own"
@@ -89,7 +91,7 @@ def _row(store, ctx: dict, item: dict, errors: list) -> dict:
     if item.get("hidden"):
         row["last_words"] = "not checked, it is hidden"
     return {**row, "watched": None if state is None else bool(state["watched"]),
-            "watch_words": _watch_words(store, ctx, name), "feeds_words": _feeds_words(item),
+            "watch_words": _watch_words(store, ctx, name, bool(item.get("hidden"))), "feeds_words": _feeds_words(item),
             "events_24h_words": _count_words(item["events_24h"], "event") + " in 24 hours",
             "hidden": bool(item.get("hidden"))}
 
@@ -110,12 +112,12 @@ def services_screen(store, catalog, now=None, include_hidden: bool = False) -> d
     everything = ctx["items"]
     shown = everything if include_hidden else [i for i in everything if not i.get("hidden")]
     errors = sre_home._errors_24h(store, [i["name"] for i in shown], ctx["t"], now)
-    merged = sum(len(i["merged"]) for i in shown)
+    merged = [f"{goal.join_words(i['merged'])} {'is' if len(i['merged']) == 1 else 'are'} shown as part of {i['name']}"
+              for i in sorted(shown, key=lambda i: i["name"]) if i["merged"]]
     rows = sorted((_row(store, ctx, i, errors.get(i["name"])) for i in shown), key=_rank)
     return {"services": rows,
             "hidden_count": sum(1 for i in everything if i.get("hidden")),
-            "merged_words": None if not merged else
-            (f"{_count_words(merged, 'name')} {'is' if merged == 1 else 'are'} counted under another service")}
+            "merged_words": ". ".join(merged) if merged else None}
 
 
 # ── one service ──────────────────────────────────────────────────────────────
@@ -245,6 +247,12 @@ def register(app, store, h, ctx):
     async def sre_services(hidden: int = 0):
         return await asyncio.to_thread(services_screen, store, runtime.catalog, None, bool(hidden))
 
+    # the settings route is declared first: {name:path} would take a PUT for a name with a "/" in it
+    @app.put("/api/sre/services/{name:path}/settings")
+    async def sre_service_settings(name: str, request: Request, body: Any = Body(...)):
+        """{display_name?, hidden?, merged_into?, repos?}: a field left out stays, null clears it."""
+        return await _save_settings(name, request, body)
+
     @app.get("/api/sre/services/{name:path}")
     async def sre_service(name: str, window: str = "24h"):
         try:
@@ -255,9 +263,7 @@ def register(app, store, h, ctx):
             raise HTTPException(404, f"No service called {name}")
         return body
 
-    @app.put("/api/sre/services/{name}/settings")
-    async def sre_service_settings(name: str, request: Request, body: Any = Body(...)):
-        """{display_name?, hidden?, merged_into?, repos?}: a field left out stays, null clears it."""
+    async def _save_settings(name: str, request: Request, body: Any):
         if not isinstance(body, dict):
             return h.err(ValueError("the body must be a JSON object such as {\"hidden\": true}"), 400)
         unknown = sorted(set(body) - set(SETTINGS_FIELDS))

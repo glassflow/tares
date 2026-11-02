@@ -73,7 +73,7 @@ export function sampleServices(name: string, hidden: boolean): Promise<SreServic
     default: return Promise.resolve({
       services: hidden ? [...NORMAL, ...HIDDEN] : NORMAL,
       hidden_count: HIDDEN.length,
-      merged_words: name === "hidden" || name === "normal" ? "2 names are counted under another service" : null });
+      merged_words: name === "hidden" || name === "normal" ? "service-a-receiver and service-a-worker are shown as part of service-a" : null });
   }
 }
 

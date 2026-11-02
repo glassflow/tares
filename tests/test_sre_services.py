@@ -33,7 +33,7 @@ os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-not-a-real-key"
 
 import httpx
 
-from fixtures.sre_cell import PROJECT, build
+from fixtures.sre_cell import PROJECT, _otlp, build
 from tares import sre, sre_home
 from tares import words
 from tares.builtin_agents import AgentRunner
@@ -159,14 +159,17 @@ async def main():
         body = r.json()
         eq("the list has these keys", set(body), {"services", "hidden_count", "merged_words"})
         names = [s["name"] for s in body["services"]]
-        order = ("incident", "not_watched", "unusual", "silent", "no_own_signal", "normal")
-        want = [s["name"] for s in sorted(body["services"], key=lambda s: (order.index(s["state"]), s["name"]))]
-        eq("incident first, then not watched, unusual, silent, no signal of its own, normal; then by name",
-           names, want)
+        eq("not watched first, then silent, no signal of its own, normal; then by name",
+           [(s["name"], s["state"]) for s in body["services"]],
+           [("docs-site", "not_watched"), ("service-a-receiver", "silent"), ("service-a-ui", "no_own_signal"),
+            ("edge-proxy", "normal"), ("service-a", "normal"), ("service-b", "normal")])
         eq("every service is there", set(names), set(made["services"]) | {"service-a-ui"})
         eq("a row has these keys", {frozenset(s) for s in body["services"]}, {frozenset(LIST_KEYS)})
         eq("nothing is hidden or merged", (body["hidden_count"], body["merged_words"]), (0, None))
         row = {s["name"]: s for s in body["services"]}
+        eq("watched says whether the watcher reads it", {n: r["watched"] for n, r in row.items()},
+           {"docs-site": False, "service-a-receiver": True, "service-a-ui": None, "edge-proxy": True,
+            "service-a": True, "service-b": True})
         eq("a watched service says by whom", row["edge-proxy"]["watch_words"], "Watched every 10 minutes")
         eq("one nobody can check says so", row["service-a-ui"]["watch_words"],
            "Nothing to watch, it has no events of its own")
@@ -205,6 +208,9 @@ async def main():
         eq("the rest are not", [n for n, s in rows.items() if s["hidden"]], ["docs-site"])
         eq("and still counted", r.json()["hidden_count"], 1)
         eq("a hidden service has a page", (await get("/api/sre/services/docs-site")).json()["hidden"], True)
+        eq("its watch line says it is not checked", (rows["docs-site"]["watch_words"], rows["docs-site"]["last_words"]),
+           ("Not checked, it is hidden", "not checked, it is hidden"))
+        eq("and so does its page", (await get("/api/sre/services/docs-site")).json()["watch_words"], "Not checked, it is hidden")
         eq("which does not say it was checked",
            (await get("/api/sre/services/docs-site")).json()["blind_spots_words"],
            "Not checked while the service is hidden")
@@ -219,7 +225,7 @@ async def main():
         eq("which lists the name it took", r.json()["settings"]["merged_names"], ["service-a-receiver"])
         body = (await get("/api/sre/services")).json()
         eq("the merged name is not a row any more", "service-a-receiver" in [s["name"] for s in body["services"]], False)
-        eq("and the list says so", body["merged_words"], "1 name is counted under another service")
+        eq("and the list names it", body["merged_words"], "service-a-receiver is shown as part of service-a")
         eq("its page is service-a's", (await get("/api/sre/services/service-a-receiver")).json()["name"], "service-a")
         r = await put("service-a-receiver", {"merged_into": None})
         eq("the settings can take it back out", (r.status_code, r.json()["settings"]["merged_names"]), (200, []))
@@ -324,6 +330,8 @@ async def main():
         eq("twelve incidents: ten show", (len(page["incidents"]), page["incidents_total"], page["incidents_open"]), (10, 12, 10))
         eq("another service has none of them", (await get("/api/sre/services/edge-proxy")).json()["incidents_total"], 0)
         eq("the list counts it as an incident", {s["name"]: s["state"] for s in (await get("/api/sre/services")).json()["services"]}["service-a"], "incident")
+        eq("and puts it before the one that is not watched", [s["name"] for s in (await get("/api/sre/services")).json()["services"]][:2],
+           ["service-a", "docs-site"])
 
         print("== what the watcher raised ==")
         page = (await get("/api/sre/services/service-b")).json()
@@ -371,6 +379,27 @@ async def main():
             r = await cx.put("/api/sre/services/service-a/settings", json=body)
             eq(f"a change refused: {label}", r.status_code, 400)
         eq("a body that is not an object is 400", (await cx.put("/api/sre/services/service-a/settings", json=[1])).status_code, 400)
+
+        print("== a name with a slash ==")
+        store.append([_otlp(NOW, 2, "k8s/payments", "INFO", "handled")])
+        store.__dict__.pop("services_cache", None)
+        sre_home.clear_cache()
+        r = await get("/api/sre/services/k8s/payments")
+        eq("the page opens", (r.status_code, r.json().get("name")), (200, "k8s/payments"))
+        r = await put("k8s/payments", {"display_name": "Payments"})
+        eq("the settings save", (r.status_code, r.json().get("about")), (200, "Payments"))
+        r = await put("k8s/payments", {"display_name": None})
+        eq("and clear again", (r.status_code, r.json().get("about")), (200, None))
+        r = await cx.put("/api/sre/services/k8s/nope/settings", json={"hidden": True})
+        eq("an unknown one is a 404, not a 405", (r.status_code, r.json()), (404, {"detail": "No service called k8s/nope"}))
+
+        print("== the home page follows a change ==")
+        before = {s["name"]: s["about"] for s in (await get("/api/home")).json()["services"]}
+        eq("the home page has no display name for service-a yet", before.get("service-a"), None)
+        await put("service-a", {"display_name": "Service A"})
+        after = {s["name"]: s["about"] for s in (await get("/api/home")).json()["services"]}
+        eq("a rename shows on the home page at once, not after its cache", after.get("service-a"), "Service A")
+        await put("service-a", {"display_name": None})
 
         print("== a read key ==")
         key = (await cx.post("/api/keys", json={"name": "viewer", "scopes": ["read"]})).json()
