@@ -17,6 +17,7 @@ import Home from "./pages/Home";
 import Start from "./pages/Start";
 import Sources from "./pages/Sources";
 import Projects from "./pages/Projects";
+import Crew from "./pages/Crew";
 import ProjectTemplates from "./pages/ProjectNew";
 import ProjectDetail from "./pages/ProjectDetail";
 import { AgentRedirect, DispatchRedirect, FiringsRedirect, NewInProjectRedirect, NotFound, SourceByName, TriggerRedirect } from "./pages/Redirects";
@@ -52,6 +53,7 @@ const router = createBrowserRouter([
       { index: true, element: <Home /> },
       { path: "start", element: <Start /> },
       { path: "projects", element: <Projects /> },
+      { path: "crew", element: <Crew /> },
       // Create new is the goal-first setup: goal, plan, connect, try it. The template gallery and
       // the by-hand path are links from its first step.
       { path: "projects/new", element: <ProjectSetup /> },

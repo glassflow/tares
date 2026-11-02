@@ -3,13 +3,17 @@ list_connectors -> create_source -> (data flows) -> list_sources -> create_trigg
 """
 import asyncio, os, signal, subprocess, sys, time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import clean_env, scrub_os_environ
+scrub_os_environ()
+
 DB = "/tmp/mcp_setup.duckdb"
 PORT = "8796"
 for _p in (DB, DB + ".wal"):
     if os.path.exists(_p):
         os.remove(_p)
 
-env = {**os.environ, "TARES_DB": DB, "TARES_CATALOG": "/tmp/none.yaml",
+env = {**clean_env(), "TARES_DB": DB, "TARES_CATALOG": "/tmp/none.yaml",
        "TARES_PORT": PORT, "TARES_OTLP_GRPC_PORT": "off"}
 proc = subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
                         env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

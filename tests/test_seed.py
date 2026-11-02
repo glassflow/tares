@@ -13,6 +13,9 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import clean_env
+
 import httpx
 
 P = F = 0
@@ -35,7 +38,7 @@ class FakeStack(BaseHTTPRequestHandler):
 
 def daemon_env(stack_port: int, seed: str | None) -> dict:
     base = f"http://127.0.0.1:{stack_port}"
-    env = {**os.environ, "TARES_DB": DB, "TARES_PORT": PORT, "TARES_OTLP_GRPC_PORT": "off",
+    env = {**clean_env(), "TARES_DB": DB, "TARES_PORT": PORT, "TARES_OTLP_GRPC_PORT": "off",
            "TARES_DEMO_PROMETHEUS_URL": base, "TARES_DEMO_LOKI_URL": base,
            "TARES_DEMO_API_SERVER_URL": base}
     env.pop("TARES_CATALOG", None)

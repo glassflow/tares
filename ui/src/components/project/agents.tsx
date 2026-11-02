@@ -15,7 +15,8 @@ function formProps(d: AgentsData) {
   return {
     presets: d.presets, models: d.models, defaultModel: d.default_model,
     providers: d.providers ?? [], defaultProvider: d.default_provider ?? null,
-    defaultModels: d.default_models ?? {}, slackWorkspace: d.slack_workspace,
+    defaultModels: d.default_models ?? {}, smallModels: d.small_models ?? {},
+    slackWorkspace: d.slack_workspace,
     defaultMaxRounds: d.default_max_rounds, defaultMaxRoundsWithMcp: d.default_max_rounds_with_mcp,
     maxRoundsLimit: d.max_rounds_limit,
   };

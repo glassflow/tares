@@ -56,6 +56,9 @@ export default function ProjectNav({ ctx }: { ctx: Ctx }) {
     { v: { kind: "activity" }, label: "Activity" },
     { v: { kind: "events" }, label: "Events" },
     ...(ctx.s.sessions ? [{ v: { kind: "sessions" }, label: "Sessions" } as Entry] : []),
+    { v: { kind: "docs" }, label: "Docs" },
+    { v: { kind: "tickets" }, label: "Tickets" },
+    { v: { kind: "claude" }, label: "Claude Code" },
   ];
   const settings: Entry[] = SETTINGS.map(([k, label]) => ({ v: { kind: "settings", name: k }, label }));
   const cur = ctx.view;

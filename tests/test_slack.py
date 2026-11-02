@@ -25,6 +25,9 @@ import asyncio, json, os, signal, subprocess, sys, threading, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qsl
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import clean_env
+
 import httpx
 
 P = F = 0
@@ -177,7 +180,7 @@ async def main():
     stub = HTTPServer(("127.0.0.1", int(STUB_PORT)), Stub)
     threading.Thread(target=stub.serve_forever, daemon=True).start()
 
-    base_env = {**os.environ, "TARES_DB": DB, "TARES_CATALOG": SEED, "TARES_PORT": PORT,
+    base_env = {**clean_env(), "TARES_DB": DB, "TARES_CATALOG": SEED, "TARES_PORT": PORT,
                 "TARES_OTLP_GRPC_PORT": "off",
                 "TARES_SLACK_API_BASE": f"http://127.0.0.1:{STUB_PORT}",
                 "TARES_PUBLIC_URL": PUBLIC_URL,

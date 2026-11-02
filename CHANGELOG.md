@@ -5,7 +5,490 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.55.0] - 2026-11-01
+
+The MCP server is listed in the official MCP registry, `tares mcp --transport stdio` works, and
+two fixes for cloud cells with their state in Postgres: a scrape of `/metrics` no longer opens a
+database connection, and a cell that could not reach its database at start restarts itself.
+
 ### Added
+- The Tares MCP server is published to the official MCP registry as `ai.glassflow/tares`, so
+  MCP clients and directories can find it. Each release tag publishes the new version.
+
+### Fixed
+- `tares mcp --transport stdio` works: its startup line went to stdout, which is the MCP channel
+  over stdio, so the client could not read the server's first reply. It now goes to stderr.
+- A tool call while Tares isn't running says so and names the address it tried, instead of "All
+  connection attempts failed".
+- `/metrics` no longer reads the state database. On a cell with its state in Postgres
+  (`TARES_STATE_DSN`), every scrape opened a connection to it, so idle cells held about a fifth of
+  the database's connections between them. `/api/usage` still reports the run and delivery counts.
+- A cell whose state database could not be reached at start (no DNS, a connect timeout, no free
+  connection slots) answers `/health` with 503 while degraded, so the liveness probe restarts it
+  and it tries again. Before, it stayed degraded until someone restarted it. Every other degraded
+  cause still answers 200 and waits for a person.
+
+## [1.54.1] - 2026-10-29
+
+Grok is named as the challenger when it reviews, xAI agents default to grok-4.6 with grok-4.3
+for Triage, and DuckDB's memory is capped on machines without a container limit. Claude Code
+plugin 0.6.1.
+
+### Changed
+- xAI: an agent without a model runs on grok-4.6 (xAI lists a non-reasoning model first), and the
+  Triage (on a schedule) preset picks grok-4.3 for the frequent look. Each applies only while the
+  key lists that model.
+
+### Fixed
+- Challenger with Grok: the console, the summary and Claude no longer say Codex when Grok
+  reviews. `/tares:challenger` and the tares skill name the challenger as Codex or Grok, each
+  challenge on the timeline names its reviewer ("Challenger (Grok) reviewed commit ..."), the
+  summarizer calls the reviewer by that name and no longer reports a plan challenge that did not
+  happen, and the template's setup says how to pick Grok.
+- Template setup: the "model provider" step counts any configured provider, not only an
+  Anthropic key, and the Model picker lists the default provider's models instead of Anthropic's.
+- DuckDB's memory is capped at 1 GB when `tares up` runs on a machine with no container memory
+  limit. Before, DuckDB took its own default of 80% of the machine's RAM and its cache grew to about
+  4 GB on a Mac after two days of crew use. Set `TARES_DUCKDB_MEMORY_LIMIT` (for example `2GB`) to
+  change it; a container limit still sets it to 60% of that limit. The cap also sets
+  `TARES_DUCKDB_THREADS` to 2 unless you set it.
+
+## [1.54.0] - 2026-10-28
+
+Grok can review a challenger session instead of Codex, and xAI is one of the model provider
+presets. Claude Code plugin 0.6.0.
+
+### Added
+- Console: xAI (Grok) is a preset in Settings, Model providers, next to the others.
+- Plugin: Grok can be the challenger's second model instead of Codex. Set `challenger_backend` to
+  `grok` and give the plugin an xAI key (`xai_api_key`, or `XAI_API_KEY`). Each plan or commit is
+  reviewed in one xAI API call over the patch and the changed files, with the same priority tags,
+  fix loop, waivers and Tares record as Codex. A reply passes only when it ends on an explicit
+  `VERDICT: CLEAN`; one that names nothing and gives no verdict is inconclusive, and a
+  `VERDICT: FINDINGS` whose findings cannot be read as `[P1]`/`[P2]` lines blocks. The challenge line
+  shipped to Tares now names the `reviewer` (codex or grok) and, for Grok, the `model`. Codex stays
+  the default. Running Codex itself against xAI does not work: xAI rejects Codex's second turn
+  ("Could not decode the compaction blob").
+
+## [1.53.0] - 2026-10-28
+
+A cell serves a page's requests side by side instead of one after another, and a cloud cell keeps
+its state (projects, tickets, agents, settings) in Postgres while its events stay in DuckDB. On
+factory the project page went from 1.2 s to about 0.7 s, and the Crew page from 0.43 s to about
+0.3 s (P-TR-268).
+
+### Added
+- State in Postgres, opt-in with `TARES_STATE_DSN` (install the `postgres-state` extra). A cell
+  started with it the first time copies its 44 state tables out of `tares.duckdb` in one
+  transaction, checks the row counts and records the move. From then on it reads and writes state
+  only there. Without the variable nothing changes: local installs keep everything in DuckDB.
+- A cell that moved refuses to start without `TARES_STATE_DSN`, or with one that points at a
+  database without its state, instead of serving the stale DuckDB copy. At startup it waits up to
+  120 s for its state database (`TARES_STATE_CONNECT_WAIT`), and reconnects once after a dropped
+  connection.
+
+### Changed
+- Request handlers run in worker threads, so the requests a page fires together are served
+  together. Catalog reloads, ingest and poll writes, ticket stage moves and desk answers no longer
+  run their database work on the event loop, so one slow query no longer stalls the rest of the
+  cell.
+- The Crew page's projects, repos, assumptions and pull request refresh are read once per request
+  instead of once per item.
+- Codex challenger results are kept in their own table when the event arrives, so the review
+  queue, the ticket view and the merge gate no longer scan every event. The "Codex open" chip stays.
+
+## [1.52.0] - 2026-10-27
+
+The Projects list reads as a work queue, the software factory crew paces itself and moves onto
+new Claude Code versions on its own, and cells time every request and can close `/metrics`.
+
+### Changed
+- Console: the Projects list no longer marks the Challenger workflow and Default projects as AI SRE
+  (TR-698). The chip went to every project that was not a software factory, but a project of no
+  special kind is an ordinary one. Now only a project made from an AI SRE template (`ai_sre_demo`
+  or `rius_rca`) shows the AI SRE chip, a software factory project keeps the factory chip, and
+  every other project shows no kind chip. The legend under the list names a kind only when a row
+  of that kind is on show.
+- Console: on the Projects list at 720px and below, a done project now says "done" after its ring
+  (TR-696). The count folds away there, so a project with every ticket closed but still active and
+  a done project looked alike apart from a shade of colour. A wide screen is unchanged.
+- Factory: cmux says "Waiting for you" about a minute after every crew station's turn ends, even
+  though a station between ticks needs nothing (TR-694). The notice is cmux's own, not Claude
+  Code's, and Claude Code has no setting that drops it while keeping permission prompts. The fix
+  is a cmux option on your side: set `"notifications": {"agentIdleReminder": false}` in
+  `~/.config/cmux/cmux.json`. `tares factory doctor` now reads that file and says when the option
+  is still on, with the exact line to add. It never edits your cmux file, and the stations' own
+  settings leave cmux's permission alerts alone.
+- Console: the Projects list marks each project's kind with an icon (TR-692). A software factory
+  project shows the factory emoji instead of the bolt, and an AI SRE project shows an AI SRE chip
+  with a heartbeat icon (TR-698 narrowed that to projects made from an AI SRE template). Both fold to the icon alone at 720px and below, keeping the name in
+  the tooltip and screen reader label, and the legend under the list explains each kind on show.
+  The status cell is now the progress ring and its count alone: the dot beside it is gone for a
+  project with tickets. A project with no tickets keeps the dot, and a paused, error or draft
+  project adds a short word ("paused", "error", "draft").
+- Console: the project page says a build station "is waiting for you" only when it needs you
+  (TR-693, TR-616). Before, every turn end showed the banner, even when the builder was waiting on
+  its own Monitor or on the reviewer and would resume by itself. The plugin now reports a new
+  session state, `idle`, for a turn that ended (the Stop hook and Claude Code's idle notice), and
+  keeps `waiting` for a permission request or prompt, an elicitation dialog or an AskUserQuestion
+  (new PermissionRequest and PreToolUse hooks). An idle session shows no banner, and still turns
+  quiet after 90 minutes. The crew list labels the two states "Idle" and "Waiting for you". Rows
+  from the old plugin keep working. Restart `tares up` first, then reload the plugin on a running crew: an old daemon
+  drops the `idle` lines, so a session would stay `working`.
+- Console: the Projects list reads as a work queue (TR-689). It hides done projects by default, with
+  Active, Done and All tabs that show their counts, and a line saying how many are hidden. A
+  filter box matches names and goals, and the sort offers recently active, most work pending, least
+  work pending and name. The name is the link, so the Open button is gone, and so is the Objects
+  column. Goals are a tooltip on the name, or on every row with the Goals toggle. A project's
+  status is the progress ring and its count; the Active and Done words are gone. A Pending column shows the work left, with what is in progress
+  and blocked. Updated now follows a project's newest ticket update, not only edits to the project
+  itself (`/api/projects` gains `activity_at`). The software factory tag is a small icon chip with
+  a legend, and the table keeps its layout at narrow widths. The view lives in the address
+  (`?show=`, `?sort=`, `?q=`, `?goals=1`), so a link or a reload keeps it.
+- A factory project's tickets list reads every working doc's title and every ticket's last review
+  in one query each, instead of a few queries per ticket (TR-657).
+- The review queue reads the tickets in review across every project, when each went to review and
+  its last review in one query each, instead of every project's whole ticket list and a few
+  queries per ticket (TR-648).
+- The projects list reads the catalog once and every software factory project's tickets in one
+  query, instead of both once per project (TR-659).
+
+### Added
+- Factory: `factory doctor` reads each handed-over repo's languages from its manifests (Python,
+  TypeScript, JavaScript, Go, Rust, at the repo root or one folder down) and says whether Claude Code has a
+  language server for each: the plugin enabled and its binary on your PATH. For a missing one it
+  prints the install command and the plugin that wires it in (`npm install -g pyright`, then
+  `claude plugin install pyright-lsp@claude-plugins-official`). `factory crew up` offers the same
+  install and runs it only on a yes; `--yes` and a closed input install nothing. The builder and
+  reviewer manuals say to prefer the LSP tool over grep for definitions, references and callers
+  when it answers. Without a server the tool has nothing to answer with (TR-682).
+- Factory: the crew setting `idle_wake` (off by default) wakes stations on events instead of fixed
+  ticks. The watch asks Tares what each station has to do and restarts an idle station with one
+  message only when there is work (a PR without a verdict, changes asked for, a `RELEASE`, a desk
+  answer, a new project), and otherwise sends a liveness wake after 15 to 30 minutes, then 30, then
+  every 45, so an empty crew costs a few model turns an hour instead of one every 15 to 30 minutes
+  per station (TR-673).
+- Factory: the crew setting `pace` (off by default) slows the crew before the plan's limit instead
+  of hitting it and restarting every station at once. From the plan usage Tares already keeps: at
+  85% of the 5-hour window or 90% of the week no new builder starts (`factory spawn builder`
+  says why) and each station is told once to tick every 45 minutes; at 95% of the window a builder
+  also finishes its step, pushes, writes down where it is and waits. A station that stopped while
+  a limit was full is not revived into it; after the reset the watch revives it in its own
+  conversation, and starts a new one only when that fails. The Crew page and
+  `factory crew status` say when the crew is pacing and until when (TR-674).
+- The tares-factory crew moves onto a new Claude Code by itself. Claude Code installs by swapping a
+  symlink, so a station kept the version it started on until someone restarted it. `tares factory
+  crew watch` now sees a newer `claude --version` that has held for a whole round and restarts
+  one idle station a round, in the same conversation, the orchestrator last; a busy or attached
+  station waits. `tares factory crew update` (or `crew restart`) does every station right away,
+  waits for each to be idle, and checks there is one session per station name. A restarted station
+  is checked to run the new version: Claude Code's daemon keeps pre-warmed spares of the old
+  version that a restart could claim, so those are stopped and the restart is tried again.
+  `factory roster`, `factory doctor` and the Crew page show each station's Claude Code version and
+  flag older ones. The crew setting `claude_update` (on by default) switches the watch's part off
+  for people who pin a version. A frozen crew (`crew freeze`) moves no station onto a newer Claude
+  Code either; the watch says there is one, once for each version, and `crew update` still works
+  (TR-669).
+- Factory: the Claude Code move now covers the crew's helpers and no longer gives up. A helper moves
+  onto a new Claude Code with the watch, like its station, after the other stations and before the
+  orchestrator; a busy helper does not hold the orchestrator back. A station whose restart keeps
+  landing on an old pre-warmed spare is no longer parked on the old version: after three tries in
+  its conversation it is started again in a new conversation on the new version (a helper is not,
+  since its task lives only in its conversation), and if that fails too the watch tries again after
+  a pause that doubles (10 minutes, up to 4 hours; `crew update` tries at once). `factory roster`, `crew status`, `factory doctor` and the Crew page show it as
+  retrying. `crew update --wait 00` waits without a deadline, and the message for a caller that is
+  not behind, or whose watch will not move it (`claude_update` off, a frozen crew), no longer
+  promises a move by the watch (TR-687).
+- `/metrics` times every HTTP request: `tares_http_request_duration_seconds{route, method, status}`,
+  labelled by route template (such as `/api/projects/{uid}/tickets`), never by a raw path or ID
+  (TR-652).
+- `TARES_METRICS_TOKEN` closes `/metrics`: when set, a scrape needs `Authorization: Bearer <token>`
+  and anything else gets 401. Unset, `/metrics` stays public as before (TR-653).
+
+### Fixed
+- Factory: `desk_answer` finds every line of a long pasted reply (TR-697). A reply of more than
+  about 500 characters was stored cut off, so its later lines were "not found" and only the first
+  lines matched. A person's turn is now kept up to 20000 characters, and the `<pasted_content>`
+  tags Claude Code wraps a paste in are ignored, so a whole paste matches with or without them.
+  Replies already stored stay cut; paste or resend the missing lines once.
+- "Raise the limit" on an agent that stopped at the daily run cap opened the agent's own page,
+  which has no cap field. It now opens Settings, Limits, with the daily cap in view and marked
+  for that agent; an agent with its own cap in its project still opens its own page (TR-670).
+- The daily run cap message now says when the next run is allowed ("next run allowed in
+  1h 12m"), counted from the run in the 24 hour window that has to age out first, on the project
+  banner and in the capped run's error. An agent's run list folds the runs the cap refused into
+  one line ("50 runs skipped, capped") that opens to list them. The Limits help line names who the
+  number applies to: every agent without its own limit (TR-671).
+- A firing that arrives while its agent is already running for the same key now gets the
+  `skipped` write-back with reason `in_flight`. Since 1.51.0 it was sent only when the duplicate
+  slipped past the first dedupe; the common case, caught when the firing is delivered, sent
+  nothing, and Rius kept the firing queued (RIUS-1103).
+- A link to a refused run inside a folded group of capped runs opened the group, but clicking
+  the group's line could not close it again. The link now opens the group once, and the line
+  toggles it like any other (TR-678).
+- Factory: a `crew watch` started from the frozen kit copy and left running past an unfreeze
+  restarted itself, on a kit change, from the copy it came from. By then the copy was removed, so
+  the watch died. It now restarts from the checkout's `factory` (TR-686).
+- Factory: the guard let a builder or reviewer run `/path/to/bin/factory crew freeze`, `up`,
+  `down`, `halt` and the other orchestrator-only commands, and `factory finish`, by spelling the
+  CLI with a path. It now matches the command by its name, whatever the path (TR-686).
+- Factory: `factory doctor` and `crew up` counted a language server plugin enabled only for the
+  repo's own folder as ready. Stations run in the crew home and in worktrees, never in that
+  folder, so they had no server. Only a plugin enabled for you (user scope) counts now (TR-686).
+- Factory: the guard still let a builder run an orchestrator-only command when the verb was
+  followed by a backtick, `>`, `}` or `#` (`` x=`factory crew down` ``, `factory crew down>log`). A
+  verb now ends at anything but a letter, digit, `_` or `-`. `ls ~/factory down`, a folder named
+  factory handed to `ls`, `cat` and the other readers, was refused as if it were the CLI; it now
+  runs (TR-688).
+- Factory: the folder-named-factory rule above could be turned into a bypass. A reader written
+  inside a quote (`` X='; ls a' factory down `` or a quote opened on the line before) made the guard
+  blank the word `factory`, although the quote ends before it and the CLI runs. The rule now skips
+  quoted strings as a unit, so a reader only owns the word when it starts a command outside any
+  quote; quoted arguments to a real reader (`ls "my dir" ~/factory down`) still work (TR-690).
+
+## [1.51.1] - 2026-10-21
+
+The crew standup writes its summary again, and its Slack channel list fits on screen.
+
+### Fixed
+- Crew standup: the summary was never shown, always "the model call failed (KeyError)", whatever
+  the model provider. The model answered; recording what the call cost then failed and the
+  summary was dropped.
+- The Slack channel picker opens upward when there is no room below it, so at the foot of the
+  standup sheet the list is no longer cut off by the bottom of the window.
+
+## [1.51.0] - 2026-10-21
+
+The write-back webhook hears about runs that were refused, and the software factory crew keeps
+the person's answers and tidies up after `crew down`.
+
+### Added
+- The write-back webhook gets a `skipped` event when a run a trigger dispatched is refused
+  before it starts: `reason` is `daily_cap` (the agent's runs in 24 hours), `budget_exhausted`
+  (its `budget_usd`) or `in_flight` (a run of the agent for the same key is already going, named
+  in `in_flight_run_id`), with the `message` the run records. It carries the `key` and `labels` a
+  finding would, so a receiver that files findings by the firing, as Rius does, stops waiting
+  for one that never comes (RIUS-1103). A rerun, a bootstrap run or a hand-off sends none.
+
+### Fixed
+- Software factory: a reply the person types while the orchestrator's turn is still running now
+  reaches Tares as their turn, so the desk records it as their answer. Before, Claude Code kept it
+  only as a queued message and `desk_answer` never found it (TR-522). Messages from other sessions
+  and task notifications still stay out.
+- `tares factory crew down` withdraws the "stop the crew?" question, whether or not it was asked
+  with a project, so it no longer sits on the desk after the crew has stopped (TR-599).
+
+### Changed
+- Project page: the crew's own stations in the crew list link to the Crew page, where their
+  sessions live.
+
+## [1.50.0] - 2026-10-20
+
+A standup report for the crew: what moved in each project, summed up by the cell's model, ready to
+copy or send to Slack. Software factory project pages stay current while they are open.
+
+### Added
+- Crew page: a Standup button opens a report of what moved in each project handed to the crew,
+  since yesterday (since Friday on a Monday), over the last 7 days, or between custom dates. It
+  lists what is done, started, in review, blocked (with the reason) and waiting on you, with PR
+  links, and puts projects that did not move on one line. The cell's model adds an overall line
+  and a line or two per project; without a provider the report still shows, with the reason.
+  Copy takes the markdown, Send to Slack posts it to a channel you pick as the cell's bot.
+- `GET /api/crew/standup?since&until` returns the report and its markdown (the last day by
+  default, at most 92 days). `POST /api/crew/standup/summary` adds the model's summary (admin,
+  counted as Ask usage). `POST /api/slack/post {channel, text}` posts as the cell's bot (admin,
+  refused from crew stations).
+
+### Fixed
+- A software factory project page left open no longer shows stale tickets, docs and sessions. The
+  factory pages refresh every 5 seconds, and every console page re-reads as soon as its tab is
+  visible again. A doc being edited keeps your changes through a refresh.
+
+## [1.49.0] - 2026-10-20
+
+OpenAI agents default to a chat model, a retired or gone crew station stops showing as Quiet, and
+the model provider table fits its card.
+
+### Added
+- Tares can mark a crew station ended (`POST /api/crew/<station>/end`), so a station whose session is gone stops showing as Quiet.
+- `factory retire` marks the station ended on Tares, so a retired builder no longer shows as Quiet.
+- Crew page: Mark ended on a Quiet station clears a session that is gone.
+
+### Fixed
+- An agent on OpenAI that names no model no longer defaults to `babbage-002`. The OpenAI model list drops models an agent cannot run on (legacy completions, embeddings, audio, images, moderation), and the default is the first of `gpt-5`, `gpt-5-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4o` the key can use.
+- Crew page: a finished project lists its builders under it, instead of under Other builders.
+- Settings, Model providers: the provider table stays inside its card. The action buttons wrap instead of pushing the table past the right edge, and the models column no longer squeezes to one word per line.
+
+## [1.48.0] - 2026-10-19
+
+The factory crew follows your `tares login`: a new login reaches every station, a logout stops the
+crew, and an old key can no longer break it. `crew status` reads cleanly once the crew is stopped.
+
+### Fixed
+- Crew stations no longer get 401s after a new `tares login` because an old key stuck around
+  (TR-560). The crew follows the saved login: `tares login` gives the crew's key file the new key
+  and `tares logout` empties it, so the crew stops with you. `tares factory` no longer passes the
+  key to any process it starts, where Claude Code's background service could keep a revoked one
+  for every station. Stations and the watch read only the crew's key file, a station never writes
+  it, and a key Tares refuses never replaces a working one.
+- `tares factory doctor` shows which key the stations use and which one this terminal uses, by key
+  id, and flags a `TARES_AUTH_TOKEN` that overrides the saved login. `tares status` says so too.
+- `tares factory crew status` no longer shows a question left over from a finished project once the crew is stopped, and says "no stations running" instead of printing an empty station table. Finishing a project withdraws its open desk questions, and `crew down` withdraws any left on finished projects (TR-559).
+
+## [1.47.0] - 2026-10-16
+
+Connect Linear on Tares Cloud with one click, and a self-hosted install connects Linear with a
+personal API key. The crew's progress at a glance (progress rings, a fold for each project's
+builders), allowing a refused permission from the console, what the crew spends, and a sidebar
+that folds to icons.
+
+### Added
+- The Projects list and a software-factory project's page show a small ring of the project's tickets:
+  done, in progress, blocked and to do, with the counts in its tooltip, so a stuck project shows at
+  a glance. The project page's counts and ticket bar use the same buckets and name blocked tickets.
+  `GET /api/projects` carries `progress` for every factory project.
+- A crew station's attach command (`tares factory crew attach <name>`) has a Copy button wherever
+  the console shows the station: a session's page, the project's Crew rows, the stopped-build
+  banner, Next up and the Crew page, so you can open a stuck or waiting builder in one paste. A
+  station that has ended offers none.
+- A permission a crew station was refused comes to the desk with the station and the exact
+  command, and you allow it with one click on the project page or the Crew page: you check the
+  sentence that becomes the grant, choose this project or every project, and click **Allow for
+  <station>**. Tares keeps it as a grant and as your decision made in the console, and the crew's
+  watch restarts that station with it in its settings, in the same conversation, once it is
+  between turns (never while you have it open with `crew attach`). `desk_add(station=, command=)`,
+  `POST /api/desk/{ref}/allow` (the person only) and `via` on decisions.
+- What the crew spends, on the Crew page: how much of your Claude plan is left (the 5-hour and
+  weekly limits and when each resets, on a Pro or Max login) and which projects used the current
+  5-hour window, in a pane below Projects that is folded by default with the most used limit on its
+  line; and for each station how near it is to compacting. A station's detail reads its context
+  window by category, as `/context` shows it, when you ask. Settings, Usage has tokens and an
+  estimated API cost per project for the last week. Stations report through a status line the
+  factory sets; the watch reads `/usage` every 10 minutes and `/context` when asked, without a
+  model call. `tares factory plan` and `tares factory context <station>` read them by hand.
+- Token usage per reply of every Claude Code session the plugin ships, counted once per reply and
+  filled in from the replies already stored.
+- The console's left sidebar folds to a rail of icons and back with its Collapse row; the choice
+  is remembered in this browser. Start, Connect and Reads have icons of their own, Settings is a
+  gear and the Workspace link an outside-link icon, so no two look alike when only icons show.
+- On Tares Cloud, Settings > Linear has **Connect Linear**: you approve the GlassFlow Linear app in
+  Linear and come back connected, with no OAuth application of your own to set up. The control
+  plane hands the token to the workspace and renews it; Disconnect goes through it and revokes the
+  token. `TARES_LINEAR_CONNECT_URL`, `PUT`/`DELETE /api/settings/linear-connection` (admin).
+
+### Changed
+- Linear on a self-hosted install connects with a personal API key only. Sign-in with your own
+  Linear OAuth application is gone (`/api/linear/oauth-app`, `/api/linear/oauth/start`, the
+  callback, `TARES_LINEAR_CLIENT_ID`); a workspace connected that way asks to connect again.
+- Crew page: each project's builders fold, shut by default, behind a line that counts them and
+  names any waiting or quiet one, so the Waiting for review list stays in view. The fold opens for
+  the member you pick or link to, and the whole Projects pane folds to its header. Both are
+  remembered in this browser.
+- Crew page: each project shows its progress ring beside the merged count, which now leaves canceled
+  tickets out as the ring does, and its usage line gives only its share of the 5-hour window and of
+  the week, with no API prices. A station's detail says less: one context line and its bar, the
+  window by category in a fold that reads it when opened, the newest 8 lines with the rest a click
+  away, and no project or ticket section for the crew's own stations. `/api/crew/projects` rows
+  carry `progress`.
+
+### Fixed
+- The attach command for a helper of a crew station (`crew-reviewer-lint`) names the helper, not
+  a station that doesn't exist.
+
+## [1.46.0] - 2026-10-14
+
+Work on a factory project in your own Claude Code session with `tares factory session`, taking it
+over from the crew when the crew holds it. Skills for building a software factory and an AI SRE,
+a tidier Settings page, and Tares on Homebrew follows every release.
+
+### Added
+- A software-factory skill (`npx skills add glassflow/tares`) so coding harnesses suggest Tares for building a software factory with Claude Code.
+- An ai-sre skill so coding harnesses suggest Tares for building an AI SRE and AI monitoring.
+- `tares factory session`: work on a project in your own Claude Code session, bound to it on Tares,
+  with the Tares plugin loaded (a plain `claude` has no Tares tools). `session <project>` works on
+  a planned project and picks up a ticket left in progress; when the crew holds the project, it
+  asks whether to take it over, and on yes the orchestrator stops its builders (they push what
+  they have and write their progress) and releases it to your session. `session "<idea>"` plans a
+  small project lightly (goal, short spec, tickets, checks) and builds it in the same session,
+  offering the full spec and the hand-over to the crew when it turns out big. No argument asks
+  which project. The spec's single-session hand-over now names this command (TR-520).
+- `POST /api/projects/{id}/takeover` (the person only) and `/release` (the orchestrator, or the
+  person's session), `releasing` in `/api/crew/projects`, the `release_project` MCP tool, and
+  `finish_project(words=...)` for a person's own session, which also finishes a project the crew
+  never held.
+
+### Changed
+- Plugin, marketplace and PyPI descriptions and keywords name both uses: a software factory for Claude Code and an AI SRE. Plugin 0.5.1.
+- Settings: the tabs are a sidebar on the left, grouped into the workspace, Agents (model
+  providers, limits, observability) and Integrations (GitHub, Linear, Slack). `?tab=` links are
+  unchanged; the "Agents" tab is now "Limits". The API keys explanation says in plain words what
+  each kind of key can do, and plain notices show in a box instead of as floating text (TR-521).
+- Factory projects whose tickets live in Linear say so under the project name, with a link to the
+  Linear project and the Linear logo, also on the Tickets section. A ticket's page links the
+  issue from its first row instead of a subheading (TR-495).
+- Crew appears in the console's sidebar as soon as `tares factory crew up` has an orchestrator
+  running, before any project is handed over (TR-494).
+- After a release, the Homebrew tap is pointed at the new PyPI version and the install is checked
+  (TR-498, TR-499). The README shows `brew install` as the alternative to uv (TR-500).
+
+## [1.45.0] - 2026-10-14
+
+Sign in to a Tares Cloud workspace with `tares login`: the factory, `tares status` and the Claude
+Code plugin then use it with no environment variables to set. Needs control plane 1.25.0, which
+serves the page `tares login` opens; workspaces on 1.44.0 or later can be picked.
+
+### Added
+- `tares login` connects this machine to one of your Tares Cloud workspaces without environment
+  variables (TR-490). It opens the console in your browser; you sign in and pick a workspace on
+  Tares 1.44.0 or later, and this machine gets its own admin key on it, handed back to the CLI
+  over localhost with a one-time code. The workspace and key are saved in `~/.tares/login.json`,
+  readable only by you. Logging in again replaces the key. `--cloud` points at another console.
+  `tares logout` removes the key from the workspace and deletes the file.
+- `tares status` and `tares factory` use the saved login when no flag or `TARESD_URL` says
+  otherwise (TR-491). The order everywhere: a flag, then `TARESD_URL` / `TARES_AUTH_TOKEN`, then the
+  saved login, then the local daemon. `tares factory doctor` says which one it used, its messages
+  suggest `tares login`, and `crew status` says when the crew still runs against the workspace it
+  was started with.
+- Claude Code plugin 0.5.0 (TR-492): outside the factory, session shipping uses the saved
+  workspace and key while `tares_url` and `access_token` are left as they came, and the MCP
+  connection presents the key when `mcp_url` is that workspace's `/mcp`. `tares login` prints the
+  `mcp_url` to set.
+
+## [1.44.0] - 2026-10-13
+
+The software factory: a crew of Claude Code sessions on your machine builds every project you
+hand it, from tickets to pull requests merged on main, and Tares keeps the plan, the ledger, the
+reviews and your decisions. The crew CLI ships inside Tares as `tares factory`. Every session
+now reaches Tares through one shared MCP endpoint instead of starting its own `tares-mcp`.
+1.43.0 stays with the decision-model watcher (released as 1.43.0-rc.1 to rc.3); this release
+does not contain it.
+
+### Added
+- `/tares:spec` turns an idea into a Tares project: it interviews you one question at a time,
+  has a second model challenge the plan, and writes the spec, plan, milestones with acceptance
+  checks, tickets with their dependencies and repos, working docs and an AGENTS.md. Docs and
+  tickets live on the cell; tickets can live in Linear instead. `tares factory spec` opens it in
+  the repo the project builds on.
+- `tares factory crew up` starts one crew for every project: an orchestrator and a reviewer, a
+  releaser only when asked for. The first run asks its settings in a box like Claude Code's and
+  keeps them on Tares, offers to trust the crew's own folder, and starts a watch that revives
+  stopped stations. The orchestrator starts builders per milestone and repo with
+  `tares factory spawn`. `tares factory doctor` checks what the crew needs.
+- The ledger: tickets carry a holder and a stage, the orchestrator assigns them and each holder
+  moves its own. Pull requests are read from GitHub; a project can span several repos, and a
+  cross-repo dependency holds a builder back.
+- The build, recorded: assumptions, checks matched against what the session actually ran,
+  project memory, subagent transcripts, review rounds with findings and verdicts tied to the
+  commit, a review queue and brief, and recurring findings offered as rules. The Codex
+  challenger can review each builder's commits.
+- The desk: one list of questions for the person across every project, answered in the
+  orchestrator's session. Answers are kept as typed and checked against what the person wrote;
+  a reply of one option's letter ("B") is recorded as that option. A standing answer becomes a
+  grant. When a project's work is done the orchestrator asks, and the person's yes marks it
+  finished (`tares factory finish` does it from the terminal).
+- Console: a Crew page (members, projects, a member's details, notices), and on a factory
+  project page the build's steps, tickets by milestone, a GitHub section with each repo's pull
+  requests, assumptions, decisions and the sessions that worked on it.
 - The project page's results have a Show filter: everything, only findings (leaves out what had
   nothing to report), or one agent's conclusions, so a root-cause agent's notes are not buried
   under a watcher's quiet checks. Remembered per project in the browser.
@@ -13,6 +496,27 @@ the project follows [Semantic Versioning](https://semver.org/).
   stay the whole project's.
 - An agent's budget can be set on the agent form (Advanced): what it may spend in all, with what
   it spent so far. Blank means no budget. Before, the form kept the value but had no field for it.
+
+### Changed
+- The Claude Code plugin (0.4.0) connects to Tares's MCP endpoint over HTTP instead of starting
+  `tares-mcp` in every session. Locally, run `tares mcp --transport streamable-http` next to
+  `tares up` (new plugin option `mcp_url`, default `http://127.0.0.1:8788/mcp`); on Tares Cloud,
+  set `mcp_url` to `https://<cell>.tares-glassflow.com/mcp` and nothing needs installing. The
+  session's station, role and project travel as `X-Tares-*` headers, so many sessions share one
+  server. `tares factory` refuses to start sessions when the endpoint does not answer, and
+  `doctor` reports it. `tares-mcp` over stdio still works for other MCP clients.
+
+### Fixed
+- `write_milestone` keeps the goal or checks an update leaves out.
+- A session that exits shows as ended: the plugin reports the end before shipping the last
+  lines, and a session silent past its window shows quiet instead of waiting forever.
+- A build session started from Tares's own prompt joins its project, and the project page names
+  an in-progress ticket only for the session working on it.
+- The desk waits a few seconds for a reply Tares has not read yet before refusing it.
+- The session picker in "Summarize a session now" shows each session's repo, branch and state in
+  full: they sat to the right of the id and were cut off at the edge of the dialog, and the list
+  was cut off under it. The label now sits under the id and wraps, and dialogs no longer clip a
+  menu that opens inside them.
 
 ## [1.42.0] - 2026-10-06
 

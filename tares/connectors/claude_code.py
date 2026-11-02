@@ -4,9 +4,10 @@ plugin and maps them into the data plane.
 Claude Code writes one structured JSONL event per line (user / assistant / tool_use / tool_result /
 summary, each with a timestamp, sessionId, cwd, gitBranch, and — for assistant turns — model + token
 usage). The plugin's hook POSTs new transcript lines to /ingest/claude_code (local *or* remote); each
-line becomes an Envelope keyed by `session`, with repo/branch/model labels and token-usage as
-numeric fields. Sub-agent (sidechain) transcripts land in the SAME source, tagged `sidechain=true`.
-Secrets are redacted before storage (thin PII guard).
+line becomes an Envelope keyed by `session`, with repo/branch/model labels. A model reply's token
+usage is also counted once per reply (session_usage, tares/claude_usage_store.py). Sub-agent
+(sidechain) transcripts land in the SAME source, tagged `sidechain=true`. Secrets are redacted
+before storage (thin PII guard).
 
 Push-only: install the plugin (claude-plugin/) to feed it. Local file tailing was removed in favor of
 the plugin, which covers both local and remote Tares with one path.
@@ -74,8 +75,18 @@ class ClaudeCodeConnector(Connector):
         {"name": "model", "help": "model on assistant turns"},
         {"name": "type", "help": "message type (user / assistant / tool_use / …)"},
         {"name": "sidechain", "help": "sub-agent (sidechain) message"},
+        {"name": "meta", "help": "a user line Claude Code wrote itself (compaction summary, skill "
+                                 "body, peer message, task notification), not typed by the person"},
         {"name": "flow", "help": "session flow set from inside Claude Code (e.g. challenger); "
                                  "the plugin stamps it on every line of a marked session"},
+        {"name": "tares_project", "help": "the Tares project the session works in; the plugin "
+                                          "stamps it once the session creates or names one"},
+        {"name": "station", "help": "the tares-factory station the session plays (crew-reviewer, "
+                                    "<project>-build-<slug>); the plugin stamps it from "
+                                    "FACTORY_STATION"},
+        {"name": "subagent", "help": "the subagent a line belongs to (its id), for lines from a "
+                                     "subagent's own transcript; the session key stays the "
+                                     "parent's"},
         {"name": "verdict", "help": "challenge events: PASS / FAIL / ERROR / TIMEOUT / INCONCLUSIVE"},
         {"name": "sha", "help": "challenge_commit: the reviewed commit"},
         {"name": "finding_count", "help": "challenge events: findings reported (number)"},
@@ -87,6 +98,7 @@ class ClaudeCodeConnector(Connector):
     # `challenge` object: {verdict, sha?, plan?, findings: [{priority, title, waived}],
     # finding_count, blocking_count, waived_count, round?, duration_seconds, prose}.
     CHALLENGE_TYPES = ("challenge_plan", "challenge_commit", "challenge_waived")
+    USER_TURN_CAP = 20000
     # Push-only: the Claude Code plugin POSTs transcript lines to /ingest/claude_code; events are
     # mapped by map_payload(). There is no local file tail.
     ACCEPTS_PUSH = True
@@ -104,12 +116,112 @@ class ClaudeCodeConnector(Connector):
         include_thinking = c.get("include_thinking", False)
         items = payload if isinstance(payload, list) else [payload]
         out = []
+        projects: dict[str, str | None] = {}
         for o in items:
+            if isinstance(o, dict) and o.get("type") in self.METER_TYPES:
+                self._record_meter(o)   # a meter reading, not something the session said
+                continue
+            if isinstance(o, dict):
+                self._record_usage(o, projects)
+            if isinstance(o, dict) and o.get("type") == "session_station":
+                self._record_station(o)
+            if isinstance(o, dict) and o.get("type") == "session_project":
+                if not self._link_project(o) and o.get("from_env"):
+                    # TARES_PROJECT named a project Tares does not have: say so on the session's
+                    # timeline instead of making one
+                    o = {**o, "type": "session_warning",
+                         "warning": f"TARES_PROJECT names project {o.get('tares_project')!r}, "
+                                    "which is not on Tares; the session is not tied to a project"}
+            if isinstance(o, dict) and o.get("type") == "session_state":
+                self._record_state(o)
             if isinstance(o, dict):
                 env = self._obj_to_envelope(o, redact, include_thinking)
                 if env is not None:
                     out.append(env)
         return out
+
+    def _record_station(self, o: dict) -> None:
+        """A `session_station` line (TR-418): the session plays a station of a tares-factory crew
+        (its environment said FACTORY_STATION). Kept so Tares groups the crew's sessions by
+        station."""
+        sid = str(o.get("sessionId") or "")
+        if not sid or self.store is None:
+            return
+        from ..factory import DocError, station_ok
+        try:
+            name, role, parent = station_ok(o.get("station"), o.get("role"), o.get("parent"))
+        except DocError:
+            return
+        ref = str(o.get("tares_project") or "").strip()
+        p = (self.store.get_project(ref) or self.store.get_project_by_name(ref)) if ref else None
+        self.store.set_session_station(sid, name, role, parent, p["id"] if p else None,
+                                       self._ts(o))
+
+    def _link_project(self, o: dict) -> bool:
+        """A `session_project` line (TR-405): the plugin saw the session work in a Tares project
+        (it created it, or a Tares tool named it). Tie the session to the project, and put this
+        source in the project so the session's lines read as the project's, the ones from before
+        the project existed included (they share the session key). An unknown project is
+        ignored: the line still lands on the session's timeline."""
+        ref, sid = str(o.get("tares_project") or "").strip(), str(o.get("sessionId") or "")
+        if not ref or not sid or self.store is None:
+            return False
+        p = self.store.get_project(ref) or self.store.get_project_by_name(ref)
+        if p is None:
+            return False
+        cwd = o.get("cwd")
+        self.store.link_session(p["id"], sid, Path(str(cwd)).name if cwd else None)
+        self.store.upsert_project_object(p["id"], "source", f"+source:{self.cfg.name}",
+                                         self.cfg.name)
+        return True
+
+    # Lines that read a meter rather than say something: the status line's report on the session
+    # (claude-plugin/scripts/statusline.py), a /context reading of it and the plan's limits from
+    # /usage (both from `factory`). Kept on the session and the plan, never on the timeline.
+    METER_TYPES = ("session_status", "session_context", "claude_plan")
+
+    def _record_meter(self, o: dict) -> None:
+        if self.store is None:
+            return
+        from .. import claude_usage as cu
+        sid, at, typ = str(o.get("sessionId") or ""), self._ts(o), o.get("type")
+        if typ == "session_status" and sid and isinstance(o.get("status"), dict):
+            self.store.set_session_status(sid, cu.compact_status(o["status"]), at)
+        elif typ == "session_context" and sid and isinstance(o.get("context_usage"), dict):
+            self.store.set_session_context(sid, cu.compact_context(o["context_usage"]), at)
+        elif typ == "claude_plan" and isinstance(o.get("usage_report"), dict):
+            self.store.set_setting(cu.PLAN_SETTING, json.dumps(
+                {"at": at.isoformat(), "plan": cu.compact_plan(o["usage_report"])}))
+
+    def _record_usage(self, o: dict, projects: dict) -> None:
+        """A model reply's line: its token usage, counted once per reply, for the project the line
+        was stamped with (`projects` caches name lookups for one push)."""
+        msg = o.get("message") if isinstance(o.get("message"), dict) else {}
+        usage, mid, sid = msg.get("usage"), msg.get("id"), o.get("sessionId")
+        if not isinstance(usage, dict) or not mid or not sid or self.store is None:
+            return
+        from ..claude_usage_store import SYNTHETIC
+        if msg.get("model") == SYNTHETIC:   # Claude Code's own notice, not a model reply
+            return
+        ref = str(o.get("tares_project") or "").strip()
+        if ref and ref not in projects:
+            p = self.store.get_project(ref) or self.store.get_project_by_name(ref)
+            projects[ref] = p["id"] if p else None
+        self.store.record_reply_usage(
+            str(sid), str(mid), self._ts(o), msg.get("model"), projects.get(ref) if ref else None,
+            str(o.get("subagent") or o.get("agentId") or "") or None
+            if o.get("isSidechain") or o.get("subagent") else None, usage)
+
+    STATES = ("working", "idle", "waiting", "ended")
+
+    def _record_state(self, o: dict) -> None:
+        """A `session_state` line: the plugin saw the session start working, end a turn (idle),
+        need the person (a permission prompt, a question: waiting), or end. Kept as the session's state now."""
+        sid, state = str(o.get("sessionId") or ""), str(o.get("state") or "")
+        if not sid or state not in self.STATES or self.store is None:
+            return
+        self.store.set_session_state(sid, state, str(o.get("reason") or "")[:300] or None,
+                                     self._ts(o))
 
     def label_context(self, o: dict | None) -> dict:
         """Synthesized label axes from a raw transcript object — the SAME mapping ingest uses
@@ -126,7 +238,23 @@ class ClaudeCodeConnector(Connector):
                 "model": str(msg["model"]) if msg.get("model") else None,
                 "type": str(o.get("type")) if o.get("type") else None,
                 "sidechain": "true" if o.get("isSidechain") else "false",
-                "flow": str(o["flow"]) if o.get("flow") else None}
+                "meta": "true" if self._written_by_harness(o) else None,
+                "flow": str(o["flow"]) if o.get("flow") else None,
+                "tares_project": str(o["tares_project"]) if o.get("tares_project") else None,
+                "station": str(o["factory_station"]) if o.get("factory_station") else None,
+                "subagent": str(o.get("subagent") or o.get("agentId") or "") or None
+                if o.get("isSidechain") or o.get("subagent") else None}
+
+    @staticmethod
+    def _written_by_harness(o: dict) -> bool:
+        """A `user` line the person did not type: a compaction summary, a skill body, a peer
+        message, a task notification. Any origin but a human one counts, so a new kind Claude
+        Code adds stays out by default (TR-697)."""
+        if o.get("isMeta") or o.get("isCompactSummary"):
+            return True
+        origin = o.get("origin")
+        kind = origin.get("kind") if isinstance(origin, dict) else origin
+        return bool(origin) and kind != "human"
 
     # ── mapping: one JSONL object → one Envelope ───────────────────────────────
     def _obj_to_envelope(self, o: dict, redact: bool, include_thinking: bool):
@@ -142,7 +270,11 @@ class ClaudeCodeConnector(Connector):
 
         # challenge events carry the whole review; chopping them mid-finding is what the 500-char
         # cap would do, and the summarizer reads this text
-        cap = 4000 if o.get("type") in self.CHALLENGE_TYPES else 500
+        # a person's turn is what a desk answer is matched against line by line (TR-697), so a long
+        # paste is kept whole
+        etype = self._event_type(o, msg)
+        cap = (4000 if o.get("type") in self.CHALLENGE_TYPES
+               else self.USER_TURN_CAP if etype == "user" else 500)
         text = self._render_text(o, msg, include_thinking)[:cap]
         if redact:
             text = _redact(text)
@@ -153,7 +285,7 @@ class ClaudeCodeConnector(Connector):
             source=self.cfg.name,
             source_type=self.cfg.type,
             key_value=str(sid),
-            event_type=self._event_type(o, msg),
+            event_type=etype,
             text=text,
             event_time=self._ts(o),
             payload=payload,
@@ -207,11 +339,14 @@ class ClaudeCodeConnector(Connector):
         findings = "\n".join(f"[{f.get('priority')}] {f.get('title')}"
                               for f in (ch.get("findings") or []) if isinstance(f, dict))
         tail = f"\n{findings}" if findings else ""
+        # plugin 0.6.0+ names the reviewer; the summarizer reads this text, so it says which model
+        name = {"codex": "Codex", "grok": "Grok"}.get(str(ch.get("reviewer") or "").lower())
+        who = f"Challenger ({name})" if name else "Challenger"
         if typ == "challenge_plan":
-            what = f"Challenger reviewed the plan {ch.get('plan') or ''}".rstrip()
+            what = f"{who} reviewed the plan {ch.get('plan') or ''}".rstrip()
         elif typ == "challenge_commit":
             rnd = f", round {ch['round']}" if ch.get("round") else ""
-            what = f"Challenger reviewed commit {str(ch.get('sha') or '')[:8]}{rnd}"
+            what = f"{who} reviewed commit {str(ch.get('sha') or '')[:8]}{rnd}"
         else:
             return f"Challenger finding waived{tail}"
         # say what happened, not Codex's verdict word: "FAIL" reads as a broken run elsewhere
@@ -231,6 +366,18 @@ class ClaudeCodeConnector(Connector):
         if o.get("type") == "session_flow":
             # written by the plugin when Claude calls set_session_flow; `flow` empty = cleared
             return f"session flow: {o.get('flow') or 'cleared'}"
+        if o.get("type") == "session_project":
+            return f"session works in project {o.get('tares_project')}"
+        if o.get("type") == "session_state":
+            why = f": {o.get('reason')}" if o.get("reason") else ""
+            return f"session {o.get('state')}{why}"
+        if o.get("type") == "session_station":
+            role = f" ({o.get('role')})" if o.get("role") else ""
+            return f"session plays station {o.get('station')}{role}"
+        if o.get("type") == "session_warning":
+            return f"warning: {o.get('warning')}"
+        if o.get("type") == "subagent_truncated":
+            return str(o.get("note") or "a subagent's transcript was cut off")
         if o.get("type") in ClaudeCodeConnector.CHALLENGE_TYPES:
             return ClaudeCodeConnector._render_challenge(o)
         content = msg.get("content")

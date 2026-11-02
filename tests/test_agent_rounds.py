@@ -9,6 +9,9 @@ export round-trip the field.
 import asyncio, json, os, subprocess, sys, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import clean_env
+
 import httpx
 
 P = F = 0
@@ -88,7 +91,7 @@ async def main():
     stub = HTTPServer(("127.0.0.1", int(STUB_PORT)), Stub)
     threading.Thread(target=stub.serve_forever, daemon=True).start()
 
-    env = {**os.environ, "TARES_DB": DB, "TARES_CATALOG": SEED, "TARES_PORT": PORT,
+    env = {**clean_env(), "TARES_DB": DB, "TARES_CATALOG": SEED, "TARES_PORT": PORT,
            "TARES_OTLP_GRPC_PORT": "off", "ANTHROPIC_API_KEY": "sk-test",
            "TARES_ANTHROPIC_BASE": f"http://127.0.0.1:{STUB_PORT}",
            "TARES_TRIGGER_DEBOUNCE_SECONDS": "0"}

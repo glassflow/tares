@@ -6,15 +6,18 @@ export function StatusBadge({ status }: { status: string | undefined }) {
   return <span className={`badge ${s}`}>{s}</span>;
 }
 
+/** "22s ago", "5m ago", "3h ago", "2d ago": what TimeAgo shows, as text for a title. */
+export function agoText(ts: string): string {
+  const secs = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
+  if (secs < 60) return `${Math.round(secs)}s ago`;
+  if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
+  return `${Math.round(secs / 86400)}d ago`;
+}
+
 export function TimeAgo({ ts }: { ts: string | null | undefined }) {
   if (!ts) return <span className="dim">—</span>;
-  const secs = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
-  let label: string;
-  if (secs < 60) label = `${Math.round(secs)}s ago`;
-  else if (secs < 3600) label = `${Math.round(secs / 60)}m ago`;
-  else if (secs < 86400) label = `${Math.round(secs / 3600)}h ago`;
-  else label = `${Math.round(secs / 86400)}d ago`;
-  return <span title={new Date(ts).toLocaleString()}>{label}</span>;
+  return <span title={new Date(ts).toLocaleString()}>{agoText(ts)}</span>;
 }
 
 /** Fetch on mount and refetch on an interval; pause when the tab is hidden. */
@@ -42,7 +45,11 @@ export function usePolling<T>(fn: () => Promise<T>, intervalMs = 5000): {
     };
     load(true);
     const id = setInterval(() => load(), intervalMs);
-    return () => { live = false; clearInterval(id); };
+    // back on the tab: catch up now, not at the next tick, so a page left open never shows what
+    // it held when the tab was hidden
+    const onShow = () => { if (!document.hidden) load(); };
+    document.addEventListener("visibilitychange", onShow);
+    return () => { live = false; clearInterval(id); document.removeEventListener("visibilitychange", onShow); };
   }, [intervalMs, tick]);
 
   return { data, error, reload: () => setTick((t) => t + 1) };
@@ -70,6 +77,32 @@ export function ErrorState({ error, what, onRetry }: {
 /** "There is genuinely nothing here" — only ever rendered when the load SUCCEEDED. */
 export function EmptyState({ children }: { children: React.ReactNode }) {
   return <div className="empty">{children}</div>;
+}
+
+/** A button that copies `text` and says "Copied" for a moment. `what` names the text for a
+ *  screen reader ("Copy the address", then "Copied the address"). Keep the text itself on screen
+ *  next to it: when the clipboard is refused, the person selects it by hand. Both words sit in
+ *  the button, one hidden, so it is as wide as the longer one and the box beside it never moves. */
+export function CopyButton({ text, label = "Copy", what, primary, title, className }: {
+  text: string; label?: string; what?: string; primary?: boolean; title?: string; className?: string;
+}) {
+  const [done, setDone] = useState(false);
+  const timer = useRef<number>();
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text); } catch { return; /* the text stays selectable next to the button */ }
+    setDone(true);
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setDone(false), 1800);
+  };
+  const cls = ["copy-btn", primary ? "primary" : "", className ?? ""].filter(Boolean).join(" ");
+  return (
+    <button type="button" className={cls} title={title} onClick={copy}
+            aria-label={what ? `${done ? "Copied" : "Copy"} ${what}` : undefined}>
+      <span className={done ? "copy-off" : undefined}>{label}</span>
+      <span className={done ? undefined : "copy-off"}>Copied</span>
+    </button>
+  );
 }
 
 /** Bytes as a human size, binary units ("2.4 GiB"). Null/undefined is *unknown*, not zero — the
@@ -171,12 +204,13 @@ export function Picker({ value, onChange, options, labels, className, style, dis
 
 /** Input with styled suggestions — replaces native <datalist> (which can't be themed).
  *  Free text stays allowed; suggestions filter as you type. */
-export function Combo({ value, onChange, options, placeholder, style, className, hints, hintClass, matchHints }: {
+export function Combo({ value, onChange, options, placeholder, style, className, hints, hintClass, matchHints, stacked }: {
   value: string; onChange: (v: string) => void; options: string[];
   placeholder?: string; style?: React.CSSProperties; className?: string;
   hints?: Record<string, string>;   // per-option annotation, right-aligned (e.g. coverage, a type tag)
   hintClass?: string;               // className for the annotation (default "dim"; "chip" for a tag)
   matchHints?: boolean;             // typing also finds an option by its annotation (a source by its repo)
+  stacked?: boolean;                // the annotation under the option, wrapped, in a menu as wide as the field
 }) {
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0);
@@ -187,7 +221,7 @@ export function Combo({ value, onChange, options, placeholder, style, className,
   const pick = (o: string) => { onChange(o); setOpen(false); };
 
   return (
-    <div className={"combo" + (className ? ` ${className}` : "")} style={style}>
+    <div className={"combo" + (stacked ? " combo-stacked" : "") + (className ? ` ${className}` : "")} style={style}>
       <input type="text" value={value} placeholder={placeholder} autoComplete="off" data-1p-ignore data-lpignore="true"
              onChange={(e) => { onChange(e.target.value); setOpen(true); setHi(0); }}
              onFocus={() => setOpen(true)}
@@ -203,7 +237,7 @@ export function Combo({ value, onChange, options, placeholder, style, className,
         <div className="combo-list">
           {shown.map((o, i) => (
             <div key={o} className={"combo-item" + (i === hi ? " active" : "")}
-                 style={hints ? { display: "flex", justifyContent: "space-between", gap: 12 } : undefined}
+                 style={hints && !stacked ? { display: "flex", justifyContent: "space-between", gap: 12 } : undefined}
                  onMouseDown={(e) => { e.preventDefault(); pick(o); }}
                  onMouseEnter={() => setHi(i)}>
               <span>{o}</span>

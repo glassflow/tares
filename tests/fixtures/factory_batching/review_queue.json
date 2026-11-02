@@ -1,0 +1,144 @@
+{
+ "queue": [
+  {
+   "blocks_milestone": true,
+   "head": null,
+   "holder": null,
+   "layer1_clean": false,
+   "pr": null,
+   "project": "uc_solo",
+   "project_name": "solo",
+   "repo": null,
+   "ticket": "T2",
+   "title": "Last open",
+   "verdict": null
+  },
+  {
+   "blocks_milestone": false,
+   "head": "0000000000000000000000000000000000000018",
+   "holder": null,
+   "layer1_clean": true,
+   "pr": "https://github.com/o/r/pull/24",
+   "project": "uc_big",
+   "project_name": "big",
+   "repo": "o/r",
+   "ticket": "T25",
+   "title": "Ticket 24",
+   "verdict": {
+    "current": true,
+    "head": "0000000000000000000000000000000000000018",
+    "note": null,
+    "round": 1,
+    "verdict": "pass"
+   }
+  },
+  {
+   "blocks_milestone": false,
+   "head": "0000000000000000000000000000000000000008",
+   "holder": null,
+   "layer1_clean": true,
+   "pr": "https://github.com/o/r/pull/8",
+   "project": "uc_small",
+   "project_name": "small",
+   "repo": "o/r",
+   "ticket": "T9",
+   "title": "Ticket 8",
+   "verdict": {
+    "current": false,
+    "head": "000000000000000000000000000000000000000a",
+    "note": "verdict is for an older commit (0000000); the PR is now at 0000000",
+    "round": 3,
+    "verdict": "pass"
+   }
+  },
+  {
+   "blocks_milestone": false,
+   "head": "0000000000000000000000000000000000000008",
+   "holder": null,
+   "layer1_clean": true,
+   "pr": "https://github.com/o/r/pull/8",
+   "project": "uc_big",
+   "project_name": "big",
+   "repo": "o/r",
+   "ticket": "T9",
+   "title": "Ticket 8",
+   "verdict": {
+    "current": false,
+    "head": "000000000000000000000000000000000000000a",
+    "note": "verdict is for an older commit (0000000); the PR is now at 0000000",
+    "round": 3,
+    "verdict": "pass"
+   }
+  },
+  {
+   "blocks_milestone": false,
+   "head": null,
+   "holder": null,
+   "layer1_clean": true,
+   "pr": null,
+   "project": "uc_solo",
+   "project_name": "solo",
+   "repo": null,
+   "ticket": "T3",
+   "title": "No milestone",
+   "verdict": null
+  },
+  {
+   "blocks_milestone": false,
+   "head": "0000000000000000000000000000000000000000",
+   "holder": null,
+   "layer1_clean": false,
+   "pr": "https://github.com/o/r/pull/0",
+   "project": "uc_small",
+   "project_name": "small",
+   "repo": "o/r",
+   "ticket": "T1",
+   "title": "Ticket 0",
+   "verdict": {
+    "current": true,
+    "head": "0000000000000000000000000000000000000000",
+    "note": null,
+    "round": 1,
+    "verdict": "pass"
+   }
+  },
+  {
+   "blocks_milestone": false,
+   "head": "0000000000000000000000000000000000000000",
+   "holder": null,
+   "layer1_clean": false,
+   "pr": "https://github.com/o/r/pull/0",
+   "project": "uc_big",
+   "project_name": "big",
+   "repo": "o/r",
+   "ticket": "T1",
+   "title": "Ticket 0",
+   "verdict": {
+    "current": true,
+    "head": "0000000000000000000000000000000000000000",
+    "note": null,
+    "round": 1,
+    "verdict": "pass"
+   }
+  },
+  {
+   "blocks_milestone": false,
+   "head": "0000000000000000000000000000000000000010",
+   "holder": null,
+   "layer1_clean": false,
+   "pr": "https://github.com/o/r/pull/16",
+   "project": "uc_big",
+   "project_name": "big",
+   "repo": "o/r",
+   "ticket": "T17",
+   "title": "Ticket 16",
+   "verdict": {
+    "current": false,
+    "head": "0000000000000000000000000000000000000011",
+    "note": "verdict is for an older commit (0000000); the PR is now at 0000000",
+    "round": 2,
+    "verdict": "pass"
+   }
+  }
+ ]
+}

@@ -256,7 +256,7 @@ async def main():
         ck("the chain did not loop back to c1", len(chain["c1"]) == 1, str(chain["c1"]))
 
         print("== daily cap and an agent already running are recorded ==")
-        store.con.execute("UPDATE catalog_agents SET daily_cap = 1 WHERE name = 'capt'")
+        store.sc.execute("UPDATE catalog_agents SET daily_cap = 1 WHERE name = 'capt'")
         SCRIPT["capt"] = ("finding", "done", None, None)
         runner.run_now("capt", "watch", "before", "")
         await wait_for(lambda: settled(store, "capt", 1))

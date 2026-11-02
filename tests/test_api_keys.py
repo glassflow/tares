@@ -5,6 +5,9 @@ credentials, keys). Env tokens act as implicit root keys. Revoking a key removes
 import asyncio, os, subprocess, sys
 import httpx
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import clean_env
+
 P = F = 0
 def ck(l, c, d=""):
     global P, F; P += 1 if c else 0; F += 0 if c else 1
@@ -47,7 +50,7 @@ async def main():
     for p in (DB, DB + ".wal"):
         if os.path.exists(p):
             os.remove(p)
-    env = {**os.environ, "TARES_DB": DB, "TARES_CATALOG": SEED, "TARES_PORT": PORT,
+    env = {**clean_env(), "TARES_DB": DB, "TARES_CATALOG": SEED, "TARES_PORT": PORT,
            "TARES_OTLP_GRPC_PORT": "off", "TARES_AUTH_TOKEN": AUTH}
     proc = subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

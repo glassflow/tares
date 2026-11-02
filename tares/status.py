@@ -232,7 +232,8 @@ def render(st: dict) -> str:
     store = ""
     if st["storage"]["used_bytes"] is not None:
         cap = st["storage"]["max_bytes"]
-        store = f"   data dir {st['data_dir'] or '?'} ({_fmt_bytes(st['storage']['used_bytes'])}"
+        where = f"data dir {st['data_dir']}" if st["data_dir"] else "storage"
+        store = f"   {where} ({_fmt_bytes(st['storage']['used_bytes'])}"
         store += f" of {_fmt_bytes(cap)})" if cap else ")"
     L.append(f"Tares {ver} at {st['url']}{store}")
     d = st["daemon"]

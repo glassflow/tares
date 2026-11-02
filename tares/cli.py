@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
 DEFAULT_HOME = Path(os.getenv("TARES_HOME", str(Path.home() / ".tares")))
@@ -149,38 +150,118 @@ def _status(args: argparse.Namespace):
     """Readiness checklist against a running daemon. Read-only."""
     import json
     from .status import collect, render
+    from .login import resolve, saved
     home = Path(args.data_dir).expanduser()
-    base = args.taresd or f"http://127.0.0.1:{os.getenv('TARES_PORT', '8787')}"
-    token = os.getenv("TARES_AUTH_TOKEN", "").strip() or None
-    if not token and (home / "root_token").exists():
+    # a flag, then TARESD_URL, then `tares login`'s saved workspace, then the local daemon
+    base, token, source = resolve(args.taresd)
+    token = token or None
+    if not token and source != "saved login" and (home / "root_token").exists():
         token = (home / "root_token").read_text().strip() or None
-    mcp = f"http://{os.getenv('TARES_MCP_HOST', '127.0.0.1')}:{os.getenv('TARES_MCP_PORT', '8788')}/mcp"
-    st = collect(base, token, mcp_url=mcp, data_dir=str(home))
-    if args.json:
-        print(json.dumps(st, indent=2, default=str))
+    if source == "saved login":
+        mcp = f"{base}/mcp"
     else:
+        mcp = f"http://{os.getenv('TARES_MCP_HOST', '127.0.0.1')}:{os.getenv('TARES_MCP_PORT', '8788')}/mcp"
+    # a workspace's data is on the workspace, not in this machine's data dir
+    st = collect(base, token, mcp_url=mcp, data_dir=None if source == "saved login" else str(home))
+    if args.json:
+        print(json.dumps({**st, "source": source}, indent=2, default=str))
+    else:
+        if source == "saved login":
+            print(f"Signed in to {(saved() or {}).get('cell') or base} (tares login)")
+            if token and token != (saved() or {}).get("key"):
+                print("  with the key in TARES_AUTH_TOKEN, not the saved login's; unset it to use "
+                      "the saved one")
         print(render(st))
     raise SystemExit(0 if st["daemon"]["running"] else 1)
 
 
 def _mcp(args: argparse.Namespace):
-    """Run the MCP server over a network transport (for remote agents). stdio is the default for
-    local use and is what the `tares-mcp` entry point a client spawns uses."""
+    """Run the MCP server: over HTTP for remote agents (the default), or over stdio for a client
+    that spawns it, as the `tares-mcp` entry point does and as the MCP registry entry runs it."""
     os.environ["TARES_MCP_TRANSPORT"] = args.transport
     os.environ["TARES_MCP_HOST"] = args.host
     os.environ["TARES_MCP_PORT"] = str(args.port)
     if args.taresd:
-        os.environ["TARESD_URL"] = args.taresd
-    target = os.getenv("TARESD_URL", "http://127.0.0.1:8787")
+        # the server prefers TARES_FACTORY_URL, so a stray one in the shell would beat --taresd
+        os.environ["TARESD_URL"] = os.environ["TARES_FACTORY_URL"] = args.taresd
+    target = os.getenv("TARES_FACTORY_URL") or os.getenv("TARESD_URL", "http://127.0.0.1:8787")
     path = "/sse" if args.transport == "sse" else "/mcp"
-    print(f"tares-mcp: {args.transport} on http://{args.host}:{args.port}{path}  ->  {target}",
-          flush=True)
+    where = "stdio" if args.transport == "stdio" else f"{args.transport} on http://{args.host}:{args.port}{path}"
+    # stderr: over stdio, stdout is the MCP channel and any other line breaks the client's session
+    print(f"tares-mcp: {where}  ->  {target}", file=sys.stderr, flush=True)
     run_mcp()
+
+
+def _login(args: argparse.Namespace):
+    """Connect this machine to a Tares Cloud workspace through the browser (TR-490)."""
+    from .login import login
+    raise SystemExit(login(args.cloud, open_browser=not args.no_browser))
+
+
+def _logout(args: argparse.Namespace):
+    from .login import logout
+    raise SystemExit(logout())
+
+
+def plugin_dir() -> Path:
+    """The Claude Code plugin for Tares: inside the installed package, or claude-plugin/ in a
+    checkout (an editable install)."""
+    here = Path(__file__).resolve().parent
+    for d in (here / "claude-plugin", here.parent / "claude-plugin"):
+        if (d / "bin" / "factory").is_file():
+            return d
+    raise SystemExit("tares: the Claude Code plugin is missing from this install "
+                     f"(looked in {here / 'claude-plugin'} and {here.parent / 'claude-plugin'})")
+
+
+def _factory(argv: list[str]):
+    """`tares factory ...`: the tares-factory crew, run by the factory CLI the plugin ships. It
+    finds this Tares through TARESD_URL and the token in TARES_AUTH_TOKEN, else the workspace
+    `tares login` saved, else the local daemon; stations get the same address."""
+    from .login import resolve
+    script = plugin_dir() / "bin" / "factory"
+    env = dict(os.environ)
+    # The environment first, then `tares login`'s saved workspace (with its key), then the local
+    # daemon. TARES_FACTORY_SOURCE tells `doctor` which one it got.
+    url, token, source = resolve()
+    env["TARESD_URL"] = env.get("TARESD_URL") or url
+    env["TARES_FACTORY_URL"] = env.get("TARES_FACTORY_URL") or env["TARESD_URL"]
+    # Where the key came from, for `doctor`: a TARES_AUTH_TOKEN already set overrides the saved
+    # login's key, which is worth saying when the two differ (TR-560).
+    env["TARES_FACTORY_KEY_SOURCE"] = "environment" if env.get("TARES_AUTH_TOKEN") else source
+    if token and not env.get("TARES_AUTH_TOKEN"):
+        # The saved key goes only to its own workspace: not to an MCP endpoint set elsewhere.
+        mcp = (env.get("TARES_FACTORY_MCP_URL") or "").rstrip("/")
+        if source == "saved login" and mcp and mcp != f"{url}/mcp":
+            print(f"tares factory: TARES_FACTORY_MCP_URL ({mcp}) is not the workspace you are "
+                  f"signed in to ({url}); the saved key is not used. Unset it, or set "
+                  "TARES_AUTH_TOKEN.", file=sys.stderr)
+        else:
+            env["TARES_AUTH_TOKEN"] = token
+    env["TARES_FACTORY_SOURCE"] = source
+    # tares-mcp sits next to this python; stations need it on their PATH to reach Tares.
+    bindir = str(Path(sys.argv[0]).resolve().parent)
+    if (Path(bindir) / "tares-mcp").exists() and bindir not in env.get("PATH", "").split(os.pathsep):
+        env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
+    # The first `crew up` in a terminal asks its questions in a box like Claude Code's; the factory
+    # CLI then finds them answered. Scripts and --yes get its plain prompts.
+    if (argv[:2] == ["crew", "up"] and not {"--yes", "-y"} & set(argv)
+            and sys.stdin.isatty() and sys.stdout.isatty()):
+        import shutil
+
+        from .factory_setup import setup
+        home = Path(env.get("FACTORY_CREW_HOME") or Path.home() / "factory").expanduser()
+        claude = env.get("CLAUDE_BIN") or shutil.which("claude", path=env.get("PATH")) or "claude"
+        if not setup(env["TARES_FACTORY_URL"].rstrip("/"), env.get("TARES_AUTH_TOKEN", ""), home, claude):
+            raise SystemExit(1)
+    os.execve("/bin/bash", ["bash", str(script), *argv], env)
 
 
 def main():
     from .config import reject_legacy_env
     reject_legacy_env()
+    if len(sys.argv) > 1 and sys.argv[1] == "factory":
+        _factory(sys.argv[2:])
     p = argparse.ArgumentParser(prog="tares", description="Tares; a data plane for AI agents.")
     p.add_argument("--version", action="version", version=f"tares {_pkg_version()}")
     sub = p.add_subparsers(dest="cmd")
@@ -199,7 +280,7 @@ def main():
     up.set_defaults(func=_up)
 
     m = sub.add_parser(
-        "mcp", help="run the MCP server for remote agents (HTTP transport)",
+        "mcp", help="run the MCP server: HTTP for remote agents, or --transport stdio",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="joining one project:\n"
                "  Make a project key on the project page (Setup, Keys) and connect with it, e.g.\n"
@@ -215,6 +296,18 @@ def main():
     m.add_argument("--taresd", default=os.getenv("TARESD_URL", ""),
                    help="taresd base URL to proxy to (default http://127.0.0.1:8787)")
     m.set_defaults(func=_mcp)
+
+    sub.add_parser("factory", help="the tares-factory crew of Claude Code sessions: "
+                                   "`tares factory help` lists its commands")
+
+    li = sub.add_parser("login", help="connect this machine to one of your Tares Cloud workspaces "
+                                      "(opens your browser)")
+    li.add_argument("--cloud", default="", help="the Tares Cloud console to sign in at (default "
+                                                "$TARES_CLOUD_URL or https://console.tares-glassflow.com)")
+    li.add_argument("--no-browser", action="store_true", help="only print the address to open")
+    li.set_defaults(func=_login)
+    lo = sub.add_parser("logout", help="remove this machine's key from its workspace and forget the login")
+    lo.set_defaults(func=_logout)
 
     st = sub.add_parser("status", help="readiness checklist for a running instance, and the next step")
     st.add_argument("--taresd", default=os.getenv("TARESD_URL", ""),

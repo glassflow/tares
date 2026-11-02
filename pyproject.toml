@@ -1,8 +1,9 @@
 [project]
 name = "tares"
-version = "1.42.0"
-description = "A self-hostable data plane for AI agents: ingest events, store them losslessly, and serve one correlated read of any entity over MCP."
+version = "1.55.0"
+description = "Open-source platform for always-on AI agents: a software factory for Claude Code that takes your projects from tickets to merged pull requests, or an AI SRE that watches your systems."
 readme = "README.md"
+keywords = ["tares", "software-factory", "claude-code", "autonomous-agents", "coding-agents", "multi-agent", "agent-orchestration", "ai-sre", "ai-monitoring", "incident-response", "observability", "mcp"]
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "GlassFlow" }]
@@ -11,6 +12,7 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
+    "Topic :: Software Development",
     "Topic :: System :: Monitoring",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
@@ -35,7 +37,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://tares-glassflow.com"
+Homepage = "https://www.glassflow.ai/tares"
 Documentation = "https://docs.glassflow.ai/tares"
 Repository = "https://github.com/glassflow/tares"
 
@@ -44,6 +46,9 @@ Repository = "https://github.com/glassflow/tares"
 # compiled dep, so the gRPC path stays opt-in. (postgres/agent deps are now base — `tares up`
 # ships a working Postgres connector and Ask agent with no extras.)
 otlp-grpc = ["grpcio>=1.60", "opentelemetry-proto>=1.20"]
+# A cell's state in Postgres (TARES_STATE_DSN, state_db.py): the cloud image installs it; a
+# local install keeps its state in DuckDB and needs none of this.
+postgres-state = ["psycopg[binary]>=3.1"]
 
 [project.scripts]
 tares = "tares.cli:main"
@@ -59,6 +64,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build]
 artifacts = ["ui/dist/**"]
 
+[tool.hatch.build.targets.sdist]
+# hatch reads only the root .gitignore, so ui/.gitignore's node_modules would land in the sdist,
+# hard links (esbuild's binary) included, which uv refuses to unpack when it builds the wheel
+exclude = ["**/node_modules"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["tares"]
 
@@ -66,3 +76,5 @@ packages = ["tares"]
 # Build the UI first: `cd ui && npm install && npm run build` emits ui/dist before the wheel build.
 [tool.hatch.build.targets.wheel.force-include]
 "ui/dist" = "tares/console"
+# The Claude Code plugin, so `tares factory` and its stations run from the install.
+"claude-plugin" = "tares/claude-plugin"

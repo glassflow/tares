@@ -2,21 +2,35 @@
 
 One install wires Claude Code to Tares in **both directions**:
 
-- **Read-back (MCP):** registers the `tares` MCP server so the agent can query your data plane
-  (the same `tares-mcp` proxy the console hands out).
+- **Read-back (MCP):** connects the session to Tares's MCP endpoint over HTTP (`mcp_url`) so the
+  agent can query your data plane. Every session shares that one endpoint; the plugin starts no
+  MCP process of its own.
 - **Capture (hooks):** ships this session's transcript into Tares's `claude_code` source as it
   progresses — via a small hook (`scripts/ship.py`) that POSTs new transcript lines to
   `{tares_url}/ingest/claude_code`.
 
-Both wires are configured once on install (`tares_url`, optional auth `access_token`, and a
-`stream_sessions` toggle). Challenger sessions (below) add `challenger_mode`, `codex_bin` and
-`codex_sandbox`.
+Both wires are configured once on install (`tares_url`, `mcp_url`, optional auth `access_token`,
+and a `stream_sessions` toggle). Challenger sessions (below) add `challenger_mode`, `challenger_backend`,
+`codex_bin`, `codex_sandbox`, `xai_api_key` and `grok_model`.
 
 ## Prerequisites
 
-- `tares-mcp` on PATH (from `pip install tares`) — the MCP read-back proxy.
-- `python3` on PATH — runs the shipper hook.
+- A Tares MCP endpoint at `mcp_url`. Local: run `tares mcp --transport streamable-http` next to
+  `tares up` and keep the default `http://127.0.0.1:8788/mcp`. Tares Cloud: built in, at
+  `https://<cell>.tares-glassflow.com/mcp`; nothing to install.
+
+**On Tares Cloud, sign in once with `tares login`.** It opens your browser, you pick one of your
+workspaces, and this machine gets its own key on it. Sessions then ship to that workspace with that
+key, and the MCP connection presents it, with no `tares_url` or `access_token` to set. The one
+setting left is `mcp_url`: `tares login` prints the workspace's address to paste there (`/plugin`,
+tares, Configure). The key is only ever sent to that workspace: session shipping uses it while
+`tares_url` and `access_token` are left as they came, and the MCP connection presents it only when
+`mcp_url` is that workspace's `/mcp`. `tares logout` removes the key.
+- `python3` on PATH: runs the shipper hook.
 - A Tares daemon reachable at `tares_url`.
+
+Tested with Claude Code 2.1.296. The MCP connection relies on its expansion of `${VAR:-}` and
+`${user_config.*}` in HTTP server URLs and headers, and on `headersHelper`.
 
 **No manual source setup.** The shipper creates the `claude_code` push source on Tares itself the
 first time it runs (on `SessionStart`), and re-creates it if it's ever missing. Installing the plugin
@@ -31,6 +45,10 @@ claude --plugin-dir ./claude-plugin
 Then start a session and do some work — new transcript lines flow to Tares on each prompt/tool use
 and at session end. Check the console: **Entities** (keyed by `session`), or query the `claude_code`
 source.
+
+To prove the shared MCP endpoint end to end (real Claude Code sessions with this plugin, each under
+its own station identity, against a throwaway Tares; costs a few Haiku calls), run
+`bash scripts/check-shared-mcp.sh` from the repo root.
 
 ## Distribute (marketplace)
 
@@ -50,7 +68,7 @@ Say "make this a challenger session" (or type `/tares:challenger`) at the start 
 Claude calls the `set_session_flow` MCP tool; the shipper sees that call in the transcript, marks
 the session locally and on Tares, and from then on:
 
-- when Claude leaves plan mode, the OpenAI Codex CLI on your laptop critiques the plan and Claude
+- when Claude leaves plan mode, the OpenAI Codex CLI on your laptop (or Grok, below) critiques the plan and Claude
   gets the findings before you see the plan (advisory; only `[P1]` counts as blocking on a plan);
 - after every `git commit` Claude makes, Codex reviews the commit. `[P1]`/`[P2]` findings block
   Claude until it fixes and amends (strict, the default) or come back as context (`challenger_mode`
@@ -68,10 +86,45 @@ Needs `codex` on PATH (`npm install -g @openai/codex && codex login`) or the `co
 reviews are billed to your OpenAI account and Tares never calls Codex. If reviews come back
 INCONCLUSIVE inside an already sandboxed session, set `codex_sandbox` to `danger-full-access`.
 
+To have Grok challenge instead of Codex, set `challenger_backend` to `grok` and give it an xAI key
+(`xai_api_key`, or `XAI_API_KEY` in the environment). Grok gets one API call per review: the
+commit's patch plus the full text of each changed file, or the plan. It cannot run the project's
+commands, so it reasons from the code only. A reply has to end on `VERDICT: CLEAN` to pass; one
+without findings or a verdict line is INCONCLUSIVE, and one that says `VERDICT: FINDINGS` but
+names no `[P1]` or `[P2]` line the plugin can read blocks like a P2, with Grok's text as the
+finding. `grok_model` defaults to `grok-4.6`; a
+non-reasoning model invents findings, so keep a reasoning one. Reviews are billed to your xAI
+account (about 2 US cents for a small commit). Grok raises real but minor `[P2]` findings often
+enough that `challenger_mode` = `advise` is the calmer start.
+
 The mechanism follows [andreidavid/codex-review](https://github.com/andreidavid/codex-review)
 (MIT): post-commit review, priority-tagged findings, the blocking fix loop, plan critique, state in
 `.git/`. This plugin reimplements it in Python, gates it on the session mark, and records the
 exchange in Tares.
+
+## Spec a project
+
+Type `/tares:spec <what you want to build>` (or ask Claude to spec a new project). Claude
+brainstorms it with you first, then writes everything a later session needs to build it into a
+new Tares project:
+
+- the spec, the plan, the AGENTS.md of the build and a starting prompt (docs, kept in Tares)
+- the tickets, in order, each with a working doc (context, steps, files, how to verify)
+
+The tickets live in Tares, or in Linear when you want Linear: Claude creates them there with
+Linear's own MCP tools, links the Linear project, and Tares keeps its ticket list in sync (it
+polls about once a minute). Working docs stay in Tares either way. For Linear, connect it once in
+the Tares console (Settings, Linear) and give this session Linear's MCP server.
+
+Or in GitHub Issues: Claude creates them with `gh` in one repo under an issue label, links them
+with `link_github_issues`, and Tares keeps the list in sync with the GitHub credentials stored on
+it. Tares refuses to change a GitHub ticket's title, status, order, milestone or dependencies; change those with `gh`.
+
+The spec session's whole recording lands on the project. A later session told
+`Work on Tares project "<name>"` reads the starting prompt, the tickets and their working docs
+with `list_docs`, `get_doc`, `list_tickets` and `get_ticket`.
+
+Creating projects and writing docs needs an admin key in `access_token` on a secured instance.
 
 ## How capture works
 

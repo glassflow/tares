@@ -4,6 +4,9 @@ boot only); with sync set, every boot re-imports, so editing the file + restarti
 import asyncio, os, signal, subprocess, sys
 import httpx
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import clean_env
+
 P = F = 0
 def ck(l, c, d=""):
     global P, F; P += 1 if c else 0; F += 0 if c else 1
@@ -23,7 +26,7 @@ def write_catalog(*names):
 
 
 async def boot_and_count(sync):
-    env = {**os.environ, "TARES_DB": DB, "TARES_CATALOG": CAT, "TARES_PORT": PORT,
+    env = {**clean_env(), "TARES_DB": DB, "TARES_CATALOG": CAT, "TARES_PORT": PORT,
            "TARES_OTLP_GRPC_PORT": "off"}
     if sync:
         env["TARES_CATALOG_SYNC"] = "1"

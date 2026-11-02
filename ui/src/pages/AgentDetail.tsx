@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -300,6 +300,7 @@ export default function AgentDetail() {
             providers={data.providers}
             defaultProvider={data.default_provider}
             defaultModels={data.default_models}
+            smallModels={data.small_models}
             slackWorkspace={data.slack_workspace}
             defaultMaxRounds={data.default_max_rounds}
             defaultMaxRoundsWithMcp={data.default_max_rounds_with_mcp}
@@ -433,6 +434,27 @@ export function RunsPanel({ name, agent, from = [], focusDispatch, focusRun, ope
   );
 }
 
+/** Consecutive capped runs, newest first, as one entry; a lone capped run stays a plain run.
+ *  A trigger firing past the daily cap leaves one capped row per firing (TR-671), so a capped
+ *  agent's list is otherwise a wall of identical lines. */
+export type RunItem = { run: AgentRun } | { capped: AgentRun[] };
+export function collapseCapped(runs: AgentRun[]): RunItem[] {
+  const items: RunItem[] = [];
+  let streak: AgentRun[] = [];
+  const flush = () => {
+    if (streak.length === 1) items.push({ run: streak[0] });
+    else if (streak.length > 1) items.push({ capped: streak });
+    streak = [];
+  };
+  for (const r of runs) {
+    if (r.status === "capped") { streak.push(r); continue; }
+    flush();
+    items.push({ run: r });
+  }
+  flush();
+  return items;
+}
+
 export function RunsTable({ runs, runsError, agent, emptyText, focusDispatch, focusRun, openRun, setOpenRun }: {
   runs: AgentRun[] | undefined;
   runsError: string | undefined;
@@ -443,14 +465,36 @@ export function RunsTable({ runs, runsError, agent, emptyText, focusDispatch, fo
   openRun: string | undefined;
   setOpenRun: (id: string | undefined) => void;
 }) {
+  // a folded group is keyed by its newest run, which stays put while older ones are paged in
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
+  const isFocused = (r: AgentRun) =>
+    (!!focusDispatch && r.dispatch_id === focusDispatch) || (!!focusRun && r.id === focusRun);
+  // A deep link to a run inside a folded group opens that group once, when the run first shows up
+  // in the list; after that the header toggles it like any other group.
+  const focusId = focusRun ?? focusDispatch;
+  const [openedFor, setOpenedFor] = useState<string | undefined>();
+  if (runs && focusId && openedFor !== focusId) {
+    const hit = collapseCapped(runs).find((i): i is { capped: AgentRun[] } => "capped" in i && i.capped.some(isFocused));
+    if (hit) {
+      setOpenedFor(focusId);
+      setOpenGroups((g) => new Set(g).add(hit.capped[0].id));
+    }
+  }
   if (runsError) return <ErrorState error={runsError} what="this agent’s runs" />;
   if (!runs?.length) {
     return <div className="empty">{emptyText ?? (agent.trigger ? <>no runs yet; this agent runs when <span className="mono">{agent.trigger}</span> fires</> : <>no runs yet; a handoff starts this agent</>)}</div>;
   }
-  const isFocused = (r: AgentRun) =>
-    (!!focusDispatch && r.dispatch_id === focusDispatch) || (!!focusRun && r.id === focusRun);
   // an agent that concludes: how each run ended gets a column, so nobody reads the text for it
   const outcomes = !!agent.offers_conclude;
+  const row = (r: AgentRun) => {
+    const focused = isFocused(r);
+    // A deep-linked run starts open; clicking any row toggles it like the roster table.
+    const open = openRun !== undefined ? openRun === r.id : focused;
+    return (
+      <RunRow key={r.id} r={r} open={open} focused={focused} outcomes={outcomes}
+              onToggle={() => setOpenRun(open ? "" : r.id)} />
+    );
+  };
   return (
     <table>
       <thead>
@@ -461,13 +505,24 @@ export function RunsTable({ runs, runsError, agent, emptyText, focusDispatch, fo
         </tr>
       </thead>
       <tbody>
-        {runs.map((r) => {
-          const focused = isFocused(r);
-          // A deep-linked run starts open; clicking any row toggles it like the roster table.
-          const open = openRun !== undefined ? openRun === r.id : focused;
+        {collapseCapped(runs).map((item) => {
+          if ("run" in item) return row(item.run);
+          const group = item.capped;
+          const key = group[0].id;
+          const open = openGroups.has(key);
           return (
-            <RunRow key={r.id} r={r} open={open} focused={focused} outcomes={outcomes}
-                    onToggle={() => setOpenRun(open ? "" : r.id)} />
+            <Fragment key={key}>
+              <tr className="clickable" data-testid="capped-group"
+                  title="runs refused before any model call: the daily cap, the agent's budget, a handoff stop or a run already in progress"
+                  onClick={() => setOpenGroups((g) => { const n = new Set(g); n.has(key) ? n.delete(key) : n.add(key); return n; })}>
+                <td colSpan={outcomes ? 9 : 8}>
+                  {group.length} runs skipped, capped
+                  <span className="dim"> · latest <TimeAgo ts={group[0].started_at} /></span>
+                </td>
+                <td className="dim">{open ? "▾" : "▸"}</td>
+              </tr>
+              {open && group.map(row)}
+            </Fragment>
           );
         })}
       </tbody>

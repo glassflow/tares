@@ -19,6 +19,7 @@ from .claude_code import ClaudeCodeConnector
 from .docker_logs import DockerLogsConnector
 from .github import GithubConnector
 from .github_app import GithubAppConnector
+from .github_issues import GitHubIssuesConnector
 from .loki import LokiConnector
 from .memory import MemoryConnector
 from .otlp import OtlpConnector
@@ -26,6 +27,7 @@ from .postgres import PostgresConnector
 from .prometheus import PrometheusConnector
 from .finding import FindingConnector
 from .http_poll import HttpPollConnector
+from .linear import LinearConnector
 from .reference import ReferenceConnector
 from .threat_intel import ThreatIntelConnector
 from .vercel import VercelConnector
@@ -49,6 +51,8 @@ REGISTRY = {
     "finding": FindingConnector,
     "threat_intel": ThreatIntelConnector,
     "http_poll": HttpPollConnector,
+    "linear": LinearConnector,
+    "github_issues": GitHubIssuesConnector,
 }
 
 # Connector metadata for the UI. The `fields` of each are GENERATED from the connector's
@@ -131,6 +135,18 @@ SPECS = {
     "finding": {"label": "Agent findings", "mode": "push", "internal": True,
                 "description": "What Tares agents conclude when a trigger fires; one finding per "
                                "run, keyed to the entity, on that entity's timeline."},
+    # provisioned when a project is linked to a Linear project (TR-408); one per cell
+    "linear": {"label": "Linear tickets", "mode": "poll", "internal": True, "poll": "60s",
+               "description": "Keeps the tickets of projects that use Linear in sync; one event "
+                              "per change (added, renamed, status, reordered, left the project), "
+                              "keyed by the Linear identifier."},
+    # provisioned when a project is linked to a GitHub repo and issue label (TR-569); one per cell
+    "github_issues": {"label": "GitHub issues (tickets)", "mode": "poll", "internal": True,
+                      "poll": "60s",
+                      "description": "Keeps the tickets of projects that use GitHub Issues in "
+                                     "sync; one event per change (added, renamed, status, "
+                                     "reordered, left the project), keyed by the issue "
+                                     "identifier (GH-12)."},
 }
 
 

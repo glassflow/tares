@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import ipaddress
 import os
@@ -23,6 +24,7 @@ from urllib.parse import urlsplit
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs
 
 import httpx
@@ -32,6 +34,7 @@ from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse, Re
                                Response, StreamingResponse)
 from pydantic import BaseModel, model_validator
 
+from . import loop as loop_mod
 from .config import (SLACK_URL_PREFIX, CatalogError, agent_url, catalog_from_db, export_db_to_yaml,
                      validate_mcp_server_dict,
                      import_yaml_to_db, slack_channel_from_url, slack_url,
@@ -41,8 +44,10 @@ from .config import (SLACK_URL_PREFIX, CatalogError, agent_url, catalog_from_db,
                      _source_from_dict)
 from .connectors import (SPECS, normalize_config, redact_config, restore_secrets,
                          source_type_for)
+from .connectors.github import _normalize_repo as _gh_normalize_repo
 from .dispatch import Dispatcher
 from .envelope import now_utc
+from .models import add_usage, empty_usage
 from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_conclude,
                              MAX_ROUNDS as AGENT_MAX_ROUNDS,
                              MAX_ROUNDS_LIMIT as AGENT_MAX_ROUNDS_LIMIT,
@@ -51,6 +56,11 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_
                              resolve_anthropic_headers, resolve_api_base, resolve_provider,
                              DEFAULT_API_BASE)
 from . import metrics as _metrics
+from . import docs as docs_mod
+from . import factory as factory_mod
+from . import claude_usage, factory_api, standup as standup_mod
+from . import linear as _linear
+from . import github_tickets as _gh_tickets
 from . import skills as skills_mod
 from . import providers as providers_mod
 from .runtime import Runtime
@@ -95,6 +105,10 @@ GITHUB_CONNECT_URL = os.getenv("TARES_GITHUB_CONNECT_URL", "").strip()
 # Cloud only: where "Connect Slack" sends the browser (the control plane's Slack install for this
 # workspace, TR-364). Set, Settings > Slack offers Connect and Disconnect instead of the paste forms.
 SLACK_CONNECT_URL = os.getenv("TARES_SLACK_CONNECT_URL", "").strip()
+# Cloud only: where "Connect Linear" sends the browser (the control plane's sign-in with the
+# GlassFlow Linear app, TR-537). Set, Settings > Linear offers Connect and Disconnect; the control
+# plane hands the token to this cell and renews it.
+LINEAR_CONNECT_URL = os.getenv("TARES_LINEAR_CONNECT_URL", "").strip()
 # Cloud only: the control plane's list of the signed-in person's workspaces (TR-370). Set, the
 # console's top left becomes a workspace switcher; the console fetches it with the person's
 # control-plane session cookie, the cell never calls it.
@@ -280,24 +294,46 @@ def _serve_ui(path: str):
     return FileResponse(UI_DIST / "index.html")
 
 
-def _degraded_app(reason: str) -> FastAPI:
+def _state_db_unreachable(e: BaseException) -> bool:
+    """True when the store failed because the Postgres state database (TARES_STATE_DSN) could not
+    be reached or refused the login: no DNS, a connect timeout, no connection slots left. Those
+    pass on their own, unlike a locked or corrupt DuckDB file or a state database that does not
+    hold this cell's state."""
+    try:
+        import psycopg
+    except ImportError:
+        return False
+    x = e.__cause__ or e.__context__
+    while x is not None:
+        if isinstance(x, psycopg.OperationalError):
+            return True
+        x = x.__cause__ or x.__context__
+    return False
+
+
+def _degraded_app(reason: str, retry: bool = False) -> FastAPI:
     """The app we serve when the store could not be opened. It exists so the failure reaches a
     human instead of ERR_CONNECTION_REFUSED: the console still loads and every data route answers
     503 with the reason, so the UI can name the problem. No runtime, no connectors, no ingest —
-    nothing that would need the store. Restart once the DB is reachable again."""
+    nothing that would need the store. Restart once the DB is reachable again.
+
+    `retry`: the failure passes on its own (_state_db_unreachable), so /health answers 503 and the
+    liveness probe restarts the daemon, which tries the database again. Left at 200, a cell that
+    started during a DNS outage or a burst of restarts that filled the database's connection slots
+    stayed degraded until someone restarted it by hand (2026-10-31: twelve cells)."""
     app = FastAPI(title="taresd (degraded)")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                        allow_headers=["*"])
 
     @app.get("/health", include_in_schema=False)
-    async def health():
+    def health():
         # HTTP 200 with status "down": a probe that can read the body learns WHAT is wrong, and the
         # console (which only ever reaches this daemon) can render it. Keys AuthGate depends on stay.
         body = {"status": "down", "detail": reason, "auth_required": bool(AUTH_TOKEN),
                 "sources": [], "pct_used": None}
         if LOGIN_URL:
             body["login_url"] = LOGIN_URL
-        return body
+        return JSONResponse(body, status_code=503) if retry else body
 
     async def unavailable():
         return JSONResponse({"detail": f"database unavailable; {reason}", "status": "down"},
@@ -310,7 +346,7 @@ def _degraded_app(reason: str) -> FastAPI:
                           methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"])
 
     @app.get("/{path:path}", include_in_schema=False)
-    async def ui(path: str):
+    def ui(path: str):
         # An unmatched /api/* or /ingest/* path must never answer with the SPA's HTML and a 200 —
         # a client checking the status reads that as success and fails to parse (TR-226). The
         # console never requests these prefixes, so nothing legitimate is lost.
@@ -412,6 +448,7 @@ class ProjectIn(BaseModel):
     params: dict = {}
     objects: list | None = None   # template "custom": the objects, each {kind, name}
     goal: str | None = None       # one line, at most 200 characters; none = the template's GOAL
+    kind: str | None = None       # "software_factory" for a project a spec session makes
 
     @model_validator(mode="before")
     @classmethod
@@ -552,12 +589,18 @@ def _seed_project(store, projects) -> None:
 
 def make_app() -> FastAPI:
     try:
-        store = Store(DB_PATH)
+        # TARES_STATE_DSN (a cloud cell): the state lives in that Postgres database, the events
+        # stay in DuckDB. Unset, everything is in the DuckDB file as before.
+        store = Store(DB_PATH, state_dsn=os.getenv("TARES_STATE_DSN") or None)
     except StoreUnavailable as e:
         # Losing the DB must not cost us the ability to SAY that we lost the DB. Log the full
         # traceback (degraded mode explains the failure to the user, it does not hide it from the
         # operator) and serve the console + 503s instead of exiting before uvicorn ever binds.
         traceback.print_exc()
+        if _state_db_unreachable(e):
+            print(f"taresd: DEGRADED; {e.reason}. Serving the console and 503s; /health answers "
+                  f"503 too, so the liveness probe restarts this daemon to try again.", flush=True)
+            return _degraded_app(e.reason, retry=True)
         print(f"taresd: DEGRADED; {e.reason}. Serving the console and 503s; fix the database "
               f"and restart.", flush=True)
         return _degraded_app(e.reason)
@@ -627,7 +670,7 @@ def make_app() -> FastAPI:
         runtime.start_all()
         # the daemon's own counters (/metrics, TR-308): storage gauges read on scrape, the event
         # loop watched by a one-second timer for the whole life of the process
-        _metrics.set_storage_probe(lambda: {**store.usage(), **{
+        _metrics.set_storage_probe(lambda: {**store.storage_usage(), **{
             k: v for k, v in storage_state(store, DB_PATH).items()
             if k in ("max_bytes", "pct_used", "paused")}})
         try:
@@ -639,6 +682,7 @@ def make_app() -> FastAPI:
         # providers the environment handed the cell list their models now, not on a click
         asyncio.create_task(providers_mod.discover_env_entries(store))
         loop_stop = asyncio.Event()
+        loop_mod.attach(asyncio.get_running_loop())   # handlers in threads start work here
         loop_watch = asyncio.create_task(_metrics.watch_event_loop(loop_stop))
         # the clock for schedule triggers (TR-320)
         from . import schedule as _schedule
@@ -706,7 +750,8 @@ def make_app() -> FastAPI:
         if path == "/api/setup/github-suggestion":
             return "admin"   # spends model money and distills private READMEs: not for read keys
         if (path in _ADMIN_PATHS or path.startswith("/api/keys")
-                or path.startswith("/api/discover") or path.startswith("/api/settings")):
+                or path.startswith("/api/discover") or path.startswith("/api/settings")
+                or path.startswith("/api/linear")):
             return "admin"
         if method != "GET" and (path.startswith("/api/sources")
                                 or path.startswith("/api/triggers")
@@ -743,6 +788,18 @@ def make_app() -> FastAPI:
         ("GET", re.compile(r"^/skills$"), "read"),
         ("GET", re.compile(r"^/skills/[^/]+$"), "read"),
         ("GET", re.compile(r"^/findings$"), "read"),
+        ("GET", re.compile(r"^/docs$"), "read"),
+        ("GET", re.compile(r"^/docs/[^/]+$"), "read"),
+        ("GET", re.compile(r"^/tickets$"), "read"),
+        ("GET", re.compile(r"^/tickets/[^/]+$"), "read"),
+        ("GET", re.compile(r"^/milestones$"), "read"),
+        ("GET", re.compile(r"^/crew$"), "read"),
+        ("GET", re.compile(r"^/tickets/[^/]+/messages$"), "read"),
+        ("GET", re.compile(r"^/assumptions$"), "read"),
+        ("GET", re.compile(r"^/decisions$"), "read"),
+        ("GET", re.compile(r"^/sessions$"), "read"),
+        ("GET", re.compile(r"^/sessions/[^/]+$"), "read"),
+        ("GET", re.compile(r"^/pickup$"), "read"),
         ("GET", re.compile(r"^/results$"), "read"),
         ("GET", re.compile(r"^/results/[^/]+$"), "read"),
         ("GET", re.compile(r"^/outline$"), "read"),
@@ -821,15 +878,30 @@ def make_app() -> FastAPI:
                 request.state.scopes = sorted(scopes)
             return await call_next(request)
 
+    # per-route timing in /metrics (TR-652): added after every other middleware so it is the
+    # outermost one and times auth rejections too
+    app.add_middleware(_metrics.RequestTiming)
+
     def _err(e: Exception, code: int = 400):
         raise HTTPException(status_code=code, detail=str(e))
 
     # ── agent surface (unchanged contract; queries now logged) ───────────────
+    # A scrape token for /metrics (TR-653), separate from the cell's own auth token on purpose: the
+    # scraper gets only the counters. Read here, not at import, so each app built reads the env.
+    metrics_token = os.getenv("TARES_METRICS_TOKEN", "").strip()
+
     @app.get("/metrics", include_in_schema=False)
-    async def metrics_endpoint():
+    def metrics_endpoint(request: Request):
         """The daemon's own counters in the Prometheus text format (TR-308): events per source,
         poll outcomes, source state, agent runs, model calls and spend by provider, storage against
-        its limit, trigger evaluation time, event loop lag. Public like /health; counts only."""
+        its limit, trigger evaluation time, event loop lag. Counts only. Public like /health
+        unless TARES_METRICS_TOKEN is set; then it wants `Authorization: Bearer <that token>`
+        (TR-653). The auth guard lets /metrics through either way, so this check decides."""
+        if metrics_token and not hmac.compare_digest(
+                request.headers.get("authorization", "").encode(),
+                f"Bearer {metrics_token}".encode()):
+            return JSONResponse({"detail": "this endpoint needs the metrics scrape token"},
+                                status_code=401, headers={"WWW-Authenticate": "Bearer"})
         try:
             body, ctype = _metrics.render()
         except RuntimeError:
@@ -837,7 +909,7 @@ def make_app() -> FastAPI:
         return Response(content=body, media_type=ctype)
 
     @app.get("/health")
-    async def health():
+    def health():
         """Liveness that actually touches the store, so a wedged DuckDB can't read as healthy to a
         k8s probe or the control plane's uptime check. `ok` / `degraded` (running, but nearly out of
         the configured storage) / `down` (the store stopped answering — restart needed). Always
@@ -869,6 +941,8 @@ def make_app() -> FastAPI:
             body["github_connect_url"] = GITHUB_CONNECT_URL
         if SLACK_CONNECT_URL:
             body["slack_connect_url"] = SLACK_CONNECT_URL
+        if LINEAR_CONNECT_URL:
+            body["linear_connect_url"] = LINEAR_CONNECT_URL
         if WORKSPACES_URL:
             body["workspaces_url"] = WORKSPACES_URL
         if WORKSPACE_API_URL:
@@ -916,7 +990,7 @@ def make_app() -> FastAPI:
         return _resolve_project(ref) if ref else None
 
     @app.post("/read")
-    async def read(req: ReadReq, request: Request):
+    def read(req: ReadReq, request: Request):
         """Raw label-native read. The selector is a {label: value} conjunction (strict AND). By
         default it reads every source; `project` narrows it to that project's sources (the
         shared findings and memory sources included, with only the project's own rows) and
@@ -956,7 +1030,7 @@ def make_app() -> FastAPI:
                           include_in_schema=False)
 
     @app.post("/subscribe")
-    async def subscribe(req: SubReq, request: Request):
+    def subscribe(req: SubReq, request: Request):
         if req.trigger not in {t.name for t in runtime.catalog.triggers}:
             _err(KeyError(f"unknown trigger {req.trigger!r}"), 404)
         url = req.url.strip()
@@ -979,12 +1053,12 @@ def make_app() -> FastAPI:
         return {"subscription_id": sid}
 
     @app.post("/unsubscribe")
-    async def unsubscribe(req: UnsubReq):
+    def unsubscribe(req: UnsubReq):
         store.remove_subscription(req.subscription_id)
         return {"ok": True}
 
     @app.get("/catalog")
-    async def catalog_list(request: Request):
+    def catalog_list(request: Request):
         members = store.source_memberships()
         pk = _pk(request)
         if pk:   # a project key sees its own project only
@@ -1054,7 +1128,7 @@ def make_app() -> FastAPI:
         return facets
 
     @app.get("/catalog/{handle}")
-    async def catalog_describe(handle: str, request: Request):
+    def catalog_describe(handle: str, request: Request):
         kind, _, name = handle.partition(":")
         pk = _pk(request)
         if pk:
@@ -1114,7 +1188,7 @@ def make_app() -> FastAPI:
 
     # ── entities — the (label, value) pairs, faceted (the entity surface) ─────
     @app.get("/api/entities")
-    async def entities(label: str | None = None, limit: int = 50):
+    def entities(label: str | None = None, limit: int = 50):
         facets = _label_facets()
 
         def values_for(name: str, facet: dict, lim: int):
@@ -1182,7 +1256,7 @@ def make_app() -> FastAPI:
                 _err(ValueError("body must be JSON or NDJSON"))
 
     @app.get("/ingest/{token}", include_in_schema=False)
-    async def ingest_verify(token: str, request: Request):
+    def ingest_verify(token: str, request: Request):
         # Vercel (and similar) probe the endpoint before saving a drain — answer with the verify header.
         return JSONResponse({"ok": True}, headers=_verify_headers(request))
 
@@ -1285,7 +1359,7 @@ def make_app() -> FastAPI:
 
     # ── management API: connectors ────────────────────────────────────────────
     @app.get("/api/connectors")
-    async def connectors():
+    def connectors():
         return {name: spec for name, spec in SPECS.items()}
 
     # (there is no /api/security — whether auth is on is a boolean on /health; producers authenticate
@@ -1295,7 +1369,7 @@ def make_app() -> FastAPI:
     _SCOPES = {"read", "ingest", "admin"}
 
     @app.get("/api/keys")
-    async def list_keys():
+    def list_keys():
         return {"keys": store.list_api_keys(),
                 "enforced": bool(AUTH_TOKEN),   # without a root auth token the instance is open
                 "scopes": sorted(_SCOPES)}
@@ -1315,7 +1389,7 @@ def make_app() -> FastAPI:
         return out
 
     @app.post("/api/keys", status_code=201)
-    async def create_key(body: dict = Body(...)):
+    def create_key(body: dict = Body(...)):
         """{name, scopes, project?}. With `project` (an id or a name) it is a project key: scopes
         `read` and `findings` (the default), over that project only."""
         name = str(body.get("name") or "").strip()
@@ -1336,13 +1410,13 @@ def make_app() -> FastAPI:
         return _make_key(name, scopes, None)
 
     @app.delete("/api/keys/{kid}")
-    async def revoke_key(kid: str):
+    def revoke_key(kid: str):
         if not store.revoke_api_key(kid):
             _err(KeyError(f"no active key {kid!r}"), 404)
         return {"ok": True, "note": "key revoked; its subscriptions were removed"}
 
     @app.get("/api/whoami")
-    async def whoami(request: Request):
+    def whoami(request: Request):
         ident = getattr(request.state, "credential", None)
         scopes = getattr(request.state, "scopes", None)
         if ident is None:   # guard not active (open instance) or ingest-path credential
@@ -1353,7 +1427,7 @@ def make_app() -> FastAPI:
         return out
 
     @app.get("/api/capabilities")
-    async def capabilities():
+    def capabilities():
         """Host capabilities that gate local-only console features, so the UI can hide actions that
         can't work on this deployment — e.g. a hosted cell has no Docker socket, so Auto-discover
         would be a dead end. (Claude Code is plugin-based and works everywhere, so it's not gated.)"""
@@ -1382,7 +1456,7 @@ def make_app() -> FastAPI:
         }
 
     @app.post("/api/labels/preview")
-    async def label_preview(body: dict = Body(...)):
+    def label_preview(body: dict = Body(...)):
         """Pure preview of a label spec's value normalization against a source's OBSERVED values:
         before -> after with event counts, so the user sees the merge they're about to create
         before saving (docs/design/label-value-normalization.md). No state is touched."""
@@ -1425,7 +1499,7 @@ def make_app() -> FastAPI:
                 "distinct_after": len({a for _, a in pairs})}
 
     @app.get("/api/sources/discover", include_in_schema=False)
-    async def discover_source_get():
+    def discover_source_get():
         _err(ValueError("discover is POST-only: POST /api/sources/discover "
                         "{connector, config}"), 405)
 
@@ -1474,7 +1548,7 @@ def make_app() -> FastAPI:
 
     # ── management API: sources ───────────────────────────────────────────────
     @app.get("/api/sources")
-    async def list_sources():
+    def list_sources():
         health = runtime.health_snapshot()
         members = store.source_memberships()
         return [{**s, "config": redact_config(s["connector"], s["config"]),
@@ -1482,7 +1556,7 @@ def make_app() -> FastAPI:
                  "health": health.get(s["name"])} for s in store.list_catalog_sources()]
 
     @app.get("/api/sources/{name}")
-    async def get_source(name: str):
+    def get_source(name: str):
         for s in store.list_catalog_sources():
             if s["name"] == name:
                 return {**s, "config": redact_config(s["connector"], s["config"]),
@@ -1491,7 +1565,7 @@ def make_app() -> FastAPI:
         _err(KeyError(f"unknown source {name!r}"), 404)
 
     @app.post("/api/sources", status_code=201)
-    async def create_source(body: SourceIn):
+    def create_source(body: SourceIn):
         if body.name in runtime.catalog.sources:
             _err(ValueError(f"source {body.name!r} already exists"), 409)
         uid = _resolve_project(body.project)
@@ -1508,7 +1582,7 @@ def make_app() -> FastAPI:
         return {"ok": True, "name": body.name, "ingest_key": cfg.ingest_key if cfg else None}
 
     @app.put("/api/sources/{name}")
-    async def update_source(name: str, body: SourceIn):
+    def update_source(name: str, body: SourceIn):
         existing = {s["name"]: s for s in store.list_catalog_sources()}.get(name)
         if existing is None:
             _err(KeyError(f"unknown source {name!r}"), 404)
@@ -1535,7 +1609,7 @@ def make_app() -> FastAPI:
     # What else goes if an object is deleted, in delete order (agents, then triggers). The
     # delete dialogs show it and offer to take it along; the cascade deletes use the same list.
     @app.get("/api/catalog/dependents")
-    async def catalog_dependents(kind: str, name: str):
+    def catalog_dependents(kind: str, name: str):
         from .projects.engine import dependents
         if kind not in ("source", "trigger"):
             _err(ValueError("kind must be source or trigger"), 400)
@@ -1554,7 +1628,7 @@ def make_app() -> FastAPI:
         return gone
 
     @app.delete("/api/sources/{name}")
-    async def delete_source(name: str, purge_events: bool = False, cascade: bool = False):
+    def delete_source(name: str, purge_events: bool = False, cascade: bool = False):
         """`cascade` takes the triggers that read this source and those triggers' agents with
         it; without it a source that something depends on is refused by name."""
         if name not in {s["name"] for s in store.list_catalog_sources()}:
@@ -1573,7 +1647,7 @@ def make_app() -> FastAPI:
         return {"ok": True, "purged_events": purged, "deleted": gone}
 
     @app.post("/api/sources/{name}/pause")
-    async def pause_source(name: str):
+    def pause_source(name: str):
         if name not in runtime.catalog.sources:
             _err(KeyError(f"unknown source {name!r}"), 404)
         store.set_source_paused(name, True)
@@ -1581,7 +1655,7 @@ def make_app() -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/sources/{name}/resume")
-    async def resume_source(name: str):
+    def resume_source(name: str):
         if name not in runtime.catalog.sources:
             _err(KeyError(f"unknown source {name!r}"), 404)
         store.set_source_paused(name, False)
@@ -1599,13 +1673,13 @@ def make_app() -> FastAPI:
         return await runtime.test_source(_source_from_dict(d))
 
     @app.get("/api/sources/{name}/events")
-    async def source_events(name: str, limit: int = 50):
+    def source_events(name: str, limit: int = 50):
         if name not in {s["name"] for s in store.list_catalog_sources()}:
             _err(KeyError(f"unknown source {name!r}"), 404)
         return store.recent_events(source=name, limit=min(limit, 500))
 
     @app.get("/api/sources/{name}/fields")
-    async def source_fields(name: str, limit: int = 500):
+    def source_fields(name: str, limit: int = 500):
         """What this source actually contains: the connector's normalized fields (the things you can
         key/label on), each with how many sampled events carry it and its top values. Makes the
         otherwise-invisible normalized structure visible, so a key is chosen, not guessed."""
@@ -1769,11 +1843,11 @@ def make_app() -> FastAPI:
                                        runtime.health_snapshot())
 
     @app.get("/api/mcp-servers")
-    async def list_mcp_servers():
+    def list_mcp_servers():
         return {"servers": [_mcp_row(m) for m in store.list_mcp_servers()]}
 
     @app.post("/api/mcp-servers", status_code=201)
-    async def create_mcp_server(body: McpServerIn):
+    def create_mcp_server(body: McpServerIn):
         if store.get_mcp_server(body.name) is not None:
             _err(ValueError(f"mcp server {body.name!r} already exists"), 409)
         uid = _resolve_project(body.project)
@@ -1796,7 +1870,7 @@ def make_app() -> FastAPI:
         return value
 
     @app.put("/api/mcp-servers/{name}")
-    async def update_mcp_server(name: str, body: McpServerIn):
+    def update_mcp_server(name: str, body: McpServerIn):
         existing = store.get_mcp_server(name)
         if existing is None:
             _err(KeyError(f"unknown mcp server {name!r}"), 404)
@@ -1817,7 +1891,7 @@ def make_app() -> FastAPI:
         return {"ok": True, "project": uid or existing.get("owned_by")}
 
     @app.delete("/api/mcp-servers/{name}")
-    async def delete_mcp_server(name: str):
+    def delete_mcp_server(name: str):
         if store.get_mcp_server(name) is None:
             _err(KeyError(f"unknown mcp server {name!r}"), 404)
         store.delete_mcp_server(name)
@@ -1925,7 +1999,7 @@ def make_app() -> FastAPI:
         return out
 
     @app.get("/api/integrations/github")
-    async def list_github_credentials():
+    def list_github_credentials():
         return {"credentials": [_gh_row(c) for c in store.list_github_credentials()]}
 
     @app.post("/api/integrations/github", status_code=201)
@@ -2019,7 +2093,7 @@ def make_app() -> FastAPI:
         return {"ok": True, "account": account}
 
     @app.delete("/api/integrations/github/{name}")
-    async def delete_github_credential(name: str):
+    def delete_github_credential(name: str):
         if store.get_github_credential(name) is None:
             _err(KeyError(f"unknown GitHub credential {name!r}"), 404)
         store.delete_github_credential(name)
@@ -2066,7 +2140,7 @@ def make_app() -> FastAPI:
         return {"ok": True, "login": rows[0]["account"], "installations": rows}
 
     @app.post("/api/integrations/github/{name}/mcp")
-    async def github_credential_mcp(name: str, body: GithubMcpIn):
+    def github_credential_mcp(name: str, body: GithubMcpIn):
         """The GitHub MCP server for this credential (GitHub's hosted server, authenticated with
         the credential, so an App credential's agents act as the App): `github-<name>` with write
         toolsets, `githubro-<name>` read-only. Created once, a shared part any project uses;
@@ -2134,7 +2208,7 @@ def make_app() -> FastAPI:
                                 status_code=303)
 
     @app.post("/api/integrations/github/apps")
-    async def create_github_app(body: GithubAppCreateIn, request: Request):
+    def create_github_app(body: GithubAppCreateIn, request: Request):
         from .setup_flow import public_base
         name = _check_gh_name(body.name)
         base = (body.public_url.strip() or public_base(str(request.base_url))).rstrip("/")
@@ -2172,7 +2246,7 @@ def make_app() -> FastAPI:
         return _gh_settings({"github": name, "event": "created"})
 
     @app.get("/api/integrations/github/{name}/install")
-    async def github_app_install_link(name: str):
+    def github_app_install_link(name: str):
         """The GitHub page that installs this App (with a signed state naming the credential)."""
         cred = store.get_github_credential(name)
         if cred is None or cred.get("kind") != "app" or not (cred.get("config") or {}).get("slug"):
@@ -2225,18 +2299,18 @@ def make_app() -> FastAPI:
     # console reopened tomorrow can pick up where it left off. The console PUTs the whole session
     # after each exchange; the store keeps the newest 50.
     @app.get("/api/ask/sessions")
-    async def ask_sessions():
+    def ask_sessions():
         return {"sessions": store.list_ask_sessions()}
 
     @app.get("/api/ask/sessions/{sid}")
-    async def ask_session(sid: str):
+    def ask_session(sid: str):
         row = store.get_ask_session(sid)
         if row is None:
             _err(KeyError(f"unknown session {sid!r}"), 404)
         return row
 
     @app.put("/api/ask/sessions/{sid}")
-    async def save_ask_session(sid: str, body: AskSessionIn):
+    def save_ask_session(sid: str, body: AskSessionIn):
         if not re.fullmatch(r"[0-9a-f]{16,64}", sid):
             _err(ValueError("session id must be a hex id"), 400)
         # a runaway transcript should degrade the one session, not the instance
@@ -2246,7 +2320,7 @@ def make_app() -> FastAPI:
         return {"ok": True}
 
     @app.delete("/api/ask/sessions/{sid}")
-    async def remove_ask_session(sid: str):
+    def remove_ask_session(sid: str):
         if not store.delete_ask_session(sid):
             _err(KeyError(f"unknown session {sid!r}"), 404)
         return {"ok": True}
@@ -2271,7 +2345,7 @@ def make_app() -> FastAPI:
                 "customized": t["customized"]}
 
     @app.get("/api/triggers")
-    async def list_triggers():
+    def list_triggers():
         return [_trigger_row(t) for t in store.list_catalog_triggers()]
 
     def _check_trigger(body: TriggerIn, name: str) -> dict:
@@ -2300,7 +2374,7 @@ def make_app() -> FastAPI:
             store.put_in_project("source", src, uid)
 
     @app.post("/api/triggers", status_code=201)
-    async def create_trigger(body: TriggerIn):
+    def create_trigger(body: TriggerIn):
         if body.name in {t.name for t in runtime.catalog.triggers}:
             _err(ValueError(f"trigger {body.name!r} already exists"), 409)
         raw = _check_trigger(body, body.name)
@@ -2314,7 +2388,7 @@ def make_app() -> FastAPI:
         return {"ok": True, "project": uid}
 
     @app.put("/api/triggers/{name}")
-    async def update_trigger(name: str, body: TriggerIn):
+    def update_trigger(name: str, body: TriggerIn):
         current = next((t for t in store.list_catalog_triggers() if t["name"] == name), None)
         if current is None:
             _err(KeyError(f"unknown trigger {name!r}"), 404)
@@ -2333,7 +2407,7 @@ def make_app() -> FastAPI:
         return {"ok": True, "project": uid}
 
     @app.delete("/api/triggers/{name}")
-    async def delete_trigger(name: str):
+    def delete_trigger(name: str):
         if name not in {t.name for t in runtime.catalog.triggers}:
             _err(KeyError(f"unknown trigger {name!r}"), 404)
         # it leaves every project, and the agents it woke stay, without a trigger of their own
@@ -2343,7 +2417,7 @@ def make_app() -> FastAPI:
         return {"ok": True, "agents_without_trigger": cleared}
 
     @app.post("/api/triggers/{name}/pause")
-    async def pause_trigger(name: str):
+    def pause_trigger(name: str):
         if name not in {t.name for t in runtime.catalog.triggers}:
             _err(KeyError(f"unknown trigger {name!r}"), 404)
         store.set_trigger_paused(name, True)
@@ -2351,7 +2425,7 @@ def make_app() -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/triggers/{name}/resume")
-    async def resume_trigger(name: str):
+    def resume_trigger(name: str):
         if name not in {t.name for t in runtime.catalog.triggers}:
             _err(KeyError(f"unknown trigger {name!r}"), 404)
         store.set_trigger_paused(name, False)
@@ -2391,7 +2465,7 @@ def make_app() -> FastAPI:
         return raw
 
     @app.get("/api/agents/builtin")
-    async def list_builtin_agents(project: str | None = None):
+    def list_builtin_agents(project: str | None = None):
         """Tares agent definitions plus the state the UI needs to explain why one isn't running:
         no key configured is the common case on a fresh install and looks identical to "disabled"
         without this."""
@@ -2444,6 +2518,9 @@ def make_app() -> FastAPI:
                 "providers": plist["providers"], "default_provider": plist["default"],
                 "default_models": {p["id"]: providers_mod.default_model_for(store, p["id"])
                                    for p in plist["providers"]},
+                # per provider id, the model the Triage preset picks ("" = keep the default)
+                "small_models": {p["id"]: providers_mod.small_model_for(store, p["id"])
+                                 for p in plist["providers"]},
                 "default_max_rounds": AGENT_MAX_ROUNDS,
                 "default_max_rounds_with_mcp": AGENT_MAX_ROUNDS_WITH_MCP,
                 "max_rounds_limit": AGENT_MAX_ROUNDS_LIMIT,
@@ -2458,7 +2535,7 @@ def make_app() -> FastAPI:
         return value.strip() if value else value
 
     @app.post("/api/agents/builtin", status_code=201)
-    async def create_builtin_agent(body: AgentIn):
+    def create_builtin_agent(body: AgentIn):
         if not body.name:
             _err(ValueError("name is required"), 400)
         if store.get_catalog_agent(body.name) is not None:
@@ -2481,7 +2558,7 @@ def make_app() -> FastAPI:
                 "note": "agents start disabled; enable it to run on the next firing"}
 
     @app.put("/api/agents/builtin/{name}")
-    async def update_builtin_agent(name: str, body: AgentIn):
+    def update_builtin_agent(name: str, body: AgentIn):
         existing = store.get_catalog_agent(name)
         if existing is None:
             _err(KeyError(f"unknown agent {name!r}"), 404)
@@ -2526,7 +2603,7 @@ def make_app() -> FastAPI:
         return {"ok": True}
 
     @app.delete("/api/agents/builtin/{name}")
-    async def delete_builtin_agent(name: str):
+    def delete_builtin_agent(name: str):
         if store.get_catalog_agent(name) is None:
             _err(KeyError(f"unknown agent {name!r}"), 404)
         # the agents that handed off to it lose that handoff, in every project (the store drops
@@ -2552,7 +2629,7 @@ def make_app() -> FastAPI:
         return uid
 
     @app.post("/api/agents/builtin/{name}/enable")
-    async def enable_builtin_agent(name: str, project: str | None = None):
+    def enable_builtin_agent(name: str, project: str | None = None):
         """On in a project (the one named, else the one that made it): its wake-ups there wake
         it. Idempotent."""
         agent = store.get_catalog_agent(name)
@@ -2567,7 +2644,7 @@ def make_app() -> FastAPI:
         return {"ok": True, "enabled": True, "project": uid}
 
     @app.post("/api/agents/builtin/{name}/disable")
-    async def disable_builtin_agent(name: str, project: str | None = None):
+    def disable_builtin_agent(name: str, project: str | None = None):
         """Off in a project (the one named), or everywhere when none is named."""
         if store.get_catalog_agent(name) is None:
             _err(KeyError(f"unknown agent {name!r}"), 404)
@@ -2577,7 +2654,7 @@ def make_app() -> FastAPI:
         return {"ok": True, "enabled": False, **({"project": uid} if uid else {})}
 
     @app.post("/api/agents/builtin/{name}/runs/{run_id}/rerun", status_code=201)
-    async def rerun_builtin_agent(name: str, run_id: str):
+    def rerun_builtin_agent(name: str, run_id: str):
         """Run the agent again with the same inputs as an earlier run: same trigger, same key,
         and the firing's payload when a firing woke it (a manual or bootstrap run reruns with an
         empty note; the timeline the agent reads is the real input either way). Same run record,
@@ -2604,7 +2681,7 @@ def make_app() -> FastAPI:
     _RUN_STATUSES = {"running", "ok", "empty", "failed", "capped", "exhausted"}
 
     @app.get("/api/agents/builtin/{name}/runs")
-    async def builtin_agent_runs(name: str, limit: int = 50, offset: int = 0, status: str = "",
+    def builtin_agent_runs(name: str, limit: int = 50, offset: int = 0, status: str = "",
                                  project: str | None = None):
         """The operational record — status, duration, errors. Distinct from findings, which are
         events on the entity's timeline; a failed run must never look like a conclusion.
@@ -2624,7 +2701,7 @@ def make_app() -> FastAPI:
 
     # ── the Anthropic key: a stored key wins, env is the fallback ────────────
     @app.get("/api/settings/anthropic-key")
-    async def get_anthropic_key():
+    def get_anthropic_key():
         """Never returns the key — only whether one is resolvable and where it came from. A key
         saved here takes over from the deployment's env key; `env_overrides` is kept for API
         compatibility and can now only be true when no key is stored."""
@@ -2634,7 +2711,7 @@ def make_app() -> FastAPI:
                 "env_overrides": origin.startswith("env:")}
 
     @app.put("/api/settings/anthropic-key")
-    async def set_anthropic_key(body: AnthropicKeyIn):
+    def set_anthropic_key(body: AnthropicKeyIn):
         key = body.key.strip()
         if not key:
             _err(ValueError("key is required (use DELETE to remove the stored key)"))
@@ -2643,7 +2720,7 @@ def make_app() -> FastAPI:
         return {"ok": True, "source": origin}
 
     @app.delete("/api/settings/anthropic-key")
-    async def clear_anthropic_key():
+    def clear_anthropic_key():
         """Removing the stored key falls back to the deployment's env key when one exists — on a
         hosted trial cell that is the trial key, until its operator removes it too."""
         store.set_setting("anthropic_key", None)
@@ -2662,11 +2739,11 @@ def make_app() -> FastAPI:
                 "default_url": DEFAULT_API_BASE}
 
     @app.get("/api/settings/gateway")
-    async def get_gateway():
+    def get_gateway():
         return _gateway_status()
 
     @app.put("/api/settings/gateway")
-    async def set_gateway(body: GatewayIn):
+    def set_gateway(body: GatewayIn):
         url = body.url.strip().rstrip("/")
         parts = urlsplit(url)
         if parts.scheme not in ("http", "https") or not parts.hostname:
@@ -2678,7 +2755,7 @@ def make_app() -> FastAPI:
         return {"ok": True, **_gateway_status()}
 
     @app.delete("/api/settings/gateway")
-    async def clear_gateway():
+    def clear_gateway():
         """Back to the environment's gateway if the deployment set one, else Anthropic."""
         store.set_setting("gateway_url", None)
         store.set_setting("gateway_token", None)
@@ -2689,11 +2766,11 @@ def make_app() -> FastAPI:
     # OpenAI-compatible entries (LiteLLM, OpenRouter, Ollama, vLLM) live in one JSON setting.
     # Credentials are write-only: the listing says configured-or-not and where from.
     @app.get("/api/settings/providers")
-    async def get_providers():
+    def get_providers():
         return providers_mod.list_providers(store)
 
     @app.put("/api/settings/providers/default")
-    async def set_default_provider(body: ProviderDefaultIn):
+    def set_default_provider(body: ProviderDefaultIn):
         try:
             providers_mod.set_default(store, body.id.strip())
         except KeyError as e:
@@ -2733,7 +2810,7 @@ def make_app() -> FastAPI:
         return {"ok": True, **result, **providers_mod.list_providers(store)}
 
     @app.delete("/api/settings/providers/{provider_id}")
-    async def delete_provider(provider_id: str):
+    def delete_provider(provider_id: str):
         known = {p["id"] for p in providers_mod.list_providers(store)["providers"]}
         if provider_id not in known:
             _err(KeyError(f"unknown provider {provider_id!r}"), 404)
@@ -2754,11 +2831,11 @@ def make_app() -> FastAPI:
                 "env": DAILY_CAP_ENV}
 
     @app.get("/api/settings/agents")
-    async def get_agent_limits():
+    def get_agent_limits():
         return _agent_limits()
 
     @app.put("/api/settings/agents")
-    async def set_agent_limits(body: AgentLimitsIn):
+    def set_agent_limits(body: AgentLimitsIn):
         from .builtin_agents import DAILY_CAP_MAX, DAILY_CAP_SETTING
         raw = body.daily_cap
         if raw is None or str(raw).strip() == "":
@@ -2775,11 +2852,11 @@ def make_app() -> FastAPI:
         return {"ok": True, **_agent_limits()}
 
     @app.get("/api/settings/tracing")
-    async def get_tracing():
+    def get_tracing():
         return tracing_status(store)
 
     @app.put("/api/settings/tracing")
-    async def set_tracing(body: TracingIn):
+    def set_tracing(body: TracingIn):
         """Every field is optional; a field left out is untouched, an empty string clears the
         stored value (the environment value, if any, takes over again)."""
         if body.provider is not None:
@@ -2808,7 +2885,7 @@ def make_app() -> FastAPI:
     # write-only over the API exactly like the model key: the console can learn THAT one resolves
     # and where from, never what it is.
     @app.get("/api/settings/slack-bot-token")
-    async def get_slack_token():
+    def get_slack_token():
         token, origin = resolve_slack_token(store)
         return {"configured": bool(token), "source": origin,
                 "stored": bool(store.get_setting(SLACK_TOKEN_SETTING)),
@@ -2830,7 +2907,7 @@ def make_app() -> FastAPI:
         return {"id": t.get("id") or "", "name": t.get("name") or ""}
 
     @app.put("/api/settings/slack-team")
-    async def set_slack_team(body: SlackTeamIn):
+    def set_slack_team(body: SlackTeamIn):
         team_id = body.team_id.strip()
         if not team_id:
             _err(ValueError("team_id is required (use DELETE to clear the team)"))
@@ -2839,12 +2916,12 @@ def make_app() -> FastAPI:
         return {"ok": True, "team": _slack_team()}
 
     @app.delete("/api/settings/slack-team")
-    async def clear_slack_team():
+    def clear_slack_team():
         store.set_setting(SLACK_TEAM_SETTING, None)
         return {"ok": True, "team": None}
 
     @app.put("/api/settings/slack-bot-token")
-    async def set_slack_token(body: SlackTokenIn):
+    def set_slack_token(body: SlackTokenIn):
         token = body.token.strip()
         if not token:
             _err(ValueError("token is required (use DELETE to remove the stored token)"))
@@ -2861,7 +2938,7 @@ def make_app() -> FastAPI:
                    if origin.startswith("env:") else {})}
 
     @app.delete("/api/settings/slack-bot-token")
-    async def clear_slack_token():
+    def clear_slack_token():
         store.set_setting(SLACK_TOKEN_SETTING, None)
         _drop_channels_cache(forget=True)
         token, origin = resolve_slack_token(store)
@@ -2928,7 +3005,7 @@ def make_app() -> FastAPI:
             return out
 
     @app.post("/api/slack/channels/changed")
-    async def slack_channels_changed(body: SlackChannelsChangedIn | None = None):
+    def slack_channels_changed(body: SlackChannelsChangedIn | None = None):
         """Tares Cloud forwards Slack's channel events here (member_joined_channel, channel_created,
         channel_rename, channel_archive); the next read of the list asks Slack again."""
         _drop_channels_cache()
@@ -2938,14 +3015,14 @@ def make_app() -> FastAPI:
     # Same write-only contract as the bot token. Without it POST /api/slack/events answers 503:
     # there is no configuration in which accepting an unverified inbound request is correct.
     @app.get("/api/settings/slack-signing-secret")
-    async def get_slack_signing_secret():
+    def get_slack_signing_secret():
         secret, origin = slack_verify.resolve_secret(store)
         return {"configured": bool(secret), "source": origin,
                 "stored": bool(store.get_setting(slack_verify.SETTING_KEY)),
                 "env_overrides": origin.startswith("env:")}
 
     @app.put("/api/settings/slack-signing-secret")
-    async def set_slack_signing_secret(body: SlackSigningSecretIn):
+    def set_slack_signing_secret(body: SlackSigningSecretIn):
         secret = body.secret.strip()
         if not secret:
             _err(ValueError("secret is required (use DELETE to remove the stored secret)"))
@@ -2960,7 +3037,7 @@ def make_app() -> FastAPI:
                    if origin.startswith("env:") else {})}
 
     @app.delete("/api/settings/slack-signing-secret")
-    async def clear_slack_signing_secret():
+    def clear_slack_signing_secret():
         store.set_setting(slack_verify.SETTING_KEY, None)
         secret, origin = slack_verify.resolve_secret(store)
         return {"ok": True, "configured": bool(secret), "source": origin}
@@ -3110,15 +3187,15 @@ def make_app() -> FastAPI:
 
     # ── management API: activity (what agents saw / what woke them) ──────────
     @app.get("/api/activity/queries")
-    async def activity_queries(limit: int = 100):
+    def activity_queries(limit: int = 100):
         return store.list_queries(limit=min(limit, 500))
 
     @app.get("/api/activity/dispatches")
-    async def activity_dispatches(limit: int = 100):
+    def activity_dispatches(limit: int = 100):
         return store.list_dispatches(limit=min(limit, 500))
 
     @app.get("/api/activity/dispatches/{dispatch_id}")
-    async def activity_dispatch(dispatch_id: str):
+    def activity_dispatch(dispatch_id: str):
         """One firing, deep. Fetch-by-id so a linked dispatch page never dead-ends (unlike the
         capped list). Includes the per-subscriber delivery attempts with masked endpoints + agent
         names, so the failure is attributable to a specific agent."""
@@ -3171,7 +3248,7 @@ def make_app() -> FastAPI:
         return name, masked
 
     @app.get("/api/agents")
-    async def agent_roster():
+    def agent_roster():
         """The roster of everything a trigger wakes: Tares agents (run in-process) and connected
         external agents (webhooks), one row each, tagged by `kind`. Both are subscriptions, so both
         appear here identically — wiring (triggers), delivery health, recent wakes."""
@@ -3231,7 +3308,7 @@ def make_app() -> FastAPI:
         return {"agents": out}
 
     @app.get("/api/subscriptions")
-    async def subscriptions():
+    def subscriptions():
         return store.list_all_subscriptions()
 
     # ── management API: projects (templates instantiated with params) ─────────
@@ -3245,14 +3322,14 @@ def make_app() -> FastAPI:
         raise e
 
     @app.get("/api/projects/templates")
-    async def project_templates():
+    def project_templates():
         return {"templates": projects.list_templates()}
 
     # By key, hidden templates included: the gallery list leaves out templates a person does not
     # pick (rius_rca is created by the Rius control plane), but the Edit page of a project built
     # on one still has to render its form.
     @app.get("/api/projects/templates/{key}")
-    async def project_template(key: str):
+    def project_template(key: str):
         from .projects.registry import get_template
         try:
             return get_template(key).describe()
@@ -3273,22 +3350,42 @@ def make_app() -> FastAPI:
                 "skills": [s["name"] for s in store.list_skills(uid)]}
 
     @app.get("/api/projects")
-    async def list_projects(request: Request):
+    def list_projects(request: Request):
         pk = _pk(request)
         if pk:
             return {"projects": [_project_card(pk)]}
-        return {"projects": projects.list()}
+        # a software factory project carries its tickets' progress, for the list's ring, and
+        # `activity_at`, when it last moved (its newest ticket counts), for the Updated column;
+        # every factory project's tickets come in one query (TR-659)
+        cards = projects.list()
+        tickets = store.tickets_by_project([p["id"] for p in cards
+                                            if p.get("kind") == "software_factory"])
+
+        def card(p: dict) -> dict:
+            if p.get("kind") != "software_factory":
+                return {**p, "activity_at": p["updated_at"]}
+            ts = tickets[p["id"]]
+            return {**p, "progress": factory_mod.progress(ts),
+                    "activity_at": factory_mod.activity_at(p["updated_at"], ts)}
+        return {"projects": [card(p) for p in cards]}
 
     @app.post("/api/projects", status_code=201)
-    async def create_project(body: ProjectIn):
+    def create_project(body: ProjectIn):
+        if body.kind not in (None, "", "software_factory"):
+            _err(ValueError(f"unknown project kind {body.kind!r}; the one there is: "
+                            "software_factory"))
         try:
             params = {**body.params, "objects": body.objects} if body.objects is not None else body.params
-            return projects.create(body.template, params, name=body.name or None, goal=body.goal)
+            out = projects.create(body.template, params, name=body.name or None, goal=body.goal)
         except Exception as e:
             _uc_err(e)
+        if body.kind:
+            store.set_project_kind(out["id"], body.kind)
+            out = {**out, "kind": body.kind}
+        return out
 
     @app.get("/api/projects/{uid}")
-    async def get_project(uid: str, request: Request):
+    def get_project(uid: str, request: Request):
         if _pk(request):
             return _project_card(uid)   # the guard already held it to the key's own project
         inst = projects.get(uid)
@@ -3297,7 +3394,7 @@ def make_app() -> FastAPI:
         return inst
 
     @app.put("/api/projects/{uid}")
-    async def update_project(uid: str, body: ProjectUpdate):
+    def update_project(uid: str, body: ProjectUpdate):
         given = body.model_fields_set
         try:
             if "goal" in given and not ({"params", "objects"} & given) and not body.name.strip():
@@ -3315,7 +3412,7 @@ def make_app() -> FastAPI:
             _uc_err(e)
 
     @app.delete("/api/projects/{uid}")
-    async def delete_project(uid: str, purge_events: bool = False, delete_sources: str = ""):
+    def delete_project(uid: str, purge_events: bool = False, delete_sources: str = ""):
         """Deletes the project's triggers, agents and MCP servers. `delete_sources=a,b` also
         deletes those of its sources that no other project uses (the others are kept and listed
         in `kept`); every other source stays, in the default project if in no other. Sources are
@@ -3330,7 +3427,7 @@ def make_app() -> FastAPI:
             _uc_err(e)
 
     @app.post("/api/projects/{uid}/sources")
-    async def add_project_source(uid: str, body: dict = Body(...)):
+    def add_project_source(uid: str, body: dict = Body(...)):
         """Add an existing source to a project (sources are shared between projects)."""
         name = str((body or {}).get("name") or "").strip()
         if not name:
@@ -3341,7 +3438,7 @@ def make_app() -> FastAPI:
             _uc_err(e)
 
     @app.delete("/api/projects/{uid}/sources/{name}")
-    async def remove_project_source(uid: str, name: str):
+    def remove_project_source(uid: str, name: str):
         """Take a source out of a project; refused while a trigger of the project reads it."""
         try:
             return projects.remove_source(uid, name)
@@ -3349,7 +3446,7 @@ def make_app() -> FastAPI:
             _uc_err(e)
 
     @app.post("/api/projects/{uid}/pause")
-    async def pause_project(uid: str, body: dict | None = Body(default=None)):
+    def pause_project(uid: str, body: dict | None = Body(default=None)):
         """Body {"sources": true} also pauses the project's sources, so nothing accumulates while
         it is paused (the AI SRE demo's traffic, for one). Default: sources keep ingesting."""
         try:
@@ -3358,14 +3455,14 @@ def make_app() -> FastAPI:
             _uc_err(e)
 
     @app.post("/api/projects/{uid}/resume")
-    async def resume_project(uid: str):
+    def resume_project(uid: str):
         try:
             return projects.resume(uid)
         except Exception as e:
             _uc_err(e)
 
     @app.post("/api/projects/{uid}/repair")
-    async def repair_project(uid: str, body: ProjectRepair):
+    def repair_project(uid: str, body: ProjectRepair):
         try:
             return projects.repair(uid, body.key)
         except Exception as e:
@@ -3467,7 +3564,7 @@ def make_app() -> FastAPI:
             _err(e, 404)
 
     @app.post("/api/projects/{uid}/results/{run_id}/handled")
-    async def project_result_handled(uid: str, run_id: str, request: Request,
+    def project_result_handled(uid: str, run_id: str, request: Request,
                                      body: dict = Body(...)):
         """{"handled": true|false}: mark a result handled by the caller, or clear the mark."""
         _project_or_404(uid)
@@ -3492,7 +3589,7 @@ def make_app() -> FastAPI:
                                        runtime.health_snapshot())
 
     @app.get("/api/projects/{uid}/summary")
-    async def project_summary(uid: str):
+    def project_summary(uid: str):
         try:
             return projects.summary(uid)
         except Exception as e:
@@ -3602,7 +3699,7 @@ def make_app() -> FastAPI:
                                               prev=plan)}
 
     @app.post("/api/setup/check")
-    async def setup_check(body: dict = Body(...)):
+    def setup_check(body: dict = Body(...)):
         """{plan} -> {plan, problems}: the plan normalized exactly as apply would (sentences and
         the summary derived from it as it is now) and what stops it from applying, per item
         ({where, message}), in plain words. No model call; apply accepts a plan with no
@@ -3707,7 +3804,7 @@ def make_app() -> FastAPI:
                 _planning_tasks.pop(uid, None)
 
         progress(setup_flow.context_words(runtime.catalog), False)
-        _planning_tasks[uid] = asyncio.create_task(run())
+        _planning_tasks[uid] = loop_mod.spawn(run())
 
     # a restart ends any planning in flight: say so rather than leave the page waiting
     for _p in store.list_projects():
@@ -3793,7 +3890,7 @@ def make_app() -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/setup/apply", status_code=201)
-    async def setup_apply(request: Request, body: dict = Body(...)):
+    def setup_apply(request: Request, body: dict = Body(...)):
         """{plan, project?} -> {project, plan, connect}: create the project and everything it
         needs in one go, then say what only the person can do. `project`: the draft that becomes
         the project. `plan` is the plan as the project keeps it (a secret typed into a new
@@ -3849,7 +3946,7 @@ def make_app() -> FastAPI:
                                                    setup.get("plan") or {}, base, None)}
 
     @app.put("/api/projects/{uid}/setup")
-    async def put_project_setup(uid: str, body: dict = Body(...)):
+    def put_project_setup(uid: str, body: dict = Body(...)):
         """{step}: connect, try or done. On a draft, {plan}: the plan as the person edited it,
         kept so they can leave and come back."""
         setup = _setup_or_404(uid)
@@ -4058,7 +4155,7 @@ def make_app() -> FastAPI:
         return {k: sk[k] for k in ("name", "description", "body", "updated_at")}
 
     @app.get("/api/projects/{uid}/skills")
-    async def list_skills(uid: str):
+    def list_skills(uid: str):
         """The project's skills, with the agents of the project that loaded each one in the
         last 7 days (`loaded_by`)."""
         _skill_project(uid)
@@ -4068,12 +4165,12 @@ def make_app() -> FastAPI:
         return [{**sk, "loaded_by": loads.get(sk["name"], [])} for sk in store.list_skills(uid)]
 
     @app.get("/api/projects/{uid}/skills/{name}")
-    async def get_skill(uid: str, name: str):
+    def get_skill(uid: str, name: str):
         _skill_project(uid)
         return _skill_or_404(uid, name)
 
     @app.post("/api/projects/{uid}/skills", status_code=201)
-    async def create_skill(uid: str, body: dict = Body(...)):
+    def create_skill(uid: str, body: dict = Body(...)):
         _skill_project(uid)
         try:
             name, description, text = skills_mod.validate(
@@ -4091,7 +4188,7 @@ def make_app() -> FastAPI:
         return _skill_or_404(uid, name)
 
     @app.post("/api/projects/{uid}/skills/{name}/use")
-    async def use_skill(uid: str, name: str):
+    def use_skill(uid: str, name: str):
         """The project uses a skill already on Tares (shared: an edit shows in every project
         that uses it)."""
         _skill_project(uid)
@@ -4100,7 +4197,7 @@ def make_app() -> FastAPI:
         return _skill_or_404(uid, name)
 
     @app.get("/api/skills")
-    async def list_cell_skills():
+    def list_cell_skills():
         """Every skill on Tares, with the projects that use it (no bodies)."""
         names = {p["id"]: p["name"] for p in store.list_projects()}
         return [{"name": sk["name"], "description": sk["description"],
@@ -4108,7 +4205,7 @@ def make_app() -> FastAPI:
                 for sk in store.list_all_skills()]
 
     @app.put("/api/projects/{uid}/skills/{name}")
-    async def update_skill(uid: str, name: str, body: dict = Body(...)):
+    def update_skill(uid: str, name: str, body: dict = Body(...)):
         """Change the description, the body, or both; a field left out keeps its value."""
         _skill_project(uid)
         cur = _skill_or_404(uid, name)
@@ -4122,7 +4219,7 @@ def make_app() -> FastAPI:
         return _skill_or_404(uid, name)
 
     @app.delete("/api/projects/{uid}/skills/{name}")
-    async def delete_skill(uid: str, name: str):
+    def delete_skill(uid: str, name: str):
         """The project stops using the skill; it is deleted when no other project uses it."""
         _skill_project(uid)
         others = [p for p in store.skill_users(name) if p != uid]
@@ -4148,6 +4245,954 @@ def make_app() -> FastAPI:
             store.mark_skill_customized(uid, name)
         return {**_skill_or_404(uid, name), "created": created}
 
+    # ── a project's docs and tickets (TR-403): what a spec session leaves for the session that
+    # builds it. Docs belong to the cell and projects include them; tickets are owned by Linear
+    # when the project uses it (written by the sync only), by Tares otherwise ────────────────
+    def _by(request: Request, body: dict | None = None) -> str:
+        """Who made a change: what the caller says (`by`), else its credential's name."""
+        said = str((body or {}).get("by") or "").strip()[:100]
+        cred = getattr(request.state, "credential", None) or {}
+        return said or cred.get("name") or ""
+
+    # The cell's global docs (its AGENTS.md and memory): made the first time a project has docs,
+    # included in every project that has docs, so every session working on a project reads them.
+    _GLOBAL_SETTING = "global_docs"
+
+    def _global_ids(create: bool = False) -> dict[str, str]:
+        """{kind: doc id} of the global docs that exist; with `create`, make the missing ones."""
+        try:
+            ids = json.loads(store.get_setting(_GLOBAL_SETTING) or "{}")
+        except ValueError:
+            ids = {}
+        ids = {k: v for k, v in ids.items() if store.get_doc(None, v) is not None}
+        if create and set(docs_mod.GLOBAL_DOCS) - set(ids):
+            for kind, (title, body) in docs_mod.GLOBAL_DOCS.items():
+                if kind not in ids:
+                    ids[kind] = store.create_doc(None, kind, title, body, by="tares")
+            store.set_setting(_GLOBAL_SETTING, json.dumps(ids))
+        return ids
+
+    def _ensure_globals(uid: str) -> dict[str, str]:
+        """A project with docs includes the global docs (made now if this is the first one)."""
+        mine = store.list_docs(uid)
+        if not mine:
+            return _global_ids()
+        ids = _global_ids(create=True)
+        have = {d["id"] for d in mine}
+        for doc_id in ids.values():
+            if doc_id not in have:
+                store.use_doc(uid, doc_id)
+        return ids
+
+    def _marked(d: dict, ids: dict[str, str]) -> dict:
+        return {**d, "global": d["id"] in ids.values()}
+
+    def _doc_or_404(uid: str, doc_id: str) -> dict:
+        d = store.get_doc(uid, doc_id)
+        if d is None:
+            _err(KeyError(f"project has no doc {doc_id!r}"), 404)
+        return _marked(d, _global_ids())
+
+    @app.get("/api/projects/{uid}/docs")
+    def list_project_docs(uid: str, kind: str = ""):
+        """The docs the project includes, without bodies, in reading order (starting prompt,
+        spec, plan, AGENTS.md, memory, notes, working docs). The cell's global AGENTS.md and
+        memory are among them (`global`) once the project has any doc."""
+        _project_or_404(uid)
+        ids = _ensure_globals(uid)
+        return [_marked(d, ids)
+                for d in docs_mod.sort_docs(store.list_docs(uid, kind.strip().lower() or None))]
+
+    @app.get("/api/docs/global")
+    def get_global_docs():
+        """The cell's global AGENTS.md and memory, with their bodies; null until the first
+        project has docs."""
+        ids = _global_ids()
+        return {k: (_marked(store.get_doc(None, ids[k]), ids) if k in ids else None)
+                for k in docs_mod.GLOBAL_DOCS}
+
+    @app.post("/api/docs/global/{kind}/lines")
+    def add_global_line(kind: str, request: Request, body: dict = Body(...)):
+        """{text}: add one line to the global AGENTS.md (`agents`) or memory (`memory`). A line
+        already there is not added twice (`added`: false)."""
+        if kind == "grants":
+            _err(ValueError("a grant quotes the person and carries its date: add it with "
+                            "add_grant (POST /api/grants)"))
+        if kind not in docs_mod.GLOBAL_DOCS:
+            _err(KeyError(f"no global doc {kind!r}; one of: " + ", ".join(docs_mod.GLOBAL_DOCS)),
+                 404)
+        why = factory_mod.may(factory_api.caller(request), "global_docs")
+        if why:
+            _err(PermissionError(why), 403)
+        ids = _global_ids(create=True)
+        cur = store.get_doc(None, ids[kind])
+        try:
+            text, added = docs_mod.append_line(cur["body"], body.get("text"))
+        except docs_mod.DocError as e:
+            _err(e)
+        if added:
+            store.update_doc(ids[kind], body=text, by=_by(request, body))
+        return {**_marked(store.get_doc(None, ids[kind]), ids), "added": added}
+
+    @app.post("/api/projects/{uid}/docs", status_code=201)
+    def create_project_doc(uid: str, request: Request, body: dict = Body(...)):
+        """{kind, title, body}: a new doc in the project."""
+        _project_or_404(uid)
+        try:
+            kind, title, text = docs_mod.validate_doc(body.get("kind"), body.get("title"),
+                                                      body.get("body"))
+        except docs_mod.DocError as e:
+            _err(e)
+        if kind == "grants":
+            _err(ValueError("a grant quotes the person and carries its date: add it with "
+                            "add_grant (POST /api/grants)"))
+        doc_id = store.create_doc(uid, kind, title, text, by=_by(request, body))
+        _ensure_globals(uid)
+        return _doc_or_404(uid, doc_id)
+
+    @app.get("/api/projects/{uid}/docs/{doc_id}")
+    def get_project_doc(uid: str, doc_id: str):
+        _project_or_404(uid)
+        return _doc_or_404(uid, doc_id)
+
+    @app.put("/api/projects/{uid}/docs/{doc_id}")
+    def update_project_doc(uid: str, doc_id: str, request: Request,
+                                 body: dict = Body(...)):
+        """Change the kind, title or body; a field left out keeps its value. Docs are shared: the
+        change shows in every project that includes the doc."""
+        _project_or_404(uid)
+        cur = _doc_or_404(uid, doc_id)
+        try:
+            kind, title, text = docs_mod.validate_doc(body.get("kind", cur["kind"]),
+                                                      body.get("title", cur["title"]),
+                                                      body.get("body", cur["body"]))
+        except docs_mod.DocError as e:
+            _err(e)
+        if "grants" in (kind, cur["kind"]) and (kind, title, text) != (cur["kind"], cur["title"],
+                                                                         cur["body"]):
+            _err(ValueError("grants change only through add_grant (POST /api/grants), which "
+                            "quotes the person and dates it"))
+        if cur["global"]:
+            why = factory_mod.may(factory_api.caller(request), "global_docs")
+            if why:
+                _err(PermissionError(why), 403)
+        store.update_doc(doc_id, kind=kind, title=title, body=text, by=_by(request, body))
+        return _doc_or_404(uid, doc_id)
+
+    @app.delete("/api/projects/{uid}/docs/{doc_id}")
+    def delete_project_doc(uid: str, doc_id: str):
+        """The project stops including the doc; it is deleted when no other project includes
+        it."""
+        _project_or_404(uid)
+        d = _doc_or_404(uid, doc_id)
+        if d["global"]:
+            _err(ValueError(f"{d['title']} belongs to every project; edit it instead"), 409)
+        others = [p for p in d["projects"] if p != uid]
+        store.remove_doc(uid, doc_id)
+        return {"ok": True, "removed": doc_id, "kept_for": others}
+
+    @app.post("/api/projects/{uid}/docs/{doc_id}/use")
+    def use_project_doc(uid: str, doc_id: str):
+        """The project includes a doc already on the cell (shared: an edit shows everywhere)."""
+        _project_or_404(uid)
+        if not store.use_doc(uid, doc_id):
+            _err(KeyError(f"there is no doc {doc_id!r} on Tares"), 404)
+        return _doc_or_404(uid, doc_id)
+
+    @app.get("/api/docs")
+    def list_cell_docs():
+        """Every doc on Tares, with the projects that include it (no bodies)."""
+        names = {p["id"]: p["name"] for p in store.list_projects()}
+        ids = _global_ids()
+        return [{**_marked(d, ids),
+                 "projects": [{"id": p, "name": names.get(p, p)} for p in d["projects"]]}
+                for d in docs_mod.sort_docs(store.list_cell_docs())]
+
+    def _plan_ctx(uid: str, listing: bool = False) -> dict:
+        """What every ticket's view needs from the rest of the plan: the tickets by id, the
+        milestones' names, and which tickets are ready (TR-411, TR-412). `listing`: also every
+        working doc's title and each staged ticket's last review, fetched once for the whole
+        list instead of per ticket (TR-657)."""
+        tickets = store.list_tickets(uid)
+        ctx = {"by_id": {t["id"]: t for t in tickets},
+               "ms": {m["id"]: m["name"] for m in store.list_milestones(uid)},
+               "ready": factory_mod.readiness(tickets)}
+        if listing:
+            ctx["titles"] = store.doc_titles(uid, sorted({t["working_doc"] for t in tickets
+                                                          if t["working_doc"]}))
+            ctx["last_review"] = store.last_reviews([t["id"] for t in tickets if t["stage"]])
+        return ctx
+
+    def _ticket_out(uid: str, t: dict, with_doc: bool = False, ctx: dict | None = None) -> dict:
+        ctx = ctx or _plan_ctx(uid)
+        out = {k: t[k] for k in ("id", "owner", "identifier", "url", "title", "status",
+                                 "position", "working_doc", "updated_at", "number", "milestone",
+                                 "holder", "stage", "stage_reason", "pr", "repo")}
+        out["label"] = factory_mod.label(t)
+        out["pr_note"] = factory_api.pr_note(t)
+        out["milestone_name"] = ctx["ms"].get(t["milestone"]) if t["milestone"] else None
+        out["depends_on"] = [factory_mod.label(ctx["by_id"][d]) for d in t["depends_on"]
+                             if d in ctx["by_id"]]
+        r = ctx["ready"].get(t["id"]) or {"ready": False, "blocked_by": []}
+        out["ready"], out["blocked_by"] = r["ready"], r["blocked_by"]
+        if "titles" in ctx:
+            out["working_doc_title"] = ctx["titles"].get(t["working_doc"])
+        else:
+            doc = store.get_doc(uid, t["working_doc"]) if t["working_doc"] else None
+            out["working_doc_title"] = doc["title"] if doc else None
+        if with_doc:
+            out["working_doc_body"] = doc["body"] if doc else None
+            out["history"] = store.ticket_history(t["id"])
+            by_id = ctx["by_id"]
+            out["assumptions"] = [
+                {**{k: a[k] for k in ("label", "question", "choice", "why", "state", "words",
+                                      "made_by")},
+                 "tickets": [factory_mod.label(by_id[x]) for x in a["tickets"] if x in by_id]}
+                for a in store.list_assumptions(uid, ticket=t["id"])]
+            out.update(factory_api.review_state(store, uid, t, _cc_source()))
+            lab = out["label"]
+            ds = store.list_decisions(uid, all_=True)
+            out["decisions"] = ([d for d in ds if lab in d["tickets"]]
+                                + [d for d in ds if lab not in d["tickets"]])[:10]
+        elif "last_review" in ctx:
+            out["verdict"] = factory_api.verdict_now(t, ctx["last_review"].get(t["id"]))
+        else:
+            last = store.ticket_reviews(t["id"])[-1:] if t["stage"] else []
+            out["verdict"] = factory_api.verdict_now(t, last[0] if last else None)
+        return out
+
+    def _tickets_out(uid: str) -> list[dict]:
+        ctx = _plan_ctx(uid, listing=True)
+        return [_ticket_out(uid, t, ctx=ctx) for t in ctx["by_id"].values()]
+
+    def _milestone_ref(uid: str, ref) -> str | None:
+        """The id of the milestone `ref` names (id or name), None for "" or None; 404 otherwise."""
+        ref = str(ref or "").strip()
+        if not ref:
+            return None
+        m = store.get_milestone(uid, ref)
+        if m is None:
+            names = [x["name"] for x in store.list_milestones(uid)]
+            _err(KeyError(f"project has no milestone {ref!r}"
+                          + ("; one of: " + ", ".join(names) if names
+                             else "; write it first with write_milestone")), 404)
+        return m["id"]
+
+    def _depends_ref(uid: str, tid: str | None, refs) -> list[str]:
+        """The ids of the tickets `refs` name, refusing an unknown ticket, the ticket itself and
+        a dependency loop."""
+        try:
+            refs = factory_mod.depends_ok(refs)
+        except docs_mod.DocError as e:
+            _err(e)
+        ids: list[str] = []
+        for ref in refs:
+            d = store.get_ticket(uid, ref)
+            if d is None:
+                _err(KeyError(f"project has no ticket {ref!r} to depend on"), 404)
+            if d["id"] == tid:
+                _err(ValueError("a ticket cannot depend on itself"))
+            if d["id"] not in ids:
+                ids.append(d["id"])
+        if tid and ids:
+            deps = {t["id"]: t["depends_on"] for t in store.list_tickets(uid)}
+            deps[tid] = ids
+            loop = factory_mod.find_loop(deps, tid)
+            if loop:
+                by_id = {t["id"]: t for t in store.list_tickets(uid)}
+                _err(ValueError("that makes a dependency loop: " + " -> ".join(
+                    factory_mod.label(by_id[x]) for x in loop if x in by_id)), 409)
+        return ids
+
+    def _repo_ok(v) -> str | None:
+        try:
+            return factory_mod.repo_ok(v)
+        except docs_mod.DocError as e:
+            _err(e)
+
+    # where a ticket or milestone not owned by Tares lives; its owner is the key
+    _HOME_NAME = {"linear": "Linear", "github": "GitHub"}
+
+    def _ticket_or_404(uid: str, ref: str) -> dict:
+        t = store.get_ticket(uid, ref)
+        if t is None:
+            _err(KeyError(f"project has no ticket {ref!r}"), 404)
+        return t
+
+    def _working_doc_ok(uid: str, doc_id) -> str | None:
+        if not doc_id:
+            return None
+        if store.get_doc(uid, str(doc_id)) is None:
+            _err(KeyError(f"project has no doc {doc_id!r}; write the working doc first"), 404)
+        return str(doc_id)
+
+    @app.get("/api/projects/{uid}/tickets")
+    async def list_project_tickets(uid: str):
+        """The project's tickets in order, each with the title of its working doc, and the
+        Linear project they live in when the project uses Linear (`linear`, with the last
+        sync's time and error), or the GitHub repo and issue label when it uses GitHub Issues
+        (`github`, the same)."""
+        await asyncio.to_thread(_project_or_404, uid)
+        await factory_api.refresh_prs(store, uid)
+        # the store work runs in a thread, so other requests are served meanwhile
+        return await asyncio.to_thread(lambda: {
+            "tickets": _tickets_out(uid), "linear": store.get_project_linear(uid),
+            "github": store.get_project_github(uid)})
+
+    @app.post("/api/projects/{uid}/tickets", status_code=201)
+    def create_project_ticket(uid: str, body: dict = Body(...)):
+        """{title, status?, position?, working_doc?, milestone?, depends_on?, repo?}: a ticket
+        Tares owns. `repo` is the GitHub repo (owner/name) it changes, for a project that spans
+        several. Refused when the project's tickets live in Linear or GitHub."""
+        _project_or_404(uid)
+        home = store.project_ticket_home(uid)
+        if home:
+            _err(ValueError(f"this project's tickets live in {_HOME_NAME[home]}; add the ticket "
+                            "there and it shows up here on the next sync"), 409)
+        try:
+            title = docs_mod.title_ok(body.get("title"))
+            status = docs_mod.status_ok(body.get("status"))
+        except docs_mod.DocError as e:
+            _err(e)
+        pos = body.get("position")
+        milestone = _milestone_ref(uid, body.get("milestone"))
+        depends = _depends_ref(uid, None, body.get("depends_on"))
+        tid = store.create_ticket(uid, "tares", title, status,
+                                  float(pos) if pos is not None else None,
+                                  working_doc=_working_doc_ok(uid, body.get("working_doc")),
+                                  milestone=milestone, depends_on=depends,
+                                  repo=_repo_ok(body.get("repo")))
+        return _ticket_out(uid, _ticket_or_404(uid, tid))
+
+    @app.get("/api/projects/{uid}/tickets/{ref}")
+    async def get_project_ticket(uid: str, ref: str):
+        """One ticket by its id, number or Linear identifier, with its working doc's body and
+        its history (who moved it, when)."""
+        _project_or_404(uid)
+        await factory_api.refresh_prs(store, uid)
+        return _ticket_out(uid, _ticket_or_404(uid, ref), with_doc=True)
+
+    @app.put("/api/projects/{uid}/tickets/{ref}")
+    def update_project_ticket(uid: str, ref: str, body: dict = Body(...)):
+        """Change a ticket. A Linear or GitHub ticket only takes `working_doc` and `repo` (its
+        title, status, order, milestone and blocking relations change where it lives); a Tares
+        ticket also takes title, status, position, milestone and depends_on."""
+        _project_or_404(uid)
+        t = _ticket_or_404(uid, ref)
+        fields: dict = {}
+        if "working_doc" in body:
+            fields["working_doc"] = _working_doc_ok(uid, body.get("working_doc"))
+        if "repo" in body:
+            fields["repo"] = _repo_ok(body.get("repo"))
+        own = {"title", "status", "position", "milestone", "depends_on"} & set(body)
+        if own and t["owner"] != "tares":
+            _err(ValueError(f"{t['identifier'] or t['id']} lives in {_HOME_NAME[t['owner']]}: "
+                            "change its " + ", ".join(sorted(own)) + " there"), 409)
+        try:
+            if "title" in body:
+                fields["title"] = docs_mod.title_ok(body["title"])
+            if "status" in body:
+                fields["status"] = docs_mod.status_ok(body["status"])
+        except docs_mod.DocError as e:
+            _err(e)
+        if "position" in body and body["position"] is not None:
+            fields["position"] = float(body["position"])
+        if "milestone" in body:
+            fields["milestone"] = _milestone_ref(uid, body.get("milestone"))
+        if "depends_on" in body:
+            fields["depends_on"] = _depends_ref(uid, t["id"], body.get("depends_on"))
+        if fields:
+            store.update_ticket(t["id"], **fields)
+        return _ticket_out(uid, _ticket_or_404(uid, t["id"]), with_doc=True)
+
+    @app.delete("/api/projects/{uid}/tickets/{ref}")
+    def delete_project_ticket(uid: str, ref: str):
+        """Delete a Tares ticket (its working doc stays). A Linear or GitHub ticket is removed
+        where it lives."""
+        _project_or_404(uid)
+        t = _ticket_or_404(uid, ref)
+        if t["owner"] != "tares":
+            _err(ValueError(f"{t['identifier'] or t['id']} lives in {_HOME_NAME[t['owner']]}: "
+                            "remove it there"), 409)
+        store.delete_ticket(t["id"])
+        return {"ok": True, "deleted": t["id"]}
+
+    # ── milestones (TR-411): each ships something a person can check, its acceptance checks.
+    # A Linear or GitHub project's milestones come from there; their checks stay Tares's ──────
+    def _milestones_out(uid: str) -> list[dict]:
+        tickets = _tickets_out(uid)
+        out = []
+        for m in store.list_milestones(uid):
+            mine = [t for t in tickets if t["milestone"] == m["id"]]
+            live = [t for t in mine if t["status"] != "canceled"]
+            done = sum(1 for t in live if t["status"] == "done")
+            out.append({**{k: m[k] for k in ("id", "owner", "name", "goal", "checks", "position",
+                                              "updated_at")},
+                        "tickets": len(live), "done": done,
+                        "ready": [t["label"] for t in mine if t["ready"]],
+                        "finished": bool(live) and done == len(live)})
+        return out
+
+    def _milestone_or_404(uid: str, ref: str) -> dict:
+        m = store.get_milestone(uid, ref)
+        if m is None:
+            _err(KeyError(f"project has no milestone {ref!r}"), 404)
+        return m
+
+    @app.get("/api/projects/{uid}/milestones")
+    def list_project_milestones(uid: str):
+        """The project's milestones in order, each with its goal, acceptance checks, and how far
+        its tickets are (count, done, the ready ones, finished)."""
+        _project_or_404(uid)
+        return {"milestones": _milestones_out(uid)}
+
+    @app.post("/api/projects/{uid}/milestones", status_code=201)
+    def create_project_milestone(uid: str, body: dict = Body(...)):
+        """{name, goal?, checks?: [{check, expect}], position?}. A milestone with the same name
+        is changed instead of added twice, keeping the goal and checks the body leaves out."""
+        _project_or_404(uid)
+        try:
+            name, goal, checks = factory_mod.milestone_ok(body.get("name"), body.get("goal"),
+                                                          body.get("checks"))
+        except docs_mod.DocError as e:
+            _err(e)
+        cur = store.get_milestone(uid, name)
+        pos = body.get("position")
+        if cur:
+            fields = {k: v for k, v in (("goal", goal), ("checks", checks)) if k in body}
+            if pos is not None and cur["owner"] == "tares":
+                fields["position"] = float(pos)
+            store.update_milestone(cur["id"], **fields)
+            mid = cur["id"]
+        else:
+            home = store.project_ticket_home(uid)
+            if home:
+                _err(ValueError(f"this project's milestones live in {_HOME_NAME[home]}: add it "
+                                "there, then write its checks here"), 409)
+            mid = store.create_milestone(uid, name, goal, checks,
+                                         float(pos) if pos is not None else None)
+        return next(m for m in _milestones_out(uid) if m["id"] == mid)
+
+    @app.put("/api/projects/{uid}/milestones/{ref}")
+    def update_project_milestone(uid: str, ref: str, body: dict = Body(...)):
+        """Change a milestone's name, goal, checks or position. A Linear or GitHub milestone only
+        takes goal and checks (its name and order change where it lives)."""
+        _project_or_404(uid)
+        m = _milestone_or_404(uid, ref)
+        if m["owner"] != "tares" and ({"name", "position"} & set(body)):
+            _err(ValueError(f"{m['name']} lives in {_HOME_NAME[m['owner']]}: rename or reorder "
+                            "it there"), 409)
+        fields: dict = {}
+        try:
+            if "name" in body:
+                fields["name"] = docs_mod.title_ok(body["name"])
+                other = store.get_milestone(uid, fields["name"])
+                if other and other["id"] != m["id"]:
+                    _err(ValueError(f"the project already has a milestone {other['name']!r}; "
+                                    "milestone names are unique"), 409)
+            if "goal" in body:
+                fields["goal"] = factory_mod.goal_ok(body["goal"])
+            if "checks" in body:
+                fields["checks"] = factory_mod.checks_ok(body["checks"])
+        except docs_mod.DocError as e:
+            _err(e)
+        if body.get("position") is not None:
+            fields["position"] = float(body["position"])
+        if fields:
+            store.update_milestone(m["id"], **fields)
+        return next(x for x in _milestones_out(uid) if x["id"] == m["id"])
+
+    @app.delete("/api/projects/{uid}/milestones/{ref}")
+    def delete_project_milestone(uid: str, ref: str):
+        """Delete a Tares milestone; its tickets stay, without a milestone."""
+        _project_or_404(uid)
+        m = _milestone_or_404(uid, ref)
+        if m["owner"] != "tares":
+            _err(ValueError(f"{m['name']} lives in {_HOME_NAME[m['owner']]}: remove it there"),
+                 409)
+        store.delete_milestone(m["id"])
+        return {"ok": True, "deleted": m["id"]}
+
+    # ── the Claude Code sessions that worked in a project (TR-405) ────────────
+    @app.get("/api/projects/{uid}/sessions")
+    def list_project_sessions(uid: str):
+        """The sessions that worked in the project (the spec session among them), newest activity
+        first, each with its state (working, idle between turns, waiting for the person, ended) and, for a waiting
+        one, the last thing it said (`last_said`)."""
+        _project_or_404(uid)
+        src = next((n for n, c in runtime.catalog.sources.items()
+                    if c.connector == "claude_code"), "claude_code")
+        out = store.project_sessions(uid)
+        now = now_utc()
+        for s in out:
+            # a session whose end never reached Tares does not wait forever (TR-473)
+            s["state"] = factory_mod.shown_state(s["state"], s["last_at"], now)
+            if s["state"] == "waiting":
+                said = store.last_said(src, s["session"]) or ""
+                s["last_said"] = said[:1200]
+        return {"sessions": out, "now": now}
+
+    @app.get("/api/projects/{uid}/sessions/{sid}")
+    def get_project_session(uid: str, sid: str, limit: int = 200, offset: int = 0):
+        """One session's lines, oldest first, the ones from before it named the project
+        included."""
+        _project_or_404(uid)
+        if not any(s["session"] == sid for s in store.project_sessions(uid)):
+            _err(KeyError(f"session {sid!r} did not work in this project"), 404)
+        src = next((n for n, c in runtime.catalog.sources.items()
+                    if c.connector == "claude_code"), "claude_code")
+        return {"session": sid,
+                "lines": store.key_events(src, sid, limit=min(max(limit, 1), 1000),
+                                          offset=max(offset, 0))}
+
+    # ── picking up a build where a session stopped: what a fresh session needs to carry on the
+    # ticket in progress, from what Tares recorded (works after a crash too) ────────────────
+    _QUIET_MIN = 10   # a working session that sent nothing for this long is taken as gone
+
+    def _cc_source() -> str:
+        return next((n for n, c in runtime.catalog.sources.items()
+                     if c.connector == "claude_code"), "claude_code")
+
+    def _previous_session(sessions: list[dict], ticket: dict | None) -> dict | None:
+        """The session that was working on the ticket: active when it went in progress (its
+        lines span that moment), else the latest one that started before it, else the latest."""
+        live = [s for s in sessions if s["state"] != "replaced"]
+        if not live:
+            return None
+        t = ticket["updated_at"] if ticket else None
+        if t is not None:
+            spans = [s for s in live if s["started_at"] and s["last_at"]
+                     and s["started_at"] <= t <= s["last_at"]]
+            if spans:
+                return max(spans, key=lambda s: s["last_at"])
+            before = [s for s in live if s["started_at"] and s["started_at"] <= t]
+            if before:
+                return max(before, key=lambda s: s["last_at"] or s["started_at"])
+        return live[0]
+
+    def _pickup(uid: str) -> dict:
+        tickets = store.list_tickets(uid)
+        ready = factory_mod.readiness(tickets)
+        # the ticket a session stopped on: in progress, and not waiting on someone else (in
+        # review, changes asked, blocked: picking those up would redo work that is done)
+        ticket = next((t for t in tickets if t["status"] == "in_progress"
+                       and t["stage"] not in ("review", "changes", "blocked", "merged",
+                                              "shipped")), None)
+        nxt = ticket or next((t for t in tickets if t["status"] == "todo"
+                              and ready[t["id"]]["ready"]), None)
+        sessions = store.project_sessions(uid)
+        prev = _previous_session(sessions, ticket) if ticket else None
+        out: dict = {"ticket": _ticket_out(uid, nxt, with_doc=True) if nxt else None,
+                     "in_progress": ticket is not None, "previous_session": None,
+                     "may_be_open": False}
+        if prev:
+            now = now_utc()
+            quiet = int((now - prev["last_at"]).total_seconds() // 60) if prev["last_at"] else None
+            open_ = prev["state"] in ("idle", "waiting") or (
+                prev["state"] in (None, "working") and quiet is not None and quiet < _QUIET_MIN)
+            src = _cc_source()
+            out["previous_session"] = {
+                "session": prev["session"], "repo": prev["repo"], "state": prev["state"],
+                "reason": prev["state_reason"], "last_at": prev["last_at"], "quiet_minutes": quiet,
+                "said_lately": store.said_lately(src, prev["session"], 3),
+                "files_touched": store.files_touched(src, prev["session"])}
+            out["may_be_open"] = bool(open_)
+        gmem = _global_ids().get("memory")
+        mem = next((d for d in store.list_docs(uid, "memory") if d["id"] != gmem), None)
+        body = (store.get_doc(uid, mem["id"]) or {}).get("body", "") if mem else ""
+        if len(body) > 6000:   # newest last: keep the newest lines
+            body = "...\n" + body[-6000:].split("\n", 1)[-1]
+        out["memory"] = body
+        out["decisions"] = [{k: d[k] for k in ("label", "question", "words", "choice", "at")}
+                            for d in store.list_decisions(uid, all_=True)[:10]]
+        notes = [d for d in store.list_docs(uid, "note")]
+        out["notes"] = [{"id": d["id"], "title": d["title"],
+                         "body": (store.get_doc(uid, d["id"]) or {}).get("body", "")[:4000]}
+                        for d in notes]
+        out["checklist"] = (
+            [f"Check the branch and uncommitted changes (git status, git log -3) before editing: "
+             f"the previous session may have left work on ticket \"{ticket['title']}\" "
+             "uncommitted.",
+             "Restart what the project runs on (local database, dev server) the way AGENTS.md "
+             "says; the previous session's processes are gone.",
+             "Read the ticket's working doc, its Progress section first, then the previous "
+             "session's last messages: they say what was done and what was left.",
+             "Finish what is left, run the ticket's Verify, commit, mark it done, then carry on "
+             "with the next ticket."]
+            if ticket else
+            ["No ticket is in progress: start with the next one, the way the starting prompt says."]
+            if nxt else
+            ["No ticket is ready: " + "; ".join(
+                f"{factory_mod.label(t)} waits for {', '.join(ready[t['id']]['blocked_by'])}"
+                for t in tickets if t["status"] == "todo" and ready[t["id"]]["blocked_by"])
+             + ". Finish or re-plan what they wait for." if any(
+                t["status"] == "todo" for t in tickets) else
+             "Every ticket is finished." if tickets else
+             "The project has no tickets yet: spec it first (/tares:spec)."])
+        return out
+
+    @app.get("/api/projects/{uid}/pickup")
+    def get_pickup(uid: str):
+        """What a fresh session needs to pick the build up where a session stopped: the ticket in
+        progress (else the next) with its working doc, the session that was on it (its state,
+        last messages, files it touched, whether it may still be open), the builders' notes and
+        a checklist. Reads only."""
+        _project_or_404(uid)
+        return _pickup(uid)
+
+    @app.post("/api/projects/{uid}/pickup")
+    def take_over(uid: str, body: dict = Body(default={})):
+        """A fresh session takes the build over: the previous session is marked replaced, so two
+        sessions never work the same ticket. When it may still be open (waiting, or active in
+        the last minutes) this needs {"take_over": true}."""
+        _project_or_404(uid)
+        out = _pickup(uid)
+        prev = out["previous_session"]
+        if prev and out["may_be_open"] and not body.get("take_over"):
+            _err(ValueError("the session that was building may still be open "
+                            f"({prev['state'] or 'active'}); ask the person, then take over with "
+                            "take_over"), 409)
+        if prev:
+            store.set_session_state(prev["session"], "replaced",
+                                    "a fresh session picked the build up", now_utc(), force=True)
+        return {**out, "taken_over": prev["session"] if prev else None}
+
+    # ── the crew's standup report: before factory_api, whose /api/crew/{name} would take it ──
+    def _standup_range(since: str | None, until: str | None) -> tuple[datetime, datetime]:
+        def parse(v: str, what: str) -> datetime:
+            try:
+                d = datetime.fromisoformat(v.strip().replace("Z", "+00:00"))
+            except ValueError:
+                _err(ValueError(f"{what} is not a date and time: {v!r}"))
+            return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+        end = parse(until, "until") if until else now_utc()
+        start = parse(since, "since") if since else end - timedelta(days=1)
+        if start >= end:
+            _err(ValueError("since must be before until"))
+        if end - start > timedelta(days=92):
+            _err(ValueError("a standup covers at most 92 days"))
+        return start, end
+
+    def _standup(since: str | None, until: str | None) -> dict:
+        start, end = _standup_range(since, until)
+        return standup_mod.facts(store, start, end,
+                                 lambda uid: factory_api.project_progress(store, uid))
+
+    @app.get("/api/crew/standup")
+    def crew_standup(since: str | None = None, until: str | None = None):
+        """What moved in each project handed to the crew between `since` and `until` (ISO; the
+        last day by default), read from the ledger: done, started, in review, blocked, and the
+        questions waiting on the person. `markdown` is the same report ready to copy."""
+        report = _standup(since, until)
+        return {**report, "markdown": standup_mod.markdown(report)}
+
+    @app.post("/api/crew/standup/summary")
+    async def crew_standup_summary(body: dict = Body(default={})):
+        """{since?, until?}: the same report with a line or two per project written by the cell's
+        model from those facts. Without a model provider, or when it fails, the report comes back
+        without the summary and `summary_error` says why."""
+        report = _standup(body.get("since"), body.get("until"))
+        summary, why = None, None
+        provider, origin = resolve_provider(store)
+        if provider is None:
+            why = "no model provider is set up"
+        elif report["projects"]:
+            pid = providers_mod.default_id(store)
+            model = providers_mod.default_model_for(store, pid)
+            try:
+                reply = await asyncio.wait_for(provider.complete(
+                    model=model, system=standup_mod.SUMMARY_SYSTEM, tools=[],
+                    messages=[{"role": "user", "content": standup_mod.summary_prompt(report)}],
+                    max_tokens=standup_mod.SUMMARY_MAX_TOKENS, tools_allowed=False), timeout=90)
+                # one reply's usage has no call count; the ledger row wants the loops' total
+                usage = empty_usage()
+                add_usage(usage, reply.usage)
+                _record_ask_usage(model, usage, key_source=origin, kind=provider.kind,
+                                  provider_id=pid)
+                summary = standup_mod.parse_summary(reply.text,
+                                                    {p["id"] for p in report["projects"]})
+                if not summary["overall"] and not summary["projects"]:
+                    summary, why = None, "the model's answer could not be read"
+            except asyncio.TimeoutError:
+                why = "the model took longer than 90s"
+            except Exception as e:  # noqa: BLE001 — the report stands without the summary
+                msg = str(e)
+                why = ("the model provider refused its key; check it under Settings"
+                       if any(c in msg for c in (" 401", " 403", "invalid x-api-key"))
+                       else f"the model call failed ({type(e).__name__})")
+                print(f"standup: summary failed: {type(e).__name__}: {msg[:300]}", flush=True)
+        return {**report, "summary": summary, "summary_error": why,
+                "markdown": standup_mod.markdown(report, summary)}
+
+    @app.post("/api/slack/post")
+    async def slack_post(request: Request, body: dict = Body(...)):
+        """{channel, text, title?}: post markdown to a Slack channel as the cell's bot (the
+        standup's "Send to Slack"). A person's action: refused from a crew station."""
+        if factory_api.caller(request)["station"]:
+            _err(PermissionError("posting to Slack is the person's action, from the console"), 403)
+        channel = str(body.get("channel") or "").strip()
+        text = str(body.get("text") or "").strip()
+        if not channel or not text:
+            _err(ValueError("say which channel and what to post"))
+        token, _origin = resolve_slack_token(store)
+        if not token:
+            _err(ValueError("Slack is not connected: add it under Settings, Slack"), 409)
+        title = " ".join(str(body.get("title") or "").split())
+        msg = {"channel": channel, "text": slack_mod.excerpt(text, 300) or title or "Tares",
+               "blocks": ([slack_mod._header(title)] if title else []) + slack_mod._sections(text),
+               "unfurl_links": False, "unfurl_media": False}
+        try:
+            async with httpx.AsyncClient(timeout=15) as cx:
+                r = await cx.post(f"{slack_mod.API_BASE}/chat.postMessage", json=msg,
+                                  headers={"authorization": f"Bearer {token}"})
+            try:
+                data = r.json()
+            except ValueError:
+                data = None
+        except httpx.HTTPError as e:
+            _err(RuntimeError(f"could not reach Slack: {type(e).__name__}"), 502)
+        ok, error, _retry = slack_mod.classify(r.status_code, data)
+        if not ok:
+            _err(RuntimeError(error or "Slack refused the message"), 502)
+        return {"ok": True, "channel": channel, "ts": (data or {}).get("ts")}
+
+    # ── the software factory's crew (M3 onward): routes in tares/factory_api.py ──
+    def _factory_project_id(ref: str) -> str:
+        """A project's id from its id or name (the ref itself when there is none: a 404 later)."""
+        p = store.get_project(ref) or store.get_project_by_name(ref)
+        return p["id"] if p else ref
+
+    factory_api.register(app, store, SimpleNamespace(
+        err=lambda e, code=400: _err(e, code), project_or_404=lambda uid: _project_or_404(uid),
+        by=lambda request, body=None: _by(request, body), cc_source=lambda: _cc_source(),
+        global_ids=lambda create=False: _global_ids(create), resolve_project=_factory_project_id,
+        ticket_out=lambda uid, t, **kw: _ticket_out(uid, t, **kw),
+        ensure_globals=lambda uid: _ensure_globals(uid),
+        tickets_out=lambda uid: _tickets_out(uid)))
+    # what the Claude Code sessions spend: the plan's limits and tokens by project
+    claude_usage.register(app, store)
+
+    # ── Linear (TR-408): the cell's connection, and the Linear project a project's tickets live
+    # in. Tares only reads from Linear; sessions write with Linear's own tools ───────────────
+    def _linear_err(e: Exception):
+        _err(e, 502 if "reach" in str(e) or "answered" in str(e) else 400)
+
+    @app.get("/api/linear")
+    def linear_status():
+        """Whether Linear is connected (never the token), and as whom."""
+        return _linear.public_connection(store)
+
+    @app.post("/api/linear")
+    async def linear_connect_key(body: dict = Body(...)):
+        """{api_key}: connect with a personal API key, checked against Linear first."""
+        try:
+            await _linear.connect_api_key(store, str(body.get("api_key") or ""))
+        except _linear.LinearError as e:
+            _linear_err(e)
+        return _linear.public_connection(store)
+
+    @app.put("/api/settings/linear-connection")
+    def linear_cloud_set(body: dict = Body(...)):
+        """Tares Cloud only, from the control plane (TR-537): {token, expires_at, account} after a
+        sign-in with the GlassFlow Linear app or a renewal, or {error, account} when Linear refused
+        to renew it. No restart; the next sync uses it."""
+        try:
+            _linear.set_cloud_connection(store, body)
+        except _linear.LinearError as e:
+            _err(e)
+        return _linear.public_connection(store)
+
+    @app.delete("/api/settings/linear-connection")
+    def linear_cloud_clear():
+        """Tares Cloud only: the control plane disconnected this workspace (and revoked the token
+        at Linear)."""
+        _linear.disconnect(store)
+        return _linear.public_connection(store)
+
+    @app.delete("/api/linear")
+    def linear_disconnect():
+        """Forget the connection. Linked projects keep their tickets and stop syncing until
+        Linear is connected again. On Tares Cloud the console disconnects through the control
+        plane instead, which also revokes the token at Linear."""
+        _linear.disconnect(store)
+        return _linear.public_connection(store)
+
+    @app.get("/api/linear/projects")
+    async def linear_projects(q: str = ""):
+        """Linear projects this connection can see, most recently updated first, for a picker."""
+        try:
+            return {"projects": await _linear.list_projects(store, q)}
+        except _linear.LinearError as e:
+            _linear_err(e)
+
+    async def _linear_sync_now(uid: str) -> None:
+        envelopes = await _linear.sync_project(store, uid)
+        if envelopes:
+            await asyncio.to_thread(store.append, envelopes)
+
+    @app.post("/api/projects/{uid}/linear")
+    async def link_linear_project(uid: str, body: dict = Body(...)):
+        """{project}: the Linear project (id, URL or name) this project's tickets live in. Runs a
+        first sync; from then on the `linear` source keeps them in sync. A project that already
+        has Tares tickets cannot be linked (they would be two lists)."""
+        _project_or_404(uid)
+        if store.get_project_github(uid):
+            _err(ValueError("this project's tickets live in GitHub; stop using GitHub first"),
+                 409)
+        if any(t["owner"] == "tares" for t in store.list_tickets(uid)):
+            _err(ValueError("this project already has its own tickets in Tares; a project's "
+                            "tickets live in one place"), 409)
+        try:
+            found = await _linear.find_project(store, str(body.get("project") or ""))
+        except _linear.LinearError as e:
+            _linear_err(e)
+        cur = store.get_project_linear(uid)
+        if cur and cur.get("id") != found["id"]:
+            _err(ValueError(f"this project is linked to Linear project {cur.get('name')!r}; "
+                            "unlink it first"), 409)
+        store.set_project_linear(uid, {**(cur or {}), **found})
+        if _linear.ensure_source(store):
+            runtime.reload_catalog()
+        store.upsert_project_object(uid, "source", f"+source:{_linear.SOURCE_NAME}",
+                                    _linear.SOURCE_NAME)
+        try:
+            await _linear_sync_now(uid)
+        except _linear.LinearError:
+            pass   # recorded on the link; the answer shows it
+        return {"tickets": _tickets_out(uid),
+                "linear": store.get_project_linear(uid)}
+
+    @app.post("/api/projects/{uid}/linear/sync")
+    async def sync_linear_project(uid: str):
+        """Sync the project's tickets with Linear now."""
+        _project_or_404(uid)
+        if not store.get_project_linear(uid):
+            _err(ValueError("this project does not use Linear"), 409)
+        try:
+            await _linear_sync_now(uid)
+        except _linear.LinearError as e:
+            _linear_err(e)
+        return {"tickets": _tickets_out(uid),
+                "linear": store.get_project_linear(uid)}
+
+    @app.delete("/api/projects/{uid}/linear")
+    def unlink_linear_project(uid: str):
+        """The project stops using Linear. Its tickets stay, now owned by Tares, with their
+        working docs."""
+        _project_or_404(uid)
+        store.set_project_linear(uid, None)
+        for t in store.list_tickets(uid):
+            if t["owner"] == "linear":
+                store.update_ticket_owner(t["id"], "tares")
+        for m in store.list_milestones(uid):
+            if m["owner"] == "linear":
+                store.update_milestone(m["id"], owner="tares", external_id=None)
+        return {"tickets": _tickets_out(uid),
+                "linear": None}
+
+    # ── GitHub Issues (TR-569): the repo + issue label a project's tickets live in. Tares only
+    # reads from GitHub; sessions write with the `gh` CLI ────────────────────────────────────
+    def _gh_err(e: Exception):
+        if getattr(e, "rate_limited", False):
+            _err(e, 429)
+        _err(e, 502 if "reach" in str(e) or "answered" in str(e) else 400)
+
+    async def _github_sync_now(uid: str) -> None:
+        envelopes = await _gh_tickets.sync_project(store, uid)
+        if envelopes:
+            await asyncio.to_thread(store.append, envelopes)
+
+    @app.post("/api/projects/{uid}/github")
+    async def link_github_issues(uid: str, body: dict = Body(...)):
+        """{repo, issue_label?}: the GitHub repo and the issue label whose issues are this
+        project's tickets (default `tares:<project name>`). Reads the repo once to check access,
+        then runs a first sync; from then on the `github_issues` source keeps them in sync. A
+        project that uses Linear or has Tares tickets cannot be linked (two lists), and a repo
+        and issue label belong to one project."""
+        project = _project_or_404(uid)
+        try:
+            repo = _gh_normalize_repo(body.get("repo"))
+        except ValueError as e:
+            _err(e, 400)
+        issue_label = str(body.get("issue_label")
+                          or _gh_tickets.default_issue_label(project["name"])).strip()
+        if not issue_label or len(issue_label) > 50:
+            _err(ValueError("the issue label must be 1 to 50 characters"), 400)
+        def refusals() -> dict | None:
+            """The 409s; the project's link as it stands. Run again after the fetch, since
+            another request may have linked something while GitHub was answering."""
+            if store.get_project_linear(uid):
+                _err(ValueError("this project's tickets live in Linear; stop using Linear first"),
+                     409)
+            if any(t["owner"] == "tares" for t in store.list_tickets(uid)):
+                _err(ValueError("this project already has its own tickets in Tares; a project's "
+                                "tickets live in one place"), 409)
+            cur = store.get_project_github(uid)
+            if cur and (cur.get("repo"), cur.get("issue_label")) != (repo, issue_label):
+                _err(ValueError(f"this project is linked to {cur.get('repo')} with issue label "
+                                f"{cur.get('issue_label')}; unlink it first"), 409)
+            for other, link in store.github_projects():
+                if other != uid and (str(link.get("repo")).lower(),
+                                     str(link.get("issue_label")).lower()
+                                     ) == (repo.lower(), issue_label.lower()):
+                    owner = store.get_project(other)
+                    _err(ValueError(f"{repo} with issue label {issue_label} is already the "
+                                    f"ticket home of project {owner['name'] if owner else other}"),
+                         409)
+            return cur
+
+        cur = refusals()
+        try:
+            info, _milestones, _issues = await _gh_tickets.fetch(
+                store, {**(cur or {}), "repo": repo, "issue_label": issue_label})
+        except _gh_tickets.GitHubTicketsError as e:
+            _err(e, 429 if e.rate_limited else 400)
+        cur = refusals()   # no await between this check and the save
+        store.set_project_github(uid, {**(cur or {}), "repo": repo, "issue_label": issue_label,
+                                       "url": f"https://github.com/{repo}",
+                                       "credential": info["credential"]})
+        if _gh_tickets.ensure_source(store):
+            runtime.reload_catalog()
+        store.upsert_project_object(uid, "source", f"+source:{_gh_tickets.SOURCE_NAME}",
+                                    _gh_tickets.SOURCE_NAME)
+        try:
+            await _github_sync_now(uid)
+        except _gh_tickets.GitHubTicketsError:
+            pass   # recorded on the link; the answer shows it
+        return {"tickets": _tickets_out(uid), "github": store.get_project_github(uid)}
+
+    @app.post("/api/projects/{uid}/github/sync")
+    async def sync_github_issues(uid: str):
+        """Sync the project's tickets with GitHub now."""
+        _project_or_404(uid)
+        link = store.get_project_github(uid)
+        if not link:
+            _err(ValueError("this project does not use GitHub Issues"), 409)
+        if _gh_tickets._backing_off(link):
+            # a sync now would be skipped, so say so instead of answering 200 with old tickets
+            wait = (datetime.fromisoformat(link["backoff_until"]) - now_utc()).total_seconds()
+            raise HTTPException(status_code=429, detail="GitHub rate limit reached",
+                                headers={"Retry-After": str(max(1, int(wait) + 1))})
+        try:
+            await _github_sync_now(uid)
+        except _gh_tickets.GitHubTicketsError as e:
+            _gh_err(e)
+        return {"tickets": _tickets_out(uid), "github": store.get_project_github(uid)}
+
+    @app.delete("/api/projects/{uid}/github")
+    def unlink_github_issues(uid: str):
+        """The project stops using GitHub Issues. Its tickets stay, now owned by Tares, with their
+        working docs."""
+        _project_or_404(uid)
+        store.set_project_github(uid, None)
+        for t in store.list_tickets(uid):
+            if t["owner"] == "github":
+                store.update_ticket_owner(t["id"], "tares")
+        for m in store.list_milestones(uid):
+            if m["owner"] == "github":
+                store.update_milestone(m["id"], owner="tares", external_id=None)
+        return {"tickets": _tickets_out(uid), "github": None}
+
     # ── joining a project (TR-335, TR-336): its keys, an external agent's subscription to it,
     # the findings recorded in it, and stats over its sources ────────────────────────────────
     def _project_or_404(uid: str) -> dict:
@@ -4157,14 +5202,14 @@ def make_app() -> FastAPI:
         return p
 
     @app.get("/api/projects/{uid}/keys")
-    async def list_project_keys(uid: str):
+    def list_project_keys(uid: str):
         """The project's active keys, without their secrets."""
         _project_or_404(uid)
         return {"keys": [k for k in store.list_api_keys(project=uid) if not k["revoked_at"]],
                 "enforced": bool(AUTH_TOKEN)}
 
     @app.post("/api/projects/{uid}/keys", status_code=201)
-    async def create_project_key(uid: str, body: dict = Body(...)):
+    def create_project_key(uid: str, body: dict = Body(...)):
         """{name}: a key that reads this project only and records findings in it. The secret is
         in this response only."""
         _project_or_404(uid)
@@ -4220,7 +5265,7 @@ def make_app() -> FastAPI:
         return {"subscription_id": sid, "project": uid}
 
     @app.delete("/api/projects/{uid}/subscribe/{sid}")
-    async def unsubscribe_project(uid: str, sid: str, request: Request):
+    def unsubscribe_project(uid: str, sid: str, request: Request):
         """A project key removes only its own subscriptions; an admin any of the project's."""
         _project_or_404(uid)
         sub = store.get_subscription(sid)
@@ -4235,7 +5280,7 @@ def make_app() -> FastAPI:
         return {"ok": True}
 
     @app.get("/api/projects/{uid}/external-agents")
-    async def project_external_agents(uid: str):
+    def project_external_agents(uid: str):
         """The agents that joined the project with a subscription: where it delivers (masked,
         a URL can carry the receiver's secret), which key made it, and its last delivery."""
         _project_or_404(uid)
@@ -4259,7 +5304,7 @@ def make_app() -> FastAPI:
                 "external": r.get("woken_by") == "external"}
 
     @app.get("/api/projects/{uid}/findings")
-    async def project_findings(uid: str, entity: str = "", agent: str = "", limit: int = 20):
+    def project_findings(uid: str, entity: str = "", agent: str = "", limit: int = 20):
         """Findings recorded in the project, newest first: its Tares agents' and the external
         agents'. `entity` and `agent` narrow them."""
         _project_or_404(uid)
@@ -4319,7 +5364,7 @@ def make_app() -> FastAPI:
                 "verdict": verdict}
 
     @app.post("/api/projects/{uid}/stats")
-    async def project_stats(uid: str, body: dict = Body(...)):
+    def project_stats(uid: str, body: dict = Body(...)):
         """{by, window?, where?, top?, sources?}: counts per value of the label `by` over the
         project's sources, the last window against the one before, as a few lines of text."""
         from .stats import stats_table
@@ -4372,7 +5417,7 @@ def make_app() -> FastAPI:
 
     # ── management API: catalog import/export ────────────────────────────────
     @app.get("/api/catalog/export")
-    async def catalog_export(sources: str | None = None, include_secrets: bool = False):
+    def catalog_export(sources: str | None = None, include_secrets: bool = False):
         """Catalog YAML. Defaults (no params, as the agent/MCP call it): all sources, secrets
         OMITTED. `sources=a,b` limits to a subset (triggers and agents filtered to stay consistent);
         `include_secrets=true` emits real connector secrets (admin-gated route)."""
@@ -4381,7 +5426,7 @@ def make_app() -> FastAPI:
                                  media_type="application/yaml")
 
     @app.post("/api/catalog/import")
-    async def catalog_import(body: ImportReq):
+    def catalog_import(body: ImportReq):
         if body.mode == "replace":
             store.clear_catalog()
         try:
@@ -4396,7 +5441,7 @@ def make_app() -> FastAPI:
 
     # ── metering ──────────────────────────────────────────────────────────────
     @app.get("/api/usage")
-    async def usage():
+    def usage():
         """What this instance is using: db + WAL bytes, the volume they sit on, and event counts.
         `max_bytes` is the operator's TARES_MAX_DB_SIZE, else the volume the database sits on
         (`max_bytes_source` says which); null only when neither is known. At INGEST_PAUSE_PCT of it
@@ -4417,7 +5462,7 @@ def make_app() -> FastAPI:
                 "pct_used": st["pct_used"], "ingest_paused": st["paused"]}
 
     @app.get("/api/usage/model")
-    async def usage_model(days: int = 30):
+    def usage_model(days: int = 30):
         """The cell's Anthropic spend meter: all-time totals plus a per-day tail, split by surface
         (agent runs vs Ask). Generic data only — a hosted control plane polls this to enforce
         credits, a self-hoster reads their own bill coming; the cell attaches no meaning to it.
@@ -4427,7 +5472,7 @@ def make_app() -> FastAPI:
 
     # ── console UI (built SPA; catch-all registered last so API routes win) ──
     @app.get("/{path:path}", include_in_schema=False)
-    async def ui(path: str):
+    def ui(path: str):
         # An unmatched /api/* or /ingest/* path must never answer with the SPA's HTML and a 200 —
         # a client checking the status reads that as success and fails to parse (TR-226). The
         # console never requests these prefixes, so nothing legitimate is lost.

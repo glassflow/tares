@@ -24,6 +24,8 @@ from .registry import get_template, list_templates as _list_templates
 # delete order: dependents first (an agent references a trigger and may reference an mcp server,
 # a trigger reads sources). A skill (TR-332) is the project's own and depends on nothing.
 _DELETE_ORDER = ("agent", "trigger", "source", "mcp_server", "skill")
+# what a project includes that no template plans (TR-403): a re-plan never touches it
+_NOT_PLANNED = ("doc",)
 _SECTION = {"source": "sources", "trigger": "triggers",
             "agent": "agents", "mcp_server": "mcp_servers"}
 # the kinds that belong to exactly one project (a source is shared)
@@ -51,8 +53,10 @@ class Engine:
                 "trigger": {x["name"]: x for x in s.list_catalog_triggers()},
                 "agent": {x["name"]: x for x in s.list_catalog_agents()},
                 "mcp_server": {x["name"]: x for x in s.list_mcp_servers()},
-                "skill": ({x["name"]: {**x, "owned_by": uid} for x in s.list_skills(uid)}
-                          if uid else {})}
+                "skill": self._skills_by_name(uid) if uid else {}}
+
+    def _skills_by_name(self, uid: str) -> dict[str, dict]:
+        return {x["name"]: {**x, "owned_by": uid} for x in self.store.list_skills(uid)}
 
     def default_id(self) -> str | None:
         """The default project's id, or None on a cell that has none yet: reading never makes
@@ -63,7 +67,12 @@ class Engine:
         inst = self.store.get_project(uid)
         if inst is None:
             return None
-        existing = self._existing_names(uid)
+        return self._card(inst, self._existing_names(uid), self.default_id())
+
+    def _card(self, inst: dict, existing: dict, default: str | None) -> dict:
+        """A project as get() returns it, from its row and the catalog by kind and name (with
+        the project's own skills)."""
+        uid = inst["id"]
         objects = []
         for o in self.store.list_project_objects(uid):
             if o["kind"] not in existing:   # a kind that no longer exists (a folded view)
@@ -78,7 +87,7 @@ class Engine:
         title = template.title if template else inst["template"]
         setup = self.store.get_project_setup(uid)
         return {**inst, "template_title": title, "objects": objects,
-                "default": uid == self.default_id(),
+                "default": uid == default,
                 # the guided setup's progress (the plan itself is on GET .../setup); None for a
                 # project set up any other way
                 "setup": ({"step": setup.get("step"), "practice_run": setup.get("practice_run")}
@@ -88,7 +97,10 @@ class Engine:
     def list(self) -> list[dict]:
         default = self.default_id()
         rows = sorted(self.store.list_projects(), key=lambda u: u["id"] != default)
-        return [self.get(u["id"]) for u in rows]
+        # the catalog is the same for every project: read it once, not once per project (TR-659)
+        shared = self._existing_names()
+        return [self._card(u, {**shared, "skill": self._skills_by_name(u["id"])}, default)
+                for u in rows]
 
     def summary(self, uid: str) -> dict:
         inst = self.get(uid)
@@ -179,7 +191,7 @@ class Engine:
         # rows keyed `+kind:name` were added to this project by hand, not planned: a re-plan
         # leaves them alone
         existing = {(o["kind"], o["key"]): o for o in self.store.list_project_objects(uid)
-                    if not o["key"].startswith("+")}
+                    if not o["key"].startswith("+") and o["kind"] not in _NOT_PLANNED}
         current = self._existing_names(uid)
         report = {"created": [], "updated": [], "kept": [], "deleted": []}
         to_apply: list[PlannedObject] = []
@@ -673,9 +685,10 @@ class Engine:
         self._delete_objects(gone, purge_events=False, uid=uid)
 
     def _update_custom(self, uid: str, inst: dict, params: dict, plan: list[PlannedObject]) -> dict:
-        # a skill is used through the project's skills, not its object list (P-TR-216)
+        # a skill is used through the project's skills, a doc through its docs, not its object
+        # list (P-TR-216, TR-403)
         existing = {(o["kind"], o["key"]): o for o in self.store.list_project_objects(uid)
-                    if o["kind"] != "skill"}
+                    if o["kind"] not in ("skill",) + _NOT_PLANNED}
         planned = {(o.kind, o.key) for o in plan}
         added = [o for o in plan if (o.kind, o.key) not in existing]
         removed = [PlannedObject(k, key, {"name": o["name"]})

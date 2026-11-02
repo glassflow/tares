@@ -11,6 +11,9 @@ settings API and checks the next run exports nothing.
 import asyncio, json, os, signal, subprocess, sys, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import clean_env
+
 import httpx
 
 P = F = 0
@@ -328,7 +331,7 @@ async def part2():
                 HTTPServer(("127.0.0.1", int(OTLP_PORT)), OtlpStub)):
         threading.Thread(target=srv.serve_forever, daemon=True).start()
 
-    env = {**os.environ, "TARES_DB": DB, "TARES_CATALOG": SEED, "TARES_PORT": PORT,
+    env = {**clean_env(), "TARES_DB": DB, "TARES_CATALOG": SEED, "TARES_PORT": PORT,
            "TARES_OTLP_GRPC_PORT": "off", "ANTHROPIC_API_KEY": "sk-test",
            "TARES_ANTHROPIC_BASE": f"http://127.0.0.1:{STUB_PORT}",
            "TARES_TRIGGER_DEBOUNCE_SECONDS": "0",

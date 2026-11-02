@@ -1,5 +1,6 @@
 import { api } from "../api";
 import { ErrorState, fmtCost, fmtTokens, formatBytes, usePolling } from "./bits";
+import { ClaudeCodeUsagePanel } from "./ClaudeUsage";
 import type { ModelUsage, Usage } from "../types";
 
 // The whole instance's numbers: what it spent on model providers and how full its storage is.
@@ -18,6 +19,7 @@ export function UsagePanels({ storage = true }: { storage?: boolean }) {
   return (
     <>
       <ModelSpendPanel usage={mu} error={muError} reload={reloadMu} />
+      <ClaudeCodeUsagePanel />
       {storage && <StoragePanel usage={u} error={usageError} reload={reloadUsage} onDisk={onDisk} pct={pct} />}
     </>
   );

@@ -327,8 +327,8 @@ async def main():
            and [v["verdict"] for v in h["verdicts"]] == ["page-oncall", "ignore"], r.text[:200])
 
         # a cell where a trigger was deleted before deletes cleaned up: mended at the next open
-        store.con.execute("UPDATE catalog_agents SET trigger = 'old-esc' WHERE name = 'helper'")
-        store.con.execute("INSERT INTO usecase_objects (usecase_id, kind, key, name, created_at) "
+        store.sc.execute("UPDATE catalog_agents SET trigger = 'old-esc' WHERE name = 'helper'")
+        store.sc.execute("INSERT INTO usecase_objects (usecase_id, kind, key, name, created_at) "
                           "VALUES (?, 'trigger', 'trigger:old-esc', 'old-esc', now())", [b])
         store.normalize_projects()
         objs = (await cx.get(f"/api/projects/{b}")).json()["objects"]
@@ -346,10 +346,10 @@ async def main():
                                             "window": "5m"}, {}, "5m")
     st.upsert_catalog_agent("old_agent", "t1", "look",
                             handoffs=[{"verdict": "investigate", "agent": "other"}])
-    st.con.execute("UPDATE catalog_agents SET owned_by = ? WHERE name = 'old_agent'", [uid])
-    st.con.execute("DELETE FROM project_wiring")
+    st.sc.execute("UPDATE catalog_agents SET owned_by = ? WHERE name = 'old_agent'", [uid])
+    st.sc.execute("DELETE FROM project_wiring")
     st.add_subscription("sub_old", "t1", "tares://agent/old_agent", created_by="tares")
-    st.con.execute("DELETE FROM settings WHERE key = 'wiring_moved'")
+    st.sc.execute("DELETE FROM settings WHERE key = 'wiring_moved'")
     st.con.close()
     st = Store(path)
     eq("its trigger and on/off became the project's wake-up",
@@ -364,13 +364,13 @@ async def main():
     print("== the upgrade: each project's skills become skills of the cell ==")
     p2 = "uc_other00001"
     st.create_project(p2, "custom", "Other", {"objects": []})
-    st.con.execute("DELETE FROM shared_skills")
-    st.con.execute("DELETE FROM usecase_objects WHERE kind = 'skill'")
+    st.sc.execute("DELETE FROM shared_skills")
+    st.sc.execute("DELETE FROM usecase_objects WHERE kind = 'skill'")
     for proj, name, body in ((uid, "codes", "E42 is a decline"), (p2, "codes", "E42 is a decline"),
                              (uid, "runbook", "restart it"), (p2, "runbook", "page someone")):
-        st.con.execute("INSERT INTO skills (project, name, description, body, created_at, "
+        st.sc.execute("INSERT INTO skills (project, name, description, body, created_at, "
                        "updated_at) VALUES (?, ?, 'd', ?, now(), now())", [proj, name, body])
-    st.con.execute("DELETE FROM settings WHERE key = 'skills_shared'")
+    st.sc.execute("DELETE FROM settings WHERE key = 'skills_shared'")
     st.con.close()
     st = Store(path)
     eq("the same skill in two projects is one, used by both",

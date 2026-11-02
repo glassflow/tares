@@ -1,0 +1,100 @@
+{
+ "projects": [
+  {
+   "default": false,
+   "goal": null,
+   "id": "uc_small",
+   "kind": "software_factory",
+   "last_error": null,
+   "name": "small",
+   "objects": [],
+   "params": {
+    "objects": []
+   },
+   "progress": {
+    "blocked": 1,
+    "canceled": 0,
+    "doing": 3,
+    "done": 3,
+    "todo": 3,
+    "total": 10
+   },
+   "recipe": "custom",
+   "recipe_title": "From existing objects",
+   "setup": null,
+   "status": "active",
+   "template": "custom",
+   "template_title": "From existing objects"
+  },
+  {
+   "default": false,
+   "goal": null,
+   "id": "uc_big",
+   "kind": "software_factory",
+   "last_error": null,
+   "name": "big",
+   "objects": [],
+   "params": {
+    "objects": []
+   },
+   "progress": {
+    "blocked": 4,
+    "canceled": 0,
+    "doing": 9,
+    "done": 9,
+    "todo": 8,
+    "total": 30
+   },
+   "recipe": "custom",
+   "recipe_title": "From existing objects",
+   "setup": null,
+   "status": "active",
+   "template": "custom",
+   "template_title": "From existing objects"
+  },
+  {
+   "default": false,
+   "goal": null,
+   "id": "uc_solo",
+   "kind": "software_factory",
+   "last_error": null,
+   "name": "solo",
+   "objects": [],
+   "params": {
+    "objects": []
+   },
+   "progress": {
+    "blocked": 0,
+    "canceled": 0,
+    "doing": 2,
+    "done": 1,
+    "todo": 0,
+    "total": 3
+   },
+   "recipe": "custom",
+   "recipe_title": "From existing objects",
+   "setup": null,
+   "status": "active",
+   "template": "custom",
+   "template_title": "From existing objects"
+  },
+  {
+   "default": false,
+   "goal": null,
+   "id": "uc_plain",
+   "kind": null,
+   "last_error": null,
+   "name": "plain",
+   "objects": [],
+   "params": {
+    "objects": []
+   },
+   "recipe": "custom",
+   "recipe_title": "From existing objects",
+   "setup": null,
+   "status": "active",
+   "template": "custom",
+   "template_title": "From existing objects"
+  }
+ ]
+}

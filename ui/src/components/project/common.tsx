@@ -21,11 +21,14 @@ import type {
 
 export type ViewKind = "overview" | "result" | "how"
   | "activity" | "events" | "sources" | "source" | "triggers" | "trigger" | "agents"
-  | "agent" | "external" | "skills" | "skill" | "sessions" | "settings";
+  | "agent" | "external" | "skills" | "skill" | "sessions" | "settings"
+  // what a spec session leaves for the build (TR-407): docs, tickets, the Claude Code sessions
+  | "docs" | "doc" | "tickets" | "ticket" | "claude";
 export interface View { kind: ViewKind; name?: string }
 
-const SECTIONS: ViewKind[] = ["overview", "how", "activity", "events", "sources", "triggers", "agents", "skills", "sessions"];
-const ITEMS: ViewKind[] = ["result", "source", "trigger", "agent", "external", "skill"];
+const SECTIONS: ViewKind[] = ["overview", "how", "activity", "events", "sources", "triggers", "agents", "skills", "sessions",
+  "docs", "tickets", "claude"];
+const ITEMS: ViewKind[] = ["result", "source", "trigger", "agent", "external", "skill", "doc", "ticket", "claude"];
 export const SETTINGS: [string, string][] = [
   ["mcp", "MCP servers"], ["subscribers", "Subscribers"], ["keys", "Keys"], ["history", "Change history"],
 ];
@@ -92,6 +95,10 @@ export type AgentsData = Awaited<ReturnType<Api["builtinAgents"]>>;
 export type Roster = Awaited<ReturnType<Api["agents"]>>;
 export type Mcp = Awaited<ReturnType<Api["mcpServers"]>>;
 export type SlackChannels = Awaited<ReturnType<Api["slackChannels"]>>["channels"];
+
+// How often a software factory project's pages read again: its sessions move tickets, write
+// docs and open PRs while the page is open, so a page someone watches keeps up within seconds.
+export const FACTORY_POLL_MS = 5000;
 
 /** Everything the views share: the project, its objects as the live APIs report them, and how to
  *  move between views and refresh. Loaded once by the page so the nav and the views agree. */

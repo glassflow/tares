@@ -3,6 +3,9 @@ proxy to a live taresd. Proves an agent can reach Tares without stdio (the demo/
 """
 import asyncio, os, signal, subprocess, sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import clean_env
+
 import httpx
 
 P = F = 0
@@ -30,7 +33,7 @@ async def main():
     for p in (DB, DB + ".wal"):
         if os.path.exists(p):
             os.remove(p)
-    base = {**os.environ, "TARES_OTLP_GRPC_PORT": "off"}
+    base = {**clean_env(), "TARES_OTLP_GRPC_PORT": "off"}
     daemon = subprocess.Popen(
         [sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
         env={**base, "TARES_DB": DB, "TARES_CATALOG": "/tmp/none_mr.yaml", "TARES_PORT": DPORT},

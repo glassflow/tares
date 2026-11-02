@@ -8,8 +8,8 @@ import { useCloud, useWorkspaceOverview } from "./cloud";
 import CommandPalette from "./components/CommandPalette";
 import WorkspaceSwitcher from "./components/WorkspaceSwitcher";
 import {
-  Activity, Chat, ChevronRight, Database, GitHub, Grid, Lock, Moon,
-  Settings, SignOut, Sun, Terminal, Zap,
+  Activity, Chat, ChevronLeft, ChevronRight, Database, ExternalLink, Eye, Flag, GitHub, Grid, Lock,
+  Moon, Plug, Settings, SignOut, Sun, Terminal, Zap,
 } from "./components/icons";
 import { applyTheme, currentTheme, type Theme } from "./theme";
 
@@ -30,10 +30,12 @@ type NavItem = {
 // everything a project is made of is one flat Catalog group ordered along the pipeline
 // (sources feed triggers, triggers run agents, agents leave firings).
 // The old Data / Automate split was mechanism vocabulary and is gone.
+// No two rows share an icon: on the folded rail the icon is all a row shows.
 const NAV_GROUPS: { section: string; items: NavItem[] }[] = [
   { section: "", items: [
-    { to: "/start", label: "Start", icon: Grid },
+    { to: "/start", label: "Start", icon: Flag },
     { to: "/projects", label: "Projects", icon: Zap },
+    { to: "/crew", label: "Crew", icon: Terminal },
     { to: "/ask", label: "Ask", icon: Chat, kbd: "⌘K" },
   ] },
   { section: "Catalog", items: [
@@ -42,8 +44,8 @@ const NAV_GROUPS: { section: string; items: NavItem[] }[] = [
     { to: "/resources", label: "All resources", icon: Grid },
   ] },
   { section: "Agent access", items: [
-    { to: "/connect", label: "Connect", icon: Terminal },
-    { to: "/reads", label: "Reads", icon: Activity },
+    { to: "/connect", label: "Connect", icon: Plug },
+    { to: "/reads", label: "Reads", icon: Eye },
   ] },
 ];
 
@@ -62,6 +64,7 @@ const SECTION_LABEL: Record<string, string> = {
   projects: "Projects",
   resources: "All resources",
   start: "Start",
+  crew: "Crew",
 };
 
 type Crumb = { label: string; to?: string; mono?: boolean };
@@ -160,8 +163,27 @@ function ThemeToggle() {
   );
 }
 
+// The sidebar folds to a rail of icons; per viewer, in this browser, open by default.
+const COLLAPSED_KEY = "tares.sidebar.collapsed";
+function readCollapsed(): boolean {
+  try { return localStorage.getItem(COLLAPSED_KEY) === "1"; } catch { return false; }
+}
+function rememberCollapsed(collapsed: boolean) {
+  try {
+    if (collapsed) localStorage.setItem(COLLAPSED_KEY, "1");
+    else localStorage.removeItem(COLLAPSED_KEY);
+  } catch { /* private window: for this visit only */ }
+}
+
 export default function App() {
   const [version, setVersion] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const toggleCollapsed = () => {
+    rememberCollapsed(!collapsed);
+    setCollapsed(!collapsed);
+  };
+  // folded, a row is its icon alone: its name is the tooltip (and stays in the DOM for screen readers)
+  const tip = (text: string) => (collapsed ? text : undefined);
   // Cloud only: the control-plane workspace this cell belongs to. Users, plan, storage and the
   // Slack app are managed there; the link is the missing half of Settings (TR-142). Self-host
   // sets no TARES_WORKSPACE_URL and never sees it.
@@ -178,15 +200,32 @@ export default function App() {
   const overview = useWorkspaceOverview(logoutUrl ? cloud.health?.workspace_api_url || undefined : undefined);
   const email = overview.result?.status === "ok" ? overview.result.data.you?.email : undefined;
   // Start is in the sidebar until the person has a project of their own (and while it is open)
-  const { own } = useOwnProjects();
-  const onStart = useLocation().pathname === "/start";
+  const { own, projects } = useOwnProjects();
+  const here = useLocation().pathname;
+  const onStart = here === "/start";
   const showStart = onStart || (own !== undefined && own.length === 0);
+  // the crew of a tares-factory: in the sidebar once there is a software factory project, or as
+  // soon as `tares crew up` has an orchestrator reporting (TR-494), before any project is handed over
+  const hasFactory = (projects ?? []).some((p) => p.kind === "software_factory");
+  const [crewUp, setCrewUp] = useState(false);
+  useEffect(() => {
+    if (hasFactory || crewUp) return;
+    let live = true;
+    const check = () => api.crew()
+      .then((c) => { if (live && c.stations.some((s) => s.role === "orchestrator")) setCrewUp(true); })
+      .catch(() => {});
+    check();
+    const id = setInterval(check, 30000);
+    return () => { live = false; clearInterval(id); };
+  }, [hasFactory, crewUp]);
+  const showCrew = here === "/crew" || hasFactory || crewUp;
+  const shown = (to: string) => (to !== "/start" || showStart) && (to !== "/crew" || showCrew);
   useEffect(() => {
     api.capabilities().then((c) => setVersion(c.version ?? null)).catch(() => {});
   }, []);
   return (
     <>
-      <nav className="sidebar">
+      <nav className={"sidebar" + (collapsed ? " collapsed" : "")}>
         <div className={"brand" + (cloud.switcher ? " with-switcher" : "")}>
           <img className="brand-mark" src="/tares-mark.svg" alt="Tares" />
           <span className="brand-word">tares</span>
@@ -197,8 +236,9 @@ export default function App() {
           <div className="nav-group" key={section}>
             {/* Start, Projects and Ask have no section heading: they sit above the groups. */}
             {section && <div className="nav-section">{section}</div>}
-            {items.filter((x) => x.to !== "/start" || showStart).map(({ to, end, label, icon: Icon, badge, locked, kbd }) => (
-              <NavLink key={to} to={to} end={end} className={link}>
+            {items.filter((x) => shown(x.to)).map(({ to, end, label, icon: Icon, badge, locked, kbd }) => (
+              <NavLink key={to} to={to} end={end} className={link}
+                       title={tip(label + (badge ? ` (${badge})` : "") + (locked ? ", locked" : "") + (kbd ? `, ${kbd}` : ""))}>
                 <Icon className="ico" />
                 <span className="nav-label">{label}</span>
                 {badge && <span className="nav-badge">{badge}</span>}
@@ -212,13 +252,14 @@ export default function App() {
         <div className="nav-spacer" />
         <div className="sep" />
 
-        <NavLink to="/settings" className={link}>
-          <Lock className="ico" />
+        <NavLink to="/settings" className={link} title={tip("Settings")}>
+          <Settings className="ico" />
           <span className="nav-label">Settings</span>
         </NavLink>
         {workspaceUrl && (
-          <a className="navlink" href={workspaceUrl} title="users, plan, storage and the Slack app: managed in your workspace">
-            <Settings className="ico" />
+          <a className="navlink" href={workspaceUrl}
+             title={collapsed ? "Workspace, opens outside the console: users, plan, storage and the Slack app" : "users, plan, storage and the Slack app: managed in your workspace"}>
+            <ExternalLink className="ico" />
             <span className="nav-label">Workspace</span>
             <span className="nav-badge">↗</span>
           </a>
@@ -226,11 +267,19 @@ export default function App() {
         <ThemeToggle />
         {logoutUrl && email && <div className="who" title={`Signed in as ${email}`}>{email}</div>}
         {auth.get() && (
-          <button className="navbtn" onClick={() => signOut(logoutUrl)}>
+          <button className="navbtn" onClick={() => signOut(logoutUrl)}
+                  title={tip(email ? `Sign out (${email})` : "Sign out")}>
             <SignOut className="ico" />
             <span className="nav-label">Sign out</span>
           </button>
         )}
+        {/* last row above the footer, so folding or opening leaves it under the pointer */}
+        <button type="button" className="navbtn side-toggle" onClick={toggleCollapsed} aria-expanded={!collapsed}
+                aria-label={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
+                title={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}>
+          {collapsed ? <ChevronRight className="ico" /> : <ChevronLeft className="ico" />}
+          <span className="nav-label" aria-hidden="true">Collapse</span>
+        </button>
         <div className="foot">
           {version && <span>v{version}</span>}
           <a href="https://github.com/glassflow/tares" target="_blank" rel="noreferrer"

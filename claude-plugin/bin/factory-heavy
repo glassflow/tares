@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# factory-heavy <timeout-seconds> <command...>
+# Runs a heavy command (docker build, many-module build, scan) with a machine-wide lock so only one
+# runs at a time, and kills it after the timeout. A Claude Code Bash timeout does not kill the process.
+set -euo pipefail
+
+if [ $# -lt 2 ] || ! [[ $1 =~ ^[0-9]+$ ]]; then
+  echo "usage: factory-heavy <timeout-seconds> <command...>" >&2
+  exit 2
+fi
+limit=$1; shift
+
+lock="${TMPDIR:-/tmp}/tares-factory-heavy.lock"
+waited=0
+until mkdir "$lock" 2>/dev/null; do
+  holder=$(cat "$lock/pid" 2>/dev/null || true)
+  if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+    rm -rf "$lock"
+    continue
+  fi
+  if [ $waited -ge 3600 ]; then
+    echo "factory-heavy: waited an hour for $(cat "$lock/what" 2>/dev/null || echo 'another heavy command'); giving up" >&2
+    exit 75
+  fi
+  [ $((waited % 60)) -eq 0 ] && echo "factory-heavy: waiting for $(cat "$lock/what" 2>/dev/null || echo 'another heavy command') to finish" >&2
+  sleep 5; waited=$((waited + 5))
+done
+echo $$ > "$lock/pid"
+printf '%s (station %s)\n' "$*" "${FACTORY_STATION:-unknown}" > "$lock/what"
+trap 'rm -rf "$lock"' EXIT
+
+# perl's alarm survives exec, so the command itself receives SIGALRM at the limit (exit 142).
+set +e
+perl -e 'alarm shift; exec @ARGV or die "exec failed: $!\n"' "$limit" "$@"
+status=$?
+set -e
+[ $status -eq 142 ] && echo "factory-heavy: killed after ${limit}s: $*" >&2
+exit $status

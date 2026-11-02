@@ -66,7 +66,7 @@ function ResultBadge({ r }: { r: ProjectResult }) {
 // ── Overview ────────────────────────────────────────────────────────────────
 
 /** The goal, editable in place. A project without one asks for it. */
-function Goal({ ctx }: { ctx: Ctx }) {
+export function Goal({ ctx }: { ctx: Ctx }) {
   const goal = ctx.s.goal ?? null;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -131,6 +131,10 @@ function HealthBanner({ ctx, health, onResume }: { ctx: Ctx; health: ProjectHeal
     // credentials and model providers are the cell's, on the console's own Settings page
     if (issue?.fix && (issue.view === "settings:github" || issue.view === "settings:providers"))
       return <Link className={`btn gf-fix ${cls}`} to="/settings">{issue.fix}</Link>;
+    // the daily run cap is one console setting for every agent, not a field on the agent's page
+    if (issue?.fix && issue.view === "settings:agents")
+      return <Link className={`btn gf-fix ${cls}`}
+                   to={`/settings?tab=agents${issue.agent ? `&agent=${encodeURIComponent(issue.agent)}` : ""}`}>{issue.fix}</Link>;
     const v = issue && viewFrom(issue.view, hasSessions);
     return issue?.fix && v
       ? <button type="button" className={`gf-fix ${cls}`} onClick={() => ctx.go(v)}>{issue.fix}</button>
@@ -358,6 +362,7 @@ export function Overview({ ctx, actions, onResume }: { ctx: Ctx; actions: React.
       </div>
 
       <FinishSetup id={ctx.id} />
+      <BuildRow ctx={ctx} />
       {health && <HealthBanner ctx={ctx} health={health} onResume={onResume} />}
       {!health && healthError && (
         <p className="help" style={{ margin: 0 }}>Could not check whether this project is working: {healthError}</p>
@@ -367,6 +372,33 @@ export function Overview({ ctx, actions, onResume }: { ctx: Ctx; actions: React.
 
       <Results ctx={ctx} head={head} headError={headError} reload={reload} outline={outline}
                show={show} setShow={setShow} />
+    </div>
+  );
+}
+
+/** What a spec session left for the build (TR-407), when there is any: the docs and the tickets,
+ *  one click from the Overview. */
+function BuildRow({ ctx }: { ctx: Ctx }) {
+  const { data: docs } = usePolling(() => api.docs(ctx.id), 30000);
+  const { data: t } = usePolling(() => api.tickets(ctx.id), 30000);
+  const nDocs = (docs ?? []).filter((d) => d.kind !== "working" && !d.global).length;
+  const tickets = t?.tickets ?? [];
+  if (!nDocs && !tickets.length) return null;
+  const done = tickets.filter((x) => x.status === "done").length;
+  const start = (docs ?? []).find((d) => d.kind === "start");
+  return (
+    <div className="gf-setup-row">
+      <span>
+        {nDocs} {nDocs === 1 ? "doc" : "docs"}
+        {tickets.length > 0 && <>, {tickets.length} {tickets.length === 1 ? "ticket" : "tickets"} ({done} done)</>}
+        {t?.linear && <> in Linear project {t.linear.name}</>}
+        {t?.github && <> in GitHub {t.github.repo}</>}.
+        {start ? " A session can start building from the starting prompt." : " No starting prompt yet."}
+      </span>
+      <span className="btnrow" style={{ margin: 0 }}>
+        <VLink v={start ? { kind: "doc", name: start.id } : { kind: "docs" }} className="gf-setup-link">Docs</VLink>
+        <VLink v={{ kind: "tickets" }} className="gf-setup-link">Tickets</VLink>
+      </span>
     </div>
   );
 }

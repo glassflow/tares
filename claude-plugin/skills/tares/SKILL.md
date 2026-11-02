@@ -22,11 +22,31 @@ this service healthy", "what has this customer done recently" — read Tares ins
 This plugin also streams the current Claude Code session into Tares (the `claude_code` source) when
 session streaming is enabled, so prior sessions are queryable as a source.
 
+## Projects with docs and tickets
+
+A project can hold docs (spec, plan, AGENTS.md, a starting prompt, notes, working docs),
+milestones with acceptance checks, and a ticket list (in Tares, or synced from Linear or GitHub Issues) where each
+ticket has a milestone and the tickets it depends on. To spec a new project, use the
+`spec-project` skill. When told to work on a Tares project, start with its `start` doc
+(`list_docs`, `get_doc`), then work one milestone at a time (`list_milestones`): the ready tickets
+from `list_tickets`, in order, each read with `get_ticket`, which carries the working doc.
+If a ticket is already in progress when you start, an earlier session stopped on it: call
+`pick_up` first, and finish that ticket. While you build, keep a `## Progress` section at the end
+of the ticket's working doc (done, next, how to run things), so the next session can pick up.
+Record each check you run with `add_check` (it adds one line to the working doc), what you
+learn about the project with `remember_for_project`, and, in a tares-factory crew, an assumption
+you make so as not to block with `assume`.
+
+Two docs belong to every project: the shared AGENTS.md (standing rules) and memory (facts that
+hold everywhere). Read them with `read_global_docs`. When the user states a rule or fact that
+holds beyond the current project, offer to add it with `add_to_global`.
+
 ## Challenger sessions
 
 When the user asks to make this a challenger session (any wording: "challenger session",
-"let Codex challenge this", "/tares:challenger"), call the `set_session_flow` tool with
-`flow="challenger"` and say so in one sentence. Do not run Codex yourself: the plugin's hooks
+"let Codex challenge this", "let Grok review my commits", "/tares:challenger"), call the `set_session_flow` tool with
+`flow="challenger"` and say so in one sentence. Do not run the challenger yourself: the plugin's hooks run Codex, or Grok
+when the `challenger_backend` option is `grok`, and each review names which. They
 challenge the plan when you leave plan mode and every commit you make, and hand you the findings.
 `set_session_flow` with an empty `flow` turns it off.
 

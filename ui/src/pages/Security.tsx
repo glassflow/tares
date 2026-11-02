@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 
 import { api, type AgentLimits, type TracingStatus } from "../api";
@@ -8,6 +8,8 @@ import { InternalName, Picker, TimeAgo, keyTitle } from "../components/bits";
 import { type Cloud, cloudLink, useCloud } from "../cloud";
 import type { ApiKey, GithubAppTest, GithubCredential, ModelProvider, ModelProviders } from "../types";
 import { UsagePanels } from "../components/UsagePanels";
+import LinearSettings from "../components/LinearSettings";
+import OwnerOnly from "../components/OwnerOnly";
 import WorkspaceSettings from "./WorkspaceSettings";
 
 // Four distinct credential concepts, one box each:
@@ -19,16 +21,18 @@ import WorkspaceSettings from "./WorkspaceSettings";
 // The per-source ingest URL is an address, not a secret — it lives on the source page, not here.
 //   · Workspace  (Tares Cloud only) team, plan, storage, credit and delete, held by the control
 //                  plane (TR-375); shown first, and the default tab, when /health has workspace_api_url
-type SettingsTab = "workspace" | "usage" | "access" | "anthropic" | "agents" | "github" | "slack" | "observability";
-const TABS: { key: SettingsTab; label: string }[] = [
+type SettingsTab = "workspace" | "usage" | "access" | "anthropic" | "agents" | "github" | "linear" | "slack" | "observability";
+// The tabs as a second sidebar (TR-521): the workspace itself on top, then one group per concern.
+const TABS: { key: SettingsTab; label: string; group?: string }[] = [
   { key: "workspace", label: "Workspace" },
   { key: "usage", label: "Usage" },
   { key: "access", label: "Access and API keys" },
-  { key: "anthropic", label: "Model providers" },
-  { key: "agents", label: "Agents" },
-  { key: "github", label: "GitHub" },
-  { key: "slack", label: "Slack" },
-  { key: "observability", label: "Observability" },
+  { key: "anthropic", label: "Model providers", group: "Agents" },
+  { key: "agents", label: "Limits", group: "Agents" },
+  { key: "observability", label: "Observability", group: "Agents" },
+  { key: "github", label: "GitHub", group: "Integrations" },
+  { key: "linear", label: "Linear", group: "Integrations" },
+  { key: "slack", label: "Slack", group: "Integrations" },
 ];
 
 // Coming back from a Tares Cloud connect page (contract §3): `cloud` says what happened and
@@ -44,6 +48,10 @@ export const CLOUD_BACK: Record<string, { tab?: SettingsTab; text: string; kind:
     text: "Slack is connected. Triggers and agents can post to its channels, and your team can ask Tares with /tares ask." },
   "slack-disconnected": { tab: "slack", kind: "",
     text: "Slack is disconnected. Nothing is posted to it any more." },
+  "linear-connected": { tab: "linear", kind: "ok",
+    text: "Linear is connected. Projects can keep their tickets in a Linear project." },
+  "linear-disconnected": { tab: "linear", kind: "",
+    text: "Linear is disconnected. Projects linked to it keep their tickets and stop syncing." },
   error: { kind: "error", text: "That did not work. Nothing was changed." },
   cancelled: { kind: "", text: "Cancelled. Nothing was changed." },
 };
@@ -93,18 +101,40 @@ export default function Security() {
   // spend and storage) in its place.
   const tabs = TABS.filter((t) => t.key === "workspace" ? !!workspaceApiUrl
     : t.key === "usage" ? !workspaceApiUrl : true);
+  const groups = [...new Set(tabs.map((t) => t.group))];
+  const link = (t: (typeof TABS)[number]) => (
+    <button key={t.key} type="button" aria-current={tab === t.key ? "page" : undefined}
+            className={`pnav-link${t.group ? " pnav-item pnav-plain" : ""}${tab === t.key ? " active" : ""}`}
+            onClick={() => pick(t.key)}>
+      <span className="pnav-label">{t.label}</span>
+    </button>
+  );
   return (
     <>
       <h1>Settings</h1>
-      <p className="subtitle">
-        {workspaceApiUrl ? "Your team, plan, storage and model spend, API keys, model providers, agent limits, GitHub and Slack, and agent tracing."
-          : "Model spend and storage, who can get in, API keys, model providers, agent limits, GitHub and Slack credentials, and agent tracing."}
-      </p>
-      <div className="tabs">
-        {tab !== undefined && tabs.map((t) => (
-          <button key={t.key} className={tab === t.key ? "active" : ""} onClick={() => pick(t.key)}>{t.label}</button>
-        ))}
-      </div>
+      <p className="subtitle">What applies to the whole workspace, not to one project.</p>
+      <div className="project-body settings-body">
+      <nav className="pnav" aria-label="Settings">
+        {tab !== undefined && groups.map((g) => g
+          ? <div className="pnav-group" key={g}>
+              <div className="pnav-head"><span className="pnav-title pnav-static">{g}</span></div>
+              {tabs.filter((t) => t.group === g).map(link)}
+            </div>
+          : <Fragment key="top">{tabs.filter((t) => !t.group).map(link)}</Fragment>)}
+      </nav>
+      {tab !== undefined && (
+        <label className="pnav-select">
+          <span className="lbl">show</span>
+          <select value={tab} onChange={(e) => pick(e.target.value as SettingsTab)}>
+            {groups.map((g) => g
+              ? <optgroup key={g} label={g}>
+                  {tabs.filter((t) => t.group === g).map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+                </optgroup>
+              : tabs.filter((t) => !t.group).map((t) => <option key={t.key} value={t.key}>{t.label}</option>))}
+          </select>
+        </label>
+      )}
+      <div className="pview">
       {cloudBack && (backTab ? tab === backTab : picked === undefined) && (
         <div className={"alert" + (cloudBack.kind ? ` ${cloudBack.kind}` : "")}
              role={cloudBack.kind === "error" ? "alert" : "status"}>
@@ -119,26 +149,17 @@ export default function Security() {
       {tab === "usage" && <UsagePanels />}
       {tab === "access" && <><AccessPanel /><ApiKeysPanel /></>}
       {tab === "anthropic" && <ProvidersPanel />}
-      {tab === "agents" && <AgentLimitsPanel />}
+      {tab === "agents" && <AgentLimitsPanel agent={new URLSearchParams(loc.search).get("agent") ?? undefined} />}
       {tab === "github" && <GithubPanel cloud={cloud} />}
+      {tab === "linear" && <LinearSettings cloud={cloud} />}
       {/* Until /health answers (it can be slow on a busy instance) the self-host panels show, so
           a self-hosted Slack tab never waits on it; a cloud cell swaps to its panel once it does. */}
       {tab === "slack" && (slackConnectUrl ? <SlackCloudPanel cloud={cloud} connectUrl={slackConnectUrl} />
         : <><SlackTokenPanel /><SlackSigningSecretPanel /></>)}
       {tab === "observability" && <TracingPanel />}
+      </div>
+      </div>
     </>
-  );
-}
-
-/** Who may connect, when this person may not (TR-367): the control plane lets only the
- *  workspace's owner connect and disconnect GitHub and Slack. */
-function OwnerOnly({ cloud, what }: { cloud: Cloud; what: string }) {
-  const email = cloud.current?.owner_email;
-  return (
-    <p className="help">
-      {email ? <>Only the workspace owner, <strong>{email}</strong>, can connect {what}.</>
-        : <>Only the workspace owner can connect {what}.</>}
-    </p>
   );
 }
 
@@ -599,6 +620,7 @@ const PRESETS: { id: string; label: string; kind: ProviderKind; name: string; ba
   { id: "openai", label: "OpenAI", kind: "openai", name: "OpenAI", base_url: "", key: true },
   { id: "litellm", label: "LiteLLM", kind: "openai_compatible", name: "LiteLLM", base_url: "http://localhost:4000/v1", key: true },
   { id: "openrouter", label: "OpenRouter", kind: "openai_compatible", name: "OpenRouter", base_url: "https://openrouter.ai/api/v1", key: true },
+  { id: "xai", label: "xAI (Grok)", kind: "openai_compatible", name: "xAI", base_url: "https://api.x.ai/v1", key: true },
   { id: "ollama", label: "Ollama", kind: "openai_compatible", name: "Ollama", base_url: "http://localhost:11434/v1", key: false },
   { id: "other", label: "Other OpenAI-compatible", kind: "openai_compatible", name: "", base_url: "", key: true },
 ];
@@ -753,15 +775,15 @@ function ProvidersPanel() {
                         ? <><span className="badge error">key rejected</span><span className="help"> by the endpoint; edit and save a valid key</span></>
                         : <><span className="badge ok">configured</span>{p.source && <span className="help"> from <span className="mono">{p.source}</span></span>}</>}
                   </td>
-                  <td>
+                  <td style={{ minWidth: 220 }}>
                     {p.models_error
                       ? <span className="help" title={p.models_error}><span className="badge error">not listed</span> {p.models_problem}{p.models.length > 0 ? `; the picker offers ${p.models.length} ${p.discovers && p.models_at ? "from the last read" : "built in"}` : ""}</span>
                       : <span className="help" title={p.models.slice(0, 40).join("\n")}>{p.models.length}{p.discovers ? " from the endpoint" : " built in"}</span>}
                   </td>
-                  <td style={{ whiteSpace: "nowrap" }}>
-                    <div className="btnrow" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
-                      {p.discovers && p.configured && <button disabled={busy} onClick={() => refresh(p.id)} title="re-read the models this endpoint serves">Refresh models</button>}
-                      {!p.default && p.configured && <button disabled={busy} onClick={() => makeDefault(p.id)}>Make default</button>}
+                  <td style={{ width: 270 }}>
+                    <div className="btnrow" style={{ justifyContent: "flex-end", flexWrap: "wrap" }}>
+                      {p.discovers && p.configured && <button style={{ whiteSpace: "nowrap" }} disabled={busy} onClick={() => refresh(p.id)} title="re-read the models this endpoint serves">Refresh models</button>}
+                      {!p.default && p.configured && <button style={{ whiteSpace: "nowrap" }} disabled={busy} onClick={() => makeDefault(p.id)}>Make default</button>}
                       <button disabled={busy} onClick={() => startEdit(p)}>Edit</button>
                       {(p.stored || p.kind !== "anthropic") && <button className="danger" disabled={busy} onClick={() => setConfirmDelete(p)}>Remove</button>}
                     </div>
@@ -792,8 +814,11 @@ function ProvidersPanel() {
 // the switch is the one live control. The key and headers are write-only.
 // Runs per agent per day (TR-325). A guard against a runaway trigger, not a bill: spend is bounded
 // by each agent's budget. Saved here it replaces the deployment's value; cleared, that comes back.
-function AgentLimitsPanel() {
+// `agent` is who the person came for (a project's "Raise the limit", TR-670): the field is scrolled
+// into view and marked, since the one number applies to every agent without its own limit.
+function AgentLimitsPanel({ agent }: { agent?: string }) {
   const [st, setSt] = useState<AgentLimits>();
+  const field = useRef<HTMLLabelElement>(null);
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
@@ -803,6 +828,9 @@ function AgentLimitsPanel() {
     .then((s) => { setSt(s); setValue(String(s.daily_cap)); })
     .catch((e) => setErr(String((e as Error).message ?? e)));
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (agent && st) field.current?.scrollIntoView({ block: "center" });
+  }, [agent, !!st]);
 
   const save = async (daily_cap: string | null, done: string) => {
     setBusy(true); setErr(undefined); setMsg(undefined);
@@ -829,11 +857,17 @@ function AgentLimitsPanel() {
       {err && <div className="alert error">{err}</div>}
       {msg && <p className="help">{msg}</p>}
       <div className="row2">
-        <label className="field">
+        <label className={`field${agent ? " field-focus" : ""}`} ref={field}
+               data-testid="daily-cap-field">
           <span className="lbl">runs per agent per day</span>
           <input type="number" min={1} max={10000} value={value} disabled={busy}
                  onChange={(e) => setValue(e.target.value)} />
           <span className="help">now {st.daily_cap}, {from}</span>
+          {agent && (
+            <span className="help">{agent} stopped at this limit. Raise it here and {agent} runs
+              again on its next trigger; the number applies to every agent
+              without its own limit.</span>
+          )}
         </label>
       </div>
       <div className="btnrow">
@@ -1162,11 +1196,16 @@ function ApiKeysPanel() {
         <h2 style={{ margin: 0 }}>API keys</h2>
         <button className="primary" onClick={() => setCreating(true)}>Create key</button>
       </div>
-      <p className="help" style={{ marginTop: 0 }}>
-        Scoped, revocable credentials; hand each producer and agent its own key instead of a
-        shared token. <strong>read</strong>: agents over MCP · <strong>ingest</strong>: producers ·{" "}
-        <strong>read + ingest</strong>: the Claude Code plugin · <strong>admin</strong>: full control.
+      <p className="help" style={{ marginTop: 0, marginBottom: 6 }}>
+        Give each agent, script or service its own key, so you can revoke one without touching the others.
+        What a key can do:
       </p>
+      <ul className="help" style={{ marginTop: 0, paddingLeft: 18 }}>
+        <li><strong>read</strong>: look things up, for an agent connecting over MCP</li>
+        <li><strong>ingest</strong>: send events in, for a script or service that pushes logs or webhooks</li>
+        <li><strong>read + ingest</strong>: both, for the Claude Code plugin</li>
+        <li><strong>admin</strong>: everything, settings included</li>
+      </ul>
       {!enforced && keys && (
         <div className="alert">
           No <code>TARES_AUTH_TOKEN</code> is set, so this instance is open and keys are not
@@ -1216,7 +1255,7 @@ function ApiKeysPanel() {
         )}
         </>
       ) : (
-        <p className="help">no keys yet; <strong>Create key</strong> to issue one for a producer or agent.</p>
+        <p className="help">No keys yet. <strong>Create key</strong> to make one for an agent, script or service.</p>
       )}
 
       {creating && (
@@ -1283,7 +1322,7 @@ function KeyModal({ onClose, onCreated }: {
             <span className="lbl">name</span>
             <input type="text" placeholder="e.g. otel-prod, my-agent" value={name} autoFocus
                    onChange={(e) => setName(e.target.value)} />
-            <span className="help">who holds it; one key per producer or agent</span>
+            <span className="help">who uses it: one key per agent, script or service</span>
           </label>
           <div className="field">
             <span className="lbl">scopes</span>

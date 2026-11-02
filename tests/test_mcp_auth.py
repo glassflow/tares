@@ -4,6 +4,9 @@ forwards it to taresd (whose API also requires it). Without the token, the conne
 import asyncio, os, signal, subprocess, sys
 import httpx
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _env import clean_env
+
 P = F = 0
 def ck(l, c, d=""):
     global P, F; P += 1 if c else 0; F += 0 if c else 1
@@ -28,7 +31,7 @@ async def main():
     for p in (DB, DB + ".wal"):
         if os.path.exists(p):
             os.remove(p)
-    base = {**os.environ, "TARES_OTLP_GRPC_PORT": "off", "TARES_AUTH_TOKEN": TOKEN}
+    base = {**clean_env(), "TARES_OTLP_GRPC_PORT": "off", "TARES_AUTH_TOKEN": TOKEN}
     daemon = subprocess.Popen(
         [sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
         env={**base, "TARES_DB": DB, "TARES_CATALOG": "/tmp/none_ma.yaml", "TARES_PORT": DPORT},

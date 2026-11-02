@@ -450,7 +450,7 @@ async def daemon():
                   len(rows) == 2 and rows[1][0] == "acme/app#7"
                   and json.loads(rows[1][3]).get("action") == "merged"
                   and json.loads(rows[1][3]).get("base") == "main", str(rows))
-            fired = store.con.execute(
+            fired = store.sc.execute(
                 "SELECT count(*) FROM dispatch_log WHERE trigger = 'pr_merged'").fetchone()[0]
             check("trigger filtered to action=merged fired once", fired == 1, str(fired))
 
