@@ -1,9 +1,14 @@
 """The factory project page (TR-734): GET /api/factory/projects/{uid}.
 
 One answer for the whole page: where the project stands (spec, build, review or done), what
-waits for the person on this project, the ticket that goes next, the milestones with their
-tickets, the decisions and the open calls the crew made, the project's documents, the command
-that opens a builder's session, and where the tickets live. The tickets are read once.
+waits for the person on this project, how many tickets are in each state (`counts`), the few
+that move now (`moving`: changes asked, in review, in progress, blocked, at most 5, with
+`moving_total` for how many there are), the ticket that goes next, the milestones as compact
+rows (a number, a bar's worth of counts, the acceptance checks and a link to their tickets, no
+ticket lists), the decisions and the open calls the crew made, the project's documents, the
+command that opens a builder's session, and where the tickets live. The full ticket list is the
+Tickets screen, which `tickets_href` and each milestone's `tickets_href` open. The tickets are
+read once.
 
 Every string is worded for people: a builder is "Builder for M1", never the name of its
 station; a time is "3 days ago"; a ticket is "in review", never a stage key. The only folder
@@ -45,13 +50,22 @@ _ROLE_WHO = {"orchestrator": "Lead", "reviewer": "Reviewer", "releaser": "Releas
 _DOC_LABEL = {"spec": "Spec", "plan": "Plan", "agents": "Rules", "memory": "Memory",
               "note": "Notes", "working": "Working notes"}
 _PR_NUMBER = re.compile(r"/pull/(\d+)")
+# the states that move now, in the order the page lists them, and the key each state counts under
+_MOVING = ("changes asked", "in review", "in progress", "blocked")
+_MOVING_CAP = 5
+_COUNT_KEY = {"to do": "to_do", "in progress": "in_progress", "in review": "in_review",
+              "changes asked": "changes_asked", "blocked": "blocked", "merged": "merged",
+              "canceled": "canceled"}
+# a station whose newest session shows one of these plays no part now
+_GONE = ("ended", "stopped", "replaced")
 
 
 def stage_of(has_start: bool, tickets: list[dict], finished: bool = False) -> str:
     """Where a project stands: "spec", "build", "review" or "done". It is phaseOf() of
     ui/src/components/project/factory.tsx in Python.
 
-    No starting prompt, or no ticket that is not canceled: spec. Every such ticket done: done.
+    No starting prompt, or no ticket that is not canceled: spec. Every such ticket finished
+    (factory.finished: done, or merged or shipped by its stage): done.
     The last ticket of the plan verifies and opens the pull request, so when it is the only one
     left (in a plan of more than one) the build is in review. Otherwise build. A project the
     crew's hand-over closed (`finished`) is done whatever its tickets say."""
@@ -60,7 +74,7 @@ def stage_of(has_start: bool, tickets: list[dict], finished: bool = False) -> st
     live = [t for t in tickets if t.get("status") != "canceled"]
     if not has_start or not live:
         return "spec"
-    left = [t for t in live if t.get("status") != "done"]
+    left = [t for t in live if not factory_mod.finished(t)]
     if not left:
         return "done"
     if len(left) == 1 and left[0]["id"] == live[-1]["id"] and len(live) > 1:
@@ -111,6 +125,10 @@ def ticket_state(t: dict, blocked_by: list[str]) -> str:
     if status == "in_progress":
         return "in progress"
     return "blocked" if blocked_by else "to do"
+
+
+def _stamp(v) -> float:
+    return v.timestamp() if hasattr(v, "timestamp") else 0.0
 
 
 def _pr_out(t: dict) -> dict | None:
@@ -171,12 +189,15 @@ def register(app, store, h, ctx):
         hidden = {}
         for r in (handover or {}).get("repos") or []:
             if r.get("path"):
-                hidden[r["path"]] = r.get("name") or r["path"].rstrip("/").rsplit("/", 1)[-1] or "the repo"
+                name = r.get("name") or r["path"].rstrip("/").rsplit("/", 1)[-1] or "the repo"
+                base = r["path"].rstrip("/")
+                if base:                                  # with or without a trailing slash
+                    hidden[base] = name
 
         def clean(text):
             out = str(text or "")
-            for path, name in hidden.items():
-                out = out.replace(path, name)
+            for path in sorted(hidden, key=len, reverse=True):
+                out = out.replace(path, hidden[path])
             return out
 
         def ticket_out(t: dict) -> dict:
@@ -189,22 +210,27 @@ def register(app, store, h, ctx):
                     "pr": _pr_out(t), "review": _review_out(reviews.get(t["id"]), t),
                     "blocked_by": blocked_by, "href": f"/projects/{uid}/tickets/{ref}"}
 
-        by_ms: dict[str, list[dict]] = {}
-        loose = []
-        known = {m["id"] for m in milestones}
+        states = {t["id"]: ticket_state(t, rd[t["id"]]["blocked_by"]) for t in tickets}
+        counts = {"total": len(tickets), **{k: 0 for k in _COUNT_KEY.values()}}
         for t in tickets:
-            if t.get("milestone") in known:
-                by_ms.setdefault(t["milestone"], []).append(t)
-            else:
-                loose.append(t)
+            counts[_COUNT_KEY[states[t["id"]]]] += 1
+        # the tickets that move now: changes asked, then in review, in progress, blocked; each
+        # state in the project's own order
+        movers = sorted((t for t in tickets if states[t["id"]] in _MOVING),
+                        key=lambda t: _MOVING.index(states[t["id"]]))
+        moving = [ticket_out(t) for t in movers[:_MOVING_CAP]]
+
         out_ms = []
-        for m in milestones:
-            ts = by_ms.get(m["id"], [])
-            out_ms.append({"id": m["id"], "name": m["name"], "goal": clean(m["goal"]),
-                           "done": bool(ts) and all(factory_mod.finished(t) for t in ts),
+        for i, m in enumerate(milestones):
+            ts = [t for t in tickets if t.get("milestone") == m["id"] and states[t["id"]] != "canceled"]
+            merged = sum(1 for t in ts if states[t["id"]] == "merged")
+            out_ms.append({"id": m["id"], "number": f"M{i + 1}", "name": m["name"],
+                           "goal": clean(m["goal"]),
+                           "done": bool(ts) and merged == len(ts),
+                           "counts": {"total": len(ts), "merged": merged},
                            "checks": [{"check": clean(c.get("check")), "expect": clean(c.get("expect"))}
                                       for c in m["checks"]],
-                           "tickets": [ticket_out(t) for t in ts]})
+                           "tickets_href": f"/tickets?project={uid}&milestone={m['id']}"})
 
         # the ticket that goes next: the one being built, else the first ready, else the first
         # that waits
@@ -228,6 +254,12 @@ def register(app, store, h, ctx):
 
         waiting = [w for w in fh.waiting_items(store, ctx.fx, now)
                    if (w.get("project") or {}).get("id") == uid]
+        for w in waiting:        # ids, links and what a button does stay as they are
+            for k in ("label", "title", "detail", "meta"):
+                if isinstance(w.get(k), str):
+                    w[k] = clean(w[k])
+            w["actions"] = [{**a, "label": clean(a["label"])} if isinstance(a.get("label"), str) else a
+                            for a in w.get("actions") or []]
         gids = set(h.global_ids().values())
         own = [d for d in store.list_docs(uid) if d["id"] not in gids]
         has_start = any(d["kind"] == "start" for d in own)
@@ -252,11 +284,19 @@ def register(app, store, h, ctx):
                 for d in sorted((d for d in own if d["kind"] in _DOC_LABEL),
                                 key=lambda d: (order.index(d["kind"]), str(d["created_at"])))]
 
+        # a builder's station plays by its newest session, shown as the crew page shows it
+        # (factory_api.stations): an older session that is still working does not bring it back
+        newest: dict[str, dict] = {}
+        for r in station_rows:
+            name, cur = r.get("station"), newest.get(r.get("station"))
+            if name and (cur is None or _stamp(r.get("last_at")) > _stamp(cur.get("last_at"))):
+                newest[name] = r
         terminal = [{"label": "Open the builder's session",
-                     "command": factory_mod.attach_command(s["station"])}
-                    for s in station_rows
+                     "command": factory_mod.attach_command(name)}
+                    for name, s in newest.items()
                     if s.get("role") == "builder" and s.get("project") == uid
-                    and s.get("state") != "ended" and s.get("station")]
+                    and factory_mod.shown_state(s.get("state") or "working", s.get("last_at"), now)
+                    not in _GONE]
         terminal = list({t["command"]: t for t in terminal}.values())
 
         home = store.project_ticket_home(uid)
@@ -265,8 +305,8 @@ def register(app, store, h, ctx):
         return {"id": p["id"], "name": p["name"], "goal": clean(p.get("goal")),
                 "stage": stage, "stage_label": STAGE_LABEL[stage],
                 "state": state, "state_label": STATE_LABEL[state],
-                "waiting": waiting, "next": nxt, "milestones": out_ms,
-                "no_milestone": [ticket_out(t) for t in loose],
+                "waiting": waiting, "counts": counts, "moving": moving, "moving_total": len(movers),
+                "tickets_href": f"/tickets?project={uid}", "next": nxt, "milestones": out_ms,
                 "decisions": decisions, "calls": calls, "docs": docs, "terminal": terminal,
                 "linked": {"tickets_in": {"linear": "Linear", "github": "GitHub"}.get(home or ""),
                            "url": (link or {}).get("url")},
