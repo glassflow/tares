@@ -4,7 +4,7 @@ they keep two tickets from editing adjacent lines."""
 import importlib
 
 SCREENS = [
-    # "factory_projects",      # TR-733
+    "factory_projects",      # TR-733
 
     "factory_project",         # TR-734
 
