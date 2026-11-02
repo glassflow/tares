@@ -108,8 +108,9 @@ async def main():
         print("== an empty cell ==")
         h = await get_home()
         ck("nothing waits", h["waiting_for_you"] == [] and h["waiting_total"] == 0, h["waiting_for_you"])
-        ck("the five builders are registered once", [f.__name__ for f in fh.WAITING_BUILDERS] == [
-            "prs_to_review", "ready_to_start", "calls_to_confirm", "desk_items", "milestones_to_check"],
+        ck("the six builders are registered once", [f.__name__ for f in fh.WAITING_BUILDERS] == [
+            "prs_to_review", "ready_to_start", "calls_to_confirm", "desk_items", "milestones_to_check",
+            "projects_to_close"],
            [f.__name__ for f in fh.WAITING_BUILDERS])
 
         # project-x: two passed pull requests (one holds up a milestone), two that do not wait for
@@ -363,6 +364,43 @@ async def main():
         h = await get_home()
         ck("one permission is left, for every project", [i["kind"] for i in h["waiting_for_you"]] == ["permission"]
            and h["headline"].endswith("1 thing waits for you, for 40 minutes."), h["headline"])
+
+        print("== projects to close ==")
+        pv = project("project-v")
+        v1 = ticket(pv, "Build it", stage="merged", status="done")
+        v2 = ticket(pv, "Test it", stage="merged", status="done")
+        v3 = ticket(pv, "Dropped idea", status="canceled")
+        back("tickets", v1, "updated_at", hours=5)
+        back("tickets", v2, "updated_at", hours=27)
+        back("tickets", v3, "updated_at", hours=49)
+        pu = project("project-u")
+        ticket(pu, "Build it", stage="merged", status="done")
+        ticket(pu, "Still open")
+        pt = project("project-t")
+        ticket(pt, "Dropped idea", status="canceled")
+        pq1 = project("project-q")
+        ticket(pq1, "Only one", stage="merged", status="done")
+        k = by_kind(await get_home())
+        sv = {i["project"]["name"]: i for i in k.get("signoff", [])}
+        ck("only a project with every ticket finished and one delivered offers Close",
+           sorted(sv) == ["project-q", "project-v"], sorted(sv))
+        so = sv["project-v"]
+        ck("the row: label, title, count without the canceled ticket, wait from the last ticket to finish",
+           so["label"] == "Ready to close" and so["title"] == "project-v" and so["id"] == f"signoff:{pv}"
+           and so["detail"] == "All 2 tickets are merged. Close the project when you have checked the result."
+           and so["meta"] == "Ready 5 hours ago" and so["waited"] == "5 hours", so)
+        ck("one ticket reads in the singular", sv["project-q"]["detail"]
+           == "Its ticket is merged. Close the project when you have checked the result.", sv["project-q"])
+        ck("open the project, or close it", so["actions"] == [
+            {"label": "Open project", "primary": False, "href": f"/projects/{pv}"},
+            {"label": "Close project", "primary": True, "do": "close"}], so["actions"])
+        ck("the project row says so too", {p["name"]: p for p in (await get_home())["projects"]}
+           ["project-v"]["can_close"] is True)
+        async with cx_() as cx:
+            r = await cx.post(f"/api/projects/{pv}/finish", json={"words": "Closed from the home page"})
+        ck("closing it ends the item", r.status_code == 200
+           and "project-v" not in {i["project"]["name"] for i in by_kind(await get_home()).get("signoff", [])},
+           r.text)
 
         print("== the cost of a read ==")
         for i in range(50):
