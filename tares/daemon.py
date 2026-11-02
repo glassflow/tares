@@ -512,6 +512,10 @@ class EditionIn(BaseModel):
     edition: str
 
 
+class McpSettingsIn(BaseModel):
+    object_tools: bool | None = None
+
+
 class TracingIn(BaseModel):
     enabled: bool | None = None
     provider: str | None = None
@@ -1417,13 +1421,17 @@ def make_app() -> FastAPI:
         value, needed = edition_mod.edition(store)
         return {"edition": value, "edition_name": edition_mod.NAMES[value], "edition_needed": needed}
 
+    def _whoami_edition() -> dict:
+        out = _edition_out()
+        return {**out, "mcp_object_tools": edition_mod.object_tools(store, out["edition"])}
+
     @app.get("/api/whoami")
     def whoami(request: Request):
         ident = getattr(request.state, "credential", None)
         scopes = getattr(request.state, "scopes", None)
         if ident is None:   # guard not active (open instance) or ingest-path credential
-            return {"id": "open", "name": "no auth configured", "scopes": sorted(_SCOPES), **_edition_out()}
-        out = {**ident, "scopes": scopes or [], **_edition_out()}
+            return {"id": "open", "name": "no auth configured", "scopes": sorted(_SCOPES), **_whoami_edition()}
+        out = {**ident, "scopes": scopes or [], **_whoami_edition()}
         if ident.get("project"):   # a project key: the project it reads, by id and name
             out["project_name"] = (store.get_project(ident["project"]) or {}).get("name")
         return out
@@ -2876,6 +2884,21 @@ def make_app() -> FastAPI:
             _err(ValueError("edition must be one of " + ", ".join(edition_mod.EDITIONS)))
         store.set_setting(edition_mod.EDITION_SETTING, value)
         return {"ok": True, **_edition_settings()}
+
+    # whether the MCP server lists the building-block tools (TR-757); null clears the choice
+    def _mcp_settings() -> dict:
+        value, _needed = edition_mod.edition(store)
+        return {"object_tools": edition_mod.object_tools(store, value)}
+
+    @app.get("/api/settings/mcp")
+    def get_mcp_settings():
+        return _mcp_settings()
+
+    @app.put("/api/settings/mcp")
+    def set_mcp_settings(body: McpSettingsIn):
+        store.set_setting(edition_mod.OBJECT_TOOLS_SETTING,
+                          None if body.object_tools is None else ("1" if body.object_tools else "0"))
+        return {"ok": True, **_mcp_settings()}
 
     @app.get("/api/settings/tracing")
     def get_tracing():

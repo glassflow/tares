@@ -13,9 +13,11 @@ from __future__ import annotations
 import contextvars
 import json
 import os
+import time
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.types import TextContent
 
 def _factory_token() -> str:
     """The token a tares-factory station presents: `tares factory` keeps it in a file only the
@@ -114,9 +116,81 @@ def _cx(timeout: float = 10):
 # stdio (default) is what a local agent spawns. For remote agents (the demo / a server), run with
 # TARES_MCP_TRANSPORT=streamable-http (or sse) and the server listens on MCP_HOST:MCP_PORT — at
 # /mcp (streamable-http) or /sse (sse), proxying tool calls to taresd as usual.
-mcp = FastMCP("tares",
-              host=os.getenv("TARES_MCP_HOST", "127.0.0.1"),
-              port=int(os.getenv("TARES_MCP_PORT", "8788")))
+# What each edition's agent sees (TR-757). The low-level building-block tools stay off a factory
+# or AI SRE cell unless an admin turns them on; the crew's tools stay on everywhere.
+OBJECT_TOOLS = frozenset({
+    "read", "stats", "catalog_list", "catalog_describe", "list_connectors", "discover_source",
+    "discover_docker", "test_source", "create_source", "list_sources", "source_fields",
+    "create_trigger", "update_trigger", "subscribe"})
+SRE_KEEP = frozenset({"read"})   # the outside AI SRE investigator reads timelines
+# The outcome tools, in the order they are listed (tares/mcp_outcomes.py registers them).
+FACTORY_TOOLS = frozenset({"what_needs_me", "how_is_project", "start_project",
+                           "hand_project_to_crew"})
+SRE_TOOLS: frozenset = frozenset()   # TR-766 fills it
+_OFF = ("This tool is off on this Tares. An admin can turn it on under Settings, Advanced.")
+
+# A tidy tool list, not a permission boundary: the daemon checks every call with the caller's own
+# key, and X-Tares-Role is a plain header any client can send. Hiding a tool only keeps the list
+# short for a person; it never decides what a caller may do.
+_SURFACES: dict[str, tuple[float, tuple[str, bool]]] = {}
+
+
+async def _surface() -> tuple[str, bool]:
+    """(edition, object tools on) as the daemon says for this caller's token, kept for
+    TARES_MCP_SURFACE_TTL seconds (30). Any error gives ("platform", True): every tool, as before."""
+    tok = _caller("token")
+    now = time.monotonic()
+    hit = _SURFACES.get(tok)
+    if hit and now - hit[0] < float(os.getenv("TARES_MCP_SURFACE_TTL", "30") or 30):
+        return hit[1]
+    try:
+        async with _cx(5) as cx:
+            r = await cx.get(f"{TARESD}/api/whoami")
+        r.raise_for_status()
+        who = r.json()
+        out = (str(who["edition"]), bool(who["mcp_object_tools"]))
+    except Exception:
+        return ("platform", True)
+    if len(_SURFACES) > 256:
+        _SURFACES.clear()
+    _SURFACES[tok] = (now, out)
+    return out
+
+
+def _visible(name: str, edition: str, object_tools: bool, station: bool) -> bool:
+    """Whether a tool is listed (and runs) for this caller on this edition."""
+    if station:
+        return True
+    if name in OBJECT_TOOLS:
+        return object_tools or (edition == "sre" and name in SRE_KEEP)
+    if name in FACTORY_TOOLS:
+        return edition in ("factory", "platform")
+    if name in SRE_TOOLS:
+        return edition in ("sre", "platform")
+    return True
+
+
+class TaresMCP(FastMCP):
+    """FastMCP that lists, and runs, only the tools the cell's edition shows its caller."""
+
+    async def list_tools(self):
+        tools = await super().list_tools()
+        edition, object_tools = await _surface()
+        station = bool(_caller("role"))
+        tools = [t for t in tools if _visible(t.name, edition, object_tools, station)]
+        first = FACTORY_TOOLS if edition == "factory" else SRE_TOOLS if edition == "sre" else frozenset()
+        return sorted(tools, key=lambda t: t.name not in first)   # stable: outcome tools first
+
+    async def call_tool(self, name, arguments):
+        edition, object_tools = await _surface()
+        if not _visible(name, edition, object_tools, bool(_caller("role"))):
+            return [TextContent(type="text", text=_OFF)]
+        return await super().call_tool(name, arguments)
+
+
+mcp = TaresMCP("tares",
+               host=os.getenv("TARES_MCP_HOST", "127.0.0.1"),
+               port=int(os.getenv("TARES_MCP_PORT", "8788")))
 
 
 def writable():
@@ -887,6 +961,7 @@ class _CallerHeaders:
 
 
 from . import mcp_factory  # noqa: E402,F401  (registers the factory's tools on `mcp`)
+from . import mcp_outcomes  # noqa: E402,F401  (the outcome tools of the factory edition)
 
 
 def main():

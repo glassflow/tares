@@ -156,7 +156,7 @@ export default function Security({ initialTab }: { initialTab?: SettingsTab } = 
         ? <WorkspaceSettings cloud={cloud} apiUrl={workspaceApiUrl} onOpenTab={pick} />
         : <div className="panel"><div className="muted">loading…</div></div>)}
       {tab === "usage" && <UsagePanels />}
-      {tab === "access" && <><AccessPanel /><ApiKeysPanel /></>}
+      {tab === "access" && <><AccessPanel /><McpToolsPanel /><ApiKeysPanel /></>}
       {tab === "edition" && <EditionPanel />}
       {tab === "anthropic" && <ProvidersPanel />}
       {tab === "agents" && <AgentLimitsPanel agent={new URLSearchParams(loc.search).get("agent") ?? undefined} />}
@@ -611,6 +611,42 @@ function AccessPanel() {
             <code>tares up --auth</code> to require a login.
           </div>
         )}
+    </div>
+  );
+}
+
+// Whether agents that connect over MCP see the building-block tools (TR-757). On by default on a
+// platform cell; off on a factory or AI SRE cell until an admin turns it on. Only an admin sees it.
+function McpToolsPanel() {
+  const [on, setOn] = useState<boolean>();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>();
+  useEffect(() => {
+    api.whoami().then((w) => w.scopes.includes("admin") ? api.mcpSettings().then((s) => setOn(s.object_tools)) : undefined)
+      .catch((e) => setErr(String((e as Error).message ?? e)));
+  }, []);
+  if (on === undefined && !err) return null;
+  const toggle = async (next: boolean) => {
+    setBusy(true); setErr(undefined);
+    try { setOn((await api.setMcpObjectTools(next)).object_tools); }
+    catch (e) { setErr(String((e as Error).message ?? e)); }
+    setBusy(false);
+  };
+  return (
+    <div className="panel">
+      <h2 style={{ marginTop: 0 }}>Agent tools</h2>
+      {err && <div className="alert error">{err}</div>}
+      <label className="field" style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
+        <input type="checkbox" checked={!!on} disabled={busy || on === undefined}
+               onChange={(e) => toggle(e.target.checked)} />
+        <span>
+          <strong>Let agents use the building blocks (connections, raw data, rules)</strong><br />
+          <span className="help">
+            Agents that connect over MCP get the low-level tools as well as the ones named for what you want done.
+            Crew sessions always have them. This only shortens the list; what a key may do is set by its scopes.
+          </span>
+        </span>
+      </label>
     </div>
   );
 }
