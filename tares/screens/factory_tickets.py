@@ -102,6 +102,21 @@ def register(app, store, h, ctx):
         ranked.sort(key=lambda x: x[0])
         projects = [p for _, p in ranked]
 
+        def cleaner(p):
+            # the crew's folders stay on the crew's machine: a title that names one shows the repo
+            hidden = {}
+            for r in (store.get_handover(p["id"]) or {}).get("repos") or []:
+                base = (r.get("path") or "").rstrip("/")
+                if base:
+                    hidden[base] = r.get("name") or base.rsplit("/", 1)[-1] or "the repo"
+
+            def clean(text):
+                out = str(text or "")
+                for path in sorted(hidden, key=len, reverse=True):
+                    out = out.replace(path, hidden[path])
+                return out
+            return clean
+
         needle = (q or "").strip().lower()
         rows = []          # (sort time, ticket row) of every ticket the filters but the state keep
         counts = {"total": 0, "moving": 0, **{k: 0 for k in KEYS.values()}}
@@ -112,24 +127,13 @@ def register(app, store, h, ctx):
             rd = factory_mod.readiness(tickets)
             numbers = {m["id"]: f"M{i + 1}" for i, m in enumerate(milestones_of[p["id"]])}
             names = {m["id"]: m["name"] for m in milestones_of[p["id"]]}
-            # the crew's folders stay on the crew's machine: a title that names one shows the repo
-            hidden = {}
-            for r in (store.get_handover(p["id"]) or {}).get("repos") or []:
-                base = (r.get("path") or "").rstrip("/")
-                if base:
-                    hidden[base] = r.get("name") or base.rsplit("/", 1)[-1] or "the repo"
-
-            def clean(text, hidden=hidden):
-                out = str(text or "")
-                for path in sorted(hidden, key=len, reverse=True):
-                    out = out.replace(path, hidden[path])
-                return out
+            clean = cleaner(p)
 
             for t in tickets:
                 if milestone is not None and t.get("milestone") != milestone:
                     continue
                 ref = factory_mod.label(t)
-                if needle and needle not in ref.lower() and needle not in str(t["title"]).lower():
+                if needle and needle not in ref.lower() and needle not in clean(t["title"]).lower():
                     continue
                 blocked_by = [] if factory_mod.finished(t) else rd[t["id"]]["blocked_by"]
                 st = ticket_state(t, blocked_by)
@@ -179,7 +183,7 @@ def register(app, store, h, ctx):
                                            if t.get("status") != "canceled")}
                              for p in projects],
                 "milestones": [{"id": m["id"], "project": p["id"], "number": f"M{i + 1}",
-                                "name": m["name"]}
+                                "name": cleaner(p)(m["name"])}
                                for p in projects for i, m in enumerate(milestones_of[p["id"]])
                                if project is None or p["id"] == project],
                 "hidden_canceled": counts["canceled"] if want != "canceled" else 0,
