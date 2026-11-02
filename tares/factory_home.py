@@ -200,9 +200,45 @@ def project_row(p: dict, tickets: list[dict], handover: dict | None, waiting: li
 
 # ── the crew ──────────────────────────────────────────────────────────────────
 
+ROLE_LABEL = {"orchestrator": "The one you talk to", "reviewer": "Reviewer", "releaser": "Releaser",
+              "builder": "Builder", "helper": "Helper"}
+
+
+def heard_ago(ts, now) -> str:
+    """Like `plain_ago`, but to the second under a minute: "12 seconds ago", "1 minute ago"."""
+    t, n = _dt(ts), _dt(now)
+    if t is None or n is None:
+        return ""
+    secs = max(0, int((n - t).total_seconds()))
+    if secs < 1:
+        return "just now"
+    if secs < 60:
+        return _count(secs, "second") + " ago"
+    return plain_ago(t, n)
+
+
+def _state_text(state: str, since, now) -> str:
+    """The state in words with its duration: "Working", "Idle for 8 minutes", "Waiting for you",
+    "Not heard from in 2 hours", "Ended 1 day ago"."""
+    if state == "working":
+        return "Working"
+    if state == "waiting":
+        return "Waiting for you"
+    m = _minutes(since, now)
+    span = plain_wait(m) if m is not None else None
+    if state == "ended":
+        return "Ended" if not span else ("Ended just now" if span == "just now" else f"Ended {span} ago")
+    if state == "not heard":
+        return "Not heard from" if not span or span == "just now" else f"Not heard from in {span}"
+    if not span:
+        return "Idle"
+    return "Idle for less than a minute" if span == "just now" else f"Idle for {span}"
+
+
 def crew_member(station: dict, tickets_by_holder: dict[str, list[dict]], desk_open: int,
-                now) -> dict:
-    """One station as the crew card shows it. `tickets_by_holder` is {station name: its tickets}."""
+                now, by_name: dict[str, dict] | None = None) -> dict:
+    """One station as the crew card shows it. `tickets_by_holder` is {station name: its tickets};
+    `by_name` ({station name: station}) lets `helpers` skip the helpers that ended."""
     role, state = station["role"], station["state"]
     name = (f"Builder, {station.get('project_name')}" if role == "builder" and station.get("project_name")
             else ROLE_NAME.get(role) or station["name"])
@@ -220,10 +256,18 @@ def crew_member(station: dict, tickets_by_holder: dict[str, list[dict]], desk_op
     since = station.get("last_at") if shown == "not heard" else (station.get("state_at")
                                                                  or station.get("last_at"))
     pct = ((station.get("context") or {}).get("pct"))
-    pct = round(pct) if isinstance(pct, (int, float)) else None
+    pct = round(pct) if isinstance(pct, (int, float)) and not isinstance(pct, bool) else None
+    kids = [c for c in (station.get("children") or [])
+            if not by_name or ((by_name.get(c) or {}).get("role") == "helper"
+                               and (by_name.get(c) or {}).get("state") != "ended")]
     return {"station": station["name"], "role": role, "name": name, "state": shown,
             "since": plain_ago(since, now), "doing": doing, "memory_pct": pct,
-            "memory": f"memory {pct}% full" if pct is not None else None}
+            "memory": f"memory {pct}% full" if pct is not None else None,
+            "role_label": ROLE_LABEL.get(role) or "Helper",
+            "state_text": _state_text(shown, since, now),
+            "heard": heard_ago(station.get("last_at"), now),
+            "memory_text": f"Memory {pct}% full" if pct is not None else None,
+            "helpers": len(kids)}
 
 
 def _how_far(settings: dict) -> dict:
@@ -252,13 +296,14 @@ def _crew(stations: list[dict], settings: dict, open_ids: dict, tickets: dict, d
         for t in ts:
             if t.get("holder"):
                 by_holder.setdefault(t["holder"], []).append(t)
+    by_name = {s["name"]: s for s in stations}
     keep = [s for s in stations if s["state"] != "ended" and (
         (s["role"] in _ALWAYS_ON and not (s["role"] == "releaser" and settings.get("releaser") is False))
         or (s["role"] == "builder" and s["project"] in open_ids))]
     keep.sort(key=lambda s: (_ALWAYS_ON.index(s["role"]) if s["role"] in _ALWAYS_ON else 9, s["name"]))
     return {"running": running, "heard_at": _iso(heard), "heard": plain_ago(heard, now) or None,
             "where": None, "summary": summary,
-            "members": [crew_member(s, by_holder, desk_open, now) for s in keep],
+            "members": [crew_member(s, by_holder, desk_open, now, by_name) for s in keep],
             "how_far": _how_far(settings), "desk_open": desk_open}
 
 
