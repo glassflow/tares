@@ -36,11 +36,12 @@ from .factory_tickets import KEYS
 _VERDICT_TEXT = {"pass": "passed", "changes": "asked for changes", "block": "blocked"}
 _CALL_STATE = {"open": "waiting for you", "kept": "confirmed", "overturned": "you changed it"}
 # a folder under a home directory that is not the crew's own: show its last name. It has to start
-# there, not inside a word or a longer path (ui/src/components/Users/List.tsx, a link ending in
-# /home/guide stay as written).
-_HOME_PATH = re.compile(r"(?<![\w.~/-])(?:(?:/Users|/home)/[^/\s'\"`]+(?:/[^\s'\"`]*)?|~/[^\s'\"`]*)")
+# there, or right after file://, not inside a word or a longer path (ui/src/components/Users/List.tsx
+# and a link ending in /home/guide stay as written).
+_HOME_PATH = re.compile(r"(?:(?<=file://)|(?<![\w.~/-]))(?:(?:/Users|/home)/[^/\s'\"`]+(?:/[^\s'\"`]*)?"
+                        r"|~/[^\s'\"`]*)")
 # a station of the crew named by its own pattern (crew-reviewer), whether or not it has a session
-_CREW_NAME = re.compile(r"(?<![\w-])crew-(?:orchestrator|reviewer|releaser|builder|helper)(?![\w-])")
+_CREW_NAME = re.compile(r"(?<![\w/.-])crew-(?:orchestrator|reviewer|releaser|builder|helper)(?![\w/-]|\.\w)")
 
 
 def _state_label(st: str) -> str:
@@ -96,10 +97,12 @@ def register(app, store, h, ctx):
             return _ROLE_BY.get(role or "") or ("the crew" if name else None)
 
         # a station named in free text reads as its role: the stations that have a session, the ones
-        # that hold a ticket here, and the crew's own names
-        stations = {n for n in [*roles, *(x.get("holder") for x in tickets)] if n}
-        station_re = (re.compile(r"(?<![\w-])(?:" + "|".join(
-            re.escape(n) for n in sorted(stations, key=len, reverse=True)) + r")(?![\w-])")
+        # that hold a ticket here (when the name has a station's shape), and the crew's own names. A
+        # name inside a path or a longer word (origin/main, src/crew-reviewer/x.md) is left alone.
+        stations = {n for n in [*roles, *(x.get("holder") for x in tickets)]
+                    if n and (n in roles or n.startswith("crew-") or "-build" in n)}
+        station_re = (re.compile(r"(?<![\w/.-])(?:" + "|".join(
+            re.escape(n) for n in sorted(stations, key=len, reverse=True)) + r")(?![\w/-]|\.\w)")
                       if stations else None)
 
         def clean(text):

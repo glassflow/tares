@@ -122,6 +122,9 @@ async def main():
         t9 = ticket(px, "Add the share button", depends_on=[t8])
         t10 = ticket(px, "Add the legal page", stage="blocked", status="in_progress", holder=LEAD,
                      depends_on=[t1])
+        M2 = "project-x-build-m2"            # holds a ticket, has no session of its own
+        ticket(px, "Add the help page", stage="doing", status="in_progress", holder=M2)
+        ticket(px, "Add the faq page", stage="doing", status="in_progress", holder="main")
 
         # t2: three review rounds, a finding fixed in a later round, one still open
         r1 = store.add_review(px, t2, None, "aaaaaaa1111", "changes", "ran the tests",
@@ -147,7 +150,9 @@ async def main():
                          [{"severity": "high", "file": "/private/tmp/x/footer.ts", "line": 3,
                            "blocking": True, "text": "Not in the repo, " + ", ".join(LOOKS)},
                           {"severity": "low", "file": LOOKS[3], "line": 1, "blocking": False,
-                           "text": f"See {LOOKS[0]} and {LOOKS[1]}"}],
+                           "text": f"See {LOOKS[0]} and {LOOKS[1]}"},
+                          {"severity": "low", "file": "a.ts", "line": 2, "blocking": False,
+                           "text": "Opened file:///Users/sam/proj/a.ts and file:///home/sam/proj/b.ts"}],
                          {}, factory_mod.finding_kind, ago(days=1))
 
         store.add_check(px, t2, f"cd {PATH} && npm test", "12 passed, 0 failed", "ccccccc3333", "",
@@ -181,6 +186,8 @@ async def main():
         store.add_decision(px, "", f"Let {BUILDER} and crew-releaser push?",
                            f"Yes, {LEAD} and {REVIEWER} can too", "yes", False, "project", False, None, False,
                            ["T2"], ago(days=2))
+        store.add_decision(px, "", "Merge origin/main?", f"Yes, {M2} will, see origin/{M2}, {M2}/x.md, {M2}.log, merge main first and "
+                           "crew-reviewer.", "yes", False, "project", False, None, False, ["T2"], ago(days=1))
         store.add_decision(px, "", "Which licence?", "MIT", "MIT", False, "project", False, None, False,
                            [], ago(hours=2))
 
@@ -258,6 +265,10 @@ async def main():
                sorted(a["decisions"], key=lambda d: d["question"]) == [
                    {"question": "Let the builder and the releaser push?",
                     "words": "Yes, the lead and the reviewer can too", "when": "2 days ago"},
+                   {"question": "Merge origin/main?",
+                    "words": "Yes, the builder will, see origin/project-x-build-m2, project-x-build-m2/x.md, "
+                              "project-x-build-m2.log, merge main first and the reviewer.",
+                    "when": "1 day ago"},
                    {"question": "Tabs or spaces?", "words": f"Tabs, as in {REPO}/style.md",
                     "when": "3 days ago"}], a["decisions"])
             hs = a["history"]
@@ -313,6 +324,8 @@ async def main():
             t3f = (await cx.get(f"/api/factory/projects/{px}/tickets/T3")).json()["reviews"][0]["findings"]
             ck("a path outside the repo and outside a home folder shows its last name",
                t3f[0]["file"] == "footer.ts", t3f[0])
+            ck("a file:// link to a home folder shows the last name, as a bare path does",
+               t3f[2]["text"] == "Opened file://a.ts and file://b.ts", t3f[2])
             ck("a path or link that only looks like a home folder stays as written",
                t3f[0]["text"] == "Not in the repo, " + ", ".join(LOOKS)
                and t3f[1]["text"] == f"See {LOOKS[0]} and {LOOKS[1]}" and t3f[1]["file"] == LOOKS[3], t3f)
