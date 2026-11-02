@@ -113,6 +113,7 @@ async def main():
                     holder=LEAD, depends_on=[t2])
         t4 = ticket(px, "Tidy the readme")
         t5 = ticket(px, "Add the search box", owner="linear", milestone=m1)
+        t6 = ticket(px, "Add the 404 page", stage="doing", status="in_progress", depends_on=[t4])
         store.update_ticket(t5, identifier="PX-5", url="https://linear.app/example/issue/PX-5")
 
         # t2: three review rounds, a finding fixed in a later round, one still open
@@ -179,7 +180,7 @@ async def main():
             ck("the top level has exactly the fields of the page",
                set(a) == {"ref", "title", "state", "state_label", "milestone", "in", "url", "who",
                           "depends_on", "blocks", "pr", "reviews", "checks", "calls", "decisions",
-                          "history", "notes", "terminal", "project", "now"}, sorted(a))
+                          "history", "notes", "terminal", "project", "now", "blocked_reason"}, sorted(a))
             ck("identity and state in words", a["ref"] == "T2" and a["title"] == "Add the footer"
                and a["state"] == "changes_asked" and a["state_label"] == "Changes asked",
                [a["ref"], a["state"], a["state_label"]])
@@ -240,10 +241,10 @@ async def main():
                                    "when": "3 days ago"}], a["decisions"])
             hs = a["history"]
             ck("history newest first, in words", [x["what"] for x in hs] == [
-                "Moved to in review", "Taken off whoever had it", "Moved to changes asked",
-                "Moved to in review", "Moved to in progress", "Handed to the builder",
+                "Moved to in review", "Taken off whoever had it", "Changes asked",
+                "Moved to in review", "Started", "Handed to the builder",
                 "Changed the title"], [x["what"] for x in hs])
-            ck("history says who did it", {x["what"]: x["who"] for x in hs}["Moved to changes asked"] == "the reviewer"
+            ck("history says who did it", {x["what"]: x["who"] for x in hs}["Changes asked"] == "the reviewer"
                and {x["what"]: x["who"] for x in hs}["Handed to the builder"] == "the lead"
                and any(x["who"] == "GitHub" for x in hs), hs)
             ck("history keeps a reason and swaps the folder", any(x["text"] == f"released from {REPO}/work" for x in hs)
@@ -262,11 +263,17 @@ async def main():
             ck("not offered once the builder's session ended", a["terminal"] == [], a["terminal"])
             store.set_session_state("sess-b1", "working", None, now_utc())
             t1_ = (await cx.get(f"/api/factory/projects/{px}/tickets/T1")).json()
-            ck("not offered for a merged ticket, which nobody works on", t1_["terminal"] == [] and t1_["who"] is None
+            ck("not offered for a merged ticket, which nobody works on", t1_["terminal"] == [] and t1_["who"] == "Builder for M1"
                and t1_["state_label"] == "Merged" and t1_["pr"]["state_text"] == "merged", t1_)
             t3_ = (await cx.get(f"/api/factory/projects/{px}/tickets/T3")).json()
             ck("not offered when the lead holds the ticket", t3_["terminal"] == [] and t3_["who"] == "Lead"
-               and t3_["state_label"] == "Blocked" and t3_["depends_on"][0]["ref"] == "T2", t3_)
+               and t3_["state_label"] == "Blocked" and t3_["depends_on"][0]["ref"] == "T2"
+               and t3_["blocked_reason"] == "Waiting for T2, Add the footer.", t3_)
+            t6_ = (await cx.get(f"/api/factory/projects/{px}/tickets/T6")).json()
+            ck("only a blocked ticket has a reason, even when it waits on another",
+               a["blocked_reason"] is None and t1_["blocked_reason"] is None
+               and t6_["state_label"] == "In progress" and t6_["depends_on"][0]["ref"] == "T4"
+               and t6_["blocked_reason"] is None, t6_)
 
             print("== other tickets ==")
             t4_ = (await cx.get(f"/api/factory/projects/{px}/tickets/T4")).json()

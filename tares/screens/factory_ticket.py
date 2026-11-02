@@ -150,9 +150,17 @@ def register(app, store, h, ctx):
                      for d in full["decisions"] if ref in d["tickets"]]
 
         history = []
+        first_stage = next((x for x in full["history"] if x["field"] == "stage"), None)
         for x in reversed(full["history"]):                    # newest first
             if x["field"] == "stage":
-                what = "Moved to " + _STAGE_WORD.get(x["value"], str(x["value"] or ""))
+                if x["value"] == "changes":
+                    what = "Changes asked"
+                elif x["value"] in ("merged", "shipped"):
+                    what = "Merged"
+                elif x is first_stage and x["value"] == "doing":
+                    what = "Started"
+                else:
+                    what = "Moved to " + _STAGE_WORD.get(x["value"], str(x["value"] or ""))
             elif x["field"] == "holder":
                 what = (f"Handed to {by_words(x['value'])}" if x["value"]
                         else "Taken off whoever had it")
@@ -174,6 +182,11 @@ def register(app, store, h, ctx):
                 terminal = [{"label": "Open the builder's session",
                              "command": factory_mod.attach_command(holder)}]
 
+        waiting = [other(by_id[d]) for d in t["depends_on"]
+                   if d in by_id and not factory_mod.finished(by_id[d])]
+        reason = ("Waiting for " + " and ".join(f"{o['ref']}, {o['title']}" for o in waiting) + "."
+                  if st == "blocked" and waiting else None)
+
         owner = t.get("owner")
         return {"ref": ref, "title": clean(t["title"]), "state": KEYS[st],
                 "state_label": _state_label(st),
@@ -181,7 +194,8 @@ def register(app, store, h, ctx):
                                "name": clean(ms_row[1]["name"])} if ms_row else None),
                 "in": {"linear": "Linear", "github": "GitHub"}.get(owner or "", "Tares"),
                 "url": t.get("url"),
-                "who": None if done else who_words(holder, roles, number.get(ms)),
+                "who": None if done and not holder else who_words(holder, roles, number.get(ms)),
+                "blocked_reason": reason,
                 "depends_on": [other(by_id[d]) for d in t["depends_on"] if d in by_id],
                 "blocks": [other(x) for x in tickets if t["id"] in x["depends_on"]],
                 "pr": _pr_out(t), "reviews": reviews, "checks": checks, "calls": calls,
