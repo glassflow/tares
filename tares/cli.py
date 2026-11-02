@@ -92,6 +92,66 @@ def _resolve_root_token(home: Path, flag) -> str | None:
     return tok
 
 
+EDITION_QUESTION = (
+    "Which Tares is this?\n"
+    "  1) Software Factory: a crew of Claude Code sessions builds your projects; you review and decide.\n"
+    "  2) AI SRE: agents watch your services and tell you what broke and why.\n"
+)
+
+
+def _ask_edition(read=input, write=print) -> str:
+    """The first-run question. Enter or 1 is factory, 2 is sre; anything else asks again, and after
+    three tries (or no more input) the answer is factory."""
+    write(EDITION_QUESTION + "Choose 1 or 2 [1]:")
+    for _ in range(3):
+        try:
+            raw = str(read("")).strip()
+        except EOFError:
+            return "factory"
+        if raw in ("", "1"):
+            return "factory"
+        if raw == "2":
+            return "sre"
+        write("Please type 1 or 2 (Enter for 1).")
+    return "factory"
+
+
+def _stored_edition(db_path: str) -> str | None:
+    """The edition saved in an existing data file, read without taking its lock for writes. None when
+    the file is missing, held by a running daemon, or holds no edition."""
+    from .edition import EDITION_SETTING, _valid
+    if not Path(db_path).is_file():
+        return None
+    try:
+        import duckdb
+        con = duckdb.connect(db_path, read_only=True)
+        try:
+            row = con.execute("SELECT value FROM settings WHERE key = ?", [EDITION_SETTING]).fetchone()
+        finally:
+            con.close()
+    except Exception:
+        return None
+    return _valid(row[0]) if row else None
+
+
+def _settle_edition(args: argparse.Namespace, db_path: str) -> str | None:
+    """Decide which edition this start is for, before the daemon opens its store. Returns the edition
+    the console line should name, or None when it is not known here (the console asks)."""
+    from .edition import EDITIONS, NAMES, _valid
+    chosen = _valid(getattr(args, "edition", None)) or _valid(os.getenv("TARES_EDITION"))
+    fresh = not Path(db_path).exists() and not os.getenv("TARES_STATE_DSN")
+    if chosen is None and fresh and sys.stdin.isatty() and sys.stdout.isatty():
+        chosen = _ask_edition()
+    stored = _stored_edition(db_path)
+    if stored:
+        if chosen and chosen != stored:
+            print(f"tares: this Tares is {NAMES[stored]}; change it in Settings", flush=True)
+        return stored
+    if chosen:
+        os.environ["TARES_EDITION"] = chosen
+    return chosen if chosen in EDITIONS else None
+
+
 def _up(args: argparse.Namespace):
     """Start the daemon with a persistent data home, so a fresh `pip install` just works."""
     home = Path(args.data_dir).expanduser()
@@ -102,6 +162,7 @@ def _up(args: argparse.Namespace):
     os.environ.setdefault("TARES_CATALOG", str(home / "catalog.yaml"))  # seed only; absent is fine
     os.environ["TARES_HOST"] = args.host
     os.environ["TARES_PORT"] = str(args.port)
+    edition_now = _settle_edition(args, os.environ["TARES_DB"])
 
     # Auth mode. Setting TARES_AUTH_TOKEN is what the daemon's guard keys off, so resolving the
     # root token here and exporting it turns the whole existing enforcement on — nothing else to wire.
@@ -118,6 +179,9 @@ def _up(args: argparse.Namespace):
     else:
         print(f"tares: console at {url}  ·  data in {home}  ·  auth OFF (open; "
               f"run with --auth to require a login)", flush=True)
+    if edition_now in ("factory", "sre"):
+        from .edition import NAMES
+        print(f"tares: {NAMES[edition_now]}", flush=True)
     if args.open:
         import threading
         import webbrowser
@@ -276,6 +340,9 @@ def main():
                     help="require a login for the console + API. Bare --auth generates and persists "
                          "a root token (printed as a login URL each launch); --auth=<token> uses "
                          "yours. Omit for an open local instance.")
+    up.add_argument("--edition", choices=["factory", "sre", "platform"], default=None,
+                    help="which Tares this is: factory (Software Factory) or sre (AI SRE); "
+                         "asked on first run when omitted")
     up.set_defaults(func=_up)
 
     m = sub.add_parser(
