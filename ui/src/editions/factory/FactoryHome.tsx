@@ -16,6 +16,8 @@ import type {
   HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeItem, HomeProject, HomeProjectRow, HomeProjectState, HomeVerb,
 } from "./home.types";
 import { HOME_SAMPLES } from "./homeSamples";
+import { HOME_SAMPLES_TEAM } from "./homeSamplesTeam";
+import { WaitingForYou } from "./WaitingForYou";
 
 // The factory home: what waits for the person, the projects, the crew, the Claude plan and the
 // connected tools. FactoryHomeView is pure: it draws the HomeData it is given. The default export
@@ -136,6 +138,12 @@ function WaitingRow({ item, onAction, state }: { item: HomeItem; onAction?: OnAc
     </ListRow>
   );
 }
+
+// The buttons of a team row that the page does not act on yet: they show once their handlers land.
+const NOT_YET: HomeVerb[] = ["answer", "sign_off", "agree", "decline"];
+
+/** A cell with more than one person sends these keys; a cell of one never does. */
+const isTeam = (d: HomeData): boolean => d.summary !== undefined;
 
 function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAction; rows?: Record<string, RowState> }) {
   const [all, setAll] = React.useState(false);
@@ -351,7 +359,15 @@ export function FactoryHomeView({ data, onAction, rows, notice, hideStart, onSta
           {data.start && (
             <StartChecklistHidden block={data.start} title={START_TITLE} show={showStart} onShown={onStartShown} />
           )}
-          <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />
+          {isTeam(data) ? (
+            <WaitingForYou
+              items={data.waiting_for_you.map((i) => ({ ...i, actions: i.actions.filter((a) => !a.do || !NOT_YET.includes(a.do)) }))}
+              renderAction={(a, item) => <ActionButton key={a.label} action={a} item={item} onAction={onAction} state={rows?.[item.id]} />}
+              errors={Object.fromEntries(Object.entries(rows ?? {}).map(([k, v]) => [k, v.error]))}
+            />
+          ) : (
+            <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />
+          )}
           <Projects projects={data.projects.filter(isProject)} finished={data.finished_count} />
         </div>
         <aside className={RIGHT}>
@@ -388,13 +404,15 @@ export function FactoryHomeLoading() {
   );
 }
 
-export function FactoryHomeError({ onRetry }: { onRetry?: () => void }) {
+export function FactoryHomeError({ onRetry, team }: { onRetry?: () => void; team?: boolean }) {
   const { credentialName } = useEdition();
   return (
     <div className={PAGE} data-testid="factory-home-error">
       <TopBar name={firstName(credentialName)} />
       <Banner tone="error" action={<Button variant="secondary" onClick={onRetry}>Retry</Button>}>
-        <b>Home did not load.</b> The cell did not answer, so nothing here is current. Try again in a moment.
+        {team
+          ? <><b>Could not load your home page.</b> Try again.</>
+          : <><b>Home did not load.</b> The cell did not answer, so nothing here is current. Try again in a moment.</>}
       </Banner>
     </div>
   );
@@ -602,13 +620,17 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
 
 // ── pages ──────────────────────────────────────────────────────────────────────
 
+const ALL_SAMPLES: Record<string, HomeData> = { ...HOME_SAMPLES, ...HOME_SAMPLES_TEAM };
+
 function SampleHome({ sample }: { sample: string }) {
   const [tries, setTries] = React.useState(0);
   const { rows, onAction, dialogs } = useHomeActions(false, () => {});
   let body: React.ReactNode;
   if (sample === "loading") body = <FactoryHomeLoading />;
-  else if (sample === "error") body = <FactoryHomeError key={tries} onRetry={() => setTries((n) => n + 1)} />;
-  else body = <FactoryHomeView data={HOME_SAMPLES[sample]} onAction={onAction} rows={rows} hideStart={() => Promise.resolve()} showStart={() => Promise.resolve()} />;
+  else if (sample === "error" || sample === "teamError") {
+    body = <FactoryHomeError key={tries} team={sample === "teamError"} onRetry={() => setTries((n) => n + 1)} />;
+  }
+  else body = <FactoryHomeView data={ALL_SAMPLES[sample]} onAction={onAction} rows={rows} hideStart={() => Promise.resolve()} showStart={() => Promise.resolve()} />;
   return (
     <>
       {body}
@@ -628,9 +650,10 @@ function hhmm(d: Date): string {
 function LiveHome() {
   const { data, error, reload } = usePagePolling(getHome, POLL_MS);
   const [readAt, setReadAt] = React.useState<Date>();
+  const team = React.useRef(false);   // a team cell stays one while the page cannot reach it
   const [overlay, setOverlay] = React.useState<Overlay | null>(null);
   const timer = React.useRef<ReturnType<typeof setTimeout>>();
-  React.useEffect(() => { if (data) setReadAt(new Date()); }, [data]);
+  React.useEffect(() => { if (data) { setReadAt(new Date()); team.current = isTeam(data); } }, [data]);
   // the daemon keeps its answer for a few seconds: once that has passed, the next read is the truth
   React.useEffect(() => {
     if (data && overlay && Date.now() >= overlay.until) setOverlay(null);
@@ -652,7 +675,7 @@ function LiveHome() {
 
   let body: React.ReactNode;
   if (!data) {
-    body = error ? <FactoryHomeError onRetry={reload} /> : <FactoryHomeLoading />;
+    body = error ? <FactoryHomeError team={team.current} onRetry={reload} /> : <FactoryHomeLoading />;
   } else {
     const shown: HomeData = overlay ? {
       ...data,
@@ -678,7 +701,7 @@ function LiveHome() {
 
 export default function FactoryHome() {
   const sample = useSample();
-  if (sample && (sample === "loading" || sample === "error" || Object.prototype.hasOwnProperty.call(HOME_SAMPLES, sample))) {
+  if (sample && (sample === "loading" || sample === "error" || sample === "teamError" || Object.prototype.hasOwnProperty.call(ALL_SAMPLES, sample))) {
     return <SampleHome sample={sample} />;
   }
   return <LiveHome />;
