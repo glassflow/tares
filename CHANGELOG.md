@@ -6,6 +6,17 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- On a team cell, the home's Your crew card shows your own crew's stations only.
+- The team home's side column shows your crew's limit in words, the team's other crews, and the repos you own.
+- The team home's Projects section has a Mine and Team switch, locks on private projects, who leads each one, and a line for private projects you are not on.
+- The team home lists the projects you lead that wait on other people, and lets you hand one over anyway with a reason.
+- On a team's console, Waiting for you now lets you answer, sign off, agree to, decline and allow from the page.
+- The home of a team cell lists what is waiting for you with who each item is from.
+- `GET /api/home` on a cell with more than one person adds the projects with lead, members, scope and a Mine and Team split (`?projects=mine|team`; a private project the person is not on shows only its lead's name), their crew then the team's crews (crews silent for a day named apart), and how far a crew may go. A project everyone has signed off on no longer counts as one the lead waits on, and a private project's desk items no longer count in the crew's open questions.
+- `GET /api/home` on a cell with more than one person adds "you are waiting on" for the projects the person leads (which repo owner has not signed off, which repo has no owner, which question is open, with a "Hand over anyway" action) and the repos they own, and its `summary` says who they are waiting on. A private project the person is not on no longer counts in the home. A cell of one person returns what it did before.
+- `GET /api/home` on a cell with more than one person answers for the person of the key: what is addressed to them (a spec question, a sign-off, a grant to agree to, a desk item, a milestone to check, pull requests to review), each with who it comes from, and a `summary` sentence. A cell of one person returns what it did before.
+- People can answer a question, agree to or decline a grant and sign off from the console, and the console marks answers given there.
+- Start checklist: if you hide it, the Home keeps a "Show it again" button so you can bring it back.
 - Console: the AI SRE home shows a Get started checklist (model, connected logs or metrics, services, watching, Slack channel, and a test incident once the demo is running) with a Try the demo service button; Hide this list keeps it away for you.
 - A fresh Tares now asks which one it is for, Software Factory or AI SRE: in the terminal on `tares up`, or in the console on first open (Docker, no terminal). `--edition` and `TARES_EDITION` skip the question, and an install that already has data stays Platform and is never asked.
 - Console: a new factory cell shows a "Get your factory going" list on its home: sign in from Claude Code, connect GitHub, connect Linear or GitHub Issues, start the crew, write a first spec. Each row ticks from the cell's own state, and the list goes when all five are done or when you hide it, in any browser.
@@ -250,6 +261,8 @@ the project follows [Semantic Versioning](https://semver.org/).
   crew has a station of the same name.
 
 ### Fixed
+- A crew's line on the team home no longer shows the reason of a station that also works on a project you cannot see.
+- A grant that was declined stays declined: a consent that comes after the decline, or at the same moment, no longer puts it back in effect, and the grants list no longer shows a person who declined as having agreed.
 - Incident notes no longer show No action when the note has a numbered next step. A finding with no verdict now counts as a note that waits for a person, on every edition.
 - Console: the line chart and sparkline skip values that are not numbers instead of drawing them as zero, sort points by time, and draw one point as a short segment; y labels show the decimals small values need, marks can be listed as text, and disabled controls and focused fields now match the rest of the console.
 - Plugin: the station and spec skills keep working against a Tares before 1.56. That Tares has no
