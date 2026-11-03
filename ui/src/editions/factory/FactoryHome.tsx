@@ -20,6 +20,7 @@ import type {
 } from "./home.types";
 import { HOME_SAMPLES } from "./homeSamples";
 import { HOME_SAMPLES_TEAM } from "./homeSamplesTeam";
+import { Detail } from "./HomeDetail";
 import { AnswerPanel, DeclineDialog, SignOffDialog, type AnswerGiven } from "./WaitingActions";
 import { WaitingForYou } from "./WaitingForYou";
 
@@ -104,18 +105,6 @@ function ActionButton({ action, item, onAction, state }: {
     <Button variant={variant} className={cls} busy={mine} disabled={working && !mine} onClick={() => onAction?.(action, item)}>
       {label}
     </Button>
-  );
-}
-
-/** The crew's text puts a command in backticks; the page shows it in a monospace span. */
-function Detail({ text }: { text: string }) {
-  const parts = text.split(/`([^`]+)`/);
-  return (
-    <>
-      {parts.map((part, i) => (i % 2 === 1
-        ? <code key={i} className="bg-muted px-1 font-mono text-[12.5px]" data-words-exempt>{part}</code>
-        : part))}
-    </>
   );
 }
 
@@ -411,15 +400,13 @@ export function FactoryHomeLoading() {
   );
 }
 
-export function FactoryHomeError({ onRetry, team }: { onRetry?: () => void; team?: boolean }) {
+export function FactoryHomeError({ onRetry }: { onRetry?: () => void }) {
   const { credentialName } = useEdition();
   return (
     <div className={PAGE} data-testid="factory-home-error">
       <TopBar name={firstName(credentialName)} />
       <Banner tone="error" action={<Button variant="secondary" onClick={onRetry}>Retry</Button>}>
-        {team
-          ? <><b>Could not load your home page.</b> Try again.</>
-          : <><b>Home did not load.</b> The cell did not answer, so nothing here is current. Try again in a moment.</>}
+        <b>Home did not load.</b> The cell did not answer, so nothing here is current. Try again in a moment.
       </Banner>
     </div>
   );
@@ -701,8 +688,8 @@ function SampleHome({ sample }: { sample: string }) {
   const { rows, onAction, dialogs, panels } = useHomeActions(false, () => {});
   let body: React.ReactNode;
   if (sample === "loading") body = <FactoryHomeLoading />;
-  else if (sample === "error" || sample === "teamError") {
-    body = <FactoryHomeError key={tries} team={sample === "teamError"} onRetry={() => setTries((n) => n + 1)} />;
+  else if (sample === "error") {
+    body = <FactoryHomeError key={tries} onRetry={() => setTries((n) => n + 1)} />;
   }
   else body = <FactoryHomeView data={ALL_SAMPLES[sample]} onAction={onAction} rows={rows} panels={panels} hideStart={() => Promise.resolve()} showStart={() => Promise.resolve()} />;
   return (
@@ -724,10 +711,9 @@ function hhmm(d: Date): string {
 function LiveHome() {
   const { data, error, reload } = usePagePolling(getHome, POLL_MS);
   const [readAt, setReadAt] = React.useState<Date>();
-  const team = React.useRef(false);   // a team cell stays one while the page cannot reach it
   const [overlay, setOverlay] = React.useState<Overlay | null>(null);
   const timer = React.useRef<ReturnType<typeof setTimeout>>();
-  React.useEffect(() => { if (data) { setReadAt(new Date()); team.current = isTeam(data); } }, [data]);
+  React.useEffect(() => { if (data) { setReadAt(new Date()); } }, [data]);
   // the daemon keeps its answer for a few seconds: once that has passed, the next read is the truth
   React.useEffect(() => {
     if (data && overlay && Date.now() >= overlay.until) setOverlay(null);
@@ -749,7 +735,7 @@ function LiveHome() {
 
   let body: React.ReactNode;
   if (!data) {
-    body = error ? <FactoryHomeError team={team.current} onRetry={reload} /> : <FactoryHomeLoading />;
+    body = error ? <FactoryHomeError onRetry={reload} /> : <FactoryHomeLoading />;
   } else {
     const shown: HomeData = overlay ? {
       ...data,
@@ -775,7 +761,7 @@ function LiveHome() {
 
 export default function FactoryHome() {
   const sample = useSample();
-  if (sample && (sample === "loading" || sample === "error" || sample === "teamError" || Object.prototype.hasOwnProperty.call(ALL_SAMPLES, sample))) {
+  if (sample && (sample === "loading" || sample === "error" || Object.prototype.hasOwnProperty.call(ALL_SAMPLES, sample))) {
     return <SampleHome sample={sample} />;
   }
   return <LiveHome />;

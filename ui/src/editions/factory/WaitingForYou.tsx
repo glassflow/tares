@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { Button, EmptyState, ListRow } from "../../components/edition";
 import { cn } from "@/lib/utils";
+import { Detail } from "./HomeDetail";
 import type { HomeAction, HomeItem } from "./home.types";
 
 // "Waiting for you" on a cell with more than one person: only what is addressed to the person,
@@ -17,7 +18,7 @@ const PEOPLE: { bg: string; fg: string }[] = [
   { bg: "#2f5d8a", fg: "#ffffff" },
   { bg: "#6b4f8a", fg: "#ffffff" },
 ];
-const CREW_COLOUR = { bg: "#ffac00", fg: "#1e0f00" };
+const CREW_COLOUR = { bg: "var(--accent)", fg: "var(--on-accent)" };
 
 function colourOf(key: string): { bg: string; fg: string } {
   let h = 0;
@@ -39,18 +40,6 @@ function Sender({ from }: { from: HomeItem["from"] }) {
     >
       {(crew ? "Y" : Array.from(name)[0] ?? "?").toUpperCase()}
     </span>
-  );
-}
-
-/** The crew's text puts a command in backticks; the page shows it in a monospace span. */
-function Detail({ text }: { text: string }) {
-  const parts = text.split(/`([^`]+)`/);
-  return (
-    <>
-      {parts.map((part, i) => (i % 2 === 1
-        ? <code key={i} className="bg-muted px-1 font-mono text-[12.5px]" data-words-exempt>{part}</code>
-        : part))}
-    </>
   );
 }
 
