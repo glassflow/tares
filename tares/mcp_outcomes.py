@@ -73,6 +73,17 @@ WINDOWS = {"30m": timedelta(minutes=30), "1h": timedelta(hours=1), "6h": timedel
 INCIDENT_ROUTES = {"on_it": "on_it", "resolved": "resolve", "open": "reopen"}
 
 
+def _why(r) -> str:
+    """A failed answer as a sentence: the daemon's own `detail` for a refusal (403, 404, 409), the
+    status and text for anything else."""
+    try:
+        detail = r.json().get("detail")
+    except (ValueError, AttributeError):
+        detail = None
+    text = detail if isinstance(detail, str) and detail else r.text
+    return text if r.status_code in (403, 404, 409) else f"error {r.status_code}: {text}"
+
+
 @mcp.tool()
 async def what_is_broken() -> str:
     """What is wrong right now, as the AI SRE home page says it: the headline, whether anybody is
@@ -83,7 +94,7 @@ async def what_is_broken() -> str:
     async with _cx(15) as cx:
         r = await cx.get(f"{TARESD}/api/home")
     if r.status_code >= 400:
-        return f"error {r.status_code}: {r.text}"
+        return _why(r)
     home = r.json()
     watch = home.get("watch") or {}
     keep = ("id", "title", "service", "state", "age_words", "who_words", "failing",
@@ -106,12 +117,12 @@ async def how_is_service(service: str) -> str:
         if r.status_code == 404:
             r = await cx.get(f"{TARESD}/api/sre/services")
             if r.status_code >= 400:
-                return f"error {r.status_code}: {r.text}"
+                return _why(r)
             names = ", ".join(s["name"] for s in r.json().get("services") or [])
             return f"No service called {service}. Services: {names}." if names else \
                 f"No service called {service}. This Tares has no services yet."
     if r.status_code >= 400:
-        return f"error {r.status_code}: {r.text}"
+        return _why(r)
     page = r.json()
     keep = ("name", "state", "state_words", "watch_words", "signals_words", "feeds_words",
             "last_words", "events_24h_words", "incidents_open", "blind_spots_words")
@@ -135,16 +146,17 @@ async def what_happened(service: str = "", around: str = "", window: str = "30m"
     try:
         end = datetime.fromisoformat(around.strip().replace("Z", "+00:00")) if around.strip() \
             else datetime.now(timezone.utc)
-    except ValueError:
+        end = end.replace(tzinfo=timezone.utc) if end.tzinfo is None \
+            else end.astimezone(timezone.utc)
+        params = {"from": (end - span).isoformat(), "to": end.isoformat()}
+    except (ValueError, OverflowError):
         return f"around must be an ISO time, like 2026-11-02T14:00:00Z. You sent {around}."
-    end = end.replace(tzinfo=timezone.utc) if end.tzinfo is None else end.astimezone(timezone.utc)
-    params = {"from": (end - span).isoformat(), "to": end.isoformat()}
     if service.strip():
         params["service"] = service.strip()
     async with _cx(30) as cx:
         r = await cx.get(f"{TARESD}/api/sre/timeline", params=params)
     if r.status_code >= 400:
-        return f"error {r.status_code}: {r.text}"
+        return _why(r)
     body = r.json()
     return json.dumps({
         "range": body.get("range_words"), "nothing": body.get("empty_words"),
@@ -158,19 +170,16 @@ async def mark_incident(incident: str, state: str) -> str:
     """Change where an incident stands. `incident` is its id, as what_is_broken shows it. `state`
     is on_it (you or the person is working on it), resolved (it is over) or open (nobody is on it
     and it is not over). It is recorded under the key the caller uses, so a read-only key is
-    refused and the answer says so. Returns the incident as it stands now."""
+    refused and the answer says so. So is a change the incident's state does not allow: a
+    resolved incident cannot go to on_it until it is open again. Returns the incident as it
+    stands now."""
     route = INCIDENT_ROUTES.get((state or "").strip())
     if route is None:
         return f"state must be one of {', '.join(INCIDENT_ROUTES)}. You sent {state}."
     async with _cx(15) as cx:
-        r = await cx.post(f"{TARESD}/api/incidents/{quote(incident.strip(), safe='')}/{route}")
-    if r.status_code in (403, 404):
-        try:
-            return str(r.json().get("detail") or r.text)
-        except ValueError:
-            return r.text
+        r = await cx.post(f"{TARESD}/api/sre/incidents/{quote(incident.strip(), safe='')}/{route}")
     if r.status_code >= 400:
-        return f"error {r.status_code}: {r.text}"
+        return _why(r)
     inc = r.json()
     return json.dumps({k: inc.get(k) for k in ("id", "title", "service", "state", "state_words", "who")},
                       default=str)
