@@ -283,17 +283,20 @@ async function waitFor(url, tries = 100) {
     // an old ticket or doc link, a project that is not a factory project and an address with no
     // project show today's project page, never this one
     await page.goto(`${BASE}/projects/${y}?view=ticket:T1`, { waitUntil: "load" });
+    await page.waitForFunction(() => location.pathname.endsWith("/tickets/T1"), null, { timeout: 15000 }).catch(() => {});
     await page.waitForFunction(() => document.body.innerText.includes("T1"), null, { timeout: 15000 }).catch(() => {});
-    ck("?view=ticket:T1 opens today's ticket view, not the factory page", (await T("factory-project").count()) === 0 && (await page.locator("body").innerText()).includes("T1"));
+    ck("?view=ticket:T1 lands on the ticket page, not the factory page", (await T("factory-project").count()) === 0
+       && new URL(page.url()).pathname === `/projects/${y}/tickets/T1` && new URL(page.url()).search === "", page.url());
     await page.goto(`${BASE}/projects/${y}?view=doc:none`, { waitUntil: "load" });
     await page.waitForFunction(() => document.body.innerText.trim().length > 40, null, { timeout: 15000 }).catch(() => {});
     ck("?view=doc: opens today's page too", (await T("factory-project").count()) === 0 && (await T("factory-project-wait").count()) === 0);
     await page.goto(`${BASE}/projects/${y}`, { waitUntil: "load" });
     await T("factory-project").waitFor();
     await T("moving-row").and(page.locator("[data-ref=T5]")).click();
-    await page.waitForFunction(() => location.search.includes("view=ticket"), null, { timeout: 15000 }).catch(() => {});
+    await page.waitForFunction(() => location.pathname.endsWith("/tickets/T5"), null, { timeout: 15000 }).catch(() => {});
     await page.waitForFunction(() => document.body.innerText.includes("T5"), null, { timeout: 15000 }).catch(() => {});
-    ck("a ticket row lands on that ticket, not on this page", (await T("factory-project").count()) === 0 && (await page.locator("body").innerText()).includes("T5"), page.url());
+    ck("a ticket row lands on that ticket's page, not on this page", (await T("factory-project").count()) === 0
+       && new URL(page.url()).pathname === `/projects/${y}/tickets/T5` && (await page.locator("body").innerText()).includes("T5"), page.url());
     await page.goto(`${BASE}/projects/${ids["project-w"]}`, { waitUntil: "load" });
     await page.waitForFunction(() => document.body.innerText.includes("Not a factory project"), null, { timeout: 15000 }).catch(() => {});
     ck("a project that is not a factory project shows today's page", (await T("factory-project").count()) === 0 && (await T("factory-project-wait").count()) === 0
