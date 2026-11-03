@@ -20,7 +20,7 @@ const PEOPLE: { bg: string; fg: string }[] = [
 ];
 const CREW_COLOUR = { bg: "var(--accent)", fg: "var(--on-accent)" };
 
-function colourOf(key: string): { bg: string; fg: string } {
+export function colourOf(key: string): { bg: string; fg: string } {
   let h = 0;
   for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return PEOPLE[h % PEOPLE.length];
