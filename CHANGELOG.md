@@ -54,6 +54,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 - Plugin 0.6.1: builders mock a screen first and wait for approval; the reviewer compares screenshots of every state with the approved mock.
 - Plugin 0.6.2: the orchestrator keeps a builder's mock as the project doc "Mock: <screen>" and puts its desk item on the project, so the approval shows in `list_decisions`.
 - Plugin 0.6.3: the Tares skill says an agent on a Software Factory cell sees outcome tools first and the building-block tools only when an admin turns them on.
+- Plugin 0.6.4: the Tares skill names the four tools an agent sees first on an AI SRE cell (`what_is_broken`, `how_is_service`, `what_happened`, `mark_incident`) and says `read` keeps working there.
 - The factory and AI SRE console editions have a words list (`ui/src/editions/words.json`) and checks
   that fail CI when an edition screen shows an internal name such as source, trigger or run, or an em
   dash. `tares.words` runs the same check over API JSON.
