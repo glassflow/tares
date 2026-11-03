@@ -8,7 +8,7 @@ import type { HomeRaised } from "./Home.api";
 export function RaisedList({ items, note, busy, onAnswer }: {
   items: HomeRaised[];
   note: string | null;
-  /** The answer in flight ("<id>:worth"), or null. */
+  /** The answer in flight ("<id>:worth-yes" or "<id>:worth-no"), or null. */
   busy: string | null;
   onAnswer: (id: string, worth: boolean) => void;
 }) {
@@ -23,12 +23,12 @@ export function RaisedList({ items, note, busy, onAnswer }: {
       ) : (
         <ul className="m-0! list-none! p-0!">
           {items.map((r) => {
-            const mine = busy === `${r.id}:worth`;
+            const yes = busy === `${r.id}:worth-yes`, no = busy === `${r.id}:worth-no`;
             return (
               <li key={r.id} className="grid gap-x-4 gap-y-2 border-t border-border px-[18px] py-3 first:border-t-0 sm:grid-cols-[64px_minmax(0,1fr)_auto]" data-testid="raised-row" data-run={r.id}>
                 <div className="font-mono text-xs text-muted-foreground">{r.when_words}</div>
                 <div className="min-w-0 text-[14px] [overflow-wrap:anywhere]">
-                  <div><b data-user-text>{r.service}</b> <span data-user-text>· {r.what}</span></div>
+                  <div><b data-user-text>{r.service}</b> {r.what && <span data-user-text>· {r.what}</span>}</div>
                   <div className="text-[13px] text-muted-foreground">{r.outcome_words}</div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 text-[13px]">
@@ -37,8 +37,8 @@ export function RaisedList({ items, note, busy, onAnswer }: {
                   ) : r.can_answer ? (
                     <>
                       <span className="text-muted-foreground">Was this worth raising?</span>
-                      <Button variant="secondary" className="h-8 text-[13px]!" busy={mine} disabled={busy !== null && !mine} onClick={() => onAnswer(r.id, true)} data-testid="worth-yes">Yes</Button>
-                      <Button variant="secondary" className="h-8 text-[13px]!" disabled={busy !== null} onClick={() => onAnswer(r.id, false)} data-testid="worth-no">No</Button>
+                      <Button variant="secondary" className="h-8 text-[13px]!" busy={yes} disabled={busy !== null && !yes} onClick={() => onAnswer(r.id, true)} data-testid="worth-yes">Yes</Button>
+                      <Button variant="secondary" className="h-8 text-[13px]!" busy={no} disabled={busy !== null && !no} onClick={() => onAnswer(r.id, false)} data-testid="worth-no">No</Button>
                     </>
                   ) : (
                     <Link to={`/incidents/${encodeURIComponent(r.id)}`} className="text-foreground underline underline-offset-2" data-testid="read-note">Read the note</Link>

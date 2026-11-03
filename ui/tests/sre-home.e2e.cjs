@@ -147,7 +147,7 @@ function cleanEnv(home, dist) {
       const sec = await sections(page);
 
       if (state === "watcher-off") {
-        ck("watcher-off: the headline says nobody has watched", /^Nobody has watched .* since (\d+ [A-Z][a-z]{2}, )?\d\d:\d\d$/.test(headline), headline);
+        ck("watcher-off: the headline says nobody has watched", /^Nobody has watched .* since ((yesterday|\d+ [A-Z][a-z]{2}), )?\d\d:\d\d$/.test(headline), headline);
         const w = page.getByTestId("watch-off");
         ck("watcher-off: the panel says why", (await text(page.getByTestId("watch-off-title"))).startsWith("The watcher is off: the watcher used its $25.00 budget"), await text(page.getByTestId("watch-off-title")));
         const wt = await text(w);
@@ -193,7 +193,7 @@ function cleanEnv(home, dist) {
         ck("one-incident: it has the three columns", ["what is failing", "most likely cause", "suggested next step"].every((k) => ct.toLowerCase().includes(k)), ct);
         ck("one-incident: it has the title and the age", /service-a/.test(await text(page.getByTestId("incident-title"))) && /open .*nobody has picked it up/.test(await text(page.getByTestId("incident-age"))), await text(page.getByTestId("incident-age")));
         ck("one-incident: a chart with a dashed mark for the deploy", (await card.locator("svg [data-mark]").count()) >= 1, String(await card.locator("svg [data-mark]").count()));
-        ck("one-incident: the post in Slack is said", /Posted to #ops-alerts at \d\d:\d\d/.test(await text(page.getByTestId("incident-foot"))), await text(page.getByTestId("incident-foot")));
+        ck("one-incident: the post in Slack is said", /Posted to #ops-alerts (at \d\d:\d\d|on \d+ [A-Z][a-z]{2}, \d\d:\d\d)/.test(await text(page.getByTestId("incident-foot"))), await text(page.getByTestId("incident-foot")));
         ck("one-incident: the timeline link is the service's", (await page.getByTestId("incident-timeline").getAttribute("href")) === "/timeline?service=service-a");
         ck("one-incident: all three buttons", (await page.getByTestId("incident-on-it").count()) === 1 && (await page.getByTestId("incident-resolve").count()) === 1);
         ck("one-incident: the incident comes before the services", await page.evaluate(() => {

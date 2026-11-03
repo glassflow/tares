@@ -185,7 +185,8 @@ export function withIncident(home: SreHome, id: string, to: "on_it" | "resolved"
   const next = structuredClone(home);
   if (to === "resolved") {
     next.incidents = next.incidents.filter((i) => i.id !== id);
-    if (next.incidents.length === 0 && next.incidents_more === 0) {
+    // With the watcher off the cell words the page itself ("Nobody has watched ..."), so leave it to the reload.
+    if (next.incidents.length === 0 && next.incidents_more === 0 && home.watch.on) {
       next.headline = { text: "All quiet", tone: "quiet", sub: "" };
       next.services = next.services.map((s) => (s.state === "incident" ? { ...s, state: "normal", state_words: "Normal" } : s));
     }

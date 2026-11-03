@@ -133,6 +133,8 @@ export default function Home() {
       if (refresh && !sample) { clearTimeout(timer.current); timer.current = setTimeout(reload, REFRESH_MS); }
     } catch {
       setFailed(true);
+      // The write may have gone through: read the cell again rather than wait for the next poll.
+      if (refresh && !sample) { clearTimeout(timer.current); timer.current = setTimeout(reload, REFRESH_MS); }
     } finally {
       setBusy(null);
     }
@@ -146,7 +148,7 @@ export default function Home() {
       return withIncident(home!, id, to);
     });
   const answer = (id: string, worth: boolean) =>
-    act(`${id}:worth`, async () => {
+    act(`${id}:worth-${worth ? "yes" : "no"}`, async () => {
       if (!sample) await answerWorth(id, worth);
       return withWorth(home!, id, worth);
     });
