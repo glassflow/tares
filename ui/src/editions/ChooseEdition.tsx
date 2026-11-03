@@ -66,6 +66,8 @@ export default function ChooseEdition() {
   const [picked, setPicked] = React.useState<Choice["id"]>("factory");
   const [saving, setSaving] = React.useState(false);
   const [failed, setFailed] = React.useState(false);
+  // the choice was saved but the cell did not answer when the page asked again
+  const [stale, setStale] = React.useState(false);
 
   if (edition === undefined) {
     return (
@@ -99,7 +101,11 @@ export default function ChooseEdition() {
       setSaving(false);
       return;
     }
-    await reload();
+    if (!(await reload())) {
+      setStale(true);
+      setSaving(false);
+      return;
+    }
     navigate("/", { replace: true });
   };
 
@@ -120,6 +126,14 @@ export default function ChooseEdition() {
           <Radio key={c.id} choice={c} on={picked === c.id} disabled={saving} pick={() => setPicked(c.id)} onKey={onKey(i)} />
         ))}
       </div>
+      {stale && (
+        <Banner
+          tone="warn" className="mt-4" data-testid="choose-stale"
+          action={<Button variant="secondary" onClick={() => window.location.reload()}>Reload</Button>}
+        >
+          <b>Your choice was saved.</b> The cell did not answer when we asked again. Reload to continue.
+        </Banner>
+      )}
       {failed && (
         <Banner
           tone="error" className="mt-4" data-testid="choose-error"
@@ -128,7 +142,7 @@ export default function ChooseEdition() {
           <b>Your choice was not saved.</b> The cell did not answer.
         </Banner>
       )}
-      {!failed && (
+      {!failed && !stale && (
         <div className="mt-5">
           <Button busy={saving} onClick={save} className="w-full sm:w-auto" data-testid="choose-continue">
             {saving ? "Saving" : "Continue"}

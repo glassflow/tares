@@ -18,11 +18,11 @@ export type EditionInfo = {
   needed?: boolean;
   /** the key this console signs in with may change settings; a cell with no sign-in counts as admin */
   admin?: boolean;
-  /** reads whoami again, after the edition was chosen */
-  reload: () => Promise<void>;
+  /** reads whoami again, after the edition was chosen; false when the cell did not answer */
+  reload: () => Promise<boolean>;
 };
 
-const EditionContext = createContext<EditionInfo>({ reload: async () => {} });
+const EditionContext = createContext<EditionInfo>({ reload: async () => true });
 
 /** Asks the cell for its edition once. If that fails the console still has to work, so it falls
  *  back to the platform edition, which is today's console. */
@@ -35,8 +35,11 @@ export function EditionProvider({ children }: { children: ReactNode }) {
       .catch(() => { if (live) setInfo({ edition: "platform" }); });
     return () => { live = false; };
   }, []);
-  // After a choice is saved; a failed read keeps what is shown
-  const reload = useCallback(() => api.whoami().then((w) => setInfo(fromWhoami(w))).catch(() => {}), []);
+  // After a choice is saved; a failed read keeps what is shown and says so (false)
+  const reload = useCallback(
+    () => api.whoami().then((w) => { setInfo(fromWhoami(w)); return true; }, () => false),
+    [],
+  );
   const value = useMemo(() => ({ ...info, reload }), [info, reload]);
   return <EditionContext.Provider value={value}>{children}</EditionContext.Provider>;
 }

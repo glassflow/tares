@@ -117,9 +117,26 @@ def _ask_edition(read=input, write=print) -> str:
 
 
 def _stored_edition(db_path: str) -> str | None:
-    """The edition saved in an existing data file, read without taking its lock for writes. None when
-    the file is missing, held by a running daemon, or holds no edition."""
+    """The edition saved in an existing cell, read without taking the data file's lock for writes.
+    A cell that keeps its state in Postgres (TARES_STATE_DSN) holds it there, so that is read first;
+    the local file is the fallback (a cell that has not moved yet). None when neither can be read
+    or holds no edition."""
     from .edition import EDITION_SETTING, _valid
+    dsn = os.getenv("TARES_STATE_DSN")
+    if dsn:
+        try:
+            from .state_db import PgState
+            # wait=0: a database that cannot be reached right now is not waited for here, the
+            # daemon's own start does that
+            pg = PgState(dsn, wait=0)
+            try:
+                row = pg.execute("SELECT value FROM settings WHERE key = ?", [EDITION_SETTING]).fetchone()
+            finally:
+                pg.conn().close()
+        except Exception:
+            row = None
+        if row and _valid(row[0]):
+            return _valid(row[0])
     if not Path(db_path).is_file():
         return None
     try:

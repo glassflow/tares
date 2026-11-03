@@ -154,6 +154,27 @@ def test_first_run_edition():
     got, n, out, _ = _up_with(True, answers=["2"], state_dsn="postgresql://x@localhost/none")
     ck("a Postgres state store is never asked in the terminal", n == 0, n)
 
+    pg = os.environ.get("TARES_TEST_PG")
+    if pg:
+        # TR-829: a cell whose state is in Postgres keeps its edition there, not in the local file
+        import uuid
+        import psycopg
+        schema = "t_" + uuid.uuid4().hex[:16]
+        with psycopg.connect(pg, autocommit=True) as c:
+            c.execute(f"CREATE SCHEMA {schema}")
+            c.execute(f"CREATE TABLE {schema}.settings (key text PRIMARY KEY, value text, updated_at timestamptz)")
+            c.execute(f"INSERT INTO {schema}.settings VALUES ('edition', 'factory', now())")
+        dsn = f"{pg}?options=-csearch_path%3D{schema}"
+        got, n, out, _ = _up_with(False, edition="sre", state_dsn=dsn)
+        ck("a Postgres cell's stored edition wins over --edition", got is None, got)
+        ck("and the difference is said in words, state in Postgres",
+           "tares: this Tares is Software Factory; change it in Settings" in out, out)
+        ck("and the stored edition is named, state in Postgres", "tares: Software Factory" in out, out)
+        got, n, out, _ = _up_with(False, edition="factory", state_dsn=dsn)
+        ck("the same choice says nothing extra, state in Postgres", "change it in Settings" not in out, out)
+        with psycopg.connect(pg, autocommit=True) as c:
+            c.execute(f"DROP SCHEMA {schema} CASCADE")
+
     got, n, out, _ = _up_with(False, edition="sre", seed_db=lambda p: _seed_db(p, "factory"))
     ck("a stored edition wins over --edition", got is None, got)
     ck("and the difference is said in words", "tares: this Tares is Software Factory; change it in Settings" in out, out)
