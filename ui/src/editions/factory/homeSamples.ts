@@ -45,7 +45,7 @@ const BUSY_WAITING: HomeItem[] = [
   }),
 ];
 
-function project(id: string, over: Partial<HomeProject>): HomeProject {
+export function project(id: string, over: Partial<HomeProject>): HomeProject {
   return {
     id, name: id, goal: "", state: "building", state_label: "Building", milestone: null,
     tickets: { merged: 0, blocked: 0, total: 0 }, repos: [], builders: 1, last_activity_at: null,

@@ -1,10 +1,11 @@
-import type { HomeData, HomeItem, HomeWaitingOn } from "./home.types";
-import { busy } from "./homeSamples";
+import type { HomeData, HomeItem, HomeProject, HomeProjectRow, HomeRef, HomeWaitingOn } from "./home.types";
+import { busy, project } from "./homeSamples";
 
 // Sample bodies of the factory home on a cell with more than one person (the keys tares/factory_team.py
 // adds). They show only behind the sample flag, never on a live cell. Every name here is invented.
 
 const crew = { crew: true, name: "Your crew" };
+const alex = { id: "alex", name: "Alex" };
 const kim = { id: "kim", name: "Kim" };
 const lee = { id: "lee", name: "Lee" };
 const projectX = { id: "project-x", name: "project-x" };
@@ -85,10 +86,75 @@ const waitingOn: HomeWaitingOn[] = [
   },
 ];
 
+// ── projects: the Team list, each row with its lead, members and yours_text ──
+
+function row(id: string, lead: HomeRef, members: HomeRef[], over: Partial<HomeProject>): HomeProject {
+  return project(id, { lead, members, scope: "team", yours: 0, yours_text: "", mine: false, ...over });
+}
+
+const TEAM_PROJECTS: HomeProject[] = [
+  row("project-y", alex, [kim], {
+    scope: "private", goal: "A nickname field on the API, shown on the web page.", state: "waiting_on_you", state_label: "Waiting on you",
+    milestone: "M1 ready to check", tickets: { merged: 1, blocked: 1, total: 2 }, yours: 1, yours_text: "1 ticket yours, 1 Kim's", mine: true,
+  }),
+  row("project-x", kim, [alex], {
+    goal: "Bill teams per seat, monthly or yearly.", state: "not_started", state_label: "Not started",
+    milestone: "Waiting on your answer and sign-off", tickets: { merged: 0, blocked: 0, total: 7 }, yours: 3, yours_text: "3 tickets in your repo", mine: true,
+  }),
+  row("project-z", alex, [], {
+    goal: "About 1,000 answer articles so AI assistants cite the product.", milestone: "Now on M4: 1,000 articles live",
+    tickets: { merged: 13, blocked: 6, total: 20 }, yours: 20, yours_text: "All 20 tickets yours", mine: true,
+  }),
+  row("project-w", kim, [lee], {
+    goal: "A new sign-in page for the web app.", milestone: "Now on M2: sign-in page", tickets: { merged: 4, blocked: 0, total: 9 },
+  }),
+  row("project-v", lee, [], {
+    goal: "Move the build to a faster runner.", state: "not_started", state_label: "Not started", milestone: "3 milestones",
+    tickets: { merged: 0, blocked: 0, total: 5 },
+  }),
+  row("project-u", kim, [], {
+    goal: "Fix the date shown on invoices.", state: "ready_to_close", state_label: "Ready to close", milestone: "Ready to close",
+    tickets: { merged: 6, blocked: 0, total: 6 },
+  }),
+];
+
+const LONG_LEAD = { id: "alexandria", name: "Alexandria Kimberley-Lee-Hargreaves-Montgomery" };
+const LONG_PROJECT = row("project-long", LONG_LEAD, [kim, lee], {
+  name: "project-for-the-enterprise-edition-with-a-name-that-keeps-going-on-and-on-and-on-2026-v2-b",
+  scope: "private", mine: true, yours: 2, yours_text: "2 tickets yours, 1 Alexandria Kimberley-Lee-Hargreaves-Montgomery's",
+  goal: "A goal written as a long sentence that goes on to describe the whole piece of work in some detail so the row has to wrap onto several lines on a phone.",
+  milestone: "Now on M2: a milestone with a long name that also has to wrap", tickets: { merged: 2, blocked: 1, total: 9 },
+});
+
+const LEADS = [alex, kim, lee];
+const MANY_PROJECTS: HomeProject[] = Array.from({ length: 12 }, (_, i) => {
+  const b = TEAM_PROJECTS[i % 6];
+  const id = `project-${String.fromCharCode(97 + i)}`;
+  return { ...b, id, name: id, lead: LEADS[i % 3], mine: i % 3 === 0, scope: i % 4 === 0 ? "private" : "team", yours_text: i % 3 === 0 ? "2 tickets yours" : "" };
+});
+
+/** The three keys a team cell adds for its projects: the list as the Team view has it (a stub for each private
+ *  project the person is not on), the counts and the one line about the hidden ones. */
+function projectKeys(rows: HomeProjectRow[]): Pick<HomeData, "projects" | "counts" | "hidden_summary"> {
+  const shown = rows.filter((r): r is HomeProject => !("hidden" in r));
+  const stubs = rows.filter((r) => "hidden" in r);
+  const leads = [...new Set(stubs.flatMap((s) => ("hidden" in s && s.lead ? [s.lead.name] : [])))];
+  return {
+    projects: rows, counts: { mine: shown.filter((p) => p.mine).length, team: shown.length },
+    hidden_summary: stubs.length ? `${stubs.length} private project${stubs.length > 1 ? "s" : ""} you are not on${leads.length ? `, led by ${leads.join(" and ")}` : ""}` : undefined,
+  };
+}
+
+/** What the cell sends for `?projects=mine|team`: Mine drops the stubs and the projects that are not the person's. */
+export function sampleView(data: HomeData, view: "mine" | "team"): HomeData {
+  if (view === "team" || data.summary === undefined) return data;   // a cell of one has one list
+  return { ...data, projects: data.projects.filter((r) => !("hidden" in r) && r.mine) };
+}
+
 const TEAM_KEYS = {
   summary: "6 things wait for you. You are waiting on Kim for 1 sign-off.",
   you_are_waiting_on: waitingOn,
-  counts: { mine: 2, team: 3 },
+  ...projectKeys(TEAM_PROJECTS),
   crews: [],
   crews_quiet: [],
   areas: [],
@@ -134,6 +200,7 @@ export const longText: HomeData = team(
   })],
   "1 thing waits for you.",
   {
+    ...projectKeys([LONG_PROJECT, TEAM_PROJECTS[3]]),
     summary: "1 thing waits for you. You are waiting on Kim for 1 sign-off.",
     you_are_waiting_on: [{ ...waitingOn[0], project: { ...projectY, name: LONG_NAME }, title: `${LONG_NAME}: the web ticket cannot be handed over yet` }],
   },
@@ -148,12 +215,18 @@ export const manyItems: HomeData = team(
     actions: [{ label: "Answer", primary: true, do: "answer" }],
   })),
   "30 things wait for you, the oldest for 31 hours.",
-  { summary: "30 things wait for you.", you_are_waiting_on: [] },
+  { summary: "30 things wait for you.", you_are_waiting_on: [], ...projectKeys(MANY_PROJECTS) },
+);
+
+/** A private project the person is not on: no row, only the one line under the list, in both views. */
+export const privateNotOn: HomeData = team(
+  asked.slice(0, 2), "2 things wait for you.",
+  { summary: "2 things wait for you.", ...projectKeys([...TEAM_PROJECTS, { hidden: true, lead: { name: "Lee" } }]) },
 );
 
 /** A cell of one person: no team keys, so the page keeps the v2 list. */
 export const onePerson: HomeData = busy;
 
 export const HOME_SAMPLES_TEAM: Record<string, HomeData> = {
-  onePerson, threePeople, nothingWaitingTeam: nothingWaiting, longText, manyItems,
+  onePerson, threePeople, nothingWaitingTeam: nothingWaiting, longText, manyItems, privateNotOn,
 };

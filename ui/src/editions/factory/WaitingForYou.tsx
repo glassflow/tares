@@ -26,15 +26,16 @@ function colourOf(key: string): { bg: string; fg: string } {
   return PEOPLE[h % PEOPLE.length];
 }
 
-/** The square next to a row: the crew's accent with a Y, or the person's initial in their colour. */
-function Sender({ from }: { from: HomeItem["from"] }) {
+/** The square next to a row: the crew's accent with a Y, or the person's initial in their colour.
+ *  `small` is the member square on a project row. */
+export function Sender({ from, small }: { from: HomeItem["from"]; small?: boolean }) {
   const crew = !from || from.crew === true;
   const name = crew ? "Your crew" : from.name;
   const c = crew ? CREW_COLOUR : colourOf(from.id ?? from.name);
   return (
     <span
-      role="img" aria-label={`From ${name}`} title={name} data-testid="waiting-from"
-      className="mt-0.5 grid size-7 flex-none select-none place-items-center text-[13px] font-semibold"
+      role="img" aria-label={small ? name : `From ${name}`} title={name} data-testid={small ? "project-member" : "waiting-from"}
+      className={cn("grid flex-none select-none place-items-center font-semibold", small ? "size-5 text-[11px]" : "mt-0.5 size-7 text-[13px]")}
       style={{ background: c.bg, color: c.fg }}
       data-user-text
     >

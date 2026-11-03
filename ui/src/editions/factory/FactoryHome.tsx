@@ -19,8 +19,9 @@ import type {
   HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeItem, HomeProject, HomeProjectRow, HomeProjectState, HomeVerb, HomeWaitingOn,
 } from "./home.types";
 import { HOME_SAMPLES } from "./homeSamples";
-import { HOME_SAMPLES_TEAM } from "./homeSamplesTeam";
+import { HOME_SAMPLES_TEAM, sampleView } from "./homeSamplesTeam";
 import { Detail } from "./HomeDetail";
+import { HiddenLine, LeadLine, PrivateLock, ProjectsSwitch, type ProjectsView } from "./TeamProjects";
 import { AnswerPanel, DeclineDialog, HandOverDialog, SignOffDialog, type AnswerGiven } from "./WaitingActions";
 import { WaitingForYou } from "./WaitingForYou";
 import { YouAreWaitingOn } from "./YouAreWaitingOn";
@@ -166,23 +167,25 @@ function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAc
   );
 }
 
-// The Team view of a team cell also lists a stub where a private project the person is not on would be.
+// The Team view of a team cell also lists a stub where a private project the person is not on would be;
+// the page never draws it as a row, only the cell's one line about the hidden ones.
 const isProject = (r: HomeProjectRow): r is HomeProject => !("hidden" in r);
 
-function ProjectRow({ p }: { p: HomeProject }) {
+function ProjectRow({ p, team, me }: { p: HomeProject; team?: boolean; me?: string }) {
   const { merged, blocked, total } = p.tickets;
   const pct = (n: number) => (total > 0 ? (n / total) * 100 : 0);
   return (
     <ListRow to={`/projects/${encodeURIComponent(p.id)}`} data-testid="project-row"
              className="block! text-foreground! py-3.5">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="min-w-0 font-bold" data-user-text>{p.name}</span>
+        {team && p.scope === "private" && <PrivateLock />}
+        <span className={cn("min-w-0 font-bold", team && "[overflow-wrap:anywhere]")} data-user-text>{p.name}</span>
         <span className={cn("border px-1.5 py-0.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.06em]", CHIP_TONES[p.state])}>
           {p.state_label}
         </span>
       </div>
       <div className="mt-0.5 line-clamp-2" title={p.goal} data-user-text>{p.goal}</div>
-      {p.meta && <div className={cn(MUTED, "mt-0.5")} data-user-text>{p.meta}</div>}
+      {team ? <LeadLine p={p} me={me} /> : p.meta && <div className={cn(MUTED, "mt-0.5")} data-user-text>{p.meta}</div>}
       <ProgressBar value={pct(merged)} blocked={pct(blocked)} aria-label="Tickets merged"
         className="my-2 [&>div:first-child]:bg-foreground! [&_[aria-hidden]]:bg-[repeating-linear-gradient(135deg,var(--kit-accent)_0_3px,transparent_3px_6px)]!" />
       <div className={cn(MUTED, "flex flex-wrap gap-x-3")}>
@@ -194,21 +197,48 @@ function ProjectRow({ p }: { p: HomeProject }) {
   );
 }
 
-function Projects({ projects, finished }: { projects: HomeProject[]; finished: number }) {
+/** What a team cell adds to the Projects section: the switch, who the person is, the line about hidden ones. */
+interface TeamProjectsProps {
+  counts: { mine: number; team: number }; view: ProjectsView; onView?: (v: ProjectsView) => void; me?: string; hidden?: string;
+}
+
+const PROJECTS_FIRST = 6;
+
+function Projects({ projects, finished, team }: { projects: HomeProject[]; finished: number; team?: TeamProjectsProps }) {
+  const [all, setAll] = React.useState(false);
+  const shown = team && !all ? projects.slice(0, PROJECTS_FIRST) : projects;
+  const link = projects.length > 0 || finished > 0 ? (
+    <Link to="/projects" className="text-xs text-[color:var(--accent-deep)]! underline">All projects, {finished} finished</Link>
+  ) : undefined;
   return (
-    <section aria-label="Projects" className="min-w-0">
-      <SectionHead title="Projects" aside={projects.length > 0 || finished > 0 ? (
-        <Link to="/projects" className="text-xs text-[color:var(--accent-deep)]! underline">All projects, {finished} finished</Link>
-      ) : undefined} />
+    <section aria-label="Projects" className="min-w-0" data-testid="projects">
+      <SectionHead title="Projects" aside={team ? (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          {link}
+          <ProjectsSwitch view={team.view} counts={team.counts} onView={(v) => { setAll(false); team.onView?.(v); }} />
+        </div>
+      ) : link} />
       <div className="border border-border bg-card">
         {projects.length === 0 ? (
-          <EmptyState title="No projects yet."
-                      action={<Button asChild><Link to="/projects/new">New project</Link></Button>}>
-            Start one and hand it to the crew.
-          </EmptyState>
+          team && team.view === "mine" ? (
+            <EmptyState title="No projects of yours yet." />
+          ) : (
+            <EmptyState title="No projects yet."
+                        action={<Button asChild><Link to="/projects/new">New project</Link></Button>}>
+              Start one and hand it to the crew.
+            </EmptyState>
+          )
         ) : (
-          projects.map((p) => <ProjectRow key={p.id} p={p} />)
+          shown.map((p) => <ProjectRow key={p.id} p={p} team={!!team} me={team?.me} />)
         )}
+        {team && projects.length > shown.length && (
+          <ListRow>
+            <Button variant="quiet" className="px-0! text-[color:var(--accent-deep)]!" onClick={() => setAll(true)}>
+              Show all {projects.length} projects
+            </Button>
+          </ListRow>
+        )}
+        {team?.hidden && <HiddenLine text={team.hidden} />}
       </div>
     </section>
   );
@@ -333,8 +363,10 @@ const RIGHT = "flex min-w-0 flex-[1_1_300px] flex-col gap-6";
 
 const START_TITLE = "Get your factory going";
 
-export function FactoryHomeView({ data, onAction, onHandOver, rows, notice, panels, hideStart, onStartHidden, showStart, onStartShown }: {
+export function FactoryHomeView({ data, onAction, onHandOver, rows, notice, panels, hideStart, onStartHidden, showStart, onStartShown, projectsView, onProjectsView }: {
   data: HomeData; onAction?: OnAction; rows?: Record<string, RowState>; notice?: React.ReactNode;
+  /** Mine or Team on a team cell's Projects (Mine unless told); the page reads the list again for the other. */
+  projectsView?: ProjectsView; onProjectsView?: (v: ProjectsView) => void;
   /** Hand over anyway on a row of You are waiting on. */
   onHandOver?: (entry: HomeWaitingOn) => void;
   /** A panel open under a waiting row, by row id (the answer box on a team home). */
@@ -343,8 +375,11 @@ export function FactoryHomeView({ data, onAction, onHandOver, rows, notice, pane
   hideStart?: () => Promise<unknown>; onStartHidden?: () => void;
   showStart?: () => Promise<unknown>; onStartShown?: () => void;
 }) {
-  const { credentialName } = useEdition();
+  const { credentialName, personName } = useEdition();
   const name = firstName(credentialName);
+  const team = isTeam(data) && data.counts
+    ? { counts: data.counts, view: projectsView ?? "mine", onView: onProjectsView, me: personName, hidden: data.hidden_summary }
+    : undefined;
   return (
     <div className={PAGE} data-testid="factory-home">
       <TopBar name={name} headline={<p className="m-0! max-w-[640px] text-[15px] text-muted-foreground" data-testid="home-headline">{data.headline}</p>} />
@@ -368,7 +403,7 @@ export function FactoryHomeView({ data, onAction, onHandOver, rows, notice, pane
             <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />
           )}
           {isTeam(data) && <YouAreWaitingOn entries={data.you_are_waiting_on ?? []} onHandOver={onHandOver} />}
-          <Projects projects={data.projects.filter(isProject)} finished={data.finished_count} />
+          <Projects projects={data.projects.filter(isProject)} finished={data.finished_count} team={team} />
         </div>
         <aside className={RIGHT}>
           <CrewCard data={data} />
@@ -442,7 +477,7 @@ function grantWords(who: string, command: string, where: string): string {
   return say(`${cut.slice(0, Math.max(cut.lastIndexOf(" "), 1))} ...`);
 }
 
-interface Done { item?: string; project?: string }
+interface Done { item?: string; project?: string; handedOver?: string }
 
 function AllowDialog({ item, desk, mayLimit, onClose, onDone }: {
   item: HomeItem; desk: string; mayLimit: boolean; onClose: () => void; onDone: (r: AllowedGrant) => void;
@@ -640,9 +675,10 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
       await handOverAnyway(entry.project.id, why);
       toast(`${entry.project.name} is handed over. The crew can start it.`);
       setHanding(null);
-      changed();
+      changed({ handedOver: entry.project.id });
     } catch (e) {
-      setHanding({ entry, busy: false, error: reason(e) });
+      const notLead = e instanceof ApiError && e.status === 403;
+      setHanding({ entry, busy: false, error: notLead ? `Only the lead of ${entry.project.name} can hand it over.` : reason(e) });
     }
   };
 
@@ -709,12 +745,13 @@ const ALL_SAMPLES: Record<string, HomeData> = { ...HOME_SAMPLES, ...HOME_SAMPLES
 function SampleHome({ sample }: { sample: string }) {
   const [tries, setTries] = React.useState(0);
   const { rows, onAction, onHandOver, dialogs, panels } = useHomeActions(false, () => {});
+  const [view, setView] = React.useState<ProjectsView>("mine");
   let body: React.ReactNode;
   if (sample === "loading") body = <FactoryHomeLoading />;
   else if (sample === "error") {
     body = <FactoryHomeError key={tries} onRetry={() => setTries((n) => n + 1)} />;
   }
-  else body = <FactoryHomeView data={ALL_SAMPLES[sample]} onAction={onAction} onHandOver={onHandOver} rows={rows} panels={panels} hideStart={() => Promise.resolve()} showStart={() => Promise.resolve()} />;
+  else body = <FactoryHomeView data={sampleView(ALL_SAMPLES[sample], view)} projectsView={view} onProjectsView={setView} onAction={onAction} onHandOver={onHandOver} rows={rows} panels={panels} hideStart={() => Promise.resolve()} showStart={() => Promise.resolve()} />;
   return (
     <>
       {body}
@@ -725,14 +762,15 @@ function SampleHome({ sample }: { sample: string }) {
 }
 
 /** What the page shows at once after a change, until the daemon's own answer catches up. */
-interface Overlay { items: Set<string>; projects: Set<string>; until: number }
+interface Overlay { items: Set<string>; projects: Set<string>; handedOver: Set<string>; until: number }
 
 function hhmm(d: Date): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
 function LiveHome() {
-  const { data, error, reload } = usePagePolling(getHome, POLL_MS);
+  const [view, setView] = React.useState<ProjectsView>();   // unset: what the cell sends with no ?projects=
+  const { data, error, reload } = usePagePolling(() => getHome(view), POLL_MS);
   const [readAt, setReadAt] = React.useState<Date>();
   const [overlay, setOverlay] = React.useState<Overlay | null>(null);
   const timer = React.useRef<ReturnType<typeof setTimeout>>();
@@ -748,6 +786,7 @@ function LiveHome() {
       setOverlay((o) => ({
         items: new Set([...(o?.items ?? []), ...(done.item ? [done.item] : [])]),
         projects: new Set([...(o?.projects ?? []), ...(done.project ? [done.project] : [])]),
+        handedOver: new Set([...(o?.handedOver ?? []), ...(done.handedOver ? [done.handedOver] : [])]),
         until: Date.now() + CACHE_MS,
       }));
     }
@@ -763,6 +802,7 @@ function LiveHome() {
     const shown: HomeData = overlay ? {
       ...data,
       waiting_for_you: data.waiting_for_you.filter((i) => !overlay.items.has(i.id)),
+      ...(data.you_are_waiting_on ? { you_are_waiting_on: data.you_are_waiting_on.filter((w) => !overlay.handedOver.has(w.project.id)) } : {}),
       projects: data.projects.filter((p) => !isProject(p) || !overlay.projects.has(p.id)),
       finished_count: data.finished_count + data.projects.filter((p) => isProject(p) && overlay.projects.has(p.id)).length,
     } : data;
@@ -771,7 +811,8 @@ function LiveHome() {
         Could not refresh. Showing what we had at {hhmm(readAt ?? new Date())}.
       </Banner>
     ) : undefined;
-    body = <FactoryHomeView data={shown} onAction={onAction} onHandOver={onHandOver} rows={rows} panels={panels} notice={notice} onStartHidden={reload} onStartShown={reload} />;
+    body = <FactoryHomeView data={shown} onAction={onAction} onHandOver={onHandOver} rows={rows} panels={panels} notice={notice} onStartHidden={reload} onStartShown={reload}
+                           projectsView={view} onProjectsView={(v) => { setView(v); reload(); }} />;
   }
   return (
     <>
@@ -785,7 +826,7 @@ function LiveHome() {
 export default function FactoryHome() {
   const sample = useSample();
   if (sample && (sample === "loading" || sample === "error" || Object.prototype.hasOwnProperty.call(ALL_SAMPLES, sample))) {
-    return <SampleHome sample={sample} />;
+    return <SampleHome key={sample} sample={sample} />;
   }
   return <LiveHome />;
 }
