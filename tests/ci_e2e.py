@@ -16,8 +16,10 @@ is not listed there counts as DEFAULT_WEIGHT."""
 import argparse
 import os
 import re
+import signal
 import subprocess
 import sys
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -67,8 +69,13 @@ def shard(all_items, n, of):
     return sorted(bins[n - 1][1], key=order.get)
 
 
-def run(suite, all_suites):
-    """(exit code, FAIL lines) for one suite. Its output goes to the log as it comes."""
+def run(suite, all_suites, ui=UI, timeout=None):
+    """(exit code, FAIL lines) for one suite. Its output goes to the log as it comes.
+
+    A timer kills the suite's whole process group when the time is up, so a suite that goes silent
+    (a request with no timeout, a browser that will not close) still ends; it does not wait for the next
+    output line."""
+    timeout = TIMEOUT if timeout is None else timeout
     env = dict(os.environ, TARES_E2E_PORT=str(port(suite, all_suites)))
     shots = os.environ.get("E2E_SHOTS")
     if shots:
@@ -79,20 +86,30 @@ def run(suite, all_suites):
     print(f"== {suite} (port {env['TARES_E2E_PORT']}) ==", flush=True)
     fails = []
     started = time.time()
-    p = subprocess.Popen(["node", os.path.join("tests", f"{suite}.e2e.cjs")], cwd=UI, env=env,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+    p = subprocess.Popen(["node", os.path.join("tests", f"{suite}.e2e.cjs")], cwd=ui, env=env,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace",
+                         start_new_session=True)
+    timed_out = threading.Event()
+
+    def stop():
+        timed_out.set()
+        try:
+            os.killpg(p.pid, signal.SIGKILL)  # node and the daemons and browsers it started
+        except ProcessLookupError:
+            pass
+
+    timer = threading.Timer(timeout, stop)
+    timer.start()
     try:
-        deadline = started + TIMEOUT
         for line in p.stdout:
             print(line, end="", flush=True)
             if FAIL_LINE.match(line):
                 fails.append(line.strip())
-            if time.time() > deadline:
-                raise subprocess.TimeoutExpired(p.args, TIMEOUT)
-        rc = p.wait(timeout=max(1, deadline - time.time()))
-    except subprocess.TimeoutExpired:
-        p.kill()
-        print(f"TIMEOUT: {suite} ran over {TIMEOUT}s", flush=True)
+        rc = p.wait()
+    finally:
+        timer.cancel()
+    if timed_out.is_set():
+        print(f"TIMEOUT: {suite} ran over {timeout}s", flush=True)
         rc = 124
     print(f"-- {suite}: exit {rc}, {len(fails)} FAIL line(s), {time.time() - started:.0f}s", flush=True)
     return rc, fails

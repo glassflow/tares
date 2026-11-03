@@ -107,6 +107,7 @@ ck("job e2e: runs tests/ci_e2e.py for each shard of its matrix",
 of = int(re.search(r"--of (\d+)", e2e_job).group(1)) if "--of" in e2e_job else 0
 ck("job e2e: the matrix lists shards 1 to N for --of N",
    re.search(r"shard: \[" + ", ".join(str(i) for i in range(1, of + 1)) + r"\]", e2e_job) is not None, f"--of {of}")
+ck("job e2e: has a timeout-minutes, so a hang does not run for the 6 hour default", re.search(r"^\s+timeout-minutes: \d+", e2e_job, re.M) is not None)
 ck("job e2e: screenshots are uploaded only when the run fails", "if: failure()" in e2e_job and "upload-artifact" in e2e_job)
 
 import sys

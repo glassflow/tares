@@ -86,6 +86,8 @@ jobs:
     name: e2e (${{ matrix.shard }}/2)
     # Pinned: Playwright does not install Chromium on the Ubuntu that ubuntu-latest points at now.
     runs-on: ubuntu-24.04
+    # The runner kills a silent suite after 10 minutes; this stops the job itself if something else hangs.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

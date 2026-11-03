@@ -234,7 +234,7 @@ function cleanEnv(extra) {
       // links
       await openLive();
       await waiting.first().getByTestId("review-title").click();
-      await page.waitForLoadState("networkidle");
+      await page.waitForURL(new RegExp(`/projects/${ids["project-x"]}/tickets/T1$`));
       ck(`${tag("links")}: a title opens its ticket inside its project`, new URL(page.url()).pathname === `/projects/${ids["project-x"]}/tickets/T1`, page.url());
       await ctx.close();
     }
