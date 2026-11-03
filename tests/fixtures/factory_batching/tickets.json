@@ -3,6 +3,8 @@
  "linear": null,
  "tickets": [
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -40,6 +42,8 @@
    "working_doc_title": "Working: ticket 0"
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [
     "T1"
@@ -67,6 +71,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -98,6 +104,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -123,6 +131,8 @@
    "working_doc_title": "Working: ticket 3"
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -160,6 +170,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [
     "T5"
    ],
@@ -189,6 +201,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -220,6 +234,8 @@
    "working_doc_title": "Working: ticket 6"
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -245,6 +261,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -282,6 +300,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [
     "T9"
    ],
@@ -311,6 +331,8 @@
    "working_doc_title": "Working: ticket 9"
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -342,6 +364,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -367,6 +391,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -404,6 +430,8 @@
    "working_doc_title": "Working: ticket 12"
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [
     "T13"
    ],
@@ -433,6 +461,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -464,6 +494,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -489,6 +521,8 @@
    "working_doc_title": "Working: ticket 15"
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -526,6 +560,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [
     "T17"
    ],
@@ -555,6 +591,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -586,6 +624,8 @@
    "working_doc_title": "Working: ticket 18"
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -611,6 +651,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -648,6 +690,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [
     "T21"
@@ -675,6 +719,8 @@
    "working_doc_title": "Working: ticket 21"
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -706,6 +752,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -731,6 +779,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -768,6 +818,8 @@
    "working_doc_title": "Working: ticket 24"
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [
     "T25"
    ],
@@ -797,6 +849,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -828,6 +882,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -853,6 +909,8 @@
    "working_doc_title": "Working: ticket 27"
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [],
    "depends_on": [],
    "holder": null,
@@ -890,6 +948,8 @@
    "working_doc_title": null
   },
   {
+   "assignee": null,
+   "assignee_raw": null,
    "blocked_by": [
     "T29"
    ],

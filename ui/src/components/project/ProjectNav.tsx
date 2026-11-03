@@ -58,6 +58,7 @@ export default function ProjectNav({ ctx }: { ctx: Ctx }) {
     ...(ctx.s.sessions ? [{ v: { kind: "sessions" }, label: "Sessions" } as Entry] : []),
     { v: { kind: "docs" }, label: "Docs" },
     { v: { kind: "tickets" }, label: "Tickets" },
+    { v: { kind: "grants" }, label: "Grants" },
     { v: { kind: "claude" }, label: "Claude Code" },
   ];
   const settings: Entry[] = SETTINGS.map(([k, label]) => ({ v: { kind: "settings", name: k }, label }));

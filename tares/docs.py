@@ -14,6 +14,8 @@ This module validates what the API and the MCP tools hand the store.
 """
 from __future__ import annotations
 
+import re
+
 DOC_KINDS = {
     "spec": "what is built and why",
     "plan": "milestones and the order of work",
@@ -38,6 +40,15 @@ GLOBAL_DOCS = {
                "# Memory\n\n"
                "Facts and preferences that hold across projects. One line each, newest last.\n\n"),
 }
+# A person's own AGENTS.md and memory (TR-624): the same two docs as above, one pair per person,
+# made with the person's first line. They belong to the person, join no project and are listed
+# only to them. Not in DOC_KINDS: a project cannot be given one. {name: (doc kind, title)}
+PERSONAL_DOCS = {
+    "agents": ("personal_agents", "Your AGENTS.md"),
+    "memory": ("personal_memory", "Your memory"),
+}
+PERSONAL_CONFLICT = ("These add to the team rules above; when they conflict, the team rule "
+                     "wins.")
 # The grants for every project of a tares-factory crew (TR-419): on the cell, made with the first
 # grant, and included in the projects that read their grants (not in every project, like the two
 # above: only a crew-built project has grants).
@@ -46,21 +57,55 @@ GRANTS_DOC = ("Grants (all projects)",
               "What the person allows a tares-factory crew to do in every project, in their own "
               "words with the day they said it. Only the person's words become a grant.\n\n")
 MAX_LINE = 500
+# A person's own AGENTS.md or memory is read into every session they start, so it has a ceiling of
+# its own, well under MAX_DOC_BYTES.
+MAX_PERSONAL_BYTES = 32 * 1024
 
 
-def append_line(body: str, text) -> tuple[str, bool]:
+def read_all_text(data: dict) -> str:
+    """What read_global_docs hands a session, from the /api/docs/global answer: the team
+    AGENTS.md, the team memory, then the caller's own rules (with the line saying the team's win)
+    and their own memory. A personal section is left out while its doc is empty."""
+    parts = [d["body"].rstrip() for d in (data.get("agents"), data.get("memory")) if d]
+    who = (data.get("person") or {}).get("name") or ""
+    personal = data.get("personal") or {}
+    rules = ((personal.get("agents") or {}).get("body") or "").strip()
+    memory = ((personal.get("memory") or {}).get("body") or "").strip()
+    if rules:
+        parts.append(f"# Your rules ({who})\n\n{PERSONAL_CONFLICT}\n\n{rules}")
+    if memory:
+        parts.append(f"# Your memory ({who})\n\n{memory}")
+    return "\n\n".join(parts)
+
+
+_ADDED_NOTE = re.compile(r" \(added by .+, \d{4}-\d{2}-\d{2}\)$")
+
+
+def strip_added_note(text: str) -> str:
+    """A line without the " (added by who, date)" note a shared line carries."""
+    return _ADDED_NOTE.sub("", text)
+
+
+def append_line(body: str, text, note: str = "", limit: int | None = None) -> tuple[str, bool]:
     """(the body with `- text` added at the end, whether it changed). A line already there is
-    not added twice."""
+    not added twice, whoever added it and when: `note` (" (added by Kiran, 2026-10-21)") is
+    kept out of that comparison, and one on the new line is dropped before it is compared
+    or stored. With `limit` (bytes), a line that would take the body over it is refused."""
     line = " ".join(str(text or "").split())
     if not line:
         raise DocError("say what to add: one line")
     if len(line) > MAX_LINE:
         raise DocError(f"the line is {len(line)} characters; keep it to {MAX_LINE}")
-    entry = f"- {line[2:].strip() if line.startswith('- ') else line}"   # one bullet marker, not the dashes of a flag
-    if entry in body.splitlines():
+    # one bullet marker, not the dashes of a flag
+    entry = _ADDED_NOTE.sub("", f"- {line[2:].strip() if line.startswith('- ') else line}")
+    if entry in {_ADDED_NOTE.sub("", x) for x in body.splitlines()}:
         return body, False
     sep = "" if not body or body.endswith("\n") else "\n"
-    return f"{body}{sep}{entry}\n", True
+    out = f"{body}{sep}{entry}{note}\n"
+    if limit is not None and len(out.encode()) > limit:
+        raise DocError(f"this doc is full: {limit // 1024} KB at most, and this line would take it "
+                       f"to {len(out.encode()) // 1024 + 1} KB")
+    return out, True
 
 TICKET_STATUSES = ("todo", "in_progress", "done", "canceled")
 TICKET_OWNERS = ("tares", "linear", "github")

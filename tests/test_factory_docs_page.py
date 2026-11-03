@@ -226,6 +226,12 @@ async def main():
                and rules2["changed"] == "Changed by you, just now", rules2["changed"])
             r = await cx.post(rules["add"]["path"], json={"text": "Name the ticket in each commit.", "by": "console"})
             ck("a duplicate shared line is refused (added false)", r.json()["added"] is False, r.text)
+            body = store.get_doc(None, rules["id"])["body"]
+            store.update_doc(rules["id"], body=body + "- Ask before you delete a branch. (added by Sam Ops, 2026-11-01)\n",
+                             by="crew-reviewer")
+            ck("a shared line shows without the note of who added it (the header says who changed it)",
+               (await doc_of(cx, rules["id"]))["lines"][-1]["text"] == "Ask before you delete a branch.",
+               (await doc_of(cx, rules["id"]))["lines"][-1])
             r = await cx.post("/api/docs/global/memory/lines", json={"text": "Alex prefers short PRs.", "by": "console"})
             a = (await cx.get("/api/factory/docs")).json()
             ck("the shared memory shows the line",

@@ -357,6 +357,8 @@ async def main():
         eq("merge_options leaves out the service itself", "service-a" in s["merge_options"], False)
         ck("and offers the others", {"edge-proxy", "docs-site"} <= set(s["merge_options"]), s["merge_options"])
         eq("repo_options are the repos GitHub sent", s["repo_options"], [REPO])
+        # a second person, so a key bound to nobody keeps its own name (while `local` is alone it acts as them)
+        store.create_person("Sam Ops")
         key = (await cx.post("/api/keys", json={"name": "ops", "scopes": ["admin"]})).json()
         r = await put("service-a", {"display_name": "Service A", "repos": [REPO]},
                       headers={"Authorization": f"Bearer {key['secret']}"})

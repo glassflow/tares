@@ -293,13 +293,25 @@ class Runtime:
         print(f"taresd: refused a delivery to {source!r}: {reason}")
 
     async def ingest(self, token: str, payload, bypass_cooldown: bool = False,
-                     headers: dict | None = None) -> int:
+                     headers: dict | None = None, stamp_person: bool = False,
+                     person_id: str | None = None) -> int:
+        """Push events into a source. `stamp_person` is set by the HTTP route, which knows the
+        credential: a connector that records people's sessions (STAMPS_PERSON) gets
+        `tares_person=<person_id>` on every event, or none when `person_id` is None. The sender
+        cannot set it: the connector builds its labels from fixed fields, so the label comes only
+        from the credential. Calls from inside the cell (no credential) leave it off."""
         cfg = self._push_cfg(token)   # token may be the ingest_key or the source name
         self._ensure_push_wins(cfg)   # first push flips a tail source to push mode (no double-ingest)
         conn = build_connector(cfg, self.store)
+        if stamp_person and getattr(conn, "STAMPS_PERSON", False):
+            conn.person_id = person_id   # the connector files what it records under this person
         # a connector that reads its event name from a header (GitHub) asks for them
         envs = (conn.map_payload(payload, headers=headers or {})
                 if getattr(conn, "WANTS_HEADERS", False) else conn.map_payload(payload))
+        if stamp_person and getattr(conn, "STAMPS_PERSON", False):
+            for e in envs:
+                if person_id:
+                    e.labels["tares_person"] = person_id
         return await self._store_envelopes(cfg.name, envs, bypass_cooldown=bypass_cooldown)
 
     async def ingest_otlp(self, source_name: str, signal: str, body) -> int:

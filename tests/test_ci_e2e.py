@@ -49,5 +49,14 @@ try:
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 
+# no suite's range (its port, +1, +2 and the MCP port +20) holds a port fetch refuses
+many = [f"s{i:02d}" for i in range(60)]
+ranges = [(ci_e2e.port(s, many), ci_e2e.port(s, many) + ci_e2e.PORT_STEP) for s in many]
+ck("no suite's range holds a blocked port, even with 60 suites",
+   not any(lo <= b < hi for lo, hi in ranges for b in {10080}), ranges)
+ck("the ranges do not overlap and stay in list order",
+   all(a[1] <= b[0] for a, b in zip(ranges, ranges[1:])), ranges)
+ck("a short list keeps its first ports as before", [ci_e2e.port(s, many) for s in many[:3]] == [9000, 9040, 9080])
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

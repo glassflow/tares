@@ -11,7 +11,7 @@ applied after building: roots are read in pages until enough threads match.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .config import agent_name_from_url, slack_channel_from_url
 
@@ -205,3 +205,30 @@ def project_timeline(store, project: str, limit: int = 50, before: datetime | No
             break
     return {"threads": threads,
             "next_before": cursor.isoformat() if more and cursor is not None else None}
+
+
+def _utc(v) -> datetime:
+    if isinstance(v, str):
+        v = datetime.fromisoformat(v.replace("Z", "+00:00"))
+    return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+
+
+def override_events(overrides: list[dict], before: datetime | None,
+                    next_before: str | None) -> list[dict]:
+    """The hand-overs pushed through without every sign-off that belong on one page of the
+    timeline, oldest first (TR-640). A page covers [next_before, before): threads there are
+    older than `before` and not older than `next_before`, which is the next page's `before`.
+    The first page has no `before`, so it takes everything newer than its oldest thread, and the
+    last page has no `next_before`, so it takes everything older. A time sits on exactly one page."""
+    hi = _utc(before) if before else None
+    lo = _utc(next_before) if next_before else None
+    out = []
+    for o in overrides:
+        at = _utc(o["at"])
+        if (hi is not None and at >= hi) or (lo is not None and at < lo):
+            continue
+        who = o.get("by_label") or (o.get("person") or {}).get("name")
+        out.append({"kind": "handover_override", "at": o["at"], "reason": o["reason"], "by": who,
+                    "text": "Handed to the crew without every area owner's sign-off: "
+                            + o["reason"]})
+    return out

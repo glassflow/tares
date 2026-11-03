@@ -219,7 +219,7 @@ async def main():
                                               headers={"Authorization": f"Bearer {TOKEN}"})
     m._cx = mf._cx = mk
     store = app.state.store
-    fx = factory_api.register(FastAPI(), store, SimpleNamespace(cc_source=lambda: "claude_code"))
+    fx = factory_api.register(FastAPI(), store, SimpleNamespace(cc_source=lambda: "claude_code", hidden_ids=lambda: set()))
 
     async def get_home(cx):
         fh._cache.clear()

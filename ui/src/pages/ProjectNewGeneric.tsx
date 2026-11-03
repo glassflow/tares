@@ -61,11 +61,18 @@ export default function ProjectNewGeneric() {
   };
   const [models, setModels] = useState<string[]>([]);
   const [defaultModel, setDefaultModel] = useState("");
+  // any configured provider lets the agent run; the box below only offers a quick Anthropic key
   const [keyStatus, setKeyStatus] = useState<{ configured: boolean; source: string }>();
   const [keyInput, setKeyInput] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyErr, setKeyErr] = useState<string>();
-  const loadKey = () => api.anthropicKeyStatus().then((k) => setKeyStatus(k)).catch(() => setKeyStatus(undefined));
+  const loadKey = () => api.builtinAgents().then((r) => {
+    const def = r.providers.find((p) => p.id === r.default_provider);
+    setKeyStatus({ configured: r.key_configured, source: def?.name ?? "" });
+    // the model picker offers what the default provider lists, and its default model
+    setModels(def ? def.models : r.models);
+    setDefaultModel((r.default_provider && r.default_models[r.default_provider]) || r.default_model);
+  }).catch(() => setKeyStatus(undefined));
   const saveKey = async () => {
     setKeyBusy(true); setKeyErr(undefined);
     try { await api.setAnthropicKey(keyInput.trim()); setKeyInput(""); await loadKey(); }
@@ -75,7 +82,6 @@ export default function ProjectNewGeneric() {
 
   useEffect(() => {
     loadKey();
-    api.builtinAgents().then((r) => { setModels(r.models); setDefaultModel(r.default_model); }).catch(() => {});
     // by key, so a hidden template (one a control plane creates over the API) still renders
     // its form when a person edits the project built on it
     api.template(key).then(async (found) => {
@@ -150,7 +156,7 @@ export default function ProjectNewGeneric() {
                 {done ? (
                   <p className="help" style={{ margin: "2px 0 0" }}>
                     {keyStep
-                      ? <>a model provider is set{keyStatus?.source ? ` (${keyStatus.source})` : ""}; the agent can run. Change it under Settings, Model providers.</>
+                      ? <>{keyStatus?.source ? `${keyStatus.source} is the default model provider` : "a model provider is set"}; the agent can run. Change it under Settings, Model providers.</>
                       : <>running: {Array.from(new Set(Object.values(detected?.found ?? {}).map((v) => v.split(" (")[0].split(" publishes")[0]))).join(", ")}; the fields below were filled from it</>}
                   </p>
                 ) : (
@@ -201,7 +207,7 @@ export default function ProjectNewGeneric() {
               ) : k === "model" ? (
                 <Picker value={vals[k] ?? ""} onChange={(v) => setVals({ ...vals, [k]: v })}
                         options={["", ...models.filter((m) => m !== defaultModel)]}
-                        labels={{ "": defaultModel ? `${defaultModel} · instance default` : "instance default" }}
+                        labels={{ "": defaultModel ? `${defaultModel} · ${keyStatus?.source || "instance"} default` : "instance default" }}
                         ariaLabel="model" />
               ) : p.choices?.length ? (
                 <Picker value={vals[k] ?? ""} onChange={(v) => setVals({ ...vals, [k]: v })}

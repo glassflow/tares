@@ -92,6 +92,26 @@ CREATE TABLE IF NOT EXISTS api_keys (
   last_used_at TIMESTAMPTZ,
   revoked_at   TIMESTAMPTZ
 );
+CREATE TABLE IF NOT EXISTS people (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  email      TEXT,
+  emails     TEXT,
+  github     TEXT,
+  is_admin   BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ,
+  created_via TEXT
+);
+-- Who is on a project besides its lead (usecases.lead_person_id): reason 'manual' (the lead or
+-- the system added them) or 'ticket' (they hold one of its tickets). The lead is not a row.
+CREATE TABLE IF NOT EXISTS project_members (
+  project   TEXT,
+  person_id TEXT,
+  added_by  TEXT,
+  added_at  TIMESTAMPTZ,
+  reason    TEXT,
+  PRIMARY KEY (project, person_id)
+);
 CREATE TABLE IF NOT EXISTS catalog_sources (
   name       TEXT PRIMARY KEY,
   type       TEXT,
@@ -361,6 +381,11 @@ _MIGRATIONS = [
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS model TEXT",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS slack_channel TEXT",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS webhook_url TEXT",
+    # whose transcript an Ask session is; NULL = no person (Slack, the system credential, rows from
+    # before this column), which only the system credential sees once auth is on
+    "ALTER TABLE ask_sessions ADD COLUMN IF NOT EXISTS person_id TEXT",
+    # the project ids a read was about (comma-joined), so the log can hide a private project's reads
+    "ALTER TABLE query_log ADD COLUMN IF NOT EXISTS project TEXT",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS webhook_token TEXT",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS mcp_servers JSON",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS external_tools JSON",
@@ -498,6 +523,22 @@ _MIGRATIONS = [
     "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS repo TEXT",
     # Who last changed a shared skill, when a person did it from a page (TR-753); NULL otherwise
     "ALTER TABLE shared_skills ADD COLUMN IF NOT EXISTS updated_by TEXT",
+    # The person a key belongs to (a people.id); NULL = a key made before people existed, or one
+    # nobody has bound yet. The cell reads who is calling from this, never from a header.
+    "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS person_id TEXT",
+    # A project's lead (a people.id; NULL = nobody, as for every project made before people) and
+    # its scope, 'team' or 'private'. No DEFAULT for the same reason as paused above; NULL scope
+    # reads as 'team'.
+    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS lead_person_id TEXT",
+    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS scope TEXT",
+    # The person a doc belongs to (a people.id): a personal AGENTS.md or memory (TR-624). NULL =
+    # a doc of the cell, as every doc made before this column.
+    "ALTER TABLE docs ADD COLUMN IF NOT EXISTS owner TEXT",
+    # Who a ticket is for (TR-631), wherever it lives: a people.id, or when nobody on the cell
+    # matches, the assignee as the source named them (an email, a name or a GitHub login). Not
+    # `owner`, which says where the ticket lives.
+    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS assignee_person_id TEXT",
+    "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS assignee_raw TEXT",
 ]
 
 _FILTER_COLS = {"event_type", "source", "text", "key_value"}
@@ -610,6 +651,46 @@ def _scope_sql(scope) -> tuple[str, list]:
                 f"json_extract_string(labels, '$.agent') IN ({', '.join(['?'] * len(agents))}))")
         params += agents
     return sql + ")", params
+
+
+def _exclude_sql(exclude, sources=None, sessions=None) -> tuple[str, list]:
+    """Rows that belong to projects the caller cannot see -> ('AND ...' SQL, params). `exclude` is
+    {"ids": [project ids], "names": [project names], "shared": [the shared finding and
+    memory sources, or None for every source]}, or None/empty for no filter (the common
+    case: no private project, nothing added to the query). A row is left out when its
+    `tares_project` label names one of them, when its session (key) is linked to one in
+    project_sessions, or when a shared finding or memory row was recorded in one (payload
+    `project`). A row with none of those is kept. `sources` is what the query reads: the payload
+    test is left out when none of them is a shared source. `sessions` is the keys linked in
+    project_sessions to those projects (Store._exclude_sql reads them from the state, which may
+    be Postgres while the events are in DuckDB)."""
+    if not exclude or not (exclude.get("ids") or exclude.get("names")):
+        return "", []
+    ids = list(exclude.get("ids") or [])
+    both = sorted({v.lower() for v in [*ids, *(exclude.get("names") or [])]})
+    ph = lambda n: ", ".join(["?"] * n)
+    # NOT COALESCE(x IN (...), FALSE) keeps a row with no value: x is NULL, so is the test. It
+    # also leaves the NULLs as NULLs, which is cheaper than COALESCE(x, '') on every row.
+    # The payload is the dear column to open, so it is only looked into for the shared sources
+    # that can carry another project's rows (`shared`); no list given means every source.
+    shared = exclude.get("shared")
+    if shared is not None and sources is not None:
+        shared = [x for x in shared if x in sources]
+    if shared is None:
+        pay, pparams = (f" AND NOT COALESCE(json_extract_string(payload, '$.project') "
+                        f"IN ({ph(len(ids))}), FALSE)"), ids
+    elif shared:
+        pay = (f" AND NOT COALESCE(CASE WHEN source IN ({ph(len(shared))}) THEN "
+               f"json_extract_string(payload, '$.project') IN ({ph(len(ids))}) END, FALSE)")
+        pparams = [*shared, *ids]
+    else:
+        pay, pparams = "", []
+    sql = (f" AND NOT COALESCE(lower(json_extract_string(labels, '$.tares_project')) "
+           f"IN ({ph(len(both))}), FALSE){pay}")
+    sessions = list(sessions or [])
+    if sessions:
+        sql += f" AND NOT COALESCE(key_value IN ({ph(len(sessions))}), FALSE)"
+    return sql, [*both, *pparams, *sessions]
 
 
 def _cgroup_mem_bytes() -> int | None:
@@ -771,6 +852,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def _upgrade(self) -> None:
         """The data upgrades every open runs; each is idempotent."""
         self._rename_query_log_scope()
+        self._query_log_projects()
         self._fold_views()
         self._migrate_claude_code_repo_label()
         self._normalize_projects()
@@ -779,6 +861,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         self._skills_upgrade()
         self._factory_kind_upgrade()
         self._factory_upgrade()
+        self._people_upgrade()
         self._claude_usage_fill()
         self._challenges_fill()
         self._init_source_stats()
@@ -800,6 +883,36 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return {r[0] for r in con.execute(
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_schema = current_schema()").fetchall()}
+
+    def _query_log_projects(self) -> None:
+        """Reads logged before the project column: the ones that named a project in their selector
+        (`tares_project=<id or name>`) get it, so the log still hides a private project's. The rest
+        cannot be told apart and stay unattributed. A row that named something no project answers
+        to is marked with '' (read like no project everywhere) so later boots do not look at it
+        again."""
+        rows = self.sc.execute(
+            "SELECT id, key_value FROM query_log WHERE project IS NULL "
+            "AND key_value LIKE '%tares_project=%'").fetchall()
+        if not rows:
+            return
+        by_ref: dict[str, list[str]] = {}
+        for u in self.list_projects():
+            for ref in {u["id"].lower(), u["name"].lower()}:
+                by_ref.setdefault(ref, []).append(u["id"])
+        for qid, key in rows:
+            m = re.search(r"tares_project=([^,]*)", key or "")
+            ref = m.group(1).strip().lower() if m else ""
+            ids = by_ref.get(ref, []) if ref else []
+            self.sc.execute("UPDATE query_log SET project = ? WHERE id = ?",
+                             [",".join(ids), qid])
+
+    def _people_upgrade(self) -> None:
+        """The person `local` always exists: the one person of a cell with auth off, and the one
+        an unbound key acts as while nobody else is on the cell."""
+        self.sc.execute(
+            "INSERT INTO people (id, name, email, emails, github, is_admin, created_at, created_via) "
+            "SELECT 'local', 'You', NULL, '[]', NULL, TRUE, ?, 'boot' "
+            "WHERE NOT EXISTS (SELECT 1 FROM people WHERE id = 'local')", [now_utc()])
 
     def _columns(self, table: str) -> set:
         con = self.con if table in state_db.EVENT_TABLES else self.sc
@@ -1407,7 +1520,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     # ── reads ───────────────────────────────────────────────────────────────
     def read_window(self, sources: list[str], key: str | None, since: datetime, cap: int = 12,
                          filters: list | None = None, where: dict | None = None,
-                         include_payload: bool = False, scope: dict | None = None):
+                         include_payload: bool = False, scope: dict | None = None,
+                         exclude: dict | None = None, owners: set | None = None,
+                         shared: list[str] | None = None):
         """Rows for an entity across sources, time-ordered: (event_time, source, text, labels), plus
         the raw lossless `payload` as a 5th column when `include_payload` is set.
 
@@ -1420,18 +1535,33 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         stays lossless; this bound is a read-path summary, matching what an SRE actually wants.
         `include_payload` pulls the full stored record per row (bounded by the same cap) for callers
         that need fidelity beyond the summary `text`. `scope` narrows the shared findings and
-        memory sources to one project's rows (see _scope_sql).
+        memory sources to one project's rows (see _scope_sql). `exclude` drops the rows of the
+        projects the caller cannot see (see _exclude_sql). When `owners` is a set, the ids of the
+        projects the returned rows belong to are added to it (see _row_owners); `shared` names the
+        shared finding and memory sources, the only ones whose payload `project` counts.
         """
         cols = "event_time, source, text, labels" + (", payload" if include_payload else "")
+        ocols: list = []
+        if owners is not None:
+            # the payload is only opened for the shared sources, as _exclude_sql does
+            shared = [x for x in (shared or []) if x in sources]
+            if shared:
+                cols += (", key_value, CASE WHEN source IN "
+                         f"({', '.join(['?'] * len(shared))}) THEN "
+                         "json_extract_string(payload, '$.project') END")
+                ocols = shared
+            else:
+                cols += ", key_value, NULL"
         ph = ", ".join(["?"] * len(sources))
         fsql, fparams = _filter_sql(filters)
         wsql, wparams = _where_sql(where)
         ssql, sparams = _scope_sql(scope)
-        wsql, wparams = wsql + ssql, wparams + sparams
+        esql, eparams = self._exclude(exclude, sources)
+        wsql, wparams = wsql + ssql + esql, wparams + sparams + eparams
         ksql, kparams = (" AND key_value = ?", [key]) if key is not None else ("", [])
         with self._lock:
-            return self.con.execute(
-                f"SELECT {cols} FROM ("
+            rows = self.con.execute(
+                f"SELECT * FROM ("
                 f"  SELECT {cols}, "
                 f"  ROW_NUMBER() OVER (PARTITION BY source ORDER BY event_time DESC) AS rn "
                 # reference sources are declarative context — always surfaced for the matched
@@ -1439,8 +1569,54 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 f"  FROM events WHERE source IN ({ph}) "
                 f"    AND (source_type = 'reference' OR event_time >= ?){ksql}{fsql}{wsql}"
                 f") WHERE rn <= {int(cap)} ORDER BY event_time",
-                [*sources, since, *kparams, *fparams, *wparams],
+                [*ocols, *sources, since, *kparams, *fparams, *wparams],
             ).fetchall()
+        if owners is None:
+            return [r[:-1] for r in rows]
+        n = len(rows[0]) - 3 if rows else 0       # the columns asked for, before key, payload project, rn
+        owners |= self._row_owners(rows, n)
+        return [r[:n] for r in rows]
+
+    def _exclude(self, exclude, sources=None) -> tuple[str, list]:
+        """The module's _exclude_sql, with the sessions linked to the hidden projects read from
+        the state first."""
+        ids = list((exclude or {}).get("ids") or [])
+        sessions: list = []
+        if ids:
+            with self._sread:
+                sessions = [r[0] for r in self.sc.execute(
+                    f"SELECT DISTINCT session FROM project_sessions WHERE project IN "
+                    f"({', '.join(['?'] * len(ids))})", ids).fetchall()]
+        return _exclude_sql(exclude, sources, sessions)
+
+    def _row_owners(self, rows: list, n: int) -> set[str]:
+        """The ids of the projects the `rows` belong to, by the three tests _exclude_sql hides by:
+        the `tares_project` label (id or name), the payload `project` of a shared finding or
+        memory row, and the row's session (key) linked in project_sessions. Each row is its first
+        `n` columns (event_time, source, text, labels, ...), then key_value, the payload project
+        (read only for the shared sources, NULL for the rest) and the row number. Rows the caller
+        could not see were already dropped from the read."""
+        found: set[str] = set()
+        named: set[str] = set()
+        keys: set[str] = set()
+        for r in rows:
+            try:
+                tag = (json.loads(r[3]) if isinstance(r[3], str) else r[3] or {}).get("tares_project")
+            except (ValueError, AttributeError):
+                tag = None
+            if tag:
+                named.add(str(tag))
+            if r[n + 1]:
+                found.add(str(r[n + 1]))
+            if r[n]:
+                keys.add(r[n])
+        found.update(self.project_ids_named(sorted(named)))
+        if keys:
+            with self._sread:
+                found.update(x[0] for x in self.sc.execute(
+                    f"SELECT DISTINCT project FROM project_sessions WHERE session IN "
+                    f"({', '.join(['?'] * len(keys))})", sorted(keys)).fetchall())
+        return found
 
     def aggregate(self, sources: list[str], field: str | None, agg: str, since: datetime,
                   filters: list | None = None, where: dict | None = None,
@@ -2405,13 +2581,16 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return True
 
     def create_project(self, uid: str, template: str, name: str, params: dict,
-                       status: str = "active", goal: str | None = None) -> None:
+                       status: str = "active", goal: str | None = None,
+                       lead_person_id: str | None = None) -> None:
         ts = now_utc()
         with self._swrite:
             self.sc.execute(
                 "INSERT INTO usecases (id, recipe, name, params, status, created_at, updated_at, "
-                "last_error, goal) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)",
-                [uid, template, name, json.dumps(params), status, ts, ts, goal or None])
+                "last_error, goal, lead_person_id, scope) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 'team')",
+                [uid, template, name, json.dumps(params), status, ts, ts, goal or None,
+                 lead_person_id or None])
 
     def update_project(self, uid: str, params: dict | None = None, status: str | None = None,
                        last_error: str | None = "", name: str | None = None,
@@ -2437,21 +2616,89 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def _project_row(r) -> dict:
         return {"id": r[0], "template": r[1], "name": r[2], "params": json.loads(r[3] or "{}"),
                 "status": r[4], "created_at": r[5], "updated_at": r[6], "last_error": r[7],
-                "goal": r[8], "kind": r[9]}
+                "goal": r[8], "kind": r[9], "lead_person_id": r[10],
+                "scope": r[11] or "team"}
 
     def list_projects(self) -> list[dict]:
         with self._sread:
             rows = self.sc.execute(
                 "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
-                "goal, kind FROM usecases ORDER BY created_at").fetchall()
+                "goal, kind, lead_person_id, scope FROM usecases ORDER BY created_at").fetchall()
         return [self._project_row(r) for r in rows]
+
+    def private_projects(self) -> list[dict]:
+        """The private projects, as {id, name, scope}: the one small query every cell-wide read
+        runs to learn whether it has anything to hide (usually it has not)."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT id, name FROM usecases WHERE scope = 'private'").fetchall()
+        return [{"id": r[0], "name": r[1], "scope": "private"} for r in rows]
 
     def get_project(self, uid: str) -> dict | None:
         with self._sread:
             r = self.sc.execute(
                 "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
-                "goal, kind FROM usecases WHERE id = ?", [uid]).fetchone()
+                "goal, kind, lead_person_id, scope FROM usecases WHERE id = ?", [uid]).fetchone()
         return self._project_row(r) if r else None
+
+    # ── who a project belongs to: its lead, its scope and its members (TR-623) ──
+    def set_project_lead(self, uid: str, person_id: str | None) -> None:
+        with self._swrite:
+            self.sc.execute("UPDATE usecases SET lead_person_id = ? WHERE id = ?",
+                             [person_id or None, uid])
+
+    def set_project_scope(self, uid: str, scope: str) -> None:
+        if scope not in ("team", "private"):
+            raise ValueError("scope is team or private")
+        with self._swrite:
+            self.sc.execute("UPDATE usecases SET scope = ? WHERE id = ?", [scope, uid])
+
+    def add_project_member(self, uid: str, person_id: str, added_by: str | None = None,
+                           reason: str = "manual") -> bool:
+        """Put a person on the project. True when they were added, False when they already were
+        a member (a second add changes nothing, the first reason stays)."""
+        if reason not in ("manual", "ticket"):
+            raise ValueError("reason is manual or ticket")
+        with self._swrite:
+            if self.sc.execute("SELECT 1 FROM project_members WHERE project = ? AND person_id = ?",
+                                [uid, person_id]).fetchone():
+                return False
+            self.sc.execute(
+                "INSERT INTO project_members (project, person_id, added_by, added_at, reason) "
+                "VALUES (?, ?, ?, ?, ?)", [uid, person_id, added_by or None, now_utc(), reason])
+        return True
+
+    def remove_project_member(self, uid: str, person_id: str) -> bool:
+        """True when they were a member (a stored one; the lead is not)."""
+        with self._swrite:
+            hit = self.sc.execute("SELECT 1 FROM project_members WHERE project = ? "
+                                   "AND person_id = ?", [uid, person_id]).fetchone()
+            self.sc.execute("DELETE FROM project_members WHERE project = ? AND person_id = ?",
+                             [uid, person_id])
+        return bool(hit)
+
+    def list_project_members(self, uid: str) -> list[dict]:
+        """The people on the project besides its lead, oldest first: {person_id, added_by,
+        added_at, reason}."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT person_id, added_by, added_at, reason FROM project_members "
+                "WHERE project = ? ORDER BY added_at, person_id", [uid]).fetchall()
+        return [{"person_id": r[0], "added_by": r[1], "added_at": r[2], "reason": r[3]}
+                for r in rows]
+
+    def is_project_member(self, uid: str, person_id: str | None) -> bool:
+        """The project's lead, or a person on its member list."""
+        if not person_id:
+            return False
+        with self._sread:
+            lead = self.sc.execute("SELECT lead_person_id FROM usecases WHERE id = ?",
+                                    [uid]).fetchone()
+            if lead and lead[0] == person_id:
+                return True
+            return bool(self.sc.execute(
+                "SELECT 1 FROM project_members WHERE project = ? AND person_id = ?",
+                [uid, person_id]).fetchone())
 
     def set_project_kind(self, uid: str, kind: str | None) -> None:
         with self._swrite:
@@ -2483,6 +2730,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             self.sc.execute("DELETE FROM subscriptions WHERE project = ?", [uid])
             self.sc.execute("DELETE FROM usecase_objects WHERE usecase_id = ?", [uid])
             self.sc.execute("DELETE FROM project_wiring WHERE project = ?", [uid])
+            self.sc.execute("DELETE FROM project_members WHERE project = ?", [uid])
             self._forget_unused_skills()   # a skill another project uses stays
             self._forget_unused_docs()     # so does a doc
             self.sc.execute("DELETE FROM tickets WHERE project = ?", [uid])
@@ -2629,27 +2877,29 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                              "AND kind = 'skill' AND name = ?", [project, name])
 
     # ── docs and tickets (TR-403): validated by tares/docs.py before they get here ──
-    _DOC_COLS = "d.id, d.kind, d.title, d.made_by, d.updated_by, d.created_at, d.updated_at"
+    _DOC_COLS = ("d.id, d.kind, d.title, d.made_by, d.updated_by, d.created_at, d.updated_at, "
+                 "d.owner")
 
     @staticmethod
     def _doc_row(r, body: str | None = None) -> dict:
         out = {"id": r[0], "kind": r[1], "title": r[2], "made_by": r[3], "updated_by": r[4],
-               "created_at": r[5], "updated_at": r[6]}
+               "created_at": r[5], "updated_at": r[6], "owner": r[7]}
         if body is not None:
             out["body"] = body
         return out
 
     def create_doc(self, project: str | None, kind: str, title: str, body: str,
-                   by: str = "") -> str:
+                   by: str = "", owner: str | None = None) -> str:
         """A new doc on the cell, included in `project` (None: on the cell only, for every
-        project to include). Returns its id."""
+        project to include). `owner` (a people.id) makes it that person's own: never included in
+        a project, listed only to them. Returns its id."""
         doc_id = "doc_" + uuid.uuid4().hex[:10]
         ts = now_utc()
         with self._swrite:
             self.sc.execute(
                 "INSERT INTO docs (id, kind, title, body, made_by, updated_by, created_at, "
-                "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [doc_id, kind, title, body, project, by or None, ts, ts])
+                "updated_at, owner) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [doc_id, kind, title, body, project, by or None, ts, ts, owner])
             if project:
                 self._use_doc(project, doc_id)
         return doc_id
@@ -2679,7 +2929,16 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             users = [u[0] for u in self.sc.execute(
                 "SELECT usecase_id FROM usecase_objects WHERE kind = 'doc' AND name = ? "
                 "ORDER BY usecase_id", [doc_id]).fetchall()]
-        return {**self._doc_row(r, r[7]), "projects": users}
+        return {**self._doc_row(r, r[8]), "projects": users}
+
+    def personal_doc(self, person_id: str, kind: str) -> dict | None:
+        """The doc of `kind` that belongs to this person, with its body, or None until they
+        write the first line."""
+        with self._sread:
+            r = self.sc.execute(f"SELECT {self._DOC_COLS}, d.body FROM docs d WHERE d.owner = ? "
+                                 "AND d.kind = ? ORDER BY d.created_at LIMIT 1",
+                                 [person_id, kind]).fetchone()
+        return self._doc_row(r, r[8]) if r else None
 
     def doc_titles(self, project: str, doc_ids: list[str]) -> dict[str, str]:
         """The titles of those docs the project includes, in one query (TR-657); a doc the
@@ -2696,25 +2955,29 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def list_docs(self, project: str, kind: str | None = None) -> list[dict]:
         """The docs a project includes, without bodies: size in bytes instead."""
         q = (f"SELECT DISTINCT {self._DOC_COLS}, octet_length(encode(d.body)) FROM docs d "
-             "JOIN usecase_objects o ON o.kind = 'doc' AND o.name = d.id WHERE o.usecase_id = ?")
+             "JOIN usecase_objects o ON o.kind = 'doc' AND o.name = d.id WHERE o.usecase_id = ? "
+             "AND d.owner IS NULL")
         vals: list = [project]
         if kind:
             q += " AND d.kind = ?"; vals.append(kind)
         with self._sread:
             rows = self.sc.execute(q, vals).fetchall()
-        return [{**self._doc_row(r), "size": int(r[7] or 0)} for r in rows]
+        return [{**self._doc_row(r), "size": int(r[8] or 0)} for r in rows]
 
-    def list_cell_docs(self) -> list[dict]:
-        """Every doc on the cell (no bodies), with the projects that include it."""
+    def list_cell_docs(self, viewer: str | None = None) -> list[dict]:
+        """Every doc on the cell (no bodies), with the projects that include it. A personal doc
+        is listed only to its person (`viewer`, a people.id): nobody else sees it, whatever their
+        rights."""
         with self._sread:
             rows = self.sc.execute(f"SELECT {self._DOC_COLS}, octet_length(encode(d.body)) "
-                                    "FROM docs d ORDER BY d.title").fetchall()
+                                    "FROM docs d WHERE d.owner IS NULL OR d.owner = ? "
+                                    "ORDER BY d.title", [viewer or ""]).fetchall()
             users = self.sc.execute("SELECT name, usecase_id FROM usecase_objects WHERE "
                                      "kind = 'doc' GROUP BY name, usecase_id").fetchall()
         by: dict[str, list] = {}
         for n, u in users:
             by.setdefault(n, []).append(u)
-        return [{**self._doc_row(r), "size": int(r[7] or 0), "projects": sorted(by.get(r[0], []))}
+        return [{**self._doc_row(r), "size": int(r[8] or 0), "projects": sorted(by.get(r[0], []))}
                 for r in rows]
 
     def _use_doc(self, project: str, doc_id: str) -> None:
@@ -2727,8 +2990,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """A doc already on the cell, included in one more project. False when there is no such
         doc."""
         with self._sread:
-            if not self.sc.execute("SELECT 1 FROM docs WHERE id = ?", [doc_id]).fetchone():
-                return False
+            if not self.sc.execute("SELECT 1 FROM docs WHERE id = ? AND owner IS NULL",
+                                    [doc_id]).fetchone():
+                return False        # no such doc, or a person's own: those join no project
             self._use_doc(project, doc_id)
         return True
 
@@ -2753,7 +3017,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     _TICKET_COLS = ("id, project, owner, external_id, identifier, url, title, status, position, "
                     "working_doc, created_at, updated_at, milestone, depends_on, number, holder, "
-                    "stage, stage_reason, pr, repo")
+                    "stage, stage_reason, pr, repo, assignee_person_id, assignee_raw")
 
     @staticmethod
     def _ticket_row(r) -> dict:
@@ -2762,13 +3026,16 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 "position": r[8], "working_doc": r[9], "created_at": r[10], "updated_at": r[11],
                 "milestone": r[12], "depends_on": json.loads(r[13]) if r[13] else [],
                 "number": r[14], "holder": r[15], "stage": r[16], "stage_reason": r[17],
-                "pr": json.loads(r[18]) if r[18] else None, "repo": r[19]}
+                "pr": json.loads(r[18]) if r[18] else None, "repo": r[19],
+                "assignee_person_id": r[20], "assignee_raw": r[21]}
 
     def create_ticket(self, project: str, owner: str, title: str, status: str = "todo",
                       position: float | None = None, external_id: str | None = None,
                       identifier: str | None = None, url: str | None = None,
                       working_doc: str | None = None, milestone: str | None = None,
-                      depends_on: list[str] | None = None, repo: str | None = None) -> str:
+                      depends_on: list[str] | None = None, repo: str | None = None,
+                      assignee_person_id: str | None = None,
+                      assignee_raw: str | None = None) -> str:
         """A ticket at the end of the project's list unless `position` says where. It gets the
         project's next number (T1, T2, ...)."""
         tid = "tk_" + uuid.uuid4().hex[:10]
@@ -2781,11 +3048,11 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             num = self._next_ticket_number(project)
             self.sc.execute(
                 f"INSERT INTO tickets ({self._TICKET_COLS}) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [tid, project, owner, external_id, identifier, url, title, status,
                  float(position), working_doc, ts, ts, milestone,
                  json.dumps(depends_on) if depends_on else None, num, None, None, None, None,
-                 repo])
+                 repo, assignee_person_id or None, assignee_raw or None])
         return tid
 
     def update_ticket(self, tid: str, touch: bool = True, **fields) -> None:
@@ -2795,7 +3062,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         not activity."""
         allowed = {"title", "status", "position", "working_doc", "identifier", "url",
                    "external_id", "milestone", "depends_on", "holder", "stage", "stage_reason",
-                   "pr", "repo"}
+                   "pr", "repo", "assignee_person_id", "assignee_raw"}
         sets, vals = (["updated_at = ?"], [now_utc()]) if touch else ([], [])
         for col, v in fields.items():
             if col == "depends_on":
@@ -3467,59 +3734,116 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     # would couple the store's schema to the UI's message shape for no reader's benefit.
     ASK_SESSIONS_KEEP = 50   # bounded history: enough to scroll back, never a growth vector
 
-    def list_ask_sessions(self) -> list[dict]:
+    # `person_id` scopes a transcript to one person. `system=True` (the system credential, or auth
+    # off) sees every row; otherwise only the rows of `person_id`, so a caller with no person sees
+    # none. The 50-row cap counts per owner so one person cannot push another's history out.
+    def list_ask_sessions(self, person_id: str | None = None, system: bool = True) -> list[dict]:
+        where, args = ("", []) if system else (" WHERE person_id = ?", [person_id])
         with self._sread:
             rows = self.sc.execute(
-                "SELECT id, title, created_at, updated_at FROM ask_sessions "
-                "ORDER BY updated_at DESC").fetchall()
+                "SELECT id, title, created_at, updated_at FROM ask_sessions" + where +
+                " ORDER BY updated_at DESC", args).fetchall()
         return [{"id": r[0], "title": r[1], "created_at": r[2], "updated_at": r[3]} for r in rows]
 
-    def get_ask_session(self, sid: str) -> dict | None:
+    def get_ask_session(self, sid: str, person_id: str | None = None,
+                        system: bool = True) -> dict | None:
         with self._sread:
             row = self.sc.execute(
-                "SELECT id, title, state, created_at, updated_at FROM ask_sessions WHERE id = ?",
-                [sid]).fetchone()
-        if row is None:
+                "SELECT id, title, state, created_at, updated_at, person_id FROM ask_sessions "
+                "WHERE id = ?", [sid]).fetchone()
+        if row is None or not (system or (person_id is not None and row[5] == person_id)):
             return None
         return {"id": row[0], "title": row[1], "state": row[2],
                 "created_at": row[3], "updated_at": row[4]}
 
-    def upsert_ask_session(self, sid: str, title: str, state: str) -> None:
+    def upsert_ask_session(self, sid: str, title: str, state: str,
+                           person_id: str | None = None, system: bool = True) -> bool:
+        """Save a transcript; False (nothing written) when `sid` already belongs to someone the
+        caller may not see (same rule as get_ask_session). The check and the write happen under
+        one lock hold, so two saves cannot both pass the check. The owner is set on insert and
+        never changes."""
         ts = now_utc()
         with self._swrite:
+            row = self.sc.execute(
+                "SELECT person_id FROM ask_sessions WHERE id = ?", [sid]).fetchone()
+            if row is not None and not (system or (person_id is not None and row[0] == person_id)):
+                return False
             self.sc.execute(
-                "INSERT INTO ask_sessions (id, title, state, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?) "
+                "INSERT INTO ask_sessions (id, title, state, created_at, updated_at, person_id) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (id) DO UPDATE SET title = excluded.title, "
                 "state = excluded.state, updated_at = excluded.updated_at",
-                [sid, title, state, ts, ts])
+                [sid, title, state, ts, ts, person_id])
             self.sc.execute(
-                "DELETE FROM ask_sessions WHERE id NOT IN "
-                "(SELECT id FROM ask_sessions ORDER BY updated_at DESC LIMIT ?)",
-                [self.ASK_SESSIONS_KEEP])
+                "DELETE FROM ask_sessions WHERE person_id IS NOT DISTINCT FROM ? AND id NOT IN "
+                "(SELECT id FROM ask_sessions WHERE person_id IS NOT DISTINCT FROM ? "
+                "ORDER BY updated_at DESC LIMIT ?)",
+                [person_id, person_id, self.ASK_SESSIONS_KEEP])
+        return True
 
     def delete_ask_session(self, sid: str) -> bool:
         with self._swrite:
-            n = self.sc.execute("DELETE FROM ask_sessions WHERE id = ?", [sid]).fetchone()
-            # DuckDB returns the deleted-row count as a result row
-        return bool(n and n[0])
+            # RETURNING answers the same on DuckDB and Postgres (a bare DELETE gives a count row
+            # on DuckDB and no row on Postgres)
+            gone = self.sc.execute("DELETE FROM ask_sessions WHERE id = ? RETURNING id", [sid]).fetchall()
+        return bool(gone)
 
     # ── activity logs (agent-facing observability) ────────────────────────────
+    def project_ids_named(self, refs: list[str]) -> list[str]:
+        """The ids of the projects whose id or name is one of `refs` (case-insensitive); unknown
+        refs are skipped. Takes no view of who may see them: it is for attributing a read."""
+        want = {str(r).strip().lower() for r in refs if r and str(r).strip()}
+        if not want:
+            return []
+        return [u["id"] for u in self.list_projects()
+                if u["id"].lower() in want or u["name"].lower() in want]
+
+    def read_projects(self, selector: dict | None, *uids: str | None,
+                      sources: list[str] | None = None,
+                      unseen: set[str] | None = None,
+                      owners: set[str] | None = None) -> str | None:
+        """The `project` of a read for log_query: the projects it was scoped to (`uids`), the
+        one its selector names (`tares_project`) and the ones the `sources` it read are members
+        of, comma-joined; None when it was about none. `unseen` are the projects the reader
+        could not see: the read returned none of their rows, so they are left off the sources'.
+        `owners` are the projects the rows it returned belong to (read_window), which covers the
+        private rows that sit in a source no private project owns."""
+        ids = [u for u in uids if u]
+        named = (selector or {}).get("tares_project")
+        if named:
+            ids += [i for i in self.project_ids_named([named]) if i not in ids]
+        if sources:
+            member = self.source_memberships()
+            ids += [i for n in sources for i in member.get(n, [])
+                    if i not in ids and i not in (unseen or ())]
+        ids += [i for i in sorted(owners or ()) if i not in ids and i not in (unseen or ())]
+        return ",".join(ids) or None
+
     def log_query(self, qid: str, scope: str, key: str, window: str,
-                  rows_returned: int, client: str) -> None:
-        """`scope` says what was read: a trigger's name, an agent tool, "(read)" for a raw read."""
+                  rows_returned: int, client: str, project: str | None = None) -> None:
+        """`scope` says what was read: a trigger's name, an agent tool, "(read)" for a raw read.
+        `project` is the comma-joined ids of the projects it was about (see read_projects)."""
         with self._swrite:
             self.sc.execute(
                 "INSERT INTO query_log (id, scope, key_value, time_window, rows_returned, client, "
-                "queried_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [qid, scope, key, window, rows_returned, client, now_utc()],
+                "queried_at, project) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [qid, scope, key, window, rows_returned, client, now_utc(), project],
             )
 
-    def list_queries(self, limit: int = 100) -> list[dict]:
+    def list_queries(self, limit: int = 100, hide: list[str] | None = None) -> list[dict]:
+        """The read log. `hide` lists the ids of the projects the caller cannot see: a read that was
+        about one of them (its `project` column) is left out."""
+        sql, params = "", []
+        for pid in hide or []:
+            # the column is a comma-joined list; ids may carry `_`, which LIKE reads as a wildcard
+            esc = pid.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+            sql += " AND (',' || COALESCE(project, '') || ',') NOT LIKE ? ESCAPE '!'"
+            params.append(f"%,{esc},%")
         with self._sread:
             rows = self.sc.execute(
                 "SELECT id, scope, key_value, time_window, rows_returned, client, queried_at "
-                "FROM query_log ORDER BY queried_at DESC LIMIT ?", [int(limit)],
+                f"FROM query_log WHERE TRUE{sql} ORDER BY queried_at DESC LIMIT ?",
+                [*params, int(limit)],
             ).fetchall()
         return [
             {"id": r[0], "scope": r[1], "key": r[2], "window": r[3],
@@ -3650,11 +3974,14 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 [*sources, since, *kparams, *fparams, *wparams]).fetchone()
         return row[0] if row else None
 
-    def list_dispatches(self, limit: int = 100) -> list[dict]:
+    def list_dispatches(self, limit: int = 100, hide: list[str] | None = None) -> list[dict]:
         # `delivered` and `pending` are computed LIVE from deliveries, not read from the snapshot:
         # a Tares agent's in-process run finishes after fire() returns, so its outcome lands late.
         # Counting ok/NULL deliveries keeps the row honest as those runs complete.
         # `error` = the most recent failed delivery's reason (NULL if none failed).
+        # `hide` = projects the caller cannot see: a firing recorded against one is left out.
+        where = (" WHERE NOT EXISTS (SELECT 1 FROM dispatch_projects p WHERE p.dispatch_id = "
+                 f"l.dispatch_id AND p.project IN ({', '.join('?' * len(hide))}))") if hide else ""
         with self._sread:
             rows = self.sc.execute(
                 "SELECT l.dispatch_id, l.trigger, l.key_value, l.kind, l.fired_at, l.subscribers, "
@@ -3665,7 +3992,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 "l.payload, "
                 "(SELECT arg_max(d.error, d.delivered_at) FROM dispatch_deliveries d "
                 " WHERE d.dispatch_id = l.dispatch_id AND d.ok = FALSE) AS error "
-                "FROM dispatch_log l ORDER BY l.fired_at DESC LIMIT ?", [int(limit)],
+                f"FROM dispatch_log l{where} ORDER BY l.fired_at DESC LIMIT ?",
+                [*(hide or []), int(limit)],
             ).fetchall()
         return [
             {"dispatch_id": r[0], "trigger": r[1], "key": r[2], "kind": r[3],
@@ -3692,41 +4020,49 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         `source_stats` counter (never a scan of events), and the two row counts are unfiltered
         COUNT(*)s, which DuckDB answers from table metadata. Per-source bytes are None — DuckDB
         stores every source in one events table and does not attribute storage per value."""
-        db_bytes = _file_size(self.path)
-        wal_bytes = _file_size(self.path + ".wal")
-        with self._lock:
-            sources = self.con.execute(
-                "SELECT source, events FROM source_stats ORDER BY source").fetchall()
         with self._sread:
             runs = self.sc.execute("SELECT COUNT(*) FROM agent_runs").fetchone()[0]
             deliveries = self.sc.execute("SELECT COUNT(*) FROM dispatch_deliveries").fetchone()[0]
+        return {**self.storage_usage(), "agent_runs": int(runs),
+                "dispatch_deliveries": int(deliveries)}
+
+    def storage_usage(self) -> dict:
+        """The disk half of `usage()`: file sizes and event counts, from stat() and the DuckDB file
+        only. /metrics reads this on every scrape, so it never touches the state database: on a
+        cloud cell that is Postgres, and an idle cell would otherwise open a connection each time."""
+        with self._lock:
+            sources = self.con.execute(
+                "SELECT source, events FROM source_stats ORDER BY source").fetchall()
         return {
-            "db_bytes": db_bytes,
-            "wal_bytes": wal_bytes,
+            "db_bytes": _file_size(self.path),
+            "wal_bytes": _file_size(self.path + ".wal"),
             "events": sum(int(r[1] or 0) for r in sources),
             "sources": [{"name": r[0], "events": int(r[1] or 0), "bytes": None} for r in sources],
-            "agent_runs": int(runs),
-            "dispatch_deliveries": int(deliveries),
         }
 
     def newest_key(self, sources: list[str], filters: list | None,
-                   since: datetime) -> tuple[str, datetime] | None:
+                   since: datetime, exclude: dict | None = None) -> tuple[str, datetime] | None:
         """(entity, event time) of the newest event since `since` across `sources` that passes
-        `filters` (a trigger's), or None."""
+        `filters` (a trigger's), or None. `exclude` drops the rows of projects the caller
+        cannot see."""
         if not sources:
             return None
         ph = ", ".join(["?"] * len(sources))
         fsql, fparams = _filter_sql(filters)
+        esql, eparams = self._exclude(exclude, list(sources))
         with self._lock:
             r = self.con.execute(
                 f"SELECT key_value, event_time FROM events WHERE source IN ({ph}) AND ingest_time >= ? "
-                f"AND COALESCE(key_value, '') <> ''{fsql} ORDER BY ingest_time DESC LIMIT 1",
-                [*sources, since, *fparams]).fetchone()
+                f"AND COALESCE(key_value, '') <> ''{fsql}{esql} ORDER BY ingest_time DESC LIMIT 1",
+                [*sources, since, *fparams, *eparams]).fetchone()
         return (r[0], r[1]) if r else None
 
-    def recent_events(self, source: str | None = None, limit: int = 50) -> list[dict]:
-        where = "WHERE source = ?" if source else ""
-        params = ([source] if source else []) + [int(limit)]
+    def recent_events(self, source: str | None = None, limit: int = 50,
+                      exclude: dict | None = None) -> list[dict]:
+        esql, eparams = self._exclude(exclude, [source] if source else None)
+        clauses = (["source = ?"] if source else []) + ([esql[5:]] if esql else [])
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        params = ([source] if source else []) + eparams + [int(limit)]
         with self._lock:
             rows = self.con.execute(
                 f"SELECT source, key_value, event_type, text, event_time, ingest_time "
@@ -3765,12 +4101,15 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 return str(p["finding"])
         return None
 
-    def recent_payloads(self, source: str, limit: int = 500) -> list[dict]:
+    def recent_payloads(self, source: str, limit: int = 500,
+                        exclude: dict | None = None) -> list[dict]:
         """The lossless payloads of a source's most recent events (for field profiling)."""
+        esql, eparams = self._exclude(exclude, [source])
         with self._lock:
             rows = self.con.execute(
-                "SELECT payload FROM events WHERE source = ? ORDER BY ingest_time DESC LIMIT ?",
-                [source, int(limit)]).fetchall()
+                f"SELECT payload FROM events WHERE source = ?{esql} "
+                "ORDER BY ingest_time DESC LIMIT ?",
+                [source, *eparams, int(limit)]).fetchall()
         out = []
         for (pj,) in rows:
             try:
@@ -3840,16 +4179,22 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return len(updates)
 
     def list_entities(self, label: str, sources: list[str] | None = None,
-                      limit: int = 200) -> list[dict]:
+                      limit: int = 200, exclude: dict | None = None) -> list[dict]:
         """Distinct values of `label` (an entity per value) with event count + last seen, most
         active first. `label` may be 'key_value' or any named label. Optionally scoped to sources.
 
         Reads the maintained entity_counts counter (kept in sync by append()/purge_events()) instead
         of a full-table `GROUP BY json_extract_string(labels, …)`. If any relevant (source, label)
         was truncated for exceeding the cardinality cap, that label isn't materialized — fall back to
-        a live scan so the answer stays correct (just slower, for a label that shouldn't be an axis)."""
+        a live scan so the answer stays correct (just slower, for a label that shouldn't be an axis).
+        The counter has no project, so `exclude` (see _exclude_sql) also takes the live scan: a label
+        value that only a hidden project's rows carry must not list."""
         if not _FIELD_RE.match(label):
             raise ValueError(f"bad label name {label!r}")
+        xsql, xparams = self._exclude(exclude, sources)
+        if xsql:
+            with self._lock:
+                return self._list_entities_scan(label, sources, limit, xsql, xparams)
         ph = ", ".join(["?"] * len(sources)) if sources else ""
         with self._lock:
             tq = "SELECT 1 FROM entity_label_state WHERE label = ? AND truncated = TRUE"
@@ -3881,7 +4226,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         with self._lock:
             return self.con.execute(q + " LIMIT 1", p).fetchone() is not None
 
-    def _list_entities_scan(self, label: str, sources: list[str] | None, limit: int) -> list[dict]:
+    def _list_entities_scan(self, label: str, sources: list[str] | None, limit: int,
+                            xsql: str = "", xparams: list | None = None) -> list[dict]:
         """The pre-counter implementation: scan events and GROUP BY the label. Used only as the
         fallback for a truncated (high-cardinality) label. Caller holds the lock."""
         expr = _label_expr(label)
@@ -3890,6 +4236,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         if sources:
             where += f" AND source IN ({', '.join(['?'] * len(sources))})"
             params += sources
+        where += xsql
+        params += xparams or []
         rows = self.con.execute(
             f"SELECT {expr} AS v, COUNT(*), MAX(ingest_time) FROM events {where} "
             f"GROUP BY v ORDER BY COUNT(*) DESC LIMIT ?", [*params, int(limit)],
@@ -4091,18 +4439,20 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     # ── API keys (scoped credentials; only the SHA-256 of the secret is stored) ─
     def insert_api_key(self, kid: str, name: str, prefix: str, hash_: str, scopes: list[str],
-                       project: str | None = None) -> None:
-        """`project` makes it a project key: it reads that project only (TR-335)."""
+                       project: str | None = None, person_id: str | None = None) -> None:
+        """`project` makes it a project key: it reads that project only (TR-335). `person_id`
+        is the person it belongs to."""
         with self._swrite:
             self.sc.execute(
                 "INSERT INTO api_keys (id, name, prefix, hash, scopes, created_at, last_used_at, "
-                "revoked_at, project) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
-                [kid, name, prefix, hash_, json.dumps(scopes), now_utc(), project or None])
+                "revoked_at, project, person_id) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
+                [kid, name, prefix, hash_, json.dumps(scopes), now_utc(), project or None,
+                 person_id or None])
 
     def list_api_keys(self, project: str | None = None) -> list[dict]:
         """Every key, newest first; with `project`, only that project's keys."""
-        sql = ("SELECT id, name, prefix, scopes, created_at, last_used_at, revoked_at, project "
-               "FROM api_keys ")
+        sql = ("SELECT id, name, prefix, scopes, created_at, last_used_at, revoked_at, project, "
+               "person_id FROM api_keys ")
         params = []
         if project is not None:
             sql += "WHERE project = ? "
@@ -4111,7 +4461,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             rows = self.sc.execute(sql + "ORDER BY created_at DESC", params).fetchall()
         return [{"id": r[0], "name": r[1], "prefix": r[2], "scopes": json.loads(r[3]),
                  "created_at": r[4], "last_used_at": r[5], "revoked_at": r[6],
-                 "project": r[7]} for r in rows]
+                 "project": r[7], "person_id": r[8]} for r in rows]
 
     def get_api_key(self, kid: str) -> dict | None:
         return next((k for k in self.list_api_keys() if k["id"] == kid), None)
@@ -4120,12 +4470,215 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """Active (non-revoked) key by secret hash, or None."""
         with self._sread:
             r = self.sc.execute(
-                "SELECT id, name, scopes, last_used_at, project FROM api_keys "
+                "SELECT id, name, scopes, last_used_at, project, person_id FROM api_keys "
                 "WHERE hash = ? AND revoked_at IS NULL", [hash_]).fetchone()
         if not r:
             return None
         return {"id": r[0], "name": r[1], "scopes": json.loads(r[2]), "last_used_at": r[3],
-                "project": r[4]}
+                "project": r[4], "person_id": r[5]}
+
+    def key_person_id(self, kid: str) -> str | None:
+        """The person an active key is bound to, None for an unbound or unknown key (unlike a
+        credential's person, this never falls back to `local`)."""
+        with self._sread:
+            r = self.sc.execute("SELECT person_id FROM api_keys WHERE id = ? AND revoked_at IS NULL",
+                                 [kid]).fetchone()
+        return r[0] if r else None
+
+    def set_key_person(self, kid: str, person_id: str | None) -> bool:
+        """Bind an active key to a person (None unbinds it). False when there is no such key."""
+        with self._swrite:
+            hit = self.sc.execute("SELECT 1 FROM api_keys WHERE id = ? AND revoked_at IS NULL",
+                                   [kid]).fetchone()
+            if not hit:
+                return False
+            self.sc.execute("UPDATE api_keys SET person_id = ? WHERE id = ?", [person_id, kid])
+        return True
+
+    # ── People: who is on the cell. A key belongs to one; the credential names the person ─
+    _PERSON_COLS = "id, name, email, emails, github, is_admin, created_at, created_via"
+
+    @staticmethod
+    def _person_row(r) -> dict:
+        return {"id": r[0], "name": r[1], "email": r[2],
+                "emails": json.loads(r[3]) if r[3] else [], "github": r[4],
+                "is_admin": bool(r[5]), "created_at": r[6], "created_via": r[7]}
+
+    @staticmethod
+    def _norm_email(e) -> str | None:
+        e = str(e or "").strip().lower()
+        return e or None
+
+    @classmethod
+    def check_email(cls, email) -> str | None:
+        """The main email, lowercased: None for none (None or empty), ValueError when it is not
+        a string holding an @."""
+        if email is None:
+            return None
+        if not isinstance(email, str):
+            raise ValueError("email must be an email address")
+        e = cls._norm_email(email)
+        if e and "@" not in e:
+            raise ValueError(f"{e!r} is not an email address")
+        return e
+
+    @classmethod
+    def _norm_emails(cls, emails) -> list[str]:
+        """A list of addresses, lowercased, without repeats. Anything else (a bare string would
+        be split into letters) or an entry without an @ raises ValueError."""
+        if emails is None:
+            return []
+        if not isinstance(emails, list) or not all(isinstance(x, str) for x in emails):
+            raise ValueError("emails must be a list of email addresses")
+        out = [e for e in dict.fromkeys(cls._norm_email(x) for x in emails) if e]
+        bad = next((e for e in out if "@" not in e), None)
+        if bad:
+            raise ValueError(f"{bad!r} is not an email address")
+        return out
+
+    def _taken_emails(self, emails: list[str], besides: str | None = None) -> str | None:
+        """The first of `emails` another person already has (as the main or an extra email)."""
+        for e in emails:
+            for p in self._people():
+                if p["id"] != besides and e in ([p["email"]] + p["emails"]):
+                    return e
+        return None
+
+    def create_person(self, name: str, email: str | None = None, emails: list[str] | None = None,
+                      github: str | None = None, is_admin: bool = False,
+                      via: str = "admin") -> dict:
+        """Add a person. Emails and the GitHub login are kept lowercased and are unique across
+        people; a clash raises ValueError naming it."""
+        name = str(name or "").strip()
+        if not name:
+            raise ValueError("name is required")
+        email = self.check_email(email)
+        extra = self._norm_emails(emails)
+        github = str(github or "").strip().lstrip("@").lower() or None
+        with self._swrite:
+            clash = self._taken_emails(([email] if email else []) + extra)
+            if clash:
+                raise ValueError(f"{clash} already belongs to another person")
+            if github and any(p["github"] == github for p in self._people()):
+                raise ValueError(f"the GitHub login {github} already belongs to another person")
+            pid = "p_" + uuid.uuid4().hex[:10]
+            self.sc.execute(
+                "INSERT INTO people (id, name, email, emails, github, is_admin, created_at, "
+                "created_via) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [pid, name, email, json.dumps(extra), github, bool(is_admin), now_utc(), via])
+        return self.get_person(pid)
+
+    def get_person(self, pid: str) -> dict | None:
+        with self._sread:
+            r = self.sc.execute(f"SELECT {self._PERSON_COLS} FROM people WHERE id = ?",
+                                 [pid]).fetchone()
+        return self._person_row(r) if r else None
+
+    def _people(self) -> list[dict]:
+        """list_people for a caller that already holds the lock."""
+        rows = self.sc.execute(
+            f"SELECT {self._PERSON_COLS} FROM people ORDER BY created_at, id").fetchall()
+        return [self._person_row(r) for r in rows]
+
+    def list_people(self) -> list[dict]:
+        """Everyone on the cell, oldest first (`local` first on a cell that has it)."""
+        with self._sread:
+            return self._people()
+
+    def find_person_by_email(self, email: str) -> dict | None:
+        """The person with this main or extra email, ignoring case."""
+        e = self._norm_email(email)
+        if not e:
+            return None
+        return next((p for p in self.list_people() if e in ([p["email"]] + p["emails"])), None)
+
+    def find_person_by_github(self, login: str) -> dict | None:
+        g = str(login or "").strip().lstrip("@").lower()
+        if not g:
+            return None
+        return next((p for p in self.list_people() if p["github"] == g), None)
+
+    def update_person(self, pid: str, **fields) -> dict | None:
+        """Change name, email, emails, github or is_admin (anything else is ignored). None when
+        there is no such person; ValueError when an email or login belongs to someone else."""
+        cur = self.get_person(pid)
+        if not cur:
+            return None
+        new = dict(cur)
+        if "name" in fields:
+            new["name"] = str(fields["name"] or "").strip()
+            if not new["name"]:
+                raise ValueError("name cannot be empty")
+        if "email" in fields:
+            new["email"] = self.check_email(fields["email"])
+        if "emails" in fields:
+            new["emails"] = self._norm_emails(fields["emails"])
+        if "github" in fields:
+            new["github"] = str(fields["github"] or "").strip().lstrip("@").lower() or None
+        if "is_admin" in fields:
+            new["is_admin"] = bool(fields["is_admin"])
+        with self._swrite:
+            clash = self._taken_emails(([new["email"]] if new["email"] else []) + new["emails"],
+                                       besides=pid)
+            if clash:
+                raise ValueError(f"{clash} already belongs to another person")
+            if new["github"] and any(p["github"] == new["github"] and p["id"] != pid
+                                     for p in self._people()):
+                raise ValueError(f"the GitHub login {new['github']} already belongs to another person")
+            self.sc.execute(
+                "UPDATE people SET name = ?, email = ?, emails = ?, github = ?, is_admin = ? "
+                "WHERE id = ?", [new["name"], new["email"], json.dumps(new["emails"]),
+                                 new["github"], new["is_admin"], pid])
+        return self.get_person(pid)
+
+    def claim_local(self, email: str, name: str | None = None) -> dict | None:
+        """The cell's owner arrives: `local` becomes them (their name and email) instead of a new
+        person being made, so what `local` owns (projects without a lead, desk items addressed to
+        no one, keys bound to no one) stays theirs. Only while `local` is unclaimed (no email)
+        and nobody else has this email; None otherwise."""
+        e = self.check_email(email)
+        if not e:
+            return None
+        with self._swrite:
+            local = next((p for p in self._people() if p["id"] == "local"), None)
+            if not local or local["email"] or local["emails"]:
+                return None
+            if self._taken_emails([e]):
+                return None
+            self.sc.execute("UPDATE people SET name = ?, email = ? WHERE id = 'local'",
+                            [str(name or "").strip() or e.split("@")[0], e])
+        return self.get_person("local")
+
+    def person_or_create(self, email: str, name: str | None = None, via: str = "key",
+                         owner: bool = False) -> dict:
+        """The person with this email, made first when there is none (named by `name`, else by
+        the part of the email before the @). Asking twice for one email gives one person. With
+        `owner` (the cell's owner, as the control plane says) an unclaimed `local` becomes them."""
+        e = self.check_email(email)
+        if not e:
+            raise ValueError("an email is required")
+        found = self.find_person_by_email(e)
+        if found:
+            return found
+        if owner:
+            claimed = self.claim_local(e, name)
+            if claimed:
+                return claimed
+        try:
+            return self.create_person(str(name or "").strip() or e.split("@")[0], email=e, via=via)
+        except ValueError:
+            # two callers asked for one new email at once: the other one made the person first
+            found = self.find_person_by_email(e)
+            if found:
+                return found
+            raise
+
+    def only_local_person(self) -> bool:
+        """True while `local` is the only person on the cell: a key nobody has bound still acts
+        as them, so a single-user cell keeps working."""
+        with self._sread:
+            rows = self.sc.execute("SELECT id FROM people LIMIT 2").fetchall()
+        return [r[0] for r in rows] == ["local"]
 
     def touch_api_key(self, kid: str) -> None:
         with self._swrite:

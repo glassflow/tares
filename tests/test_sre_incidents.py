@@ -487,6 +487,8 @@ async def cell():
            (await cx.post(f"/api/sre/incidents/{g}/worth_yes")).status_code, 409)
 
         print("== an action the state does not allow ==")
+        # a second person, so a key bound to nobody keeps its own name (while `local` is alone it acts as them)
+        store.create_person("Sam Ops")
         r = await cx.post("/api/keys", json={"name": "alex-key", "scopes": ["admin"]})
         ak = r.json()["secret"]
         eq("the home page lists the open incident", h_ in [i["id"] for i in (

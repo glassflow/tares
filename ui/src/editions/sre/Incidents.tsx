@@ -31,10 +31,11 @@ const READ_ONLY = "That did not save. Your key can read but not change incidents
 const ALL_SERVICES = "__all__";
 const PAGE = 20;
 
-/** The name the cell records for the person looking: their key's name, or "console" on a cell with no sign-in. */
+/** The name the cell records for the person looking: the person behind the key, else the key's
+ *  name, or "console" on a cell with no sign-in and nobody to name. */
 function useMe(): string {
-  const { open, credentialName } = useEdition();
-  return open ? "console" : credentialName ?? "";
+  const { open, credentialName, personName } = useEdition();
+  return personName ?? (open ? "console" : credentialName ?? "");
 }
 
 const now = (sample: string | null) => (sample ? SAMPLE_NOW : Date.now());

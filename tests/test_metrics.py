@@ -84,6 +84,22 @@ async def main():
             ck("the trigger fired once and was counted", sample(body, "tares_trigger_firings_total", trigger="errors") == 1.0, str(sample(body, "tares_trigger_firings_total", trigger="errors")))
             ck("stored events gauge", (sample(body, "tares_events_stored") or 0) >= 3)
 
+            # a scrape reads only the disk and the DuckDB file, never the state database (Postgres
+            # on a cloud cell): an idle cell must not open a connection on every scrape
+            state_reads = []
+
+            class _NoState:   # render() swallows probe errors, so record the read instead of raising
+                def execute(self, sql, *a, **k):
+                    state_reads.append(sql)
+                    raise RuntimeError("the scrape read the state database")
+            real_sc, store.sc = store.sc, _NoState()
+            try:
+                r = await cx.get("/metrics")
+            finally:
+                store.sc = real_sc
+            ck("a scrape leaves the state database alone", r.status_code == 200 and not state_reads,
+               str(state_reads))
+
             print("== a poll source that fails ==")
             store.upsert_catalog_source("bad", "http_poll", "http_poll", "1s",
                                         {"url": "http://127.0.0.1:1/nothing", "labels": [{"name": "service", "field": "service", "primary": True}]})
