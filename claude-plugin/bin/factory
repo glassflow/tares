@@ -997,7 +997,9 @@ store_crew_name() { # name
   CREW_NAME_CACHE=""
 }
 people_count() { # people on this Tares other than the built-in local one; 0 when Tares can't say
-  tares_http GET /api/people 2>/dev/null | jq '[.people[]? | select(.id != "local")] | length' 2>/dev/null || echo 0
+  local n # an older Tares has no /api/people: no answer, which counts as 0
+  n=$(tares_http GET /api/people 2>/dev/null | jq '[.people[]? | select(.id != "local")] | length' 2>/dev/null)
+  echo "${n:-0}"
 }
 suggest_crew_name() { # <first name>-<short hostname>, lowercased
   local first host s
