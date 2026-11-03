@@ -52,15 +52,31 @@ function CopyCommand({ command }: { command: string }) {
   );
 }
 
-function ActionButton({ action, primary }: { action: Exclude<StartAction, { copy: string }>; primary: boolean }) {
+interface DoProps {
+  /** Runs a `do` action; the page that owns the work passes it. Without one the button is disabled. */
+  onDo?: (name: string) => void;
+  /** The `do` action running now, if any. */
+  doing?: string | null;
+}
+
+function ActionButton({ action, primary, onDo, doing }: DoProps & { action: Exclude<StartAction, { copy: string }>; primary: boolean }) {
   const cls = cn("h-8 text-[13px]!", primary && "border-foreground!");
+  if ("do" in action) {
+    const busy = doing === action.do;
+    return (
+      <Button variant="secondary" className={cls} disabled={!onDo || doing != null} onClick={() => onDo?.(action.do)}
+              data-testid="start-do" data-do={action.do}>
+        {busy ? "Starting" : action.label}
+      </Button>
+    );
+  }
   if ("to" in action) {
     return <Button asChild variant="secondary" className={cls}><Link to={action.to}>{action.label}</Link></Button>;
   }
   return <Button asChild variant="secondary" className={cls}><a href={action.href}>{action.label}</a></Button>;
 }
 
-function Actions({ actions }: { actions: StartAction[] }) {
+function Actions({ actions, onDo, doing }: DoProps & { actions: StartAction[] }) {
   let marked = false;   // the first button that is not a command gets the dark outline
   return (
     <div className="flex max-w-full min-w-0 flex-none flex-wrap gap-2">
@@ -68,13 +84,13 @@ function Actions({ actions }: { actions: StartAction[] }) {
         if ("copy" in a) return <CopyCommand key={a.label + a.copy} command={a.copy} />;
         const primary = !marked;
         marked = true;
-        return <ActionButton key={a.label} action={a} primary={primary} />;
+        return <ActionButton key={a.label} action={a} primary={primary} onDo={onDo} doing={doing} />;
       })}
     </div>
   );
 }
 
-function Step({ step }: { step: StartStep }) {
+function Step({ step, onDo, doing }: DoProps & { step: StartStep }) {
   return (
     <li data-testid="start-step" data-key={step.key} data-done={step.done}
         className={cn(ROW_CLASS, "items-start gap-y-3 hover:bg-[var(--row-hover)]")}>
@@ -88,7 +104,7 @@ function Step({ step }: { step: StartStep }) {
           )}
         </div>
       </div>
-      {step.actions.length > 0 && <Actions actions={step.actions} />}
+      {step.actions.length > 0 && <Actions actions={step.actions} onDo={onDo} doing={doing} />}
     </li>
   );
 }
@@ -104,9 +120,15 @@ export interface StartChecklistProps {
   hide?: () => Promise<unknown>;
   /** Called once the cell has taken the hide, so the page can read again. */
   onHidden?: () => void;
+  /** Runs a `do` action of a step. */
+  onDo?: (name: string) => void;
+  /** The `do` action running now; its button reads Starting and the others wait. */
+  doing?: string | null;
+  /** A short line under the heading, such as why a `do` action failed. */
+  notice?: string | null;
 }
 
-export function StartChecklist({ block, title, hide = hideStart, onHidden }: StartChecklistProps) {
+export function StartChecklist({ block, title, hide = hideStart, onHidden, onDo, doing, notice }: StartChecklistProps) {
   const [hidden, setHidden] = React.useState(false);
   const [error, setError] = React.useState(false);
   if (!block.show || hidden) return null;
@@ -136,8 +158,13 @@ export function StartChecklist({ block, title, hide = hideStart, onHidden }: Sta
           {HIDE_FAILED}
         </div>
       )}
+      {notice && (
+        <div role="alert" data-testid="start-notice" className="border-b border-border px-[18px] py-2.5 text-[13px] text-[color:var(--err)]">
+          {notice}
+        </div>
+      )}
       <ul className="m-0! list-none! p-0!">
-        {block.steps.map((s) => <Step key={s.key} step={s} />)}
+        {block.steps.map((s) => <Step key={s.key} step={s} onDo={onDo} doing={doing} />)}
       </ul>
     </section>
   );

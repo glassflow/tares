@@ -1,14 +1,15 @@
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import {
   Banner, Button, EmptyState, ListSection, ServiceRows, Skeleton, type ServiceRowItem,
 } from "../../components/edition";
+import { StartChecklist, StartChecklistLoading } from "../StartChecklist";
 import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
 import { BlindSpots } from "./BlindSpots";
 import {
-  answerWorth, homeAction, pickUpIncident, resolveIncident, sreHome, withIncident, withWorth,
+  answerWorth, homeAction, pickUpIncident, resolveIncident, sreHome, startDemo, withIncident, withWorth,
   type HomeService, type HomeWayOut, type SreHome,
 } from "./Home.api";
 import { IncidentCard } from "./IncidentCard";
@@ -30,6 +31,8 @@ const POLL_MS = 30_000;
 const REFRESH_MS = 5_500;
 const SERVICES_SHOWN = 10;
 const SETUP_TO = "/settings#tools";
+const START_TITLE = "Get started";
+const DEMO_FAILED = "Could not start the demo. Try again in a moment, or set it up step by step.";
 
 const asRow = (s: HomeService): ServiceRowItem => ({
   id: s.name,
@@ -73,6 +76,7 @@ function Loading() {
   );
   return (
     <div className="grid gap-6 md:gap-8" role="status" aria-busy="true" aria-label="Loading" data-testid="home-loading">
+      <StartChecklistLoading title={START_TITLE} />
       <div className="grid gap-2"><Skeleton width="40%" height={28} /><Skeleton width="60%" height={14} /></div>
       <Columns main={[box(3, "a"), box(3, "b")]} aside={[box(2, "c"), box(1, "d")]} />
     </div>
@@ -119,7 +123,11 @@ export default function Home() {
   const [busy, setBusy] = React.useState<string | null>(null);
   const [failed, setFailed] = React.useState(false);
   const timer = React.useRef<ReturnType<typeof setTimeout>>();
-  React.useEffect(() => () => clearTimeout(timer.current), []);
+  const demoTimer = React.useRef<ReturnType<typeof setTimeout>>();
+  React.useEffect(() => () => { clearTimeout(timer.current); clearTimeout(demoTimer.current); }, []);
+  const navigate = useNavigate();
+  const [doing, setDoing] = React.useState<string | null>(null);
+  const [startNote, setStartNote] = React.useState<string | null>(null);
 
   const home = data && shown && shown.base === data ? shown.home : data;
 
@@ -137,6 +145,24 @@ export default function Home() {
       if (refresh && !sample) { clearTimeout(timer.current); timer.current = setTimeout(reload, REFRESH_MS); }
     } finally {
       setBusy(null);
+    }
+  };
+
+  // "Try the demo service": create it, then read the home again once the cell's short cache of it
+  // has expired. The button stays busy until then, so a second click cannot make a second demo.
+  const doStart = async (name: string) => {
+    if (name !== "start_demo" || doing) return;
+    setDoing(name);
+    setStartNote(null);
+    if (sample) { setDoing(null); return; }
+    try {
+      const to = await startDemo();
+      if (to) { navigate(to); return; }
+      clearTimeout(demoTimer.current);
+      demoTimer.current = setTimeout(() => { reload(); setDoing(null); }, REFRESH_MS);
+    } catch {
+      setStartNote(DEMO_FAILED);
+      setDoing(null);
     }
   };
 
@@ -206,6 +232,10 @@ export default function Home() {
     <div className="grid gap-6 md:gap-8" data-testid="sre-home" data-tone={home.headline.tone}>
       {banner}
       {failed && <Banner tone="error" data-testid="home-action-error">That did not go through. Try again in a moment.</Banner>}
+      {home.start?.show && (
+        <StartChecklist block={home.start} title={START_TITLE} onHidden={reload} onDo={doStart} doing={doing} notice={startNote}
+                        hide={sample ? () => Promise.resolve() : undefined} />
+      )}
       <Head title={home.headline.text} sub={home.headline.sub} />
       <Columns main={main} aside={aside} />
     </div>

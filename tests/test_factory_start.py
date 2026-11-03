@@ -289,12 +289,16 @@ async def main():
             ck("the factory home carries start", "start" in body and body["edition"] == "factory")
             await cx.put("/api/settings/edition", json={"edition": "sre"})
             sre = (await cx.get("/api/home")).json()
-            ck("the AI SRE home is the same shape as before, without a start block",
-               sre["edition"] == "sre" and "start" not in sre and "headline" in sre, list(sre))
+            ck("the AI SRE home carries its own start block (TR-765, tests/test_sre_start.py)",
+               sre["edition"] == "sre" and "headline" in sre and sre["start"]["total"] == 5, list(sre))
             r = await cx.post("/api/home/start/hide")
-            ck("hide on another edition answers ok", r.status_code == 200 and r.json() == {"ok": True}, r.text)
+            ck("hide on the AI SRE edition answers with its block",
+               r.status_code == 200 and r.json()["show"] is False, r.text)
             await cx.delete("/api/home/start/hide")
             await cx.put("/api/settings/edition", json={"edition": "platform"})
+            r = await cx.post("/api/home/start/hide")
+            ck("hide on the platform edition answers ok", r.status_code == 200 and r.json() == {"ok": True}, r.text)
+            await cx.delete("/api/home/start/hide")
             r = await cx.get("/api/home")
             ck("platform still has no home", r.status_code == 404)
             await cx.put("/api/settings/edition", json={"edition": "factory"})

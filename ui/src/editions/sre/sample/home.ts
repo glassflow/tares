@@ -2,6 +2,7 @@
 // flag (see ../../sample.ts). It is invented: edge-proxy, service-a, service-a-receiver,
 // service-a-ui, docs-site, example-org/service-a, the system "Acme". One body per state of the page.
 
+import type { StartAction, StartBlock, StartStep } from "../../StartChecklist.api";
 import type {
   HomeBlindSpot, HomeChart, HomeIncident, HomeOnWatch, HomeRaised, HomeService, HomeTool, HomeWatch,
   SreHome,
@@ -9,7 +10,7 @@ import type {
 
 export const HOME_SAMPLES = [
   "watcher-off", "watcher-off-monthly", "all-quiet", "one-incident", "many-incidents", "new-cell",
-  "silent", "long-text", "many-items", "load", "error",
+  "silent", "long-text", "many-items", "start-partial", "start-demo", "load", "error",
 ] as const;
 export type HomeSample = (typeof HOME_SAMPLES)[number];
 
@@ -21,6 +22,27 @@ const MIN = 60_000;
 const ago = (minutes: number) => new Date(Date.now() - minutes * MIN).toISOString();
 /** "14:09" in UTC, the way the cell words a time. */
 const hm = (iso: string) => new Date(iso).toISOString().slice(11, 16);
+
+// ── the Start checklist: the rows and words come from tares/start_steps.py ───
+const row = (key: string, title: string, gets: string, actions: StartAction[], done: boolean): StartStep =>
+  ({ key, title, gets, done, actions: done ? [] : actions });
+
+/** The checklist with the keys in `done` ticked. `demo` adds the sixth row. */
+const startBlock = (done: string[], show = true, demo = false): StartBlock => {
+  const has = (k: string) => done.includes(k);
+  const steps = [
+    row("model", "Add a model provider", "The agents that watch and investigate need an AI model.", [{ label: "Add a provider", to: "/settings/advanced" }], has("model")),
+    row("signals", "Connect logs or metrics", "Tares sees how your services behave.",
+        [{ label: "Connect", to: "/settings#tools" }, { label: "Try the demo service", do: "start_demo" }], has("signals")),
+    row("services", "See your services appear", "Each of your services, with its state.", [{ label: "Open services", to: "/services" }], has("services")),
+    row("watching", "Turn on watching", "An agent looks at every change and tells you when something breaks.", [{ label: "Turn on watching", to: "/settings#watching" }], has("watching")),
+    row("slack", "Choose the Slack channel for notes", "Incident notes land where your team talks.", [{ label: "Choose a channel", to: "/settings#notes" }], has("slack")),
+    ...(demo ? [row("test_incident", "Cause a test incident on the demo", "See a full incident note written in about a minute.", [{ label: "Open the demo", to: "/incidents" }], has("test_incident"))] : []),
+  ];
+  const n = steps.filter((s) => s.done).length;
+  return { steps, done: n, total: steps.length, show: show && n < steps.length };
+};
+const ALL_FIVE = ["model", "signals", "services", "watching", "slack"];
 
 // ── pieces ───────────────────────────────────────────────────────────────────
 const wave = (seed: number, scale: number, n = 24): number[] =>
@@ -96,6 +118,7 @@ const BASE: SreHome = {
   services_from_words: FEEDS, raised: OLD_RAISED, raised_note: "Every check since then came back quiet.",
   today: { checks: 95, quiet: 95, investigated: 0, spent_usd: 0.48 }, on_watch: ON_WATCH, notes_go_to: NOTES,
   blind_spots: [SPOT_RECEIVER, SPOT_UI, SPOT_DEPLOYS], tools: TOOLS,
+  start: startBlock(ALL_FIVE),
 };
 
 // ── the watcher is off ───────────────────────────────────────────────────────
@@ -238,6 +261,7 @@ const NEW_CELL: SreHome = {
   services: [], services_from_words: "", raised: [], raised_note: null,
   today: { checks: 0, quiet: 0, investigated: 0, spent_usd: 0 }, on_watch: [], notes_go_to: null, blind_spots: [],
   tools: TOOLS.map((t) => ({ ...t, ok: false })),
+  start: startBlock([]),
 };
 
 const SILENT: SreHome = {
@@ -317,10 +341,15 @@ const MANY_ITEMS: SreHome = (() => {
   };
 })();
 
+// Connected, watching is still off: three of five
+const START_PARTIAL: SreHome = { ...BASE, start: startBlock(["model", "signals", "services"]) };
+// The demo service is running and the watcher is not: signals and services done, the test incident open
+const START_DEMO: SreHome = { ...BASE, start: startBlock(["model", "signals", "services"], true, true) };
+
 const BODIES: Record<Exclude<HomeSample, "load" | "error">, SreHome> = {
   "watcher-off": WATCHER_OFF, "watcher-off-monthly": WATCHER_OFF_MONTHLY, "all-quiet": BASE,
   "one-incident": ONE_INCIDENT, "many-incidents": MANY_INCIDENTS, "new-cell": NEW_CELL, silent: SILENT,
-  "long-text": LONG_TEXT, "many-items": MANY_ITEMS,
+  "long-text": LONG_TEXT, "many-items": MANY_ITEMS, "start-partial": START_PARTIAL, "start-demo": START_DEMO,
 };
 
 export function sampleHome(name: HomeSample): Promise<SreHome> {

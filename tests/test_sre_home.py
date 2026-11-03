@@ -84,7 +84,7 @@ BANNED_WORD = "tri" + "al"
 STATES = {"incident", "not_watched", "silent", "no_own_signal", "unusual", "normal"}
 KEYS = {"edition", "system", "headline", "watch", "incidents", "incidents_more", "services",
         "services_from_words", "raised", "raised_note", "today", "on_watch", "notes_go_to",
-        "blind_spots", "tools"}
+        "blind_spots", "tools", "start"}
 
 
 def ago(minutes, floor=MONTH):

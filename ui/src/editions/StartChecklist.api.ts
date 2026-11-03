@@ -3,11 +3,13 @@ import { request } from "../api";
 // The Start checklist of an edition home (GET /api/home carries it as `start`, tares/start_steps.py).
 // Every string is worded for people and shown as it is.
 
-/** A button of a step: a link inside the console (`to`), a link out (`href`) or a command to copy (`copy`). */
+/** A button of a step: a link inside the console (`to`), a link out (`href`), a command to copy
+ *  (`copy`) or something the page itself does (`do`, such as `start_demo`; the page passes the handler). */
 export type StartAction =
   | { label: string; to: string }
   | { label: string; href: string }
-  | { label: string; copy: string };
+  | { label: string; copy: string }
+  | { label: string; do: string };
 
 export interface StartStep {
   key: string;
