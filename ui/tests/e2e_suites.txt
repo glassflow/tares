@@ -1,5 +1,6 @@
 # Browser e2e suites CI runs, one per line, in sorted order (byte order, LC_ALL=C sort). Each is ui/tests/<name>.e2e.cjs. Add your suite's name on its own line in its sorted place. On a merge conflict keep both sides.
 capped-runs
+choose-edition
 component-gallery
 edition-routes
 edition-shell
