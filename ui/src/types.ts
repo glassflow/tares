@@ -444,6 +444,16 @@ export interface DeskItem {
   to_person?: PersonRef | null;   // who it is for (TR-634); null on an item from before
 }
 export interface DeskAllowed { desk_item: DeskItem; decision: Decision; station: string; line: string; added: boolean; scope: "project" | "all" }
+// The body of POST /api/desk/{ref}/reply: a person's own answer from the console (TR-740)
+export interface DeskReplyBody {
+  words: string; choice?: string; standing?: boolean; scope?: "project" | "all";
+  grant_kind?: "project" | "personal"; kept?: string[]; overturned?: Record<string, string>;
+}
+export interface DeskReplied {
+  desk_item: DeskItem; decision: Decision; matched: boolean; recorded: boolean; granted: boolean;
+  grant: Grant | null; assumptions: { label: string; state: "kept" | "overturned"; tickets: string[] }[];
+  follow_up: { assumption: string; tickets: string[] }[]; unheard: string[];
+}
 export interface Decision {
   id: string; label: string | null; question: string; words: string; choice: string | null;
   standing: boolean; scope: "project" | "all"; matched: boolean; granted: boolean; tickets: string[]; at: string;
@@ -596,10 +606,11 @@ export interface SpecQuestion {
   id: string; to_person_id: string; to_person?: PersonRef | null; repo: string; text: string;
   asked_by: string | null; asked_at: string; answer: string | null; answered_by: string | null;
   answered_by_person?: PersonRef | null; answered_at: string | null; state: "open" | "answered";
+  via?: "console" | null;   // "console": answered on the page
 }
 // One repo a project has tickets in: who owns its area, and whether they signed off (TR-636).
 // `exempt` says why it needs no sign-off: a cell of one person ("solo") or the owner leads the project.
-export interface SignoffRow { repo: string; owner: PersonRef | null; is_lead: boolean; exempt?: "solo" | "lead" | null; signed_off: boolean; at: string | null }
+export interface SignoffRow { repo: string; owner: PersonRef | null; is_lead: boolean; exempt?: "solo" | "lead" | null; signed_off: boolean; at: string | null; via?: "console" | null }
 export interface Handover { override?: HandoverOverride | null; overridden?: boolean; overrides?: HandoverOverride[]; repo: string | null; repos: HandoverRepo[]; autonomy: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null; at: string; finished?: ProjectFinished | null }
 // A repo a project touches, with the tickets that change it and their open pull requests (TR-463)
 export interface RepoPR {
@@ -1191,7 +1202,7 @@ export interface Grant {
   given_by: PersonRef | null;
   holder: PersonRef | null;
   areas: string[];
-  consents: (PersonRef & { at: string })[];
+  consents: (PersonRef & { at: string; via?: "console"; declined?: boolean; reason?: string })[];
   waiting_for: { id: string; name: string | null }[];   // id "admin": an admin has to
   in_effect: boolean;
 }
