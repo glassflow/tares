@@ -217,9 +217,10 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("a crew question can stand for next time"), (await optPanel.getByTestId("answer-standing").count()) === 1);
       await optPanel.getByRole("button", { name: "green", exact: true }).click();
       await colour.waitFor({ state: "detached" });
+      const decided = (await api("GET", `/api/projects/${ids.project}/decisions`)).body.decisions.find((d) => /Which colour for the links/.test(d.question));
+      ck(t("the option clicked is the recorded answer, made in the console"), !!decided && decided.words === "green" && decided.via === "console", JSON.stringify(decided));
       const desk = (await api("GET", "/api/desk?state=answered")).body.desk;
-      const d2 = desk.find((d) => d.label === ids.desk.options);
-      ck(t("the option reached the desk item"), !!d2 && /green/.test(JSON.stringify(d2)), JSON.stringify(d2 || desk).slice(0, 300));
+      ck(t("the desk item is answered"), desk.some((d) => d.label === ids.desk.options), JSON.stringify(desk.map((d) => d.label)));
       ck(t("five remain"), (await rows.count()) === 5, String(await rows.count()));
 
       // Sign off
@@ -237,7 +238,10 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await sd.getByTestId("signoff-confirm").click();
       await so.waitFor({ state: "detached" });
       const owed = (await api("GET", `/api/projects/${ids.project}/signoffs`, undefined, ids.keys.kim)).body;
-      ck(t("the sign-off is recorded for acme/web"), /acme\/web/.test(JSON.stringify(owed)) && /alex|Alex|p_/.test(JSON.stringify(owed)), JSON.stringify(owed).slice(0, 300));
+      const webRow = owed.signoffs.find((r) => r.repo === "acme/web");
+      const apiRow = owed.signoffs.find((r) => r.repo === "acme/api");
+      ck(t("acme/web is signed off by its owner, from the console"), !!webRow && webRow.signed_off === true && webRow.owner.id === ids.people.alex && !!webRow.via && !!webRow.at, JSON.stringify(webRow));
+      ck(t("acme/api, which Alex does not own, is not signed off"), !!apiRow && apiRow.signed_off === false, JSON.stringify(apiRow));
       ck(t("four remain"), (await rows.count()) === 4, String(await rows.count()));
 
       // Agree and Decline
@@ -257,6 +261,8 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       const state = (id) => (grants.find((g) => g.id === id) || {}).state || (JSON.stringify(listed.known_words || "").includes("read the logs of acme/web") ? "revoked" : undefined);
       ck(t("Agree made the first grant active"), state(ids.grants[0]) === "active", JSON.stringify(grants.map((g) => [g.id, g.state])));
       ck(t("Decline made the second one revoked"), state(ids.grants[1]) === "revoked", JSON.stringify(grants.map((g) => [g.id, g.state])));
+      const declinePost = ctl.posts.find((x) => x.path === `/api/grants/${ids.grants[1]}/decline`);
+      ck(t("Decline sends the reason it was given to the daemon"), !!declinePost && JSON.parse(declinePost.body || "{}").reason === "It reads the logs of every customer.", JSON.stringify(declinePost));
       ck(t("two remain: the permission and the long question"), (await rows.count()) === 2, String(await rows.count()));
 
       // Allow: the permission a builder asked for, kept as a grant in words
@@ -288,7 +294,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await foot.getByTestId("answer-panel").getByTestId("answer-text").fill("Yes.");
       await foot.getByTestId("answer-panel").getByRole("button", { name: "Send" }).click();
       await foot.getByTestId("row-error").waitFor();
-      ck(t("a refused answer says why under its row and the row stays"), (await foot.getByTestId("row-error").innerText()).trim().length > 0 && (await foot.count()) === 1,
+      ck(t("a refused answer says why under its row and the row stays"), /already/i.test(await foot.getByTestId("row-error").innerText()) && (await foot.count()) === 1,
          await foot.getByTestId("row-error").innerText());
       await foot.getByTestId("answer-panel").getByRole("button", { name: "Cancel" }).click();
 
@@ -331,7 +337,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("a long list shows eight rows and Show all"), (await rows.count()) === 8 && (await page.getByRole("button", { name: /Show all/ }).count()) === 1,
          JSON.stringify({ rows: await rows.count(), head: await page.getByTestId("home-headline").innerText(), titles: (await rows.allInnerTexts()).map((x) => x.slice(0, 40)) }));
       await page.getByRole("button", { name: /Show all/ }).click();
-      ck(t("Show all lists every item"), (await rows.count()) >= 13, String(await rows.count()));
+      ck(t("Show all lists every item"), (await rows.count()) === 14, String(await rows.count()));
       ck(t("no horizontal scroll with all of them"), (await overflow(page)) <= 0);
       await shot(page, "many-items", width);
       await checkWords(page, ck, t("many items"));
