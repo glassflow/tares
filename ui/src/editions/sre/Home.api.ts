@@ -4,10 +4,12 @@
 //   POST /api/incidents/{id}/on_it          the person picks an incident up
 //   POST /api/incidents/{id}/resolve        the person marks it resolved
 //   PUT  /api/findings/{run_id}/worth       { worth: boolean }, the answer to "Was this worth raising?"
+//   POST /api/home/start/hide               hide the Start checklist for this credential (DELETE shows it again)
 // The words (`headline`, `*_words`, `doing`, `detail`) are worded for people and shown as they are.
 // Service names, titles, causes and blind-spot text come from the person's own data.
 
-import { request } from "../../api";
+import { api, request } from "../../api";
+import type { StartBlock } from "../StartChecklist.api";
 import type { SreServiceState } from "./Services.api";
 
 export type HomeTone = "broken" | "unwatched" | "quiet" | "new";
@@ -155,6 +157,26 @@ export interface SreHome {
   notes_go_to: { label: string } | null;
   blind_spots: HomeBlindSpot[];
   tools: HomeTool[];
+  /** The Start checklist (tares/start_steps.py). */
+  start: StartBlock;
+}
+
+export const DEMO_TEMPLATE = "ai_sre_demo";
+
+/** Starts the demo service the way the Start list on the platform pages does: detect what it needs,
+ *  then create it. Answers the path to open when the cell needs a step-by-step setup instead (a
+ *  required value could not be found), and null once the demo is created. */
+export async function startDemo(): Promise<string | null> {
+  const { templates } = await api.templates();
+  const template = templates.find((t) => t.key === DEMO_TEMPLATE);
+  if (!template) throw new Error("This cell has no demo.");
+  const found = await api.detectRecipe(template.key);
+  const required = Object.entries(template.params).filter(([, p]) => p.required).map(([k]) => k);
+  if (required.some((k) => found.params[k] === undefined || found.params[k] === "")) {
+    return `/projects/new/${template.key}`;
+  }
+  await api.createProject({ template: template.key, params: found.params });
+  return null;
 }
 
 export const sreHome = () => request<SreHome>("/api/home");
