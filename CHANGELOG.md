@@ -200,6 +200,10 @@ the project follows [Semantic Versioning](https://semver.org/).
   crew has a station of the same name.
 
 ### Fixed
+- Settings, Areas: saving a repo pasted as its GitHub address (`https://github.com/glassflow/tares`)
+  failed with "Method Not Allowed", because the address went into the request path. The console
+  and the cell now take a GitHub address, with or without `.git`, or `git@github.com:`, as the
+  repo it names; anything else that is not `owner/name` says so. `set_area` in Claude Code too.
 - A cell used by one person before people existed keeps working for its owner once they become a
   person. The owner's old keys acted as nobody as soon as a second person existed, and the projects
   without a lead and the desk items addressed to no one stayed with `local`, out of the owner's

@@ -81,6 +81,17 @@ def unit():
         except ValueError:
             ok = True
         ck(f"save refuses {bad}", ok)
+    for pasted in ("https://github.com/GlassFlow/Tares", "https://github.com/glassflow/tares.git",
+                   "github.com/glassflow/tares/", "https://www.github.com/glassflow/tares/pull/393",
+                   "git@github.com:glassflow/tares.git", "  http://github.com/glassflow/tares  "):
+        ck(f"a pasted address is the repo: {pasted.strip()}", areas.norm_repo(pasted) == "glassflow/tares",
+           areas.norm_repo(pasted))
+    for bad in ("https://gitlab.com/glassflow/tares", "https://github.com/glassflow"):
+        try:
+            areas.norm_repo(bad); ok = False
+        except ValueError:
+            ok = True
+        ck(f"not a GitHub repo: {bad} refused", ok)
     s.con.close()
 
 
