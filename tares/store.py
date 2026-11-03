@@ -4528,15 +4528,39 @@ class Store(FactoryStore, ClaudeUsageStore):
                                  new["github"], new["is_admin"], pid])
         return self.get_person(pid)
 
-    def person_or_create(self, email: str, name: str | None = None, via: str = "key") -> dict:
+    def claim_local(self, email: str, name: str | None = None) -> dict | None:
+        """The cell's owner arrives: `local` becomes them (their name and email) instead of a new
+        person being made, so what `local` owns (projects without a lead, desk items addressed to
+        no one, keys bound to no one) stays theirs. Only while `local` is unclaimed (no email)
+        and nobody else has this email; None otherwise."""
+        e = self.check_email(email)
+        if not e:
+            return None
+        with self._swrite:
+            local = next((p for p in self._people() if p["id"] == "local"), None)
+            if not local or local["email"] or local["emails"]:
+                return None
+            if self._taken_emails([e]):
+                return None
+            self.sc.execute("UPDATE people SET name = ?, email = ? WHERE id = 'local'",
+                            [str(name or "").strip() or e.split("@")[0], e])
+        return self.get_person("local")
+
+    def person_or_create(self, email: str, name: str | None = None, via: str = "key",
+                         owner: bool = False) -> dict:
         """The person with this email, made first when there is none (named by `name`, else by
-        the part of the email before the @). Asking twice for one email gives one person."""
+        the part of the email before the @). Asking twice for one email gives one person. With
+        `owner` (the cell's owner, as the control plane says) an unclaimed `local` becomes them."""
         e = self.check_email(email)
         if not e:
             raise ValueError("an email is required")
         found = self.find_person_by_email(e)
         if found:
             return found
+        if owner:
+            claimed = self.claim_local(e, name)
+            if claimed:
+                return claimed
         try:
             return self.create_person(str(name or "").strip() or e.split("@")[0], email=e, via=via)
         except ValueError:

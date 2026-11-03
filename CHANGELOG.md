@@ -200,6 +200,12 @@ the project follows [Semantic Versioning](https://semver.org/).
   crew has a station of the same name.
 
 ### Fixed
+- A cell used by one person before people existed keeps working for its owner once they become a
+  person. The owner's old keys acted as nobody as soon as a second person existed, and the projects
+  without a lead and the desk items addressed to no one stayed with `local`, out of the owner's
+  `my_work`. When the control plane names the workspace owner (`owner: true` on a key's person, on
+  `POST /api/people` or on `PUT /api/keys/{id}/person`, system credential only), `local` takes
+  their name and email instead of a new person being made. A teammate never becomes `local`.
 - Settings, Access on a cell with people: it said "You signed in with the root token" to everyone.
   It now names how you signed in (the root token, your API key and whose it is, or a project key).
   The People list marks your own row and shows the boot person as "Local (no login)" instead of
