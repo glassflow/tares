@@ -41,6 +41,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 - Console: a Tickets place in the factory sidebar lists every ticket of every project as a Board, a List or Swimlanes, with filters kept in the address.
 - Console: the factory edition has a page for each ticket: its reviews and findings, checks, calls and decisions, history and working notes, what it depends on, its pull request, and the command that opens its builder's session.
 - On AI SRE cells the Slack message of a finding has buttons: "I'm on it", Resolve and Reopen on the incident, and "Worth raising" / "Not worth it" on what a watcher raised. A click changes the incident or records the answer, replaces the message and says who did it in its thread, and a change made in the console shows in Slack too. Works on self-hosted cells now, and on Tares Cloud after TR-763.
+- Console: on AI SRE cells the home page (`/`) is now the AI SRE home: why the watcher is off when it is, open incidents with their next step, what was raised and waits for a verdict, the services on watch and the blind spots, read from `GET /api/home` and refreshed every 30 seconds. Start now opens the home page.
 
 ### Fixed
 - Incident notes no longer show No action when the note has a numbered next step. A finding with no verdict now counts as a note that waits for a person, on every edition.
