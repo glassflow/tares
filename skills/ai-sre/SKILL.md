@@ -23,6 +23,9 @@ fires triggers, and serves the timeline over MCP. The user brings the agent. Two
   wakes an agent with the timeline, and the agent writes its finding back where the next
   investigation will find it.
 
+On a Tares set up as an AI SRE (a hosted cell), an agent sees four tools first: `what_is_broken`,
+`how_is_service`, `what_happened` and `mark_incident`. `read` keeps working there.
+
 ## Operating rules
 
 - Say what is about to run. Installs and image pulls can take a minute; post a line of progress
