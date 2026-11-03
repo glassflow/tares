@@ -63,7 +63,7 @@ from . import docs as docs_mod
 from . import factory as factory_mod
 from . import areas as areas_mod, claude_usage, factory_api, standup as standup_mod
 from . import edition as edition_mod
-from . import factory_home, sre_home, screens
+from . import factory_home, sre_home, screens, start_steps
 from . import sre as sre_mod
 from . import watch as watch_mod
 from . import feedback as feedback_mod
@@ -942,6 +942,11 @@ def make_app() -> FastAPI:
         if not hasattr(request.state, "person"):
             request.state.person = _person_ref(store.get_person("local"))
         return request.state.person
+
+    def _start_who(request) -> str:
+        """Whose Start checklist hide applies to this request (see start_steps.person_key)."""
+        cred = getattr(request.state, "credential", None) or {}
+        return start_steps.person_key(_current_person(request), cred.get("name"))
 
     def _is_admin(request) -> bool:
         """The credential may manage people and keys: admin scope (the system credential has it),
@@ -5840,6 +5845,7 @@ def make_app() -> FastAPI:
         err=lambda e, code=400: _err(e, code), project_or_404=lambda uid: _project_or_404(uid),
         by=lambda request, body=None: _by(request, body), cc_source=lambda: _cc_source(),
         current_person=lambda request: _current_person(request),
+        start_who=lambda request: _start_who(request),
         area_owner=lambda repo: areas_mod.owner(store, repo),
         is_system=lambda request: _is_system(request),
         is_admin=lambda request: _is_admin(request),
@@ -5860,7 +5866,8 @@ def make_app() -> FastAPI:
             return await asyncio.to_thread(factory_home.build, store, fx, request)
         if value == "sre":
             return await asyncio.to_thread(sre_home.cached, store, runtime.catalog,
-                                           runtime.health_snapshot, _by(request) or "console")
+                                           runtime.health_snapshot, _by(request) or "console",
+                                           _start_who(request))
         return JSONResponse({"error": "no home on this edition"}, status_code=404)
 
     # ── services (TR-742): the services this cell receives data for, read from the events ──

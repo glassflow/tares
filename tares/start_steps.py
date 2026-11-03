@@ -124,6 +124,13 @@ def sre_steps(ctx) -> list[dict]:
     return steps
 
 
+def person_key(person: dict | None, credential_name: str | None) -> str:
+    """Who a hide belongs to: the person's id, so a rename keeps it and two people of one name
+    keep their own; a key with no person falls back to its own name, a cell with nobody to name
+    to "console"."""
+    return (person or {}).get("id") or credential_name or "console"
+
+
 def hidden(store, who: str) -> bool:
     return bool(store.get_setting(HIDDEN_PREFIX + who))
 

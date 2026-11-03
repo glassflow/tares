@@ -1,9 +1,10 @@
 """POST and DELETE /api/home/start/hide (TR-756): hide the Start checklist, and show it again.
 
-Each credential hides only its own checklist (the setting `start_hidden:<its name>`; one cell
-with no auth has one person, "console"), so a teammate still sees theirs. Any signed-in
-credential may do it, a read key too: it changes nothing but what the caller's own home shows
-(tares/daemon.py lets this path through as "any"). The answer is the caller's new start block, or
+On the factory home each credential hides only its own checklist (the setting
+`start_hidden:<its name>`; one cell with no auth has one person, "console"); on the AI SRE home
+each person does (`start_hidden:<person id>`, the key's name for a key with no person), so a
+teammate still sees theirs. Any signed-in credential may do it, a read key too: it changes nothing but what the caller's own
+home shows (tares/daemon.py lets this path through as "any"). The answer is the caller's new start block, or
 {"ok": true} on a cell whose edition has no Start block.
 """
 import asyncio
@@ -20,10 +21,10 @@ def register(app, store, h, ctx):
     def change(request: Request, hide: bool):
         value = edition_mod.edition(store)[0]
         # the same key the edition's home reads. The factory home: the credential's own name,
-        # "console" with no auth. The AI SRE home: who the cell records for the caller (the person
-        # behind the key, else the key's name), "console" with nobody to name
+        # "console" with no auth. The AI SRE home: the person's id (a rename keeps the hide), else
+        # the key's own name, "console" with nobody to name
         cred = (getattr(request.state, "credential", None) or {}).get("name") or "console"
-        who = (h.by(request) or "console") if value == "sre" else cred
+        who = h.start_who(request) if value == "sre" else cred
         (start_steps.hide if hide else start_steps.unhide)(store, who)
         factory_home.drop_cache(store, request)
         if value == "sre":

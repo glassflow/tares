@@ -67,6 +67,13 @@ function firstName(who: string | undefined): string {
   return first ? first[0].toUpperCase() + first.slice(1) : "";
 }
 
+/** What the greeting calls the person: their own name, else the name of the key they signed in
+ *  with. The cell calls its one unnamed person "You", which is not a name to greet. */
+function useFirstName(): string {
+  const { credentialName, personName } = useEdition();
+  return firstName(personName && personName !== "You" ? personName : credentialName);
+}
+
 function SectionHead({ title, aside }: { title: string; aside?: React.ReactNode }) {
   return (
     <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
@@ -383,8 +390,8 @@ export function FactoryHomeView({ data, onAction, onHandOver, rows, notice, pane
   hideStart?: () => Promise<unknown>; onStartHidden?: () => void;
   showStart?: () => Promise<unknown>; onStartShown?: () => void;
 }) {
-  const { credentialName, personName } = useEdition();
-  const name = firstName(credentialName);
+  const { personName } = useEdition();
+  const name = useFirstName();
   const team = isTeam(data) && data.counts
     ? { counts: data.counts, view: projectsView ?? "mine", onView: onProjectsView, me: personName, hidden: data.hidden_summary }
     : undefined;
@@ -430,10 +437,10 @@ function LoadingBox({ rows }: { rows: number }) {
 }
 
 export function FactoryHomeLoading() {
-  const { credentialName } = useEdition();
+  const name = useFirstName();
   return (
     <div className={PAGE} data-testid="factory-home-loading">
-      <TopBar name={firstName(credentialName)} headline={<Skeleton width={320} height={14} className="mt-2" />} />
+      <TopBar name={name} headline={<Skeleton width={320} height={14} className="mt-2" />} />
       <div className={COLS}>
         <div className={LEFT}>
           <StartChecklistLoading title={START_TITLE} />
@@ -450,10 +457,10 @@ export function FactoryHomeLoading() {
 }
 
 export function FactoryHomeError({ onRetry }: { onRetry?: () => void }) {
-  const { credentialName } = useEdition();
+  const name = useFirstName();
   return (
     <div className={PAGE} data-testid="factory-home-error">
-      <TopBar name={firstName(credentialName)} />
+      <TopBar name={name} />
       <Banner tone="error" action={<Button variant="secondary" onClick={onRetry}>Retry</Button>}>
         <b>Home did not load.</b> The cell did not answer, so nothing here is current. Try again in a moment.
       </Banner>
