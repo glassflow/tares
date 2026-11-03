@@ -1508,6 +1508,15 @@ class FactoryStore:
                 [answer, by or None, at, via, project, qid]).fetchone()
         return hit is not None
 
+    def decline_waiting_grant(self, gid: str, consents: list[dict]) -> bool:
+        """End a grant that still waits and keep who said no; False when it was no longer waiting
+        (another consent settled it first)."""
+        with self._swrite:
+            hit = self.sc.execute(
+                "UPDATE grants SET state = 'revoked', consents = ? WHERE id = ? AND state = 'waiting' "
+                "RETURNING id", [json.dumps(consents), gid]).fetchone()
+        return hit is not None
+
     def add_signoff(self, project: str, repo: str, person_id: str, at,
                     via: str | None = None) -> None:
         """The area owner's sign-off for a repo, and where it came from (`via`). Signing again

@@ -726,7 +726,8 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         if console_via(request):
             entry["via"] = "console"
         # a waiting grant was never in effect, so there is nothing to take out of the grants doc
-        store.update_grant_row(g["id"], state="revoked", consents=g["consents"] + [entry])
+        if not store.decline_waiting_grant(g["id"], g["consents"] + [entry]):
+            h.err(ValueError(f"{g['id']} is no longer waiting; there is nothing to decline"), 409)
         return {"grant": grants_view([store.get_grant_row(g["id"])])[0]}
 
     def append_grant(uid: str | None, line: str, by: str) -> bool:
@@ -2305,7 +2306,8 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         d = desk_or_404(ref)
         if not desk_is_mine(d, me["id"]):
             who = (store.get_person(d.get("to_person_id")) or {}).get("name") or d.get("to_person_id")
-            h.err(PermissionError(f"{d['label']} is for {who}: only they answer it"), 403)
+            h.err(PermissionError(f"{d['label']} is for {who}: only they answer it" if who else
+                                  f"{d['label']} is not addressed to you"), 403)
         if d["state"] != "open":
             h.err(ValueError(f"{d['label']} is already {d['state']}"), 409)
         a = parse_answer(d, body)
@@ -2330,7 +2332,8 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         d = desk_or_404(ref)
         if not desk_is_mine(d, me["id"]):
             who = (store.get_person(d.get("to_person_id")) or {}).get("name") or d.get("to_person_id")
-            h.err(PermissionError(f"{d['label']} is for {who}: only they allow it"), 403)
+            h.err(PermissionError(f"{d['label']} is for {who}: only they allow it" if who else
+                                  f"{d['label']} is not addressed to you"), 403)
         if d["state"] != "open":
             h.err(ValueError(f"{d['label']} is already {d['state']}"), 409)
         if not d.get("command"):
@@ -2713,7 +2716,10 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         if d["project"] not in (uid, None):
             h.err(ValueError(f"{d['label']} was asked about another project"), 409)
         dec = next((x for x in store.list_decisions(None) if x["desk_item"] == d["id"]), None)
-        if d["state"] != "answered" or dec is None or not dec["matched"]:
+        # the person's own words count: matched against their session, or typed by them in the console
+        said = dec is not None and (dec["matched"] or (dec.get("via") == "console" and dec.get("person")
+                                  and not d.get("command")))
+        if d["state"] != "answered" or not said:
             h.err(ValueError(f"{d['label']} has no answer from the person yet: record their words "
                              "with desk_answer first"), 409)
         store.finish_handover(uid, dec["words"], d["label"], by, now_utc(), person_of(request))

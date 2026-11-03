@@ -419,8 +419,8 @@ async def desk_withdraw(item: str, reason: str) -> str:
 async def list_decisions(project: str = "") -> str:
     """What the person decided on the project, newest first: the question, their words, the
     choice, whether it stands from now on and whether it matched what they typed (`via`
-    "console": a permission they allowed in the console; the watch restarts that station with
-    it). Follow them; relay them to stations by quoting the words."""
+    "console": they answered or allowed it in the console; a permission they allowed there
+    restarts that station with it). Follow them; relay them to stations by quoting the words."""
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:

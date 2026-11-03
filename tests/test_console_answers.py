@@ -22,6 +22,7 @@ import logging
 import os
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _env import scrub_os_environ
@@ -205,6 +206,10 @@ async def main():
         ck("the grant row is revoked in the store", store.get_grant_row(g2["id"])["state"] == "revoked")
         r = await call("alex", "POST", f"/api/grants/{g2['id']}/decline", {})
         ck("declining it again: 409", r.status_code == 409, r.text)
+        ck("the store's guarded decline refuses a grant that is no longer waiting, and keeps its row",
+           store.decline_waiting_grant(g2["id"], []) is False
+           and len(store.get_grant_row(g2["id"])["consents"]) == 1
+           and store.decline_waiting_grant(g["id"], []) is False)
         r = await call("alex", "POST", "/api/grants/G999/decline", {})
         ck("an unknown grant: 404", r.status_code == 404, r.text)
 
@@ -232,9 +237,9 @@ async def main():
         print("== a permission is the addressed person's to allow ==")
         d5 = await add("Shop: run git push?", tickets=[t_web], command="git push",
                   station="shop-build-m1")
-        r = await call("lee_admin", "POST", f"/api/desk/{d5['label']}/allow", {"scope": "once"})
+        r = await call("lee_admin", "POST", f"/api/desk/{d5['label']}/allow", {"words": "shop-build-m1 may run `git push` in shop", "scope": "project"})
         ck("lee cannot allow kim's command: 403", r.status_code == 403 and "kim" in r.text, r.text)
-        r = await call("kim_admin", "POST", f"/api/desk/{d5['label']}/allow", {"scope": "once"}, station=True)
+        r = await call("kim_admin", "POST", f"/api/desk/{d5['label']}/allow", {"words": "shop-build-m1 may run `git push` in shop", "scope": "project"}, station=True)
         ck("a crew station cannot allow it either: 403", r.status_code == 403, r.text)
         ck("the item is still open", store.get_desk_item(d5["label"])["state"] == "open")
 
@@ -273,6 +278,43 @@ async def main():
         r = await call("kim", "POST", f"/api/projects/{uid}/signoffs", {"repo": "example-org/api"},
                        station=True)
         ck("kim does not own example-org/api: 403", r.status_code == 403, r.text)
+        r = await call("alex", "POST", f"/api/projects/{uid}/signoffs", {"repo": "example-org/api"},
+                       station=True)
+        row = next((x for x in (r.json().get("signoffs") or []) if x["repo"] == "example-org/api"), {})
+        ck("alex signs example-org/api from a session: no mark", r.status_code == 201
+           and row.get("signed_off") is True and not row.get("via"), r.text)
+        await call("root", "PUT", "/api/areas/example-org/api", {"person_id": pid["lee"]})
+        r = await call("lee", "POST", f"/api/projects/{uid}/signoffs", {"repo": "example-org/api"})
+        row = next((x for x in (r.json().get("signoffs") or []) if x["repo"] == "example-org/api"), {})
+        ck("a new owner signing from the console replaces it, with the console mark", r.status_code == 201
+           and (row.get("owner") or {}).get("id") == pid["lee"] and row.get("via") == "console", r.text)
+
+        print("== finishing the project on a console answer ==")
+        for t in (t_web, t_api):
+            for stage in ("doing", "merged"):
+                await call("alex", "POST", f"/api/projects/{uid}/tickets/{t}/stage", {"stage": stage})
+        store.set_handover(uid, [{"path": "/w/shop"}], None, None, datetime.now(timezone.utc))
+        fin = lambda ref: call("alex", "POST", f"/api/projects/{uid}/finish", {"decision": ref},
+                               station=True)
+        d6 = await add("Shop: run git status?", tickets=[t_web], command="git status",
+                       station="shop-build-m1")
+        r = await call("kim_admin", "POST", f"/api/desk/{d6['label']}/allow", {
+            "words": "shop-build-m1 may run `git status` in shop", "scope": "project"})
+        ck("kim allows a command in the console", r.status_code == 200, r.text)
+        r = await fin(d6["label"])
+        ck("a permission allowed in the console is not the person saying the project is done: 409",
+           r.status_code == 409 and "no answer from the person" in r.text, r.text)
+        d7 = await add("Shop: is the project done?")
+        r = await fin(d7["label"])
+        ck("an open question: 409", r.status_code == 409, r.text)
+        r = await reply("alex", d7, {"words": "Yes, ship it"})
+        ck("alex answers it in the console", r.status_code == 200 and r.json().get("matched") is False,
+           r.text)
+        r = await fin(d7["label"])
+        ck("the project finishes on that answer", r.status_code == 200
+           and r.json()["finished"]["words"] == "Yes, ship it"
+           and r.json()["finished"]["decision"] == d7["label"], r.text)
+        ck("the project is done", store.get_project(uid)["status"] == "done")
 
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
