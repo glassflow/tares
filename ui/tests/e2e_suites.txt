@@ -30,3 +30,4 @@ sre-services
 sre-settings
 sre-start
 sre-timeline
+team-home
