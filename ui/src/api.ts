@@ -1,5 +1,5 @@
 import type {
-  Edition, EditionSettings, Whoami,
+  Edition, EditionSettings,
   AgentInfo,
   ApiKey, ExternalAgent, Person, Whoami,
   CatalogDescribe, ConnectorSpec, DiscoverProposal, DispatchDetail, DispatchLogEntry, Entity, EnvScan,
