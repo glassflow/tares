@@ -349,7 +349,8 @@ function cleanEnv(extra) {
       await page.reload({ waitUntil: "load" });
       await page.getByTestId("factory-home").waitFor();
       await oneAgain(ck, "live after reload");
-      ck("live: after a reload the list is still gone", (await list(page).count()) === 0 && (await page.getByText("Get your factory going").count()) === 0);
+      ck("live: after a reload the list is still gone", (await list(page).count()) === 0 && (await steps(page).count()) === 0
+         && (await page.getByRole("region", { name: "Get your factory going" }).count()) === 0);
       await ctx.close();
     }
 

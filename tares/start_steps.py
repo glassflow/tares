@@ -97,5 +97,6 @@ def unhide(store, who: str) -> None:
 def checklist(store, steps: list[dict], who: str) -> dict:
     """The block the home shows: the steps, how many are done, and whether to show it."""
     done = sum(1 for s in steps if s["done"])
-    show = done < len(steps) and not hidden(store, who)
-    return {"steps": steps, "done": done, "total": len(steps), "show": show}
+    pending = done < len(steps)
+    mine = pending and hidden(store, who)   # this person hid it, so the page can offer it back
+    return {"steps": steps, "done": done, "total": len(steps), "show": pending and not mine, "hidden": mine}

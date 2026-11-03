@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { ApiError } from "../../api";
 import { useEdition } from "../edition";
 import { useSample } from "../sample";
-import { StartChecklist, StartChecklistLoading } from "../StartChecklist";
+import { StartChecklist, StartChecklistHidden, StartChecklistLoading } from "../StartChecklist";
 import { usePagePolling } from "../usePagePolling";
 import { allowDesk, finishProject, getHome, keepAssumption, type AllowedGrant } from "./FactoryHome.api";
 import type {
@@ -328,10 +328,11 @@ const RIGHT = "flex min-w-0 flex-[1_1_300px] flex-col gap-6";
 
 const START_TITLE = "Get your factory going";
 
-export function FactoryHomeView({ data, onAction, rows, notice, hideStart, onStartHidden }: {
+export function FactoryHomeView({ data, onAction, rows, notice, hideStart, onStartHidden, showStart, onStartShown }: {
   data: HomeData; onAction?: OnAction; rows?: Record<string, RowState>; notice?: React.ReactNode;
-  /** What Hide this list calls; a sample passes one that touches nothing. */
+  /** What Hide this list and Show it again call; a sample passes ones that touch nothing. */
   hideStart?: () => Promise<unknown>; onStartHidden?: () => void;
+  showStart?: () => Promise<unknown>; onStartShown?: () => void;
 }) {
   const { credentialName } = useEdition();
   const name = firstName(credentialName);
@@ -343,6 +344,9 @@ export function FactoryHomeView({ data, onAction, rows, notice, hideStart, onSta
         <div className={LEFT}>
           {data.start?.show && (
             <StartChecklist block={data.start} title={START_TITLE} hide={hideStart} onHidden={onStartHidden} />
+          )}
+          {data.start && (
+            <StartChecklistHidden block={data.start} title={START_TITLE} show={showStart} onShown={onStartShown} />
           )}
           <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />
           <Projects projects={data.projects} finished={data.finished_count} />
@@ -601,7 +605,7 @@ function SampleHome({ sample }: { sample: string }) {
   let body: React.ReactNode;
   if (sample === "loading") body = <FactoryHomeLoading />;
   else if (sample === "error") body = <FactoryHomeError key={tries} onRetry={() => setTries((n) => n + 1)} />;
-  else body = <FactoryHomeView data={HOME_SAMPLES[sample]} onAction={onAction} rows={rows} hideStart={() => Promise.resolve()} />;
+  else body = <FactoryHomeView data={HOME_SAMPLES[sample]} onAction={onAction} rows={rows} hideStart={() => Promise.resolve()} showStart={() => Promise.resolve()} />;
   return (
     <>
       {body}
@@ -658,7 +662,7 @@ function LiveHome() {
         Could not refresh. Showing what we had at {hhmm(readAt ?? new Date())}.
       </Banner>
     ) : undefined;
-    body = <FactoryHomeView data={shown} onAction={onAction} rows={rows} notice={notice} onStartHidden={reload} />;
+    body = <FactoryHomeView data={shown} onAction={onAction} rows={rows} notice={notice} onStartHidden={reload} onStartShown={reload} />;
   }
   return (
     <>

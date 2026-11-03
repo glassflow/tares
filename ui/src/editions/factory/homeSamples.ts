@@ -218,13 +218,14 @@ const STEPS: Record<string, Omit<StartStep, "done">> = {
 };
 
 /** The block with the steps named in `done` ticked, and `details` added to the steps they name. */
-function startBlock(done: string[], details: Record<string, string> = {}): StartBlock {
+function startBlock(done: string[], details: Record<string, string> = {}, hidden = false): StartBlock {
   const steps: StartStep[] = STEP_KEYS.map((k) => {
     const isDone = done.includes(k);
     return { ...STEPS[k], done: isDone, actions: isDone ? [] : STEPS[k].actions, ...(details[k] ? { detail: details[k] } : {}) };
   });
   const n = steps.filter((s) => s.done).length;
-  return { steps, done: n, total: steps.length, show: n < steps.length };
+  const pending = n < steps.length;
+  return { steps, done: n, total: steps.length, show: pending && !hidden, hidden: pending && hidden };
 }
 
 const LONG_DETAIL =
@@ -244,8 +245,11 @@ export const startLong: HomeData = { ...empty, start: startBlock(["github"], { g
 /** Everything done: the block says not to show, so the page has no list. */
 export const startDone: HomeData = { ...nothingWaiting, start: startBlock(STEP_KEYS) };
 
+/** The person hid the list: the page shows one line with Show it again where the list was. */
+export const startHidden: HomeData = { ...empty, start: startBlock(["claude_code", "github"], {}, true) };
+
 /** The samples by the name `?sample=` gives them. Loading and error have no data and live in FactoryHome. */
 export const HOME_SAMPLES: Record<string, HomeData> = {
   busy, empty, crewQuiet, nothingWaiting, manyWaiting, longGoals,
-  startNothing, startThree, startLong, startDone,
+  startNothing, startThree, startLong, startDone, startHidden,
 };

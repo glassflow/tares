@@ -26,6 +26,8 @@ export interface StartBlock {
   total: number;
   /** False once everything is done or this person hid the list. */
   show: boolean;
+  /** True while this person has hidden a list that still has open steps: the page offers it back. */
+  hidden?: boolean;
 }
 
 /** Hide the list for the caller. The daemon answers with the caller's new block. */
