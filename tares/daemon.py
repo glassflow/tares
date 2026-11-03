@@ -1572,10 +1572,12 @@ def make_app() -> FastAPI:
         if not isinstance(spec, dict) or not str(spec.get("email") or "").strip():
             _err(ValueError("person needs an email: {email, name?}"))
         ident = getattr(request.state, "credential", None) or {}
+        system = ident.get("kind") == "system"
         try:
+            # `owner: true` comes from the control plane (the system credential) only
             return store.person_or_create(
-                spec["email"], spec.get("name"),
-                via="cloud" if ident.get("kind") == "system" else "key")["id"]
+                spec["email"], spec.get("name"), via="cloud" if system else "key",
+                owner=system and spec.get("owner") is True)["id"]
         except ValueError as e:
             _err(e, 409 if "already belongs" in str(e) else 400)
 
@@ -1626,15 +1628,22 @@ def make_app() -> FastAPI:
         return {"people": [_person_out(p) for p in store.list_people()]}
 
     @app.post("/api/people")
-    def create_person(body: dict = Body(...)):
-        """{name, email?, emails?, github?, is_admin?}. 201 with the new person; 200 with the
-        existing one when that email is already someone's."""
+    def create_person(request: Request, body: dict = Body(...)):
+        """{name, email?, emails?, github?, is_admin?, owner?}. 201 with the new person; 200 with
+        the existing one when that email is already someone's. `owner: true` (the system
+        credential only, as the control plane sends for the workspace owner) makes an unclaimed
+        `local` that person instead (200)."""
         email = None
+        ident = getattr(request.state, "credential", None) or {}
         try:
             email = store.check_email(body.get("email"))
             found = store.find_person_by_email(email) if email else None
             if found:
                 return _person_out(found)
+            if email and body.get("owner") is True and ident.get("kind") == "system":
+                claimed = store.claim_local(email, body.get("name"))
+                if claimed:
+                    return _person_out(claimed)
             p = store.create_person(body.get("name"), email, body.get("emails"), body.get("github"),
                                     bool(body.get("is_admin")), via="admin")
         except ValueError as e:
