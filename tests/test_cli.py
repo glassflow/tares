@@ -101,7 +101,7 @@ def _up_with(tty, edition=None, env_edition=None, answers=(), seed_db=None, stat
 
 def _seed_db(path, edition=None):
     from tares.store import Store
-    s = Store(path)
+    s = Store(path, state_dsn="")  # a DuckDB-only file, whatever CI's Postgres harness does
     if edition:
         s.set_setting("edition", edition)
     s.con.close()
