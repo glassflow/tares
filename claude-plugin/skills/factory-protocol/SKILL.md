@@ -64,6 +64,12 @@ These come from a month of running this setup by hand. Each one exists because i
 
 One Tares cell serves many people, each with a crew of their own. These rules keep the crews out of each other's way:
 
+- **An older Tares has no people.** A Tares before 1.56 has no `my_work`, `list_areas`, `list_people`,
+  `ask_area`, `answer_question` or `sign_off` tool (the tool is not listed, or the call says it is
+  unknown), and `list_crew` and `desk_list` take no `mine`. There, one person runs the factory: every
+  ticket of every project in `crew_projects` is that person's, the desk has no addressee, and there
+  are no area owners, questions or sign-offs. Work as the skills say for one person, skip the steps
+  about other people, and do not tell the person to upgrade unless they ask why.
 - **Other people's tickets are not yours.** A ticket assigned to someone else is theirs and their crew's: never build it, assign it or comment on it. `my_work` lists what is yours.
 - **Other crews are not reachable by message.** `SendMessage` reaches only the stations of your own crew. Tares is the only channel between crews: the ticket, its working doc and the desk.
 - **Questions go to the desk, to someone by name.** Only the orchestrator writes the desk (rule 1): a station sends it an `ASK` that names who it is for (`to:`, an email or person id), and the orchestrator files it with `desk_add(..., to=...)`. The addressee is the assignee of the ticket the question is about (name the ticket and `desk_add` finds the assignee by itself), else the owner of the repo's area (`list_areas` shows it), else the project's lead. A question for your person needs no `to`. The addressee must be able to see the project.
