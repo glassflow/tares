@@ -12,17 +12,18 @@ import { useSample } from "../sample";
 import { StartChecklist, StartChecklistHidden, StartChecklistLoading } from "../StartChecklist";
 import { usePagePolling } from "../usePagePolling";
 import {
-  allowDesk, answerQuestion, consentGrant, declineGrant, deskReply, finishProject, getHome, keepAssumption, signOff,
+  allowDesk, answerQuestion, consentGrant, declineGrant, deskReply, finishProject, getHome, handOverAnyway, keepAssumption, signOff,
   type AllowedGrant,
 } from "./FactoryHome.api";
 import type {
-  HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeItem, HomeProject, HomeProjectRow, HomeProjectState, HomeVerb,
+  HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeItem, HomeProject, HomeProjectRow, HomeProjectState, HomeVerb, HomeWaitingOn,
 } from "./home.types";
 import { HOME_SAMPLES } from "./homeSamples";
 import { HOME_SAMPLES_TEAM } from "./homeSamplesTeam";
 import { Detail } from "./HomeDetail";
-import { AnswerPanel, DeclineDialog, SignOffDialog, type AnswerGiven } from "./WaitingActions";
+import { AnswerPanel, DeclineDialog, HandOverDialog, SignOffDialog, type AnswerGiven } from "./WaitingActions";
 import { WaitingForYou } from "./WaitingForYou";
+import { YouAreWaitingOn } from "./YouAreWaitingOn";
 
 // The factory home: what waits for the person, the projects, the crew, the Claude plan and the
 // connected tools. FactoryHomeView is pure: it draws the HomeData it is given. The default export
@@ -332,8 +333,10 @@ const RIGHT = "flex min-w-0 flex-[1_1_300px] flex-col gap-6";
 
 const START_TITLE = "Get your factory going";
 
-export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStart, onStartHidden, showStart, onStartShown }: {
+export function FactoryHomeView({ data, onAction, onHandOver, rows, notice, panels, hideStart, onStartHidden, showStart, onStartShown }: {
   data: HomeData; onAction?: OnAction; rows?: Record<string, RowState>; notice?: React.ReactNode;
+  /** Hand over anyway on a row of You are waiting on. */
+  onHandOver?: (entry: HomeWaitingOn) => void;
   /** A panel open under a waiting row, by row id (the answer box on a team home). */
   panels?: Record<string, React.ReactNode>;
   /** What Hide this list and Show it again call; a sample passes ones that touch nothing. */
@@ -364,6 +367,7 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStar
           ) : (
             <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />
           )}
+          {isTeam(data) && <YouAreWaitingOn entries={data.you_are_waiting_on ?? []} onHandOver={onHandOver} />}
           <Projects projects={data.projects.filter(isProject)} finished={data.finished_count} />
         </div>
         <aside className={RIGHT}>
@@ -537,6 +541,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
   const [answering, setAnswering] = React.useState<{ item: HomeItem; action: HomeAction } | null>(null);
   const [signing, setSigning] = React.useState<{ item: HomeItem; project: string; repo: string; tickets: string[] } | null>(null);
   const [declining, setDeclining] = React.useState<{ item: HomeItem; grant: string } | null>(null);
+  const [handing, setHanding] = React.useState<{ entry: HomeWaitingOn; busy: boolean; error: string | null } | null>(null);
   const working = React.useRef(new Set<string>());
   const timers = React.useRef(new Set<ReturnType<typeof setTimeout>>());
   React.useEffect(() => () => { timers.current.forEach(clearTimeout); }, []);
@@ -627,6 +632,20 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
     }
   };
 
+  const handOver = (entry: HomeWaitingOn) => setHanding({ entry, busy: false, error: null });
+  const confirmHandOver = async (entry: HomeWaitingOn, why: string) => {
+    if (!live) { setHanding(null); return; }   // a sample never calls the cell
+    setHanding({ entry, busy: true, error: null });
+    try {
+      await handOverAnyway(entry.project.id, why);
+      toast(`${entry.project.name} is handed over. The crew can start it.`);
+      setHanding(null);
+      changed();
+    } catch (e) {
+      setHanding({ entry, busy: false, error: reason(e) });
+    }
+  };
+
   const sendAnswer = ({ item, action }: { item: HomeItem; action: HomeAction }, given: AnswerGiven) => {
     const desk = typeof action.desk === "string" ? action.desk : "";
     const call = desk ? () => deskReply(desk, given.words, given.standing)
@@ -666,6 +685,10 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
           onConfirm={(why) => void run(declining.item, "decline", () => declineGrant(declining.grant, why),
             "Declined. The grant is revoked.", () => setDeclining(null))} />
       )}
+      {handing && (
+        <HandOverDialog key={handing.entry.project.id} entry={handing.entry} busy={handing.busy} error={handing.error}
+          onClose={() => setHanding(null)} onConfirm={(why) => void confirmHandOver(handing.entry, why)} />
+      )}
       {close && (
         <CloseDialog key={close.item.id} item={close.item} project={close.project} onClose={() => setClose(null)}
           onDone={() => {
@@ -676,7 +699,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
       )}
     </>
   );
-  return { rows, onAction, dialogs, panels };
+  return { rows, onAction, onHandOver: handOver, dialogs, panels };
 }
 
 // ── pages ──────────────────────────────────────────────────────────────────────
@@ -685,13 +708,13 @@ const ALL_SAMPLES: Record<string, HomeData> = { ...HOME_SAMPLES, ...HOME_SAMPLES
 
 function SampleHome({ sample }: { sample: string }) {
   const [tries, setTries] = React.useState(0);
-  const { rows, onAction, dialogs, panels } = useHomeActions(false, () => {});
+  const { rows, onAction, onHandOver, dialogs, panels } = useHomeActions(false, () => {});
   let body: React.ReactNode;
   if (sample === "loading") body = <FactoryHomeLoading />;
   else if (sample === "error") {
     body = <FactoryHomeError key={tries} onRetry={() => setTries((n) => n + 1)} />;
   }
-  else body = <FactoryHomeView data={ALL_SAMPLES[sample]} onAction={onAction} rows={rows} panels={panels} hideStart={() => Promise.resolve()} showStart={() => Promise.resolve()} />;
+  else body = <FactoryHomeView data={ALL_SAMPLES[sample]} onAction={onAction} onHandOver={onHandOver} rows={rows} panels={panels} hideStart={() => Promise.resolve()} showStart={() => Promise.resolve()} />;
   return (
     <>
       {body}
@@ -720,7 +743,7 @@ function LiveHome() {
   }, [data, overlay]);
   React.useEffect(() => () => clearTimeout(timer.current), []);
 
-  const { rows, onAction, dialogs, panels } = useHomeActions(true, (done) => {
+  const { rows, onAction, onHandOver, dialogs, panels } = useHomeActions(true, (done) => {
     if (done) {
       setOverlay((o) => ({
         items: new Set([...(o?.items ?? []), ...(done.item ? [done.item] : [])]),
@@ -748,7 +771,7 @@ function LiveHome() {
         Could not refresh. Showing what we had at {hhmm(readAt ?? new Date())}.
       </Banner>
     ) : undefined;
-    body = <FactoryHomeView data={shown} onAction={onAction} rows={rows} panels={panels} notice={notice} onStartHidden={reload} onStartShown={reload} />;
+    body = <FactoryHomeView data={shown} onAction={onAction} onHandOver={onHandOver} rows={rows} panels={panels} notice={notice} onStartHidden={reload} onStartShown={reload} />;
   }
   return (
     <>
