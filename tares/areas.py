@@ -9,12 +9,18 @@ import re
 
 AREAS_SETTING = "areas"
 _REPO = re.compile(r"^[a-z0-9][a-z0-9._-]*/[a-z0-9._-]+$")
+# a pasted GitHub address: https://github.com/o/n(.git)(/...), github.com/o/n, git@github.com:o/n.git
+_GITHUB = re.compile(r"^(?:(?:https?://)?(?:www\.)?github\.com/|git@github\.com:)([^/]+)/([^/?#]+)")
 
 
 def norm_repo(repo) -> str:
-    """The repo as stored and matched: trimmed and lowercase. ValueError unless it is
-    `owner/name`."""
+    """The repo as stored and matched: trimmed and lowercase, a pasted GitHub address turned
+    into `owner/name`. ValueError unless it comes out as `owner/name`."""
     r = str(repo or "").strip().lower()
+    m = _GITHUB.match(r)
+    if m:
+        name = m.group(2)
+        r = f"{m.group(1)}/{name[:-4] if name.endswith('.git') else name}"
     if not _REPO.match(r):
         raise ValueError(f"{repo!r} is not a repo: write it as owner/name, like glassflow/tares")
     return r
