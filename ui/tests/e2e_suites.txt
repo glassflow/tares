@@ -12,6 +12,7 @@ factory-projects
 factory-reviews
 factory-settings
 factory-start
+factory-start-show
 factory-ticket
 factory-tickets
 login-handoff
