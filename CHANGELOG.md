@@ -200,6 +200,10 @@ the project follows [Semantic Versioning](https://semver.org/).
   crew has a station of the same name.
 
 ### Fixed
+- Plugin: the station and spec skills keep working against a Tares before 1.56. That Tares has no
+  `my_work`, area or people tools, so the orchestrator there works from `crew_projects` and
+  `list_tickets` as before, and the spec skips area owners and sign-offs. `tares factory crew up`
+  no longer prints a shell error there when it counts the people.
 - Settings, Areas: saving a repo pasted as its GitHub address (`https://github.com/glassflow/tares`)
   failed with "Method Not Allowed", because the address went into the request path. The console
   and the cell now take a GitHub address, with or without `.git`, or `git@github.com:`, as the

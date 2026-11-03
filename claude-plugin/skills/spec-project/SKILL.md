@@ -52,7 +52,9 @@ when you could explain the project to a new engineer. Cover:
 - how it ships: where it runs, how a release is done and checked, how it is rolled back
 - whether it will run on a tares-factory crew, or be built by one session (see step 8)
 
-**Area owners.** Once you know which repos the project changes, call `list_areas` and note the
+**Area owners.** On an older Tares with no `list_areas` tool (factory-protocol), skip this part and
+the sign-offs in step 8: one person owns every repo. Otherwise, once you know which repos the
+project changes, call `list_areas` and note the
 owner of each one (`{repo, person: {id, name}}`). If a repo has none, ask the user who owns it
 (one question, recommending a person from `list_people`) and call `set_area(repo, person)`. Setting
 the owner of a repo that has one, or of a repo for someone else, needs an admin: when you are not
