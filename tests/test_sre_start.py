@@ -96,6 +96,50 @@ def main_checks_unit():
         eq("the words pass the word list", bad, [])
 
 
+def main_checks_slack_channel():
+    """The demo's investigator posts to a demo channel the cell hosts itself, so a demo
+    investigator with a channel ticks Slack without a Slack token. Any other project's does not."""
+    print("== the Slack row and the demo channel ==")
+
+    class Store:
+        def __init__(self, projects, channels):
+            self._projects, self._channels = projects, channels
+
+        def list_projects(self):
+            return self._projects
+
+        def list_catalog_agents(self):
+            return [{"name": n, "slack_channel": c} for n, c in self._channels.items()]
+
+        def list_catalog_sources(self):
+            return []
+
+        def project_findings(self, pid, limit=1):
+            return []
+
+    saved = (sre_home.providers.default_id, sre_home.slack_mod.resolve_token)
+    sre_home.providers.default_id = lambda store: None
+    sre_home.slack_mod.resolve_token = lambda store: ("", "")   # no Slack token
+    try:
+        demo = {"id": "prj-demo", "template": sre_home.DEMO_TEMPLATE}
+        other = {"id": "prj-x", "template": "ai_sre"}
+        roles = lambda project: {"investigators": [{"agent": "inv", "project": project}]}  # noqa: E731
+
+        def slack(projects, channels, project):
+            return sre_home._start_ctx(Store(projects, channels), [], {}, roles(project)).slack
+
+        eq("a demo investigator with a channel: Slack done without a token",
+           slack([demo], {"inv": "C0DEMO"}, "prj-demo"), True)
+        eq("a demo investigator without a channel: Slack open",
+           slack([demo], {"inv": ""}, "prj-demo"), False)
+        eq("another project's investigator with a channel and no token: open",
+           slack([demo, other], {"inv": "C0X"}, "prj-x"), False)
+        eq("a channel but no demo project at all: open",
+           slack([other], {"inv": "C0X"}, "prj-x"), False)
+    finally:
+        sre_home.providers.default_id, sre_home.slack_mod.resolve_token = saved
+
+
 async def main():
     from tares.daemon import make_app
     app = make_app()
@@ -156,6 +200,21 @@ async def main():
                                outcome="finding", verdict="rca")
         eq("a finding ticks it", done_of(start_of(store, runtime))["test_incident"], True)
 
+        print("== a project made or deleted shows on the next read ==")
+        store.delete_project("prj-demo")
+        sre_home.clear_cache()
+        eq("no demo yet: five rows", len((await cx.get("/api/home")).json()["start"]["steps"]), 5)
+        r = await cx.post("/api/projects", json={"template": "ai_sre_demo", "params": {}})
+        eq("the demo is created", r.status_code, 201)
+        eq("the very next read has its row (no wait on the cache)",
+           len((await cx.get("/api/home")).json()["start"]["steps"]), 6)
+        r = await cx.delete(f"/api/projects/{r.json()['id']}")
+        eq("the demo is deleted", r.status_code, 200)
+        eq("the very next read is back to five rows",
+           len((await cx.get("/api/home")).json()["start"]["steps"]), 5)
+        store.create_project("prj-demo", "ai_sre_demo", "Demo", {}, goal="Try it")
+        sre_home.clear_cache()
+
         print("== all done hides the block ==")
         os.environ["TARES_SLACK_BOT_TOKEN"] = "xoxb-invented-token"
         block = start_of(store, runtime)
@@ -195,6 +254,7 @@ async def main():
 
 
 main_checks_unit()
+main_checks_slack_channel()
 asyncio.run(main())
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

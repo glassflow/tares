@@ -4000,6 +4000,7 @@ def make_app() -> FastAPI:
             store.set_project_lead(out["id"], person["id"])
         if body.kind:
             store.set_project_kind(out["id"], body.kind)
+        sre_home.clear_cache()   # the AI SRE home reads the projects (the demo row), so show this one
         return projects.get(out["id"])
 
     @app.patch("/api/projects/{uid}")
@@ -4114,9 +4115,11 @@ def make_app() -> FastAPI:
         if chosen == ["all"]:
             chosen = sorted(store.project_sources(uid))
         try:
-            return projects.delete(uid, purge_events=purge_events, delete_sources=chosen)
+            out = projects.delete(uid, purge_events=purge_events, delete_sources=chosen)
         except Exception as e:
             _uc_err(e)
+        sre_home.clear_cache()
+        return out
 
     @app.post("/api/projects/{uid}/sources")
     def add_project_source(uid: str, body: dict = Body(...)):
