@@ -72,7 +72,23 @@ export interface HomeProject {
   last_activity: string | null; // "27 minutes ago"
   meta: string; // "1 builder · docs-site · active 2 minutes ago"
   can_close: boolean;
+  // A cell with more than one person adds these.
+  lead?: HomeRef | null;
+  members?: HomeRef[]; // besides the lead
+  scope?: "team" | "private";
+  yours?: number; // tickets assigned to the person
+  yours_text?: string; // "2 tickets yours, 1 Alex's"
+  mine?: boolean; // the person leads it, holds a ticket in it, or it waits on them
 }
+
+// What stands where a private project the person is not on would be: no name, no goal, only who
+// leads it. Shown in the Team view of the projects.
+export interface HomeHiddenProject {
+  hidden: true;
+  lead: { name: string } | null;
+}
+
+export type HomeProjectRow = HomeProject | HomeHiddenProject;
 
 // One repo of a project the person leads, and where its owner stands.
 export interface HomeWaitingRepo {
@@ -89,6 +105,23 @@ export interface HomeWaitingOn {
   repos: HomeWaitingRepo[];
   open_questions: { id: string; to: HomeRef | null; asked_at: string | null; waited: string }[];
   actions: HomeAction[];
+}
+
+export interface HomeTeamCrew {
+  name: string; // "Your crew", "Kim's crew"
+  machine: string;
+  person: HomeRef | null;
+  last_seen: string | null;
+  heard: string; // "4 minutes ago"
+  working: number;
+  doing: string; // "Building Atlas."
+}
+
+// The limit on how far a crew may go, in words: the person's own and the team's.
+export interface HomeCrewLimit {
+  mine: string;
+  team: string;
+  text: string;
 }
 
 export interface HomeArea {
@@ -148,10 +181,17 @@ export interface HomeData {
   waiting_total: number;
   // One sentence on what waits for the person; only a cell with more than one person sends it.
   summary?: string;
-  // Only a cell with more than one person sends the keys below.
+  // Only a cell with more than one person sends the keys below. `projects=mine|team` picks the view.
   you_are_waiting_on?: HomeWaitingOn[];
-  areas?: HomeArea[];
+  // In the Team view of a team cell the list also holds HomeHiddenProject stubs (see
+  // HomeProjectRow); narrow on `"hidden" in row` before reading a project field.
   projects: HomeProject[];
+  counts?: { mine: number; team: number };
+  hidden_summary?: string; // "1 private project you are not on, led by Lee"
+  crews?: HomeTeamCrew[];
+  crews_quiet?: string[]; // crews not heard from in a day
+  crew_limit?: HomeCrewLimit;
+  areas?: HomeArea[];
   finished_count: number;
   crew: HomeCrew;
   plan: HomePlan;
