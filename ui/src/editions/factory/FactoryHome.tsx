@@ -16,12 +16,12 @@ import {
   type AllowedGrant,
 } from "./FactoryHome.api";
 import type {
-  HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeItem, HomeProject, HomeProjectRow, HomeProjectState, HomeVerb, HomeWaitingOn,
+  HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeHiddenProject, HomeItem, HomeProject, HomeProjectRow, HomeProjectState, HomeVerb, HomeWaitingOn,
 } from "./home.types";
 import { HOME_SAMPLES } from "./homeSamples";
 import { HOME_SAMPLES_TEAM, sampleView } from "./homeSamplesTeam";
 import { Detail } from "./HomeDetail";
-import { HiddenLine, LeadLine, PrivateLock, ProjectsSwitch, type ProjectsView } from "./TeamProjects";
+import { HiddenLine, HiddenRow, LeadLine, PrivateLock, ProjectsSwitch, type ProjectsView } from "./TeamProjects";
 import { AnswerPanel, DeclineDialog, HandOverDialog, SignOffDialog, type AnswerGiven } from "./WaitingActions";
 import { WaitingForYou } from "./WaitingForYou";
 import { YouAreWaitingOn } from "./YouAreWaitingOn";
@@ -168,8 +168,9 @@ function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAc
 }
 
 // The Team view of a team cell also lists a stub where a private project the person is not on would be;
-// the page never draws it as a row, only the cell's one line about the hidden ones.
+// Team draws each as a quiet row after the projects, Mine shows the cell's one line about them instead.
 const isProject = (r: HomeProjectRow): r is HomeProject => !("hidden" in r);
+const isStub = (r: HomeProjectRow): r is HomeHiddenProject => "hidden" in r;
 
 function ProjectRow({ p, team, me }: { p: HomeProject; team?: boolean; me?: string }) {
   const { merged, blocked, total } = p.tickets;
@@ -204,7 +205,9 @@ interface TeamProjectsProps {
 
 const PROJECTS_FIRST = 6;
 
-function Projects({ projects, finished, team }: { projects: HomeProject[]; finished: number; team?: TeamProjectsProps }) {
+function Projects({ projects, stubs, finished, team }: {
+  projects: HomeProject[]; stubs: HomeHiddenProject[]; finished: number; team?: TeamProjectsProps;
+}) {
   const [all, setAll] = React.useState(false);
   const shown = team && !all ? projects.slice(0, PROJECTS_FIRST) : projects;
   const link = projects.length > 0 || finished > 0 ? (
@@ -220,7 +223,7 @@ function Projects({ projects, finished, team }: { projects: HomeProject[]; finis
       ) : link} />
       <div className="border border-border bg-card">
         {projects.length === 0 ? (
-          team && team.view === "mine" ? (
+          stubs.length > 0 ? null : team && team.view === "mine" ? (
             <EmptyState title="No projects of yours yet." />
           ) : (
             <EmptyState title="No projects yet."
@@ -238,7 +241,8 @@ function Projects({ projects, finished, team }: { projects: HomeProject[]; finis
             </Button>
           </ListRow>
         )}
-        {team?.hidden && <HiddenLine text={team.hidden} />}
+        {stubs.map((s, i) => <HiddenRow key={i} stub={s} />)}
+        {team?.view === "mine" && team.hidden && <HiddenLine text={team.hidden} />}
       </div>
     </section>
   );
@@ -403,7 +407,7 @@ export function FactoryHomeView({ data, onAction, onHandOver, rows, notice, pane
             <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />
           )}
           {isTeam(data) && <YouAreWaitingOn entries={data.you_are_waiting_on ?? []} onHandOver={onHandOver} />}
-          <Projects projects={data.projects.filter(isProject)} finished={data.finished_count} team={team} />
+          <Projects projects={data.projects.filter(isProject)} stubs={data.projects.filter(isStub)} finished={data.finished_count} team={team} />
         </div>
         <aside className={RIGHT}>
           <CrewCard data={data} />

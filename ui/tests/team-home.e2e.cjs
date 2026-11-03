@@ -412,16 +412,16 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
 
       await go("threePeople", "mine");
       ck(t("the switch shows both counts"), (await page.getByTestId("projects-mine").innerText()) === "Mine, 3" && (await page.getByTestId("projects-team").innerText()) === "Team, 6");
-      ck(t("Mine is the one chosen and lists three projects"), (await page.getByTestId("projects-mine").getAttribute("aria-selected")) === "true" && (await rowsN()) === 3, String(await rowsN()));
+      ck(t("Mine is the one chosen and lists three projects"), (await page.getByTestId("projects-mine").getAttribute("aria-pressed")) === "true" && (await rowsN()) === 3, String(await rowsN()));
       const before = calls.length;
       await page.getByTestId("projects-team").click();
       ck(t("Team lists all six"), (await rowsN()) === 6, String(await rowsN()));
-      ck(t("Team is now the one chosen"), (await page.getByTestId("projects-team").getAttribute("aria-selected")) === "true" && (await page.getByTestId("projects-mine").getAttribute("aria-selected")) === "false");
+      ck(t("Team is now the one chosen"), (await page.getByTestId("projects-team").getAttribute("aria-pressed")) === "true" && (await page.getByTestId("projects-mine").getAttribute("aria-pressed")) === "false");
       ck(t("a sample switches without calling the cell"), calls.length === before, calls.slice(before).join(", "));
       ck(t("a private project has a lock and the others none"), (await page.getByTestId("project-lock").count()) === 1 && (await prow("project-y").getByTestId("project-lock").count()) === 1);
       ck(t("a row says who leads it"), (await prow("project-x").getByTestId("project-lead").innerText()).trim() === "Led by Kim" && /^Led by (you|Alex)$/.test((await prow("project-y").getByTestId("project-lead").innerText()).trim()));
       ck(t("a row shows the members besides the lead"), (await prow("project-x").getByTestId("project-member").evaluateAll((els) => els.map((e) => e.getAttribute("aria-label")))).join() === "Alex");
-      ck(t("a row says how many tickets are yours"), (await prow("project-x").innerText()).includes("3 tickets in your repo"));
+      ck(t("a row says how many tickets are yours"), (await prow("project-x").innerText()).includes("3 tickets yours, 4 Kim's"));
       ck(t("no line about hidden projects when none are hidden"), (await page.getByTestId("hidden-summary").count()) === 0);
       await shot(page, "projects-team", width);
       await go("onePerson", "mine");
@@ -430,8 +430,21 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       for (const view of ["mine", "team"]) {
         await go("privateNotOn", view);
         const label = t(`privateNotOn, ${view}`);
-        ck(`${label}: the hidden project is not a row`, (await rowsN()) === (view === "mine" ? 3 : 6) && (await page.getByText("Private, led by").count()) === 0, String(await rowsN()));
-        ck(`${label}: one line says how many are hidden and who leads them`, (await page.getByTestId("hidden-summary").count()) === 1 && (await page.getByTestId("hidden-summary").innerText()).trim() === "1 private project you are not on, led by Lee");
+        ck(`${label}: the hidden project is not a project row`, (await rowsN()) === (view === "mine" ? 3 : 6), String(await rowsN()));
+        if (view === "team") {
+          ck(`${label}: it stands as one quiet row, lock, lead and nothing else`, (await page.getByTestId("hidden-row").count()) === 1
+             && (await page.getByTestId("hidden-row").innerText()).trim() === "Private, led by Lee", await page.getByTestId("hidden-row").allInnerTexts().then(String));
+          ck(`${label}: the row comes after every project row`, await page.getByTestId("projects").evaluate((el) => {
+            const rows = [...el.querySelectorAll('[data-testid="project-row"]')], stub = el.querySelector('[data-testid="hidden-row"]');
+            return !!stub && rows.every((r) => r.compareDocumentPosition(stub) & Node.DOCUMENT_POSITION_FOLLOWING);
+          }));
+          ck(`${label}: the row is not counted, six projects need no Show all`, (await page.getByRole("button", { name: /Show all/ }).count()) === 0);
+          ck(`${label}: no summary line besides the row`, (await page.getByTestId("hidden-summary").count()) === 0);
+        } else {
+          ck(`${label}: one line says how many are hidden and who leads them`, (await page.getByTestId("hidden-summary").count()) === 1
+             && (await page.getByTestId("hidden-summary").innerText()).trim() === "1 private project you are not on, led by Lee");
+          ck(`${label}: no stub row`, (await page.getByTestId("hidden-row").count()) === 0);
+        }
         ck(`${label}: the switch counts leave the hidden one out`, (await page.getByTestId("projects-team").innerText()) === "Team, 6");
         ck(`${label}: no horizontal scroll`, (await overflow(page)) <= 0, `${await overflow(page)}px over`);
         await shot(page, `projects-private-${view}`, width);

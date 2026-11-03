@@ -99,11 +99,11 @@ const TEAM_PROJECTS: HomeProject[] = [
   }),
   row("project-x", kim, [alex], {
     goal: "Bill teams per seat, monthly or yearly.", state: "not_started", state_label: "Not started",
-    milestone: "Waiting on your answer and sign-off", tickets: { merged: 0, blocked: 0, total: 7 }, yours: 3, yours_text: "3 tickets in your repo", mine: true,
+    milestone: "Waiting on your answer and sign-off", tickets: { merged: 0, blocked: 0, total: 7 }, yours: 3, yours_text: "3 tickets yours, 4 Kim's", mine: true,
   }),
   row("project-z", alex, [], {
     goal: "About 1,000 answer articles so AI assistants cite the product.", milestone: "Now on M4: 1,000 articles live",
-    tickets: { merged: 13, blocked: 6, total: 20 }, yours: 20, yours_text: "All 20 tickets yours", mine: true,
+    tickets: { merged: 13, blocked: 6, total: 20 }, yours: 20, yours_text: "20 tickets yours", mine: true,
   }),
   row("project-w", kim, [lee], {
     goal: "A new sign-in page for the web app.", milestone: "Now on M2: sign-in page", tickets: { merged: 4, blocked: 0, total: 9 },
@@ -133,6 +133,8 @@ const MANY_PROJECTS: HomeProject[] = Array.from({ length: 12 }, (_, i) => {
   return { ...b, id, name: id, lead: LEADS[i % 3], mine: i % 3 === 0, scope: i % 4 === 0 ? "private" : "team", yours_text: i % 3 === 0 ? "2 tickets yours" : "" };
 });
 
+const and = (xs: string[]) => (xs.length === 1 ? xs[0] : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+
 /** The three keys a team cell adds for its projects: the list as the Team view has it (a stub for each private
  *  project the person is not on), the counts and the one line about the hidden ones. */
 function projectKeys(rows: HomeProjectRow[]): Pick<HomeData, "projects" | "counts" | "hidden_summary"> {
@@ -141,7 +143,7 @@ function projectKeys(rows: HomeProjectRow[]): Pick<HomeData, "projects" | "count
   const leads = [...new Set(stubs.flatMap((s) => ("hidden" in s && s.lead ? [s.lead.name] : [])))];
   return {
     projects: rows, counts: { mine: shown.filter((p) => p.mine).length, team: shown.length },
-    hidden_summary: stubs.length ? `${stubs.length} private project${stubs.length > 1 ? "s" : ""} you are not on${leads.length ? `, led by ${leads.join(" and ")}` : ""}` : undefined,
+    hidden_summary: stubs.length ? `${stubs.length} private project${stubs.length > 1 ? "s" : ""} you are not on${leads.length ? `, led by ${and(leads)}` : ""}` : undefined,
   };
 }
 
@@ -218,7 +220,7 @@ export const manyItems: HomeData = team(
   { summary: "30 things wait for you.", you_are_waiting_on: [], ...projectKeys(MANY_PROJECTS) },
 );
 
-/** A private project the person is not on: no row, only the one line under the list, in both views. */
+/** A private project the person is not on: a quiet row in Team, one line under the list in Mine. */
 export const privateNotOn: HomeData = team(
   asked.slice(0, 2), "2 things wait for you.",
   { summary: "2 things wait for you.", ...projectKeys([...TEAM_PROJECTS, { hidden: true, lead: { name: "Lee" } }]) },
