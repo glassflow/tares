@@ -126,7 +126,7 @@ export interface StartChecklistProps {
   /** The `do` action running now; its button reads Starting and the others wait. */
   doing?: string | null;
   /** A short line under the heading, such as why a `do` action failed. */
-  notice?: string | null;
+  notice?: React.ReactNode;
 }
 
 export function StartChecklist({ block, title, hide = hideStart, onHidden, onDo, doing, notice }: StartChecklistProps) {

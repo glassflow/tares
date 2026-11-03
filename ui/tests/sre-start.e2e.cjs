@@ -192,6 +192,41 @@ function cleanEnv(home, dist, extra = {}) {
     }
   });
 
+  // ── Try the demo service on a live cell (TR-831) ──────────────────────────
+  await live("new", {}, async () => {
+    const { ctx, page } = await newPage(1440);
+    const creates = [];
+    page.on("request", (r) => { if (r.method() === "POST" && new URL(r.url()).pathname === "/api/projects") creates.push(r.url()); });
+    await openLive(page);
+    await page.getByTestId("start-checklist").waitFor();
+    const demoBtn = () => page.getByTestId("start-checklist").getByRole("button", { name: "Try the demo service" });
+
+    // A refused create: the notice names the symptom and links to the steps; nothing is made
+    await page.route("**/api/projects", (r) => (r.request().method() === "POST"
+      ? r.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "down" }) }) : r.continue()));
+    await demoBtn().click();
+    await page.getByTestId("start-notice").waitFor();
+    ck("demo: a refused create says so in plain words", (await text(page.getByTestId("start-notice"))) === "Could not start the demo. Try again in a moment, or set it up step by step.",
+       await text(page.getByTestId("start-notice")));
+    ck("demo: and the notice links to the steps", (await page.getByTestId("start-notice-link").getAttribute("href")) === "/projects/new/ai_sre_demo");
+    ck("demo: the button works again after a refusal", (await demoBtn().isEnabled()));
+    await checkWords(page, ck, "demo notice");
+    await page.unroute("**/api/projects");
+
+    // A create that goes through: the sixth row shows without waiting for the cell's cache
+    creates.length = 0;
+    const started = Date.now();
+    await demoBtn().click();
+    const shown = await page.locator("[data-testid=start-step][data-key=test_incident]").waitFor({ timeout: 4000 }).then(() => true, () => false);
+    const took = Date.now() - started;
+    ck("demo: the demo row shows up", shown);
+    ck("demo: the click makes one project", creates.length === 1, String(creates.length));
+    ck("demo: the home shows the demo row within 4 seconds (not after the cache wait)", took < 4000, `${took} ms`);
+    ck("demo: six rows, the signals row ticked", (await steps(page).count()) === 6 && (await doneOf(page))[1] === true, (await keysOf(page)).join());
+    ck("demo: the notice is gone", (await page.getByTestId("start-notice").count()) === 0);
+    await ctx.close();
+  });
+
   // ── the sample states (they need no data; the daemon only serves the console) ──
   await live("new", {}, async () => {
     for (const name of ["start-partial", "start-demo", "new-cell"]) {

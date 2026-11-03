@@ -32,7 +32,17 @@ const REFRESH_MS = 5_500;
 const SERVICES_SHOWN = 10;
 const SETUP_TO = "/settings#tools";
 const START_TITLE = "Get started";
-const DEMO_FAILED = "Could not start the demo. Try again in a moment, or set it up step by step.";
+const DEMO_SETUP_TO = "/projects/new/ai_sre_demo";
+// The demo project adds this row to the checklist, so its arrival says the cell took the demo.
+const DEMO_ROW = "test_incident";
+// If the home never shows the demo row, read again after this and let the button work again.
+const DEMO_WAIT_MS = 5_500;
+const DEMO_FAILED = (
+  <>
+    Could not start the demo. Try again in a moment, or{" "}
+    <Link to={DEMO_SETUP_TO} className="underline underline-offset-2" data-testid="start-notice-link">set it up step by step</Link>.
+  </>
+);
 
 const asRow = (s: HomeService): ServiceRowItem => ({
   id: s.name,
@@ -127,9 +137,20 @@ export default function Home() {
   React.useEffect(() => () => { clearTimeout(timer.current); clearTimeout(demoTimer.current); }, []);
   const navigate = useNavigate();
   const [doing, setDoing] = React.useState<string | null>(null);
-  const [startNote, setStartNote] = React.useState<string | null>(null);
+  const [startNote, setStartNote] = React.useState<React.ReactNode>(null);
+  const demoWait = React.useRef(false);
 
   const home = data && shown && shown.base === data ? shown.home : data;
+
+  // The demo was created: the button stays busy (a second click would make a second demo) until the
+  // home answers with the demo's row.
+  React.useEffect(() => {
+    if (demoWait.current && data?.start?.steps.some((s) => s.key === DEMO_ROW)) {
+      demoWait.current = false;
+      clearTimeout(demoTimer.current);
+      setDoing(null);
+    }
+  }, [data]);
 
   const act = async (key: string, run: () => Promise<SreHome | void>, refresh = true) => {
     if (!data || !home) return;
@@ -148,8 +169,9 @@ export default function Home() {
     }
   };
 
-  // "Try the demo service": create it, then read the home again once the cell's short cache of it
-  // has expired. The button stays busy until then, so a second click cannot make a second demo.
+  // "Try the demo service": create it, then read the home again at once (the cell drops its short
+  // cache of the home when a project is made). The button stays busy until the home shows the demo,
+  // so a second click cannot make a second demo.
   const doStart = async (name: string) => {
     if (name !== "start_demo" || doing) return;
     setDoing(name);
@@ -158,8 +180,10 @@ export default function Home() {
     try {
       const to = await startDemo();
       if (to) { navigate(to); return; }
+      demoWait.current = true;
+      reload();
       clearTimeout(demoTimer.current);
-      demoTimer.current = setTimeout(() => { reload(); setDoing(null); }, REFRESH_MS);
+      demoTimer.current = setTimeout(() => { demoWait.current = false; reload(); setDoing(null); }, DEMO_WAIT_MS);
     } catch {
       setStartNote(DEMO_FAILED);
       setDoing(null);
