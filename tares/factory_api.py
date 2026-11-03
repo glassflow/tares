@@ -1095,7 +1095,7 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         c = SimpleNamespace(store=store, h=h, stations=stations, work_of=work_of,
                             work_person=work_person, my_projects=my_projects, queue=queue,
                             settings=settings, signoff_state=signoff_state,
-                            waits_for_me=waits_for_me, desk_is_mine=desk_is_mine)
+                            waits_for_me=waits_for_me, desk_is_mine=desk_is_mine, leads=leads)
         return factory_team.team_home(c, request, now or now_utc())
 
     @app.get("/api/crew/projects")
@@ -2766,4 +2766,4 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         return {"repos": [r for r in rows if r["path"] or r["name"]]}
 
     return SimpleNamespace(stations=stations, queue=queue, pace=pace, settings=settings,
-                           team_home=team_home)
+                           team_home=team_home, hidden_ids=lambda: h.hidden_ids())
