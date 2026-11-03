@@ -1,4 +1,4 @@
-import type { HomeData, HomeItem } from "./home.types";
+import type { HomeData, HomeItem, HomeWaitingOn } from "./home.types";
 import { busy } from "./homeSamples";
 
 // Sample bodies of the factory home on a cell with more than one person (the keys tares/factory_team.py
@@ -9,6 +9,7 @@ const kim = { id: "kim", name: "Kim" };
 const lee = { id: "lee", name: "Lee" };
 const projectX = { id: "project-x", name: "project-x" };
 const projectY = { id: "project-y", name: "project-y" };
+const projectZ = { id: "project-z", name: "project-z" };
 
 function item(id: string, over: Partial<HomeItem> & Pick<HomeItem, "kind" | "label" | "title" | "detail" | "meta">): HomeItem {
   return { id, project: null, repo: null, from: crew, since: null, waited: "2 days", actions: [], ...over };
@@ -57,17 +58,44 @@ const asked: HomeItem[] = [
   }),
 ];
 
+const handOver = { label: "Hand over anyway", primary: false, do: "hand_over_anyway" as const };
+
+/** Two projects the person leads: one waits on Kim, one has a repo nobody owns. */
+const waitingOn: HomeWaitingOn[] = [
+  {
+    project: projectY, title: "project-y: the web ticket cannot be handed over yet",
+    detail: "Kim has not answered Q1 (how the web page gets its data), asked 3 hours ago, and has not signed off example-org/service-b.",
+    repos: [
+      { repo: "example-org/service-a", owner: null, state: "yours" },
+      { repo: "example-org/service-b", owner: kim, state: "waiting" },
+      { repo: "example-org/service-d", owner: lee, state: "signed_off" },
+    ],
+    open_questions: [{ id: "q1", to: kim, asked_at: null, waited: "3 hours" }],
+    actions: [handOver],
+  },
+  {
+    project: projectZ, title: "project-z: a repo has no owner",
+    detail: "example-org/service-c has tickets but nobody owns it, so nobody can sign it off.",
+    repos: [
+      { repo: "example-org/service-a", owner: null, state: "yours" },
+      { repo: "example-org/service-c", owner: null, state: "no_owner" },
+    ],
+    open_questions: [],
+    actions: [{ label: "Set an owner", primary: true, href: "/settings/advanced" }],
+  },
+];
+
 const TEAM_KEYS = {
   summary: "6 things wait for you. You are waiting on Kim for 1 sign-off.",
-  you_are_waiting_on: [],
+  you_are_waiting_on: waitingOn,
   counts: { mine: 2, team: 3 },
   crews: [],
   crews_quiet: [],
   areas: [],
 };
 
-function team(items: HomeItem[], headline: string): HomeData {
-  return { ...busy, ...TEAM_KEYS, headline, waiting_for_you: items, waiting_total: items.length };
+function team(items: HomeItem[], headline: string, over: Partial<HomeData> = {}): HomeData {
+  return { ...busy, ...TEAM_KEYS, ...over, headline, waiting_for_you: items, waiting_total: items.length };
 }
 
 /** Three people: items from Kim, from the crew and one from Lee, each with its actions. */
@@ -82,7 +110,8 @@ export const threePeople: HomeData = team(
 
 /** Nothing addressed to the person. */
 export const nothingWaiting: HomeData = {
-  ...team([], "The crew is working on 5 tickets. Nothing waits for you."), summary: "Nothing waits for you.",
+  ...team([], "The crew is working on 5 tickets. Nothing waits for you.", { you_are_waiting_on: [] }),
+  summary: "Nothing waits for you.",
 };
 
 /** A question of about 600 characters, which wraps and never pushes the row wider than the card. */
@@ -94,6 +123,9 @@ const LONG_QUESTION =
   + "up, a lead needs a place to change the number, and a project that goes over its seats needs a message that says "
   + "what to do next. Please name the one you want and say why, so the tickets can be written once.";
 
+/** A project name of 90 characters, which wraps and never pushes the row wider than the card. */
+const LONG_NAME = "project-for-the-enterprise-edition-with-a-name-that-keeps-going-on-and-on-and-on-2026-v2-b";
+
 export const longText: HomeData = team(
   [item("question:long", {
     kind: "question", label: "Question for you", title: "project-with-a-very-long-name-for-the-enterprise-edition-2026",
@@ -101,6 +133,10 @@ export const longText: HomeData = team(
     actions: [{ label: "Answer", primary: true, do: "answer" }],
   })],
   "1 thing waits for you.",
+  {
+    summary: "1 thing waits for you. You are waiting on Kim for 1 sign-off.",
+    you_are_waiting_on: [{ ...waitingOn[0], project: { ...projectY, name: LONG_NAME }, title: `${LONG_NAME}: the web ticket cannot be handed over yet` }],
+  },
 );
 
 /** Thirty items: eight rows, then Show all 30. */
@@ -112,6 +148,7 @@ export const manyItems: HomeData = team(
     actions: [{ label: "Answer", primary: true, do: "answer" }],
   })),
   "30 things wait for you, the oldest for 31 hours.",
+  { summary: "30 things wait for you.", you_are_waiting_on: [] },
 );
 
 /** A cell of one person: no team keys, so the page keeps the v2 list. */

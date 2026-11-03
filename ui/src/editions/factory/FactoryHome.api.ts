@@ -81,3 +81,12 @@ export function declineGrant(grant: string, reason: string): Promise<unknown> {
     body: JSON.stringify(reason ? { reason } : {}),
   });
 }
+
+/** The project's lead hands it to a crew although a repo's owner has not signed off, and says why.
+ *  The daemon refuses with a sentence when the person is not the lead (403) or the reason is empty (409). */
+export function handOverAnyway(project: string, reason: string): Promise<unknown> {
+  return request(`/api/projects/${enc(project)}/handover`, {
+    method: "POST",
+    body: JSON.stringify({ override_reason: reason }),
+  });
+}

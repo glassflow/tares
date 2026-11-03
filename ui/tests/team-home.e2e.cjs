@@ -240,7 +240,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       const owed = (await api("GET", `/api/projects/${ids.project}/signoffs`, undefined, ids.keys.kim)).body;
       const webRow = owed.signoffs.find((r) => r.repo === "acme/web");
       const apiRow = owed.signoffs.find((r) => r.repo === "acme/api");
-      ck(t("acme/web is signed off by its owner, from the console"), !!webRow && webRow.signed_off === true && webRow.owner.id === ids.people.alex && !!webRow.via && !!webRow.at, JSON.stringify(webRow));
+      ck(t("acme/web is signed off by its owner, from the console"), !!webRow && webRow.signed_off === true && !!webRow.owner && webRow.owner.id === ids.people.alex && !!webRow.via && !!webRow.at, JSON.stringify(webRow));
       ck(t("acme/api, which Alex does not own, is not signed off"), !!apiRow && apiRow.signed_off === false, JSON.stringify(apiRow));
       ck(t("four remain"), (await rows.count()) === 4, String(await rows.count()));
 
@@ -357,6 +357,40 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
          && (await page.getByRole("button", { name: "Allow" }).count()) >= 1);
       await shot(page, "one-person", width);
       await checkWords(page, ck, t("one person"));
+      await ctx.close();
+    }
+    // ── You are waiting on, from the sample states: the section, its chips and the Hand over anyway box ──
+    for (const width of [390, 1440]) {
+      const t = (s) => `@${width}: ${s}`;
+      const ctx = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 } });
+      await ctx.addInitScript((tok) => { try { localStorage.setItem("taresSamples", "1"); localStorage.setItem("tares_token", tok); } catch { /* blocked */ } }, ids.keys.alex);
+      const page = await ctx.newPage();
+      const want = { threePeople: 2, longText: 1, nothingWaitingTeam: 0, manyItems: 0 };
+      for (const [sample, n] of Object.entries(want)) {
+        await page.goto(`${BASE}/?sample=${sample}`, { waitUntil: "load" });
+        await page.getByTestId("factory-home").waitFor();
+        await settle(page);
+        ck(t(`${sample}: ${n} rows under You are waiting on`), (await page.getByTestId("waiting-on-row").count()) === n, String(await page.getByTestId("waiting-on-row").count()));
+        if (!n) ck(t(`${sample}: no section when nothing is waited on`), (await page.getByTestId("waiting-on").count()) === 0);
+        ck(t(`${sample}: no horizontal scroll`), (await overflow(page)) <= 0);
+        await checkWords(page, ck, t(`${sample} waiting on`));
+      }
+      await page.goto(`${BASE}/?sample=threePeople`, { waitUntil: "load" });
+      await page.getByTestId("waiting-on").waitFor();
+      const chips = await page.getByTestId("waiting-on-chip").evaluateAll((els) => els.map((e) => `${e.getAttribute("data-state")}:${e.textContent}`));
+      ck(t("a chip per repo, with its state and who"), chips.some((c) => c.startsWith("waiting:")) && chips.some((c) => c.startsWith("signed_off:")) && chips.some((c) => c.startsWith("no_owner:") && /no owner/.test(c)), JSON.stringify(chips));
+      ck(t("Remind is not offered"), (await page.getByRole("button", { name: "Remind" }).count()) === 0);
+      await page.getByRole("button", { name: "Hand over anyway" }).first().click();
+      const confirm = page.getByTestId("handover-confirm");
+      await page.getByTestId("handover-dialog").waitFor();
+      ck(t("Hand over is off with no reason"), await confirm.isDisabled());
+      await page.getByTestId("handover-reason").fill("   ");
+      ck(t("Hand over is off with only spaces"), await confirm.isDisabled());
+      await page.getByTestId("handover-reason").fill("Kim is out until Monday, so the ticket should not wait.");
+      ck(t("Hand over is on with a reason"), await confirm.isEnabled());
+      await shot(page, "waiting-on-dialog", width);
+      await page.getByRole("button", { name: "Cancel" }).click();
+      ck(t("Cancel closes the box"), (await page.getByTestId("handover-dialog").count()) === 0);
       await ctx.close();
     }
     const soloHome = await fetch(`http://127.0.0.1:${SOLO}/api/home`).then((r) => r.json());

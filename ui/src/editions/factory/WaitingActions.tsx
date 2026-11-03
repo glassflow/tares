@@ -1,13 +1,14 @@
 import * as React from "react";
 
 import { Button, Checkbox, Dialog, Textarea } from "../../components/edition";
-import type { HomeAction, HomeItem } from "./home.types";
+import type { HomeAction, HomeItem, HomeWaitingOn } from "./home.types";
 
-// The panels and dialogs behind Answer, Sign off and Decline on the team home. Each is told what
+// The panels and dialogs behind Answer, Sign off, Decline and Hand over anyway on the team home. Each is told what
 // to show and calls back; the page (FactoryHome.tsx) makes the call and shows a refusal under the row.
 
 const ANSWER_MAX = 4000;
 const REASON_MAX = 1000;
+const OVERRIDE_MAX = 500;   // the daemon keeps this much of a hand-over reason
 
 /** The words a person gives an answer, and whether it stands for next time. */
 export interface AnswerGiven { words: string; standing: boolean }
@@ -99,6 +100,41 @@ export function DeclineDialog({ item, busy, error, onClose, onConfirm }: {
       <div className="flex min-w-0 flex-col gap-3">
         <p className="m-0 text-sm [overflow-wrap:anywhere]" data-user-text>{item.title}</p>
         <Textarea label="Why (optional)" rows={3} value={text} disabled={busy} maxLength={REASON_MAX} data-testid="decline-reason"
+          onChange={(e) => setText(e.target.value)} />
+        {error && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-[color:var(--err)]" data-words-exempt>{error}</p>}
+      </div>
+    </Dialog>
+  );
+}
+
+const andList = (names: string[]): string =>
+  names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+
+/** Hand over anyway: what is missing, then the lead's reason, which the crew and the owners can read. */
+export function HandOverDialog({ entry, busy, error, onClose, onConfirm }: {
+  entry: HomeWaitingOn; busy: boolean; error: string | null; onClose: () => void; onConfirm: (reason: string) => void;
+}) {
+  const [text, setText] = React.useState("");
+  const reason = text.trim();
+  const missing = entry.repos.filter((r) => r.state === "waiting" || r.state === "no_owner");
+  const owners = [...new Set(missing.flatMap((r) => (r.state === "waiting" && r.owner ? [r.owner.name] : [])))];
+  const unowned = missing.filter((r) => r.state === "no_owner").map((r) => r.repo);
+  const bits = [
+    ...(owners.length ? [`${andList(owners)} ${owners.length === 1 ? "has" : "have"} not signed off ${andList(missing.filter((r) => r.state === "waiting").map((r) => r.repo))}.`] : []),
+    ...(unowned.length ? [`${andList(unowned)} ${unowned.length === 1 ? "has" : "have"} no owner.`] : []),
+  ];
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o && !busy) onClose(); }} data-testid="handover-dialog"
+      title={`Hand over ${entry.project.name} anyway?`}
+      description={`${bits.join(" ")} The crew will start those tickets without the sign-off, and the owners will see why.`.trim()}
+      footer={(
+        <>
+          <Button variant="secondary" disabled={busy} onClick={onClose}>Cancel</Button>
+          <Button busy={busy} disabled={!reason} onClick={() => onConfirm(reason)} data-testid="handover-confirm">Hand over</Button>
+        </>
+      )}>
+      <div className="flex min-w-0 flex-col gap-3">
+        <Textarea label="Why hand it over now?" rows={3} value={text} disabled={busy} maxLength={OVERRIDE_MAX} data-testid="handover-reason"
           onChange={(e) => setText(e.target.value)} />
         {error && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-[color:var(--err)]" data-words-exempt>{error}</p>}
       </div>
