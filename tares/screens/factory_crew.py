@@ -12,7 +12,7 @@ route. Settings for pace and grants live on the Settings page, not here.
 """
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from .. import claude_usage
 from .. import factory as factory_mod
@@ -87,13 +87,24 @@ def register(app, store, h, ctx):
         except Exception:
             return None
         ps = rep["projects"]
-        parts = []
-        for key, one, many in (("done", "ticket done", "tickets done"), ("started", "started", "started"),
-                               ("review", "in review", "in review"), ("blocked", "blocked", "blocked"),
-                               ("needs_you", "question for you", "questions for you")):
-            n = sum(len(p[key]) for p in ps)
-            if n:
-                parts.append(f"{n} {one if n == 1 else many}")
+        since, until = rep["since"], rep["until"]
+
+        def asked_in_range(d: dict) -> bool:
+            at = d.get("asked_at")
+            return isinstance(at, datetime) and since <= at < until
+
+        # only what happened inside the range: what is merely still standing (a ticket that has
+        # sat in review for a week, an old question) is not "in the last day"
+        counts = (
+            ("done", sum(len(p["done"]) for p in ps), "ticket done", "tickets done"),
+            ("started", sum(len(p["started"]) for p in ps), "started", "started"),
+            ("review", sum(1 for p in ps for x in p["review"] if x.get("new")),
+             "sent to review", "sent to review"),
+            ("blocked", sum(1 for p in ps for x in p["blocked"] if x.get("new")), "blocked", "blocked"),
+            ("needs_you", sum(1 for p in ps for d in p["needs_you"] if asked_in_range(d)),
+             "question for you", "questions for you"),
+        )
+        parts = [f"{n} {one if n == 1 else many}" for _, n, one, many in counts if n]
         if not parts:
             return None
         names = ", ".join(p["name"] for p in ps[:3]) + (f" and {len(ps) - 3} more" if len(ps) > 3 else "")
