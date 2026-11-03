@@ -8,7 +8,7 @@ import ConfirmDialog from "../ConfirmDialog";
 import { Combo, CopyButton, ErrorState, Picker, TimeAgo, formatBytes, usePolling } from "../bits";
 import { FACTORY_POLL_MS, Facts, NotHere, VLink, ViewHead, type Ctx } from "./common";
 import { GitHubMark, LinearMark, prBrief } from "./factory";
-import type { Doc, DocKind, GitHubLink, Ticket, TicketStatus } from "../../types";
+import type { Doc, DocKind, PersonalDoc as PersonalDocData, GitHubLink, Ticket, TicketStatus } from "../../types";
 
 // What a spec session leaves in a project for the session that builds it (TR-403, TR-407): the
 // docs (starting prompt, spec, plan, AGENTS.md, notes), the tickets in order with a working doc
@@ -175,6 +175,7 @@ export function DocsView({ ctx }: { ctx: Ctx }) {
           </table>
         </>
       )}
+      <PersonalDocsPanel />
       {working > 0 && (
         <p className="help" style={{ marginTop: 12 }}>
           {working} working {working === 1 ? "doc sits" : "docs sit"} with {working === 1 ? "its ticket" : "their tickets"}:{" "}
@@ -182,6 +183,52 @@ export function DocsView({ ctx }: { ctx: Ctx }) {
         </p>
       )}
     </>
+  );
+}
+
+/** The caller's own AGENTS.md and memory: only they see them, in every project. Hidden when the
+ *  key belongs to no person. A line is added at the end; the daemon refuses past 32 KB. */
+function PersonalDocsPanel() {
+  const { data, reload } = usePolling(() => api.personalDocs(), 60000);
+  if (!data?.person) return null;
+  return (
+    <>
+      <h3 style={{ margin: "22px 0 8px" }}>Only you see these</h3>
+      <PersonalDoc name="agents" title="Your rules" doc={data.agents} onAdded={reload}
+                   help="How you want sessions to work with you. They add to the team rules; where they conflict, the team rule wins." />
+      <PersonalDoc name="memory" title="Your memory" doc={data.memory} onAdded={reload}
+                   help="What a session should remember about you and how you work." />
+    </>
+  );
+}
+
+function PersonalDoc({ name, title, help, doc, onAdded }: {
+  name: "agents" | "memory"; title: string; help: string; doc: PersonalDocData | null; onAdded: () => void;
+}) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>();
+  const add = async () => {
+    setBusy(true); setErr(undefined);
+    try { await api.addPersonalLine(name, text.trim()); setText(""); onAdded(); }
+    catch (e) { setErr(String((e as Error).message ?? e)); }
+    setBusy(false);
+  };
+  return (
+    <div className="panel" style={{ marginBottom: 12 }}>
+      <h4 style={{ margin: "0 0 4px" }}>{title}</h4>
+      <p className="help" style={{ margin: "0 0 8px" }}>{help}</p>
+      <div className="md">
+        {doc?.body.trim() ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{doc.body}</ReactMarkdown>
+          : <span className="dim">Nothing yet.</span>}
+      </div>
+      {err && <div className="alert error" style={{ marginTop: 8 }}>{err}</div>}
+      <form className="btnrow" style={{ marginTop: 10 }} onSubmit={(e) => { e.preventDefault(); if (text.trim() && !busy) add(); }}>
+        <input type="text" aria-label={`Add a line to ${title}`} maxLength={500} value={text} placeholder="add one line"
+               style={{ flex: "1 1 280px" }} onChange={(e) => setText(e.target.value)} />
+        <button type="submit" disabled={busy || !text.trim()}>{busy ? "…" : "Add"}</button>
+      </form>
+    </div>
   );
 }
 
@@ -530,7 +577,7 @@ function TicketCrew({ ctx, ticket }: { ctx: Ctx; ticket: Ticket }) {
           {reviews.map((r) => (
             <div key={r.id} style={{ marginTop: 10 }}>
               <b>Round {r.round}</b>{" "}
-              <span className="dim">· {r.verdict === "pass" ? "Pass" : r.verdict === "changes" ? "changes asked" : "blocked"} on <span className="mono">{r.head.slice(0, 7)}</span> · <TimeAgo ts={r.at} />{r.by && <> · {r.by}</>}{r.fixed.length > 0 && <> · fixed {r.fixed.join(", ")}</>}</span>
+              <span className="dim">· {r.verdict === "pass" ? "Pass" : r.verdict === "changes" ? "changes asked" : "blocked"} on <span className="mono">{r.head.slice(0, 7)}</span> · <TimeAgo ts={r.at} />{(r.by_label ?? r.by) && <> · {r.by_label ?? r.by}</>}{r.fixed.length > 0 && <> · fixed {r.fixed.join(", ")}</>}</span>
               <div className="dim" style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>Verified: {r.verified}{r.not_verified && <>{"\n"}Not verified: {r.not_verified}</>}</div>
               {r.findings.length > 0 && (
                 <ul className="tk-history">
@@ -553,7 +600,7 @@ function TicketCrew({ ctx, ticket }: { ctx: Ctx; ticket: Ticket }) {
             {assumptions.map((a) => (
               <li key={a.label}>
                 <b>{a.label}</b> <span className="dim">({a.state})</span> {a.question} <b>→</b> {a.choice}
-                <div className="dim">{a.why}{a.made_by && <> · by {a.made_by}</>}{a.words && <> · you said: "{a.words}"</>}</div>
+                <div className="dim">{a.why}{(a.by_label ?? a.made_by) && <> · by {a.by_label ?? a.made_by}</>}{a.words && <> · you said: "{a.words}"</>}</div>
               </li>
             ))}
           </ul>
@@ -569,7 +616,7 @@ function TicketCrew({ ctx, ticket }: { ctx: Ctx; ticket: Ticket }) {
                 {c.broke_test && <span className="dim"> · broke the code under {c.broke_test}: it failed, then passed</span>}
                 {c.match === "not_found" && <div className="fo-warn">not found in the recording</div>}
                 {c.match === "differs" && <div className="fo-warn">the recording shows something else{c.recorded && <>: {c.recorded.slice(0, 200)}</>}</div>}
-                <div className="dim"><TimeAgo ts={c.at} />{c.by && <> · {c.by}</>}</div>
+                <div className="dim"><TimeAgo ts={c.at} />{(c.by_label ?? c.by) && <> · {c.by_label ?? c.by}</>}</div>
               </li>
             ))}
           </ul>
@@ -583,7 +630,7 @@ function TicketCrew({ ctx, ticket }: { ctx: Ctx; ticket: Ticket }) {
               <li key={i}>
                 <TimeAgo ts={h.at} /> · {h.field === "holder" ? <>given to <span className="mono">{h.value}</span></> : <>moved to <b>{h.value}</b></>}
                 {h.reason && <span className="dim">: {h.reason}</span>}
-                {h.by && <span className="dim"> · by {h.by}</span>}
+                {(h.by_label ?? h.by) && <span className="dim"> · by {h.by_label ?? h.by}</span>}
               </li>
             ))}
           </ul>

@@ -9,6 +9,7 @@ test_agent_stats
 test_agents
 test_ai_sre_demo
 test_api_keys
+test_areas
 test_auth
 test_blind_spots
 test_budget_period
@@ -22,8 +23,10 @@ test_clean_env
 test_cli
 test_cloud_connect
 test_crew_standup
+test_crews
 test_degraded
 test_delete_cascade
+test_desk_person
 test_docs
 test_duckdb_memory
 test_edition
@@ -59,6 +62,7 @@ test_github_app
 test_github_credentials
 test_github_tickets
 test_goal_first
+test_grants_teams
 test_handoffs
 test_homebrew_formula
 test_http_poll
@@ -78,14 +82,23 @@ test_mcp_station_headers
 test_metrics
 test_model_provider
 test_model_providers
+test_my_work
 test_normalize
 test_openai_provider
 test_otlp
 test_otlp_grpc
+test_owner_claims_local
+test_people
+test_person_attribution
+test_personal_docs
+test_personal_limits
 test_pickup
 test_plugin_challenger
 test_postgres
 test_pricing
+test_private_reads
+test_private_routes
+test_project_access
 test_project_keys
 test_project_timeline
 test_projects
@@ -93,6 +106,7 @@ test_projects_activity
 test_projects_unit_upgrade
 test_push_wins
 test_rca_callback_anchor
+test_recording_person
 test_resources
 test_rius_rca
 test_run_results
@@ -111,6 +125,7 @@ test_slack_ask
 test_slack_finding_post
 test_slack_incident_buttons
 test_slack_verify
+test_spec_signoff
 test_sre_home
 test_sre_incidents
 test_sre_runbooks
@@ -121,6 +136,8 @@ test_sre_timeline
 test_startup_fill
 test_state_postgres
 test_status
+test_teams_e2e
+test_ticket_assignee
 test_tracing
 test_trigger_debounce
 test_upgrade_hard_stop

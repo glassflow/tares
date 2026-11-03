@@ -8,12 +8,14 @@ trigger/agent/project management happens over /api (or the UI at /).
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import hmac
 import json
 import ipaddress
 import os
 import socket
+import threading
 import time
 import re
 import secrets
@@ -59,7 +61,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_
 from . import metrics as _metrics
 from . import docs as docs_mod
 from . import factory as factory_mod
-from . import claude_usage, factory_api, standup as standup_mod
+from . import areas as areas_mod, claude_usage, factory_api, standup as standup_mod
 from . import edition as edition_mod
 from . import factory_home, sre_home, screens
 from . import sre as sre_mod
@@ -68,6 +70,7 @@ from . import feedback as feedback_mod
 from . import incidents as incidents_mod
 from . import linear as _linear
 from . import github_tickets as _gh_tickets
+from . import ticket_assignee
 from . import skills as skills_mod
 from . import providers as providers_mod
 from .runtime import Runtime
@@ -302,11 +305,33 @@ def _serve_ui(path: str):
     return FileResponse(UI_DIST / "index.html")
 
 
-def _degraded_app(reason: str) -> FastAPI:
+def _state_db_unreachable(e: BaseException) -> bool:
+    """True when the store failed because the Postgres state database (TARES_STATE_DSN) could not
+    be reached or refused the login: no DNS, a connect timeout, no connection slots left. Those
+    pass on their own, unlike a locked or corrupt DuckDB file or a state database that does not
+    hold this cell's state."""
+    try:
+        import psycopg
+    except ImportError:
+        return False
+    x = e.__cause__ or e.__context__
+    while x is not None:
+        if isinstance(x, psycopg.OperationalError):
+            return True
+        x = x.__cause__ or x.__context__
+    return False
+
+
+def _degraded_app(reason: str, retry: bool = False) -> FastAPI:
     """The app we serve when the store could not be opened. It exists so the failure reaches a
     human instead of ERR_CONNECTION_REFUSED: the console still loads and every data route answers
     503 with the reason, so the UI can name the problem. No runtime, no connectors, no ingest —
-    nothing that would need the store. Restart once the DB is reachable again."""
+    nothing that would need the store. Restart once the DB is reachable again.
+
+    `retry`: the failure passes on its own (_state_db_unreachable), so /health answers 503 and the
+    liveness probe restarts the daemon, which tries the database again. Left at 200, a cell that
+    started during a DNS outage or a burst of restarts that filled the database's connection slots
+    stayed degraded until someone restarted it by hand (2026-10-31: twelve cells)."""
     app = FastAPI(title="taresd (degraded)")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                        allow_headers=["*"])
@@ -319,7 +344,7 @@ def _degraded_app(reason: str) -> FastAPI:
                 "sources": [], "pct_used": None}
         if LOGIN_URL:
             body["login_url"] = LOGIN_URL
-        return body
+        return JSONResponse(body, status_code=503) if retry else body
 
     async def unavailable():
         return JSONResponse({"detail": f"database unavailable; {reason}", "status": "down"},
@@ -594,6 +619,10 @@ def make_app() -> FastAPI:
         # traceback (degraded mode explains the failure to the user, it does not hide it from the
         # operator) and serve the console + 503s instead of exiting before uvicorn ever binds.
         traceback.print_exc()
+        if _state_db_unreachable(e):
+            print(f"taresd: DEGRADED; {e.reason}. Serving the console and 503s; /health answers "
+                  f"503 too, so the liveness probe restarts this daemon to try again.", flush=True)
+            return _degraded_app(e.reason, retry=True)
         print(f"taresd: DEGRADED; {e.reason}. Serving the console and 503s; fix the database "
               f"and restart.", flush=True)
         return _degraded_app(e.reason)
@@ -667,7 +696,7 @@ def make_app() -> FastAPI:
         runtime.start_all()
         # the daemon's own counters (/metrics, TR-308): storage gauges read on scrape, the event
         # loop watched by a one-second timer for the whole life of the process
-        _metrics.set_storage_probe(lambda: {**store.usage(), **{
+        _metrics.set_storage_probe(lambda: {**store.storage_usage(), **{
             k: v for k, v in storage_state(store, DB_PATH).items()
             if k in ("max_bytes", "pct_used", "paused")}})
         try:
@@ -728,8 +757,14 @@ def make_app() -> FastAPI:
     # the only writes a read key may make: reads that take a body, and a reader's own delivery.
     # Every other write, including a route added later, needs admin.
     _READ_WRITES = ("/read", "/subscribe", "/unsubscribe", "/api/labels/preview")
+    _PERSONAL_LINES = re.compile(r"^/api/docs/personal/[^/]+/lines$")
     # a project's skills: what its agents are told to do, so writing one is a catalog write
     _SKILLS_PATH = re.compile(r"^/api/projects/[^/]+/skills(/|$)")
+
+    _AREA_ONE = re.compile(r"^/api/areas/[^/]+/[^/]+$")
+    _GRANT_WRITE = re.compile(r"^/api/grants(/[^/]+/(consent|revoke))?$")
+    _ANSWER_WRITE = re.compile(r"^/api/projects/[^/]+/questions/[^/]+/answer$")
+    _SIGNOFF_WRITE = re.compile(r"^/api/projects/[^/]+/signoffs$")
 
     def _required_scope(method: str, path: str) -> str | None:
         """None = public. 'any' = any valid credential. Reads of credentials and every write are
@@ -747,6 +782,23 @@ def make_app() -> FastAPI:
             return None
         if path == "/api/whoami" or path == "/api/home/start/hide":
             return "any"   # the second one only changes what the caller's own home shows
+        if method == "PUT" and _AREA_ONE.match(path):
+            return "ingest"   # an admin sets any area; a person may claim an unowned repo for
+                              # themselves (TR-627): the handler decides, it needs the credential
+        if method == "POST" and _GRANT_WRITE.match(path):
+            return "ingest"   # a lead, an area owner or a person for themselves (TR-630): the
+                              # handler decides by kind, it needs the credential's person
+        if method == "POST" and (_ANSWER_WRITE.match(path) or _SIGNOFF_WRITE.match(path)):
+            return "ingest"   # an area owner answering a question addressed to them or signing off
+                              # their repo (TR-636): the handler decides by the credential's person
+        if method == "PATCH" and path.startswith("/api/people/"):
+            return "read"   # an admin, or a key bound to that person changing their own name:
+                            # the handler decides, it needs the credential's person
+        if (method == "PUT" and path == "/api/crew/settings") or (
+                method == "POST" and _PERSONAL_LINES.match(path)):
+            return "ingest"  # a person's own crew settings and personal docs (TR-624): the
+                             # handler decides whose, from the credential's person. A read key
+                             # is refused here; admin implies ingest
         # /api/settings holds instance credentials (the Anthropic key): admin even to READ, since
         # a read tells you whether and where a credential is configured.
         if path == "/api/setup/github-suggestion":
@@ -843,17 +895,118 @@ def make_app() -> FastAPI:
         if not tok:
             return None, None
         if AUTH_TOKEN and tok == AUTH_TOKEN:
-            return {"read", "ingest", "admin"}, {"id": "env:auth", "name": "auth token (env)"}
+            # the operator's credential, not a person
+            return ({"read", "ingest", "admin"},
+                    {"id": "env:auth", "name": "auth token (env)", "kind": "system", "person": None})
         key = store.find_api_key(hashlib.sha256(tok.encode()).hexdigest())
         if key:
             last = key.get("last_used_at")
             if last is None or (now_utc() - last).total_seconds() > 60:   # throttle write churn
                 store.touch_api_key(key["id"])
-            ident = {"id": f"key:{key['id']}", "name": key["name"]}
+            ident = {"id": f"key:{key['id']}", "name": key["name"],
+                     "kind": "project" if key.get("project") else "key",
+                     "person": _key_person(key)}
             if key.get("project"):
                 ident["project"] = key["project"]
             return set(key["scopes"]), ident
         return None, None
+
+    def _person_ref(p: dict | None) -> dict | None:
+        """The part of a person a credential carries."""
+        return {"id": p["id"], "name": p["name"], "email": p["email"]} if p else None
+
+    def _key_person(key: dict) -> dict | None:
+        """Who a key acts as: the person it is bound to. A key nobody has bound acts as `local`
+        while `local` is the only person on the cell (a single-user cell keeps working), and as
+        nobody once a second person exists."""
+        if key.get("person_id"):
+            return _person_ref(store.get_person(key["person_id"]))
+        if store.only_local_person():
+            return _person_ref(store.get_person("local"))
+        return None
+
+    def _current_person(request) -> dict | None:
+        """The person making this request ({id, name, email}), or None for the system credential
+        and for a key with no person. Always read from the credential, never from a header or the
+        body. With auth off it is the person `local`."""
+        ident = getattr(request.state, "credential", None)
+        if ident is not None:
+            return ident.get("person")   # resolved once, by the guard
+        # auth off: look `local` up once per request and keep it on the request
+        if AUTH_TOKEN:
+            return None
+        if not hasattr(request.state, "person"):
+            request.state.person = _person_ref(store.get_person("local"))
+        return request.state.person
+
+    def _is_admin(request) -> bool:
+        """The credential may manage people and keys: admin scope (the system credential has it),
+        or auth off, where everyone is the admin."""
+        if not AUTH_TOKEN:
+            return True
+        return "admin" in (getattr(request.state, "scopes", None) or [])
+
+    def _is_system(request) -> bool:
+        """The system credential (the root TARES_AUTH_TOKEN, which is no person), or auth off,
+        where the cell belongs to the one person using it."""
+        if not AUTH_TOKEN:
+            return True
+        return (getattr(request.state, "credential", None) or {}).get("kind") == "system"
+
+    # Who may see a private project (TR-625). The guard below keeps the request being served here,
+    # so the project helpers that ~70 routes already call can check it without taking a request
+    # argument. Auth off has no guard, so nothing is set and every project is visible.
+    _CALLER: contextvars.ContextVar = contextvars.ContextVar("tares_caller", default=None)
+
+    def _can_see(p: dict, request=None) -> bool:
+        """May this caller see project `p`? A team project: anyone who gets this far. A private
+        one: the system credential, a project key for it, and the people on it (its lead and its
+        members). An admin who is none of those does not; they can only hand the lead over (see
+        set_project_access). Rights come from the credential, never from people.is_admin (A9)."""
+        request = request or _CALLER.get()
+        if request is None or p.get("scope") != "private":
+            return True
+        # Slack's /tares ask knows no person, so it runs the Ask agent as the system credential
+        # with this header: every private project is then hidden from it. Only the system
+        # credential can narrow itself this way; anyone else's header is ignored.
+        if _is_system(request) and request.headers.get("x-tares-viewer") != "public":
+            return True
+        if _pk(request) == p["id"]:
+            return True
+        person = _current_person(request)
+        return bool(person and store.is_project_member(p["id"], person["id"]))
+
+    def _hidden_projects() -> list[dict]:
+        """The private projects this caller cannot see; usually none, and then one small query
+        is all a cell-wide read adds (TR-629)."""
+        return [p for p in store.private_projects() if not _can_see(p)]
+
+    def _hidden_ids() -> set[str]:
+        return {p["id"] for p in _hidden_projects()}
+
+    def _read_exclude() -> dict | None:
+        """What event reads leave out: the rows of the projects the caller cannot see."""
+        hp = _hidden_projects()
+        if not hp:
+            return None
+        return {"ids": [p["id"] for p in hp], "names": [p["name"] for p in hp],
+                "shared": sorted(n for n, c in runtime.catalog.sources.items()
+                                 if c.connector in _SHARED_CONNECTORS)}
+
+    def _hidden_sources(hidden: set[str]) -> set[str]:
+        """Sources that belong only to hidden projects. A source shared with a project the caller
+        can see stays; its hidden rows are dropped row by row (store._exclude_sql)."""
+        if not hidden:
+            return set()
+        return {n for n, uids in store.source_memberships().items() if uids and set(uids) <= hidden}
+
+    def _owned_by_hidden(kind: str, name: str, hidden: set[str]) -> bool:
+        """An object whose every project is hidden from the caller (one it shares with a project
+        they can see stays visible)."""
+        if not hidden:
+            return False
+        uids = store.projects_using(kind, name)
+        return bool(uids) and set(uids) <= hidden
 
     # Auth off (no token) → no middleware, the instance is fully open (local default). Auth on →
     # every non-public route needs a credential carrying the required scope; ingest is gated exactly
@@ -878,7 +1031,11 @@ def make_app() -> FastAPI:
                                         status_code=403)
                 request.state.credential = ident
                 request.state.scopes = sorted(scopes)
-            return await call_next(request)
+            token = _CALLER.set(request)
+            try:
+                return await call_next(request)
+            finally:
+                _CALLER.reset(token)
 
     # per-route timing in /metrics (TR-652): added after every other middleware so it is the
     # outermost one and times auth rejections too
@@ -958,13 +1115,26 @@ def make_app() -> FastAPI:
         is off, for an update that leaves the project alone). Unknown answers 400."""
         ref = (ref or "").strip()
         if not ref:
-            return store.default_project_id() if default else None
-        if store.get_project(ref) is not None:
-            return ref
-        p = store.get_project_by_name(ref)
-        if p is None:
+            uid = store.default_project_id() if default else None
+            if uid and not _can_see(store.get_project(uid)):
+                # a default the caller cannot see is no default for them: say what to do, and
+                # never name the project or write into it
+                _err(ValueError("name the project to use (its id or name)"), 400)
+            return uid
+        p = store.get_project(ref) or store.get_project_by_name(ref)
+        if p is None or not _can_see(p):   # a private one the caller cannot see is unknown
             _err(ValueError(f"unknown project {ref!r}"), 400)
         return p["id"]
+
+    def _fallback_project(*uids) -> str | None:
+        """The first project in `uids` that is set, as a fallback for a write that named none (the
+        project that made the object, else the default). One the caller cannot see is no fallback
+        for them: same ask as an unseen default, and nothing is written into it (TR-629)."""
+        uid = next((u for u in uids if u), None)
+        p = store.get_project(uid) if uid else None
+        if p is not None and not _can_see(p):
+            _err(ValueError("name the project to use (its id or name)"), 400)
+        return uid
 
     _SHARED_CONNECTORS = ("finding", "memory")
 
@@ -1004,22 +1174,32 @@ def make_app() -> FastAPI:
         uid = _key_project(request, req.project)
         if uid:
             names, scope = _project_view(uid)
+        exclude = _read_exclude()
+        hidden_src = _hidden_sources(set(exclude["ids"])) if exclude else set()
         if req.sources:
             if _pk(request):
                 # a project key learns nothing about sources outside its project, not even
                 # whether they exist
                 if set(req.sources) - set(names or []):
                     _err(PermissionError(_project_key_denied(uid)), 403)
-            unknown = sorted(set(req.sources) - set(runtime.catalog.sources))
+            unknown = sorted(set(req.sources) - (set(runtime.catalog.sources) - hidden_src))
             if unknown:
                 _err(KeyError(f"unknown sources {unknown}"), 404)
             names = [s for s in req.sources if names is None or s in names]
+        if hidden_src:
+            names = [n for n in (sorted(runtime.catalog.sources) if names is None else names)
+                     if n not in hidden_src]
+        owners: set[str] = set()
         payload, nrows, sources, rows = resolve_read(store, runtime.catalog, req.selector, req.window,
                                                      include_payload=req.include_payload,
-                                                     sources=names, scope=scope)
+                                                     sources=names, scope=scope, exclude=exclude,
+                                                     owners=owners)
         log_key = ", ".join(f"{k}={v}" for k, v in req.selector.items())
         store.log_query("r_" + uuid.uuid4().hex[:12], "(read)", log_key, req.window,
-                        nrows, req.client)
+                        nrows, req.client,
+                        project=store.read_projects(
+                            req.selector, uid, sources=req.sources or sources,
+                            unseen=set(exclude["ids"]) if exclude else None, owners=owners))
         return {"payload": payload, "count": nrows, "sources": sources, "rows": rows}
 
     # Views were removed: a trigger names its own sources. The old routes answer 404 with the
@@ -1074,13 +1254,17 @@ def make_app() -> FastAPI:
                              for t in runtime.catalog.triggers if pk in store.projects_using("trigger", t.name)],
                 "projects": [{"id": pk, "name": p.get("name"), "template": p.get("template")}],
             }
+        hidden = _hidden_ids()
+        hidden_src = _hidden_sources(hidden)
         return {
-            "sources": [{"name": s.name, "type": s.type, "projects": members.get(s.name, [])}
-                        for s in runtime.catalog.sources.values()],
+            "sources": [{"name": s.name, "type": s.type,
+                         "projects": [u for u in members.get(s.name, []) if u not in hidden]}
+                        for s in runtime.catalog.sources.values() if s.name not in hidden_src],
             "triggers": [{"name": t.name, "project": t.project, "sources": t.sources,
-                          "key_field": t.key_field} for t in runtime.catalog.triggers],
+                          "key_field": t.key_field} for t in runtime.catalog.triggers
+                         if not _owned_by_hidden("trigger", t.name, hidden)],
             "projects": [{"id": p["id"], "name": p["name"], "template": p["template"]}
-                         for p in store.list_projects()],
+                         for p in store.list_projects() if p["id"] not in hidden],
         }
 
     # ── catalog.describe — the discovery surface (design doc §4 MCP surface) ──
@@ -1147,7 +1331,16 @@ def make_app() -> FastAPI:
             _err(KeyError(VIEWS_REMOVED), 404)
         if not name or kind not in ("source", "trigger"):
             _err(ValueError("handle must be source:<name> or trigger:<name>"))
+        hidden = _hidden_ids()
+        if hidden:
+            if (name in _hidden_sources(hidden) if kind == "source"
+                    else _owned_by_hidden("trigger", name, hidden)):
+                _err(KeyError(f"unknown {kind} {name!r}"), 404)
         edges = [e for e in _lineage_edges() if handle in (e["from"], e["to"])]
+        if hidden:
+            # a source that feeds a trigger of a hidden project must not name that trigger
+            edges = [e for e in edges
+                     if not _owned_by_hidden("trigger", e["to"].split(":", 1)[1], hidden)]
         if pk:
             project_triggers = {f"trigger:{t.name}" for t in runtime.catalog.triggers
                                 if pk in store.projects_using("trigger", t.name)}
@@ -1160,11 +1353,14 @@ def make_app() -> FastAPI:
             entry = {**entry, "config": redact_config(entry["connector"], entry["config"])}
             health = runtime.health_snapshot().get(name) or {}
             names = _source_label_names(entry)
+            exclude = _read_exclude()
             if names:
-                labels = {ln: store.list_entities(ln, sources=[name], limit=20) for ln in names}
+                labels = {ln: store.list_entities(ln, sources=[name], limit=20, exclude=exclude)
+                          for ln in names}
                 primary_label = _source_primary(entry)
             else:
-                labels = {"key": store.list_entities("key_value", sources=[name], limit=20)}
+                labels = {"key": store.list_entities("key_value", sources=[name], limit=20,
+                                                     exclude=exclude)}
                 primary_label = "key"
             return {
                 "handle": handle, "kind": "source", "entry": entry,
@@ -1176,7 +1372,7 @@ def make_app() -> FastAPI:
                               "events_total": health.get("events_total", 0),
                               "status": health.get("status")},
                 "lineage": edges,
-                "sample": store.recent_events(source=name, limit=3),
+                "sample": store.recent_events(source=name, limit=3, exclude=exclude),
             }
 
         entry = next((t for t in store.list_catalog_triggers() if t["name"] == name), None)
@@ -1191,14 +1387,29 @@ def make_app() -> FastAPI:
     # ── entities — the (label, value) pairs, faceted (the entity surface) ─────
     @app.get("/api/entities")
     def entities(label: str | None = None, limit: int = 50):
+        hidden = _hidden_ids()
+        hidden_src = _hidden_sources(hidden)
+        # a cell with a hidden source counts the labels of the sources the caller can see only
+        visible_src = ([n for n in runtime.catalog.sources if n not in hidden_src]
+                       if hidden_src else None)
+        exclude = _read_exclude()
         facets = _label_facets()
+        if hidden_src:
+            facets = {k: {**f, "sources": [n for n in f["sources"] if n not in hidden_src]}
+                      for k, f in facets.items()}
+            facets = {k: f for k, f in facets.items() if f["sources"]}
 
         def values_for(name: str, facet: dict, lim: int):
             # an unnamed `key` facet reads the bare key_value, scoped to its label-less sources;
             # a named label reads that label across events that carry it
             if facet.get("unnamed"):
-                return store.list_entities("key_value", sources=facet["sources"], limit=lim)
-            return store.list_entities(name, limit=lim)
+                return store.list_entities("key_value", sources=facet["sources"], limit=lim,
+                                           exclude=exclude)
+            vals = store.list_entities(name, sources=visible_src, limit=lim, exclude=exclude)
+            if name == "tares_project" and hidden:
+                gone = {v.lower() for p in _hidden_projects() for v in (p["id"], p["name"])}
+                vals = [v for v in vals if str(v["value"]).lower() not in gone]
+            return vals
 
         def entry(name: str, facet: dict, lim: int) -> dict:
             srcs = facet["sources"] if facet.get("unnamed") else None
@@ -1293,8 +1504,10 @@ def make_app() -> FastAPI:
                                                f"{reason}"}, status_code=401)
         body = await _parse_ingest_body(request)
         try:
+            person = _current_person(request)   # from the credential, never from the body
             n = await runtime.ingest(token, body, bypass_cooldown=_bypass_cooldown(request),
-                                     headers=dict(request.headers))
+                                     headers=dict(request.headers), stamp_person=True,
+                                     person_id=person["id"] if person else None)
         except KeyError as e:
             _err(e, 404)
         except ValueError as e:
@@ -1370,30 +1583,63 @@ def make_app() -> FastAPI:
     # ── API keys: scoped, revocable credentials (admin scope; see docs/design) ─
     _SCOPES = {"read", "ingest", "admin"}
 
+    def _key_out(k: dict) -> dict:
+        """A key as listed: its person as {id, name}, or null when nobody is bound."""
+        p = store.get_person(k["person_id"]) if k.get("person_id") else None
+        return {**k, "person": {"id": p["id"], "name": p["name"]} if p else None}
+
     @app.get("/api/keys")
     def list_keys():
-        return {"keys": store.list_api_keys(),
+        return {"keys": [_key_out(k) for k in store.list_api_keys()],
                 "enforced": bool(AUTH_TOKEN),   # without a root auth token the instance is open
                 "scopes": sorted(_SCOPES)}
 
     # A project key (TR-335) reads one project and records findings in it; nothing else.
     _PROJECT_SCOPES = {"read", "findings"}
 
-    def _make_key(name: str, scopes: list[str], project: str | None) -> dict:
+    def _make_key(name: str, scopes: list[str], project: str | None,
+                  person_id: str | None = None) -> dict:
         kid = uuid.uuid4().hex[:8]
         secret = f"nvf_{kid}_{secrets.token_urlsafe(24)}"
         store.insert_api_key(kid, name, f"nvf_{kid}", hashlib.sha256(secret.encode()).hexdigest(),
-                             scopes, project=project)
+                             scopes, project=project, person_id=person_id)
         # the secret exists only in this response; the store keeps its hash
         out = {"id": kid, "name": name, "scopes": scopes, "secret": secret}
         if project:
             out["project"] = project
+        p = store.get_person(person_id) if person_id else None
+        out["person"] = {"id": p["id"], "name": p["name"]} if p else None
         return out
 
+    def _body_person(request: Request, body: dict) -> str | None:
+        """The person id a key request names: `person_id` (must exist), or `person: {email, name}`
+        (found by email or made: `cloud` when the system credential asks, as the control plane
+        does, `key` otherwise). None when it names neither."""
+        pid = str(body.get("person_id") or "").strip()
+        if pid:
+            if not store.get_person(pid):
+                _err(KeyError(f"no person {pid!r}"), 404)
+            return pid
+        spec = body.get("person")
+        if spec is None:
+            return None
+        if not isinstance(spec, dict) or not str(spec.get("email") or "").strip():
+            _err(ValueError("person needs an email: {email, name?}"))
+        ident = getattr(request.state, "credential", None) or {}
+        system = ident.get("kind") == "system"
+        try:
+            # `owner: true` comes from the control plane (the system credential) only
+            return store.person_or_create(
+                spec["email"], spec.get("name"), via="cloud" if system else "key",
+                owner=system and spec.get("owner") is True)["id"]
+        except ValueError as e:
+            _err(e, 409 if "already belongs" in str(e) else 400)
+
     @app.post("/api/keys", status_code=201)
-    def create_key(body: dict = Body(...)):
-        """{name, scopes, project?}. With `project` (an id or a name) it is a project key: scopes
-        `read` and `findings` (the default), over that project only."""
+    def create_key(request: Request, body: dict = Body(...)):
+        """{name, scopes, project?, person_id? | person?: {email, name}}. With `project` (an id
+        or a name) it is a project key: scopes `read` and `findings` (the default), over that
+        project only. `person_id` or `person` binds the key to a person (made by email when new)."""
         name = str(body.get("name") or "").strip()
         scopes = sorted(set(body.get("scopes") or []))
         if not name:
@@ -1404,12 +1650,22 @@ def make_app() -> FastAPI:
             scopes = scopes or sorted(_PROJECT_SCOPES)
             if not set(scopes) <= _PROJECT_SCOPES:
                 _err(ValueError(f"a project key's scopes are a subset of {sorted(_PROJECT_SCOPES)}"))
-            return _make_key(name, scopes, uid)
+            return _make_key(name, scopes, uid, _body_person(request, body))
         if "findings" in scopes:
             _err(ValueError("the findings scope is for a project key; name the project"))
         if not scopes or not set(scopes) <= _SCOPES:
             _err(ValueError(f"scopes must be a non-empty subset of {sorted(_SCOPES)}"))
-        return _make_key(name, scopes, None)
+        return _make_key(name, scopes, None, _body_person(request, body))
+
+    @app.put("/api/keys/{kid}/person")
+    def set_key_person(kid: str, request: Request, body: dict = Body(...)):
+        """Bind a key to a person: {person_id} or {person: {email, name}}. Admin."""
+        if not body.get("person_id") and not body.get("person"):
+            _err(ValueError("say which person: {person_id} or {person: {email, name}}"))
+        if not store.get_api_key(kid) or store.get_api_key(kid)["revoked_at"]:
+            _err(KeyError(f"no active key {kid!r}"), 404)
+        store.set_key_person(kid, _body_person(request, body))
+        return _key_out(store.get_api_key(kid))
 
     @app.delete("/api/keys/{kid}")
     def revoke_key(kid: str):
@@ -1425,12 +1681,153 @@ def make_app() -> FastAPI:
         out = _edition_out()
         return {**out, "mcp_object_tools": edition_mod.object_tools(store, out["edition"])}
 
+    # ── People: who is on the cell. Keys belong to them; the credential names who is calling ──
+    def _person_out(p: dict) -> dict:
+        return {k: p[k] for k in ("id", "name", "email", "emails", "github", "is_admin", "created_via")}
+
+    @app.get("/api/people")
+    def list_people():
+        return {"people": [_person_out(p) for p in store.list_people()]}
+
+    @app.post("/api/people")
+    def create_person(request: Request, body: dict = Body(...)):
+        """{name, email?, emails?, github?, is_admin?, owner?}. 201 with the new person; 200 with
+        the existing one when that email is already someone's. `owner: true` (the system
+        credential only, as the control plane sends for the workspace owner) makes an unclaimed
+        `local` that person instead (200)."""
+        email = None
+        ident = getattr(request.state, "credential", None) or {}
+        try:
+            email = store.check_email(body.get("email"))
+            found = store.find_person_by_email(email) if email else None
+            if found:
+                return _person_out(found)
+            if email and body.get("owner") is True and ident.get("kind") == "system":
+                claimed = store.claim_local(email, body.get("name"))
+                if claimed:
+                    return _person_out(claimed)
+            p = store.create_person(body.get("name"), email, body.get("emails"), body.get("github"),
+                                    bool(body.get("is_admin")), via="admin")
+        except ValueError as e:
+            # this handler runs in the thread pool: two creations of one email can both pass the
+            # lookup above, and the loser then meets the winner's row. It gets that person (200).
+            found = store.find_person_by_email(email) if email and "already belongs" in str(e) else None
+            if found:
+                return _person_out(found)
+            # a second creation of the same extra email or GitHub login answers 409
+            _err(e, 409 if "already belongs" in str(e) else 400)
+        return JSONResponse(_person_out(p), status_code=201)
+
+    @app.patch("/api/people/{pid}")
+    def update_person(pid: str, request: Request, body: dict = Body(...)):
+        """An admin (or the system credential) changes anything; a person changes only their own
+        name. Emails and the GitHub login are how a person is recognised, so they are not self-service."""
+        admin = _is_admin(request)
+        ident = getattr(request.state, "credential", None) or {}
+        kid = str(ident.get("id") or "")
+        # themselves = a key explicitly bound to this person; the `local` fallback of an unbound
+        # key does not count, or any read key could rename the only person on a one-person cell
+        own = kid.startswith("key:") and store.key_person_id(kid[4:]) == pid
+        if not admin and not own:
+            raise HTTPException(status_code=403, detail="only an admin, or the person themselves, "
+                                                        "can change a person")
+        allowed = ("name", "email", "emails", "github", "is_admin") if admin else ("name",)
+        fields = {k: body[k] for k in allowed if k in body}
+        if not admin and any(k in body for k in ("email", "emails", "github", "is_admin")):
+            raise HTTPException(status_code=403, detail="only an admin can change a person's "
+                                                        "emails, GitHub login or admin flag")
+        try:
+            p = store.update_person(pid, **fields)
+        except ValueError as e:
+            _err(e, 409 if "already belongs" in str(e) else 400)
+        if not p:
+            _err(KeyError(f"no person {pid!r}"), 404)
+        return _person_out(p)
+
+    # ── Area owners (TR-627): the person who owns each GitHub repo ──
+    _areas_lock = threading.Lock()
+
+    @app.get("/api/areas")
+    def list_areas():
+        """[{repo, person: {id, name}, note}], one per repo."""
+        return areas_mod.view(store)
+
+    @app.put("/api/areas")
+    def replace_areas(body: list = Body(...)):
+        """Admin only. Replace the whole list with [{repo, person_id, note?}]. A repo given twice
+        keeps its last entry; repos are saved in lowercase."""
+        try:
+            with _areas_lock:
+                areas_mod.save(store, body)
+        except ValueError as e:
+            _err(e, 400)
+        return areas_mod.view(store)
+
+    @app.put("/api/areas/{owner}/{name}")
+    def set_area(owner: str, name: str, request: Request, body: dict = Body(...)):
+        """{person_id, note?}. An admin sets or reassigns any repo. Anyone else may only claim a
+        repo nobody owns yet, for themselves: who they are comes from their key, never the body."""
+        try:
+            repo = areas_mod.norm_repo(f"{owner}/{name}")
+        except ValueError as e:
+            _err(e, 400)
+        pid = str(body.get("person_id") or "").strip()
+        if not pid or store.get_person(pid) is None:
+            _err(KeyError(f"no person {pid!r}; GET /api/people lists them"), 400)
+        admin = _is_admin(request)
+        me = None
+        if not admin:
+            me = _current_person(request)
+            if not me:
+                raise HTTPException(status_code=403, detail="this key belongs to no person, so it "
+                                    "cannot claim a repo; ask an admin to set the owner")
+            if pid != me["id"]:
+                raise HTTPException(status_code=403, detail="you can claim a repo only for "
+                                    "yourself; ask an admin to set another person as owner")
+        # the unowned check, the load and the save are one step: handlers run in the thread
+        # pool, and two claims at once would each save a list without the other's repo
+        with _areas_lock:
+            if not admin:
+                held = areas_mod.owner(store, repo)
+                if held and held["id"] != me["id"]:
+                    raise HTTPException(status_code=403, detail=f"{repo} already belongs to "
+                                        f"{held['name']}; ask an admin to reassign it")
+            current = areas_mod.load(store)
+            old = next((e for e in current if e["repo"] == repo), None)
+            entries = [e for e in current if e["repo"] != repo]
+            # a reassign keeps the note the repo had unless the body names one
+            note = body["note"] if "note" in body else (old or {}).get("note")
+            entries.append({"repo": repo, "person_id": pid, "note": note})
+            try:
+                areas_mod.save(store, entries)
+            except ValueError as e:
+                _err(e, 400)
+            # the answer is built before the lock is let go: a delete in between would leave
+            # nothing to find
+            out = next(a for a in areas_mod.view(store) if a["repo"] == repo)
+        return out
+
+    @app.delete("/api/areas/{owner}/{name}")
+    def delete_area(owner: str, name: str):
+        """Admin only. Take a repo's owner away."""
+        try:
+            repo = areas_mod.norm_repo(f"{owner}/{name}")
+        except ValueError as e:
+            _err(e, 400)
+        with _areas_lock:
+            current = areas_mod.load(store)
+            left = [e for e in current if e["repo"] != repo]
+            gone = len(left) != len(current)
+            store.set_setting(areas_mod.AREAS_SETTING, json.dumps(left))
+        return {"ok": True, "removed": gone}
+
     @app.get("/api/whoami")
     def whoami(request: Request):
         ident = getattr(request.state, "credential", None)
         scopes = getattr(request.state, "scopes", None)
         if ident is None:   # guard not active (open instance) or ingest-path credential
-            return {"id": "open", "name": "no auth configured", "scopes": sorted(_SCOPES), **_whoami_edition()}
+            return {"id": "open", "name": "no auth configured", "kind": "open",
+                    "person": _current_person(request), "scopes": sorted(_SCOPES), **_whoami_edition()}
         out = {**ident, "scopes": scopes or [], **_whoami_edition()}
         if ident.get("project"):   # a project key: the project it reads, by id and name
             out["project_name"] = (store.get_project(ident["project"]) or {}).get("name")
@@ -1478,7 +1875,7 @@ def make_app() -> FastAPI:
         source = body.get("source")
         spec = body.get("label") or {}
         cfg = runtime.catalog.sources.get(str(source))
-        if cfg is None:
+        if cfg is None or cfg.name in _hidden_sources(_hidden_ids()):
             _err(KeyError(f"unknown source {source!r}"), 404)
         try:   # validate the label spec exactly like a save would (bad regex -> 400 here)
             normalized = normalize_label_specs([spec])
@@ -1491,7 +1888,7 @@ def make_app() -> FastAPI:
         conn = build_connector(cfg, store)
         pairs: Counter = Counter()   # (before, after) -> events
         sampled = 0
-        for payload in store.recent_payloads(cfg.name, 2000):
+        for payload in store.recent_payloads(cfg.name, 2000, exclude=_read_exclude()):
             ctx = conn.label_context(payload)
             if not isinstance(ctx, dict):
                 continue
@@ -1561,16 +1958,22 @@ def make_app() -> FastAPI:
     def list_sources():
         health = runtime.health_snapshot()
         members = store.source_memberships()
+        hidden = _hidden_ids()
+        hidden_src = _hidden_sources(hidden)
         return [{**s, "config": redact_config(s["connector"], s["config"]),
-                 "projects": members.get(s["name"], []),
-                 "health": health.get(s["name"])} for s in store.list_catalog_sources()]
+                 "projects": [u for u in members.get(s["name"], []) if u not in hidden],
+                 "health": health.get(s["name"])} for s in store.list_catalog_sources()
+                if s["name"] not in hidden_src]
 
     @app.get("/api/sources/{name}")
     def get_source(name: str):
+        hidden = _hidden_ids()
+        hidden_src = _hidden_sources(hidden)
         for s in store.list_catalog_sources():
-            if s["name"] == name:
+            if s["name"] == name and name not in hidden_src:
                 return {**s, "config": redact_config(s["connector"], s["config"]),
-                        "projects": store.source_memberships().get(name, []),
+                        "projects": [u for u in store.source_memberships().get(name, [])
+                                     if u not in hidden],
                         "health": runtime.health_snapshot().get(name)}
         _err(KeyError(f"unknown source {name!r}"), 404)
 
@@ -1684,9 +2087,11 @@ def make_app() -> FastAPI:
 
     @app.get("/api/sources/{name}/events")
     def source_events(name: str, limit: int = 50):
-        if name not in {s["name"] for s in store.list_catalog_sources()}:
+        hidden = _hidden_ids()
+        if name not in {s["name"] for s in store.list_catalog_sources()} \
+                or name in _hidden_sources(hidden):
             _err(KeyError(f"unknown source {name!r}"), 404)
-        return store.recent_events(source=name, limit=min(limit, 500))
+        return store.recent_events(source=name, limit=min(limit, 500), exclude=_read_exclude())
 
     @app.get("/api/sources/{name}/fields")
     def source_fields(name: str, limit: int = 500):
@@ -1697,7 +2102,7 @@ def make_app() -> FastAPI:
 
         from .connectors import build_connector
         cfg = runtime.catalog.sources.get(name)
-        if cfg is None:
+        if cfg is None or name in _hidden_sources(_hidden_ids()):
             _err(KeyError(f"unknown source {name!r}"), 404)
         conn = build_connector(cfg, store)
 
@@ -1715,7 +2120,7 @@ def make_app() -> FastAPI:
         counts: dict[str, Counter] = {}
         label_counts: dict[str, Counter] = {}   # the EXTRACTED value of each declared label
         sampled = 0
-        for payload in store.recent_payloads(name, min(limit, 2000)):
+        for payload in store.recent_payloads(name, min(limit, 2000), exclude=_read_exclude()):
             ctx = conn.label_context(payload)
             if not isinstance(ctx, dict):
                 continue
@@ -1784,6 +2189,18 @@ def make_app() -> FastAPI:
             price_usage(kind, model, usage),
             key_source=key_source or None, provider=provider_id)
 
+    def _caller_headers(request: Request) -> dict:
+        """The credential this request carried, to hand the Ask agent for its own tool calls. With
+        auth off there is none to forward."""
+        if not AUTH_TOKEN:
+            return {}
+        out = {}
+        for h in ("authorization", "x-tares-token"):
+            if request.headers.get(h):
+                out[h] = request.headers[h]
+        # none carried (not reachable behind the guard): the narrowest view, never the system's
+        return out or {"Authorization": f"Bearer {AUTH_TOKEN}", "x-tares-viewer": "public"}
+
     @app.post("/api/agent/chat")
     async def agent_chat(request: Request):
         from .agent import BUILD_STEPS, run_agent, traced_name
@@ -1796,8 +2213,9 @@ def make_app() -> FastAPI:
             _err(ValueError("add a model provider under Settings to use the assistant"), 400)
         default_pid = providers_mod.default_id(store)
         body = await request.json()
-        # the daemon's own token, so the agent's tool self-calls clear the auth middleware
-        self_headers = {"Authorization": f"Bearer {AUTH_TOKEN}"} if AUTH_TOKEN else {}
+        # the asker's own credential, so the agent's tool self-calls clear the auth middleware and
+        # see what the asker sees: a private project they are not on stays out of Ask (TR-629)
+        self_headers = _caller_headers(request)
         # mode "build" + step (sources|watch|agent) is the AI-guided project builder:
         # same loop, same endpoint, a step-scoped toolset (tares/agent.py, TR-242)
         mode = "build" if body.get("mode") == "build" else "ask"
@@ -1849,12 +2267,26 @@ def make_app() -> FastAPI:
         """Every part on the cell (sources, wake-ups, agents, tools, skills, project keys), each
         with the projects that use it: the All resources page."""
         from . import resources as resources_mod
-        return await asyncio.to_thread(resources_mod.list_resources, store, runtime.catalog,
-                                       runtime.health_snapshot())
+        out = await asyncio.to_thread(resources_mod.list_resources, store, runtime.catalog,
+                                      runtime.health_snapshot())
+        hidden = _hidden_ids()
+        if hidden:   # a part only hidden projects use is left out; a shared one drops their names
+            for kind, rows in out.items():
+                kept = []
+                for r in rows:
+                    users = r.get("used_by") or []
+                    shown = [u for u in users if u["id"] not in hidden]
+                    if users and not shown:
+                        continue
+                    kept.append({**r, "used_by": shown})
+                out[kind] = kept
+        return out
 
     @app.get("/api/mcp-servers")
     def list_mcp_servers():
-        return {"servers": [_mcp_row(m) for m in store.list_mcp_servers()]}
+        hidden = _hidden_ids()
+        return {"servers": [_mcp_row(m) for m in store.list_mcp_servers()
+                            if not _owned_by_hidden("mcp_server", m["name"], hidden)]}
 
     @app.post("/api/mcp-servers", status_code=201)
     def create_mcp_server(body: McpServerIn):
@@ -1980,7 +2412,7 @@ def make_app() -> FastAPI:
         store.upsert_catalog_source(src, source_type_for("github_app"), "github_app", "1m",
                                     normalize_config("github_app", {"credential": name}),
                                     ingest_key=ingest_key)
-        store.put_in_project("source", src, store.default_project_id(), creator=True)
+        store.put_in_project("source", src, _fallback_project(store.default_project_id()), creator=True)
         runtime.reload_catalog()
         return src
 
@@ -2171,7 +2603,8 @@ def make_app() -> FastAPI:
                 headers["X-MCP-Readonly"] = "true"
             store.upsert_mcp_server(server, GITHUB_MCP_URL, "Authorization",
                                     CREDENTIAL_PREFIX + name, headers)
-            store.put_in_project("mcp_server", server, store.default_project_id(), creator=True)
+            store.put_in_project("mcp_server", server, _fallback_project(store.default_project_id()),
+                                 creator=True)
         return {"ok": True, "server": server}
 
     @app.get("/api/integrations/github/{name}/repos")
@@ -2308,30 +2741,45 @@ def make_app() -> FastAPI:
     # ── Ask sessions — server-side chat history, so a conversation survives navigation and a
     # console reopened tomorrow can pick up where it left off. The console PUTs the whole session
     # after each exchange; the store keeps the newest 50.
+    def _ask_viewer(request) -> dict:
+        """Whose Ask transcripts this caller may touch: all of them for the system credential (and
+        auth off), a person's own for a key with a person, none for a key without one."""
+        person = _current_person(request)
+        return {"person_id": person["id"] if person else None, "system": _is_system(request)}
+
     @app.get("/api/ask/sessions")
-    def ask_sessions():
-        return {"sessions": store.list_ask_sessions()}
+    def ask_sessions(request: Request):
+        return {"sessions": store.list_ask_sessions(**_ask_viewer(request))}
 
     @app.get("/api/ask/sessions/{sid}")
-    def ask_session(sid: str):
-        row = store.get_ask_session(sid)
+    def ask_session(sid: str, request: Request):
+        row = store.get_ask_session(sid, **_ask_viewer(request))
         if row is None:
             _err(KeyError(f"unknown session {sid!r}"), 404)
         return row
 
     @app.put("/api/ask/sessions/{sid}")
-    def save_ask_session(sid: str, body: AskSessionIn):
+    def save_ask_session(sid: str, body: AskSessionIn, request: Request):
         if not re.fullmatch(r"[0-9a-f]{16,64}", sid):
             _err(ValueError("session id must be a hex id"), 400)
         # a runaway transcript should degrade the one session, not the instance
         if len(body.state) > 2_000_000:
             _err(ValueError("session too large to save (2 MB cap)"), 413)
-        store.upsert_ask_session(sid, body.title[:120], body.state)
+        viewer = _ask_viewer(request)
+        # a key with no person has no transcripts to keep: refuse, rather than save once and then
+        # 404 its own next save of the same id
+        if viewer["person_id"] is None and not viewer["system"]:
+            _err(PermissionError("this key has no person, so it cannot keep Ask history"), 403)
+        # someone else's id is "unknown", the same as a read, so a PUT cannot overwrite it; the
+        # store checks the owner and writes in one step
+        if not store.upsert_ask_session(sid, body.title[:120], body.state, **viewer):
+            _err(KeyError(f"unknown session {sid!r}"), 404)
         return {"ok": True}
 
     @app.delete("/api/ask/sessions/{sid}")
-    def remove_ask_session(sid: str):
-        if not store.delete_ask_session(sid):
+    def remove_ask_session(sid: str, request: Request):
+        if store.get_ask_session(sid, **_ask_viewer(request)) is None \
+                or not store.delete_ask_session(sid):
             _err(KeyError(f"unknown session {sid!r}"), 404)
         return {"ok": True}
 
@@ -2356,7 +2804,9 @@ def make_app() -> FastAPI:
 
     @app.get("/api/triggers")
     def list_triggers():
-        return [_trigger_row(t) for t in store.list_catalog_triggers()]
+        hidden = _hidden_ids()
+        return [_trigger_row(t) for t in store.list_catalog_triggers()
+                if not _owned_by_hidden("trigger", t["name"], hidden)]
 
     def _check_trigger(body: TriggerIn, name: str) -> dict:
         if body.view not in (None, ""):
@@ -2405,8 +2855,10 @@ def make_app() -> FastAPI:
         if body.name != name:
             _err(ValueError("renaming a trigger is not supported; delete and recreate"), 400)
         raw = _check_trigger(body, name)
-        uid = _resolve_project(body.project, default=False) or current.get("owned_by") \
-            or store.default_project_id()
+        if _owned_by_hidden("trigger", name, _hidden_ids()):
+            _err(KeyError(f"unknown trigger {name!r}"), 404)
+        uid = _fallback_project(_resolve_project(body.project, default=False),
+                                current.get("owned_by"), store.default_project_id())
         store.upsert_catalog_trigger(name, raw["sources"], body.condition, body.emit,
                                      body.cooldown, filters=raw.get("filters") or [],
                                      key_field=raw.get("key_field") or "",
@@ -2488,9 +2940,17 @@ def make_app() -> FastAPI:
                 "cost_usd": None, "input_tokens": 0, "output_tokens": 0, "uncosted_runs": 0}
         rows = []
         # with ?project=: each agent's trigger, handoffs and on/off are that project's wiring
-        mine = ("id IN (SELECT run_id FROM run_projects WHERE project = ?)", [in_project]) \
-            if in_project else ("", None)
+        hidden = _hidden_ids()
+        if in_project:
+            mine = ("id IN (SELECT run_id FROM run_projects WHERE project = ?)", [in_project])
+        elif hidden:   # no project named: the newest run the caller may see
+            mine = ("id NOT IN (SELECT run_id FROM run_projects WHERE project IN "
+                    f"({', '.join('?' * len(hidden))}))", sorted(hidden))
+        else:
+            mine = ("", None)
         for a in store.list_catalog_agents(in_project):
+            if _owned_by_hidden("agent", a["name"], hidden):
+                continue
             runs = store.list_agent_runs(a["name"], limit=1, where_sql=mine[0],
                                          where_params=mine[1])
             rows.append({"name": a["name"], "trigger": a["trigger"], "prompt": a["prompt"],
@@ -2525,7 +2985,8 @@ def make_app() -> FastAPI:
                          "effective_max_rounds": effective_max_rounds(a),
                          "enabled": a["enabled"], "updated_at": a.get("updated_at"),
                          "project": in_project or a.get("owned_by"),
-                         "projects": store.projects_using("agent", a["name"]),
+                         "projects": [u for u in store.projects_using("agent", a["name"])
+                                      if u not in hidden],
                          "owned_by": a.get("owned_by"), "customized": bool(a.get("customized")),
                          "last_run": runs[0] if runs else None})
         plist = providers_mod.list_providers(store)
@@ -2534,6 +2995,9 @@ def make_app() -> FastAPI:
                 "providers": plist["providers"], "default_provider": plist["default"],
                 "default_models": {p["id"]: providers_mod.default_model_for(store, p["id"])
                                    for p in plist["providers"]},
+                # per provider id, the model the Triage preset picks ("" = keep the default)
+                "small_models": {p["id"]: providers_mod.small_model_for(store, p["id"])
+                                 for p in plist["providers"]},
                 "default_max_rounds": AGENT_MAX_ROUNDS,
                 "default_max_rounds_with_mcp": AGENT_MAX_ROUNDS_WITH_MCP,
                 "max_rounds_limit": AGENT_MAX_ROUNDS_LIMIT,
@@ -2579,8 +3043,10 @@ def make_app() -> FastAPI:
         # the path names the agent; a body name is optional and only checked for a rename attempt
         if body.name and body.name != name:
             _err(ValueError("renaming an agent is not supported; delete and recreate"), 400)
-        uid = _resolve_project(body.project, default=False) or existing.get("owned_by") \
-            or store.default_project_id()
+        if _owned_by_hidden("agent", name, _hidden_ids()):
+            _err(KeyError(f"unknown agent {name!r}"), 404)
+        uid = _fallback_project(_resolve_project(body.project, default=False),
+                                existing.get("owned_by"), store.default_project_id())
         raw = _agent_payload(body, uid, name)
         # blank-to-keep for the webhook, matching the connector-secret convention: the UI never
         # receives the stored URL back, so an unedited form must not wipe it.
@@ -2635,7 +3101,7 @@ def make_app() -> FastAPI:
         it. The agent joins it, wired with its own trigger, when it is not wired there yet."""
         agent = store.get_catalog_agent(name)
         uid = _resolve_project(project, default=False) if project else None
-        uid = uid or agent.get("owned_by") or store.default_project_id()
+        uid = _fallback_project(uid, agent.get("owned_by"), store.default_project_id())
         if not store.list_wakes(project=uid, agent=name):
             if not agent.get("trigger"):
                 _err(ValueError(f"{name} has no trigger of its own, so there is nothing to turn "
@@ -2704,17 +3170,26 @@ def make_app() -> FastAPI:
         events on the entity's timeline; a failed run must never look like a conclusion.
         `status` narrows to one run status; `offset` pages (a capped agent's list is mostly
         capped rows, and the ok runs are what a reader looks for, TR-267)."""
-        if store.get_catalog_agent(name) is None:
+        if store.get_catalog_agent(name) is None \
+                or _owned_by_hidden("agent", name, _hidden_ids()):
             _err(KeyError(f"unknown agent {name!r}"), 404)
         if status and status not in _RUN_STATUSES:
             _err(ValueError(f"status must be one of {', '.join(sorted(_RUN_STATUSES))}"), 400)
         # with a project: the runs that belong to it (P-TR-216)
         uid = _resolve_project(project, default=False) if project else None
+        hidden = sorted(_hidden_ids())
+        if uid:
+            where_sql, where_params = ("id IN (SELECT run_id FROM run_projects WHERE project = ?)",
+                                       [uid])
+        elif hidden:   # a run that belongs to a project the caller cannot see is left out
+            where_sql = ("id NOT IN (SELECT run_id FROM run_projects WHERE project IN "
+                         f"({', '.join('?' * len(hidden))}))")
+            where_params = hidden
+        else:
+            where_sql, where_params = "", None
         return store.list_agent_runs(name, limit=min(max(1, limit), 200), offset=offset,
-                                     status=status or None,
-                                     where_sql="id IN (SELECT run_id FROM run_projects WHERE "
-                                               "project = ?)" if uid else "",
-                                     where_params=[uid] if uid else None)
+                                     status=status or None, where_sql=where_sql,
+                                     where_params=where_params)
 
     # ── the Anthropic key: a stored key wins, env is the fallback ────────────
     @app.get("/api/settings/anthropic-key")
@@ -3124,7 +3599,10 @@ def make_app() -> FastAPI:
         try:
             provider, key_origin = resolve_provider(store)
             default_pid = providers_mod.default_id(store)
-            self_headers = {"Authorization": f"Bearer {AUTH_TOKEN}"} if AUTH_TOKEN else {}
+            # Slack knows no person: the system credential, as a public viewer, so no private
+            # project reaches an answer posted in a channel
+            self_headers = ({"Authorization": f"Bearer {AUTH_TOKEN}", "x-tares-viewer": "public"}
+                            if AUTH_TOKEN else {})
             async def _run():
                 nonlocal text, error
                 async for chunk in run_agent(provider, [{"role": "user", "content": question}],
@@ -3302,11 +3780,11 @@ def make_app() -> FastAPI:
     # ── management API: activity (what agents saw / what woke them) ──────────
     @app.get("/api/activity/queries")
     def activity_queries(limit: int = 100):
-        return store.list_queries(limit=min(limit, 500))
+        return store.list_queries(limit=min(limit, 500), hide=sorted(_hidden_ids()))
 
     @app.get("/api/activity/dispatches")
     def activity_dispatches(limit: int = 100):
-        return store.list_dispatches(limit=min(limit, 500))
+        return store.list_dispatches(limit=min(limit, 500), hide=sorted(_hidden_ids()))
 
     @app.get("/api/activity/dispatches/{dispatch_id}")
     def activity_dispatch(dispatch_id: str):
@@ -3314,7 +3792,7 @@ def make_app() -> FastAPI:
         capped list). Includes the per-subscriber delivery attempts with masked endpoints + agent
         names, so the failure is attributable to a specific agent."""
         d = store.get_dispatch(dispatch_id)
-        if d is None:
+        if d is None or set(store.dispatch_projects(dispatch_id)) & _hidden_ids():
             _err(KeyError(f"unknown dispatch {dispatch_id!r}"), 404)
         from .config import agent_name_from_url
         deliveries = []
@@ -3375,7 +3853,10 @@ def make_app() -> FastAPI:
                   "url": _agent_url(w["agent"]), "created_at": None, "project": w["project"],
                   "created_by": "tares"}
                  for w in store.list_wakes() if w["enabled"]]
+        hidden = _hidden_ids()
         for sub in [*store.all_subscriptions(), *wired]:
+            if sub.get("project") in hidden or _owned_by_hidden("trigger", sub["trigger"] or "", hidden):
+                continue
             norm = sub["url"].rstrip("/")
             a = agents.get(norm)
             if a is None:
@@ -3423,7 +3904,10 @@ def make_app() -> FastAPI:
 
     @app.get("/api/subscriptions")
     def subscriptions():
-        return store.list_all_subscriptions()
+        hidden = _hidden_ids()
+        return [s for s in store.list_all_subscriptions()
+                if s.get("project") not in hidden
+                and not _owned_by_hidden("trigger", s["trigger"] or "", hidden)]
 
     # ── management API: projects (templates instantiated with params) ─────────
     # A project creates and owns ordinary objects; those stay editable and deletable on their own
@@ -3463,6 +3947,12 @@ def make_app() -> FastAPI:
                                    if uid in store.projects_using("trigger", t.name)),
                 "skills": [s["name"] for s in store.list_skills(uid)]}
 
+    def _hidden_project(p: dict) -> dict:
+        """A private project as someone not on it sees it: enough to name it and to hand its
+        lead over, nothing of what is in it."""
+        return {"id": p["id"], "name": p["name"], "scope": "private", "hidden": True,
+                "lead": p["lead"]}
+
     @app.get("/api/projects")
     def list_projects(request: Request):
         pk = _pk(request)
@@ -3471,11 +3961,16 @@ def make_app() -> FastAPI:
         # a software factory project carries its tickets' progress, for the list's ring, and
         # `activity_at`, when it last moved (its newest ticket counts), for the Updated column;
         # every factory project's tickets come in one query (TR-659)
+        # a private project the caller is not on is listed as its name and lead and nothing else
+        # (an admin hands its lead over from this row); everything else about it is unknown
         cards = projects.list()
         tickets = store.tickets_by_project([p["id"] for p in cards
-                                            if p.get("kind") == "software_factory"])
+                                            if p.get("kind") == "software_factory"
+                                            and _can_see(p)])
 
         def card(p: dict) -> dict:
+            if not _can_see(p):
+                return _hidden_project(p)
             if p.get("kind") != "software_factory":
                 return {**p, "activity_at": p["updated_at"], "ready_to_close": False}
             ts = tickets[p["id"]]
@@ -3485,7 +3980,7 @@ def make_app() -> FastAPI:
         return {"projects": [card(p) for p in cards]}
 
     @app.post("/api/projects", status_code=201)
-    def create_project(body: ProjectIn):
+    def create_project(body: ProjectIn, request: Request):
         if body.kind not in (None, "", "software_factory"):
             _err(ValueError(f"unknown project kind {body.kind!r}; the one there is: "
                             "software_factory"))
@@ -3494,15 +3989,91 @@ def make_app() -> FastAPI:
             out = projects.create(body.template, params, name=body.name or None, goal=body.goal)
         except Exception as e:
             _uc_err(e)
+        # the person who makes a project leads it; the system credential is no person, so a
+        # project it makes has no lead until an admin claims it
+        person = _current_person(request)
+        if person:
+            store.set_project_lead(out["id"], person["id"])
         if body.kind:
             store.set_project_kind(out["id"], body.kind)
-            out = {**out, "kind": body.kind}
-        return out
+        return projects.get(out["id"])
+
+    @app.patch("/api/projects/{uid}")
+    def set_project_access(uid: str, request: Request, body: dict = Body(...)):
+        """{lead_person_id?, scope?}: who leads the project and whether it is `team` or
+        `private`. The lead changes both. An admin (or the system credential) changes the lead
+        only, which is also how a project with no lead is claimed. Nobody else changes either.
+        Answers with the project. A private project the caller is not on is unknown to them,
+        except that an admin (the admin scope, which the guard already requires for this route)
+        may still hand it to a lead, so it is never left without one."""
+        p = store.get_project(uid)
+        body = body or {}
+        hand_over_only = _is_admin(request) and "lead_person_id" in body and "scope" not in body
+        if p is None or not (_can_see(p) or hand_over_only):
+            _err(KeyError(f"unknown project {uid!r}"), 404)
+        want_lead, want_scope = "lead_person_id" in body, "scope" in body
+        if not (want_lead or want_scope):
+            _err(ValueError("say lead_person_id, scope or both"))
+        person = _current_person(request)
+        is_lead = bool(person and p["lead_person_id"] == person["id"])
+        if not is_lead and (want_scope or not _is_admin(request)):
+            raise HTTPException(status_code=403, detail="only the project lead can change this")
+        if want_scope and body["scope"] not in ("team", "private"):
+            _err(ValueError("scope is team or private"))
+        if want_lead:
+            lead = str(body["lead_person_id"] or "").strip()
+            if not lead:
+                _err(ValueError("lead_person_id must be a person id"))
+            if store.get_person(lead) is None:
+                _err(KeyError(f"no person {lead!r}; GET /api/people lists them"), 404)
+            old_lead = p["lead_person_id"]
+            store.set_project_lead(uid, lead)
+            if old_lead and old_lead != lead:   # the one who handed it over stays on it
+                store.add_project_member(uid, old_lead, person["id"] if person else "system")
+        if want_scope:
+            store.set_project_scope(uid, body["scope"])
+        out = projects.get(uid)
+        return out if _can_see(store.get_project(uid)) else _hidden_project(out)
+
+    def _lead_or_system(request, uid: str) -> dict:
+        """The project, when this caller may change who is on it: its lead, or the system
+        credential (an admin who is not the lead may not)."""
+        p = _project_or_404(uid)
+        person = _current_person(request)
+        if not (person and p["lead_person_id"] == person["id"]) and not _is_system(request):
+            raise HTTPException(status_code=403, detail="only the project lead can change this")
+        return p
+
+    @app.post("/api/projects/{uid}/members")
+    def add_project_member(uid: str, request: Request, body: dict = Body(...)):
+        """{person_id}: put a person on the project. Adding someone already on it changes
+        nothing. Answers with the project."""
+        p = _lead_or_system(request, uid)
+        pid = str((body or {}).get("person_id") or "").strip()
+        if not pid:
+            _err(ValueError("person_id is required"))
+        if store.get_person(pid) is None:
+            _err(KeyError(f"no person {pid!r}; GET /api/people lists them"), 404)
+        if pid != p["lead_person_id"]:   # the lead is a member already
+            by = _current_person(request)
+            store.add_project_member(uid, pid, by["id"] if by else "system")
+        return projects.get(uid)
+
+    @app.delete("/api/projects/{uid}/members/{person_id}")
+    def remove_project_member(uid: str, person_id: str, request: Request):
+        """Take a person off the project. The lead cannot be taken off: hand the project to
+        someone else first. Answers with the project."""
+        p = _lead_or_system(request, uid)
+        if person_id == p["lead_person_id"]:
+            _err(ValueError("the lead is always a member; make someone else the lead first"), 409)
+        store.remove_project_member(uid, person_id)
+        return projects.get(uid)
 
     @app.get("/api/projects/{uid}")
     def get_project(uid: str, request: Request):
         if _pk(request):
             return _project_card(uid)   # the guard already held it to the key's own project
+        _project_or_404(uid)
         inst = projects.get(uid)
         if inst is None:
             _err(KeyError(f"unknown project {uid!r}"), 404)
@@ -3510,6 +4081,7 @@ def make_app() -> FastAPI:
 
     @app.put("/api/projects/{uid}")
     def update_project(uid: str, body: ProjectUpdate):
+        _project_or_404(uid)
         given = body.model_fields_set
         try:
             if "goal" in given and not ({"params", "objects"} & given) and not body.name.strip():
@@ -3533,6 +4105,7 @@ def make_app() -> FastAPI:
         in `kept`); every other source stays, in the default project if in no other. Sources are
         only ever deleted when asked: `delete_sources=all` names every source of the project, and
         `none`, or leaving it out, keeps them all."""
+        _project_or_404(uid)
         chosen = [x.strip() for x in delete_sources.split(",") if x.strip() and x.strip() != "none"]
         if chosen == ["all"]:
             chosen = sorted(store.project_sources(uid))
@@ -3544,6 +4117,7 @@ def make_app() -> FastAPI:
     @app.post("/api/projects/{uid}/sources")
     def add_project_source(uid: str, body: dict = Body(...)):
         """Add an existing source to a project (sources are shared between projects)."""
+        _project_or_404(uid)
         name = str((body or {}).get("name") or "").strip()
         if not name:
             _err(ValueError("name is required"), 400)
@@ -3555,6 +4129,7 @@ def make_app() -> FastAPI:
     @app.delete("/api/projects/{uid}/sources/{name}")
     def remove_project_source(uid: str, name: str):
         """Take a source out of a project; refused while a trigger of the project reads it."""
+        _project_or_404(uid)
         try:
             return projects.remove_source(uid, name)
         except Exception as e:
@@ -3564,6 +4139,7 @@ def make_app() -> FastAPI:
     def pause_project(uid: str, body: dict | None = Body(default=None)):
         """Body {"sources": true} also pauses the project's sources, so nothing accumulates while
         it is paused (the AI SRE demo's traffic, for one). Default: sources keep ingesting."""
+        _project_or_404(uid)
         try:
             return projects.pause(uid, sources=bool((body or {}).get("sources")))
         except Exception as e:
@@ -3571,6 +4147,7 @@ def make_app() -> FastAPI:
 
     @app.post("/api/projects/{uid}/resume")
     def resume_project(uid: str):
+        _project_or_404(uid)
         try:
             return projects.resume(uid)
         except Exception as e:
@@ -3578,6 +4155,7 @@ def make_app() -> FastAPI:
 
     @app.post("/api/projects/{uid}/repair")
     def repair_project(uid: str, body: ProjectRepair):
+        _project_or_404(uid)
         try:
             return projects.repair(uid, body.key)
         except Exception as e:
@@ -3592,6 +4170,7 @@ def make_app() -> FastAPI:
 
     @app.post("/api/projects/{uid}/actions/{name}")
     async def project_action(uid: str, name: str, request: Request):
+        _project_or_404(uid)
         try:
             body = await request.json()
         except Exception:
@@ -3607,13 +4186,18 @@ def make_app() -> FastAPI:
                                entity: str = ""):
         """Everything that happened in the project, newest first, one thread per firing or
         unprompted run, with what each led to nested inside (TR-331). Page with `before` =
-        the previous page's `next_before`."""
+        the previous page's `next_before`; a `before` without a zone is UTC. Any of `trigger`,
+        `agent`, `outcome`, `entity` shows only the threads that match, so the hand-overs pushed
+        through without every sign-off (`events`) are left out: they have none of those."""
+        _project_or_404(uid)
         if projects.get(uid) is None:
             _err(KeyError(f"unknown project {uid!r}"), 404)
         at = None
         if before:
             try:
                 at = datetime.fromisoformat(before.replace("Z", "+00:00"))
+                if at.tzinfo is None:   # no zone means UTC, not the host's time
+                    at = at.replace(tzinfo=timezone.utc)
             except ValueError:
                 _err(ValueError("before must be an ISO timestamp, as next_before gives it"))
         if outcome and outcome not in timeline.OUTCOMES:
@@ -3623,6 +4207,13 @@ def make_app() -> FastAPI:
         out = await asyncio.to_thread(
             timeline.project_timeline, store, uid, limit=limit, before=at, trigger=trigger,
             agent=agent, outcome=outcome, entity=entity, scheduled=scheduled)
+        filtered = bool(trigger or agent or outcome or entity)
+        events = [] if filtered else timeline.override_events(
+            store.list_handover_overrides(uid), at, out.get("next_before"))
+        if events:
+            # every hand-over the lead pushed through without every sign-off (TR-636), on the page
+            # whose window holds its time, so across pages none repeats and none is lost
+            out["events"] = events
         if _pk(request):
             # a webhook URL can carry its receiver's secret: a project key sees it masked,
             # like the agents roster shows it
@@ -3655,14 +4246,17 @@ def make_app() -> FastAPI:
     async def project_results(uid: str, request: Request, limit: int = 20, before: str = "",
                               show: str = ""):
         """What the agents concluded, newest first: one result per chain of runs. Page with
-        `before` = the previous page's `next_before`. `show`: "findings" leaves out the runs that
-        had nothing to report, "worth" leaves out the quiet checks (the response's `quiet` counts
-        them), "agent:<name>" keeps that agent's conclusions."""
+        `before` = the previous page's `next_before`; a `before` without a zone is UTC. `show`:
+        "findings" leaves out the runs that had nothing to report, "worth" leaves out the quiet
+        checks (the response's `quiet` counts them), "agent:<name>" keeps that agent's
+        conclusions."""
         _project_or_404(uid)
         at = None
         if before:
             try:
                 at = datetime.fromisoformat(before.replace("Z", "+00:00"))
+                if at.tzinfo is None:   # no zone means UTC, not the host's time
+                    at = at.replace(tzinfo=timezone.utc)
             except ValueError:
                 _err(ValueError("before must be an ISO timestamp, as next_before gives it"))
         if show and show not in ("findings", "worth") and not show.startswith("agent:"):
@@ -3735,6 +4329,7 @@ def make_app() -> FastAPI:
 
     @app.get("/api/projects/{uid}/summary")
     def project_summary(uid: str):
+        _project_or_404(uid)
         try:
             out = projects.summary(uid)
         except Exception as e:
@@ -3964,7 +4559,7 @@ def make_app() -> FastAPI:
                 store.set_project_setup(_p["id"], _s)
 
     @app.post("/api/setup/drafts", status_code=202)
-    async def setup_draft(body: dict = Body(...)):
+    async def setup_draft(request: Request, body: dict = Body(...)):
         """{goal, who?, name?, description?} -> {project}: a draft project, and its plan being
         written in the background. GET /api/projects/{id}/setup shows the planning step by step,
         then the plan. `name` is kept as the project's name; `description` goes to the planner."""
@@ -3982,8 +4577,10 @@ def make_app() -> FastAPI:
             _err(ValueError(f"a project named {name!r} already exists"), 409)
         _setup_model()   # no provider: 409 now, on the goal page, not later on the draft
         uid = "uc_" + uuid.uuid4().hex[:10]
+        person = _current_person(request)
         store.create_project(uid, "custom", name or _draft_name(goal), {"objects": []},
-                             status=setup_flow.DRAFT, goal=goal)
+                             status=setup_flow.DRAFT, goal=goal,
+                             lead_person_id=person["id"] if person else None)
         store.log_project(uid, "draft", "planning from the goal")
         store.set_project_setup(uid, {"step": "plan", "goal": goal, "who": who, "plan": None,
                                       "practice_run": None, "name": name, "description": about})
@@ -4058,6 +4655,10 @@ def make_app() -> FastAPI:
             uid, key = setup_flow.apply(store, projects, plan, _make_key, draft=draft)
         except setup_flow.SetupError as e:
             _setup_err(e)
+        if draft is None:   # a draft was led by whoever made it; this project has no lead yet
+            person = _current_person(request)
+            if person:
+                store.set_project_lead(uid, person["id"])
         setup = {"plan": setup_flow.stored_plan(plan), "step": "connect", "practice_run": None}
         if key is not None:
             setup["own_key_id"] = key["id"]
@@ -4165,6 +4766,7 @@ def make_app() -> FastAPI:
         from .reads import parse_window, resolve_sources_full
         plan = setup.get("plan") or {}
         window = trig.emit.get("context_window") or "15m"
+        exclude = _read_exclude()
         key = None
         for w in plan.get("watches") or []:
             cfg = runtime.catalog.sources.get(w.get("name"))
@@ -4177,14 +4779,16 @@ def make_app() -> FastAPI:
                 key = (env.labels or {}).get(trig.key_field) if trig.key_field else None
                 key = str(key or env.key_value or "")
                 _p, count, _rows = resolve_sources_full(store, trig.sources, trig.name, key=key,
-                                                        window=window, filters=trig.filters)
+                                                        window=window, filters=trig.filters,
+                                                        exclude=exclude)
                 if not count:
                     await _practice_ingest(w["name"], w["sample"])
                 break
         if not key:
             # the newest event the wake-up would count (its filters) in the last day, with the
             # timeline reaching back to it
-            hit = store.newest_key(list(trig.sources), trig.filters, now_utc() - timedelta(days=1))
+            hit = store.newest_key(list(trig.sources), trig.filters, now_utc() - timedelta(days=1),
+                                   exclude=exclude)
             if hit:
                 key, at = hit
                 at = at if at.tzinfo else at.replace(tzinfo=timezone.utc)
@@ -4193,7 +4797,7 @@ def make_app() -> FastAPI:
                     window = f"{age_m}m"
         if not key:
             for s in trig.sources:
-                ev = store.recent_events(source=s, limit=1)
+                ev = store.recent_events(source=s, limit=1, exclude=exclude)
                 if ev and ev[0].get("key"):
                     key = ev[0]["key"]
                     break
@@ -4201,7 +4805,8 @@ def make_app() -> FastAPI:
             _err(ValueError("Nothing has arrived yet to practice on. Send a test event first."),
                  409)
         payload, _n, _rows = resolve_sources_full(store, trig.sources, trig.name, key=key,
-                                                  window=window, filters=trig.filters)
+                                                  window=window, filters=trig.filters,
+                                                  exclude=exclude)
         return key, payload
 
     @app.post("/api/projects/{uid}/setup/practice")
@@ -4299,10 +4904,7 @@ def make_app() -> FastAPI:
 
     # ── a project's skills (TR-332): instructions its agents load by name ─────
     def _skill_project(uid: str) -> dict:
-        p = store.get_project(uid)
-        if p is None:
-            _err(KeyError(f"unknown project {uid!r}"), 404)
-        return p
+        return _project_or_404(uid)
 
     def _skill_or_404(uid: str, name: str) -> dict:
         sk = store.get_skill(uid, name)
@@ -4356,9 +4958,12 @@ def make_app() -> FastAPI:
     def list_cell_skills():
         """Every skill on Tares, with the projects that use it (no bodies)."""
         names = {p["id"]: p["name"] for p in store.list_projects()}
+        hidden = _hidden_ids()
         return [{"name": sk["name"], "description": sk["description"],
-                 "used_by": [{"id": p, "name": names.get(p, p)} for p in sk["projects"]]}
-                for sk in store.list_all_skills()]
+                 "used_by": [{"id": p, "name": names.get(p, p)} for p in sk["projects"]
+                             if p not in hidden]}
+                for sk in store.list_all_skills()
+                if not sk["projects"] or set(sk["projects"]) - hidden]
 
     @app.put("/api/projects/{uid}/skills/{name}")
     def update_skill(uid: str, name: str, body: dict = Body(...)):
@@ -4405,10 +5010,14 @@ def make_app() -> FastAPI:
     # builds it. Docs belong to the cell and projects include them; tickets are owned by Linear
     # when the project uses it (written by the sync only), by Tares otherwise ────────────────
     def _by(request: Request, body: dict | None = None) -> str:
-        """Who made a change: what the caller says (`by`), else its credential's name."""
+        """Who made a change: what the caller says (`by`), else the person behind its credential,
+        else the caller's own default label (`by_default`, which the Claude Code tools send and
+        which never beats a person), else the credential's own name."""
         said = str((body or {}).get("by") or "").strip()[:100]
+        default = str((body or {}).get("by_default") or "").strip()[:100]
         cred = getattr(request.state, "credential", None) or {}
-        return said or cred.get("name") or ""
+        person = _current_person(request) or {}
+        return said or person.get("name") or default or cred.get("name") or ""
 
     # The cell's global docs (its AGENTS.md and memory): made the first time a project has docs,
     # included in every project that has docs, so every session working on a project reads them.
@@ -4460,12 +5069,56 @@ def make_app() -> FastAPI:
                 for d in docs_mod.sort_docs(store.list_docs(uid, kind.strip().lower() or None))]
 
     @app.get("/api/docs/global")
-    def get_global_docs():
+    def get_global_docs(request: Request):
         """The cell's global AGENTS.md and memory, with their bodies; null until the first
-        project has docs."""
+        project has docs. `person` and `personal` are the caller's own, see /api/docs/personal."""
         ids = _global_ids()
-        return {k: (_marked(store.get_doc(None, ids[k]), ids) if k in ids else None)
-                for k in docs_mod.GLOBAL_DOCS}
+        out = {k: (_marked(store.get_doc(None, ids[k]), ids) if k in ids else None)
+               for k in docs_mod.GLOBAL_DOCS}
+        # the caller's own AGENTS.md and memory ride along: only theirs, never another person's
+        out["person"], out["personal"] = _personal_out(request)
+        return out
+
+    def _personal_out(request: Request) -> tuple[dict | None, dict]:
+        """(the caller's person, {agents, memory}: their personal docs with bodies or null)."""
+        person = _current_person(request)
+        mine = {name: (store.personal_doc(person["id"], kind) if person else None)
+                for name, (kind, _title) in docs_mod.PERSONAL_DOCS.items()}
+        return ({"id": person["id"], "name": person["name"]} if person else None), mine
+
+    @app.get("/api/docs/personal")
+    def get_personal_docs(request: Request):
+        """The caller's own personal AGENTS.md and memory, with their bodies (null until the first
+        line). Another person's are not reachable by any route."""
+        person, mine = _personal_out(request)
+        return {"person": person, **mine}
+
+    @app.post("/api/docs/personal/{name}/lines")
+    def add_personal_line(name: str, request: Request, body: dict = Body(...)):
+        """{text}: add one line to the caller's personal AGENTS.md (`agents`) or memory
+        (`memory`), made with the first line. Any station of that person may. The person comes
+        from the credential: a key with no person has none to write for."""
+        if name not in docs_mod.PERSONAL_DOCS:
+            _err(KeyError(f"no personal doc {name!r}; one of: " + ", ".join(docs_mod.PERSONAL_DOCS)),
+                 404)
+        person = _current_person(request)
+        if not person:
+            _err(PermissionError("This key has no person, so it has no personal docs."), 403)
+        kind, title = docs_mod.PERSONAL_DOCS[name]
+        cur = store.personal_doc(person["id"], kind)
+        try:
+            text, added = docs_mod.append_line(cur["body"] if cur else "", body.get("text"),
+                                           limit=docs_mod.MAX_PERSONAL_BYTES)
+        except docs_mod.DocError as e:
+            _err(e)
+        by = _by(request, body)
+        if cur is None:
+            doc_id = store.create_doc(None, kind, title, text, by=by, owner=person["id"])
+        else:
+            doc_id = cur["id"]
+            if added:
+                store.update_doc(doc_id, body=text, by=by)
+        return {**store.personal_doc(person["id"], kind), "added": added}
 
     @app.post("/api/docs/global/{kind}/lines")
     def add_global_line(kind: str, request: Request, body: dict = Body(...)):
@@ -4483,7 +5136,12 @@ def make_app() -> FastAPI:
         ids = _global_ids(create=True)
         cur = store.get_doc(None, ids[kind])
         try:
-            text, added = docs_mod.append_line(cur["body"], body.get("text"))
+            person = _current_person(request)
+            # the name sits in a shared doc: one line, so a name cannot add a bullet of its own
+            who = " ".join(str((person or {}).get("name") or "").split())[:60].strip()
+            note = (f" (added by {who}, {datetime.now(timezone.utc).date().isoformat()})"
+                    if who else "")
+            text, added = docs_mod.append_line(cur["body"], body.get("text"), note)
         except docs_mod.DocError as e:
             _err(e)
         if added:
@@ -4556,13 +5214,18 @@ def make_app() -> FastAPI:
         return _doc_or_404(uid, doc_id)
 
     @app.get("/api/docs")
-    def list_cell_docs():
-        """Every doc on Tares, with the projects that include it (no bodies)."""
+    def list_cell_docs(request: Request):
+        """Every doc on Tares, with the projects that include it (no bodies). A person's own
+        AGENTS.md and memory show only to them."""
+        viewer = (_current_person(request) or {}).get("id")
         names = {p["id"]: p["name"] for p in store.list_projects()}
         ids = _global_ids()
+        hidden = _hidden_ids()
         return [{**_marked(d, ids),
-                 "projects": [{"id": p, "name": names.get(p, p)} for p in d["projects"]]}
-                for d in docs_mod.sort_docs(store.list_cell_docs())]
+                 "projects": [{"id": p, "name": names.get(p, p)} for p in d["projects"]
+                              if p not in hidden]}
+                for d in docs_mod.sort_docs(store.list_cell_docs(viewer))
+                if not d["projects"] or set(d["projects"]) - hidden]
 
     def _plan_ctx(uid: str, listing: bool = False) -> dict:
         """What every ticket's view needs from the rest of the plan: the tickets by id, the
@@ -4584,6 +5247,7 @@ def make_app() -> FastAPI:
         out = {k: t[k] for k in ("id", "owner", "identifier", "url", "title", "status",
                                  "position", "working_doc", "updated_at", "number", "milestone",
                                  "holder", "stage", "stage_reason", "pr", "repo")}
+        out.update(ticket_assignee.view(store, t))   # assignee {id, name} | None, assignee_raw
         out["label"] = factory_mod.label(t)
         out["pr_note"] = factory_api.pr_note(t)
         out["milestone_name"] = ctx["ms"].get(t["milestone"]) if t["milestone"] else None
@@ -4602,7 +5266,7 @@ def make_app() -> FastAPI:
             by_id = ctx["by_id"]
             out["assumptions"] = [
                 {**{k: a[k] for k in ("label", "question", "choice", "why", "state", "words",
-                                      "made_by")},
+                                      "made_by", "person", "by_label")},
                  "tickets": [factory_mod.label(by_id[x]) for x in a["tickets"] if x in by_id]}
                 for a in store.list_assumptions(uid, ticket=t["id"])]
             out.update(factory_api.review_state(store, uid, t, _cc_source()))
@@ -4669,6 +5333,36 @@ def make_app() -> FastAPI:
     # where a ticket or milestone not owned by Tares lives; its owner is the key
     _HOME_NAME = {"linear": "Linear", "github": "GitHub"}
 
+    def _assignee_ref(v) -> tuple[str | None, str | None]:
+        """(person id, raw) for the `assignee` a caller sent; 404 for text that is neither a
+        person id nor an email."""
+        try:
+            return ticket_assignee.resolve(store, v)
+        except ValueError as e:
+            _err(KeyError(str(e)), 404)
+
+    def _assign_join(request, project: dict, prev: str | None, who: str | None) -> bool:
+        """May this caller give the ticket `who` as its assignee, and does that add them to the
+        project? Only a change joins anyone, and on a private project only the lead or the system
+        credential may bring in someone who is not on it (403 otherwise, like the members route);
+        any member may assign a person already on it."""
+        if (not who or who == prev or project.get("scope") != "private"
+                or who == project.get("lead_person_id")
+                or store.is_project_member(project["id"], who)):
+            return False
+        me = _current_person(request)
+        if not _is_system(request) and not (me and me["id"] == project.get("lead_person_id")):
+            raise HTTPException(status_code=403, detail=(
+                "that person is not on this private project: assign someone who is, or ask the "
+                "project lead to add them"))
+        return True
+
+    def _added_by(request) -> str:
+        """Who a project member added by assigning a ticket is recorded as: the person behind the
+        credential, from the credential alone."""
+        by = _current_person(request)
+        return by["id"] if by else "system"
+
     def _ticket_or_404(uid: str, ref: str) -> dict:
         t = store.get_ticket(uid, ref)
         if t is None:
@@ -4696,11 +5390,12 @@ def make_app() -> FastAPI:
             "github": store.get_project_github(uid)})
 
     @app.post("/api/projects/{uid}/tickets", status_code=201)
-    def create_project_ticket(uid: str, body: dict = Body(...)):
-        """{title, status?, position?, working_doc?, milestone?, depends_on?, repo?}: a ticket
-        Tares owns. `repo` is the GitHub repo (owner/name) it changes, for a project that spans
-        several. Refused when the project's tickets live in Linear or GitHub."""
-        _project_or_404(uid)
+    def create_project_ticket(uid: str, request: Request, body: dict = Body(...)):
+        """{title, status?, position?, working_doc?, milestone?, depends_on?, repo?, assignee?}: a
+        ticket Tares owns. `repo` is the GitHub repo (owner/name) it changes, for a project that
+        spans several. `assignee` is a person id or an email (an email nobody on the cell has is
+        kept as written, and the ticket shows as unowned). Refused when the project's tickets live in Linear or GitHub."""
+        project = _project_or_404(uid)
         home = store.project_ticket_home(uid)
         if home:
             _err(ValueError(f"this project's tickets live in {_HOME_NAME[home]}; add the ticket "
@@ -4710,6 +5405,8 @@ def make_app() -> FastAPI:
             status = docs_mod.status_ok(body.get("status"))
         except docs_mod.DocError as e:
             _err(e)
+        who, raw = _assignee_ref(body.get("assignee"))
+        joins = _assign_join(request, project, None, who)
         pos = body.get("position")
         milestone = _milestone_ref(uid, body.get("milestone"))
         depends = _depends_ref(uid, None, body.get("depends_on"))
@@ -4717,7 +5414,10 @@ def make_app() -> FastAPI:
                                   float(pos) if pos is not None else None,
                                   working_doc=_working_doc_ok(uid, body.get("working_doc")),
                                   milestone=milestone, depends_on=depends,
-                                  repo=_repo_ok(body.get("repo")))
+                                  repo=_repo_ok(body.get("repo")),
+                                  assignee_person_id=who, assignee_raw=raw)
+        if joins:
+            ticket_assignee.join(store, project, who, _added_by(request))
         return _ticket_out(uid, _ticket_or_404(uid, tid))
 
     @app.get("/api/projects/{uid}/tickets/{ref}")
@@ -4729,18 +5429,22 @@ def make_app() -> FastAPI:
         return _ticket_out(uid, _ticket_or_404(uid, ref), with_doc=True)
 
     @app.put("/api/projects/{uid}/tickets/{ref}")
-    def update_project_ticket(uid: str, ref: str, body: dict = Body(...)):
+    def update_project_ticket(uid: str, ref: str, request: Request,
+                                    body: dict = Body(...)):
         """Change a ticket. A Linear or GitHub ticket only takes `working_doc` and `repo` (its
-        title, status, order, milestone and blocking relations change where it lives); a Tares
-        ticket also takes title, status, position, milestone and depends_on."""
-        _project_or_404(uid)
+        title, status, order, assignee, milestone and blocking relations change where it lives);
+        a Tares ticket also takes title, status, position, assignee, milestone and depends_on.
+        `assignee` is a person id or an email; "" clears it. Changing it leaves the holder and
+        stage alone."""
+        project = _project_or_404(uid)
         t = _ticket_or_404(uid, ref)
         fields: dict = {}
+        joins = False
         if "working_doc" in body:
             fields["working_doc"] = _working_doc_ok(uid, body.get("working_doc"))
         if "repo" in body:
             fields["repo"] = _repo_ok(body.get("repo"))
-        own = {"title", "status", "position", "milestone", "depends_on"} & set(body)
+        own = {"title", "status", "position", "milestone", "depends_on", "assignee"} & set(body)
         if own and t["owner"] != "tares":
             _err(ValueError(f"{t['identifier'] or t['id']} lives in {_HOME_NAME[t['owner']]}: "
                             "change its " + ", ".join(sorted(own)) + " there"), 409)
@@ -4757,8 +5461,14 @@ def make_app() -> FastAPI:
             fields["milestone"] = _milestone_ref(uid, body.get("milestone"))
         if "depends_on" in body:
             fields["depends_on"] = _depends_ref(uid, t["id"], body.get("depends_on"))
+        if "assignee" in body:
+            who, raw = _assignee_ref(body.get("assignee"))
+            joins = _assign_join(request, project, t.get("assignee_person_id"), who)
+            fields.update(assignee_person_id=who, assignee_raw=raw)
         if fields:
             store.update_ticket(t["id"], **fields)
+        if joins:
+            ticket_assignee.join(store, project, fields["assignee_person_id"], _added_by(request))
         return _ticket_out(uid, _ticket_or_404(uid, t["id"]), with_doc=True)
 
     @app.delete("/api/projects/{uid}/tickets/{ref}")
@@ -5032,7 +5742,8 @@ def make_app() -> FastAPI:
     def _standup(since: str | None, until: str | None) -> dict:
         start, end = _standup_range(since, until)
         return standup_mod.facts(store, start, end,
-                                 lambda uid: factory_api.project_progress(store, uid))
+                                 lambda uid: factory_api.project_progress(store, uid),
+                                 hide=_hidden_ids())
 
     @app.get("/api/crew/standup")
     def crew_standup(since: str | None = None, until: str | None = None):
@@ -5121,6 +5832,11 @@ def make_app() -> FastAPI:
     h = SimpleNamespace(
         err=lambda e, code=400: _err(e, code), project_or_404=lambda uid: _project_or_404(uid),
         by=lambda request, body=None: _by(request, body), cc_source=lambda: _cc_source(),
+        current_person=lambda request: _current_person(request),
+        area_owner=lambda repo: areas_mod.owner(store, repo),
+        is_system=lambda request: _is_system(request),
+        is_admin=lambda request: _is_admin(request),
+        hidden_ids=lambda: _hidden_ids(),
         global_ids=lambda create=False: _global_ids(create), resolve_project=_factory_project_id,
         ticket_out=lambda uid, t, **kw: _ticket_out(uid, t, **kw),
         ensure_globals=lambda uid: _ensure_globals(uid),
@@ -5575,7 +6291,7 @@ def make_app() -> FastAPI:
     # the findings recorded in it, and stats over its sources ────────────────────────────────
     def _project_or_404(uid: str) -> dict:
         p = store.get_project(uid)
-        if p is None:
+        if p is None or not _can_see(p):   # a private one the caller cannot see is unknown
             _err(KeyError(f"unknown project {uid!r}"), 404)
         return p
 
@@ -5789,7 +6505,8 @@ def make_app() -> FastAPI:
                                scope=f"project {p.get('name') or uid}", project_rows=scope)
         except ValueError as e:
             _err(e)
-        store.log_query("s_" + uuid.uuid4().hex[:12], "(stats)", f"by {by}", window, 0, "http")
+        store.log_query("s_" + uuid.uuid4().hex[:12], "(stats)", f"by {by}", window, 0, "http",
+                        project=uid)
         return {"stats": text}
 
     # /api/usecases*: the pre-1.14 routes, same handlers, old response shape ({"usecases"},

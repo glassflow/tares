@@ -305,7 +305,8 @@ async def main():
         row = crew["Shop"]
         ck("the crew's list keeps its fields",
            set(row) == {"id", "name", "tickets_done", "tickets_total", "stages", "milestone",
-                        "progress", "repos", "autonomy", "handed_over_at", "handed_over_by"},
+                        "progress", "repos", "autonomy", "handed_over_at", "handed_over_by",
+                        "handed_over_person"},
            sorted(row))
         ck("and the ring's count, the same as the projects list's",
            row["progress"] == ps["Shop"]["progress"] == {"done": 2, "doing": 1, "blocked": 2,

@@ -43,7 +43,7 @@ function Verdict({ v, findings, blocking, compact, what }: {
 }) {
   if (!v) return <span className="dim">{compact ? "none" : "not reviewed"}</span>;
   const text = verdictText(v, findings, blocking);
-  const title = `${what ? what + ": " : ""}${text} (Codex verdict ${v})`;
+  const title = `${what ? what + ": " : ""}${text} (challenger verdict ${v})`;
   if (compact) {
     const n = Number(findings);
     const label = v === "PASS" ? "Pass" : v === "FAIL" ? `Findings (${Number.isFinite(n) ? n : "?"})` : "No verdict";
@@ -153,7 +153,7 @@ export function SessionsPanel({ sessions, runs, project, onSummarize, busy, mess
     <div className="panel">
       <h2 style={{ marginTop: 0 }}>Sessions</h2>
       <p className="help" style={{ marginTop: 0 }}>
-        Every Claude Code session Codex challenged. Open one for its summary, memory proposals and the exchange.
+        Every challenged Claude Code session. Open one for its summary, memory proposals and the exchange.
       </p>
       <table>
         <thead><tr><th style={{ width: 22 }} aria-label="open" /><th>when</th><th>repo</th><th title="findings on the plan">plan</th><th title="the reviewed commits, rolled up">commits</th><th>state</th></tr></thead>
