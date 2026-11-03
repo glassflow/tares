@@ -36,7 +36,7 @@ words, and the project left the crew's work list. Its builders may still be runn
 
 1. `crew_projects`: find the project under `releasing`. If it is not there, the orchestrator has
    released it already: go to "Working the project".
-2. Send the orchestrator (normally `crew-orchestrator`; `list_crew` shows it) one message with
+2. Send your crew's orchestrator (the name `hand_over` gave when the project was handed over, else `list_crew(mine=true)`, or `list_crew` on an older Tares that does not take `mine`: `<crew>-orchestrator`, never another person's) one message with
    SendMessage:
 
    ```

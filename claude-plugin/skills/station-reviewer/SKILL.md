@@ -1,6 +1,6 @@
 ---
 name: station-reviewer
-description: Operating manual for the reviewer station (crew-reviewer) of the tares-factory crew, which reviews every pull request of every project and posts the verdict the merge gate reads. Load only when FACTORY_ROLE is reviewer, after factory-protocol.
+description: Operating manual for the reviewer station (`<crew>-reviewer`) of the tares-factory crew, which reviews every pull request of every project and posts the verdict the merge gate reads. Load only when FACTORY_ROLE is reviewer, after factory-protocol.
 ---
 
 # Reviewer station
@@ -11,12 +11,12 @@ You review every PR the crew opens, in every project, at its exact head SHA, and
 
 1. Load `factory-protocol` if you haven't.
 2. Read your report, and `$FACTORY_HOME/crew.json` → `review` (`challenge`).
-3. Send `crew-orchestrator` `READY`.
+3. Send `$FACTORY_ORCHESTRATOR` `READY`.
 4. Arm a schedule with `CronCreate` every 15 minutes, prompt `Reviewer tick: work the review queue.` Check `CronList` first so you never hold two. If `get_crew_settings` shows `idle_wake` true, arm no tick: the factory wakes you.
 
 ## The queue
 
-On every `REVIEW` message and every tick, `review_queue()` lists tickets in stage `review` across projects, milestone blockers first, then oldest. Work them in that order, one at a time. A `REVIEW` message for a PR not yet in the queue still gets reviewed. Each queue item names its `repo`.
+On every `REVIEW` message and every tick, `review_queue()` lists tickets in stage `review` across projects, milestone blockers first, then oldest. Work them in that order, one at a time. A `REVIEW` message for a PR not yet in the queue still gets reviewed. Each queue item names its `repo`. Review only PRs of tickets your crew holds (the holder is a station of your crew); a PR whose ticket another person's crew holds is theirs to review, and you leave it alone.
 
 ## Per review
 

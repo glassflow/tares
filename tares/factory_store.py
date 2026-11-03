@@ -235,7 +235,108 @@ FACTORY_SCHEMA = [
     "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS taken_words TEXT",
     "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS taken_by TEXT",
     "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS released_at TIMESTAMPTZ",
+    # The person behind every "who did this" (TR-619): the people.id of the credential that made
+    # the call, NULL when the system credential or Tares itself did (GitHub read a merge off the
+    # pull request). The station above stays as it was; the person is who stood behind it.
+    "ALTER TABLE ticket_history ADD COLUMN IF NOT EXISTS person_id TEXT",
+    "ALTER TABLE decisions ADD COLUMN IF NOT EXISTS person_id TEXT",
+    "ALTER TABLE desk_items ADD COLUMN IF NOT EXISTS person_id TEXT",
+    # The person a desk item is addressed to (TR-634): it shows in their my_work and only words
+    # found in their own recorded sessions answer it. NULL for an item from before this.
+    "ALTER TABLE desk_items ADD COLUMN IF NOT EXISTS to_person_id TEXT",
+    "ALTER TABLE assumptions ADD COLUMN IF NOT EXISTS person_id TEXT",
+    "ALTER TABLE ticket_checks ADD COLUMN IF NOT EXISTS person_id TEXT",
+    "ALTER TABLE reviews ADD COLUMN IF NOT EXISTS person_id TEXT",
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS person_id TEXT",
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS finished_person_id TEXT",
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS taken_person_id TEXT",
+    # The crew (its name) of the session that handed the project over (TR-633), so a hand-over says
+    # who handed it over and to which crew.
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS crew TEXT",
+    # Grants by kind (TR-630): team (what every project starts from), project (what the work may
+    # do; waits for the owner of any repo it reaches into) and personal (what may run on the
+    # holder's machine). areas is a JSON list of repos, consents a JSON list of {person_id, at}.
+    """CREATE TABLE IF NOT EXISTS grants (
+      id               TEXT PRIMARY KEY,
+      kind             TEXT,
+      project          TEXT,
+      holder_person_id TEXT,
+      words            TEXT,
+      given_by         TEXT,
+      given_at         TIMESTAMPTZ,
+      areas            TEXT,
+      consents         TEXT,
+      state            TEXT
+    )""",
+    # a project grant from someone who is neither the project's lead nor an admin also waits
+    # for the lead (for an admin when the project has none)
+    "ALTER TABLE grants ADD COLUMN IF NOT EXISTS needs_lead BOOLEAN DEFAULT FALSE",
+    # A crew (TR-628): one person's crew on one machine, so two crews with the same station names
+    # never merge. Named by the person (FACTORY_CREW, `crew` when unset), made from the first
+    # station line a recording carries; machine is '' when the recording names none.
+    """CREATE TABLE IF NOT EXISTS crews (
+      id          TEXT PRIMARY KEY,
+      name        TEXT,
+      person_id   TEXT,
+      machine     TEXT,
+      first_seen  TIMESTAMPTZ,
+      last_seen   TIMESTAMPTZ,
+      UNIQUE (person_id, name, machine)
+    )""",
+    "ALTER TABLE session_stations ADD COLUMN IF NOT EXISTS crew_id TEXT",
+    # Questions a spec asks of the owner of a repo (TR-636): numbered Q1, Q2... per project, asked
+    # by a person and addressed to a person; state open until the addressee answers.
+    """CREATE TABLE IF NOT EXISTS spec_questions (
+      project       TEXT,
+      id            TEXT,
+      to_person_id  TEXT,
+      repo          TEXT,
+      text          TEXT,
+      asked_by      TEXT,
+      asked_at      TIMESTAMPTZ,
+      answer        TEXT,
+      answered_by   TEXT,
+      answered_at   TIMESTAMPTZ,
+      state         TEXT,
+      PRIMARY KEY (project, id)
+    )""",
+    # The owner of a repo saying the tickets in their repo are right (TR-636); the hand-over waits
+    # for one per repo. One row per repo and project: signing again keeps the first.
+    """CREATE TABLE IF NOT EXISTS signoffs (
+      project    TEXT,
+      repo       TEXT,
+      person_id  TEXT,
+      "at"       TIMESTAMPTZ,
+      PRIMARY KEY (project, repo)
+    )""",
+    # A hand-over the project lead pushed through without every sign-off, and why (TR-636).
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS override_reason TEXT",
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS override_at TIMESTAMPTZ",
+    # Who pushed it through, so a later hand-over by someone else does not take the override over
+    # (TR-640), and every override kept in a log: a later one does not replace an earlier one.
+    "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS override_person_id TEXT",
+    """CREATE TABLE IF NOT EXISTS handover_overrides (
+      project    TEXT,
+      "at"       TIMESTAMPTZ,
+      reason     TEXT,
+      person_id  TEXT,
+      handed_by  TEXT
+    )""",
 ]
+
+# Words that say "a session" and not a station: shown without parentheses next to a person's name.
+GENERIC_BY = ("", "a session", "claude code session", "github")
+
+
+def by_label(person: dict | None, by: str | None) -> str | None:
+    """How a record of who did it reads: "Kiran (crew-builder-1)" for a person acting through a
+    station, the person's name alone when nothing names a station, and what was stored (the
+    station, the caller's name) when no person stood behind the call."""
+    name = (person or {}).get("name")
+    by = (by or "").strip()
+    if not name:
+        return by or None
+    return name if by in GENERIC_BY or by == name else f"{name} ({by})"
 
 
 class MapChanged(Exception):
@@ -249,9 +350,50 @@ class MapChanged(Exception):
 class FactoryStore:
     """Methods Store gains for the factory. Expects self.con and self._lock."""
 
+    # ── the person behind a record (TR-619) ───────────────────────────────────
+    def _person_refs(self, ids) -> dict[str, dict]:
+        """{id: {id, name}} for the people among `ids`. Call without the lock held."""
+        ids = sorted({i for i in ids if i})
+        if not ids:
+            return {}
+        with self._sread:
+            rows = self.sc.execute(
+                f"SELECT id, name FROM people WHERE id IN ({', '.join('?' for _ in ids)})",
+                ids).fetchall()
+        return {r[0]: {"id": r[0], "name": r[1]} for r in rows}
+
+    def _with_people(self, rows: list[dict], by_key: str | None = "by") -> list[dict]:
+        """Each row's `person_id` becomes `person` ({id, name} or None), and `by_label` says who
+        did it in words (the person, and the station when there is one). `by_key` is the row's
+        own name for the station; None adds the person alone."""
+        refs = self._person_refs(r.get("person_id") for r in rows)
+        for r in rows:
+            r["person"] = refs.get(r.pop("person_id", None))
+            if by_key:
+                r["by_label"] = by_label(r["person"], r.get(by_key))
+        return rows
+
     # ── upgrade and clean-up ──────────────────────────────────────────────────
     def _factory_upgrade(self) -> None:
-        """Tickets from before numbers get them, in plan order, per project."""
+        """Tickets from before numbers get them, in plan order, per project. Sessions that played
+        a station before crews existed (TR-628) join the crew `crew` of the person `local`."""
+        if self.sc.execute("SELECT 1 FROM session_stations WHERE crew_id IS NULL LIMIT 1"
+                            ).fetchone():
+            cid = self._crew_id("crew", "local", "", now_utc())
+            self.sc.execute("UPDATE session_stations SET crew_id = ? WHERE crew_id IS NULL",
+                             [cid])
+        # an override kept before the log existed is its first entry (TR-640); one with no time of
+        # its own takes the hand-over's, else now, so a log entry always has a time
+        self.sc.execute(
+            "INSERT INTO handover_overrides (project, \"at\", reason, person_id, handed_by) "
+            "SELECT project, COALESCE(override_at, handed_at, now()), override_reason, "
+            "COALESCE(override_person_id, person_id), "
+            "handed_by FROM handovers WHERE override_reason IS NOT NULL AND project NOT IN "
+            "(SELECT project FROM handover_overrides)")
+        # an override with no time of its own is stamped with its hand-over's, so get_handover
+        # reads that hand-over as overridden (its rule compares the two times)
+        self.sc.execute("UPDATE handovers SET override_at = COALESCE(handed_at, now()) "
+                         "WHERE override_reason IS NOT NULL AND override_at IS NULL")
         rows = self.sc.execute("SELECT DISTINCT project FROM tickets WHERE number IS NULL"
                                 ).fetchall()
         for (project,) in rows:
@@ -286,8 +428,12 @@ class FactoryStore:
         self.sc.execute("DELETE FROM reviews WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM review_findings WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM desk_items WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM grants WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM decisions WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM handovers WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM handover_overrides WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM spec_questions WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM signoffs WHERE project = ?", [uid])
 
     # ── milestones (TR-411) ───────────────────────────────────────────────────
     _MS_COLS = "id, project, owner, external_id, name, goal, checks, position, created_at, updated_at"
@@ -345,16 +491,51 @@ class FactoryStore:
                 [project, ref, ref, ref]).fetchone()
         return self._ms_row(r) if r else None
 
+    # ── crews (TR-628) ────────────────────────────────────────────────────────
+    def _crew_id(self, name: str, person_id: str, machine: str, at) -> str:
+        """The id of the crew (person, name, machine), made on first sight; last_seen moves up
+        to `at`. Lock held (or no other thread yet)."""
+        r = self.sc.execute("SELECT id, last_seen FROM crews WHERE person_id = ? AND name = ? "
+                             "AND machine = ?", [person_id, name, machine]).fetchone()
+        if r:
+            if at is not None and (r[1] is None or at > r[1]):
+                self.sc.execute("UPDATE crews SET last_seen = ? WHERE id = ?", [at, r[0]])
+            return r[0]
+        cid = "c_" + uuid.uuid4().hex[:10]
+        self.sc.execute("INSERT INTO crews (id, name, person_id, machine, first_seen, last_seen) "
+                         "VALUES (?, ?, ?, ?, ?, ?)", [cid, name, person_id, machine, at, at])
+        return cid
+
+    def resolve_crew(self, name: str | None, person_id: str | None, machine: str | None,
+                     at) -> str:
+        """The crew a station line belongs to: the crew's name (`crew` when the line names none),
+        the person whose recording it is (`local` when it carries none) and the machine ('' when
+        unknown). Made on first sight."""
+        with self._swrite:
+            return self._crew_id((name or "").strip() or "crew", person_id or "local",
+                                 (machine or "").strip(), at)
+
+    def list_crews(self) -> list[dict]:
+        """Every crew the cell has seen, with its person's name, newest activity first."""
+        with self._sread:
+            rows = self.sc.execute("SELECT id, name, person_id, machine, first_seen, last_seen "
+                                    "FROM crews ORDER BY last_seen DESC, id").fetchall()
+        refs = self._person_refs(r[2] for r in rows)
+        return [{"id": r[0], "name": r[1], "machine": r[3] or "", "first_seen": r[4],
+                 "last_seen": r[5], "person_id": r[2],
+                 "person": refs.get(r[2]) or {"id": r[2], "name": None}} for r in rows]
+
     # ── stations (TR-418, TR-420) ─────────────────────────────────────────────
     def set_session_station(self, session: str, station: str, role: str, parent: str,
-                            project: str | None, at) -> None:
+                            project: str | None, at, crew_id: str | None = None) -> None:
         with self._swrite:
             self.sc.execute(
-                "INSERT INTO session_stations (session, station, role, parent, project, seen_at) "
-                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (session) DO UPDATE SET "
+                "INSERT INTO session_stations (session, station, role, parent, project, seen_at, "
+                "crew_id) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (session) DO UPDATE SET "
                 "station = excluded.station, role = excluded.role, parent = excluded.parent, "
-                "project = coalesce(excluded.project, session_stations.project)",
-                [session, station, role or None, parent or None, project, at])
+                "project = coalesce(excluded.project, session_stations.project), "
+                "crew_id = coalesce(excluded.crew_id, session_stations.crew_id)",
+                [session, station, role or None, parent or None, project, at, crew_id])
 
     def session_station(self, session: str) -> dict | None:
         with self._sread:
@@ -371,7 +552,7 @@ class FactoryStore:
                 "SELECT ss.session, ss.station, ss.role, ss.parent, ss.project, ss.seen_at, "
                 "st.state, st.reason, st.state_at, "
                 "(SELECT p.project FROM project_sessions p WHERE p.session = ss.session "
-                " ORDER BY p.linked_at DESC LIMIT 1) "
+                " ORDER BY p.linked_at DESC LIMIT 1), ss.crew_id "
                 "FROM session_stations ss "
                 "LEFT JOIN session_states st ON st.session = ss.session").fetchall()
         act = self.session_activity(source, [r[0] for r in rows])
@@ -381,7 +562,7 @@ class FactoryStore:
             out.append({"session": r[0], "station": r[1], "role": r[2], "parent": r[3],
                         "project": r[4] or r[9], "seen_at": r[5], "started_at": first or r[5],
                         "last_at": last or r[5], "lines": n, "state": r[6],
-                        "state_reason": r[7], "state_at": r[8]})
+                        "state_reason": r[7], "state_at": r[8], "crew_id": r[10]})
         out.sort(key=lambda s: s["last_at"].timestamp() if s["last_at"] else float("-inf"),
                  reverse=True)
         return out
@@ -389,21 +570,21 @@ class FactoryStore:
     # ── the ledger's history (TR-427) ─────────────────────────────────────────
     def add_ticket_history(self, ticket: str, project: str, field: str, value: str | None,
                            reason: str | None, by_station: str | None, by_role: str | None,
-                           at) -> None:
+                           at, person_id: str | None = None) -> None:
         with self._swrite:
             self.sc.execute(
                 "INSERT INTO ticket_history (ticket, project, changed_at, field, value, reason, "
-                "by_station, by_role) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "by_station, by_role, person_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [ticket, project, at, field, value, reason or None, by_station or None,
-                 by_role or None])
+                 by_role or None, person_id or None])
 
     def ticket_history(self, ticket: str) -> list[dict]:
         with self._sread:
             rows = self.sc.execute(
-                "SELECT changed_at, field, value, reason, by_station, by_role FROM ticket_history "
-                "WHERE ticket = ? ORDER BY changed_at", [ticket]).fetchall()
-        return [{"at": r[0], "field": r[1], "value": r[2], "reason": r[3], "by": r[4],
-                 "role": r[5]} for r in rows]
+                "SELECT changed_at, field, value, reason, by_station, by_role, person_id "
+                "FROM ticket_history WHERE ticket = ? ORDER BY changed_at", [ticket]).fetchall()
+        return self._with_people([{"at": r[0], "field": r[1], "value": r[2], "reason": r[3],
+                                   "by": r[4], "role": r[5], "person_id": r[6]} for r in rows])
 
     def entered_stage(self, tickets: list[str], stage: str) -> dict:
         """{ticket: when it last moved to `stage`} in one query (TR-648). Tickets that never
@@ -443,11 +624,12 @@ class FactoryStore:
         """Every ticket change in [since, until), oldest first, for every project (the standup)."""
         with self._sread:
             rows = self.sc.execute(
-                "SELECT ticket, project, changed_at, field, value, reason, by_station "
+                "SELECT ticket, project, changed_at, field, value, reason, by_station, person_id "
                 "FROM ticket_history WHERE changed_at >= ? AND changed_at < ? "
                 "ORDER BY changed_at", [since, until]).fetchall()
-        return [{"ticket": r[0], "project": r[1], "at": r[2], "field": r[3], "value": r[4],
-                 "reason": r[5], "by": r[6]} for r in rows]
+        return self._with_people([{"ticket": r[0], "project": r[1], "at": r[2], "field": r[3],
+                                   "value": r[4], "reason": r[5], "by": r[6], "person_id": r[7]}
+                                  for r in rows])
 
     def factory_branch_prs(self, repos: set[str]) -> dict[tuple[str, str], tuple[str, int]]:
         """{(repo, ticket ref upper case): (repo, number)} for the pull requests GitHub sources
@@ -591,30 +773,32 @@ class FactoryStore:
 
     # ── assumptions (TR-433) ──────────────────────────────────────────────────
     _AS_COLS = ("id, project, number, question, choice, why, affects, tickets, state, words, batch, "
-                "made_by, made_role, made_at, decided_at")
+                "made_by, made_role, made_at, decided_at, person_id")
 
     @staticmethod
     def _as_row(r) -> dict:
-        return {"id": r[0], "project": r[1], "number": r[2], "label": f"A{r[2]}",
+        return {"person_id": r[15], "id": r[0], "project": r[1], "number": r[2], "label": f"A{r[2]}",
                 "question": r[3], "choice": r[4], "why": r[5], "affects": r[6] or "",
                 "tickets": json.loads(r[7]) if r[7] else [], "state": r[8], "words": r[9],
                 "batch": r[10], "made_by": r[11], "made_role": r[12], "made_at": r[13],
                 "decided_at": r[14]}
 
     def add_assumption(self, project: str, question: str, choice: str, why: str, affects: str,
-                       tickets: list[str], made_by: str, made_role: str, at) -> dict:
+                       tickets: list[str], made_by: str, made_role: str, at,
+                       person_id: str | None = None) -> dict:
         aid = "as_" + uuid.uuid4().hex[:10]
         with self._swrite:
             n = (self.sc.execute("SELECT max(number) FROM assumptions WHERE project = ?",
                                   [project]).fetchone()[0] or 0) + 1
             self.sc.execute(
                 f"INSERT INTO assumptions ({self._AS_COLS}) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, NULL, ?, ?, ?, NULL)",
+                "(?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, NULL, ?, ?, ?, NULL, ?)",
                 [aid, project, n, question, choice, why, affects or None,
-                 json.dumps(tickets) if tickets else None, made_by or None, made_role or None, at])
+                 json.dumps(tickets) if tickets else None, made_by or None, made_role or None, at,
+                 person_id or None])
             r = self.sc.execute(f"SELECT {self._AS_COLS} FROM assumptions WHERE id = ?",
                                  [aid]).fetchone()
-        return self._as_row(r)
+        return self._with_people([self._as_row(r)], "made_by")[0]
 
     def list_assumptions(self, project: str, state: str | None = None,
                          ticket: str | None = None) -> list[dict]:
@@ -625,7 +809,8 @@ class FactoryStore:
         with self._sread:
             rows = self.sc.execute(q + " ORDER BY number", vals).fetchall()
         out = [self._as_row(r) for r in rows]
-        return [a for a in out if ticket in a["tickets"]] if ticket else out
+        out = [a for a in out if ticket in a["tickets"]] if ticket else out
+        return self._with_people(out, "made_by")
 
     def get_assumption(self, project: str, ref: str) -> dict | None:
         m = re.match(r"^[Aa]?(\d{1,6})$", (ref or "").strip())
@@ -633,7 +818,7 @@ class FactoryStore:
             r = self.sc.execute(
                 f"SELECT {self._AS_COLS} FROM assumptions WHERE project = ? AND (id = ? OR "
                 "number = ?)", [project, ref, int(m.group(1)) if m else -1]).fetchone()
-        return self._as_row(r) if r else None
+        return self._with_people([self._as_row(r)], "made_by")[0] if r else None
 
     def decide_assumption(self, aid: str, state: str, words: str | None, batch: str | None,
                           at) -> None:
@@ -643,29 +828,32 @@ class FactoryStore:
 
     # ── checks (TR-435) ───────────────────────────────────────────────────────
     def add_check(self, project: str, ticket: str, command: str, result: str, commit: str,
-                  broke_test: str, by_station: str, by_session: str, at) -> str:
+                  broke_test: str, by_station: str, by_session: str, at,
+                  person_id: str | None = None) -> str:
         cid = "ck_" + uuid.uuid4().hex[:10]
         with self._swrite:
             self.sc.execute(
                 "INSERT INTO ticket_checks (id, project, ticket, command, result, commit_sha, "
-                "broke_test, by_station, by_session, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, "
-                "?, ?)", [cid, project, ticket, command, result, commit or None, broke_test or None,
-                          by_station or None, by_session or None, at])
+                "broke_test, by_station, by_session, checked_at, person_id) VALUES (?, ?, ?, ?, ?, "
+                "?, ?, ?, ?, ?, ?)", [cid, project, ticket, command, result, commit or None,
+                                      broke_test or None, by_station or None, by_session or None,
+                                      at, person_id or None])
         return cid
 
     def ticket_checks(self, ticket: str, limit: int = 50) -> list[dict]:
-        with self._swrite:
+        with self._sread:
             rows = self.sc.execute(
-                "SELECT id, command, result, commit_sha, broke_test, by_station, checked_at FROM "
-                "ticket_checks WHERE ticket = ? ORDER BY checked_at DESC LIMIT ?",
+                "SELECT id, command, result, commit_sha, broke_test, by_station, checked_at, person_id "
+                "FROM ticket_checks WHERE ticket = ? ORDER BY checked_at DESC LIMIT ?",
                 [ticket, limit]).fetchall()
-        return [{"id": r[0], "command": r[1], "result": r[2], "commit": r[3], "broke_test": r[4],
-                 "by": r[5], "at": r[6]} for r in reversed(rows)]
+        return self._with_people([{"id": r[0], "command": r[1], "result": r[2], "commit": r[3],
+                                   "broke_test": r[4], "by": r[5], "at": r[6], "person_id": r[7]}
+                                  for r in reversed(rows)])
 
     # ── reviews (TR-441) ──────────────────────────────────────────────────────
     def add_review(self, project: str, ticket: str, pr: str | None, head: str, verdict: str,
                    verified: str, not_verified: str, by: str, findings: list[dict],
-                   resolved: dict[str, str], kind_of, at) -> dict:
+                   resolved: dict[str, str], kind_of, at, person_id: str | None = None) -> dict:
         """A review round: earlier findings marked fixed or still open as `resolved` says
         ({F<n> or id: fixed|open}), the new findings numbered on from the ticket's last."""
         rid = "rv_" + uuid.uuid4().hex[:10]
@@ -674,9 +862,10 @@ class FactoryStore:
                                     [ticket]).fetchone()[0] or 0) + 1
             self.sc.execute(
                 "INSERT INTO reviews (id, project, ticket, round, pr, head, verdict, verified, "
-                "not_verified, by_station, reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "not_verified, by_station, reviewed_at, person_id) VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [rid, project, ticket, rnd, pr, head, verdict, verified, not_verified or None,
-                 by or None, at])
+                 by or None, at, person_id or None])
             for ref, st in (resolved or {}).items():
                 m = re.match(r"^[Ff]?(\d{1,6})$", str(ref).strip())
                 self.sc.execute(
@@ -700,7 +889,7 @@ class FactoryStore:
         with self._sread:
             revs = self.sc.execute(
                 "SELECT id, round, pr, head, verdict, verified, not_verified, by_station, "
-                "reviewed_at FROM reviews WHERE ticket = ? ORDER BY round", [ticket]).fetchall()
+                "reviewed_at, person_id FROM reviews WHERE ticket = ? ORDER BY round", [ticket]).fetchall()
             fs = self.sc.execute(
                 "SELECT id, review, number, severity, file, line, blocking, text, kind, state, "
                 "fixed_in FROM review_findings WHERE ticket = ? ORDER BY number",
@@ -714,8 +903,8 @@ class FactoryStore:
             fixed_here = [f["label"] for f in finds if f["fixed_in"] == r[0]]
             out.append({"id": r[0], "round": r[1], "pr": r[2], "head": r[3], "verdict": r[4],
                         "verified": r[5], "not_verified": r[6], "by": r[7], "at": r[8],
-                        "findings": mine, "fixed": fixed_here})
-        return out
+                        "person_id": r[9], "findings": mine, "fixed": fixed_here})
+        return self._with_people(out)
 
     def last_reviews(self, tickets: list[str]) -> dict[str, dict]:
         """Each ticket's latest review round, shaped like an element of ticket_reviews(), in two
@@ -963,7 +1152,7 @@ class FactoryStore:
     # ── the desk (TR-449..452) ────────────────────────────────────────────────
     _DK_COLS = ("id, number, project, question, context, options, recommendation, why, blocks, "
                 "tickets, blocking, asked_by, assumptions, state, reason, created_at, closed_at, station, "
-                "command")
+                "command, person_id, to_person_id")
 
     @staticmethod
     def _dk_row(r) -> dict:
@@ -973,22 +1162,32 @@ class FactoryStore:
                 "tickets": json.loads(r[9]) if r[9] else [], "blocking": bool(r[10]),
                 "asked_by": r[11], "assumptions": json.loads(r[12]) if r[12] else [],
                 "state": r[13], "reason": r[14], "created_at": r[15], "closed_at": r[16],
-                "station": r[17], "command": r[18]}
+                "station": r[17], "command": r[18], "person_id": r[19], "to_person_id": r[20]}
+
+    def _dk_people(self, rows: list[dict]) -> list[dict]:
+        """Desk rows with `person` (who asked) and `to_person` ({id, name} or None, who it is
+        addressed to) filled in; `to_person_id` stays."""
+        rows = self._with_people(rows, "asked_by")
+        refs = self._person_refs(r.get("to_person_id") for r in rows)
+        for r in rows:
+            r["to_person"] = refs.get(r["to_person_id"])
+        return rows
 
     def add_desk_item(self, project: str | None, question: str, context: str, options: list[str],
                       recommendation: str, why: str, blocks: str, tickets: list[str],
                       blocking: bool, asked_by: str, assumptions: list[str], at,
-                      station: str | None = None, command: str | None = None) -> dict:
+                      station: str | None = None, command: str | None = None,
+                      person_id: str | None = None, to_person_id: str | None = None) -> dict:
         did = "dk_" + uuid.uuid4().hex[:10]
         with self._swrite:
             n = (self.sc.execute("SELECT max(number) FROM desk_items").fetchone()[0] or 0) + 1
             self.sc.execute(
                 f"INSERT INTO desk_items ({self._DK_COLS}) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, NULL, ?, ?)",
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, NULL, ?, ?, ?, ?)",
                 [did, n, project, question, context or None, json.dumps(options or []),
                  recommendation, why, blocks or None, json.dumps(tickets or []), blocking,
                  asked_by or None, json.dumps(assumptions or []), at, station or None,
-                 command or None])
+                 command or None, person_id or None, to_person_id or None])
         return self.get_desk_item(did)
 
     def get_desk_item(self, ref: str) -> dict | None:
@@ -996,7 +1195,7 @@ class FactoryStore:
         with self._sread:
             r = self.sc.execute(f"SELECT {self._DK_COLS} FROM desk_items WHERE id = ? OR "
                                  "number = ?", [ref, int(m.group(1)) if m else -1]).fetchone()
-        return self._dk_row(r) if r else None
+        return self._dk_people([self._dk_row(r)])[0] if r else None
 
     def list_desk(self, state: str | None = "open", project: str | None = None) -> list[dict]:
         q, vals = f"SELECT {self._DK_COLS} FROM desk_items WHERE 1 = 1", []
@@ -1006,7 +1205,7 @@ class FactoryStore:
             q += " AND project = ?"; vals.append(project)
         with self._sread:
             rows = self.sc.execute(q + " ORDER BY blocking DESC, created_at", vals).fetchall()
-        return [self._dk_row(r) for r in rows]
+        return self._dk_people([self._dk_row(r) for r in rows])
 
     def close_desk_item(self, did: str, state: str, reason: str | None, at) -> None:
         with self._swrite:
@@ -1015,22 +1214,24 @@ class FactoryStore:
 
     def add_decision(self, project: str | None, desk_item: str, question: str, words: str,
                      choice: str, standing: bool, scope: str, matched: bool, session: str | None,
-                     granted: bool, tickets: list[str], at, via: str | None = None) -> dict:
+                     granted: bool, tickets: list[str], at, via: str | None = None,
+                     person_id: str | None = None) -> dict:
         did = "dc_" + uuid.uuid4().hex[:10]
         with self._swrite:
             self.sc.execute(
                 "INSERT INTO decisions (id, project, desk_item, question, words, choice, standing, "
-                "scope, matched, session, granted, tickets, decided_at, via) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "scope, matched, session, granted, tickets, decided_at, via, person_id) VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [did, project, desk_item, question, words, choice or None, standing, scope,
-                 matched, session, granted, json.dumps(tickets or []), at, via])
+                 matched, session, granted, json.dumps(tickets or []), at, via, person_id or None])
         return next(d for d in self.list_decisions(project, all_=True) if d["id"] == did)
 
     def list_decisions(self, project: str | None, all_: bool = False) -> list[dict]:
         """A project's decisions, newest first; with `all_`, the cell-wide ones (asked with no
         project) too. `project` None: every decision on the cell."""
         q = ("SELECT d.id, d.project, d.desk_item, d.question, d.words, d.choice, d.standing, "
-             "d.scope, d.matched, d.session, d.granted, d.tickets, d.decided_at, k.number, d.via FROM "
+             "d.scope, d.matched, d.session, d.granted, d.tickets, d.decided_at, k.number, d.via, "
+             "d.person_id FROM "
              "decisions d LEFT JOIN desk_items k ON k.id = d.desk_item")
         vals: list = []
         if project and not all_:
@@ -1039,21 +1240,35 @@ class FactoryStore:
             q += " WHERE d.project = ? OR d.project IS NULL"; vals.append(project)
         with self._sread:
             rows = self.sc.execute(q + " ORDER BY d.decided_at DESC", vals).fetchall()
-        return [{"id": r[0], "project": r[1], "desk_item": r[2], "question": r[3], "words": r[4],
-                 "choice": r[5], "standing": bool(r[6]), "scope": r[7], "matched": bool(r[8]),
-                 "session": r[9], "granted": bool(r[10]),
-                 "tickets": json.loads(r[11]) if r[11] else [], "at": r[12],
-                 "label": f"D{r[13]}" if r[13] else None, "via": r[14]} for r in rows]
+        return self._with_people(
+            [{"id": r[0], "project": r[1], "desk_item": r[2], "question": r[3], "words": r[4],
+              "choice": r[5], "standing": bool(r[6]), "scope": r[7], "matched": bool(r[8]),
+              "session": r[9], "granted": bool(r[10]),
+              "tickets": json.loads(r[11]) if r[11] else [], "at": r[12],
+              "label": f"D{r[13]}" if r[13] else None, "via": r[14], "person_id": r[15]}
+             for r in rows], None)
 
-    def person_turns(self, source: str, sessions: list[str] | None, since) -> list[dict]:
-        """What a person typed (user turns that are not tool results, not a subagent's, not a
-        compaction summary or other line Claude Code writes for itself) in
-        `sessions` (every session when None) since `since`, newest first (TR-450)."""
+    def person_turns(self, source: str, sessions: list[str] | None, since,
+                     person: str | None = None) -> list[dict]:
+        """What a person typed (user turns that are not tool results, not a subagent's) in
+        `sessions` (every session when None) since `since`, newest first (TR-450). With `person`,
+        only turns whose recording carries that `tares_person` (TR-620), in any session; the
+        person `local` also owns the recordings that carry none (the system credential's)
+        (TR-634)."""
         q = ("SELECT key_value, event_time, text FROM events WHERE source = ? AND "
              "event_type = 'user' AND event_time >= ? AND "
-             "coalesce(json_extract_string(labels, '$.sidechain'), 'false') <> 'true' AND "
-             "coalesce(json_extract_string(labels, '$.meta'), 'false') <> 'true'")
+             "coalesce(json_extract_string(labels, '$.sidechain'), 'false') <> 'true'")
+        # Claude Code also writes other sessions' messages, scheduled prompts, task notifications
+        # and compaction summaries as user lines; none of them is the person typing (TR-634)
+        q += (" AND coalesce(json_extract_string(labels, '$.meta'), 'false') <> 'true'"
+              " AND coalesce(json_extract_string(payload, '$.isMeta'), 'false') <> 'true'"
+              " AND coalesce(json_extract_string(payload, '$.isCompactSummary'), 'false') <> 'true'"
+              " AND coalesce(json_extract_string(payload, '$.origin.kind'), 'human') = 'human'")
         vals: list = [source, since]
+        if person:
+            who = "json_extract_string(labels, '$.tares_person')"
+            q += f" AND ({who} = ?" + (f" OR {who} IS NULL" if person == "local" else "") + ")"
+            vals.append(person)
         if sessions is not None:
             if not sessions:
                 return []
@@ -1070,20 +1285,60 @@ class FactoryStore:
 
     # ── hand-over to the crew (TR-425) ────────────────────────────────────────
     def set_handover(self, project: str, repos: list[dict], autonomy: str | None,
-                     by: str | None, at) -> None:
+                     by: str | None, at, person_id: str | None = None,
+                     crew: str | None = None, override_reason: str | None = None) -> None:
         """Record the hand-over: `repos` is the whole list (the caller merges it with the one
-        already kept); `repo` keeps the first path for older readers."""
+        already kept); `repo` keeps the first path for older readers. `crew` is the name of the
+        crew of whoever handed it over (TR-633). `override_reason` is why the project lead handed
+        it over without every area owner's sign-off (TR-636); a later hand-over with none keeps it, and
+        stays attributed to `person_id` of the hand-over that gave it. Every override is also
+        appended to a log (`list_handover_overrides`), so a later one does not replace it."""
         first = next((r["path"] for r in repos if r.get("path")), None)
+        # the hand-over and its entry in the override log are saved together or not at all
         with self._swrite:
-            self.sc.execute(
-                "INSERT INTO handovers (project, repo, handed_by, handed_at, repos, autonomy) "
-                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (project) DO UPDATE SET "
-                "repo = excluded.repo, handed_by = excluded.handed_by, "
-                "handed_at = excluded.handed_at, repos = excluded.repos, "
-                "autonomy = excluded.autonomy, finished_at = NULL, finished_words = NULL, "
-                "finished_decision = NULL, finished_by = NULL, taken_at = NULL, "
-                "taken_words = NULL, taken_by = NULL, released_at = NULL",
-                [project, first, by or None, at, json.dumps(repos), autonomy or None])
+            self.sc.execute("BEGIN TRANSACTION")
+            try:
+                self.sc.execute(
+                    "INSERT INTO handovers (project, repo, handed_by, handed_at, repos, autonomy, "
+                    "person_id, crew, override_reason, override_at, override_person_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT (project) DO UPDATE SET "
+                    "repo = excluded.repo, handed_by = excluded.handed_by, "
+                    "person_id = excluded.person_id, crew = excluded.crew, "
+                    "override_reason = COALESCE(excluded.override_reason, handovers.override_reason), "
+                    "override_at = COALESCE(excluded.override_at, handovers.override_at), "
+                    "override_person_id = COALESCE(excluded.override_person_id, "
+                    "handovers.override_person_id), "
+                    "finished_person_id = NULL, "
+                    "taken_person_id = NULL, "
+                    "handed_at = excluded.handed_at, repos = excluded.repos, "
+                    "autonomy = excluded.autonomy, finished_at = NULL, finished_words = NULL, "
+                    "finished_decision = NULL, finished_by = NULL, taken_at = NULL, "
+                    "taken_words = NULL, taken_by = NULL, released_at = NULL",
+                    [project, first, by or None, at, json.dumps(repos), autonomy or None,
+                     person_id or None, crew or None, override_reason or None,
+                     at if override_reason else None,
+                     (person_id or None) if override_reason else None])
+                if override_reason:
+                    self.sc.execute(
+                        "INSERT INTO handover_overrides (project, \"at\", reason, person_id, "
+                        "handed_by) VALUES (?, ?, ?, ?, ?)",
+                        [project, at, override_reason, person_id or None, by or None])
+                self.sc.execute("COMMIT")
+            except Exception:
+                self.sc.execute("ROLLBACK")
+                raise
+
+    def list_handover_overrides(self, project: str) -> list[dict]:
+        """Every hand-over the lead pushed through without all sign-offs, oldest first:
+        {at, reason, person, by_label}."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT \"at\", reason, person_id, handed_by FROM handover_overrides WHERE project = ? "
+                "ORDER BY \"at\", handed_by, person_id, reason", [project]).fetchall()
+        refs = self._person_refs(r[2] for r in rows)
+        return [{"at": r[0], "reason": r[1], "person": refs.get(r[2]),
+                 "by_label": by_label(refs.get(r[2]), r[3])} for r in rows]
 
     def handed_over_projects(self, finished: bool | None = None,
                              taken: bool | None = None) -> list[str]:
@@ -1106,18 +1361,21 @@ class FactoryStore:
             return [r[0] for r in self.sc.execute(q).fetchall()]
 
     def finish_handover(self, project: str, words: str, decision: str | None, by: str | None,
-                        at) -> None:
+                        at, person_id: str | None = None) -> None:
         with self._swrite:
             self.sc.execute("UPDATE handovers SET finished_at = ?, finished_words = ?, "
-                             "finished_decision = ?, finished_by = ? WHERE project = ?",
-                             [at, words, decision, by, project])
+                             "finished_decision = ?, finished_by = ?, finished_person_id = ? "
+                             "WHERE project = ?",
+                             [at, words, decision, by, person_id or None, project])
 
-    def take_over(self, project: str, words: str, by: str | None, at) -> None:
+    def take_over(self, project: str, words: str, by: str | None, at,
+                  person_id: str | None = None) -> None:
         """The person takes the project back from the crew (TR-520); released once the
         orchestrator has stopped its builders."""
         with self._swrite:
             self.sc.execute("UPDATE handovers SET taken_at = ?, taken_words = ?, taken_by = ?, "
-                             "released_at = NULL WHERE project = ?", [at, words, by, project])
+                             "taken_person_id = ?, released_at = NULL WHERE project = ?",
+                             [at, words, by, person_id or None, project])
 
     def release_takeover(self, project: str, at) -> None:
         with self._swrite:
@@ -1128,19 +1386,178 @@ class FactoryStore:
         with self._sread:
             r = self.sc.execute("SELECT repo, handed_by, handed_at, repos, autonomy, "
                                  "finished_at, finished_words, finished_decision, finished_by, "
-                                 "taken_at, taken_words, taken_by, released_at "
-                                 "FROM handovers WHERE project = ?", [project]).fetchone()
+                                 "taken_at, taken_words, taken_by, released_at, person_id, "
+                                 "finished_person_id, taken_person_id, crew, override_reason, "
+                                 "override_at, override_person_id FROM handovers WHERE project = ?", [project]).fetchone()
         if not r:
             return None
         repos = json.loads(r[3]) if r[3] else ([{"path": r[0], "name": None}] if r[0] else [])
-        return {"repo": r[0], "repos": repos, "autonomy": r[4], "by": r[1], "at": r[2],
-                "finished": ({"at": r[5], "words": r[6], "decision": r[7], "by": r[8]}
-                             if r[5] else None),
-                "takeover": ({"at": r[9], "words": r[10], "by": r[11], "released_at": r[12]}
-                             if r[9] else None)}
+        refs = self._person_refs([r[13], r[14], r[15], r[19]])
+        # who pushed the override through: the hand-over that gave it, not a later one; rows from
+        # before override_person_id fall back to the handing person
+        op, oby = (r[19], None) if r[19] else (r[13], r[1])
+        out = {"repo": r[0], "repos": repos, "autonomy": r[4], "by": r[1], "at": r[2],
+               "person": refs.get(r[13]), "by_label": by_label(refs.get(r[13]), r[1]),
+               "handed_by_person": refs.get(r[13]), "crew": r[16],
+               "override": ({"reason": r[17], "at": r[18], "person": refs.get(op),
+                             "by_label": by_label(refs.get(op), oby)} if r[17] else None),
+               # true only when the latest hand-over itself carried the override: a later clean
+               # one leaves `override` (the latest ever) in place but is not overridden
+               "overridden": bool(r[17] and r[18] is not None and r[18] == r[2]),
+               "overrides": self.list_handover_overrides(project) if r[17] else [],
+               "finished": ({"at": r[5], "words": r[6], "decision": r[7], "by": r[8],
+                             "person": refs.get(r[14]), "by_label": by_label(refs.get(r[14]), r[8])}
+                            if r[5] else None),
+               "takeover": ({"at": r[9], "words": r[10], "by": r[11], "released_at": r[12],
+                             "person": refs.get(r[15]), "by_label": by_label(refs.get(r[15]), r[11])}
+                            if r[9] else None)}
+        return out
+
+    # ── questions to an area owner and their sign-offs (TR-636) ───────────────
+    _SQ_COLS = ("project, id, to_person_id, repo, text, asked_by, asked_at, answer, answered_by, "
+                "answered_at, state")
+
+    def _sq_rows(self, rows) -> list[dict]:
+        out = [{"project": r[0], "id": r[1], "to_person_id": r[2], "repo": r[3], "text": r[4],
+                "asked_by": r[5], "asked_at": r[6], "answer": r[7], "answered_by": r[8],
+                "answered_at": r[9], "state": r[10]} for r in rows]
+        refs = self._person_refs([x for r in out for x in (r["to_person_id"], r["asked_by"],
+                                                           r["answered_by"])])
+        for r in out:
+            r["to_person"] = refs.get(r["to_person_id"])
+            r["asked_by_person"] = refs.get(r["asked_by"])
+            r["answered_by_person"] = refs.get(r["answered_by"])
+        return out
+
+    def add_spec_question(self, project: str, to_person_id: str, repo: str, text: str,
+                          asked_by: str | None, at) -> dict:
+        """Q<n>, n one past the project's highest, chosen and inserted in one transaction under
+        the lock, so parallel asks never share a number."""
+        with self._swrite:
+            self.sc.execute("BEGIN TRANSACTION")
+            try:
+                top = self.sc.execute(
+                    "SELECT max(CAST(substr(id, 2) AS INTEGER)) FROM spec_questions "
+                    "WHERE project = ?", [project]).fetchone()[0] or 0
+                qid = f"Q{top + 1}"
+                self.sc.execute(
+                    f"INSERT INTO spec_questions ({self._SQ_COLS}) VALUES "
+                    "(?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'open')",
+                    [project, qid, to_person_id, repo, text, asked_by or None, at])
+                self.sc.execute("COMMIT")
+            except Exception:
+                self.sc.execute("ROLLBACK")
+                raise
+        return self.get_spec_question(project, qid)
+
+    def get_spec_question(self, project: str, ref: str) -> dict | None:
+        """The project's question by id (Q3, any case, or 3)."""
+        m = re.match(r"^[Qq]?(\d{1,6})$", (ref or "").strip())
+        if not m:
+            return None
+        with self._sread:
+            r = self.sc.execute(f"SELECT {self._SQ_COLS} FROM spec_questions WHERE project = ? "
+                                 "AND id = ?", [project, f"Q{int(m.group(1))}"]).fetchone()
+        return self._sq_rows([r])[0] if r else None
+
+    def list_spec_questions(self, project: str | None = None, state: str | None = None,
+                            to_person_id: str | None = None) -> list[dict]:
+        q, vals = f"SELECT {self._SQ_COLS} FROM spec_questions WHERE 1 = 1", []
+        for col, v in (("project", project), ("state", state), ("to_person_id", to_person_id)):
+            if v:
+                q += f" AND {col} = ?"
+                vals.append(v)
+        with self._sread:
+            rows = self.sc.execute(
+                q + " ORDER BY asked_at, project, CAST(substr(id, 2) AS INTEGER)", vals).fetchall()
+        return self._sq_rows(rows)
+
+    def answer_spec_question(self, project: str, qid: str, answer: str, by: str | None,
+                             at) -> bool:
+        """Record the answer of an open question; False when it was not open."""
+        with self._swrite:
+            hit = self.sc.execute(
+                "UPDATE spec_questions SET answer = ?, answered_by = ?, answered_at = ?, "
+                "state = 'answered' WHERE project = ? AND id = ? AND state = 'open' RETURNING id",
+                [answer, by or None, at, project, qid]).fetchone()
+        return hit is not None
+
+    def add_signoff(self, project: str, repo: str, person_id: str, at) -> None:
+        """The area owner's sign-off for a repo. Signing again keeps the first time; when the
+        area has a new owner, their sign-off replaces the old owner's."""
+        with self._swrite:
+            self.sc.execute("INSERT INTO signoffs (project, repo, person_id, \"at\") "
+                             "VALUES (?, ?, ?, ?) ON CONFLICT (project, repo) DO UPDATE SET "
+                             "person_id = excluded.person_id, \"at\" = excluded.\"at\" "
+                             "WHERE signoffs.person_id <> excluded.person_id",
+                             [project, repo, person_id, at])
+
+    def list_signoffs(self, project: str) -> list[dict]:
+        with self._sread:
+            rows = self.sc.execute("SELECT repo, person_id, \"at\" FROM signoffs WHERE project = ? "
+                                    "ORDER BY \"at\", repo", [project]).fetchall()
+        refs = self._person_refs(r[1] for r in rows)
+        return [{"repo": r[0], "person_id": r[1], "person": refs.get(r[1]), "at": r[2]}
+                for r in rows]
 
     def delete_milestone(self, mid: str) -> None:
         """The milestone goes; its tickets stay, without a milestone."""
         with self._swrite:
             self.sc.execute("UPDATE tickets SET milestone = NULL WHERE milestone = ?", [mid])
             self.sc.execute("DELETE FROM milestones WHERE id = ?", [mid])
+
+    # ── grants by kind (TR-630) ───────────────────────────────────────────────
+    _GRANT_COLS = ("id, kind, project, holder_person_id, words, given_by, given_at, areas, consents, "
+                   "state, needs_lead")
+
+    @staticmethod
+    def _grant_row(r) -> dict:
+        return {"id": r[0], "kind": r[1], "project": r[2], "holder_person_id": r[3],
+                "words": r[4], "given_by": r[5], "given_at": r[6],
+                "areas": json.loads(r[7]) if r[7] else [],
+                "consents": json.loads(r[8]) if r[8] else [], "state": r[9],
+                "needs_lead": bool(r[10])}
+
+    def add_grant_row(self, kind: str, words: str, project: str | None = None,
+                      holder: str | None = None, given_by: str | None = None,
+                      areas: list[str] | None = None, consents: list[dict] | None = None,
+                      state: str = "active", given_at=None, needs_lead: bool = False) -> dict:
+        """One grant, numbered G1, G2... for the cell; nothing is checked here."""
+        with self._swrite:
+            top = self.sc.execute("SELECT max(CAST(substr(id, 2) AS INTEGER)) FROM grants"
+                                   ).fetchone()[0] or 0
+            gid = f"G{top + 1}"
+            self.sc.execute(
+                f"INSERT INTO grants ({self._GRANT_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [gid, kind, project, holder, words, given_by, given_at or now_utc(),
+                 json.dumps(areas or []), json.dumps(consents or []), state, needs_lead])
+        return self.get_grant_row(gid)
+
+    def get_grant_row(self, gid: str) -> dict | None:
+        with self._sread:
+            r = self.sc.execute(f"SELECT {self._GRANT_COLS} FROM grants WHERE id = ?",
+                                 [str(gid or "").strip().upper()]).fetchone()
+        return self._grant_row(r) if r else None
+
+    def all_grant_rows(self) -> list[dict]:
+        """Every grant of every kind and state, oldest first."""
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._GRANT_COLS} FROM grants").fetchall()
+        return sorted((self._grant_row(r) for r in rows),
+                      key=lambda g: int(g["id"][1:]))
+
+    def update_grant_row(self, gid: str, state: str | None = None,
+                         consents: list[dict] | None = None, areas: list[str] | None = None,
+                         needs_lead: bool | None = None) -> None:
+        with self._swrite:
+            if areas is not None:
+                self.sc.execute("UPDATE grants SET areas = ? WHERE id = ?",
+                                 [json.dumps(areas), gid])
+            if needs_lead is not None:
+                self.sc.execute("UPDATE grants SET needs_lead = ? WHERE id = ?",
+                                 [needs_lead, gid])
+            if state is not None:
+                self.sc.execute("UPDATE grants SET state = ? WHERE id = ?", [state, gid])
+            if consents is not None:
+                self.sc.execute("UPDATE grants SET consents = ? WHERE id = ?",
+                                 [json.dumps(consents), gid])

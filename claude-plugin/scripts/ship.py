@@ -23,6 +23,7 @@ import hashlib
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -398,17 +399,32 @@ def stamp_project(objs: list, project: str, hook: dict) -> tuple:
 
 # ── the tares-factory station a session plays (TR-418), from its environment ──
 # A crew station's settings set FACTORY_STATION (its stable name), FACTORY_ROLE, FACTORY_PARENT
-# (who started it) and, for builders, TARES_PROJECT. The hooks inherit them. The shipper sends one
+# (who started it), FACTORY_CREW (the crew's name, TR-541) and, for builders, TARES_PROJECT. The hooks inherit them. The
+# machine (`hostname -s`, or FACTORY_MACHINE, TR-628) is stamped next to the crew. The shipper sends one
 # `session_station` line per session, ties the session to TARES_PROJECT from its first line, and
 # stamps the station on every line, so Tares groups a station's sessions (revivals included)
 # without the session calling a Tares tool.
+
+def machine_name() -> str:
+    """The machine the crew runs on: FACTORY_MACHINE, else `hostname -s` (the host name up to the
+    first dot)."""
+    return (os.environ.get("FACTORY_MACHINE", "").strip()
+            or socket.gethostname().split(".")[0].strip())
+
 
 def station_env() -> dict:
     st = os.environ.get("FACTORY_STATION", "").strip()
     if not st:
         return {}
-    return {"station": st, "role": os.environ.get("FACTORY_ROLE", "").strip(),
-            "parent": os.environ.get("FACTORY_PARENT", "").strip()}
+    out = {"station": st, "role": os.environ.get("FACTORY_ROLE", "").strip(),
+           "parent": os.environ.get("FACTORY_PARENT", "").strip()}
+    crew = os.environ.get("FACTORY_CREW", "").strip()
+    if crew:
+        out["crew"] = crew
+    machine = machine_name()
+    if machine:
+        out["machine"] = machine
+    return out
 
 
 def env_project() -> str:
@@ -443,6 +459,10 @@ def announce(cfg: dict, hook: dict, flow: str) -> None:
     for o in lines:
         if st:
             o["factory_station"] = st["station"]
+            if st.get("crew"):
+                o["factory_crew"] = st["crew"]
+            if st.get("machine"):
+                o["factory_machine"] = st["machine"]
     if ship_lines(cfg, lines):
         if st:
             open(mark, "w").write(st["station"])
@@ -455,6 +475,10 @@ def stamp_station(objs: list) -> list:
     if st:
         for o in objs:
             o["factory_station"] = st["station"]
+            if st.get("crew"):
+                o["factory_crew"] = st["crew"]
+            if st.get("machine"):
+                o["factory_machine"] = st["machine"]
     return objs
 
 

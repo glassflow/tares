@@ -54,13 +54,16 @@ async def call(url, headers, tool, args):
 def unit_checks():
     """In-process: the mode flag decides where identity comes from."""
     import tares.mcp_server as m
-    keep = (m._HTTP, m.AUTH_TOKEN, {k: os.environ.get(k) for k in ("FACTORY_STATION", "FACTORY_ROLE")})
+    keep = (m._HTTP, m.AUTH_TOKEN, {k: os.environ.get(k) for k in ("FACTORY_STATION", "FACTORY_ROLE", "FACTORY_CREW")})
     try:
         os.environ["FACTORY_STATION"], os.environ["FACTORY_ROLE"] = "u-rev", "reviewer"
         m._HTTP = False
         ck("stdio: station headers come from the environment",
            m._station_headers() == {"X-Tares-Station": "u-rev", "X-Tares-Role": "reviewer"},
            str(m._station_headers()))
+        os.environ["FACTORY_CREW"] = "u-crew"
+        ck("stdio: the crew comes from FACTORY_CREW as X-Tares-Crew",
+           m._station_headers().get("X-Tares-Crew") == "u-crew", str(m._station_headers()))
         m._HTTP = True
         ck("http: no request means no station, whatever the environment says",
            m._station_headers() == {}, str(m._station_headers()))

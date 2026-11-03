@@ -336,6 +336,14 @@ async def _execute_tool(name: str, args: dict, headers: dict) -> tuple[bool, str
             r = await cx.get("/api/projects/templates")
         elif name == "list_projects":
             r = await cx.get("/api/projects")
+            if r.status_code < 400:
+                # a private project the asker is not on comes back as a bare name: Ask leaves it out
+                try:
+                    body = r.json()
+                    body["projects"] = [p for p in body.get("projects") or [] if not p.get("hidden")]
+                    return True, json.dumps(body)
+                except (ValueError, AttributeError):
+                    pass
         elif name == "detect_template":
             r = await cx.post(f"/api/projects/templates/{args.get('key', '')}/detect")
         elif name == "read":

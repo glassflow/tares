@@ -17,6 +17,9 @@ import os
 import httpx
 from mcp.server.fastmcp import FastMCP
 
+from . import docs as docs_mod
+
+
 def _factory_token() -> str:
     """The token a tares-factory station presents: `tares factory` keeps it in a file only the
     person can read and names the file in the station's settings (never the token itself)."""
@@ -46,16 +49,18 @@ _CALLER_STATION = contextvars.ContextVar("tares_caller_station", default="")
 _CALLER_ROLE = contextvars.ContextVar("tares_caller_role", default="")
 _CALLER_PARENT = contextvars.ContextVar("tares_caller_parent", default="")
 _CALLER_PROJECT = contextvars.ContextVar("tares_caller_project", default="")
+_CALLER_CREW = contextvars.ContextVar("tares_caller_crew", default="")
 # Set by main() for the HTTP transports. Never inferred from the environment at call time: tests
 # import this module in-process and must stay on the stdio path.
 _HTTP = False
 
 _CALLER_VARS = {"token": _CALLER_TOKEN, "station": _CALLER_STATION, "role": _CALLER_ROLE,
-                "parent": _CALLER_PARENT, "project": _CALLER_PROJECT}
+                "parent": _CALLER_PARENT, "project": _CALLER_PROJECT, "crew": _CALLER_CREW}
 _CALLER_HEADERS = {"station": "x-tares-station", "role": "x-tares-role",
-                   "parent": "x-tares-parent", "project": "x-tares-project"}
+                   "parent": "x-tares-parent", "project": "x-tares-project",
+                   "crew": "x-tares-crew"}
 _CALLER_ENV = {"station": "FACTORY_STATION", "role": "FACTORY_ROLE", "parent": "FACTORY_PARENT",
-               "project": "TARES_PROJECT"}
+               "project": "TARES_PROJECT", "crew": "FACTORY_CREW"}
 
 
 def _bearer(headers) -> str:
@@ -92,11 +97,11 @@ def _default_project() -> str:
 
 
 def _station_headers() -> dict:
-    """Which tares-factory station the caller is, sent with every call so Tares applies who may
-    write what. Empty for a session that is not a station."""
+    """Which tares-factory station the caller is, and the crew it belongs to (TR-633), sent with
+    every call so Tares applies who may write what. Empty for a session that is not a station."""
     out = {}
     for name, header in (("station", "X-Tares-Station"), ("role", "X-Tares-Role"),
-                         ("parent", "X-Tares-Parent")):
+                         ("parent", "X-Tares-Parent"), ("crew", "X-Tares-Crew")):
         v = _caller(name)
         if v:
             out[header] = v
@@ -373,7 +378,9 @@ async def _project_id(cx, project: str = "") -> tuple[str | None, str | None]:
     r = await cx.get(f"{TARESD}/api/projects")
     if r.status_code >= 400:
         return None, r.text
-    found = r.json().get("projects") or []
+    # a private project you are not on comes back as a bare `hidden` row (for an admin to hand its
+    # lead over in the console): to a tool it does not exist
+    found = [p for p in r.json().get("projects") or [] if not p.get("hidden")]
     if project:
         hit = next((p for p in found if project in (p["id"], p["name"])), None)
         if hit is None:
@@ -394,7 +401,7 @@ async def list_projects() -> str:
     if r.status_code >= 400:
         return r.text
     return json.dumps([{k: p.get(k) for k in ("id", "name", "template", "status")}
-                       for p in r.json().get("projects") or []], default=str)
+                       for p in r.json().get("projects") or [] if not p.get("hidden")], default=str)
 
 
 @mcp.tool()
@@ -541,6 +548,76 @@ async def create_project(name: str, goal: str = "") -> str:
     return _out(r, ("id", "name", "goal"))
 
 
+@mcp.tool()
+async def list_people() -> str:
+    """The people on this Tares: id, name, email, GitHub login and whether they are an admin.
+    set_project_access takes a person by id or email."""
+    async with _cx(10) as cx:
+        r = await cx.get(f"{TARESD}/api/people")
+    if r.status_code >= 400:
+        return _out(r)
+    return json.dumps([{k: p.get(k) for k in ("id", "name", "email", "emails", "github", "is_admin")}
+                       for p in r.json().get("people") or []], default=str)
+
+
+def _person_in(people: list[dict], who: str) -> dict | None:
+    """The person with this id or email (main or extra, any case)."""
+    who = who.strip()
+    low = who.lower()
+    return next((p for p in people if who == p["id"] or low in
+                 [e.lower() for e in ([p.get("email")] + (p.get("emails") or [])) if e]), None)
+
+
+@writable()
+async def set_project_access(project: str = "", lead: str = "", scope: str = "",
+                             add_members: list[str] | None = None,
+                             remove_members: list[str] | None = None) -> str:
+    """Say who leads a project, whether it is `team` or `private`, and who is on it. `lead` is
+    the person to lead it, `scope` is team or private, `add_members` and `remove_members` are
+    people to put on or take off it. A person is given by id or email (list_people shows them).
+    Only the project's lead changes the scope or its members; an admin may change the lead.
+    Leave out what you do not want to change. The changes are made one after another and the
+    first refusal stops the rest, so earlier ones stay. Returns the project's lead, scope and
+    members."""
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/people")
+        if r.status_code >= 400:
+            return _out(r)
+        people = r.json().get("people") or []
+        add = [x for x in (add_members or []) if x.strip()]
+        remove = [x for x in (remove_members or []) if x.strip()]
+        wanted = {}
+        for ref in [lead] + add + remove:
+            if ref.strip():
+                wanted[ref] = _person_in(people, ref)
+                if wanted[ref] is None:
+                    return f"no person {ref!r}; list_people shows the ones there are"
+        # the lead goes last: once handed over, the caller can no longer change scope or members
+        if scope.strip():
+            r = await cx.patch(f"{TARESD}/api/projects/{uid}", json={"scope": scope.strip()})
+            if r.status_code >= 400:
+                return _out(r)
+        for ref in add:
+            r = await cx.post(f"{TARESD}/api/projects/{uid}/members",
+                              json={"person_id": wanted[ref]["id"]})
+            if r.status_code >= 400:
+                return _out(r)
+        for ref in remove:
+            r = await cx.delete(f"{TARESD}/api/projects/{uid}/members/{wanted[ref]['id']}")
+            if r.status_code >= 400:
+                return _out(r)
+        if lead.strip():
+            r = await cx.patch(f"{TARESD}/api/projects/{uid}",
+                               json={"lead_person_id": wanted[lead]["id"]})
+            if r.status_code >= 400:
+                return _out(r)
+        r = await cx.get(f"{TARESD}/api/projects/{uid}")
+    return _out(r, ("id", "name", "lead", "scope", "members"))
+
+
 @writable()
 async def write_doc(kind: str, title: str, body: str, id: str = "", project: str = "") -> str:
     """Write a markdown doc into the project, or replace one when `id` is given. `kind` is one
@@ -551,7 +628,8 @@ async def write_doc(kind: str, title: str, body: str, id: str = "", project: str
     verify; link it with attach_working_doc), `note` (anything else). Working docs and every
     other doc stay in Tares; they never go to Linear or GitHub. A rule or fact that holds for every
     project goes in the shared docs with add_to_global instead. Returns the doc's id."""
-    payload = {"kind": kind, "title": title, "body": body, "by": "claude code session"}
+    payload = {"kind": kind, "title": title, "body": body,
+               "by_default": "claude code session"}
     async with _cx(15) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -595,29 +673,37 @@ async def get_doc(id: str, project: str = "") -> str:
 @mcp.tool()
 async def read_global_docs() -> str:
     """The docs every project shares: the AGENTS.md for all projects (the user's standing rules)
-    and the memory (facts and preferences that hold across projects), as markdown. Read them at
-    the start of any work on a project and follow them; do not ask the user again for what they
-    already say."""
+    and the memory (facts and preferences that hold across projects), as markdown, then the
+    caller's own rules and memory when they have any (they add to the team's; when they conflict,
+    the team rule wins). Read them at the start of any work on a project and follow them; do not
+    ask the user again for what they already say."""
     async with _cx(10) as cx:
         r = await cx.get(f"{TARESD}/api/docs/global")
     if r.status_code >= 400:
         return _out(r)
     data = r.json()
-    if not any(data.values()):
+    text = docs_mod.read_all_text(data)
+    if not text:
         return "No shared docs yet: they are made with the first project that has docs."
-    return "\n\n".join(d["body"].rstrip() for d in data.values() if d)
+    return text
 
 
 @writable()
-async def add_to_global(doc: str, line: str) -> str:
+async def add_to_global(doc: str, line: str, scope: str = "team") -> str:
     """Add one line to a doc every project shares: `doc` is `agents` (the AGENTS.md for all
     projects: a rule every session should follow, e.g. "always build on a branch, never commit
     to main") or `memory` (a fact or preference that holds across projects, e.g. "the household
     uses euros"). Ask the user first, and add only what holds beyond this project; a project's
-    own rules go in its own AGENTS.md. A line already there is not added twice."""
+    own rules go in its own AGENTS.md. A line already there is not added twice. `scope` is `team`
+    (the default: the docs every person shares) or `personal` (the caller's own AGENTS.md or
+    memory, read only by them: a preference of theirs that is not the team's)."""
+    scope = (scope or "team").strip().lower()
+    if scope not in ("team", "personal"):
+        return "scope is `team` or `personal`"
+    area = "personal" if scope == "personal" else "global"
     async with _cx(15) as cx:
-        r = await cx.post(f"{TARESD}/api/docs/global/{doc.strip().lower()}/lines",
-                          json={"text": line, "by": "claude code session"})
+        r = await cx.post(f"{TARESD}/api/docs/{area}/{doc.strip().lower()}/lines",
+                          json={"text": line, "by_default": "claude code session"})
     if r.status_code >= 400:
         return _out(r)
     d = r.json()
@@ -713,7 +799,9 @@ async def list_tickets(project: str = "") -> str:
     canceled), milestone, depends_on, the GitHub repo it changes (`repo`, owner/name, for a
     project that spans several), whether it is ready (all it depends on is done) or which tickets
     block it, the link when it lives in Linear or GitHub, and the id and title of each one's
-    working doc. Work the ready tickets in this order. Also says where they live: `linear` is
+    working doc, and who it is for (`assignee`, {id, name}, or null with `assignee_raw` as the
+    source named them, and `assignee_note`: "assignee: Kiran" or "unowned (kiran@x.com is not on
+    this cell)"). Work the ready tickets in this order. Also says where they live: `linear` is
     the Linear project and `github` the repo and issue label, each with when it was last synced
     (null when the project does not use it); with both null the tickets live in Tares. Read one
     with get_ticket to get its working doc."""
@@ -734,13 +822,21 @@ async def list_tickets(project: str = "") -> str:
         "tickets": [{k: t.get(k) for k in ("id", "label", "number", "identifier", "title",
                                             "status", "milestone_name", "depends_on", "ready",
                                             "blocked_by", "holder", "stage", "stage_reason",
-                                            "repo", "url", "working_doc", "working_doc_title")}
-                    | {"pr": _pr_brief(t.get("pr")), "pr_note": t.get("pr_note")}
+                                            "repo", "url", "working_doc", "working_doc_title",
+                                            "assignee", "assignee_raw")}
+                    | {"pr": _pr_brief(t.get("pr")), "pr_note": t.get("pr_note"),
+                       "assignee_note": _assignee_note(t)}
                     for t in data.get("tickets") or []]}
     if any(t.get("status") == "in_progress" for t in data.get("tickets") or []):
         out["note"] = ("A ticket is already in progress: unless you are the session working on "
                        "it, call pick_up before anything else.")
     return json.dumps(out, default=str)
+
+
+def _assignee_note(t: dict) -> str:
+    """"assignee: Kiran", or "unowned (kiran@x.com is not on this cell)", or "unowned"."""
+    from .ticket_assignee import note
+    return note(t)
 
 
 def _pr_brief(pr: dict | None) -> dict | None:
@@ -754,7 +850,8 @@ def _pr_brief(pr: dict | None) -> dict | None:
 async def get_ticket(ticket: str, project: str = "") -> str:
     """One ticket, by its Tares id, its number (T3), its Linear identifier (for example
     ENG-12) or its GitHub identifier (for example GH-12), with the body of its working doc, who
-    holds it and where it stands, its pull request as GitHub has it (head, CI, the reviewer's verdict, merged), its history, and the
+    holds it and where it stands, who it is for (`assignee`, or `assignee_raw` when that person is
+    not on this cell), its pull request as GitHub has it (head, CI, the reviewer's verdict, merged), its history, and the
     crew's messages about it: everything you need to work on it."""
     async with _cx(15) as cx:
         uid, why = await _project_id(cx, project)
@@ -764,6 +861,7 @@ async def get_ticket(ticket: str, project: str = "") -> str:
         if r.status_code >= 400:
             return _out(r)
         out = r.json()
+        out["assignee_note"] = _assignee_note(out)
         msgs = await cx.get(f"{TARESD}/api/projects/{uid}/tickets/{out['id']}/messages")
     if msgs.status_code == 200:
         out["messages"] = [{k: m.get(k) for k in ("at", "from", "to", "type", "first_line")}
@@ -774,7 +872,8 @@ async def get_ticket(ticket: str, project: str = "") -> str:
 @writable()
 async def write_ticket(title: str, status: str = "", position: float | None = None,
                        milestone: str | None = None, depends_on: list[str] | None = None,
-                       id: str = "", project: str = "", repo: str | None = None) -> str:
+                       id: str = "", project: str = "", repo: str | None = None,
+                       assignee: str | None = None) -> str:
     """Add a ticket to the project's list, or change one when `id` is given (its id or T<n>).
     Only for a project whose tickets live in Tares: when they live in Linear or GitHub, create
     and change them there (milestones and "blocks" or "blocked by" relations included; `gh` for
@@ -783,10 +882,15 @@ async def write_ticket(title: str, status: str = "", position: float | None = No
     write_milestone ("" takes it out of its milestone); `depends_on` lists the tickets (T<n> or
     id) that must be done first ([] clears them); `repo` is the GitHub repo the ticket changes
     (owner/name), for a project that spans several repos ("" clears it; a Linear or GitHub ticket
-    takes only this, and attach_working_doc). Returns the ticket with its label (T<n>)."""
+    takes only this, and attach_working_doc); `assignee` is the person it is for (a person id or
+    an email; an email nobody on the cell has is kept as written and the ticket shows as unowned;
+    "" clears it). Assigning someone to a ticket of a private project adds them to it. Returns
+    the ticket with its label (T<n>)."""
     body: dict = {"title": title}
     if repo is not None:
         body["repo"] = repo
+    if assignee is not None:
+        body["assignee"] = assignee
     if status:
         body["status"] = status
     if position is not None:
@@ -806,7 +910,7 @@ async def write_ticket(title: str, status: str = "", position: float | None = No
         else:
             r = await cx.post(f"{TARESD}/api/projects/{uid}/tickets", json=body)
     return _out(r, ("id", "label", "title", "status", "position", "milestone_name",
-                    "depends_on", "repo"))
+                    "depends_on", "repo", "assignee", "assignee_raw"))
 
 
 @writable()

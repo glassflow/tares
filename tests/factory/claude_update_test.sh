@@ -484,7 +484,7 @@ check "a frozen crew: the same" '[ $rc = 0 ] && grep -q "crew-orchestrator, whic
 # behind (busy here, so not moved this round), but it has not failed for the version now installed
 newcc 1.12.7; echo all > "$FAKE_CLAUDE_STATE/stale-left"; all_idle; busy crew-reviewer
 jq '.["crew-reviewer"].cc_failed = "1.12.6" | .["crew-reviewer"].cc_fails = 2 | .["crew-reviewer"].cc_retry_at = 4102444800' "$FACTORY_CREW_HOME/stations.json" > "$T/st.json" && mv "$T/st.json" "$FACTORY_CREW_HOME/stations.json"
-api PUT /api/crew/claude-retry '{"stations":{"crew-reviewer":{"target":"1.12.6","fails":2,"next_at":4102444800}}}' >/dev/null
+api PUT '/api/crew/claude-retry?crew=crew' '{"stations":{"crew-reviewer":{"target":"1.12.6","fails":2,"next_at":4102444800}}}' >/dev/null
 check "a mark for an older version is listed on Tares before the round" '[ "$(api GET /api/crew | jq -r ".claude_retry[\"crew-reviewer\"].target")" = 1.12.6 ]'
 watch1; watch1
 check "a mark for an older version: the next settled round drops it from Tares" '[ "$(api GET /api/crew | jq -r ".claude_retry | has(\"crew-reviewer\")")" = false ]'
