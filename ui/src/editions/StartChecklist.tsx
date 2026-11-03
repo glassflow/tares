@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { Button, ProgressBar, Skeleton } from "../components/edition";
 import { ROW_CLASS } from "../components/edition/ListRow";
 import { cn } from "@/lib/utils";
-import { hideStart, type StartAction, type StartBlock, type StartStep } from "./StartChecklist.api";
+import { hideStart, showStart, type StartAction, type StartBlock, type StartStep } from "./StartChecklist.api";
 
 // The Start checklist: the few steps that take a new cell from empty to working. It draws the block
 // the home gives it and knows no edition words; the home passes the title. Rows never reorder: a
@@ -14,6 +14,7 @@ import { hideStart, type StartAction, type StartBlock, type StartStep } from "./
 const COPIED_MS = 2000;
 const MUTED = "text-xs text-muted-foreground";
 const HIDE_FAILED = "Could not hide the list. Try again in a moment.";
+const SHOW_FAILED = "Could not show the list. Try again in a moment.";
 
 function Tick({ done }: { done: boolean }) {
   return (
@@ -167,6 +168,41 @@ export function StartChecklist({ block, title, hide = hideStart, onHidden, onDo,
         {block.steps.map((s) => <Step key={s.key} step={s} onDo={onDo} doing={doing} />)}
       </ul>
     </section>
+  );
+}
+
+export interface StartChecklistHiddenProps {
+  block: StartBlock;
+  /** The name of the list, as the page words it. */
+  title: string;
+  /** What Show it again calls; the daemon's own call by default. A sample passes one that touches nothing. */
+  show?: () => Promise<unknown>;
+  /** Called once the cell has shown the list again, so the page can read again. */
+  onShown?: () => void;
+}
+
+/** Where the list was, once this person hid it: one quiet line with the way back. Nothing while the list shows
+ *  or when every step is done. */
+export function StartChecklistHidden({ block, title, show = showStart, onShown }: StartChecklistHiddenProps) {
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState(false);
+  if (block.show || !block.hidden) return null;
+  const onShow = () => {
+    setBusy(true);
+    setError(false);
+    show().then(
+      () => { setBusy(false); onShown?.(); },
+      () => { setBusy(false); setError(true); },
+    );
+  };
+  return (
+    <div data-testid="start-hidden" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted-foreground">
+      <span>The list &ldquo;{title}&rdquo; is hidden.</span>
+      <Button variant="quiet" className="px-1! underline" disabled={busy} onClick={onShow} data-testid="start-show">
+        Show it again
+      </Button>
+      {error && <span role="alert" data-testid="start-show-error" className="text-[color:var(--err)]">{SHOW_FAILED}</span>}
+    </div>
   );
 }
 
