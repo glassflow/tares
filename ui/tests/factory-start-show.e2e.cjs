@@ -121,6 +121,9 @@ function cleanEnv(extra) {
       ck(`sample @${width}: the line says what is hidden`, (await line(page).innerText()).includes(LINE), await line(page).innerText());
       ck(`sample @${width}: a button named Show it again`, (await page.getByRole("button", { name: "Show it again" }).count()) === 1);
       ck(`sample @${width}: no horizontal scroll`, (await overflow(page)) <= 0, `${await overflow(page)}px over`);
+      await showBtn(page).click();
+      await page.waitForTimeout(300);
+      ck(`sample @${width}: the button is usable again after a click`, await showBtn(page).isEnabled());
       await checkWords(page, ck, `sample hidden @${width}`);
       await ctx.close();
     }
@@ -169,6 +172,15 @@ function cleanEnv(extra) {
       ck("live: the cell says the list is shown", (await api("GET", "/api/home", seed.key_secret)).body.start.show === true);
       await shot(page, "live-shown-again", 1440);
       await checkWords(page, ck, "live shown again");
+
+      // hide, show, hide, show in one visit: the button works every time
+      await list(page).getByRole("button", { name: "Hide this list" }).click();
+      await line(page).waitFor();
+      ck("live: hiding again in the same visit brings the line back with a usable button",
+         (await list(page).count()) === 0 && (await showBtn(page).isEnabled()));
+      await showBtn(page).click();
+      await list(page).waitFor();
+      ck("live: and Show it again works the second time", (await line(page).count()) === 0 && (await page.getByTestId("start-step").count()) === 5);
       await ctx.close();
     }
 

@@ -164,7 +164,7 @@ export function StartChecklistHidden({ block, title, show = showStart, onShown }
     setBusy(true);
     setError(false);
     show().then(
-      () => onShown?.(),
+      () => { setBusy(false); onShown?.(); },
       () => { setBusy(false); setError(true); },
     );
   };
