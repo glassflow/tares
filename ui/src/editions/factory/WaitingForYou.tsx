@@ -54,8 +54,8 @@ function Detail({ text }: { text: string }) {
   );
 }
 
-function Row({ item, renderAction, error }: {
-  item: HomeItem; renderAction: (a: HomeAction, item: HomeItem) => React.ReactNode; error?: string;
+function Row({ item, renderAction, error, panel }: {
+  item: HomeItem; renderAction: (a: HomeAction, item: HomeItem) => React.ReactNode; error?: string; panel?: React.ReactNode;
 }) {
   // Outline buttons first, the primary one last.
   const actions = [...item.actions].sort((a, b) => Number(a.primary) - Number(b.primary));
@@ -77,6 +77,7 @@ function Row({ item, renderAction, error }: {
           {actions.map((a) => <React.Fragment key={a.label}>{renderAction(a, item)}</React.Fragment>)}
         </div>
       )}
+      {panel}
       {error && (
         <div role="alert" data-testid="row-error" className="basis-full pl-10 text-[13px] text-[color:var(--err)]" data-words-exempt>
           {error}
@@ -86,12 +87,14 @@ function Row({ item, renderAction, error }: {
   );
 }
 
-export function WaitingForYou({ items, renderAction, errors }: {
+export function WaitingForYou({ items, renderAction, errors, panels }: {
   items: HomeItem[];
   /** What a button of a row is; the page decides what a click does. */
   renderAction: (a: HomeAction, item: HomeItem) => React.ReactNode;
   /** A refusal's sentence by row id, shown under that row. */
   errors?: Record<string, string | undefined>;
+  /** A panel open under a row, by row id (the answer box). */
+  panels?: Record<string, React.ReactNode>;
 }) {
   const [all, setAll] = React.useState(false);
   const shown = all ? items : items.slice(0, SHOW_FIRST);
@@ -106,7 +109,7 @@ export function WaitingForYou({ items, renderAction, errors }: {
           <EmptyState title="Nothing waits for you." className="py-7" />
         ) : (
           <>
-            {shown.map((it) => <Row key={it.id} item={it} renderAction={renderAction} error={errors?.[it.id]} />)}
+            {shown.map((it) => <Row key={it.id} item={it} renderAction={renderAction} error={errors?.[it.id]} panel={panels?.[it.id]} />)}
             {items.length > shown.length && (
               <ListRow className="px-[18px]! py-3!">
                 <Button variant="quiet" className="px-0! text-[color:var(--accent-deep)]!" onClick={() => setAll(true)}>

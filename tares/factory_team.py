@@ -128,7 +128,8 @@ def signoff_items(t: Team) -> list[dict]:
                 since=since, now=t.now, project={"id": p["id"], "name": p["name"]}, repo=r["repo"],
                 from_=lead, id=f"signoff:{p['id']}:{r['repo']}",
                 actions=[{"label": "Sign off", "primary": True, "do": "sign_off",
-                          "project": p["id"], "repo": r["repo"]},
+                          "project": p["id"], "repo": r["repo"],
+                          "tickets": [tk["title"] for tk in mine[:20]]},
                          {"label": "Read the ticket" if n == 1 else f"Read the {n} tickets",
                           "primary": False, "href": f"/projects/{p['id']}"}]))
     return out
@@ -204,14 +205,15 @@ def desk_items(t: Team) -> list[dict]:
             out.append(fh.home_item(
                 "desk", label="Permission",
                 detail=f"{who[0].upper()}{who[1:]} wants to use: `{d['command']}`", **base,
-                actions=[{"label": "Answer", "primary": False, "do": "answer", "desk": d["label"]},
+                actions=[{"label": "Answer", "primary": False, "do": "answer", "desk": d["label"],
+                          "options": list(d.get("options") or [])},
                          {"label": "Allow", "primary": True, "do": "allow", "desk": d["label"],
                           "may_limit": may_limit}]))
         else:
             out.append(fh.home_item(
                 "desk", label="Question for you", detail=d["question"], **base,
                 actions=[{"label": "Answer", "primary": True, "do": "answer",
-                          "desk": d["label"]}]))
+                          "desk": d["label"], "options": list(d.get("options") or [])}]))
     return out
 
 

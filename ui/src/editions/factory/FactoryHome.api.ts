@@ -44,3 +44,40 @@ export function finishProject(id: string): Promise<unknown> {
     body: JSON.stringify({ words: "Closed from the home page" }),
   });
 }
+
+/** The person answers a crew question from the console. `standing` keeps the answer as a grant. */
+export function deskReply(ref: string, words: string, standing: boolean): Promise<unknown> {
+  return request(`/api/desk/${enc(ref)}/reply`, {
+    method: "POST",
+    body: JSON.stringify({ words, standing }),
+  });
+}
+
+/** The person answers a question a project's spec asked them. */
+export function answerQuestion(project: string, question: string, answer: string): Promise<unknown> {
+  return request(`/api/projects/${enc(project)}/questions/${enc(question)}/answer`, {
+    method: "POST",
+    body: JSON.stringify({ answer }),
+  });
+}
+
+/** The owner of a repo says the project's tickets in it are right. */
+export function signOff(project: string, repo: string): Promise<unknown> {
+  return request(`/api/projects/${enc(project)}/signoffs`, {
+    method: "POST",
+    body: JSON.stringify({ repo }),
+  });
+}
+
+/** Agree to a grant that waits for the person. */
+export function consentGrant(grant: string): Promise<unknown> {
+  return request(`/api/grants/${enc(grant)}/consent`, { method: "POST", body: JSON.stringify({}) });
+}
+
+/** Decline a grant that waits for the person, with a reason when they give one. */
+export function declineGrant(grant: string, reason: string): Promise<unknown> {
+  return request(`/api/grants/${enc(grant)}/decline`, {
+    method: "POST",
+    body: JSON.stringify(reason ? { reason } : {}),
+  });
+}
