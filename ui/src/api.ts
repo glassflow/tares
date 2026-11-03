@@ -179,6 +179,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** A repo as `owner/name`: a pasted GitHub address (https://github.com/o/n, .git, git@github.com:o/n)
+ *  is cut down to it, so it fits the area routes. The daemon checks the rest. */
+export function ownerName(repo: string): string {
+  const m = repo.trim().match(/^(?:(?:https?:\/\/)?(?:www\.)?github\.com\/|git@github\.com:)([^/]+)\/([^/?#]+)/i);
+  const r = m ? `${m[1]}/${m[2].replace(/\.git$/i, "")}` : repo.trim();
+  if (r.split("/").length !== 2) throw new Error(`${repo.trim()} is not a repo: write it as owner/name, like glassflow/tares`);
+  return r;
+}
+
 export const api = {
   // login_url is present only on a cloud-managed cell (daemon TARES_LOGIN_URL) — it tells the
   // logged-out console where to send the browser to authenticate.
@@ -609,7 +618,7 @@ export const api = {
       `/api/projects/${encodeURIComponent(id)}/tickets/${encodeURIComponent(ref)}/messages`),
   areas: () => request<Area[]>("/api/areas"),
   setArea: (repo: string, personId: string, note?: string) =>
-    request<Area>(`/api/areas/${repo.split("/").map(encodeURIComponent).join("/")}`,
+    request<Area>(`/api/areas/${ownerName(repo).split("/").map(encodeURIComponent).join("/")}`,
       { method: "PUT", body: JSON.stringify({ person_id: personId, ...(note !== undefined ? { note } : {}) }) }),
   deleteArea: (repo: string) =>
     request<{ ok: boolean }>(`/api/areas/${repo.split("/").map(encodeURIComponent).join("/")}`, { method: "DELETE" }),
