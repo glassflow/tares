@@ -124,6 +124,8 @@ export interface HomeData {
   headline: string;
   waiting_for_you: HomeItem[];
   waiting_total: number;
+  // One sentence on what waits for the person; only a cell with more than one person sends it.
+  summary?: string;
   projects: HomeProject[];
   finished_count: number;
   crew: HomeCrew;

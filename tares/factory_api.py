@@ -22,6 +22,7 @@ from . import claude_usage
 from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
+from . import factory_team
 from .envelope import now_utc
 from .factory_store import MapChanged
 
@@ -970,23 +971,12 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         watch reads this (TR-674); a person's own `pace` setting counts for that person."""
         return pace(request)
 
-    @app.get("/api/crew/my-work")
-    def my_work(request: Request, crew: str | None = None, project: str | None = None):
-        """What belongs to the caller's person (TR-633), across the projects that have an open
-        hand-over and that the caller can see: `ready` (their tickets that can start),
-        `in_progress` (their tickets a station holds; a ticket with no assignee is its project
-        lead's, or `local`'s when the project has no lead), and `led_projects` with the milestones
-        whose tickets are all delivered. `desk` is the open desk items addressed to them (TR-634);
-        `spec_questions` is the open questions a spec asked of them (TR-636), in any project they
-        can see, finished or not; `project` (an id or a name) keeps only that project's, and one
-        that does not exist, or that the caller cannot see, answers 404. Question numbers restart
-        per project, so a caller working on one project asks for it by name."""
-        me = work_person(request)
-        try:
-            crew_name = crew_name_of(request, crew)
-        except ValueError as e:
-            h.err(e)
-        hidden = h.hidden_ids()
+    def work_of(me: dict, hidden: set, want: str = "", detail: bool = False) -> dict:
+        """What belongs to person `me` ({id, name}) as GET /api/crew/my-work gives it: `ready`,
+        `in_progress`, `led_projects`, `desk` and `spec_questions`, leaving out the projects in
+        `hidden`. `want` (a project id) keeps only that project's spec questions. `detail` adds,
+        to each led project, its `project_id` and `milestones` ([{id, name, checks, since}]) for
+        the home page; the route does not ask for it."""
         ready, doing, led = [], [], []
         for uid in store.handed_over_projects(finished=False, taken=False):
             p = store.get_project(uid)
@@ -1005,18 +995,49 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
                     ready.append({"project": p["name"], "ticket": factory_mod.label(t),
                                   "title": t["title"], "repo": t.get("repo") or ""})
             if leads(p, me["id"]):
-                ms = []
+                ms, full = [], []
                 for m in store.list_milestones(uid):
                     mine = [t for t in tickets if t["milestone"] == m["id"]
                             and t["status"] != "canceled"]
                     if mine and all(factory_mod.delivered(t) for t in mine):
                         ms.append(m["name"])
-                led.append({"project": p["name"], "milestones_ready_to_check": ms})
+                        full.append({"id": m["id"], "name": m["name"], "checks": len(m["checks"]),
+                                     "since": max((t["updated_at"] for t in mine
+                                                   if t.get("updated_at")), default=None)
+                                     or m["updated_at"]})
+                led.append({"project": p["name"], "milestones_ready_to_check": ms,
+                            **({"project_id": uid, "milestones": full} if detail else {})})
         desk = [{k: d[k] for k in ("label", "project_name", "question", "options", "recommendation",
                                    "why", "context", "blocks", "tickets", "blocking", "created_at")}
                 for d in map(desk_out, store.list_desk("open"))
                 if d["project"] not in hidden and desk_is_mine(d, me["id"])]
         names = {x["id"]: x["name"] for x in store.list_projects()}
+        asked = [{"project": names[q["project"]], "id": q["id"], "repo": q["repo"],
+                  "text": q["text"], "asked_by": (q["asked_by_person"] or {}).get("name"),
+                  "asked_at": q["asked_at"]}
+                 for q in store.list_spec_questions(state="open", to_person_id=me["id"])
+                 if q["project"] in names and q["project"] not in hidden
+                 and (not want or q["project"] == want)]
+        return {"ready": ready, "in_progress": doing, "led_projects": led, "desk": desk,
+                "spec_questions": asked}
+
+    @app.get("/api/crew/my-work")
+    def my_work(request: Request, crew: str | None = None, project: str | None = None):
+        """What belongs to the caller's person (TR-633), across the projects that have an open
+        hand-over and that the caller can see: `ready` (their tickets that can start),
+        `in_progress` (their tickets a station holds; a ticket with no assignee is its project
+        lead's, or `local`'s when the project has no lead), and `led_projects` with the milestones
+        whose tickets are all delivered. `desk` is the open desk items addressed to them (TR-634);
+        `spec_questions` is the open questions a spec asked of them (TR-636), in any project they
+        can see, finished or not; `project` (an id or a name) keeps only that project's, and one
+        that does not exist, or that the caller cannot see, answers 404. Question numbers restart
+        per project, so a caller working on one project asks for it by name."""
+        me = work_person(request)
+        try:
+            crew_name = crew_name_of(request, crew)
+        except ValueError as e:
+            h.err(e)
+        hidden = h.hidden_ids()
         want = (project or "").strip()
         if want:
             # an id or an exact name; a project the caller cannot see is as unknown as a mistyped one
@@ -1025,14 +1046,16 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
                 h.err(ValueError(f"no project {want!r} you can see: use a project id or its exact "
                                "name"), 404)
             want = wp["id"]
-        asked = [{"project": names[q["project"]], "id": q["id"], "repo": q["repo"],
-                  "text": q["text"], "asked_by": (q["asked_by_person"] or {}).get("name"),
-                  "asked_at": q["asked_at"]}
-                 for q in store.list_spec_questions(state="open", to_person_id=me["id"])
-                 if q["project"] in names and q["project"] not in hidden
-                 and (not want or q["project"] == want)]
-        return {"person": me, "crew": crew_name, "ready": ready, "in_progress": doing,
-                "led_projects": led, "desk": desk, "spec_questions": asked}
+        return {"person": me, "crew": crew_name, **work_of(me, hidden, want)}
+
+    def team_home(request: Request, now=None) -> dict:
+        """The team part of GET /api/home for the caller's person (TR-739), or {} on a cell of
+        one person: see factory_team. It reads what this module holds; the route stays in daemon.py."""
+        c = SimpleNamespace(store=store, h=h, stations=stations, work_of=work_of,
+                            work_person=work_person, my_projects=my_projects, queue=queue,
+                            settings=settings, signoff_state=signoff_state,
+                            waits_for_me=waits_for_me, desk_is_mine=desk_is_mine)
+        return factory_team.team_home(c, request, now or now_utc())
 
     @app.get("/api/crew/projects")
     def crew_projects(request: Request):
@@ -2638,4 +2661,5 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         rows = repo_rows(uid, ho.get("repos") or [])
         return {"repos": [r for r in rows if r["path"] or r["name"]]}
 
-    return SimpleNamespace(stations=stations, queue=queue, pace=pace, settings=settings)
+    return SimpleNamespace(stations=stations, queue=queue, pace=pace, settings=settings,
+                           team_home=team_home)
