@@ -14,7 +14,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from . import feedback, goal, incidents, providers, sre, watch
+from . import feedback, goal, incidents, providers, sre, start_steps, watch
 from . import slack as slack_mod
 from .envelope import now_utc
 from .store import day_month_words
@@ -431,6 +431,37 @@ def _feeds_words(items) -> str:
     return f"from the {goal.join_words(names)} " + ("feeds" if len(names) > 1 else "feed")
 
 
+# ── the Start checklist (TR-765) ─────────────────────────────────────────────
+DEMO_TEMPLATE = "ai_sre_demo"
+
+
+def _start_ctx(store, items, state, roles) -> start_steps.SreStartCtx:
+    """What the checklist needs, from the store alone."""
+    demo = next((p for p in store.list_projects() if p.get("template") == DEMO_TEMPLATE), None)
+    agents = {a["name"]: a for a in store.list_catalog_agents()}
+    has_channel = [i for i in roles["investigators"]
+                   if (agents.get(i["agent"]) or {}).get("slack_channel")]
+    demo_channel = demo is not None and any(i["project"] == demo["id"] for i in has_channel)
+    return start_steps.SreStartCtx(
+        model=providers.default_id(store) is not None,
+        signals=any(c.get("connector") in start_steps.SRE_SIGNAL_CONNECTORS
+                    for c in store.list_catalog_sources()),
+        services=bool(items),
+        watching=any(r["watched"] for r in state.values()),
+        slack=demo_channel or (bool(has_channel) and bool(slack_mod.resolve_token(store)[0])),
+        demo=demo is not None,
+        demo_finding=demo is not None and bool(store.project_findings(demo["id"], limit=1)))
+
+
+def start_block(store, catalog, who: str, now=None, items=None, state=None, roles=None) -> dict:
+    """The checklist block of this person's home: the steps, the counts and whether to show it."""
+    items = items if items is not None else sre.list_services(store, catalog, now)
+    state = state if state is not None else watch.compute(store, catalog, now)
+    roles = roles if roles is not None else sre.roles(store, catalog, include_paused=True)
+    return start_steps.checklist(
+        store, start_steps.sre_steps(_start_ctx(store, items, state, roles)), who)
+
+
 # ── the page ─────────────────────────────────────────────────────────────────
 def build(store, catalog, health=None, now=None, person=None) -> dict:
     t = now or now_utc()
@@ -547,4 +578,5 @@ def build(store, catalog, health=None, now=None, person=None) -> dict:
                          "action": {"label": s["fix"]["label"],
                                     "to": NOTES_PLACE.get(s["fix"]["action"], "/settings")}}
                         for s in spots],
-        "tools": _tools(store, catalog, items, health, t)}
+        "tools": _tools(store, catalog, items, health, t),
+        "start": start_block(store, catalog, person or "console", now, items, state, roles)}
