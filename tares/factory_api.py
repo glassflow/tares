@@ -836,7 +836,12 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
             for st in out:
                 if st["projects"] and set(st["projects"]) <= hidden:
                     continue
-                st["projects"] = [u for u in st["projects"] if u not in hidden]
+                seen = [u for u in st["projects"] if u not in hidden]
+                if len(seen) != len(st["projects"]) or st["project"] in hidden:
+                    # the station also works on a project the caller cannot see: its reason
+                    # may name that project, so none of it is shown
+                    st["state_reason"] = None
+                st["projects"] = seen
                 if st["project"] in hidden:
                     st["project"], st["project_name"] = None, None
                 kept.append(st)

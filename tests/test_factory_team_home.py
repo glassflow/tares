@@ -545,8 +545,8 @@ async def main():
                 o["tares_project"] = project
             return o
 
-        def state_line(sid, st_, ago_min):
-            return {"type": "session_state", "sessionId": sid, "cwd": "/w/crew", "state": st_, "reason": "",
+        def state_line(sid, st_, ago_min, reason=""):
+            return {"type": "session_state", "sessionId": sid, "cwd": "/w/crew", "state": st_, "reason": reason,
                     "timestamp": (now_utc() - timedelta(minutes=ago_min)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"}
 
         async def push(who, lines):
@@ -582,6 +582,29 @@ async def main():
         ck("Kim: her crew first, Alex's second, Lee's quiet",
            [c["name"] for c in h["crews"]] == ["Your crew", "Alex's crew"]
            and h["crews_quiet"] == ["Lee's crew"], ([c["name"] for c in h["crews"]], h["crews_quiet"]))
+
+        print("== part two: a crew on a project the reader cannot see ==")
+        # Kim's builder station worked on Atlas, which everyone sees, and now works on Vault
+        await push("kim", [st_line("k2a", "k-build-x", "builder", 9, "k", "m3", project=atlas),
+                           state_line("k2a", "idle", 9),
+                           st_line("k2b", "k-build-x", "builder", 3, "k", "m3", project=vault),
+                           state_line("k2b", "waiting", 3, "Waiting for the Vault launch codes")])
+        kim_doing = lambda h: next(c for c in h["crews"] if c["person"]["id"] == pid["kim"])["doing"]
+        h = await home_of("alex")
+        ck("Alex: Kim's crew waits on a project he cannot see, and its line says only that",
+           kim_doing(h) == "Waiting for an answer.", kim_doing(h))
+        ck("... nothing of the project's name or its reason is in his home",
+           not any(w in json.dumps(h) for w in ("Vault", "launch codes")),
+           [w for w in ("Vault", "launch codes") if w in json.dumps(h)])
+        ck("Lee leads the project: he reads the reason word for word",
+           kim_doing(await home_of("lee")) == "Waiting for the Vault launch codes", kim_doing(await home_of("lee")))
+        await push("kim", [state_line("k2b", "working", 2)])
+        h = await home_of("alex")
+        ck("Alex: the same crew at work on it reads 'At work.', never 'Building Vault.'",
+           kim_doing(h) == "At work." and "Vault" not in json.dumps(h), kim_doing(h))
+        ck("Lee reads 'Building Vault.'", kim_doing(await home_of("lee")) == "Building Vault.",
+           kim_doing(await home_of("lee")))
+        await push("kim", [state_line("k2b", "ended", 1)])
 
         print("== part two: how far a crew may go ==")
         h = await home_of("alex")

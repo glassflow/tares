@@ -13,7 +13,7 @@ import { StartChecklist, StartChecklistHidden, StartChecklistLoading } from "../
 import { usePagePolling } from "../usePagePolling";
 import { allowDesk, finishProject, getHome, keepAssumption, type AllowedGrant } from "./FactoryHome.api";
 import type {
-  HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeItem, HomeProject, HomeProjectState, HomeVerb,
+  HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeItem, HomeProject, HomeProjectRow, HomeProjectState, HomeVerb,
 } from "./home.types";
 import { HOME_SAMPLES } from "./homeSamples";
 
@@ -163,6 +163,9 @@ function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAc
     </section>
   );
 }
+
+// The Team view of a team cell also lists a stub where a private project the person is not on would be.
+const isProject = (r: HomeProjectRow): r is HomeProject => !("hidden" in r);
 
 function ProjectRow({ p }: { p: HomeProject }) {
   const { merged, blocked, total } = p.tickets;
@@ -349,7 +352,7 @@ export function FactoryHomeView({ data, onAction, rows, notice, hideStart, onSta
             <StartChecklistHidden block={data.start} title={START_TITLE} show={showStart} onShown={onStartShown} />
           )}
           <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />
-          <Projects projects={data.projects} finished={data.finished_count} />
+          <Projects projects={data.projects.filter(isProject)} finished={data.finished_count} />
         </div>
         <aside className={RIGHT}>
           <CrewCard data={data} />
@@ -654,8 +657,8 @@ function LiveHome() {
     const shown: HomeData = overlay ? {
       ...data,
       waiting_for_you: data.waiting_for_you.filter((i) => !overlay.items.has(i.id)),
-      projects: data.projects.filter((p) => !overlay.projects.has(p.id)),
-      finished_count: data.finished_count + data.projects.filter((p) => overlay.projects.has(p.id)).length,
+      projects: data.projects.filter((p) => !isProject(p) || !overlay.projects.has(p.id)),
+      finished_count: data.finished_count + data.projects.filter((p) => isProject(p) && overlay.projects.has(p.id)).length,
     } : data;
     const notice = error ? (
       <Banner tone="warn" data-testid="stale-banner">
