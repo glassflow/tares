@@ -306,6 +306,23 @@ function cleanEnv(extra) {
         await ctx.close();
       }
 
+      // the greeting names the person, not the key they signed in with (TR-832)
+      for (const [label, person, want] of [["a person", { id: "p1", name: "Dana Roe", email: "dana@example.com" }, "Dana"],
+                                           ["no person", null, "Ci"],
+                                           ["the unnamed local person", { id: "local", name: "You" }, "Ci"]]) {
+        const { ctx, page } = await liveContext(1440);
+        await page.route("**/api/whoami", async (route) => {
+          const res = await route.fetch();
+          const w = await res.json();
+          await route.fulfill({ response: res, json: { ...w, id: "key:k1", name: "ci-key", scopes: ["admin"], person } });
+        });
+        await page.goto(`${BASE}/`, { waitUntil: "load" });
+        await page.getByTestId("factory-home").waitFor();
+        const hello = (await page.locator("h1").first().innerText()).trim();
+        ck(`greeting, ${label}: the first name is ${want}`, new RegExp(`^Good (morning|afternoon|evening), ${want}$`).test(hello), hello);
+        await ctx.close();
+      }
+
       // 390 first: it only looks, so the seeded state is whole for 1440, which acts on it
       for (const width of [390, 1440]) {
         const { ctx, page, ctl } = await liveContext(width);

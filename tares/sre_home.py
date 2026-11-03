@@ -71,16 +71,17 @@ def _errors_24h(store, names: list, t, now) -> dict:
     return out
 
 
-def cached(store, catalog, health, by) -> dict:
+def cached(store, catalog, health, by, start_who=None) -> dict:
     """build(), kept for CACHE_SECONDS per store and credential. `health` may be the
     runtime's health_snapshot (a function), which a cache hit never calls."""
-    key = (id(store), by or "open")
+    key = (id(store), by or "open", start_who or "")
     with _LOCK:
         hit = _CACHE.get(key)
         if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
             return hit[1]
         gen = _GEN[0]
-    body = build(store, catalog, health() if callable(health) else health, person=by or None)
+    body = build(store, catalog, health() if callable(health) else health, person=by or None,
+                 start_who=start_who)
     with _LOCK:
         # a clear_cache() that landed while this was building means the body may be stale
         if gen == _GEN[0]:
@@ -463,7 +464,7 @@ def start_block(store, catalog, who: str, now=None, items=None, state=None, role
 
 
 # ── the page ─────────────────────────────────────────────────────────────────
-def build(store, catalog, health=None, now=None, person=None) -> dict:
+def build(store, catalog, health=None, now=None, person=None, start_who=None) -> dict:
     t = now or now_utc()
     settings = store.service_settings()
     system = watch.system_name(store)
@@ -579,4 +580,5 @@ def build(store, catalog, health=None, now=None, person=None) -> dict:
                                     "to": NOTES_PLACE.get(s["fix"]["action"], "/settings")}}
                         for s in spots],
         "tools": _tools(store, catalog, items, health, t),
-        "start": start_block(store, catalog, person or "console", now, items, state, roles)}
+        "start": start_block(store, catalog, start_who or person or "console", now, items, state,
+                             roles)}
