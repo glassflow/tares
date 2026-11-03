@@ -63,7 +63,10 @@ def _incident(store, action: dict, user: dict, workspace: str | None) -> dict:
     kind = str(action.get("action_id") or "")[len("tares_incident_"):]
     who = (_person(user), user.get("name"))
     if kind == "on_it":
-        after, said = incidents.take(store, iid, *who, via="slack"), "is on it"
+        try:
+            after, said = incidents.take(store, iid, *who, via="slack"), "is on it"
+        except incidents.Held as e:
+            return {"ephemeral": str(e)}
     elif kind == "resolve":
         after, said = incidents.resolve(store, iid, *who, via="slack"), "resolved this"
     elif kind == "reopen":

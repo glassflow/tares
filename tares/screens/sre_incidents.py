@@ -460,13 +460,17 @@ def register(app, store, h, ctx):
             raise not_found()
         who = person(request)
         if action in STATE_ACTIONS:
-            # on_it by someone else on an incident someone is on takes it over, as the button says
-            takeover = (action == "on_it" and inc["state"] == "on_it"
-                        and not (inc["owner"] == who and inc["owner_name"] == who))
-            if action not in actions_of(inc) and not takeover:
+            # on_it on an incident someone else is on is refused by take, which names them
+            held = (action == "on_it" and inc["state"] == "on_it"
+                    and not (inc["owner"] == who and inc["owner_name"] == who))
+            if action not in actions_of(inc) and not held:
                 raise HTTPException(409, REFUSED.get((inc["state"], action)) or
                                     "That does not apply to this incident now.")
-            if STATE_ACTIONS[action](store, incident_id, who, who, "console") is None:
+            try:
+                done = STATE_ACTIONS[action](store, incident_id, who, who, "console")
+            except incidents.Held as e:
+                raise HTTPException(409, str(e))
+            if done is None:
                 raise not_found()
             sre_home.clear_cache()   # the home page counts open incidents
         else:
