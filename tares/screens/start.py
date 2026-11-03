@@ -3,8 +3,8 @@
 On the factory home each credential hides only its own checklist (the setting
 `start_hidden:<its name>`; one cell with no auth has one person, "console"); on the AI SRE home
 each person does (`start_hidden:<person id>`, the key's name for a key with no person), so a
-teammate still sees theirs. Any signed-in credential may do it, a read key too: it changes nothing but what the caller's own home shows
-(tares/daemon.py lets this path through as "any"). The answer is the caller's new start block, or
+teammate still sees theirs. Any signed-in credential may do it, a read key too: it changes nothing but what the caller's own
+home shows (tares/daemon.py lets this path through as "any"). The answer is the caller's new start block, or
 {"ok": true} on a cell whose edition has no Start block.
 """
 import asyncio

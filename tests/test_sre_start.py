@@ -200,6 +200,8 @@ async def main():
         eq("rename answers", r.status_code, 200)
         sre_home.clear_cache()
         eq("after a rename it is still hidden", (await cx.get("/api/home", headers=kim)).json()["start"]["show"], False)
+        r = await cx.post("/api/home/actions/raise_budget", json={"amount_usd": 5}, headers=kim)
+        eq("the budget answer keeps the hide too", (r.status_code, r.json()["home"]["start"]["show"]), (200, False))
         r = await cx.post("/api/keys", json={"name": "other-laptop", "scopes": ["admin"],
                                              "person": {"email": "other@glassflow.dev", "name": "Dana Roe"}})
         other = {"Authorization": f"Bearer {r.json()['secret']}"}
