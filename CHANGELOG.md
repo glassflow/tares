@@ -6,6 +6,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- CI now runs the console's browser end-to-end suites on every pull request.
 - On a team cell, the home's Your crew card shows your own crew's stations only.
 - The team home's side column shows your crew's limit in words, the team's other crews, and the repos you own.
 - The team home's Projects section has a Mine and Team switch, locks on private projects, who leads each one, and a line for private projects you are not on.
@@ -261,6 +262,8 @@ the project follows [Semantic Versioning](https://semver.org/).
   crew has a station of the same name.
 
 ### Fixed
+- The Crew page standup line now counts only what happened in the last 24 hours: tickets done, started, sent to review, blocked and new questions, not what has been standing for days.
+- An incident someone else is on can no longer be taken over by pressing "I'm on it"; the screen says who is on it.
 - A crew's line on the team home no longer shows the reason of a station that also works on a project you cannot see.
 - A grant that was declined stays declined: a consent that comes after the decline, or at the same moment, no longer puts it back in effect, and the grants list no longer shows a person who declined as having agreed.
 - Incident notes no longer show No action when the note has a numbered next step. A finding with no verdict now counts as a note that waits for a person, on every edition.
