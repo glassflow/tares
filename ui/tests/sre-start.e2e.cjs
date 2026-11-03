@@ -188,7 +188,8 @@ function cleanEnv(home, dist, extra = {}) {
     // Show it again for real: one DELETE, the list is back with its five steps, the line is gone
     posts.length = 0;
     await hiddenLine.getByRole("button", { name: "Show it again" }).click();
-    await page.getByTestId("start-checklist").waitFor();
+    // short: the 30 s poll would bring the list back even if Show it again did not reload
+    await page.getByTestId("start-checklist").waitFor({ timeout: 4000 });
     ck("new: Show it again calls the daemon once with DELETE", posts.join() === "DELETE", posts.join());
     ck("new: the list is back with its five steps", (await steps(page).count()) === 5);
     ck("new: and the line is gone", (await page.getByTestId("start-hidden").count()) === 0);
