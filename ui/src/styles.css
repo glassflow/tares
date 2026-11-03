@@ -2319,7 +2319,7 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
   .pj-bar-end { margin-left: 0; }
   .pj-search { flex: 1 1 160px; }
   .pj-search input { width: 100%; }
-  .pj-chip-label, .pj-sub { display: none; }
+  .pj-chip-label, .pj-sub, .pj-name-cell .proj-lead { display: none; }   /* a row stays a name, a cue and a goal: the lead is on the project page */
   .pj-cue { display: block; }
   .pj-table th:nth-child(3), .pj-table td:nth-child(3), .pj-table th:nth-child(4), .pj-table td:nth-child(4) { display: none; }
   .pj-table tbody td { padding: 9px 8px; }
