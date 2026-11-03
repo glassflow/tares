@@ -101,7 +101,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await ctx.addInitScript((t) => { try { if (t) localStorage.setItem("tares_token", t); } catch { /* blocked */ } }, token);
       const page = await ctx.newPage();
       const ctl = { fail: false, hold: null, reads: 0, posts: [] };
-      await page.route("**/api/home", async (route) => {
+      await page.route(/\/api\/home(\?|$)/, async (route) => {
         ctl.reads++;
         if (ctl.hold) await ctl.hold;
         if (ctl.fail) return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "down" }) });
@@ -178,6 +178,102 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       }
     }
 
+
+    // ── TR-761, live: what Alex waits on, Projects (Mine and Team), the side column; Kim's view of Shop ──
+    const TEAM_NAMES = ["Shop", "Portal", "Notes", "Billing", "Search", "Mobile"];
+    const chipsOf = (loc) => loc.getByTestId("waiting-on-chip").evaluateAll((els) => els.map((e) => `${e.getAttribute("data-state")}:${e.textContent}`).sort());
+    let kim = null;   // Kim's page at 1440 stays open: she reads Shop again once Alex has signed off
+    for (const width of [390, 1440]) {
+      const t = (s) => `live @${width}: ${s}`;
+      const { ctx, page } = await open("alex", width);
+      const oneRead = expectOneCall(page, "/api/home");
+      await page.goto(`${BASE}/`, { waitUntil: "load" });
+      await page.getByTestId("factory-home").waitFor();
+      await oneRead(ck, t("alex"));
+      const n = (id) => page.getByTestId(id).count();
+      const texts = (id) => page.getByTestId(id).allInnerTexts();
+      const alexHome = (await api("GET", "/api/home", undefined, ids.keys.alex)).body;
+
+      // a. You are waiting on
+      const won = page.getByTestId("waiting-on-row");
+      const portal = won.filter({ hasText: "Portal" }), notes = won.filter({ hasText: "Notes" });
+      ck(t("You are waiting on lists Portal and Notes, the two projects Alex leads that wait on Kim"), (await won.count()) === 2
+         && (await portal.count()) === 1 && (await notes.count()) === 1, JSON.stringify(await won.allInnerTexts()));
+      ck(t("Portal: acme/api waits for Kim, acme/docs has no owner"), JSON.stringify(await chipsOf(portal)) === JSON.stringify(["no_owner:acme/docs · no owner", "waiting:acme/api · Kim · waiting"]), JSON.stringify(await chipsOf(portal)));
+      ck(t("Notes: acme/api waits for Kim, acme/web is Alex's own"), JSON.stringify(await chipsOf(notes)) === JSON.stringify(["waiting:acme/api · Kim · waiting", "yours:acme/web · you"]), JSON.stringify(await chipsOf(notes)));
+      const btns = async (loc) => (await loc.getByRole("button").allInnerTexts()).map((x) => x.trim());
+      ck(t("both rows have Hand over anyway, and Remind is not offered"), (await btns(portal)).includes("Hand over anyway") && (await btns(notes)).includes("Hand over anyway")
+         && (await page.getByRole("button", { name: "Remind" }).count()) === 0);
+      ck(t("Set an owner is on Portal only, and links to Settings, Advanced"), (await portal.getByRole("link", { name: "Set an owner" }).getAttribute("href")) === "/settings/advanced?tab=areas"
+         && (await notes.getByRole("link", { name: "Set an owner" }).count()) === 0);
+      ck(t("the daemon's summary says Alex waits on Kim for two"), /You are waiting on Kim for 2\./.test(alexHome.summary || ""), alexHome.summary);
+      await shot(page, "live-waiting-on", width);
+
+      // d. Projects: Mine and Team
+      const rowsN = () => page.getByTestId("project-row").count();
+      const prow = (name) => page.getByTestId("project-row").filter({ hasText: name });
+      const everything = () => page.evaluate(() => document.body.innerText);
+      ck(t("the switch counts Mine, 3 and Team, 6"), (await page.getByTestId("projects-mine").innerText()) === "Mine, 3" && (await page.getByTestId("projects-team").innerText()) === "Team, 6",
+         `${await page.getByTestId("projects-mine").innerText()} / ${await page.getByTestId("projects-team").innerText()}`);
+      ck(t("Mine is chosen and lists Shop, Portal and Notes"), (await page.getByTestId("projects-mine").getAttribute("aria-pressed")) === "true" && (await rowsN()) === 3
+         && (await prow("Shop").count()) === 1 && (await prow("Portal").count()) === 1 && (await prow("Notes").count()) === 1, String(await rowsN()));
+      ck(t("Mine has one line about the hidden project and no stub row"), (await n("hidden-summary")) === 1 && (await n("hidden-row")) === 0
+         && (await texts("hidden-summary"))[0].trim() === "1 private project you are not on, led by Lee", JSON.stringify(await texts("hidden-summary")));
+      const private_ = ids.private;
+      let bodyText = await everything();
+      const leaks = async () => [private_.name, private_.goal].filter((w) => bodyText.includes(w));
+      ck(t("Mine names nothing of the private project"), (await leaks()).length === 0 && !JSON.stringify(alexHome).includes(private_.name) && !JSON.stringify(alexHome).includes(private_.goal), (await leaks()).join());
+      await shot(page, "live-projects-mine", width);
+      await checkWords(page, ck, t("live mine"));
+      const asked = page.waitForRequest((r) => r.url().endsWith("/api/home?projects=team"), { timeout: 5000 }).then(() => true, () => false);
+      await page.getByTestId("projects-team").click();
+      ck(t("choosing Team makes the page read /api/home?projects=team"), await asked);
+      await page.waitForFunction(() => document.querySelectorAll('[data-testid="project-row"]').length === 6, null, { timeout: 4000 }).catch(() => {});
+      ck(t("Team lists six projects"), (await rowsN()) === 6 && (await Promise.all(TEAM_NAMES.map((x) => prow(x).count()))).every((c) => c === 1), String(await rowsN()));
+      ck(t("Team has the stub, Private, led by Lee, and no summary line"), (await n("hidden-row")) === 1 && (await texts("hidden-row"))[0].trim() === "Private, led by Lee"
+         && (await n("hidden-summary")) === 0, JSON.stringify(await texts("hidden-row")));
+      bodyText = await everything();
+      ck(t("Team names nothing of the private project either"), (await leaks()).length === 0, (await leaks()).join());
+      const rowText = async (name) => ((await prow(name).count()) ? prow(name).first().innerText() : "");
+      ck(t("Team shows Led by Lee on Search and Mobile and Led by Kim on Shop"), /Led by Lee/.test(await rowText("Search")) && /Led by Lee/.test(await rowText("Mobile"))
+         && /Led by Kim/.test(await rowText("Shop")));
+      ck(t("no horizontal scroll"), (await overflow(page)) <= 0, `${await overflow(page)}px over`);
+      await shot(page, "live-projects-team", width);
+      await checkWords(page, ck, t("live team"));
+
+      // e. the side column
+      const crewRows = await texts("team-crew-row");
+      ck(t("Kim's crew is a row, with its machine and what it does"), crewRows.length === 1 && /Kim's crew/.test(crewRows[0]) && /kim-mbp/.test(crewRows[0]), JSON.stringify(crewRows));
+      ck(t("Alex's own crew is not a row"), !crewRows.some((x) => /Your crew|Alex/.test(x)), JSON.stringify(crewRows));
+      ck(t("Lee's crew, last heard two days ago, is under Not seen in a day"), (await n("quiet-crews")) === 1 && (await texts("quiet-crews"))[0].trim() === "Not seen in a day: Lee's crew", JSON.stringify(await texts("quiet-crews")));
+      ck(t("the daemon agrees: Kim's crew is heard from, Lee's is quiet"), JSON.stringify(alexHome.crews.map((c) => c.name)) === JSON.stringify(["Your crew", "Kim's crew"])
+         && JSON.stringify(alexHome.crews_quiet) === JSON.stringify(["Lee's crew"]), JSON.stringify([alexHome.crews.map((c) => c.name), alexHome.crews_quiet]));
+      const owned = await texts("repo-you-own");
+      ck(t("Repos you own lists what the daemon says, acme/web, and not acme/docs, which nobody owns"), alexHome.areas.map((a) => a.repo).join() === "acme/web" && owned.length === 1
+         && /acme\/web/.test(owned[0]) && !/acme\/docs/.test(owned.join()), JSON.stringify([alexHome.areas, owned]));
+      await shot(page, "live-side", width);
+      await page.getByRole("link", { name: "All owners" }).click();
+      await page.waitForURL(/\/settings\/advanced/, { timeout: 10000 }).catch(() => {});
+      const areasTab = page.locator('button.pnav-link[aria-current="page"]');
+      await areasTab.first().waitFor({ timeout: 10000 }).catch(() => {});
+      ck(t("All owners opens Settings with the Areas tab selected"), (await areasTab.allInnerTexts()).join("|").trim() === "Areas", (await areasTab.allInnerTexts()).join("|"));
+      await ctx.close();
+    }
+    {
+      // Kim leads Shop, and waits on Alex for acme/web and on nobody for acme/docs
+      const { ctx, page } = await open("kim", 1440);
+      await page.goto(`${BASE}/`, { waitUntil: "load" });
+      await page.getByTestId("factory-home").waitFor();
+      await settle(page);
+      const shopRow = page.getByTestId("waiting-on-row").filter({ hasText: "Shop" });
+      const chips = await chipsOf(shopRow);
+      ck("kim: Shop waits for Alex on acme/web, acme/docs has no owner, acme/api is her own", (await page.getByTestId("waiting-on-row").count()) === 1
+         && JSON.stringify(chips) === JSON.stringify(["no_owner:acme/docs · no owner", "waiting:acme/web · Alex · waiting", "yours:acme/api · you"]), JSON.stringify(chips));
+      await shot(page, "live-kim", 1440);
+      await checkWords(page, ck, "kim: live");
+      kim = { ctx, page };
+    }
+
     // ── acting, as Alex at 1440 ──
     {
       const { ctx, page, ctl } = await open("alex", 1440);
@@ -243,6 +339,17 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("acme/web is signed off by its owner, from the console"), !!webRow && webRow.signed_off === true && !!webRow.owner && webRow.owner.id === ids.people.alex && !!webRow.via && !!webRow.at, JSON.stringify(webRow));
       ck(t("acme/api, which Alex does not own, is not signed off"), !!apiRow && apiRow.signed_off === false, JSON.stringify(apiRow));
       ck(t("four remain"), (await rows.count()) === 4, String(await rows.count()));
+
+      // Kim, who leads Shop, sees acme/web signed off once her home is read again
+      await new Promise((r) => setTimeout(r, 5500));   // the daemon keeps /api/home for 5 seconds per credential
+      await kim.page.reload({ waitUntil: "load" });
+      await kim.page.getByTestId("factory-home").waitFor();
+      await settle(kim.page);
+      const kimChips = await chipsOf(kim.page.getByTestId("waiting-on-row").filter({ hasText: "Shop" }));
+      ck(t("Kim now sees acme/web signed off by Alex"), JSON.stringify(kimChips) === JSON.stringify(["no_owner:acme/docs · no owner", "signed_off:acme/web · Alex · signed off", "yours:acme/api · you"]), JSON.stringify(kimChips));
+      await shot(kim.page, "live-kim-signed-off", 1440);
+      await checkWords(kim.page, ck, t("kim after the sign-off"));
+      await kim.ctx.close();
 
       // Agree and Decline
       const g1 = row(page, "merge to acme/web");
@@ -312,6 +419,61 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await ctx.close();
     }
 
+    // ── Hand over anyway, live: Notes has a new lead after the page listed it (403), Portal goes to the crew ──
+    {
+      const { ctx, page, ctl } = await open("alex", 1440);
+      const t = (s) => `hand over: ${s}`;
+      await page.goto(`${BASE}/`, { waitUntil: "load" });
+      await page.getByTestId("factory-home").waitFor();
+      await settle(page);
+      const won = page.getByTestId("waiting-on-row");
+      const portal = won.filter({ hasText: "Portal" }), notes = won.filter({ hasText: "Notes" });
+      const dialog = page.getByTestId("handover-dialog"), confirm = page.getByTestId("handover-confirm"), reason = page.getByTestId("handover-reason");
+      const crewOf = async (id) => (await api("GET", `/api/projects/${id}/crew`)).body.handover;
+      ck(t("both rows are listed before anything is done"), (await portal.count()) === 1 && (await notes.count()) === 1 && !(await crewOf(ids.projects.portal)) && !(await crewOf(ids.projects.notes)));
+
+      // F4: while the page is open, Alex gives Notes to Kim; the daemon then refuses him (403)
+      const lead = await api("PATCH", `/api/projects/${ids.projects.notes}`, { lead_person_id: ids.people.kim }, ids.keys.alex);
+      ck(t("Notes has a new lead, Kim, and the page still lists it"), lead.status === 200 && (await notes.count()) === 1, JSON.stringify(lead));
+      await notes.getByRole("button", { name: "Hand over anyway" }).click();
+      await dialog.waitFor();
+      await reason.fill("Kim is out until Monday.");
+      await confirm.click();
+      const err = page.getByTestId("dialog-error");
+      await err.waitFor({ timeout: 5000 }).catch(() => {});
+      const errText = (await err.count()) ? (await err.innerText()).trim() : "";
+      ck(t("a non-lead is told so: Only the lead of Notes can hand it over."), errText === "Only the lead of Notes can hand it over.", errText);
+      ck(t("the box stays open, its row stays and nothing was handed over"), (await dialog.count()) === 1 && (await notes.count()) === 1 && !(await crewOf(ids.projects.notes)));
+      await checkWords(page, ck, t("refusal"));
+      await page.getByRole("button", { name: "Cancel" }).click();
+      await dialog.waitFor({ state: "detached" });
+      const back = await api("PATCH", `/api/projects/${ids.projects.notes}`, { lead_person_id: ids.people.alex }, ids.keys.kim);   // Alex leads Notes again, so the later counts hold
+      ck(t("Kim gives Notes back to Alex"), back.status === 200, JSON.stringify(back));
+      ctl.posts.length = 0;
+
+      // F6: Portal, as its lead
+      await portal.getByRole("button", { name: "Hand over anyway" }).click();
+      await dialog.waitFor();
+      ck(t("Hand over is off with no reason, and with only spaces"), (await confirm.isDisabled()) && (await reason.fill("   "), await confirm.isDisabled()));
+      const why = "Kim is out until Monday, so the ticket should not wait.";
+      await reason.fill(why);
+      ck(t("Hand over is on with a reason"), await confirm.isEnabled());
+      await shot(page, "live-hand-over-dialog", 1440);
+      await checkWords(page, ck, t("dialog"));
+      await api("GET", "/api/home", undefined, ids.keys.alex);   // the daemon holds this answer for 5 seconds: it still lists Portal
+      await confirm.click();
+      await dialog.waitFor({ state: "detached", timeout: 5000 }).catch(() => {});
+      ck(t("the row leaves at once, though the daemon's cached answer still lists it"), (await portal.count()) === 0 && (await notes.count()) === 1, String(await portal.count()));
+      const post = ctl.posts.find((x) => x.path === `/api/projects/${ids.projects.portal}/handover`);
+      ck(t("the page asked /api/projects/<id>/handover with {override_reason}"), !!post && JSON.stringify(JSON.parse(post.body || "{}")) === JSON.stringify({ override_reason: why }), JSON.stringify(post));
+      const done = await crewOf(ids.projects.portal);
+      ck(t("the daemon recorded the hand-over with the reason"), !!done && JSON.stringify(done).includes(why), JSON.stringify(done));
+      ck(t("Notes was not handed over"), !(await crewOf(ids.projects.notes)));
+      await shot(page, "live-handed-over", 1440);
+      await checkWords(page, ck, t("handed over"));
+      await ctx.close();
+    }
+
     // ── a long question, a long list ──
     for (const width of [390, 1440]) {
       const t = (s) => `@${width}: ${s}`;
@@ -337,7 +499,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("a long list shows eight rows and Show all"), (await rows.count()) === 8 && (await page.getByRole("button", { name: /Show all/ }).count()) === 1,
          JSON.stringify({ rows: await rows.count(), head: await page.getByTestId("home-headline").innerText(), titles: (await rows.allInnerTexts()).map((x) => x.slice(0, 40)) }));
       await page.getByRole("button", { name: /Show all/ }).click();
-      ck(t("Show all lists every item"), (await rows.count()) === 14, String(await rows.count()));
+      ck(t("Show all lists every item"), (await rows.count()) === 14, JSON.stringify((await rows.allInnerTexts()).map((x) => x.replace(/\s+/g, " ").slice(0, 70))));
       ck(t("no horizontal scroll with all of them"), (await overflow(page)) <= 0);
       await shot(page, "many-items", width);
       await checkWords(page, ck, t("many items"));
@@ -350,7 +512,8 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       const { ctx, page } = await open("solo", width);
       const oneRead = expectOneCall(page, "/api/home");
       await page.goto(`http://127.0.0.1:${SOLO}/`, { waitUntil: "load" });
-      await page.getByTestId("factory-home").waitFor();
+      const soloUp = await page.getByTestId("factory-home").waitFor({ timeout: 15000 }).then(() => true, () => false);
+      ck(t("a cell of one shows its home"), soloUp);
       await oneRead(ck, t("one person"));
       ck(t("the v2 list: rows with no sender square, Keep and Allow as before"),
          (await page.getByTestId("waiting-row").count()) >= 3 && (await page.getByTestId("waiting-from").count()) === 0
@@ -450,6 +613,17 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
         await shot(page, `projects-private-${view}`, width);
         await checkWords(page, ck, label);
       }
+      // F9: a Team list of nothing but private projects is quiet rows, not an empty list
+      await go("privateOnly", "team");
+      ck(t("privateOnly, team: only the quiet row, and no project row"), (await page.getByTestId("hidden-row").count()) === 1 && (await rowsN()) === 0, `${await page.getByTestId("hidden-row").count()} / ${await rowsN()}`);
+      ck(t("privateOnly, team: it does not say No projects yet."), (await page.getByText("No projects yet.").count()) === 0 && (await page.getByText("Start one and hand it to the crew.").count()) === 0);
+      await shot(page, "projects-private-only-team", width);
+      await checkWords(page, ck, t("privateOnly, team"));
+      await go("privateOnly", "mine");
+      ck(t("privateOnly, mine: No projects of yours yet., and the one line about the hidden project"), (await page.getByText("No projects of yours yet.").count()) === 1
+         && (await page.getByTestId("hidden-summary").count()) === 1 && (await page.getByTestId("hidden-row").count()) === 0);
+      await checkWords(page, ck, t("privateOnly, mine"));
+
       for (const view of ["mine", "team"]) {
         await go("longText", view);
         ck(t(`longText, ${view}: a long name and a long lead wrap and never push the page wider`), (await overflow(page)) <= 0 && (await rowsN()) === (view === "mine" ? 1 : 2), `${await overflow(page)}px over`);
@@ -547,10 +721,14 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
     {
       const { ctx, page } = await open("solo", 1440);
       await page.goto(`http://127.0.0.1:${SOLO}/`, { waitUntil: "load" });
-      await page.getByTestId("factory-home").waitFor();
+      await page.getByTestId("factory-home").waitFor({ timeout: 15000 }).catch(() => {});
       await settle(page);
       ck("a live cell of one has no team crews, quiet line, repos you own or limit foot",
          (await page.getByTestId("team-crews").count()) + (await page.getByTestId("quiet-crews").count()) + (await page.getByTestId("repos-you-own").count()) + (await page.getByTestId("crew-limit").count()) === 0);
+      const NEW = ["waiting-on", "waiting-on-row", "waiting-on-chip", "projects-switch", "projects-mine", "projects-team", "hidden-row", "hidden-summary", "project-lock", "project-lead", "handover-dialog"];
+      const seen = [];
+      for (const id of NEW) if ((await page.getByTestId(id).count()) > 0) seen.push(id);
+      ck("a live cell of one shows none of the team home's testids", seen.length === 0, seen.join());
       await ctx.close();
     }
     const soloHome = await fetch(`http://127.0.0.1:${SOLO}/api/home`).then((r) => r.json());

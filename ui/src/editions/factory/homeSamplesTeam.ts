@@ -264,9 +264,15 @@ export const ownCrewQuiet: HomeData = team(
   { summary: "2 things wait for you.", crews: [KIM_CREW], crews_quiet: ["Your crew", "Lee's crew"] },
 );
 
+/** A team cell whose Team list is only private projects the person is not on: quiet rows, never "No projects yet." */
+export const privateOnly: HomeData = team(
+  asked.slice(0, 2), "2 things wait for you.",
+  { summary: "2 things wait for you.", ...projectKeys([{ hidden: true, lead: { name: "Lee" } }]) },
+);
+
 /** A cell of one person: no team keys, so the page keeps the v2 list. */
 export const onePerson: HomeData = busy;
 
 export const HOME_SAMPLES_TEAM: Record<string, HomeData> = {
-  onePerson, threePeople, nothingWaitingTeam: nothingWaiting, longText, manyItems, privateNotOn, noOwnedRepos, ownCrewQuiet,
+  onePerson, threePeople, nothingWaitingTeam: nothingWaiting, longText, manyItems, privateNotOn, privateOnly, noOwnedRepos, ownCrewQuiet,
 };

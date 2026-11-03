@@ -9,9 +9,15 @@ thing of every kind waiting for Alex, written through the running daemon's API o
     desk       a permission request from a builder (Allow, Answer, "stand for next time"),
                a question with two options, and a long question for the long-text state
   Lee:        has nothing waiting; the page shows "Nothing waits for you".
+  Team (TR-761): Alex leads Portal (acme/api, Kim has not signed off; acme/docs, no owner) and Notes (acme/web, his
+              own; acme/api, Kim has not signed off), so he waits on Kim for two repos. Shop gets a ticket on
+              acme/docs. Kim leads Billing, Lee leads Search, Mobile and Vault; Vault is private and Alex is not on
+              it. Alex sees Shop, Portal and Notes under Mine and six under Team, plus one hidden stub.
+  Crews:      Alex's and Kim's crew were heard a few minutes ago, Lee's two days ago (so it is "not seen in a day").
 usage: python seed-team-home.py <port> <root-token>
 Prints a JSON map on the last line: keys and people by first name, project, question, grants and desk labels."""
 import json, sys, urllib.error, urllib.request
+from datetime import datetime, timedelta, timezone
 
 port, root = sys.argv[1], sys.argv[2]
 base = f"http://127.0.0.1:{port}"
@@ -66,4 +72,61 @@ for name, body in {
 }.items():
     desk[name] = call("POST", "/api/desk", body)["label"]
 
-print(json.dumps({"keys": keys, "people": people, "project": shop, "question": question, "grants": grants, "desk": desk}))
+# ── TR-761: the team home ──
+call("POST", f"/api/projects/{shop}/tickets", {"title": "Docs page", "repo": "acme/docs"}, keys["kim"])
+
+
+def project(who, name, **extra):
+    return call("POST", "/api/projects", {"template": "custom", "name": name, "objects": [], "kind": "software_factory",
+                                          **extra}, keys[who])["id"]
+
+
+portal = project("alex", "Portal")
+call("POST", f"/api/projects/{portal}/tickets", {"title": "Portal api", "repo": "acme/api"}, keys["alex"])
+call("POST", f"/api/projects/{portal}/tickets", {"title": "Portal docs", "repo": "acme/docs"}, keys["alex"])
+notes = project("alex", "Notes")
+call("POST", f"/api/projects/{notes}/tickets", {"title": "Notes page", "repo": "acme/web"}, keys["alex"])
+call("POST", f"/api/projects/{notes}/tickets", {"title": "Notes api", "repo": "acme/api"}, keys["alex"])
+billing = project("kim", "Billing")
+search = project("lee", "Search")
+mobile = project("lee", "Mobile")
+PRIVATE = {"name": "Vault", "goal": "Rotate the launch keys"}
+vault = project("lee", PRIVATE["name"], goal=PRIVATE["goal"])
+call("PATCH", f"/api/projects/{vault}", {"scope": "private"}, keys["lee"])
+
+# the crews: each person's lines go in with their own key; Lee's last line is two days old
+call("POST", "/api/sources", {"name": "claude_code", "connector": "claude_code", "poll": "10s", "config": {"push": True}})
+
+
+def stamp(minutes):
+    return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def push(who, lines):
+    body = ("\n".join(json.dumps(x) for x in lines) + "\n").encode()
+    r = urllib.request.Request(base + "/ingest/claude_code", body, {"content-type": "application/x-ndjson",
+                               "authorization": f"Bearer {keys[who]}"}, method="POST")
+    try:
+        urllib.request.urlopen(r)
+    except urllib.error.HTTPError as e:
+        raise SystemExit(f"ingest for {who} -> {e.code} {e.read().decode()[:300]}")
+
+
+def crew(who, tag, machine, minutes_ago, state, role="orchestrator", project_id=""):
+    sid = f"{tag}-1"
+    line = {"type": "session_station", "sessionId": sid, "cwd": "/w/crew", "timestamp": stamp(minutes_ago),
+            "station": f"{tag}-{role}", "role": role, "parent": "", "factory_station": f"{tag}-{role}",
+            "factory_crew": tag, "crew": tag, "factory_machine": machine, "machine": machine}
+    if project_id:
+        line["tares_project"] = project_id
+    push(who, [line, {"type": "session_state", "sessionId": sid, "cwd": "/w/crew", "state": state, "reason": "",
+                      "timestamp": stamp(minutes_ago)}])
+
+
+crew("alex", "a", "alex-mbp", 4, "working", "builder", notes)
+crew("kim", "k", "kim-mbp", 6, "idle")
+crew("lee", "l", "lee-mbp", 2 * 24 * 60, "idle")
+
+print(json.dumps({"keys": keys, "people": people, "project": shop, "question": question, "grants": grants, "desk": desk,
+                  "projects": {"shop": shop, "portal": portal, "notes": notes, "billing": billing, "search": search,
+                               "mobile": mobile, "vault": vault}, "private": PRIVATE}))
