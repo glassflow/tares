@@ -205,7 +205,7 @@ async def main():
                                "until you sign off.", so.get("detail"))
         ck("it can be signed, and the ticket read", so["actions"] == [
             {"label": "Sign off", "primary": True, "do": "sign_off", "project": shop,
-             "repo": "acme/web"},
+             "repo": "acme/web", "tickets": ["Web page"]},
             {"label": "Read the ticket", "primary": False, "href": f"/projects/{shop}"}], so["actions"])
         ck("Kim owns acme/api and leads: nothing owed there, nothing for Kim or Lee",
            "signoff" not in by_kind(await home("kim")) and "signoff" not in by_kind(await home("lee")))
@@ -266,9 +266,12 @@ async def main():
            and [a.get("do") for a in dp["actions"]] == ["answer", "allow"]
            and dp["actions"][1] == {"label": "Allow", "primary": True, "do": "allow",
                                     "desk": perm["label"], "may_limit": True}, dp)
+        ck("the permission's Answer carries its desk label and no options",
+           dp["actions"][0] == {"label": "Answer", "primary": False, "do": "answer",
+                                "desk": perm["label"], "options": []}, dp["actions"][0])
         ck("the question has one primary Answer", dq["detail"] == "Which colour for the links?"
            and dq["actions"] == [{"label": "Answer", "primary": True, "do": "answer",
-                                  "desk": ask["label"]}], dq)
+                                  "desk": ask["label"], "options": ["blue", "green"]}], dq)
         ck("they come from Alex's own crew", dp["from"] == {"crew": True, "name": "Your crew"}
            and dq["from"]["name"] in ("Your crew", "Alex", "Kim", "Lee"), (dp["from"], dq["from"]))
         ck("Lee has only the item for Lee, Kim has none", len(by_kind(await home("lee")).get("desk", [])) == 1

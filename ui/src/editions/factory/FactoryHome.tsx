@@ -11,12 +11,17 @@ import { useEdition } from "../edition";
 import { useSample } from "../sample";
 import { StartChecklist, StartChecklistHidden, StartChecklistLoading } from "../StartChecklist";
 import { usePagePolling } from "../usePagePolling";
-import { allowDesk, finishProject, getHome, keepAssumption, type AllowedGrant } from "./FactoryHome.api";
+import {
+  allowDesk, answerQuestion, consentGrant, declineGrant, deskReply, finishProject, getHome, keepAssumption, signOff,
+  type AllowedGrant,
+} from "./FactoryHome.api";
 import type {
   HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeItem, HomeProject, HomeProjectRow, HomeProjectState, HomeVerb,
 } from "./home.types";
 import { HOME_SAMPLES } from "./homeSamples";
 import { HOME_SAMPLES_TEAM } from "./homeSamplesTeam";
+import { Detail } from "./HomeDetail";
+import { AnswerPanel, DeclineDialog, SignOffDialog, type AnswerGiven } from "./WaitingActions";
 import { WaitingForYou } from "./WaitingForYou";
 
 // The factory home: what waits for the person, the projects, the crew, the Claude plan and the
@@ -73,7 +78,8 @@ export interface RowState { busy?: HomeVerb; error?: string; copied?: boolean }
 type OnAction = (a: HomeAction, item?: HomeItem) => void;
 
 const BUSY_LABEL: Partial<Record<HomeVerb, string>> = {
-  keep_assumptions: "Keeping...", allow: "Allowing...", close: "Closing...",
+  keep_assumptions: "Keeping...", allow: "Allowing...", close: "Closing...", agree: "Agreeing...",
+  answer: "Sending...", sign_off: "Signing...", decline: "Declining...",
 };
 
 function ActionButton({ action, item, onAction, state }: {
@@ -99,18 +105,6 @@ function ActionButton({ action, item, onAction, state }: {
     <Button variant={variant} className={cls} busy={mine} disabled={working && !mine} onClick={() => onAction?.(action, item)}>
       {label}
     </Button>
-  );
-}
-
-/** The crew's text puts a command in backticks; the page shows it in a monospace span. */
-function Detail({ text }: { text: string }) {
-  const parts = text.split(/`([^`]+)`/);
-  return (
-    <>
-      {parts.map((part, i) => (i % 2 === 1
-        ? <code key={i} className="bg-muted px-1 font-mono text-[12.5px]" data-words-exempt>{part}</code>
-        : part))}
-    </>
   );
 }
 
@@ -140,7 +134,6 @@ function WaitingRow({ item, onAction, state }: { item: HomeItem; onAction?: OnAc
 }
 
 // The buttons of a team row that the page does not act on yet: they show once their handlers land.
-const NOT_YET: HomeVerb[] = ["answer", "sign_off", "agree", "decline"];
 
 /** A cell with more than one person sends these keys; a cell of one never does. */
 const isTeam = (d: HomeData): boolean => d.summary !== undefined;
@@ -339,8 +332,10 @@ const RIGHT = "flex min-w-0 flex-[1_1_300px] flex-col gap-6";
 
 const START_TITLE = "Get your factory going";
 
-export function FactoryHomeView({ data, onAction, rows, notice, hideStart, onStartHidden, showStart, onStartShown }: {
+export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStart, onStartHidden, showStart, onStartShown }: {
   data: HomeData; onAction?: OnAction; rows?: Record<string, RowState>; notice?: React.ReactNode;
+  /** A panel open under a waiting row, by row id (the answer box on a team home). */
+  panels?: Record<string, React.ReactNode>;
   /** What Hide this list and Show it again call; a sample passes ones that touch nothing. */
   hideStart?: () => Promise<unknown>; onStartHidden?: () => void;
   showStart?: () => Promise<unknown>; onStartShown?: () => void;
@@ -361,9 +356,10 @@ export function FactoryHomeView({ data, onAction, rows, notice, hideStart, onSta
           )}
           {isTeam(data) ? (
             <WaitingForYou
-              items={data.waiting_for_you.map((i) => ({ ...i, actions: i.actions.filter((a) => !a.do || !NOT_YET.includes(a.do)) }))}
+              items={data.waiting_for_you}
               renderAction={(a, item) => <ActionButton key={a.label} action={a} item={item} onAction={onAction} state={rows?.[item.id]} />}
               errors={Object.fromEntries(Object.entries(rows ?? {}).map(([k, v]) => [k, v.error]))}
+              panels={panels}
             />
           ) : (
             <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />
@@ -404,15 +400,13 @@ export function FactoryHomeLoading() {
   );
 }
 
-export function FactoryHomeError({ onRetry, team }: { onRetry?: () => void; team?: boolean }) {
+export function FactoryHomeError({ onRetry }: { onRetry?: () => void }) {
   const { credentialName } = useEdition();
   return (
     <div className={PAGE} data-testid="factory-home-error">
       <TopBar name={firstName(credentialName)} />
       <Banner tone="error" action={<Button variant="secondary" onClick={onRetry}>Retry</Button>}>
-        {team
-          ? <><b>Could not load your home page.</b> Try again.</>
-          : <><b>Home did not load.</b> The cell did not answer, so nothing here is current. Try again in a moment.</>}
+        <b>Home did not load.</b> The cell did not answer, so nothing here is current. Try again in a moment.
       </Banner>
     </div>
   );
@@ -540,6 +534,9 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
   const [rows, setRows] = React.useState<Record<string, RowState>>({});
   const [allow, setAllow] = React.useState<{ item: HomeItem; desk: string; mayLimit: boolean } | null>(null);
   const [close, setClose] = React.useState<{ item: HomeItem; project: string } | null>(null);
+  const [answering, setAnswering] = React.useState<{ item: HomeItem; action: HomeAction } | null>(null);
+  const [signing, setSigning] = React.useState<{ item: HomeItem; project: string; repo: string; tickets: string[] } | null>(null);
+  const [declining, setDeclining] = React.useState<{ item: HomeItem; grant: string } | null>(null);
   const working = React.useRef(new Set<string>());
   const timers = React.useRef(new Set<ReturnType<typeof setTimeout>>());
   React.useEffect(() => () => { timers.current.forEach(clearTimeout); }, []);
@@ -550,6 +547,26 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
     if (next && Object.keys(next).length) out[id] = next; else delete out[id];
     return out;
   });
+
+  /** One call for one row: the button shows work, the row leaves on success and shows the sentence of a refusal. */
+  const run = async (item: HomeItem, verb: HomeVerb, call: () => Promise<unknown>, message: string, finish: () => void) => {
+    if (working.current.has(item.id)) return;
+    working.current.add(item.id);
+    update(item.id, () => ({ busy: verb }));
+    try {
+      await call();
+      toast(message);
+      update(item.id, () => null);
+      finish();
+      changed({ item: item.id });
+    } catch (e) {
+      update(item.id, () => ({ error: reason(e) }));
+      changed();
+    } finally {
+      working.current.delete(item.id);
+    }
+  };
+  const clearError = (id: string) => update(id, ({ error: _e, ...s }) => s);
 
   const onAction = (a: HomeAction, item?: HomeItem) => {
     if (a.do === "copy") {
@@ -591,8 +608,38 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
     } else if (a.do === "close") {
       const project = String(a.project ?? item.project?.id ?? "");
       if (project) setClose({ item, project });
+    } else if (a.do === "answer") {
+      if (typeof a.desk === "string" || (a.project && a.question)) { clearError(item.id); setAnswering({ item, action: a }); }
+    } else if (a.do === "sign_off") {
+      const project = String(a.project ?? item.project?.id ?? "");
+      const repo = String(a.repo ?? item.repo ?? "");
+      if (project && repo) {
+        clearError(item.id);
+        setSigning({ item, project, repo, tickets: Array.isArray(a.tickets) ? a.tickets.map(String) : [] });
+      }
+    } else if (a.do === "agree") {
+      if (typeof a.grant === "string") {
+        const grant = a.grant;
+        void run(item, "agree", () => consentGrant(grant), "Agreed. The grant starts once everyone it waits for has agreed.", () => {});
+      }
+    } else if (a.do === "decline") {
+      if (typeof a.grant === "string") { clearError(item.id); setDeclining({ item, grant: a.grant }); }
     }
   };
+
+  const sendAnswer = ({ item, action }: { item: HomeItem; action: HomeAction }, given: AnswerGiven) => {
+    const desk = typeof action.desk === "string" ? action.desk : "";
+    const call = desk ? () => deskReply(desk, given.words, given.standing)
+      : () => answerQuestion(String(action.project), String(action.question), given.words);
+    void run(item, "answer", call, "Answered. It is on its way back to whoever asked.", () => setAnswering(null));
+  };
+  const closeAnswer = () => { if (answering) clearError(answering.item.id); setAnswering(null); };
+  const panels: Record<string, React.ReactNode> = answering ? {
+    [answering.item.id]: (
+      <AnswerPanel key={answering.item.id} item={answering.item} action={answering.action}
+        busy={rows[answering.item.id]?.busy === "answer"} onSend={(g) => sendAnswer(answering, g)} onCancel={closeAnswer} />
+    ),
+  } : {};
 
   const dialogs = (
     <>
@@ -605,6 +652,20 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
             changed({ item: allow.item.id });
           }} />
       )}
+      {signing && (
+        <SignOffDialog key={signing.item.id} item={signing.item} repo={signing.repo} tickets={signing.tickets}
+          busy={rows[signing.item.id]?.busy === "sign_off"} error={rows[signing.item.id]?.error ?? null}
+          onClose={() => { clearError(signing.item.id); setSigning(null); }}
+          onConfirm={() => void run(signing.item, "sign_off", () => signOff(signing.project, signing.repo),
+            `Signed off ${signing.repo}.`, () => setSigning(null))} />
+      )}
+      {declining && (
+        <DeclineDialog key={declining.item.id} item={declining.item}
+          busy={rows[declining.item.id]?.busy === "decline"} error={rows[declining.item.id]?.error ?? null}
+          onClose={() => { clearError(declining.item.id); setDeclining(null); }}
+          onConfirm={(why) => void run(declining.item, "decline", () => declineGrant(declining.grant, why),
+            "Declined. The grant is revoked.", () => setDeclining(null))} />
+      )}
       {close && (
         <CloseDialog key={close.item.id} item={close.item} project={close.project} onClose={() => setClose(null)}
           onDone={() => {
@@ -615,7 +676,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
       )}
     </>
   );
-  return { rows, onAction, dialogs };
+  return { rows, onAction, dialogs, panels };
 }
 
 // ── pages ──────────────────────────────────────────────────────────────────────
@@ -624,13 +685,13 @@ const ALL_SAMPLES: Record<string, HomeData> = { ...HOME_SAMPLES, ...HOME_SAMPLES
 
 function SampleHome({ sample }: { sample: string }) {
   const [tries, setTries] = React.useState(0);
-  const { rows, onAction, dialogs } = useHomeActions(false, () => {});
+  const { rows, onAction, dialogs, panels } = useHomeActions(false, () => {});
   let body: React.ReactNode;
   if (sample === "loading") body = <FactoryHomeLoading />;
-  else if (sample === "error" || sample === "teamError") {
-    body = <FactoryHomeError key={tries} team={sample === "teamError"} onRetry={() => setTries((n) => n + 1)} />;
+  else if (sample === "error") {
+    body = <FactoryHomeError key={tries} onRetry={() => setTries((n) => n + 1)} />;
   }
-  else body = <FactoryHomeView data={ALL_SAMPLES[sample]} onAction={onAction} rows={rows} hideStart={() => Promise.resolve()} showStart={() => Promise.resolve()} />;
+  else body = <FactoryHomeView data={ALL_SAMPLES[sample]} onAction={onAction} rows={rows} panels={panels} hideStart={() => Promise.resolve()} showStart={() => Promise.resolve()} />;
   return (
     <>
       {body}
@@ -650,17 +711,16 @@ function hhmm(d: Date): string {
 function LiveHome() {
   const { data, error, reload } = usePagePolling(getHome, POLL_MS);
   const [readAt, setReadAt] = React.useState<Date>();
-  const team = React.useRef(false);   // a team cell stays one while the page cannot reach it
   const [overlay, setOverlay] = React.useState<Overlay | null>(null);
   const timer = React.useRef<ReturnType<typeof setTimeout>>();
-  React.useEffect(() => { if (data) { setReadAt(new Date()); team.current = isTeam(data); } }, [data]);
+  React.useEffect(() => { if (data) { setReadAt(new Date()); } }, [data]);
   // the daemon keeps its answer for a few seconds: once that has passed, the next read is the truth
   React.useEffect(() => {
     if (data && overlay && Date.now() >= overlay.until) setOverlay(null);
   }, [data, overlay]);
   React.useEffect(() => () => clearTimeout(timer.current), []);
 
-  const { rows, onAction, dialogs } = useHomeActions(true, (done) => {
+  const { rows, onAction, dialogs, panels } = useHomeActions(true, (done) => {
     if (done) {
       setOverlay((o) => ({
         items: new Set([...(o?.items ?? []), ...(done.item ? [done.item] : [])]),
@@ -675,7 +735,7 @@ function LiveHome() {
 
   let body: React.ReactNode;
   if (!data) {
-    body = error ? <FactoryHomeError team={team.current} onRetry={reload} /> : <FactoryHomeLoading />;
+    body = error ? <FactoryHomeError onRetry={reload} /> : <FactoryHomeLoading />;
   } else {
     const shown: HomeData = overlay ? {
       ...data,
@@ -688,7 +748,7 @@ function LiveHome() {
         Could not refresh. Showing what we had at {hhmm(readAt ?? new Date())}.
       </Banner>
     ) : undefined;
-    body = <FactoryHomeView data={shown} onAction={onAction} rows={rows} notice={notice} onStartHidden={reload} onStartShown={reload} />;
+    body = <FactoryHomeView data={shown} onAction={onAction} rows={rows} panels={panels} notice={notice} onStartHidden={reload} onStartShown={reload} />;
   }
   return (
     <>
@@ -701,7 +761,7 @@ function LiveHome() {
 
 export default function FactoryHome() {
   const sample = useSample();
-  if (sample && (sample === "loading" || sample === "error" || sample === "teamError" || Object.prototype.hasOwnProperty.call(ALL_SAMPLES, sample))) {
+  if (sample && (sample === "loading" || sample === "error" || Object.prototype.hasOwnProperty.call(ALL_SAMPLES, sample))) {
     return <SampleHome sample={sample} />;
   }
   return <LiveHome />;
