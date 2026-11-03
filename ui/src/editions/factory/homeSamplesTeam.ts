@@ -64,8 +64,8 @@ const handOver = { label: "Hand over anyway", primary: false, do: "hand_over_any
 /** Two projects the person leads: one waits on Kim, one has a repo nobody owns. */
 const waitingOn: HomeWaitingOn[] = [
   {
-    project: projectY, title: "project-y: the web ticket cannot be handed over yet",
-    detail: "Kim has not answered Q1 (how the web page gets its data), asked 3 hours ago, and has not signed off example-org/service-b.",
+    project: projectY, title: "project-y",
+    detail: "Waiting for Kim to sign off on example-org/service-b. 1 question open for Kim.",
     repos: [
       { repo: "example-org/service-a", owner: null, state: "yours" },
       { repo: "example-org/service-b", owner: kim, state: "waiting" },
@@ -75,14 +75,14 @@ const waitingOn: HomeWaitingOn[] = [
     actions: [handOver],
   },
   {
-    project: projectZ, title: "project-z: a repo has no owner",
-    detail: "example-org/service-c has tickets but nobody owns it, so nobody can sign it off.",
+    project: projectZ, title: "project-z",
+    detail: "example-org/service-c has no owner.",
     repos: [
       { repo: "example-org/service-a", owner: null, state: "yours" },
       { repo: "example-org/service-c", owner: null, state: "no_owner" },
     ],
     open_questions: [],
-    actions: [{ label: "Set an owner", primary: true, href: "/settings/advanced?tab=areas" }],
+    actions: [handOver, { label: "Set an owner", primary: false, href: "/settings/advanced?tab=areas" }],
   },
 ];
 
@@ -232,7 +232,7 @@ export const longText: HomeData = team(
                               "a-laptop-with-a-long-machine-name-2026", "1 minute ago", `Building ${LONG_NAME}.`, 1)],
     crews_quiet: ["Lee's crew with a name that is long enough to wrap onto a second line on a phone"],
     areas: [{ repo: "example-org/a-repository-with-a-very-long-name-service-b", note: "1 sign-off asked, 2 questions open, nothing else waits there" }],
-    you_are_waiting_on: [{ ...waitingOn[0], project: { ...projectY, name: LONG_NAME }, title: `${LONG_NAME}: the web ticket cannot be handed over yet` }],
+    you_are_waiting_on: [{ ...waitingOn[0], project: { ...projectY, name: LONG_NAME }, title: LONG_NAME }],
   },
 );
 
@@ -264,9 +264,15 @@ export const ownCrewQuiet: HomeData = team(
   { summary: "2 things wait for you.", crews: [KIM_CREW], crews_quiet: ["Your crew", "Lee's crew"] },
 );
 
+/** A team cell whose Team list is only private projects the person is not on: quiet rows, never "No projects yet." */
+export const privateOnly: HomeData = team(
+  asked.slice(0, 2), "2 things wait for you.",
+  { summary: "2 things wait for you.", ...projectKeys([{ hidden: true, lead: { name: "Lee" } }]) },
+);
+
 /** A cell of one person: no team keys, so the page keeps the v2 list. */
 export const onePerson: HomeData = busy;
 
 export const HOME_SAMPLES_TEAM: Record<string, HomeData> = {
-  onePerson, threePeople, nothingWaitingTeam: nothingWaiting, longText, manyItems, privateNotOn, noOwnedRepos, ownCrewQuiet,
+  onePerson, threePeople, nothingWaitingTeam: nothingWaiting, longText, manyItems, privateNotOn, privateOnly, noOwnedRepos, ownCrewQuiet,
 };

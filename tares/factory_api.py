@@ -1107,6 +1107,10 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         one person: see factory_team. It reads what this module holds; the route stays in daemon.py."""
         return factory_team.team_home(team_reader(), request, now or now_utc())
 
+    def own_stations(request: Request, rows: list[dict]) -> list[dict]:
+        """`rows` kept to the caller's own crews on a team cell (see factory_team.own_stations)."""
+        return factory_team.own_stations(team_reader(), request, rows)
+
     def team_projects(request: Request, open_ps: list, tickets: dict, rows: list, which: str,
                       now=None, waiting: list | None = None) -> dict:
         """The team's version of the home's `projects` (TR-739): lead, members, scope, what is
@@ -2782,5 +2786,5 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         return {"repos": [r for r in rows if r["path"] or r["name"]]}
 
     return SimpleNamespace(stations=stations, queue=queue, pace=pace, settings=settings,
-                           team_home=team_home, team_projects=team_projects,
+                           team_home=team_home, team_projects=team_projects, own_stations=own_stations,
                            hidden_ids=lambda: h.hidden_ids())
