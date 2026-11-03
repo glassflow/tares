@@ -410,7 +410,10 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         to the giver) takes effect now."""
         if g["state"] == "waiting" and not waiting_for(g):
             mirror_in(g, by)   # first: a failure leaves it waiting, to settle on the next try
-            store.update_grant_row(g["id"], state="active")
+            if not store.activate_waiting_grant(g["id"]):
+                # declined or revoked since it was read: it stays so, and its line comes back out
+                mirror_out(g, by)
+                h.err(ValueError(f"{g['id']} is no longer waiting"), 409)
             g = store.get_grant_row(g["id"])
         return g
 
@@ -668,7 +671,9 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         if console_via(request):
             entry["via"] = "console"
         consents = g["consents"] + [entry]
-        store.update_grant_row(g["id"], consents=consents)
+        # only while it still waits: a decline that came since the read must stay a decline
+        if not store.consent_waiting_grant(g["id"], consents):
+            h.err(ValueError(f"{g['id']} is no longer waiting; there is nothing to consent to"), 409)
         g = settle({**g, "consents": consents}, h.by(request, None))
         if g["state"] == "waiting":
             g = store.get_grant_row(g["id"])

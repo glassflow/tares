@@ -16,6 +16,7 @@ factory-start
 factory-start-show
 factory-ticket
 factory-tickets
+grants-declined
 login-handoff
 project-idle
 projects-list

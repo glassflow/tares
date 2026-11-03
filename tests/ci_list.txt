@@ -67,6 +67,7 @@ test_github_app
 test_github_credentials
 test_github_tickets
 test_goal_first
+test_grant_decline_sticks
 test_grants_teams
 test_handoffs
 test_homebrew_formula

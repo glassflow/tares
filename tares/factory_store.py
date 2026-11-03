@@ -1517,6 +1517,24 @@ class FactoryStore:
                 "RETURNING id", [json.dumps(consents), gid]).fetchone()
         return hit is not None
 
+    def consent_waiting_grant(self, gid: str, consents: list[dict]) -> bool:
+        """Keep a consent on a grant that still waits; False when it was no longer waiting (a
+        decline or a revoke came first), and then the row is left as it was."""
+        with self._swrite:
+            hit = self.sc.execute(
+                "UPDATE grants SET consents = ? WHERE id = ? AND state = 'waiting' RETURNING id",
+                [json.dumps(consents), gid]).fetchone()
+        return hit is not None
+
+    def activate_waiting_grant(self, gid: str) -> bool:
+        """Put a grant in effect only while it still waits; False when it was declined or revoked
+        meanwhile."""
+        with self._swrite:
+            hit = self.sc.execute(
+                "UPDATE grants SET state = 'active' WHERE id = ? AND state = 'waiting' "
+                "RETURNING id", [gid]).fetchone()
+        return hit is not None
+
     def add_signoff(self, project: str, repo: str, person_id: str, at,
                     via: str | None = None) -> None:
         """The area owner's sign-off for a repo, and where it came from (`via`). Signing again
