@@ -179,6 +179,18 @@ async def main():
         r = await cx.get("/api/home")
         eq("shown again at once", r.json()["start"]["show"], True)
 
+        print("== hiding with a key bound to a person ==")
+        # the home reads under the person's name, so the hide must be kept under it too
+        r = await cx.post("/api/keys", json={"name": "kim-laptop", "scopes": ["admin"],
+                                             "person": {"email": "kim@glassflow.dev", "name": "Kim"}})
+        kim = {"Authorization": f"Bearer {r.json()['secret']}"}
+        sre_home.clear_cache()
+        eq("it shows before", (await cx.get("/api/home", headers=kim)).json()["start"]["show"], True)
+        r = await cx.post("/api/home/start/hide", headers=kim)
+        eq("hide answers hidden", (r.status_code, r.json()["show"]), (200, False))
+        eq("and the next read is hidden", (await cx.get("/api/home", headers=kim)).json()["start"]["show"], False)
+        eq("the root key still sees it", (await cx.get("/api/home")).json()["start"]["show"], True)
+
         await cx.aclose()
 
 

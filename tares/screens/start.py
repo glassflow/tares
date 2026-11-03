@@ -18,12 +18,14 @@ PATH = "/api/home/start/hide"
 
 def register(app, store, h, ctx):
     def change(request: Request, hide: bool):
-        # the same key the home reads (factory_home.home): the credential's own name, "console" with
-        # no auth. Not h.by(): once a key has a person that returns the person's name
-        who = (getattr(request.state, "credential", None) or {}).get("name") or "console"
+        value = edition_mod.edition(store)[0]
+        # the same key the edition's home reads. The factory home: the credential's own name,
+        # "console" with no auth. The AI SRE home: who the cell records for the caller (the person
+        # behind the key, else the key's name), "console" with nobody to name
+        cred = (getattr(request.state, "credential", None) or {}).get("name") or "console"
+        who = (h.by(request) or "console") if value == "sre" else cred
         (start_steps.hide if hide else start_steps.unhide)(store, who)
         factory_home.drop_cache(store, request)
-        value = edition_mod.edition(store)[0]
         if value == "sre":
             sre_home.clear_cache()
             return sre_home.start_block(store, ctx.runtime.catalog, who)
