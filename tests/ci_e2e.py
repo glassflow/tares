@@ -86,9 +86,11 @@ def shard(all_items, n, of):
 def run(suite, all_suites, ui=UI, timeout=None):
     """(exit code, FAIL lines) for one suite. Its output goes to the log as it comes.
 
-    A timer kills the suite's whole process group when the time is up, so a suite that goes silent
+    A timer kills the suite's process group when the time is up, so a suite that goes silent
     (a request with no timeout, a browser that will not close) still ends; it does not wait for the next
-    output line."""
+    output line. The group is node and what it started without a new session of its own (the browsers).
+    A scratch daemon a suite starts with `detached: true` is in a group of its own and is not reached:
+    the suite stops it itself when it ends, and on a CI runner the job's end clears one left behind."""
     timeout = TIMEOUT if timeout is None else timeout
     env = dict(os.environ, TARES_E2E_PORT=str(port(suite, all_suites)))
     shots = os.environ.get("E2E_SHOTS")
@@ -104,13 +106,19 @@ def run(suite, all_suites, ui=UI, timeout=None):
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace",
                          start_new_session=True)
     timed_out = threading.Event()
+    lock = threading.Lock()
 
     def stop():
-        timed_out.set()
-        try:
-            os.killpg(p.pid, signal.SIGKILL)  # node and the daemons and browsers it started
-        except ProcessLookupError:
-            pass
+        with lock:
+            # The suite may have ended on its own just as the timer fired: that is its own pass or
+            # fail, not a timeout. What it left in its group (a browser holding the output open) is
+            # still cleared, or the read below would never end.
+            if p.poll() is None:
+                timed_out.set()
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
     timer = threading.Timer(timeout, stop)
     timer.start()
@@ -121,7 +129,8 @@ def run(suite, all_suites, ui=UI, timeout=None):
                 fails.append(line.strip())
         rc = p.wait()
     finally:
-        timer.cancel()
+        with lock:
+            timer.cancel()
     if timed_out.is_set():
         print(f"TIMEOUT: {suite} ran over {timeout}s", flush=True)
         rc = 124
