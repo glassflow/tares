@@ -18,7 +18,9 @@ PATH = "/api/home/start/hide"
 
 def register(app, store, h, ctx):
     def change(request: Request, hide: bool):
-        who = h.by(request) or "console"
+        # the same key the home reads (factory_home.home): the credential's own name, "console" with
+        # no auth. Not h.by(): once a key has a person that returns the person's name
+        who = (getattr(request.state, "credential", None) or {}).get("name") or "console"
         (start_steps.hide if hide else start_steps.unhide)(store, who)
         factory_home.drop_cache(store, request)
         if edition_mod.edition(store)[0] != "factory":
