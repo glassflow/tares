@@ -5921,7 +5921,10 @@ def make_app() -> FastAPI:
     def _incident_action(incident_id: str, request: Request, act) -> dict:
         _incident_or_404(incident_id)
         by_id, by_name = _who(request)
-        out = act(store, incident_id, by_id, by_name, "console")
+        try:
+            out = act(store, incident_id, by_id, by_name, "console")
+        except incidents_mod.Held as e:
+            _err(e, 409)
         if out is None:
             _err(KeyError(f"no incident {incident_id!r}"), 404)
         return incidents_mod.detail(store, out)

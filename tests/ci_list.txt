@@ -17,6 +17,7 @@ test_builder_flow
 test_catalog_sync
 test_challenger_workflow
 test_ci_check
+test_ci_e2e
 test_ci_list
 test_claude_usage
 test_clean_env
@@ -36,6 +37,7 @@ test_factory_builder
 test_factory_close
 test_factory_crew
 test_factory_crew_page
+test_factory_crew_standup
 test_factory_desk
 test_factory_docs_page
 test_factory_home
@@ -127,6 +129,7 @@ test_slack_incident_buttons
 test_slack_verify
 test_spec_signoff
 test_sre_home
+test_sre_incident_hold
 test_sre_incidents
 test_sre_runbooks
 test_sre_series

@@ -288,11 +288,9 @@ async function waitFor(url, tries = 150) {
     await openIncident(page, "onit-b", "incident someone is on", "Someone on it");
     await statusIs(page, /^Alex is on it since /, "the status names Alex");
     ck("Who was on it names Alex", /^Alex, since /.test(await txt(page.getByTestId("who-line"))), await txt(page.getByTestId("who-line")));
-    ck("the buttons: Mark resolved and I'm on it too", (await txt(page.getByTestId("act-resolve"))) === "Mark resolved" && (await txt(page.getByTestId("act-on_it"))) === "I'm on it too");
+    ck("the buttons: Mark resolved only, no I'm on it for an incident Alex holds", (await txt(page.getByTestId("act-resolve"))) === "Mark resolved" && (await page.getByTestId("act-on_it").count()) === 0);
     await shot(page, "live-inc-onit-1440.png");
-    await page.getByTestId("act-on_it").click();
-    await statusIs(page, /^You are on it since /, "I'm on it too: the status says You are on it");
-    ck("I'm on it too: it is saved on the cell", (await api(incApi("onit-b"))).who.name !== "Alex");
+    ck("the holder is still Alex on the cell", (await api(incApi("onit-b"))).who.name === "Alex");
 
     await openIncident(page, "res-c", "incident resolved by a person", "Resolved");
     await statusIs(page, /^Resolved by Alex, 2 days ago, after 1 hour\.$/, "the status says who, when and after how long");

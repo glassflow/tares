@@ -503,9 +503,10 @@ async def cell():
         r = await cx.post(f"/api/sre/incidents/{h_}/on_it", headers=H(ak))
         eq("on_it by the one who is on it: 409", (r.status_code, r.json()["detail"]),
            (409, "Someone is already on this incident."))
-        eq("on_it by another person takes it over",
-           (await cx.post(f"/api/sre/incidents/{h_}/on_it")).status_code, 200)
-        eq("... and they hold it now", store.get_incident(h_)["owner"] != "alex-key", True)
+        r = await cx.post(f"/api/sre/incidents/{h_}/on_it")
+        eq("on_it by another person: 409 naming who is on it (TR-827)", (r.status_code, r.json()["detail"]),
+           (409, "alex-key is on it."))
+        eq("... and Alex still holds it", store.get_incident(h_)["owner"], "alex-key")
         eq("the home page still lists it", h_ in [i["id"] for i in (
             await cx.get("/api/home", headers=H(ak))).json()["incidents"]], True)
         eq("resolve: 200", (await cx.post(f"/api/sre/incidents/{h_}/resolve", headers=H(ak))).status_code, 200)
