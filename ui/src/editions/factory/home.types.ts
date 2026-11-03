@@ -108,6 +108,7 @@ export interface HomeWaitingOn {
 }
 
 export interface HomeTeamCrew {
+  id: string; // the crew, one per person and machine
   name: string; // "Your crew", "Kim's crew"
   machine: string;
   person: HomeRef | null;

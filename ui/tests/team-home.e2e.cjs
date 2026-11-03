@@ -498,7 +498,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("two repos are listed with what waits on each"), (await n("repo-you-own")) === 2
          && /example-org\/service-a/.test((await texts("repo-you-own"))[0]) && /1 sign-off asked/.test((await texts("repo-you-own"))[0])
          && /nothing waiting/.test((await texts("repo-you-own"))[1]), JSON.stringify(await texts("repo-you-own")));
-      ck(t("All owners links to Settings, Advanced"), (await page.getByRole("link", { name: "All owners" }).getAttribute("href")) === "/settings/advanced");
+      ck(t("All owners links to Settings, Advanced"), (await page.getByRole("link", { name: "All owners" }).getAttribute("href")) === "/settings/advanced?tab=areas");
       ck(t("the Claude plan and the connected tools stay"), (await page.locator('section[aria-label="Your Claude plan"]').count()) === 1
          && (await page.locator('section[aria-label="Connected"]').count()) === 1);
       ck(t("no horizontal scroll"), (await overflow(page)) <= 0, `${await overflow(page)}px over`);
@@ -525,6 +525,16 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("nothing waits on any repo you own"), (await texts("repo-you-own")).every((x) => /nothing waiting/.test(x)) && (await n("repo-you-own")) === 2);
       await shot(page, "side-nothing-waiting", width);
       await checkWords(page, ck, t("side, nothing waiting"));
+
+      await go("noOwnedRepos");
+      ck(t("no repo owned: there is no Repos you own block or All owners link"), (await n("repos-you-own")) === 0
+         && (await page.getByRole("link", { name: "All owners" }).count()) === 0 && (await n("team-crews")) === 1);
+      await checkWords(page, ck, t("side, no owned repos"));
+
+      await go("ownCrewQuiet");
+      ck(t("your own quiet crew is never named under Not seen in a day"), (await n("quiet-crews")) === 1
+         && (await texts("quiet-crews"))[0].trim() === "Not seen in a day: Lee's crew", JSON.stringify(await texts("quiet-crews")));
+      await checkWords(page, ck, t("side, own crew quiet"));
 
       await go("onePerson");
       ck(t("a cell of one keeps today's side: no limit foot, team crews or repos you own"),

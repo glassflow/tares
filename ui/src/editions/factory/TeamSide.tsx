@@ -56,7 +56,7 @@ export function TeamCrews({ crews, quiet }: { crews: HomeTeamCrew[]; quiet: stri
       <Head title="The team’s crews" />
       <div className="border border-border bg-card">
         {shown.map((c) => (
-          <div key={c.name + c.machine} data-testid="team-crew-row" className="flex gap-3 border-t border-border px-[18px] py-3 first:border-t-0">
+          <div key={c.id} data-testid="team-crew-row" className="flex gap-3 border-t border-border px-[18px] py-3 first:border-t-0">
             <CrewSquare name={c.person?.name ?? c.name} />
             <div className="min-w-0 flex-1">
               <div className="flex justify-between gap-2">
@@ -91,7 +91,7 @@ export function ReposYouOwn({ areas }: { areas: HomeArea[] }) {
   if (areas.length === 0) return null;
   return (
     <section aria-label="Repos you own" className="min-w-0" data-testid="repos-you-own">
-      <Head title="Repos you own" link={{ to: "/settings/advanced", text: "All owners" }} />
+      <Head title="Repos you own" link={{ to: "/settings/advanced?tab=areas", text: "All owners" }} />
       <Panel>
         {areas.map((a) => (
           <div key={a.repo} data-testid="repo-you-own" className="mt-2 flex justify-between gap-2 text-[13px] first:mt-0">

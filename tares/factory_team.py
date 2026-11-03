@@ -324,7 +324,7 @@ def waiting_on(t: Team) -> list[dict]:
             actions.append({"label": "Hand over anyway", "primary": False,
                             "do": "hand_over_anyway", "project": p["id"]})
         if any(r["state"] == "no_owner" for r in rows):
-            actions.append({"label": "Set an owner", "primary": False, "href": "/settings/advanced"})
+            actions.append({"label": "Set an owner", "primary": False, "href": "/settings/advanced?tab=areas"})
         out.append({"project": {"id": p["id"], "name": p["name"]}, "title": p["name"],
                     "detail": _waiting_detail(rows, questions), "repos": rows,
                     "open_questions": questions, "actions": actions})
@@ -448,7 +448,7 @@ def crews(t: Team) -> tuple[list[dict], list[str]]:
         if silent is None or silent > QUIET_MINUTES:
             quiet.append((cr["person_id"] != t.me["id"], label))
             continue
-        row = {"name": label, "machine": cr["machine"], "person": _ref(cr["person"]) or t.person(cr["person_id"]),
+        row = {"id": cr["id"], "name": label, "machine": cr["machine"], "person": _ref(cr["person"]) or t.person(cr["person_id"]),
                "last_seen": fh._iso(fh._dt(cr["last_seen"])), "heard": fh.plain_ago(cr["last_seen"], t.now),
                "working": sum(1 for s in cr["stations"] if s["state"] == "working"),
                "doing": _crew_doing(cr["stations"])}

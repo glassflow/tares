@@ -82,7 +82,7 @@ const waitingOn: HomeWaitingOn[] = [
       { repo: "example-org/service-c", owner: null, state: "no_owner" },
     ],
     open_questions: [],
-    actions: [{ label: "Set an owner", primary: true, href: "/settings/advanced" }],
+    actions: [{ label: "Set an owner", primary: true, href: "/settings/advanced?tab=areas" }],
   },
 ];
 
@@ -156,7 +156,7 @@ export function sampleView(data: HomeData, view: "mine" | "team"): HomeData {
 // ── the side column: the crews as the cell lists them (the person's own first), the limit, the repos owned ──
 
 function crewRow(who: HomeRef | null, name: string, machine: string, heard: string, doing: string, working = 0): HomeTeamCrew {
-  return { name, machine, person: who, last_seen: "2026-11-02T08:58:00Z", heard, working, doing };
+  return { id: `crew-${machine}`, name, machine, person: who, last_seen: "2026-11-02T08:58:00Z", heard, working, doing };
 }
 
 const OWN_CREW = crewRow(alex, "Your crew", "alex-mbp", "17 seconds ago", "Building project-z.", 1);
@@ -255,9 +255,18 @@ export const privateNotOn: HomeData = team(
   { summary: "2 things wait for you.", ...projectKeys([...TEAM_PROJECTS, { hidden: true, lead: { name: "Lee" } }]) },
 );
 
+/** The person owns no repo: the side column has no "Repos you own" block at all. */
+export const noOwnedRepos: HomeData = team(asked.slice(0, 2), "2 things wait for you.", { summary: "2 things wait for you.", areas: [] });
+
+/** The person's own crew went quiet too: the cell names it, the page never lists it among the team's. */
+export const ownCrewQuiet: HomeData = team(
+  asked.slice(0, 2), "2 things wait for you.",
+  { summary: "2 things wait for you.", crews: [KIM_CREW], crews_quiet: ["Your crew", "Lee's crew"] },
+);
+
 /** A cell of one person: no team keys, so the page keeps the v2 list. */
 export const onePerson: HomeData = busy;
 
 export const HOME_SAMPLES_TEAM: Record<string, HomeData> = {
-  onePerson, threePeople, nothingWaitingTeam: nothingWaiting, longText, manyItems, privateNotOn,
+  onePerson, threePeople, nothingWaitingTeam: nothingWaiting, longText, manyItems, privateNotOn, noOwnedRepos, ownCrewQuiet,
 };
