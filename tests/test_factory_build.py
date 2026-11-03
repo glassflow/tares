@@ -116,6 +116,94 @@ def plugin():
         ship.MAX_SUBAGENT_LINES = 3000
 
 
+def main_backlog():
+    print("== a long session's backlog ships in chunks (TR-809) ==")
+    d = os.path.join(_TMP, "backlog")
+    os.makedirs(d)
+    transcript = os.path.join(d, "s-9.jsonl")
+    cfg = {"base": "http://x", "headers": {}, "data_dir": os.path.join(_TMP, "pd-backlog")}
+    os.makedirs(cfg["data_dir"], exist_ok=True)
+    hook = {"session_id": "s-9", "transcript_path": transcript, "cwd": "/w"}
+
+    def msg(i, size=0):
+        return json.dumps({"type": "user", "sessionId": "s-9",
+                           "message": {"role": "user", "content": f"m{i}" + "x" * size}}) + "\n"
+
+    with open(transcript, "w") as f:
+        for i in range(40):
+            f.write(msg(i, 200))
+        f.write(msg(40, 5000))     # one line larger than a whole read
+        f.write(msg(41, 20000))    # one line too large to send
+        f.write(msg(42))
+    size = os.path.getsize(transcript)
+    off_file = os.path.join(cfg["data_dir"], "offsets",
+                            ship.hashlib.sha1(transcript.encode()).hexdigest()[:16] + ".off")
+
+    def offset():
+        try:
+            return int(open(off_file).read())
+        except OSError:
+            return 0
+
+    sent, posts, fail = [], [], [False]
+    real = (ship.ship_lines, ship.MAX_MAIN_READ, ship.MAX_MAIN_LINE)
+    ship.ship_lines = lambda c, objs: (not fail[0]) and (posts.append(len(objs)) or sent.extend(objs) or True)
+    ship.MAX_MAIN_READ, ship.MAX_MAIN_LINE = 2048, 8192
+    try:
+        fail[0] = True
+        ok, _ = ship.ship_main(cfg, hook, transcript, "")
+        ck("a failed post leaves the offset where it was", not ok and offset() == 0)
+        fail[0] = False
+        seen = [offset()]
+        for _ in range(40):
+            ok, _ = ship.ship_main(cfg, hook, transcript, "")
+            if offset() == seen[-1]:
+                break
+            seen.append(offset())
+        ck("every hook moves the offset until the end of the file", seen[-1] == size, (seen[-1], size))
+        ck("no read sends more than the cap",
+           all(b - a <= 2048 for a, b in zip(seen, seen[1:])
+               if b - a not in (len(msg(40, 5000)), len(msg(41, 20000)))), seen)
+        texts = [o["message"]["content"] for o in sent if o.get("type") == "user"]
+        ck("every line ships once, in order, the large one alone",
+           [t[:3].rstrip("x") for t in texts] == [f"m{i}" for i in range(41)] + ["m42"]
+           and texts[40] == "m40" + "x" * 5000, [t[:4] for t in texts])
+        notes = [o for o in sent if o.get("type") == "session_warning"]
+        ck("the line too large to send is stepped over with a warning Tares renders",
+           len(notes) == 1 and "too large to record" in notes[0]["warning"], notes)
+        sent.clear()
+        ok, _ = ship.ship_main(cfg, hook, transcript, "")
+        ck("nothing ships twice", ok and sent == [], sent)
+        with open(transcript, "a") as f:
+            f.write(msg(43, 3000)[:-1])    # a large line still being written
+        ok, _ = ship.ship_main(cfg, hook, transcript, "")
+        ck("a large unfinished line waits", ok and sent == [] and offset() == size)
+        with open(transcript, "a") as f:
+            f.write("\n")
+        ship.ship_main(cfg, hook, transcript, "")
+        ck("and ships once it ends", len(sent) == 1 and sent[0]["message"]["content"].startswith("m43"))
+
+        # SessionEnd: no hook follows, so the whole backlog goes out in that one hook
+        with open(transcript, "a") as f:
+            for i in range(44, 84):
+                f.write(msg(i, 200))
+        sent.clear()
+        before = len(posts)
+        ship.drain_main(cfg, hook, transcript, "")
+        ck("SessionEnd drains the whole backlog in chunks",
+           offset() == os.path.getsize(transcript) and len(posts) - before > 1
+           and [o["message"]["content"][:3] for o in sent] == [f"m{i}" for i in range(44, 84)],
+           (offset(), os.path.getsize(transcript), len(posts) - before))
+        with open(transcript, "a") as f:
+            f.write(msg(84, 200))
+        fail[0] = True
+        ship.drain_main(cfg, hook, transcript, "")
+        ck("a failed post stops the drain without moving the offset",
+           offset() == os.path.getsize(transcript) - len(msg(84, 200)))
+    finally:
+        ship.ship_lines, ship.MAX_MAIN_READ, ship.MAX_MAIN_LINE = real
+
+
 def ago(minutes):
     t = datetime.now(timezone.utc) - timedelta(minutes=minutes)
     return t.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
@@ -237,6 +325,7 @@ async def main():
 
 unit()
 plugin()
+main_backlog()
 asyncio.run(main())
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

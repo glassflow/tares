@@ -5,8 +5,10 @@ as tares/mcp_server.py, which imports this module at its end.
 from __future__ import annotations
 
 import json
+import re
 
-from .mcp_server import TARESD, _cx, _default_project, _out, _project_id, mcp, writable
+from . import areas as areas_mod
+from .mcp_server import TARESD, _caller, _cx, _person_in, _default_project, _out, _project_id, mcp, writable
 
 
 # ── the plan (TR-411) ─────────────────────────────────────────────────────────
@@ -142,7 +144,7 @@ async def list_assumptions(state: str = "", project: str = "") -> str:
     if r.status_code >= 400:
         return _out(r)
     return json.dumps([{k: a.get(k) for k in ("label", "question", "choice", "why", "tickets",
-                                              "state", "words", "made_by")}
+                                              "state", "words", "made_by", "person", "by_label")}
                        for a in r.json().get("assumptions") or []], default=str)
 
 
@@ -308,17 +310,22 @@ async def recurring_findings(repo: str) -> str:
 def _desk_line(d: dict) -> dict:
     return {k: d.get(k) for k in ("label", "project_name", "question", "options", "recommendation",
                                   "why", "context", "blocks", "tickets", "blocking", "asked_by",
-                                  "assumptions", "station", "command", "state", "created_at")}
+                                  "assumptions", "station", "command", "state", "created_at", "person",
+                                  "by_label", "to_person")}
 
 
 @writable()
 async def desk_add(question: str, recommendation: str, why: str, options: list[str] | None = None,
                    context: str = "", blocks: str = "", tickets: list[str] | None = None,
                    blocking: bool = False, asked_by: str = "", assumptions: list[str] | None = None,
-                   project: str = "", station: str = "", command: str = "") -> str:
+                   project: str = "", station: str = "", command: str = "",
+                   to: str = "") -> str:
     """Put a question for the person on the desk (one desk for every project; numbered D1,
     D2...): the question, your recommendation and why, the options, two lines of context, what
-    it blocks (tickets, stations), whether it blocks, and who asked. For the batch of
+    it blocks (tickets, stations), whether it blocks, and who asked. `to` is the person it is
+    for (a person id or an email): it shows in their my_work, and only what they typed in their
+    own sessions answers it. Left out, it goes to the assignee of the first ticket in `tickets`
+    that has one, else the project's lead, else the person whose key this is. For the batch of
     assumptions to confirm once per milestone, pass their numbers in `assumptions`. Then ask the
     person in your session, one item at a time, blockers first. Only the orchestrator writes
     the desk.
@@ -331,6 +338,8 @@ async def desk_add(question: str, recommendation: str, why: str, options: list[s
             "options": options or [], "context": context, "blocks": blocks,
             "tickets": tickets or [], "blocking": blocking, "asked_by": asked_by,
             "assumptions": assumptions or [], "station": station, "command": command}
+    if to:
+        body["to"] = to
     if project or _default_project():
         body["project"] = project or _default_project()
     async with _cx(10) as cx:
@@ -341,11 +350,15 @@ async def desk_add(question: str, recommendation: str, why: str, options: list[s
 
 
 @mcp.tool()
-async def desk_list(state: str = "open", project: str = "") -> str:
+async def desk_list(state: str = "open", project: str = "", mine: bool = False) -> str:
     """The desk: open questions (or `answered`, `withdrawn`) across every project, blockers
-    first, then oldest. Ask the first one."""
+    first, then oldest. `mine` keeps the ones addressed to the person whose key this is. Ask the
+    first one."""
+    params = {"state": state, "project": project}
+    if mine:
+        params["mine"] = "true"
     async with _cx(10) as cx:
-        r = await cx.get(f"{TARESD}/api/desk", params={"state": state, "project": project})
+        r = await cx.get(f"{TARESD}/api/desk", params=params)
     if r.status_code >= 400:
         return _out(r)
     return json.dumps([_desk_line(d) for d in r.json().get("desk") or []], default=str)
@@ -354,17 +367,22 @@ async def desk_list(state: str = "open", project: str = "") -> str:
 @writable()
 async def desk_answer(item: str, words: str, choice: str = "", standing: bool = False,
                       scope: str = "project", kept: list[str] | None = None,
-                      overturned: dict | None = None) -> str:
+                      overturned: dict | None = None, grant_kind: str = "project") -> str:
     """Record the person's answer to a desk item (D3). `words` is their reply exactly as they
-    typed it in your session, never your summary: Tares checks it against what they typed and
-    says whether it matches. A reply of one letter ("B") is passed as is: Tares maps it to that
-    option. `choice` the option it picks. `standing` only when they said it
-    holds from now on ("always fine for staging"); with `scope` all it holds for every project.
-    A standing answer that matches becomes a grant. For an assumption batch: `kept` the
+    typed it, never your summary: Tares looks for it in the recorded sessions of the person the
+    item is for (any station, any session of theirs). If it is not there yet, you get a
+    retryable error: recordings can take a minute to arrive, so try again after the next sync.
+    Nothing is recorded until the words are found. A reply of one letter ("B") is passed as
+    is: Tares maps it to that option. `choice` the option it picks. `standing` only when they
+    said it holds from now on ("always fine for staging"); with `scope` all it holds for every project.
+    A standing answer that matches becomes a grant given by that person: `grant_kind` project
+    (the default; with `scope` all, a team grant, which needs an admin) or personal (for their
+    own machine). A project grant that reaches into repos other people own waits for their
+    consent (`grant` says what it waits for). For an assumption batch: `kept` the
     assumptions they keep, `overturned` {A3: their words}; open a follow-up ticket for each
     overturned one."""
     body = {"words": words, "choice": choice, "standing": standing, "scope": scope,
-            "kept": kept or [], "overturned": overturned or {}}
+            "grant_kind": grant_kind, "kept": kept or [], "overturned": overturned or {}}
     async with _cx(30) as cx:   # Tares looks for a reply it has not read yet for up to 10 s
         r = await cx.post(f"{TARESD}/api/desk/{item}/answer", json=body)
     if r.status_code >= 400:
@@ -375,13 +393,15 @@ async def desk_answer(item: str, words: str, choice: str = "", standing: bool = 
                 else "these words")
         return json.dumps({
             "item": d["desk_item"]["label"], "recorded": False, "still_open": True,
-            "note": f"Tares did not find {what} in what the person typed into your session "
-                    "after the question was asked. Nothing is recorded. Pass their reply exactly "
-                    "as they typed it (a whole message, line or sentence of theirs), or ask "
-                    "them again."})
+            "note": f"Tares did not find {what} in what the person typed since the question "
+                    "was asked (an item with an addressee looks only in that person's own "
+                    "sessions and says retry when it finds nothing; this one has none, so a "
+                    "labelled caller is matched against orchestrator sessions only). Nothing "
+                    "is recorded. Pass their reply exactly as they typed it (a whole message, "
+                    "line or sentence of theirs), or ask them again."})
     out = {"item": d["desk_item"]["label"], "recorded": True,
            "matches_what_they_typed": True, "choice": d["decision"].get("choice"),
-           "became_a_grant": d["granted"],
+           "became_a_grant": d["granted"], "grant": d.get("grant"),
            "assumptions": d["assumptions"], "follow_up_tickets_needed": d["follow_up"]}
     return json.dumps(out, default=str)
 
@@ -409,7 +429,7 @@ async def list_decisions(project: str = "") -> str:
     if r.status_code >= 400:
         return _out(r)
     return json.dumps([{k: d.get(k) for k in ("label", "question", "words", "choice", "standing",
-                                              "matched", "via", "tickets", "at")}
+                                              "matched", "via", "tickets", "at", "person")}
                        for d in r.json().get("decisions") or []], default=str)
 
 
@@ -426,7 +446,8 @@ async def get_crew_settings() -> str:
     `release_profile`, `prod_pattern` (what counts as prod), `challenger` (builders run the
     Codex challenger), `builders_max`, `claude_update` (whether the watch moves stations onto a
     new Claude Code; on unless false). Unset ones are null: ask the person, one at a time, with
-    a recommendation. `kit.frozen` is null while the crew follows the plugin checkout, else
+    a recommendation. These are the caller's own settings where they have set one, else the team's
+    default. `kit.frozen` is null while the crew follows the plugin checkout, else
     when and by whom the person froze it (`tares factory crew freeze`): the watch then moves no
     station onto a newer kit. Read only here; the person freezes and unfreezes from the CLI.
     `idle_wake` (null or false: off): when true the factory's watch wakes you with a message when
@@ -445,63 +466,229 @@ async def set_crew_settings(autonomy: str = "", release_profile: str | None = No
                             releaser: bool | None = None,
                             idle_wake: bool | None = None,
                             pace: bool | None = None,
-                            claude_update: bool | None = None) -> str:
-    """Save the crew's settings the person chose (only the ones given change). Only the person's
-    own session or the orchestrator may. `idle_wake` true has the watch wake idle stations when
-    they have work, instead of each ticking on its own. `pace` true slows the crew before the plan's
-    limits are hit."""
+                            claude_update: bool | None = None,
+                            clear: list[str] | None = None) -> str:
+    """Save the crew's settings the person chose (only the ones given change). They are saved for
+    that person; on a single-user cell they are the cell's. A personal autonomy or challenger
+    can be as strict as the team's or stricter, not looser. `clear` names settings to unset, so
+    a person's own fall back to the team's. Only the person's own session or the orchestrator
+    may. `idle_wake` true has the watch wake idle stations when they have work, instead of each
+    ticking on its own. `pace` true slows the crew before the plan's limits are hit."""
     body = {"autonomy": autonomy or None, "release_profile": release_profile,
             "prod_pattern": prod_pattern, "challenger": challenger, "builders_max": builders_max,
-            "releaser": releaser, "idle_wake": idle_wake, "pace": pace, "claude_update": claude_update}
+            "releaser": releaser, "idle_wake": idle_wake, "pace": pace,
+            "claude_update": claude_update, "clear": clear}
     async with _cx(10) as cx:
         r = await cx.put(f"{TARESD}/api/crew/settings", json=body)
     return _out(r, SETTING_KEYS)
 
 
+def _grant_line(g: dict) -> str:
+    where = {"team": "every project", "project": "this project", "personal": "yours only"}[g["kind"]]
+    day = str(g.get("given_at") or "")[:10]
+    text = f'- [{g["id"]}, {g["kind"]}, {where}] "{g["words"]}" ({day})'
+    if g["state"] == "waiting":
+        text += ", waiting for " + ", ".join(w["name"] or w["id"] for w in g["waiting_for"])
+    elif (g.get("given_by") or {}).get("name"):
+        text += f", given by {g['given_by']['name']}"
+    return text
+
+
 @mcp.tool()
 async def read_grants(project: str = "") -> str:
     """What the person allows the crew to do, in their own words with the date: the grants for
-    every project, and the project's own when `project` is given. Never act on a permission
-    that is not here or in the person's own words in your session."""
+    every project, the project's own when `project` is given, and your personal ones. Those in
+    effect come first; a project grant that reaches into another person's repo is listed as
+    waiting for that owner and is NOT in effect. Never act on a permission that is not here or
+    in the person's own words in your session."""
     params = {"project": project} if project else {}
     async with _cx(10) as cx:
         r = await cx.get(f"{TARESD}/api/grants", params=params)
     if r.status_code >= 400:
         return _out(r)
     d = r.json()
-    parts = [d.get("all") or "No grants for every project yet."]
-    if project:
-        parts.append(d.get("project") or f"No grants of {project}'s own yet.")
-    return "\n\n".join(p.rstrip() for p in parts)
+    rows = d.get("grants") or []
+    live = [g for g in rows if g.get("in_effect")]
+    waiting = [g for g in rows if g["state"] == "waiting"]
+    waiting += [g for g in d.get("waiting_for_me") or [] if g["id"] not in {w["id"] for w in waiting}]
+    seen = {g["words"] for g in rows} | set(d.get("known_words") or [])
+    # grants written to the docs by a path that does not make rows yet (a standing answer)
+    older = [line for body in (d.get("all"), d.get("project") if project else None)
+             for line in _doc_grants(body) if _doc_words(line) not in seen]
+    parts = []
+    if live:
+        parts.append("In effect:\n" + "\n".join(_grant_line(g) for g in live))
+    if older:
+        parts.append("In effect (older, no kind yet):\n" + "\n".join(f"- {ln}" for ln in older))
+    if waiting:
+        parts.append("Waiting for consent, not in effect:\n"
+                     + "\n".join(_grant_line(g) for g in waiting))
+    return "\n\n".join(parts) or ("No grants yet." if not project
+                                   else f"No grants for every project or for {project} yet.")
+
+
+def _doc_words(line: str) -> str:
+    """The words inside `"words" (date)`, or the whole line when it is not in that shape."""
+    m = re.match(r'^"(.*)" \(\d{4}-\d{2}-\d{2}\)', line)
+    return m.group(1) if m else line
+
+
+def _doc_grants(body) -> list[str]:
+    """The lines of an old grants doc, `"words" (date)` as kept, and their words."""
+    out = []
+    for raw in (body or "").splitlines():
+        if raw.startswith("- ") and raw[2:].strip():
+            out.append(raw[2:].strip())
+    return out
 
 
 @writable()
-async def add_grant(words: str, scope: str = "all", project: str = "") -> str:
+async def add_grant(words: str, kind: str = "", project: str = "",
+                    areas: list[str] | None = None, scope: str = "") -> str:
     """Keep one grant: `words` are the person's own words, quoted exactly as they said them
-    (never your summary); Tares adds today's date. `scope` is `all` (every project) or
-    `project` (this project only, name it in `project`). Only the person's own session or the
-    orchestrator, relaying the person verbatim, may add one."""
+    (never your summary); Tares adds today's date. `kind` is `team` (every project; `all` is the
+    old name), `project` (this project only, name it in `project`) or `personal` (what may run on
+    the person's own machine, for the key's own person). Without `kind`, a `project` makes it a
+    project grant and no project a team grant. `areas` lists the GitHub repos (owner/name) a
+    project grant reaches into: it waits, not in effect, until each repo's area owner (other than
+    the giver) calls consent_grant. A project grant from someone who is neither the project's
+    lead nor an admin also waits for the lead (an admin, when the project has none). `scope` is
+    the older name of `kind`. Only the person's own session or the orchestrator, relaying the
+    person verbatim, may add one."""
+    body = {"words": words, "kind": kind or scope, "project": project, "areas": areas or [],
+            "by_default": "claude code session"}
     async with _cx(10) as cx:
-        r = await cx.post(f"{TARESD}/api/grants",
-                          json={"words": words, "scope": scope, "project": project,
-                                "by": "claude code session"})
-    return _out(r, ("line", "added"))
+        r = await cx.post(f"{TARESD}/api/grants", json=body)
+    return _out(r, ("line", "added", "grant"))
+
+
+@writable()
+async def consent_grant(id: str) -> str:
+    """Say yes, as the owner of a repo a project grant names or as the project's lead (an admin,
+    when it has none), to grant `id` (like `G7`). `read_grants` lists the ones waiting for you.
+    Only a person it waits for can; the grant is in effect once all of them have. Never call it
+    for someone else: the answer is their own."""
+    async with _cx(10) as cx:
+        r = await cx.post(f"{TARESD}/api/grants/{id.strip()}/consent")
+    return _out(r)
+
+
+@mcp.tool()
+async def list_areas() -> str:
+    """Who owns which GitHub repo on this Tares: [{repo, person: {id, name}, note}]. A repo is
+    `owner/name`; matching ignores case."""
+    async with _cx(10) as cx:
+        r = await cx.get(f"{TARESD}/api/areas")
+    return _out(r)
+
+
+@writable()
+async def set_area(repo: str, person: str) -> str:
+    """Say who owns a GitHub repo (`owner/name`). `person` is their id or email (list_people
+    shows them). An admin may set or change any repo; anyone else may only claim a repo nobody
+    owns yet, for themselves."""
+    async with _cx(10) as cx:
+        r = await cx.get(f"{TARESD}/api/people")
+        if r.status_code >= 400:
+            return _out(r)
+        p = _person_in(r.json().get("people") or [], person)
+        if p is None:
+            return f"no person {person!r}; list_people shows the ones there are"
+        try:
+            repo = areas_mod.norm_repo(repo.strip().strip("/"))
+        except ValueError as e:
+            return str(e)
+        owner, name = repo.split("/")
+        r = await cx.put(f"{TARESD}/api/areas/{owner}/{name}", json={"person_id": p["id"]})
+    return _out(r)
+
+
+# ── asking an area owner while the spec is written, and their sign-off (TR-636) ──
+
+def _question_line(q: dict) -> dict:
+    return {"id": q.get("id"), "repo": q.get("repo"), "text": q.get("text"), "state": q.get("state"),
+            "to": (q.get("to_person") or {}).get("name"),
+            "asked_by": (q.get("asked_by_person") or {}).get("name"), "asked_at": q.get("asked_at"),
+            "answer": q.get("answer"), "answered_at": q.get("answered_at")}
+
+
+@writable()
+async def ask_area(repo: str, text: str, project: str = "") -> str:
+    """Ask the owner of a repo (`owner/name`) a question while the spec is written: the person
+    set with set_area. It lands in their my_work as a spec question until they answer it; ask it
+    here and tell the person you did, then carry on with what does not depend on the answer.
+    Refused with 'has no area owner; set one with set_area' when nobody owns the repo."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/questions", json={"repo": repo, "text": text})
+    if r.status_code >= 400:
+        return _out(r)
+    return json.dumps(_question_line(r.json()), default=str)
+
+
+@writable()
+async def answer_question(id: str, answer: str, project: str = "") -> str:
+    """Answer a question a spec asked you as the owner of a repo (Q1, Q2... as my_work lists
+    them). Only the person it is addressed to may answer."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/questions/{id}/answer",
+                          json={"answer": answer})
+    if r.status_code >= 400:
+        return _out(r)
+    return json.dumps(_question_line(r.json()), default=str)
+
+
+@mcp.tool()
+async def list_questions(state: str = "", project: str = "") -> str:
+    """The questions a spec asked area owners, oldest first, with the answers. `state` is open
+    or answered; empty lists both."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/questions", params={"state": state})
+    if r.status_code >= 400:
+        return _out(r)
+    return json.dumps([_question_line(q) for q in r.json().get("questions") or []], default=str)
+
+
+@writable()
+async def sign_off(repo: str, project: str = "") -> str:
+    """Say that the tickets in a repo (`owner/name`) are right, as the owner of that repo. Only
+    the area owner may, and only for a repo the project has tickets in. The hand-over waits for
+    one sign-off per repo (the project lead's own repos need none). Signing again changes
+    nothing. The reply lists every repo with its owner and whether it is signed."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/signoffs", json={"repo": repo})
+    return _out(r)
 
 
 def _station_line(s: dict) -> dict:
     return {k: s.get(k) for k in ("name", "role", "parent", "state", "state_reason",
                                   "quiet_minutes", "project_name", "session", "last_at",
-                                  "children", "coordination_calls")
-            } | {"earlier_sessions": len(s.get("earlier") or [])}
+                                  "children", "crew", "machine",
+                                  "coordination_calls")} | {
+        "person": (s.get("person") or {}).get("name"),
+        "earlier_sessions": len(s.get("earlier") or [])}
 
 
 @mcp.tool()
-async def list_crew() -> str:
-    """The crew as Tares sees it: one row per station (orchestrator, reviewer, releaser,
-    builders, helpers) with its state (working, idle, waiting, quiet, ended), the project it is on,
-    when it last spoke, the stations it started, and how many earlier sessions played it."""
+async def list_crew(mine: bool = False) -> str:
+    """The crews as Tares sees them: one row per station (orchestrator, reviewer, releaser,
+    builders, helpers) with its state (working, idle, waiting, quiet, ended), the project it is
+    on, when it last spoke, the stations it started, and how many earlier sessions played it.
+    Each row names its crew, the machine the crew runs on and the person it belongs to: two crews
+    can have stations of the same name. With `mine` only the caller's own crews are listed."""
     async with _cx(10) as cx:
-        r = await cx.get(f"{TARESD}/api/crew")
+        r = await cx.get(f"{TARESD}/api/crew", params={"mine": 1} if mine else None)
     if r.status_code >= 400:
         return _out(r)
     return json.dumps([_station_line(s) for s in r.json().get("stations") or []], default=str)
@@ -517,21 +704,32 @@ async def get_station(name: str) -> str:
 
 @writable()
 async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy: str = "",
-                    repo: str = "") -> str:
-    """Hand a specced project to the crew: Tares records it with every repo it spans, and the
-    orchestrator picks it up from Tares on its next tick. `repos` is one {path, name} per repo:
+                    repo: str = "", override_reason: str = "") -> str:
+    """Hand a specced project to the crew: Tares records it with every repo it spans, who handed
+    it over and to which crew, and the orchestrator picks it up from Tares on its next tick.
+    `repos` is one {path, name} per repo:
     `path` the absolute folder it is checked out in on this machine, `name` its GitHub repo
     (owner/name), the repo that holds the plan first. A later call adds repos, never replaces
     them. `autonomy` only when the person wants this project stricter than the crew
     (L3-review: every merge waits for their yes). `repo` (one path) is the older form. Then
-    send `crew-orchestrator` a `[TF:SHIP]` message with SendMessage so it starts now rather than
-    on its tick. If no crew is running (list_crew shows no orchestrator working, idle or waiting),
-    tell the person to run `tares factory crew up` first."""
-    body: dict = {"repos": repos or [], "by": "claude code session"}
+    send your own crew's orchestrator (the reply names it) a `[TF:SHIP]` message with
+    SendMessage so it starts now rather than on its tick. If your crew is not running (the
+    reply says so), tell the person to run `tares factory crew up` first. Other people's crews
+    pick up their own tickets on their next tick. Needs a key with a person.
+
+    On a cell with more than one person the hand-over waits for the area owners: every repo the
+    tickets are in needs an owner (set_area), and that owner, unless they lead the project, must
+    have signed off (sign_off). Otherwise you get the list of who is missing. Only the project's
+    lead may hand over anyway, by passing `override_reason` (the person's words on why); it is
+    kept on the hand-over and shown on the project's timeline."""
+    crew_name = _caller("crew") or "crew"
+    body: dict = {"repos": repos or [], "by_default": "claude code session", "crew": crew_name}
     if repo:
         body["repo"] = repo
     if autonomy:
         body["autonomy"] = autonomy
+    if override_reason:
+        body["override_reason"] = override_reason
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -539,27 +737,55 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
         r = await cx.post(f"{TARESD}/api/projects/{uid}/handover", json=body)
         if r.status_code >= 400:
             return _out(r)
-        crew = await cx.get(f"{TARESD}/api/crew")
+        crew = await cx.get(f"{TARESD}/api/crew", params={"mine": 1})   # the caller's own crews (TR-633)
     ho = r.json().get("handover") or {}
+    crew_name = ho.get("crew") or crew_name
+    orch_name = f"{crew_name}-orchestrator"
     lines = [f"repo: {x.get('path') or '?'}" + (f" ({x['name']})" if x.get("name") else "")
              for x in ho.get("repos") or []] or ["repo: (none given: pass repos=[{path, name}])"]
     if ho.get("autonomy"):
         lines.append(f"autonomy: {ho['autonomy']}")
+    if ho.get("overridden") and ho.get("override"):   # this hand-over, not an earlier one
+        lines.append(f"handed over without every sign-off: {ho['override']['reason']}")
+    others = "Other people's crews pick up their own tickets on their next tick."
     orch = [s for s in (crew.json().get("stations") or []) if s.get("role") == "orchestrator"
+            and s.get("name") == orch_name and s.get("crew") == crew_name
             and s.get("state") in ("working", "idle", "waiting", "quiet")] if crew.status_code == 200 else []
     if not orch:
-        return ("Recorded as handed to the crew with:\n" + "\n".join(lines) + "\nNo orchestrator "
-                "is running: tell the person to run `tares factory crew up` in a terminal. The "
-                "orchestrator finds this project on Tares when it starts; no message is needed.")
+        return ("Recorded as handed to the crew with:\n" + "\n".join(lines) + f"\nNo orchestrator "
+                f"of crew {crew_name} ({orch_name}) is running: tell the person to run `tares "
+                "factory crew up` in a terminal. The orchestrator finds this project on Tares when "
+                f"it starts; no message is needed. {others}")
     note = ""
     if orch[0].get("state") == "quiet":
         note = (f"\n{orch[0]['name']} has been silent for {orch[0].get('quiet_minutes')} min: if "
                 "the message bounces, tell the person to run `tares factory crew watch`; the "
                 "orchestrator finds the project on Tares when it is back.")
     return (f"Recorded. Now send {orch[0]['name']} a message with SendMessage, so it starts now "
-            f"rather than on its next tick:{note}\n"
+            f"rather than on its next tick. {others}{note}\n"
             f"[TF:SHIP] {project or uid} is ready to build\nproject: {project or uid}\n"
             + "\n".join(lines))
+
+
+@mcp.tool()
+async def my_work(crew: str = "", project: str = "") -> str:
+    """What belongs to the person whose key this is, across the projects handed to a crew that
+    they can see: `ready` (their tickets that can start: nothing they wait on is open), `in_progress`
+    (their tickets a station holds, with the holder and stage), `led_projects` (projects they
+    lead, with the milestones whose tickets are all delivered: `milestones_ready_to_check`),
+    `desk` (the open desk items addressed to them) and `spec_questions` (the open questions a
+    spec asked them as the owner of a repo: answer each with answer_question). `crew`
+    names your crew; empty means the crew this session belongs to. The orchestrator of a crew works from this, so it starts
+    only its own person's tickets. `project` (a name or an id) keeps `spec_questions` to that
+    project: question numbers restart in each project, so name it when you work on one. Empty
+    lists the questions of every project; a name or id you cannot see is an error 404 ("no
+    project 'x' you can see"), so name it exactly. Needs a key with a person."""
+    params = {"crew": crew or _caller("crew")}
+    if project.strip():
+        params["project"] = project.strip()
+    async with _cx(15) as cx:
+        r = await cx.get(f"{TARESD}/api/crew/my-work", params=params)
+    return _out(r)
 
 
 @mcp.tool()

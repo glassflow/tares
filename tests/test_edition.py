@@ -29,7 +29,7 @@ PORT, MCP_PORT = "8852", "8853"
 ROOT = "root-edition"
 B = f"http://127.0.0.1:{PORT}"
 # whoami on an open instance today: nothing but these, plus the edition keys and mcp_object_tools
-TODAY_KEYS = {"id", "name", "scopes"}
+TODAY_KEYS = {"id", "name", "kind", "person", "scopes"}
 
 
 def check(label, cond, detail=""):

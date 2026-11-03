@@ -1,10 +1,11 @@
 """Project: challenger workflow.
 
 A user works in Claude Code on their laptop and marks a session as a challenger session (Claude
-calls the `set_session_flow` MCP tool). From then on a second model, the Codex CLI running on the
-laptop, challenges Claude's plan and every commit; the Tares plugin ships the whole exchange into
-the `claude_code` source on one session timeline. Tares is the record and the after-session
-brain, never the control point: nothing here decides whether Codex runs.
+calls the `set_session_flow` MCP tool). From then on a second model, the Codex CLI on the laptop
+or Grok over the xAI API (the plugin's `challenger_backend`), challenges Claude's plan and every
+commit; the Tares plugin ships the whole exchange into the `claude_code` source on one session
+timeline. Tares is the record and the after-session
+brain, never the control point: nothing here decides whether the challenger runs.
 
 This template owns the Tares side: the `claude_code` source (adopted from the plugin, which creates
 it on first run), a trigger that fires when a challenger session ends, and a
@@ -30,10 +31,11 @@ PROPOSALS_HEADING = "Memory proposals"
 MAX_PROPOSALS = 5
 
 PROMPT = """You are handed the end of one Claude Code session that ran as a challenger session: the user \
-worked with Claude, and Codex (a second model on the user's laptop) challenged Claude's plan and \
-every commit. Your key is the session id. Before writing anything, call `read` with \
+worked with Claude, and a second model challenged Claude's plan and every commit. That model is \
+Codex or Grok: each challenge event names it, as in "Challenger (Grok) reviewed". Call it by that \
+name, never by another; an event without a name means Codex. Your key is the session id. Before writing anything, call `read` with \
 {{"session": "<the key>"}} and window "24h" once to get the whole session: user prompts, Claude's \
-turns, tool calls, the plan, each Codex challenge (challenge_plan / challenge_commit events with a \
+turns, tool calls, the plan, each challenge (challenge_plan / challenge_commit events with a \
 verdict and findings), fix rounds, waived findings, commits, and token usage.
 
 Write the session summary in plain sentences, no em dashes, under these headings:
@@ -42,11 +44,12 @@ Summary
 What the user asked for and what was built (name the commits). Whether the goal was reached.
 
 Plan
-What the plan was, what Codex found in it, and how the plan changed as a result.
+Whether the plan was challenged (only a challenge_plan event says so), what the challenger found \
+in it, and how the plan changed as a result.
 
 Challenges
-For each reviewed commit: the verdict, what Codex caught, how Claude resolved it, how many rounds \
-it took. Findings the user waived and the reason if the session shows one.
+For each reviewed commit: the verdict, what the challenger caught, how Claude resolved it, how \
+many rounds it took. Findings the user waived and the reason if the session shows one.
 
 Cost
 Tokens and cost if the timeline carries them, otherwise say they were not recorded.
@@ -87,7 +90,9 @@ class ChallengerWorkflow(Template):
                  "One install, then /reload-plugins.",
          "command": "/plugin marketplace add glassflow/tares\n/plugin install tares@tares"},
         {"title": "Install the challenger",
-         "text": "Codex runs on your laptop and is billed to your OpenAI account; Tares never calls it.",
+         "text": "Codex runs on your laptop and is billed to your OpenAI account; Tares never calls it. "
+                 "For Grok instead, set the plugin's challenger_backend option to grok and give it "
+                 "an xAI key (xai_api_key, or XAI_API_KEY); reviews are billed to your xAI account.",
          "command": "npm install -g @openai/codex\ncodex login"},
         {"title": "Give the summarizer a model provider", "check": "anthropic_key",
          "text": "The summarizer is a real agent: it needs a model provider. Add one under "
@@ -106,10 +111,10 @@ class ChallengerWorkflow(Template):
     ]
 
     def _facts(self) -> dict:
-        return {"you": ["install the Tares plugin and Codex on your laptop",
+        return {"you": ["install the Tares plugin, and Codex or an xAI key for Grok",
                         "say \"make this a challenger session\" at the start of a session",
                         "accept or reject the memory proposals after each session"],
-                "tares": ["the full Claude and Codex exchange on one timeline per session",
+                "tares": ["the full exchange with the challenger on one timeline per session",
                           "a trigger that fires when a challenger session ends",
                           "an agent that writes the session summary and memory proposals",
                           "accepted memory handed to Claude at the next session start"]}

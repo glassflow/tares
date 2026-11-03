@@ -68,6 +68,9 @@ async def main():
             assert r.status_code in (200, 201), r.text
             return H(r.json()["secret"])
 
+        # a second person, so a key bound to nobody keeps its own name (while `local` is alone it
+        # acts as them, and alex and kim would be one holder)
+        store.create_person("Sam Ops")
         alex, kim = await key("alex-key"), await key("kim-key")
 
         def holder(iid):

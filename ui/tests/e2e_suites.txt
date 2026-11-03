@@ -2,6 +2,7 @@
 capped-runs
 choose-edition
 component-gallery
+crew-people
 edition-routes
 edition-shell
 factory-crew
@@ -20,6 +21,7 @@ project-idle
 projects-list
 raise-limit
 session-picker
+settings-people
 sre-home
 sre-incidents
 sre-runbooks

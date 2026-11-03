@@ -318,9 +318,9 @@ def move(duck, pg: PgState, tables: list[str]) -> dict:
                     "SELECT column_name FROM information_schema.columns WHERE table_schema = "
                     "current_schema() AND table_name = ?", [t]).fetchall()}
                 cols = [col for col in pg_cols if col in duck_cols]
-                rows = duck.execute(f"SELECT {', '.join(cols)} FROM {t}").fetchall()
-                cur.execute(f"TRUNCATE {t}")
                 quoted = ", ".join(f'"{col}"' for col in cols)
+                rows = duck.execute(f"SELECT {quoted} FROM {t}").fetchall()
+                cur.execute(f"TRUNCATE {t}")
                 with cur.copy(f"COPY {t} ({quoted}) FROM STDIN") as cp:
                     for r in rows:
                         cp.write_row(r)

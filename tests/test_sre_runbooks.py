@@ -111,6 +111,8 @@ async def main():
 
         key = (await cx.post("/api/keys", json={"name": "viewer", "scopes": ["read"]})).json()
         read = {"Authorization": f"Bearer {key['secret']}"}
+        # a second person, so a key bound to nobody keeps its own name (while `local` is alone it acts as them)
+        store.create_person("Sam Ops")
         key = (await cx.post("/api/keys", json={"name": "oncall", "scopes": ["admin"]})).json()
         oncall = {"Authorization": f"Bearer {key['secret']}"}
         today = now.date().isoformat()

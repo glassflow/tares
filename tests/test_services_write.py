@@ -160,6 +160,8 @@ async def writes():
         print("== PATCH: who is recorded ==")
         eq("the credential's name", store.service_settings()["service-a"]["updated_by"],
            "auth token (env)")
+        # a second person, so a key bound to nobody keeps its own name (while `local` is alone it acts as them)
+        store.create_person("Sam Ops")
         ak = (await cx.post("/api/keys", json={"name": "ops-admin", "scopes": ["admin"]})).json()["secret"]
         await cx.patch("/api/services/service-a", json={"hidden": False},
                        headers={"Authorization": f"Bearer {ak}"})
@@ -337,7 +339,7 @@ async def writes():
         app2.state.runtime.reload_catalog()
         r = await cx2.patch("/api/services/service-a", json={"hidden": True})
         eq("PATCH on an open cell", r.status_code, 200)
-        eq("the change is by console", s2.service_settings()["service-a"]["updated_by"], "console")
+        eq("the change is by the local person", s2.service_settings()["service-a"]["updated_by"], "You")
         eq("PUT works on an open cell", (await cx2.put(
             "/api/settings/service-labels", json={"docs-site": "project"})).status_code, 200)
 

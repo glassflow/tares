@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
+import { LeadPicker, usePeople } from "../components/project/access";
 import { ErrorState, TimeAgo, projectGoal, usePolling } from "../components/bits";
-import { Activity, Search } from "../components/icons";
+import { Activity, Lock, Search } from "../components/icons";
 import { ProgressRing, progressText } from "../components/ProgressRing";
 import { ReadyReminder } from "../components/readiness";
 import { DeleteDraft } from "../components/setup/deleteDraft";
@@ -103,7 +105,7 @@ function PendingCell({ u }: { u: Project }) {
 }
 
 export default function Projects() {
-  const { data: inst, error: instError, reload: reloadInst } = usePolling(() => api.projects(), 10000);
+  const { data: inst, error: instError, reload: reloadInst } = usePolling(() => api.projectsWithHidden(), 10000);
   const [params, setParams] = useSearchParams();
   const show = pick(params.get("show"), SHOWS, "active");
   const sort = pick(params.get("sort"), SORTS.map((s) => s.key), "recent");
@@ -116,7 +118,9 @@ export default function Projects() {
   };
 
   const projects = (inst?.projects ?? []).filter((p) => !p.default);
-  const loose = inst?.projects.find((p) => p.default)?.objects.length ?? 0;
+  const loose = inst?.projects.find((p) => p.default && !p.hidden)?.objects.length ?? 0;
+  const { list: people, isAdmin } = usePeople();
+  const [handing, setHanding] = useState<string>();   // the hidden project whose lead is being changed
   const counts: Record<Show, number> = {
     all: projects.length,
     done: projects.filter((p) => p.status === "done").length,
@@ -206,6 +210,33 @@ export default function Projects() {
               </thead>
               <tbody>
                 {shown.map((u) => {
+                  // a private project the caller is not on: its name and lead, nothing to open
+                  if (u.hidden) {
+                    return (
+                      <tr key={u.id} className="proj-hidden" data-testid="project-row" data-status="hidden">
+                        <td colSpan={4}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            <Lock /><strong>{u.name}</strong>
+                          </span>
+                          <span className="proj-lead">
+                            {u.lead ? `Private, led by ${u.lead.name}` : "Private, no lead"}
+                          </span>
+                          {handing === u.id && (
+                            <div style={{ marginTop: 8 }}>
+                              <LeadPicker id={u.id} people={people.filter((p) => p.id !== u.lead?.id)}
+                                          onDone={() => { setHanding(undefined); reloadInst(); }}
+                                          onCancel={() => setHanding(undefined)} />
+                            </div>
+                          )}
+                        </td>
+                        <td className="pj-actions">
+                          {isAdmin && handing !== u.id && (
+                            <button type="button" onClick={() => setHanding(u.id)}>Change lead</button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  }
                   // a draft opens where its setup stopped: nothing of it exists yet
                   const to = u.status === "draft" ? `/projects/${encodeURIComponent(u.id)}/setup`
                     : `/projects/${encodeURIComponent(u.id)}`;
@@ -216,7 +247,9 @@ export default function Projects() {
                         <div className="pj-name-row">
                           <Link to={to} className="pj-name" title={`${u.name}\n${goal}`}><strong>{u.name}</strong></Link>
                           {(isFactory(u) || isAiSre(u)) && <KindChip factory={isFactory(u)} />}
+                          {u.scope === "private" && <span className="proj-lock"><Lock /> Private</span>}
                         </div>
+                        {u.lead && <span className="proj-lead">Lead: {u.lead.name}</span>}
                         <SortCue u={u} sort={sort} />
                         {goals && <div className="pj-goal help" data-testid="goal-line">{goal}</div>}
                       </td>

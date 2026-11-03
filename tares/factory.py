@@ -547,6 +547,7 @@ def challenger_layer(events: list[dict]) -> dict:
 
 DESK_STATES = ("open", "answered", "withdrawn")
 MATCH_HOURS = 48       # an answer is looked for in what the person typed this recently
+MATCH_SKEW_SECONDS = 60  # a reply typed this long before the item's cell timestamp still counts: machines' clocks differ
 
 
 MAX_COMMAND = 2000     # a refused command, kept as the station ran it
@@ -652,7 +653,8 @@ def says_every_project(words: str) -> bool:
 # ── the crew (M3): one always-on crew serves every project ────────────────────
 
 ROLES = ("orchestrator", "reviewer", "releaser", "builder", "helper")
-# the always-on stations, named crew-<role>; builders and helpers come and go
+# the always-on stations, named <crew>-<role> (crew-<role> for the default crew, TR-541); builders
+# and helpers come and go
 CREW_ROLES = ("orchestrator", "reviewer", "releaser")
 AUTONOMY = {
     "L3-review": "you approve each merge",
@@ -684,12 +686,60 @@ def station_ok(name, role, parent) -> tuple[str, str, str]:
     return name, role, parent
 
 
-def attach_command(station: str) -> str:
+CREW_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}$")
+
+
+def crew_station_role(station: str, role: str = "") -> str:
+    """The crew role (orchestrator, reviewer, releaser) of a station named `<crew>-<role>`, for any
+    crew name; "" for a builder, a helper or anything else. `role` is the role the station
+    reports, when known: a builder or helper is never a crew role, whatever its name ends in. A
+    name with `-build-` in it is a builder's, never a crew station's (a crew name cannot hold that
+    word), so a project named crew-build-tools is not mangled."""
+    if role and role not in CREW_ROLES:
+        return ""
+    if "-build-" in f"-{station}-":
+        return ""
+    for r in ((role,) if role else CREW_ROLES):
+        crew = station[:-len(r) - 1] if station.endswith("-" + r) else ""
+        if not CREW_NAME_RE.match(crew):
+            continue
+        if not role and any(crew.endswith("-" + x) or crew == x for x in CREW_ROLES):
+            return ""  # `crew-reviewer-releaser`: a helper of crew-reviewer, not a releaser
+        return r
+    return ""
+
+
+def _crew_side_by_name(name: str) -> bool:
+    """A crew station (`<crew>-<role>`) or a helper of one (`<crew>-<role>-<suffix>`), by its name
+    alone: no `-build-` in it, and a role word set between hyphens."""
+    if "-build-" in f"-{name}-":
+        return False
+    return bool(crew_station_role(name)) or any(f"-{r}-" in name for r in CREW_ROLES)
+
+
+def on_crew_side(name: str, rows: list[dict]) -> bool:
+    """Whether a station is one of the crew's own or a helper under one (they serve every project
+    and hold no tickets), by its role and its parent chain in `rows`, the stations as /api/crew
+    lists them. A parent no row reports is read by its name, for any crew name."""
+    cur = next((r for r in rows if r.get("name") == name), None)
+    if cur is None:
+        return _crew_side_by_name(name)
+    for _ in range(10):
+        if cur is None or cur.get("role") != "helper" or not cur.get("parent"):
+            break
+        up = next((r for r in rows if r.get("name") == cur["parent"]), None)
+        if up is None:
+            return _crew_side_by_name(cur["parent"])
+        cur = up
+    return cur is not None and cur.get("role") in CREW_ROLES
+
+
+def attach_command(station: str, role: str = "") -> str:
     """The command that opens a station's session in a terminal. The crew's own stations go by
-    their role (`crew-reviewer` is `reviewer`); any other, a helper of one among them
-    (`crew-reviewer-lint`), by its full name, as `factory crew attach` takes them."""
-    role = station[len("crew-"):] if station.startswith("crew-") else ""
-    return f"tares factory crew attach {role if role in CREW_ROLES else station}"
+    their role (`crew-reviewer` and `ana-mbp-reviewer` are both `reviewer`); any other, a helper
+    of one among them (`crew-reviewer-lint`), by its full name, as `factory crew attach` takes
+    them."""
+    return f"tares factory crew attach {crew_station_role(station, role) or station}"
 
 
 CREW_DEFAULTS = {"autonomy": None, "releaser": None, "release_profile": None,
@@ -724,9 +774,48 @@ def kit_ok(v) -> dict:
     return {"frozen": out}
 
 
+def _stricter_autonomy(a, b):
+    """The stricter of two autonomy levels: the one listed first in AUTONOMY (the person
+    approves more). An unset or unknown one gives way to the other."""
+    levels = list(AUTONOMY)
+    ranked = [x for x in (a, b) if x in levels]
+    return min(ranked, key=levels.index) if ranked else (a or b)
+
+
+def stricter_than_team(team: dict, mine: dict) -> dict:
+    """`mine` with autonomy and challenger held to the team's value, which is a ceiling: a
+    person can ask for more care than the team does, never for less."""
+    out = dict(mine)
+    if team.get("autonomy") in AUTONOMY:
+        out["autonomy"] = _stricter_autonomy(team["autonomy"], mine.get("autonomy"))
+    if team.get("challenger"):
+        out["challenger"] = True
+    return out
+
+
+def personal_ceiling_ok(team: dict, body: dict) -> None:
+    """DocError when `body` sets a personal autonomy or challenger looser than the team's value,
+    naming the team's value. Ingest scope and the other settings have no ceiling."""
+    a = str(body.get("autonomy") or "").strip()
+    t = team.get("autonomy")
+    if a in AUTONOMY and t in AUTONOMY and _stricter_autonomy(a, t) != a:
+        raise DocError(f"autonomy {a} is looser than the team's {t}; a personal value can only "
+                       f"be as strict or stricter. Clear yours to use the team's.")
+    if body.get("challenger") is not None and not body["challenger"] and team.get("challenger"):
+        raise DocError("challenger off is looser than the team's value, on; a personal value "
+                       "can only be as strict or stricter. Clear yours to use the team's.")
+
+
 def crew_settings_ok(body: dict, cur: dict) -> dict:
-    """The crew's settings with the fields `body` sets changed; DocError on a bad value."""
+    """The crew's settings with the fields `body` sets changed; DocError on a bad value.
+    `clear: [field, ...]` unsets those fields (a person's own fall back to the team's)."""
     out = {**CREW_DEFAULTS, **cur}
+    clear = body.get("clear")
+    if clear is not None:
+        if not isinstance(clear, list) or any(k not in CREW_DEFAULTS for k in clear):
+            raise DocError("clear is a list of settings, from: " + ", ".join(CREW_DEFAULTS))
+        for k in clear:
+            out[k] = None
     if body.get("autonomy") not in (None, ""):
         a = str(body["autonomy"]).strip()
         if a not in AUTONOMY:
@@ -834,14 +923,23 @@ def pace_now(settings: dict, plan: dict | None, now: datetime) -> dict:
     return out
 
 
-def grant_line(words, when: str) -> str:
-    """One grant as it is kept: the person's words, quoted, and the day they said them."""
+def grant_words(words) -> str:
+    """The person's words as a grant keeps them: one line, no outer quotes, 400 characters at most."""
     w = " ".join(str(words or "").split()).strip().strip('"')
     if not w:
         raise DocError("a grant quotes the person's words; there are none")
     if len(w) > 400:
         raise DocError(f"the grant is {len(w)} characters; keep it to 400")
-    return f'"{w}" ({when})'
+    return w
+
+
+def grant_line(words, when: str) -> str:
+    """One grant as it is kept: the person's words, quoted, and the day they said them."""
+    return f'"{grant_words(words)}" ({when})'
+
+
+GRANT_KINDS = ("team", "project", "personal")
+GRANT_STATES = ("active", "waiting", "revoked")
 
 
 # Who may write what (the contract's table). A labeled station is any caller that says which

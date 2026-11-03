@@ -36,7 +36,8 @@
     "test:components": "vite build && node tests/component-gallery.e2e.cjs",
     "test:sre-settings": "vite build && node tests/sre-settings.e2e.cjs",
     "test:choose-edition": "vite build && node tests/choose-edition.e2e.cjs",
-    "test:words": "node tests/words.selftest.cjs && node tests/words.check.cjs"
+    "test:words": "node tests/words.selftest.cjs && node tests/words.check.cjs",
+    "test:settings-people": "vite build && node tests/settings-people.e2e.cjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",

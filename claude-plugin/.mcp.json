@@ -9,6 +9,7 @@
         "X-Tares-Station": "${FACTORY_STATION:-}",
         "X-Tares-Role": "${FACTORY_ROLE:-}",
         "X-Tares-Parent": "${FACTORY_PARENT:-}",
+        "X-Tares-Crew": "${FACTORY_CREW:-}",
         "X-Tares-Project": "${TARES_PROJECT:-}"
       }
     }

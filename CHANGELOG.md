@@ -43,15 +43,175 @@ the project follows [Semantic Versioning](https://semver.org/).
 - On AI SRE cells the Slack message of a finding has buttons: "I'm on it", Resolve and Reopen on the incident, and "Worth raising" / "Not worth it" on what a watcher raised. A click changes the incident or records the answer, replaces the message and says who did it in its thread, and a change made in the console shows in Slack too. Works on self-hosted cells now, and on Tares Cloud after TR-763.
 - Console: on AI SRE cells the home page (`/`) is now the AI SRE home: why the watcher is off when it is, open incidents with their next step, what was raised and waits for a verdict, the services on watch and the blind spots, read from `GET /api/home` and refreshed every 30 seconds. Start now opens the home page.
 - MCP: on an AI SRE cell an agent sees outcome tools first (`what_is_broken`, `how_is_service`, `what_happened`, `mark_incident`) and `read` keeps working. `mark_incident` follows the console's rules: a change the incident's state does not allow is refused in words, and `what_is_broken` shows the new state at once. A read-only key is refused with the daemon's own sentence. Crew stations see every tool.
-
-### Fixed
-- Incident notes no longer show No action when the note has a numbered next step. A finding with no verdict now counts as a note that waits for a person, on every edition.
-- DuckDB's memory is capped at 1 GB when `tares up` runs on a machine with no container memory
-  limit. Before, DuckDB took its own default of 80% of the machine's RAM and its cache grew to about
-  4 GB on a Mac after two days of crew use. Set `TARES_DUCKDB_MEMORY_LIMIT` (for example `2GB`) to
-  change it; a container limit still sets it to 60% of that limit. The cap also sets
-  `TARES_DUCKDB_THREADS` to 2 unless you set it.
-- Console: the line chart and sparkline skip values that are not numbers instead of drawing them as zero, sort points by time, and draw one point as a short segment; y labels show the decimals small values need, marks can be listed as text, and disabled controls and focused fields now match the rest of the console.
+- The spec skill brings in the area owners. It reads `list_areas`, asks the owner of a repo with
+  `ask_area` instead of guessing, folds the answers into the spec, gives every ticket its `repo`
+  (now also in a single-repo project, so the sign-off check sees it) and assigns it to that repo's
+  owner in Tares, Linear or GitHub, and stops before the hand-over while sign-offs are missing.
+  `tares factory spec --project <name>` run by someone who is not that project's lead opens a
+  contributor session: it asks them the open questions, shows the tickets in their repos and signs
+  off on their yes. It needs no git repo in the folder. That session is marked `TARES_SESSION_KIND=contributor`,
+  so its start-up reminder points at the Contributor section and never says to build. The lead's
+  `tares factory spec` is unchanged.
+- The software-factory project page shows the questions put to area owners (open ones first, then
+  the answered ones with who answered) and the sign-off of each repo with tickets: its area owner and
+  "Signed off" or "Waiting", with a link to Settings, Areas for a repo nobody owns. A hand-over the
+  lead pushed through without every sign-off is listed with its reason, who and when. Every override
+  is kept, not only the latest: the project timeline carries each one once, on the page whose time
+  window holds it, and an override stays attributed to the lead who made it when someone else hands
+  over again later. The page is read-only; answering and signing off happen in Claude sessions.
+- Questions to an area owner while a spec is written, and their sign-off before the hand-over.
+  `ask_area(repo, text)` puts a question to the person who owns that repo, numbered Q1, Q2 in the
+  project, and it shows in their `my_work` under `spec_questions` until they answer; a repo nobody owns
+  is refused and says to set an owner. `answer_question(id, answer)` works only for the person the
+  question is for. `list_questions(state)` lists them, and `sign_off(repo)` works only for that repo's
+  area owner. The routes are under `/api/projects/{id}/questions` and `/signoffs`. `hand_over` now
+  waits: every repo with tickets needs an area owner and, unless the owner is the project's lead, that
+  owner's sign-off. If something is missing it is refused and lists "repo: area owner (not signed
+  off)". The project's lead can hand over anyway with `override_reason`; the reason is kept on the
+  hand-over and shown on the project timeline. A cell with only the person `local` is not held up.
+- A desk item is for one person. It is addressed to the assignee of the ticket it names, else the
+  project's lead, else whoever wrote it, or to the person you name in `to` (an id or an email), and it
+  shows in that person's `my_work`; `desk_list` takes `mine`. Only words found in that person's own
+  recorded sessions, at whichever station, answer it. If the words are not there yet you get a
+  retryable error, because recordings can take a minute to arrive, and nothing is recorded until they
+  are. A standing answer becomes a grant given by that person: a project grant, or with `grant_kind`
+  personal one for their own machine. A project grant over repos other people own waits for them, as
+  grants do elsewhere. Lines Claude Code writes that the person did not type (messages from other
+  sessions, scheduled prompts, task notifications, compaction summaries) never answer an item. Items
+  from before keep the older rule, but a standing answer on one is now checked like any grant, so a
+  project key with no person is refused a project grant.
+- My work for an orchestrator: `GET /api/crew/my-work` (and the `my_work` tool) returns what belongs to
+  the person of the key: their ready tickets, the ones a station is working on, the milestones of
+  projects they lead that are ready to check, and empty `desk` and `spec_questions` lists. A key with
+  no person is refused; the root token and a cell of one person see the work of `local`. A hand-over
+  now records who handed the project over and to which crew (`handed_by_person`, `crew`), and the
+  `hand_over` tool names `<crew>-orchestrator` of your own crew, never someone else's running one.
+  `hand_over` is refused for a key with no person, and `crew_projects` shows a person only the
+  projects they lead or hold a ticket in, so the `factory` bash CLI, which reads that list, shows a person
+  only their own projects too.
+  A ticket with no assignee counts as its project lead's; only a project with no lead leaves it to
+  `local`, so on a team cell the lead sees it in their `my_work` and `local` no longer does.
+- Crews on the cell: it keeps a record of each crew (the person, the crew's name and the machine it
+  runs on) and lists stations by crew, so two crews with the same station names never merge. The
+  plugin stamps the machine (`hostname -s`, or `FACTORY_MACHINE`) next to the crew name, and the
+  crew is made from the first station line of a recording with the person of the key that shipped
+  it; a recording with no person joins the crew of `local`, and sessions from before crews join it
+  when the cell starts. `GET /api/crew` returns `crews` (each with its person, machine, last seen
+  and stations) next to the flat `stations` it had, and `?mine=1` keeps your own crews.
+  `GET /api/crew/{name}` takes `crew` (an id or a name) and, when several crews have a station of
+  that name, returns your own. `list_crew` names each station's crew, machine and person and takes
+  `mine`.
+- Ticket assignees: every ticket has an assignee person, or shows as unowned with the assignee as
+  its source named them, wherever it lives. The Linear sync maps the assignee's email (a person's
+  main or extra one), the GitHub Issues sync maps the first assignee's login, and a Tares ticket
+  takes `assignee` (a person id or an email) on `POST` and `PUT /api/projects/{id}/tickets` and in
+  `write_ticket`. Tickets show `assignee` ({id, name} or null) and `assignee_raw`; `list_tickets`
+  and `get_ticket` add `assignee_note`. Assigning a person to a ticket of a private project adds
+  them to it as a member (reason `ticket`); unassigning removes nobody. Changing the assignee does
+  not touch who holds the ticket.
+- A crew has a name (`crew_name` in crew.json, or `FACTORY_CREW_NAME`; default `crew`), and every
+  station name and message target comes from it: `<name>-orchestrator`, `<name>-reviewer`,
+  `<name>-releaser`, and `<name>-<project>-build-<slug>` for builders. That tells two crews on one
+  machine, or one person's crews on two machines, apart. `factory crew up` asks for the name when
+  the cell has more than one person. Stations get `FACTORY_CREW` and `FACTORY_ORCHESTRATOR`,
+  transcripts carry a `crew` label, and `factory roster` prints the crew name and warns when the
+  orchestrator session title does not match. The default crew keeps its names.
+- Grants by kind: a grant is a row with a kind (`team`, `project` or `personal`), its words, who gave
+  it and when. A team grant needs the admin scope; a project grant comes from the project's lead,
+  from the owner of the repos it names, or from an admin; a personal grant is for the person on the
+  key and only they see it. A project grant that names a repo (`areas`) owned by someone else waits
+  until that owner consents, then takes effect. A project grant from someone who is neither the
+  project's lead nor an admin also waits for the lead (for an admin when the project has no lead).
+  Whoever a grant waits for can consent to it on a private project they are not in, and finds it in
+  `waiting_for_me`. `POST /api/grants` adds one, `GET /api/grants`
+  lists the team, project and your own personal grants with `state`, `consents`, `waiting_for` and
+  `in_effect`, `POST /api/grants/{id}/consent` and `.../revoke` answer and end one. The MCP tools
+  `add_grant` (new `kind` and `areas`), `read_grants` and `consent_grant` do the same. The first
+  start turns each line of the old grants docs into a grant; the docs stay as they were, and a
+  grant in effect is still written to them.
+- Area owners: the cell records which person owns each GitHub repo (`owner/name`, matched in
+  lowercase). `GET /api/areas` lists them, `PUT /api/areas` replaces the list and `DELETE
+  /api/areas/{owner}/{name}` removes one (both need the admin scope), and `PUT
+  /api/areas/{owner}/{name}` sets one: an admin may set or reassign any repo, anyone with a person
+  on their key may claim a repo nobody owns yet, for themselves. The MCP tools `list_areas` and
+  `set_area` do the same. Project keys cannot reach these routes.
+- Crew settings, AGENTS.md and memory per person. `PUT /api/crew/settings` saves the caller's own
+  settings (the system credential, the person `local` and a cell with auth off still change the
+  cell-wide default), and `GET` returns theirs over that default; a key with no person is refused.
+  Each person also has a personal AGENTS.md and memory, made with their first line
+  (`POST /api/docs/personal/{agents|memory}/lines`, or `add_to_global` with `scope="personal"`),
+  listed and readable only by them. `read_global_docs` returns the team AGENTS.md and memory, then
+  "Your rules" (the team rule wins on a conflict) and "Your memory".
+- The console shows a project's lead, scope and members. The project page has a "Lead" line with a
+  Team/Private control and "Change lead" for the lead (an admin changes the lead only), a Members
+  page under Settings to add and remove people, and the Projects list shows each lead, a lock on
+  private projects, and a greyed "Private, led by <name>" row, with "Change lead" for an admin, for
+  a private project you are not on.
+- Project access: a project has a lead (the person who made it; none for a project made with the
+  root token), a scope (`team` or `private`) and a member list, shown on `GET /api/projects` and
+  `GET /api/projects/{id}` as `lead`, `scope` and `members`. `PATCH /api/projects/{id}` sets the
+  lead and the scope, `POST /api/projects/{id}/members` and `DELETE .../members/{person}` change the
+  members. These calls need a key with the admin scope; a read key is refused even when its person
+  leads the project. The lead changes all of it; an admin or the root token may change only the lead
+  (which is how a project with no lead is claimed), and the lead who handed it over stays on the
+  members. A project set up with a person's key (not from a draft) is led by that person. A project
+  from before reads as `team` with no lead.
+- A private project is hidden from people who are not on it: every route under `/api/projects/{id}`
+  and the MCP tools answer as if it did not exist (404, or `unknown project` when named), and the
+  list shows it as a name and its lead, nothing else. The lead, the members, the system credential
+  and the project's own keys see it whole. An admin who is not on it can only hand the lead over.
+  Admin rights come from the key's admin scope alone, not from the person's `is_admin` flag.
+  A create that names no project, on a cell whose default project is private, asks the caller
+  who is not on it to name a project, without saying which one the default is.
+- A private project's data stays out of what a non-member reads across the cell: the raw read
+  (`/read`, MCP `read`), the event and field lists, entity counts, sources made for the project,
+  triggers, agents and their runs, resources, the roster, subscriptions, skills, docs, the standup,
+  the factory's stations, queue, desk and crew lists, and the tables that follow a project's work
+  (sessions, queries, dispatches). An event belongs to a project by its `tares_project` label, by a
+  Claude Code session recorded in the project, or by the `project` a shared finding or memory row
+  was written in. Ask runs with the asker's own visibility and leaves a private project out of
+  `list_projects`; with auth on, `/tares ask` in Slack treats every private project as hidden
+  (Slack users are not mapped to people yet). An event with no project label stays visible to
+  everyone. Two limits: an entity count over a source shared by several projects still counts the hidden rows, and a
+  station's recent lines are not filtered by row.
+- Ask transcripts belong to the person who had the chat: with auth on, a key lists and opens its
+  own, the system credential sees all, and a key with no person can keep none (a save answers 403).
+  The read log records which projects a read was about, including the ones that own the sources it
+  read, so a private project's reads stay out of everyone else's activity feed. A label value or a
+  bare key carried only by a private project's rows no longer lists, and a practice run starts from
+  an event its caller can see. Ask transcripts saved before this upgrade have no person, so with auth
+  on they are visible only to the system credential (the root token); with auth off nothing changes.
+- MCP tools `list_people` and `set_project_access` (lead, scope, members added or removed, people
+  by id or email).
+- A recording carries the person who shipped it: the cell labels every Claude Code event pushed to
+  `/ingest` with `tares_person=<person id>` from the key's person (`local` with auth off, no label
+  for the root token), and drops any `tares_person` the sender wrote. Read by it like any label.
+- People in the console: Settings, Access, people and API keys lists the people on the cell, lets an admin add and edit them, and shows a person on every key (pick one when you create a key, or bind an unbound one). The sidebar shows who you are.
+- People on the cell: `GET/POST /api/people`, `PATCH /api/people/{id}`, and a person on every API
+  key (`person_id` or `person: {email, name}` on `POST /api/keys`, `PUT /api/keys/{id}/person`).
+  `/api/whoami` now says `kind` (system, key, project or open) and the `person` calling. A cell
+  with auth off, or with only the person `local`, behaves as before.
+- Every record of who did something (ticket history, assumptions, checks, reviews, the desk,
+  decisions, the handover) keeps the person behind the key next to the station, and the API lists
+  it as `person` and `by_label` ("Kiran (crew-builder-1)"). A line added to the global AGENTS.md or
+  memory ends "(added by Kiran, 2026-10-21)".
+- The crew's MCP tools `list_assumptions`, `desk_list` and `list_decisions` list the `person` (and
+  `by_label`) too. A doc changed through a person's key records the person in `updated_by`, not the
+  key's name, and so does a doc written with the Claude Code tools `write_doc` and `add_to_global`,
+  a grant added with `add_grant` and a `hand_over` (they used to stamp "claude code session" over
+  the person; that label now stays only for a key with no person and for the system credential).
+  A `by` the caller sends still comes first.
+- Settings, People: adding a person with an email that already belongs to someone says so instead of
+  closing the form, changing a person's email keeps the old address as an extra email, and a key's
+  person picker shows the person's name while people load.
+- Console for areas, grants and personal settings: Settings has an Areas tab listing each repo with
+  its owner and note. An admin adds, reassigns and removes owners; anyone else can take a repo
+  nobody owns and edit the note on a repo they own. A project has a Grants view with each grant's
+  words, kind, who gave it, who agreed and whether it is in effect or still waiting for someone,
+  with Consent, Revoke and an Add a grant form. On the Crew page, "Your crew settings" can be
+  changed (autonomy, builders at once, challenger, releaser), with "Use the team's" to drop a
+  personal value. A project's docs show "Only you see these": your own rules and memory, with a
+  field to add one line.
 
 ### Changed
 - Agents can have a monthly budget (`budget_period: month`, resets on the 1st UTC); existing budgets stay lifetime.
@@ -64,7 +224,150 @@ the project follows [Semantic Versioning](https://semver.org/).
 - The factory and AI SRE console editions have a words list (`ui/src/editions/words.json`) and checks
   that fail CI when an edition screen shows an internal name such as source, trigger or run, or an em
   dash. `tares.words` runs the same check over API JSON.
+- The Crew page shows every person's crews, you first. Each crew lists its name, machine, when it was
+  last seen and its stations with what each is on; crews not seen for a day fold under "Not seen
+  recently". Stations are told apart by crew, so two crews with a `crew-reviewer` no longer open each
+  other's detail. The desk groups its items "For you" and "For <name>", and other people's items are
+  read-only. It reads the `crews` list from `/api/crew` and falls back to the flat `stations` only when
+  a cell does not send it.
+- A person's own crew settings can no longer be looser than the team's: `PUT /api/crew/settings`
+  refuses an `autonomy` or `challenger` that is looser than the team's value with a 400 that names
+  it, and a stricter one is kept. If the team tightens later, the person's older, looser value no
+  longer applies. `clear: ["autonomy", ...]` in the body (and the MCP tool `set_crew_settings`)
+  unsets a personal setting so the team's applies again. Ingest scope and the other settings have
+  no ceiling.
+- A personal AGENTS.md or memory holds at most 32 KB; a line that would pass it is refused with a
+  400 saying the doc is full.
+- The station skills work from your own work on a shared cell. The orchestrator ticks on `my_work`,
+  checks milestones only for the projects you lead, and reads the crew's shared docs and settings at
+  boot. A station sends a question for someone else as an `ASK` with `to:`, and the orchestrator files
+  it on the desk. The reviewer and releaser answer only their own crew's tickets, and `/tares:ship`
+  and the session skill hand over to the orchestrator of the crew that holds the project.
+- `tares factory retire` now says which crew the station is in, so it ends the right one when another
+  crew has a station of the same name.
 
+### Fixed
+- Incident notes no longer show No action when the note has a numbered next step. A finding with no verdict now counts as a note that waits for a person, on every edition.
+- Console: the line chart and sparkline skip values that are not numbers instead of drawing them as zero, sort points by time, and draw one point as a short segment; y labels show the decimals small values need, marks can be listed as text, and disabled controls and focused fields now match the rest of the console.
+- Plugin: the station and spec skills keep working against a Tares before 1.56. That Tares has no
+  `my_work`, area or people tools, so the orchestrator there works from `crew_projects` and
+  `list_tickets` as before, and the spec skips area owners and sign-offs. `tares factory crew up`
+  no longer prints a shell error there when it counts the people.
+- Settings, Areas: saving a repo pasted as its GitHub address (`https://github.com/glassflow/tares`)
+  failed with "Method Not Allowed", because the address went into the request path. The console
+  and the cell now take a GitHub address, with or without `.git`, or `git@github.com:`, as the
+  repo it names; anything else that is not `owner/name` says so. `set_area` in Claude Code too.
+- A cell used by one person before people existed keeps working for its owner once they become a
+  person. The owner's old keys acted as nobody as soon as a second person existed, and the projects
+  without a lead and the desk items addressed to no one stayed with `local`, out of the owner's
+  `my_work`. When the control plane names the workspace owner (`owner: true` on a key's person, on
+  `POST /api/people` or on `PUT /api/keys/{id}/person`, system credential only), `local` takes
+  their name and email instead of a new person being made. A teammate never becomes `local`.
+- Settings, Access on a cell with people: it said "You signed in with the root token" to everyone.
+  It now names how you signed in (the root token, your API key and whose it is, or a project key).
+  The People list marks your own row and shows the boot person as "Local (no login)" instead of
+  "You"; on a cell without auth it is still "You".
+- The sign-off section of the project page: a cell of one person no longer shows its own repos as
+  "No area owner" or "Waiting" (they read "Lead's own repo, no sign-off needed" and count as ready).
+  `hand_over` no longer says "handed over without every sign-off" after a later hand-over that needed
+  no override. A hand-over and its entry in the override log are now saved together, and the one-time
+  copy of an older override that has no time takes the hand-over's. `my_work` takes `project` (a name or an id) and then lists only that project's questions,
+  because question numbers restart in each project; the contributor session uses it.
+- Follow-ups to the sign-off work: an older override that has no time of its own now reads as
+  overridden after the upgrade. A cell of one person still shows "Set one under Settings, Areas" next
+  to an unowned repo. `my_work` with a `project` that does not exist, or that you cannot see, answers
+  404 and names it, instead of an empty list. A `before` without a zone on the project timeline and
+  results is read as UTC, not as the host's time. A timeline filtered by `trigger`, `agent`, `outcome`
+  or `entity` leaves out the hand-over override events, which match none of them.
+- Opening another person's station on the Crew page no longer asks their machine for a context reading
+  (the page says only its owner can), and the server refuses that ask with a 403. When the page
+  cannot tell who you are, it says so and offers Retry instead of treating you as `local`.
+- Ending a station by its name alone no longer ends another person's station of that name: only its
+  owner (or the system credential) ends it, and anyone else gets a 403.
+- A desk item can only be addressed to someone who can see the project: for a private project, `to` must
+  be its lead or a member, else the item is refused (403) instead of reaching a person who cannot open it.
+- An answer typed within a minute before the cell stamped the question still answers it, so a machine
+  whose clock runs a little behind no longer gets the retry error every time.
+- The factory watch read the `/context` ask of every crew on the cell each round, and failed on the
+  ones that were not its own. It now answers only an ask for the session its own station plays.
+- Area owners: reassigning a repo's owner without a note no longer clears the note it had (send
+  `note` to replace it, or `null` to clear it), and the MCP `set_area` refuses a repo name with a
+  `#`, `?` or space instead of saving a shortened repo.
+- Reading grants settled every waiting grant on the cell, as the reader, including ones on a
+  private project the reader cannot see. It now settles only grants the reader may see, recorded as
+  Tares, and a grant that cannot be settled stays waiting instead of failing the read.
+- Answering a spec question and signing off a repo now work with an ordinary key bound to a
+  person (read and ingest scopes, no admin). They were refused with "this credential
+  lacks the 'admin' scope", so an area owner needed an admin key. The same checks apply as before:
+  a question is answered by the person it is addressed to, and a repo is signed off by its current
+  area owner; anyone else gets 403, and a repo with no area owner gets 409. On a cell with one
+  person, a key bound to nobody acts as that person (`local`), so it can do both for them.
+  The contributor part of the spec skill now says what to do when an ordinary key is refused a
+  ticket edit (pass it to the lead), and quotes the real 404 text of `my_work`.
+- The idle-wake scans of the reviewer and the orchestrator now look only at the caller's own tickets
+  (`/api/review-queue?mine=1`, `/api/desk?...&mine=1`), so a crew no longer wakes for another person's work.
+  The Claude Code retry marks are kept per person and crew, so two people's crews with the same
+  station names no longer overwrite each other's marks. A personal PUT of `{"kit": null}` is no change.
+
+## [1.55.1] - 2026-11-02
+
+A long Claude Code session keeps reaching Tares however large its unsent backlog grows. Claude
+Code plugin 0.6.2.
+
+### Fixed
+- Plugin: a long session no longer stops reaching Tares. The hook sent the session's whole unsent
+  backlog in one request, and once that took longer than the 5 s timeout every hook failed the
+  same way, so the person's replies in that session were never recorded. Each hook now sends at
+  most 2 MB and moves on from there, so a backlog catches up over the next few hooks, and the
+  session's last hook sends whatever is left (TR-809).
+
+## [1.55.0] - 2026-11-01
+
+The MCP server is listed in the official MCP registry, `tares mcp --transport stdio` works, and
+two fixes for cloud cells with their state in Postgres: a scrape of `/metrics` no longer opens a
+database connection, and a cell that could not reach its database at start restarts itself.
+
+### Added
+- The Tares MCP server is published to the official MCP registry as `ai.glassflow/tares`, so
+  MCP clients and directories can find it. Each release tag publishes the new version.
+
+### Fixed
+- `tares mcp --transport stdio` works: its startup line went to stdout, which is the MCP channel
+  over stdio, so the client could not read the server's first reply. It now goes to stderr.
+- A tool call while Tares isn't running says so and names the address it tried, instead of "All
+  connection attempts failed".
+- `/metrics` no longer reads the state database. On a cell with its state in Postgres
+  (`TARES_STATE_DSN`), every scrape opened a connection to it, so idle cells held about a fifth of
+  the database's connections between them. `/api/usage` still reports the run and delivery counts.
+- A cell whose state database could not be reached at start (no DNS, a connect timeout, no free
+  connection slots) answers `/health` with 503 while degraded, so the liveness probe restarts it
+  and it tries again. Before, it stayed degraded until someone restarted it. Every other degraded
+  cause still answers 200 and waits for a person.
+
+## [1.54.1] - 2026-10-29
+
+Grok is named as the challenger when it reviews, xAI agents default to grok-4.6 with grok-4.3
+for Triage, and DuckDB's memory is capped on machines without a container limit. Claude Code
+plugin 0.6.1.
+
+### Changed
+- xAI: an agent without a model runs on grok-4.6 (xAI lists a non-reasoning model first), and the
+  Triage (on a schedule) preset picks grok-4.3 for the frequent look. Each applies only while the
+  key lists that model.
+
+### Fixed
+- Challenger with Grok: the console, the summary and Claude no longer say Codex when Grok
+  reviews. `/tares:challenger` and the tares skill name the challenger as Codex or Grok, each
+  challenge on the timeline names its reviewer ("Challenger (Grok) reviewed commit ..."), the
+  summarizer calls the reviewer by that name and no longer reports a plan challenge that did not
+  happen, and the template's setup says how to pick Grok.
+- Template setup: the "model provider" step counts any configured provider, not only an
+  Anthropic key, and the Model picker lists the default provider's models instead of Anthropic's.
+- DuckDB's memory is capped at 1 GB when `tares up` runs on a machine with no container memory
+  limit. Before, DuckDB took its own default of 80% of the machine's RAM and its cache grew to about
+  4 GB on a Mac after two days of crew use. Set `TARES_DUCKDB_MEMORY_LIMIT` (for example `2GB`) to
+  change it; a container limit still sets it to 60% of that limit. The cap also sets
+  `TARES_DUCKDB_THREADS` to 2 unless you set it.
 ## [1.54.0] - 2026-10-28
 
 Grok can review a challenger session instead of Codex, and xAI is one of the model provider

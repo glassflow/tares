@@ -166,6 +166,34 @@ export interface ApiKey {
   last_used_at: string | null;
   revoked_at: string | null;
   project?: string | null;      // a project key: reads that project only (TR-335)
+  person?: { id: string; name: string } | null;   // who the key belongs to; null: nobody yet
+}
+
+// Someone on the cell. Keys belong to a person; the credential in a request says who is calling.
+export interface Person {
+  id: string;
+  name: string;
+  email: string | null;
+  emails: string[];
+  github: string | null;
+  is_admin: boolean;
+  created_via: string;
+}
+
+// /api/whoami: the credential making the request, and the person it acts as (null for the root
+// token, and for a key nobody has bound once the cell has more than one person).
+export interface Whoami {
+  id: string;
+  name: string;
+  kind: "system" | "key" | "project" | "open";
+  person: { id: string; name: string; email: string | null } | null;
+  scopes: string[];
+  project?: string;
+  project_name?: string | null;
+  edition: Edition;
+  edition_name: string;
+  edition_needed: boolean;
+  mcp_object_tools?: boolean;
 }
 
 // An agent that joined a project with a webhook subscription (TR-336). The URL comes masked: it
@@ -348,6 +376,9 @@ export interface Skill {
 }
 
 // Docs and tickets (TR-403): what a spec session leaves in a project for the session that builds it
+// The person behind a record (TR-619): who stood behind the call, and `by_label` says it in words
+// ("Kiran (crew-builder-1)", or just "Kiran" when no station was named).
+export interface PersonRef { id: string; name: string }
 export type DocKind = "start" | "spec" | "plan" | "agents" | "memory" | "grants" | "note" | "working";
 export interface DocSummary {
   id: string;
@@ -389,9 +420,9 @@ export interface Ticket {
   stage_reason: string | null;
   pr: TicketPR | null;
   pr_note: string | null;         // the stage and GitHub disagree
-  history?: { at: string; field: "holder" | "stage"; value: string | null; reason: string | null; by: string | null; role: string | null }[];
+  history?: { at: string; field: "holder" | "stage"; value: string | null; reason: string | null; by: string | null; role: string | null; person?: PersonRef | null; by_label?: string | null }[];
   // the build, recorded (TR-433, TR-435)
-  assumptions?: { label: string; question: string; choice: string; why: string; state: AssumptionState; words: string | null; made_by: string | null; tickets: string[] }[];
+  assumptions?: { label: string; question: string; choice: string; why: string; state: AssumptionState; words: string | null; made_by: string | null; person?: PersonRef | null; by_label?: string | null; tickets: string[] }[];
   checks?: TicketCheck[];
   // review and merge (TR-440..444)
   verdict?: VerdictNow | null;
@@ -401,7 +432,7 @@ export interface Ticket {
 export interface VerdictNow { verdict: "pass" | "changes" | "block"; head: string; round: number; at: string; current: boolean; note: string | null }
 export interface ChallengeFinding { priority?: string; title?: string; waived?: boolean; reason?: string }
 export interface ReviewFinding { id: string; label: string; severity: "P1" | "P2" | "P3"; file: string | null; line: number | null; blocking: boolean; text: string; kind: string; state: "open" | "fixed"; fixed_in: string | null }
-export interface Review { id: string; round: number; pr: string | null; head: string; verdict: "pass" | "changes" | "block"; verified: string; not_verified: string | null; by: string | null; at: string; findings: ReviewFinding[]; fixed: string[] }
+export interface Review { id: string; round: number; pr: string | null; head: string; verdict: "pass" | "changes" | "block"; verified: string; not_verified: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null; at: string; findings: ReviewFinding[]; fixed: string[] }
 export interface DeskItem {
   id: string; label: string; project: string | null; project_name: string | null; question: string;
   context: string; options: string[]; recommendation: string; why: string; blocks: string;
@@ -409,12 +440,15 @@ export interface DeskItem {
   state: "open" | "answered" | "withdrawn"; reason: string | null; created_at: string; closed_at: string | null;
   // a permission request: the station that was refused and the exact command
   station: string | null; command: string | null;
+  person?: PersonRef | null; by_label?: string | null;   // who asked: the person, and the station when there is one
+  to_person?: PersonRef | null;   // who it is for (TR-634); null on an item from before
 }
 export interface DeskAllowed { desk_item: DeskItem; decision: Decision; station: string; line: string; added: boolean; scope: "project" | "all" }
 export interface Decision {
   id: string; label: string | null; question: string; words: string; choice: string | null;
   standing: boolean; scope: "project" | "all"; matched: boolean; granted: boolean; tickets: string[]; at: string;
   via: "console" | null;   // "console": a permission allowed there, with no typed words to match
+  person?: PersonRef | null;   // who decided
 }
 export interface QueueItem { project: string; project_name: string; ticket: string; title: string; holder: string | null; repo: string | null; pr: string | null; head: string | null; waiting_minutes: number | null; blocks_milestone: boolean; layer1_clean: boolean; verdict: VerdictNow | null }
 export interface RuleProposal { id: string; repo: string; kind: string; project: string | null; scope: "project" | "all"; text: string; tickets: string[]; state: "open" | "accepted" | "rejected"; created_at: string }
@@ -422,11 +456,12 @@ export type AssumptionState = "open" | "kept" | "overturned";
 export interface Assumption {
   id: string; label: string; number: number; question: string; choice: string; why: string;
   affects: string; tickets: string[]; state: AssumptionState; words: string | null;
-  made_by: string | null; made_at: string; decided_at: string | null;
+  made_by: string | null; person?: PersonRef | null; by_label?: string | null;
+  made_at: string; decided_at: string | null;
 }
 export interface TicketCheck {
   id: string; command: string; result: string; commit: string | null; broke_test: string | null;
-  by: string | null; at: string;
+  by: string | null; person?: PersonRef | null; by_label?: string | null; at: string;
   match?: "matched" | "not_found" | "differs" | null; recorded?: string | null;
 }
 export type TicketStage = "todo" | "doing" | "review" | "changes" | "merged" | "shipped" | "blocked";
@@ -478,6 +513,21 @@ export interface CrewStation {
   context: StationContext | null;
   /** what all the station's sessions spent, null before any reply */
   usage: UsageTotals | null;
+  /** the crew it belongs to (TR-628): a station name repeats across crews, the crew id does not */
+  crew_id?: string | null;
+  crew?: string | null;
+  machine?: string;
+  person?: PersonRef | null;
+}
+/** One person's crew on one machine, with its stations (TR-628) */
+export interface CrewGroup {
+  id: string | null;
+  name: string | null;
+  machine: string;
+  person: PersonRef | null;
+  person_id: string | null;
+  last_seen: string | null;
+  stations: CrewStation[];
 }
 // What Claude Code sessions spend (tares/claude_usage.py)
 export interface StationContext {
@@ -534,9 +584,23 @@ export interface CrewPace {
   state: "off" | "ok" | "slow" | "hold" | "limit";
   until: string | null; session_pct: number | null; weekly_pct: number | null; note: string;
 }
+// The merged settings the caller sees (GET /api/crew/settings): theirs over the cell's default.
+export interface CrewSettingsView extends CrewSettings { autonomy_levels?: Record<string, string> }
+export type CrewSettingField = "autonomy" | "challenger" | "builders_max" | "releaser" | "release_profile" | "prod_pattern" | "pace" | "idle_wake";
 export interface HandoverRepo { path: string | null; name: string | null }
-export interface ProjectFinished { at: string; words: string; decision: string | null; by: string | null }
-export interface Handover { repo: string | null; repos: HandoverRepo[]; autonomy: string | null; by: string | null; at: string; finished?: ProjectFinished | null }
+export interface ProjectFinished { at: string; words: string; decision: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null }
+// A hand-over the project lead pushed through without every area owner's sign-off, and why (TR-636)
+export interface HandoverOverride { reason: string; at: string; person?: PersonRef | null; by_label?: string | null }
+// A question from a spec to the owner of a repo, and the answer once they give it (TR-636)
+export interface SpecQuestion {
+  id: string; to_person_id: string; to_person?: PersonRef | null; repo: string; text: string;
+  asked_by: string | null; asked_at: string; answer: string | null; answered_by: string | null;
+  answered_by_person?: PersonRef | null; answered_at: string | null; state: "open" | "answered";
+}
+// One repo a project has tickets in: who owns its area, and whether they signed off (TR-636).
+// `exempt` says why it needs no sign-off: a cell of one person ("solo") or the owner leads the project.
+export interface SignoffRow { repo: string; owner: PersonRef | null; is_lead: boolean; exempt?: "solo" | "lead" | null; signed_off: boolean; at: string | null }
+export interface Handover { override?: HandoverOverride | null; overridden?: boolean; overrides?: HandoverOverride[]; repo: string | null; repos: HandoverRepo[]; autonomy: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null; at: string; finished?: ProjectFinished | null }
 // A repo a project touches, with the tickets that change it and their open pull requests (TR-463)
 export interface RepoPR {
   url: string; ticket: string; number: number | null; title: string; branch: string | null;
@@ -626,6 +690,7 @@ export interface AgentPreset {
   label: string;
   prompt: string;
   concludes?: boolean;          // the preset ends every run with conclude
+  tier?: "small";               // picks the provider's cheaper model (small_models), when it has one
   verdicts?: Verdict[];         // and gives these verdicts
 }
 
@@ -812,9 +877,15 @@ export interface Project {
   goal?: string | null; // what the project should achieve, one line (<= 200 chars); null = not set yet
   kind?: "software_factory" | null;   // its own page and tag; null = an ordinary project
   progress?: TicketProgress;           // a software factory project's tickets (GET /api/projects only)
+  lead?: PersonRef | null;             // who leads it; null: nobody yet. Absent on an older daemon
+  scope?: ProjectScope;                // team: everyone on the cell sees it; private: lead and members only
+  members?: ProjectMember[];           // the lead first (reason "lead"), then the others
+  hidden?: boolean;                    // a private project the caller is not on: name and lead, nothing else
   activity_at?: string;                // when it last moved: its own update or its newest ticket's (GET /api/projects only)
   ready_to_close?: boolean;            // a software factory project, still open, whose tickets are all merged or otherwise finished (GET /api/projects and the summary)
 }
+export type ProjectScope = "team" | "private";
+export interface ProjectMember { id: string; name: string; reason: "lead" | "manual" | "ticket" }
 // a software factory project's tickets as its progress ring shows them (tares/factory.py
 // `progress`): total is done + doing + blocked + todo; canceled ones stay out of it
 export interface TicketProgress { done: number; doing: number; blocked: number; todo: number; canceled: number; total: number }
@@ -1098,18 +1169,6 @@ export interface Standup {
 
 export type Edition = "factory" | "sre" | "platform";
 
-export interface Whoami {
-  id: string;
-  name: string;
-  scopes: string[];
-  project?: string;
-  project_name?: string | null;
-  edition: Edition;
-  edition_name: string;
-  edition_needed: boolean;
-  mcp_object_tools?: boolean;
-}
-
 export interface EditionSettings {
   edition: Edition;
   edition_name: string;
@@ -1117,3 +1176,31 @@ export interface EditionSettings {
   env_value: string | null;
   choices: { id: Edition; name: string }[];
 }
+// Area owners (TR-627): the person who owns each GitHub repo.
+export interface Area { repo: string; person: PersonRef; note: string | null }
+
+// Grants by kind (TR-630): what a person allows, and who still has to say yes.
+export type GrantKind = "team" | "project" | "personal";
+export interface Grant {
+  id: string;
+  kind: GrantKind;
+  project: string | null;
+  words: string;
+  state: "active" | "waiting" | "revoked";
+  given_at: string | null;
+  given_by: PersonRef | null;
+  holder: PersonRef | null;
+  areas: string[];
+  consents: (PersonRef & { at: string })[];
+  waiting_for: { id: string; name: string | null }[];   // id "admin": an admin has to
+  in_effect: boolean;
+}
+export interface GrantsView {
+  grants: Grant[];
+  waiting_for_me: Grant[];
+  known_words: string[];
+}
+
+// A person's own AGENTS.md and memory (GET /api/docs/personal); null until the first line.
+export interface PersonalDoc { id: string; title: string; body: string; updated_at: string; updated_by: string | null }
+export interface PersonalDocs { person: PersonRef | null; agents: PersonalDoc | null; memory: PersonalDoc | null }

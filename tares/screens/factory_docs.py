@@ -181,6 +181,8 @@ def register(app, store, h, ctx):
         last = max((i for i, r in enumerate(rows) if r["kind"] == "li"), default=-1)
         for i, r in enumerate(rows):
             r["by"], r["when"] = "", ""
+            if project is None and r["kind"] == "li":
+                r["text"] = docs_mod.strip_added_note(r["text"])   # the header says who changed it
             if project and kind == "memory" and r["kind"] == "li":
                 m = STAMP.search(r["text"])
                 try:

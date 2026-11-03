@@ -131,7 +131,7 @@ function loadSample(env) {
       await go(page, e, "/settings/advanced");
       ck("factory: /settings/advanced stays on its address", where(page).startsWith("/settings/advanced"), where(page));
       ck("factory: it is today's Settings page", await page.getByRole("heading", { name: "Settings", exact: true }).isVisible());
-      ck("factory: with its other tabs", await settingsNav(page).getByRole("button", { name: "Access and API keys" }).isVisible());
+      ck("factory: with its other tabs", await settingsNav(page).getByRole("button", { name: "Access, people and API keys" }).isVisible());
       ck("factory: and an Advanced tab, the one open", (await advancedTab(page).count()) === 1
          && (await advancedTab(page).getAttribute("aria-current")) === "page");
       const panel = page.getByTestId("advanced-panel");
