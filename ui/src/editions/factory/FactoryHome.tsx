@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { ApiError } from "../../api";
 import { useEdition } from "../edition";
 import { useSample } from "../sample";
+import { StartChecklist, StartChecklistLoading } from "../StartChecklist";
 import { usePagePolling } from "../usePagePolling";
 import { allowDesk, finishProject, getHome, keepAssumption, type AllowedGrant } from "./FactoryHome.api";
 import type {
@@ -325,8 +326,12 @@ const COLS = "flex flex-wrap items-start gap-8";
 const LEFT = "flex min-w-0 flex-[2_1_560px] flex-col gap-8";
 const RIGHT = "flex min-w-0 flex-[1_1_300px] flex-col gap-6";
 
-export function FactoryHomeView({ data, onAction, rows, notice }: {
+const START_TITLE = "Get your factory going";
+
+export function FactoryHomeView({ data, onAction, rows, notice, hideStart, onStartHidden }: {
   data: HomeData; onAction?: OnAction; rows?: Record<string, RowState>; notice?: React.ReactNode;
+  /** What Hide this list calls; a sample passes one that touches nothing. */
+  hideStart?: () => Promise<unknown>; onStartHidden?: () => void;
 }) {
   const { credentialName } = useEdition();
   const name = firstName(credentialName);
@@ -336,6 +341,9 @@ export function FactoryHomeView({ data, onAction, rows, notice }: {
       {notice}
       <div className={COLS}>
         <div className={LEFT}>
+          {data.start?.show && (
+            <StartChecklist block={data.start} title={START_TITLE} hide={hideStart} onHidden={onStartHidden} />
+          )}
           <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />
           <Projects projects={data.projects} finished={data.finished_count} />
         </div>
@@ -360,6 +368,7 @@ export function FactoryHomeLoading() {
       <TopBar name={firstName(credentialName)} headline={<Skeleton width={320} height={14} className="mt-2" />} />
       <div className={COLS}>
         <div className={LEFT}>
+          <StartChecklistLoading title={START_TITLE} />
           <section className="min-w-0"><SectionHead title="Waiting for you" /><LoadingBox rows={3} /></section>
           <section className="min-w-0"><SectionHead title="Projects" /><LoadingBox rows={3} /></section>
         </div>
@@ -592,7 +601,7 @@ function SampleHome({ sample }: { sample: string }) {
   let body: React.ReactNode;
   if (sample === "loading") body = <FactoryHomeLoading />;
   else if (sample === "error") body = <FactoryHomeError key={tries} onRetry={() => setTries((n) => n + 1)} />;
-  else body = <FactoryHomeView data={HOME_SAMPLES[sample]} onAction={onAction} rows={rows} />;
+  else body = <FactoryHomeView data={HOME_SAMPLES[sample]} onAction={onAction} rows={rows} hideStart={() => Promise.resolve()} />;
   return (
     <>
       {body}
@@ -649,7 +658,7 @@ function LiveHome() {
         Could not refresh. Showing what we had at {hhmm(readAt ?? new Date())}.
       </Banner>
     ) : undefined;
-    body = <FactoryHomeView data={shown} onAction={onAction} rows={rows} notice={notice} />;
+    body = <FactoryHomeView data={shown} onAction={onAction} rows={rows} notice={notice} onStartHidden={reload} />;
   }
   return (
     <>

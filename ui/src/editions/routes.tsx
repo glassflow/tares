@@ -28,8 +28,11 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     // TR-734
     "/projects/:id": { page: React.lazy(() => import("./factory/ProjectRoute")), fallback: "today" },
 
-    // TR-760 (the colon after "ticket" belongs to the address; the second one starts :ref)
-    "/projects/:id/tickets/:ref": { page: null, fallback: { redirect: "/projects/:id?view=ticket::ref" } },
+    // TR-760 (an old ?view=ticket:<ref> address lands here, see ProjectRoute)
+    "/projects/:id/tickets/:ref": { page: React.lazy(() => import("./factory/FactoryTicket")), fallback: { redirect: "/projects/:id?view=ticket::ref" } },
+
+    // TR-806
+    "/tickets": { page: React.lazy(() => import("./factory/FactoryTickets")), fallback: { redirect: "/projects" } },
 
     // TR-735
     "/reviews": { page: React.lazy(() => import("./factory/FactoryReviews")), fallback: { redirect: "/crew" } },
@@ -48,31 +51,31 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
   },
   sre: {
     // TR-749
-    "/": { page: null, fallback: "today" },
+    "/": { page: React.lazy(() => import("./sre/Home")), fallback: "today" },
 
     // TR-750
-    "/services": { page: null, fallback: { redirect: "/" } },
+    "/services": { page: React.lazy(() => import("./sre/Services")), fallback: { redirect: "/" } },
 
     // TR-750
-    "/services/:name": { page: null, fallback: { redirect: "/" } },
+    "/services/:name": { page: React.lazy(() => import("./sre/Service")), fallback: { redirect: "/" } },
 
     // TR-751
-    "/incidents": { page: null, fallback: { redirect: "/" } },
+    "/incidents": { page: React.lazy(() => import("./sre/Incidents")), fallback: { redirect: "/" } },
 
     // TR-751
-    "/incidents/:id": { page: null, fallback: { redirect: "/" } },
+    "/incidents/:id": { page: React.lazy(() => import("./sre/Incidents").then((m) => ({ default: m.IncidentPage }))), fallback: { redirect: "/" } },
 
     // TR-752
-    "/timeline": { page: null, fallback: "today" },
+    "/timeline": { page: React.lazy(() => import("./sre/Timeline")), fallback: "today" },
 
     // TR-753
     "/runbooks": { page: React.lazy(() => import("./sre/Runbooks")), fallback: { redirect: "/" } },
 
     // TR-764
-    "/settings": { page: null, fallback: "today" },
+    "/settings": { page: React.lazy(() => import("./sre/Settings")), fallback: "today" },
 
-    // TR-749 turns this fallback into a redirect to /
-    "/start": { page: null, fallback: "today" },
+    // TR-749: the AI SRE home is /, so Start (the login landing) goes there
+    "/start": { page: null, fallback: { redirect: "/" } },
   },
   any: {
     // TR-755 sets the chooser page

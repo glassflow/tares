@@ -129,7 +129,8 @@ SRE_KEEP = frozenset({"read"})   # the outside AI SRE investigator reads timelin
 FACTORY_TOOLS = frozenset({"what_needs_me", "how_is_project", "start_project",
                            "hand_project_to_crew"})
 FACTORY_ONLY = frozenset({"what_needs_me", "how_is_project"})
-SRE_TOOLS: frozenset = frozenset()   # TR-766 fills it
+# The outcome tools of an AI SRE cell (tares/mcp_outcomes.py registers them); they stay off factory.
+SRE_TOOLS = frozenset({"what_is_broken", "how_is_service", "what_happened", "mark_incident"})
 _OFF = ("This tool is off on this Tares. An admin can turn on the building-block tools under "
         "Settings, Access and API keys, Agent tools.")
 

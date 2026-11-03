@@ -99,6 +99,7 @@ async def main():
                                       px if role == "builder" else None, now_utc())
         m1 = store.create_milestone(px, "M1: pages", "The pages are live.", [])
         m2 = store.create_milestone(px, "M2: search", "Search works.", [])
+        store.create_milestone(px, f"M3: the docs under {PATH}", "The docs are live.", [])
         pr = lambda n, **kw: {"url": f"https://github.com/{REPO}/pull/{n}", "repo": REPO, "number": n,
                               "head": "aaaaaaa1111", **kw}
         t1 = ticket(px, "Add the header", milestone=m1, stage="merged", status="done",
@@ -114,10 +115,11 @@ async def main():
         t7 = ticket(px, "Drop the old theme", milestone=m2, status="canceled")
         t8 = ticket(px, "Write the release notes", stage="blocked", status="in_progress", holder=STATIONS[2])
         t9 = ticket(px, "Tidy the readme")
+        t10 = ticket(px, "Check the sitemap links")
         store.add_review(px, t3, None, "aaaaaaa1111", "changes", "ran the tests", None, STATIONS[3],
                          [], {}, factory_mod.finding_kind, now_utc())
         # the last change of each ticket, so the sort is known
-        for tid, h in ((t1, 300), (t2, 1), (t3, 2), (t4, 3), (t5, 4), (t6, 5), (t7, 50), (t8, 6), (t9, 7)):
+        for tid, h in ((t1, 300), (t2, 1), (t3, 2), (t4, 3), (t5, 4), (t6, 5), (t7, 50), (t8, 6), (t9, 7), (t10, 8)):
             with store._swrite:
                 store.sc.execute("UPDATE tickets SET updated_at = ? WHERE id = ?", [ago(hours=h), tid])
 
@@ -154,7 +156,7 @@ async def main():
             ck("canceled tickets are hidden by default",
                all(t["state"] != "canceled" for t in a["tickets"]) and "Drop the old theme" not in by_title
                and "Old idea" not in by_title)
-            ck("the total counts the tickets shown (8 in project-x, 2 in project-y)", a["total"] == 10, a["total"])
+            ck("the total counts the tickets shown (9 in project-x, 2 in project-y)", a["total"] == 11, a["total"])
             ck("a draft and a project of another kind have no tickets here",
                "In a draft" not in by_title and "In a project of another kind" not in by_title)
             ck("two canceled tickets are hidden", a["hidden_canceled"] == 2, a["hidden_canceled"])
@@ -197,7 +199,7 @@ async def main():
             print("== counts ==")
             c = a["counts"]
             ck("counts by state, whatever the state asked for",
-               c == {"total": 10, "moving": 3, "to_do": 3, "in_progress": 1, "in_review": 1,
+               c == {"total": 11, "moving": 3, "to_do": 4, "in_progress": 1, "in_review": 1,
                      "changes_asked": 1, "blocked": 3, "merged": 1, "canceled": 2}, c)
             c2 = (await get("?state=merged")).json()["counts"]
             ck("the state does not change the counts", c2 == c, c2)
@@ -222,9 +224,13 @@ async def main():
             ck("canceled shows only when asked for, and nothing is then hidden",
                sorted(t["title"] for t in can["tickets"]) == ["Drop the old theme", "Old idea"]
                and can["hidden_canceled"] == 0, can["total"])
-            ck("text matches the title, any case", refs(await get("?q=SITEMAP")) == [site["ref"]])
+            ck("text matches the title, any case", refs(await get("?q=ADD%20THE%20SITEMAP")) == [site["ref"]])
             tidy = by_title["Tidy the readme"]
             ck("text matches the ref", refs(await get(f"?q={tidy['ref']}")) == [tidy["ref"]], tidy["ref"])
+            ck("text matches the title as shown: the repo's name finds the ticket",
+               refs(await get("?q=example-org/docs-site/docs")) == [by_title[f"Fix links under {REPO}/docs"]["ref"]])
+            ck("text does not match the crew's folder, which no one sees",
+               (await get("?q=alex/code")).json()["tickets"] == [] and (await get("?q=project-x/docs")).json()["tickets"] == [])
             ck("text with nothing matching gives an empty page and keeps the lists",
                (await get("?q=zzzz")).json()["tickets"] == [] and len((await get("?q=zzzz")).json()["projects"]) == 3)
             ck("filters combine", refs(await get(f"?project={px}&milestone={m1}&state=merged")) == [by_title["Add the header"]["ref"]])
@@ -236,20 +242,26 @@ async def main():
             byref = (await get("?sort=ref")).json()["tickets"]
             ck("by project, then the number in the ref",
                [t["project"]["name"] for t in byref] == sorted(t["project"]["name"] for t in byref))
+            nums = [int(t["ref"].lstrip("T")) for t in byref if t["project"]["id"] == px]
+            ck("the number in the ref is a number: T2 comes before T10", nums == sorted(nums) and nums[-1] == 10
+               and len(nums) == 9 and nums.index(2) < nums.index(10), nums)
             p1 = (await get("?limit=4")).json()
             p2 = (await get("?limit=4&offset=4")).json()
             p3 = (await get("?limit=4&offset=8")).json()
-            ck("a page is the limit, with more to come", len(p1["tickets"]) == 4 and p1["more"] and p1["total"] == 10)
+            ck("a page is the limit, with more to come", len(p1["tickets"]) == 4 and p1["more"] and p1["total"] == 11)
             ck("pages do not overlap and the last says there is no more",
                not set(refs_ := [t["ref"] + t["project"]["id"] for t in p1["tickets"]]) &
-               set(t["ref"] + t["project"]["id"] for t in p2["tickets"]) and len(p3["tickets"]) == 2 and not p3["more"])
+               set(t["ref"] + t["project"]["id"] for t in p2["tickets"]) and len(p3["tickets"]) == 3 and not p3["more"])
 
             print("== the lists to choose from ==")
             ck("the projects, the ones with tickets, with their counts",
-               {p["name"]: p["count"] for p in a["projects"]} == {"project-x": 8, "project-y": 2, "project-z": 0},
+               {p["name"]: p["count"] for p in a["projects"]} == {"project-x": 9, "project-y": 2, "project-z": 0},
                a["projects"])
+            ck("the projects in the Projects page order: by state, then the latest change",
+               [p["name"] for p in a["projects"]] == ["project-x", "project-z", "project-y"],
+               [p["name"] for p in a["projects"]])
             ck("the milestones of every project, numbered", [(m["number"], m["name"]) for m in a["milestones"]]
-               == [("M1", "M1: pages"), ("M2", "M2: search")], a["milestones"])
+               == [("M1", "M1: pages"), ("M2", "M2: search"), ("M3", f"M3: the docs under {REPO}")], a["milestones"])
             only = (await get(f"?project={py}")).json()
             ck("a project with no milestone has none to choose", only["milestones"] == [])
 

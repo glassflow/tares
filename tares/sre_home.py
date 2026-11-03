@@ -31,7 +31,7 @@ RAISE_STEP_USD = 25
 CHART_LABEL = "Errors, 2 hours around when it opened"
 RAISED_OFF_NOTE = "The checks before the watcher stopped all came back quiet."
 NOTES_PLACE = {"connect": "/settings#tools", "link_repo": "/settings#tools",
-               "service": "/services", "rule": "/settings#rules"}
+               "service": "/services", "rule": "/settings#watching"}
 _SIGNAL_WORDS = {"logs": "logs", "traces": "traces", "metrics": "metrics", "deploys": "deploys",
                  "alerts": "alerts", "events": "events"}
 _CHANNEL_ID = re.compile(r"^[CGD][A-Z0-9]{6,}$")

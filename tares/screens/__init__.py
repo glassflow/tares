@@ -10,7 +10,7 @@ SCREENS = [
 
     "factory_tickets",         # TR-806
 
-    # "factory_ticket",        # TR-760
+    "factory_ticket",          # TR-760
 
     "factory_reviews",       # TR-735
 
@@ -20,19 +20,19 @@ SCREENS = [
 
     "factory_settings",        # TR-738
 
-    # "start",                 # TR-756
+    "start",                 # TR-756
 
     "sre_home_actions",      # TR-748
 
-    # "sre_services",          # TR-750
+    "sre_services",          # TR-750
 
-    # "sre_incidents",         # TR-751
+    "sre_incidents",           # TR-751
 
-    # "sre_timeline",          # TR-752
+    "sre_timeline",            # TR-752
 
     "sre_runbooks",            # TR-753
 
-    # "sre_settings",          # TR-764
+    "sre_settings",          # TR-764
 ]
 
 

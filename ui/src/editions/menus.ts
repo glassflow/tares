@@ -10,6 +10,7 @@ export const MENUS: Record<"factory" | "sre", MenuEntry[]> = {
   factory: [
     { key: "home", label: "Home", to: "/", today: true },
     { key: "projects", label: "Projects", to: "/projects", today: true },
+    { key: "tickets", label: "Tickets", to: "/tickets", today: false },
     { key: "reviews", label: "Reviews", to: "/reviews", today: false },
     { key: "crew", label: "Crew", to: "/crew", today: true },
     { key: "docs", label: "Docs and memory", to: "/docs", today: false },

@@ -21,6 +21,8 @@ this service healthy", "what has this customer done recently" — read Tares ins
 - On a Software Factory cell the building-block tools (`read`, `create_source`, `create_trigger` and
   the like) appear only when an admin turns them on under Settings, Access and API keys, Agent tools. Use
   `what_needs_me`, `how_is_project`, `start_project` and `hand_project_to_crew` instead.
+- On an AI SRE cell use `what_is_broken`, `how_is_service`, `what_happened` and `mark_incident`;
+  `read` keeps working there.
 
 This plugin also streams the current Claude Code session into Tares (the `claude_code` source) when
 session streaming is enabled, so prior sessions are queryable as a source.

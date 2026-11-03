@@ -1,3 +1,4 @@
+import type { StartBlock, StartStep } from "../StartChecklist.api";
 import type { HomeCrew, HomeCrewMember, HomeData, HomeItem, HomeProject } from "./home.types";
 
 // Sample bodies of the factory home, in the shape of GET /api/home. They show only behind the
@@ -194,7 +195,57 @@ export const longGoals: HomeData = {
   ],
 };
 
+// The Start checklist, as the daemon words it (tares/start_steps.py): five steps, done ones in place
+// without buttons.
+const STEP_KEYS = ["claude_code", "github", "tickets", "crew", "spec"];
+const STEPS: Record<string, Omit<StartStep, "done">> = {
+  claude_code: { key: "claude_code", title: "Sign in from Claude Code",
+    gets: "Your Claude Code sessions and the crew report here.",
+    actions: [{ label: "Copy the command", copy: "tares login" }] },
+  github: { key: "github", title: "Connect GitHub",
+    gets: "The crew opens pull requests and Tares follows their reviews and checks.",
+    actions: [{ label: "Connect GitHub", to: "/settings#tools" }] },
+  tickets: { key: "tickets", title: "Connect Linear or GitHub Issues",
+    gets: "Tickets stay where your team already tracks work.",
+    actions: [{ label: "Connect Linear", to: "/settings#tools" },
+              { label: "Use GitHub Issues", href: "https://docs.glassflow.ai/tares/software-factory/get-started" }] },
+  crew: { key: "crew", title: "Start the crew",
+    gets: "Claude Code sessions that build, review and merge your tickets.",
+    actions: [{ label: "Copy the command", copy: "tares factory crew up" }] },
+  spec: { key: "spec", title: "Write your first spec",
+    gets: "A plan with milestones and tickets the crew can build.",
+    actions: [{ label: "Copy the command", copy: 'tares factory spec "what you want to build"' }] },
+};
+
+/** The block with the steps named in `done` ticked, and `details` added to the steps they name. */
+function startBlock(done: string[], details: Record<string, string> = {}): StartBlock {
+  const steps: StartStep[] = STEP_KEYS.map((k) => {
+    const isDone = done.includes(k);
+    return { ...STEPS[k], done: isDone, actions: isDone ? [] : STEPS[k].actions, ...(details[k] ? { detail: details[k] } : {}) };
+  });
+  const n = steps.filter((s) => s.done).length;
+  return { steps, done: n, total: steps.length, show: n < steps.length };
+}
+
+const LONG_DETAIL =
+  "Connected as example-org. The connection covers example-org/service-a, example-org/edge-proxy, example-org/docs-site "
+  + "and 40 more repositories, and was last used 3 minutes ago to read a review on a pull request in example-org/service-a. "
+  + "Open Settings, Connections to change which repositories the crew can reach, or to disconnect it for everyone.";
+
+/** A new cell: nothing done, so the list shows all five steps. */
+export const startNothing: HomeData = { ...empty, start: startBlock([]) };
+
+/** Three of five done: the first three, so the open ones are the crew and the spec. */
+export const startThree: HomeData = { ...empty, start: startBlock(["claude_code", "github", "tickets"]) };
+
+/** A step with a long detail: it clamps to three lines and the full text is in its title. */
+export const startLong: HomeData = { ...empty, start: startBlock(["github"], { github: LONG_DETAIL }) };
+
+/** Everything done: the block says not to show, so the page has no list. */
+export const startDone: HomeData = { ...nothingWaiting, start: startBlock(STEP_KEYS) };
+
 /** The samples by the name `?sample=` gives them. Loading and error have no data and live in FactoryHome. */
 export const HOME_SAMPLES: Record<string, HomeData> = {
   busy, empty, crewQuiet, nothingWaiting, manyWaiting, longGoals,
+  startNothing, startThree, startLong, startDone,
 };
