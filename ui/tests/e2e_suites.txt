@@ -10,9 +10,17 @@ factory-project
 factory-projects
 factory-reviews
 factory-settings
+factory-start
+factory-ticket
+factory-tickets
 login-handoff
 project-idle
 projects-list
 raise-limit
 session-picker
+sre-home
+sre-incidents
 sre-runbooks
+sre-services
+sre-settings
+sre-timeline

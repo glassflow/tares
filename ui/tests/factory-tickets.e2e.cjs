@@ -257,8 +257,9 @@ function cleanEnv(extra) {
       ck(`${tag("row")}: ref, title, state, pull request`, (await text(rows.first().getByTestId("ticket-ref"))) === "T14" && (await text(rows.first().getByTestId("ticket-title"))) === "Cache the counts"
          && (await text(rows.first().getByTestId("ticket-state"))) === "In review" && /PR 114 /.test(await text(rows.first())), await text(rows.first()));
       await rows.first().click();
-      await page.waitForURL(new RegExp(`/projects/${X}`));
-      ck(`${tag("row")}: the row opens the ticket inside its project`, /ticket:T14/.test(page.url()), page.url());
+      await page.waitForURL(new RegExp(`/projects/${X}/tickets/T14`));
+      ck(`${tag("row")}: the row opens the ticket inside its project`, new URL(page.url()).pathname === `/projects/${X}/tickets/T14`, page.url());
+      await page.goto("about:blank"); // leave the ticket page, it polls every 15 s and would put its read into the next screen's count
 
       // sort
       await openLive(`?project=${X}&layout=list`);

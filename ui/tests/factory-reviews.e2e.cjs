@@ -235,8 +235,7 @@ function cleanEnv(extra) {
       await openLive();
       await waiting.first().getByTestId("review-title").click();
       await page.waitForLoadState("networkidle");
-      ck(`${tag("links")}: a title opens its ticket inside its project`, new URL(page.url()).pathname === `/projects/${ids["project-x"]}`
-         && /ticket:T1/.test(page.url()), page.url());
+      ck(`${tag("links")}: a title opens its ticket inside its project`, new URL(page.url()).pathname === `/projects/${ids["project-x"]}/tickets/T1`, page.url());
       await ctx.close();
     }
 
