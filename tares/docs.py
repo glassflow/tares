@@ -81,6 +81,11 @@ def read_all_text(data: dict) -> str:
 _ADDED_NOTE = re.compile(r" \(added by .+, \d{4}-\d{2}-\d{2}\)$")
 
 
+def strip_added_note(text: str) -> str:
+    """A line without the " (added by who, date)" note a shared line carries."""
+    return _ADDED_NOTE.sub("", text)
+
+
 def append_line(body: str, text, note: str = "", limit: int | None = None) -> tuple[str, bool]:
     """(the body with `- text` added at the end, whether it changed). A line already there is
     not added twice, whoever added it and when: `note` (" (added by Kiran, 2026-10-21)") is
