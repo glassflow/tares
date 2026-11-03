@@ -56,7 +56,7 @@ async function checkWords(page, ck, label) {
 
 // A screen loads from exactly one read route. Records every /api/ request until the page is idle;
 // the returned check says exactly one GET went to `route` (query string ignored) and no other GET
-// went to /api/. /api/whoami (the shell's edition read) is not counted, and nothing after the check
+// went to /api/. /api/whoami (the shell's edition read) is not counted unless it is the route asked about (the chooser's one read), and nothing after the check
 // is (a person's clicks are actions).
 function expectOneCall(page, route) {
   const gets = [];
@@ -64,7 +64,7 @@ function expectOneCall(page, route) {
   const onRequest = (req) => {
     if (!recording || req.method() !== "GET") return;
     const p = new URL(req.url()).pathname;
-    if (p.startsWith("/api/") && p !== "/api/whoami") gets.push(p);
+    if (p.startsWith("/api/") && (p !== "/api/whoami" || route === "/api/whoami")) gets.push(p);
   };
   page.on("request", onRequest);
   return async (ck, label) => {

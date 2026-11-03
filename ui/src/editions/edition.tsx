@@ -1,7 +1,7 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { api } from "../api";
-import type { Edition } from "../types";
+import type { Edition, Whoami } from "../types";
 
 export type EditionInfo = {
   /** undefined until the cell has said which edition it is */
@@ -12,22 +12,39 @@ export type EditionInfo = {
   credentialName?: string;
   /** the cell has no sign-in at all (whoami answers "open"), so there is no one to name */
   open?: boolean;
+  /** the cell has no edition stored yet, so the first screen asks which one (whoami edition_needed) */
+  needed?: boolean;
+  /** the key this console signs in with may change settings; a cell with no sign-in counts as admin */
+  admin?: boolean;
+  /** reads whoami again, after the edition was chosen */
+  reload: () => Promise<void>;
 };
 
-const EditionContext = createContext<EditionInfo>({});
+const EditionContext = createContext<EditionInfo>({ reload: async () => {} });
 
 /** Asks the cell for its edition once. If that fails the console still has to work, so it falls
  *  back to the platform edition, which is today's console. */
 export function EditionProvider({ children }: { children: ReactNode }) {
-  const [info, setInfo] = useState<EditionInfo>({});
+  const [info, setInfo] = useState<Omit<EditionInfo, "reload">>({});
   useEffect(() => {
     let live = true;
     api.whoami()
-      .then((w) => { if (live) setInfo({ edition: w.edition ?? "platform", name: w.edition_name, open: w.id === "open", credentialName: w.id === "open" ? undefined : w.name }); })
+      .then((w) => { if (live) setInfo(fromWhoami(w)); })
       .catch(() => { if (live) setInfo({ edition: "platform" }); });
     return () => { live = false; };
   }, []);
-  return <EditionContext.Provider value={info}>{children}</EditionContext.Provider>;
+  // After a choice is saved; a failed read keeps what is shown
+  const reload = useCallback(() => api.whoami().then((w) => setInfo(fromWhoami(w))).catch(() => {}), []);
+  const value = useMemo(() => ({ ...info, reload }), [info, reload]);
+  return <EditionContext.Provider value={value}>{children}</EditionContext.Provider>;
+}
+
+function fromWhoami(w: Whoami): Omit<EditionInfo, "reload"> {
+  const open = w.id === "open";
+  return {
+    edition: w.edition ?? "platform", name: w.edition_name, open, credentialName: open ? undefined : w.name,
+    needed: w.edition_needed === true, admin: open || (w.scopes ?? []).includes("admin"),
+  };
 }
 
 export function useEdition(): EditionInfo {

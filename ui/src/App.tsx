@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useProjectName } from "./components/ProjectBadge";
 import { useOwnProjects } from "./components/readiness";
-import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
+import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { api, auth } from "./api";
 import { useCloud, useWorkspaceOverview } from "./cloud";
@@ -170,10 +170,17 @@ function rememberCollapsed(collapsed: boolean) {
   } catch { /* private window: for this visit only */ }
 }
 
+const CHOOSER = "/welcome/edition";
+
 /** The factory and sre editions have their own shell; the platform edition is the console as it was. */
 export default function App() {
-  const { edition } = useEdition();
+  const { edition, needed } = useEdition();
+  const here = useLocation().pathname;
+  // TR-755: a cell with no edition yet opens on the chooser, alone, with no menu. While the cell has
+  // not said yet, the chooser's own address still renders (it shows its loading state).
+  if (here === CHOOSER && (edition === undefined || needed)) return <Outlet />;
   if (edition === undefined) return null;
+  if (needed) return <Navigate to={CHOOSER} replace />;
   if (edition !== "platform") return <EditionShell />;
   return <PlatformApp />;
 }
