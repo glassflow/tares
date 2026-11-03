@@ -11,7 +11,7 @@ import asyncio
 from fastapi import Request
 
 from .. import edition as edition_mod
-from .. import factory_home, start_steps
+from .. import factory_home, sre_home, start_steps
 
 PATH = "/api/home/start/hide"
 
@@ -21,7 +21,11 @@ def register(app, store, h, ctx):
         who = h.by(request) or "console"
         (start_steps.hide if hide else start_steps.unhide)(store, who)
         factory_home.drop_cache(store, request)
-        if edition_mod.edition(store)[0] != "factory":
+        value = edition_mod.edition(store)[0]
+        if value == "sre":
+            sre_home.clear_cache()
+            return sre_home.start_block(store, ctx.runtime.catalog, who)
+        if value != "factory":
             return {"ok": True}
         return factory_home.build(store, ctx.fx, request)["start"]
 
