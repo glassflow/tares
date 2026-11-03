@@ -1089,14 +1089,25 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
             want = wp["id"]
         return {"person": me, "crew": crew_name, **work_of(me, hidden, want)}
 
+    def team_reader() -> SimpleNamespace:
+        """What factory_team reads of this module (TR-739)."""
+        return SimpleNamespace(store=store, h=h, stations=stations, work_of=work_of,
+                               work_person=work_person, my_projects=my_projects, queue=queue,
+                               settings=settings, signoff_state=signoff_state,
+                               waits_for_me=waits_for_me, desk_is_mine=desk_is_mine,
+                               is_mine=is_mine, leads=leads, stored=stored, crews_of=crews_of)
+
     def team_home(request: Request, now=None) -> dict:
         """The team part of GET /api/home for the caller's person (TR-739), or {} on a cell of
         one person: see factory_team. It reads what this module holds; the route stays in daemon.py."""
-        c = SimpleNamespace(store=store, h=h, stations=stations, work_of=work_of,
-                            work_person=work_person, my_projects=my_projects, queue=queue,
-                            settings=settings, signoff_state=signoff_state,
-                            waits_for_me=waits_for_me, desk_is_mine=desk_is_mine, leads=leads)
-        return factory_team.team_home(c, request, now or now_utc())
+        return factory_team.team_home(team_reader(), request, now or now_utc())
+
+    def team_projects(request: Request, open_ps: list, tickets: dict, rows: list, which: str,
+                      now=None, waiting: list | None = None) -> dict:
+        """The team's version of the home's `projects` (TR-739): lead, members, scope, what is
+        the caller's, the Mine and Team counts; {} on a cell of one person."""
+        return factory_team.team_projects(team_reader(), request, open_ps, tickets, rows, which,
+                                          now or now_utc(), waiting or [])
 
     @app.get("/api/crew/projects")
     def crew_projects(request: Request):
@@ -2766,4 +2777,5 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         return {"repos": [r for r in rows if r["path"] or r["name"]]}
 
     return SimpleNamespace(stations=stations, queue=queue, pace=pace, settings=settings,
-                           team_home=team_home, hidden_ids=lambda: h.hidden_ids())
+                           team_home=team_home, team_projects=team_projects,
+                           hidden_ids=lambda: h.hidden_ids())

@@ -12,6 +12,7 @@ the single-person home uses. Nothing here is kept: it is all read from what the 
 from __future__ import annotations
 
 from . import areas as areas_mod
+from . import factory as factory_mod
 from . import factory_home as fh
 from . import factory_waiting as fw
 
@@ -269,7 +270,7 @@ BUILDERS = [question_items, signoff_items, grant_items, desk_items, milestone_it
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Part two: who the person waits on, the repos they own
+# Part two: who the person waits on, the project list, the crews, the repos they own
 # ═════════════════════════════════════════════════════════════════════════════
 
 # ── "You are waiting on": the projects the person leads that cannot go to a crew yet ──
@@ -314,7 +315,7 @@ def waiting_on(t: Team) -> list[dict]:
                       "asked_at": fh._iso(fh._dt(q["asked_at"])),
                       "waited": fh.plain_wait(fh._minutes(q["asked_at"], t.now))}
                      for q in t.store.list_spec_questions(p["id"], state="open")]
-        if not questions and all(r["state"] == "yours" for r in rows):
+        if not questions and all(r["state"] in ("yours", "signed_off") for r in rows):
             continue
         actions = []
         if any(r["state"] in ("waiting", "no_owner") for r in rows):
@@ -330,15 +331,144 @@ def waiting_on(t: Team) -> list[dict]:
 
 def waiting_counts(entries: list[dict]) -> list[tuple[str, int]]:
     """[(person name, how many things the person waits on them for)], most first: a repo
-    waiting for their sign-off and a question open for them each count one."""
+    waiting for their sign-off and a question open for them each count one. People are told
+    apart by id, so two people of one name stay two entries."""
     n: dict[str, int] = {}
+    names: dict[str, str] = {}
     for e in entries:
-        for r in e["repos"]:
-            if r["state"] == "waiting":
-                n[r["owner"]["name"]] = n.get(r["owner"]["name"], 0) + 1
-        for q in e["open_questions"]:
-            n[q["to"]["name"]] = n.get(q["to"]["name"], 0) + 1
-    return sorted(n.items(), key=lambda kv: (-kv[1], kv[0]))
+        for who in ([r["owner"] for r in e["repos"] if r["state"] == "waiting"]
+                    + [q["to"] for q in e["open_questions"]]):
+            names[who["id"]] = who["name"]
+            n[who["id"]] = n.get(who["id"], 0) + 1
+    return sorted(((names[i], k) for i, k in n.items()), key=lambda kv: (-kv[1], kv[0]))
+
+
+# ── the project list: lead, members, scope, and what is the person's ─────────
+
+PROJECT_VIEWS = ("mine", "team")
+
+
+def _yours_text(t: Team, tickets: list[dict], p: dict) -> tuple[int, str]:
+    """(how many of the project's tickets are the person's, "1 ticket yours, 1 Kim's")."""
+    mine, others = 0, {}
+    for tk in tickets:
+        if tk["status"] == "canceled":
+            continue
+        if t.c.is_mine(tk, t.me["id"], p):
+            mine += 1
+            continue
+        who = tk.get("assignee_person_id") or p.get("lead_person_id")
+        name = t.people().get(who) if who else None
+        others[name or "unassigned"] = others.get(name or "unassigned", 0) + 1
+    parts = [f"{fh._count(mine, 'ticket')} yours"] if mine else []
+    for i, (name, n) in enumerate(sorted(others.items(), key=lambda kv: (-kv[1], kv[0]))):
+        who = f"{name}'s" if name != "unassigned" else name
+        parts.append(f"{fh._count(n, 'ticket')} {who}" if not parts and i == 0 else f"{n} {who}")
+    return mine, ", ".join(parts)
+
+
+def _hidden_summary(stubs: list[dict]) -> str:
+    n = len(stubs)
+    leads = list(dict.fromkeys(s["lead"]["name"] for s in stubs if s["lead"]))
+    return (f"{fh._count(n, 'private project')} you are not on"
+            + (f", led by {fw._and(leads)}" if leads else ""))
+
+
+def team_projects(c, request, open_ps: list[dict], tickets: dict, rows: list[dict], which: str,
+                  now, waiting: list[dict] = ()) -> dict:
+    """The `projects`, `counts` and `hidden_summary` keys. A project is mine when the person leads
+    it, holds a ticket in it, or an item in `waiting` is in it. `rows` are the home's project rows of
+    the projects the person can see (`open_ps`, with their `tickets`); a private project they are
+    not on is not among them and shows only as {hidden: true, lead: {name}} in the team view."""
+    if not _applies(c, request):
+        return {}
+    t = Team(c, request, c.work_person(request), now)
+    by_id = {p["id"]: p for p in open_ps}
+    asked = {(i["project"] or {}).get("id") for i in waiting}   # projects with something for the person
+    shown = []
+    for r in rows:
+        p = by_id[r["id"]]
+        yours, text = _yours_text(t, tickets.get(p["id"], []), p)
+        lead_id = p.get("lead_person_id")
+        shown.append({**r, "lead": t.person(lead_id),
+                      "members": [t.person(m["person_id"]) for m in t.store.list_project_members(p["id"])
+                                  if m["person_id"] != lead_id],
+                      "scope": p.get("scope") or "team", "yours": yours, "yours_text": text,
+                      "mine": bool(t.c.leads(p, t.me["id"]) or yours or r["id"] in asked)})
+    stubs = []
+    for p in t.store.list_projects():
+        if p["id"] in t.hidden and p.get("kind") == "software_factory" and p["status"] != "done":
+            lead = t.person(p.get("lead_person_id"))
+            stubs.append({"hidden": True, "lead": {"name": lead["name"]} if lead else None})
+    counts = {"mine": sum(1 for r in shown if r["mine"]), "team": len(shown)}
+    view = which if which in PROJECT_VIEWS else "mine"
+    out = {"projects": [r for r in shown if r["mine"]] if view == "mine" else shown + stubs,
+           "counts": counts}
+    if stubs:
+        out["hidden_summary"] = _hidden_summary(stubs)
+    return out
+
+
+# ── the crews: the person's own first, then the team's; the silent ones named apart ──
+
+QUIET_MINUTES = 24 * 60
+
+
+def _crew_label(t: Team, crew: dict) -> str:
+    if crew["person_id"] == t.me["id"]:
+        return "Your crew"
+    who = (_ref(crew["person"]) or {}).get("name")
+    return f"{who}'s crew" if who else "A crew"
+
+
+def _crew_doing(stations: list[dict]) -> str:
+    live = [s for s in stations if s["state"] != "ended"]
+    building = list(dict.fromkeys(s["project_name"] for s in live
+                                  if s["state"] == "working" and s["role"] == "builder"
+                                  and s.get("project_name")))
+    if building:
+        return "Building " + fw._and(building) + "."
+    if any(s["state"] == "working" for s in live):
+        return "At work."
+    waiting = next((s for s in live if s["state"] == "waiting"), None)
+    if waiting:
+        return waiting.get("state_reason") or "Waiting for an answer."
+    return "Idle." if live else "Not running."
+
+
+def crews(t: Team) -> tuple[list[dict], list[str]]:
+    """(the crews heard from in the last 24 hours, the person's own first, then each other
+    person's, newest first; the names of the crews not heard from since)."""
+    own, others, quiet = [], [], []
+    for cr in t.c.crews_of(t.stations()):
+        label = _crew_label(t, cr)
+        silent = fh._minutes(cr["last_seen"], t.now)
+        if silent is None or silent > QUIET_MINUTES:
+            quiet.append((cr["person_id"] != t.me["id"], label))
+            continue
+        row = {"name": label, "machine": cr["machine"], "person": _ref(cr["person"]) or t.person(cr["person_id"]),
+               "last_seen": fh._iso(fh._dt(cr["last_seen"])), "heard": fh.plain_ago(cr["last_seen"], t.now),
+               "working": sum(1 for s in cr["stations"] if s["state"] == "working"),
+               "doing": _crew_doing(cr["stations"])}
+        (own if cr["person_id"] == t.me["id"] else others).append(row)
+    return own + others, [label for _, label in sorted(quiet)]
+
+
+# ── how far a crew may go: the team's limit and the person's own ─────────────
+
+_UP_TO = {"L3-review": "up to merge",
+          "L4-ship": "merging on its own after review and green CI"}
+
+
+def crew_limit(t: Team) -> dict:
+    """{mine, team, text}: the autonomy of the person's crew and the team's, in words. The
+    person's can be stricter than the team's, never looser (factory.stricter_than_team)."""
+    team = t.c.stored("crew_settings").get("autonomy")
+    team = team if team in factory_mod.AUTONOMY else "L3-review"
+    mine = t.c.settings(t.request).get("autonomy")
+    mine = mine if mine in factory_mod.AUTONOMY else team
+    return {"mine": factory_mod.AUTONOMY[mine], "team": factory_mod.AUTONOMY[team],
+            "text": f"The team allows {_UP_TO[team]}. Yours can be stricter, not looser."}
 
 
 # ── the repos the person owns, and what waits on each ────────────────────────
@@ -389,6 +519,8 @@ def team_home(c, request, now) -> dict:
     waiting = [i for build in BUILDERS for i in build(t)]
     waiting.sort(key=lambda i: fh._dt(i["since"]) or now)
     on = waiting_on(t)
+    crew_rows, quiet = crews(t)
     return {"waiting_for_you": waiting, "waiting_total": len(waiting),
             "summary": summary(waiting, waiting_counts(on)), "you_are_waiting_on": on,
+            "crews": crew_rows, "crews_quiet": quiet, "crew_limit": crew_limit(t),
             "areas": areas(t, waiting)}

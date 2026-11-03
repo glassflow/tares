@@ -18,6 +18,7 @@ import os
 import sys
 import tempfile
 from datetime import timedelta
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _env import scrub_os_environ
@@ -378,6 +379,9 @@ async def main():
            (await home("alex"))["you_are_waiting_on"] == [] and (await home("lee"))["you_are_waiting_on"] == []
            and "waiting on" not in (await home("alex"))["summary"])
         ck("the cell's one-person home never has the key", "you_are_waiting_on" not in one)
+        ck("Atlas has not started, but a question and a sign-off wait for Alex in it: in his mine view, "
+           "not in Lee's", atlas in [p["id"] for p in (await home_of("alex"))["projects"]]
+           and atlas not in [p["id"] for p in (await home_of("lee"))["projects"]])
 
         r = await call("alex", "POST", f"/api/projects/{atlas}/questions/{aq}/answer", {"answer": "Yes"})
         await call("alex", "POST", f"/api/projects/{atlas}/signoffs", {"repo": "acme/web"})
@@ -391,10 +395,9 @@ async def main():
         r = await call("kim", "PUT", "/api/areas/other/lib", {"person_id": pid["kim"]})
         ck("Kim takes other/lib", r.status_code < 300, r.text)
         h = await home("kim")
-        e = {x["project"]["id"]: x for x in h["you_are_waiting_on"]}[atlas]
-        ck("everyone signed off: the project is still listed, says so, and offers nothing",
-           e["detail"] == "Everyone has signed off. The project can go to a crew." and e["actions"] == []
-           and h["summary"] == factory_team.summary(h["waiting_for_you"]), (e, h["summary"]))
+        ck("everyone signed off and nothing asked: the project is no longer waited on",
+           atlas not in {x["project"]["id"] for x in h["you_are_waiting_on"]}
+           and h["summary"] == factory_team.summary(h["waiting_for_you"]), h["summary"])
         solo2 = await make_project("kim", "Kim only")
         await ticket("kim", solo2, "Own repo work", "acme/api")
         ck("a project whose repos are all Kim's, with nothing asked, is left out",
@@ -418,6 +421,67 @@ async def main():
         ck("Alex answers them all", not store.list_spec_questions(atlas, state="open")
            and not store.list_spec_questions(solo2, state="open"))
 
+        print("== part two: the project list, lead, members, scope, mine and team ==")
+        store.update_ticket(t_web, assignee_person_id=pid["alex"])
+        r = await call("kim", "POST", f"/api/projects/{atlas}/members", {"person_id": pid["lee"]})
+        ck("Kim puts Lee on Atlas", r.status_code < 300, r.text)
+        h = await home_of("kim")
+        a = next(p for p in h["projects"] if p["id"] == atlas)
+        ck("Atlas for Kim: lead, members besides the lead, scope, her tickets in words",
+           a["lead"] == {"id": pid["kim"], "name": "Kim"} and a["members"] == [{"id": pid["lee"], "name": "Lee"}]
+           and a["scope"] == "team" and a["yours"] == 2 and a["yours_text"] == "2 tickets yours, 1 Alex's"
+           and a["mine"] is True, a)
+        ck("the rows keep the single-person fields too", a["name"] == "Atlas" and a["state"]
+           and "tickets" in a and "repos" in a and a["can_close"] in (True, False), sorted(a))
+        h = await home_of("alex", "mine")
+        a = next((p for p in h["projects"] if p["id"] == atlas), {})
+        ck("Atlas for Alex (one ticket assigned to him): mine, '1 ticket yours, 2 Kim's'",
+           a.get("mine") is True and a["yours"] == 1 and a["yours_text"] == "1 ticket yours, 2 Kim's", a)
+        h = await home_of("lee")
+        ck("Lee is on Atlas but holds no ticket: not in his mine view, in his team view and counts",
+           atlas not in [p["id"] for p in h["projects"]]
+           and atlas in [p["id"] for p in (await home_of("lee", "team"))["projects"]]
+           and h["counts"]["mine"] == 0 and h["counts"]["team"] >= 2, h["counts"])
+        hk, ht = await home_of("kim"), await home_of("kim", "team")
+        am, at = await home_of("alex", "mine"), await home_of("alex", "team")
+        ck("an unknown view reads as mine (Alex's two views differ)",
+           [p["id"] for p in am["projects"]] != [p["id"] for p in at["projects"]]
+           and [p["id"] for p in (await home_of("alex", "everything"))["projects"]]
+           == [p["id"] for p in am["projects"]], (len(am["projects"]), len(at["projects"])))
+        ck("Kim's counts are the same in both views and mine is a part of team",
+           hk["counts"] == ht["counts"] and hk["counts"]["mine"] <= hk["counts"]["team"]
+           and len(hk["projects"]) == hk["counts"]["mine"] and len(ht["projects"]) == hk["counts"]["team"],
+           (hk["counts"], len(hk["projects"]), len(ht["projects"])))
+        ck("every row of Kim's mine view is in her team view", {p["id"] for p in hk["projects"]} <= {p["id"] for p in ht["projects"]})
+        fh._cache.clear()
+        r1 = (await call("kim", "GET", "/api/home")).json()
+        r2 = (await call("kim", "GET", "/api/home", projects="team")).json()
+        r3 = (await call("kim", "GET", "/api/home")).json()
+        ck("the home cache is kept per view: team, then mine again, is mine",
+           len(r1["projects"]) == r1["counts"]["mine"] and len(r2["projects"]) == r2["counts"]["team"]
+           and len(r3["projects"]) == r1["counts"]["mine"])
+        req = SimpleNamespace(state=SimpleNamespace(credential={"name": "k", "person": {"id": "p"}}),
+                              query_params={})
+        req_team = SimpleNamespace(state=req.state, query_params={"projects": "team"})
+        fh._cache.clear()
+        fh._cache[fh._cache_key(store, req)] = (0, {})
+        fh._cache[fh._cache_key(store, req_team)] = (0, {})
+        fh._cache[fh._cache_key(store, SimpleNamespace(
+            state=SimpleNamespace(credential={"name": "x", "person": {"id": "q"}}), query_params={}))] = (0, {})
+        fh.drop_cache(store, req)
+        ck("dropping a credential's kept home drops its mine and team views, not another person's",
+           len(fh._cache) == 1 and next(iter(fh._cache))[1] == "x", list(fh._cache))
+        fh._cache.clear()
+        empty = await make_project("kim", "Fresh idea")
+        ck("a project Kim leads with no ticket and nothing asked is still hers",
+           empty in [p["id"] for p in (await home_of("kim"))["projects"]])
+        store.add_project_member(atlas, pid["kim"])   # the lead on the member list too
+        dropped = await ticket("kim", atlas, "Dropped work", "acme/api", status="canceled")
+        a = next(p for p in (await home_of("kim"))["projects"] if p["id"] == atlas)
+        ck("the lead is not listed among the members, and a canceled ticket is not counted",
+           a["members"] == [{"id": pid["lee"], "name": "Lee"}] and a["yours"] == 2
+           and a["yours_text"] == "2 tickets yours, 1 Alex's", a)
+
         print("== part two: a private project the person is not on ==")
         r = await call("lee", "POST", "/api/projects", {"template": "custom", "name": "Vault",
                                                         "objects": [], "kind": "software_factory",
@@ -431,14 +495,111 @@ async def main():
                                                                          "text": "Who holds the codes?"})
         ck("Lee cannot ask Alex, who is not on his private project", r.status_code >= 400, r.text)
         for who in ("alex", "kim"):
-            dump = json.dumps(await home_of(who))
-            ck(f"{who.capitalize()}: nothing of Vault is anywhere in the body",
-               not any(w in dump for w in ("Vault", "launch codes", "secret keys", "vault keys", vault)),
-               [w for w in ("Vault", "launch codes", "secret keys", "vault keys", vault) if w in dump])
+            for view in ("mine", "team"):
+                h = await home_of(who, view)
+                dump = json.dumps(h)
+                ck(f"{who.capitalize()} / {view}: nothing of Vault is anywhere in the body",
+                   not any(w in dump for w in ("Vault", "launch codes", "secret keys", "vault keys", vault)),
+                   [w for w in ("Vault", "launch codes", "secret keys", "vault keys", vault) if w in dump])
+        h = await home_of("alex", "team")
+        ck("the team view ends with one stub: hidden, and its lead's name only",
+           h["projects"][-1] == {"hidden": True, "lead": {"name": "Lee"}}
+           and sum(1 for p in h["projects"] if p.get("hidden")) == 1, h["projects"][-1])
+        ck("hidden_summary says how many and whose", h["hidden_summary"]
+           == "1 private project you are not on, led by Lee", h.get("hidden_summary"))
+        ck("counts.team leaves the hidden one out", h["counts"]["team"] == len(h["projects"]) - 1, h["counts"])
+        h = await home_of("alex", "mine")
+        ck("the mine view has no stub, only the summary", not any(p.get("hidden") for p in h["projects"])
+           and h["hidden_summary"] == "1 private project you are not on, led by Lee")
+        h = await home_of("lee", "team")
+        ck("Lee leads it: his own row, no stub, no summary", next(p for p in h["projects"] if p["id"] == vault)
+           ["scope"] == "private" and not any(p.get("hidden") for p in h["projects"])
+           and "hidden_summary" not in h)
         store.add_desk_item(vault, "Rotate the vault keys?", "", [], "yes", "why", "", [], False,
                             "crew-orchestrator", [], ago(minutes=3), to_person_id=pid["alex"])
         ck("a desk item addressed to Alex in a project he is not on is not in his list",
            "vault keys" not in json.dumps(await home_of("alex")))
+        ck("a hidden project's desk item is not counted in the crew's open questions for Alex",
+           (await home_of("lee"))["crew"]["desk_open"] == (await home_of("alex"))["crew"]["desk_open"] + 1,
+           [(await home_of(w))["crew"]["desk_open"] for w in ("lee", "alex")])
+        two = [{"repos": [{"state": "waiting", "owner": {"id": "p1", "name": "Sam"}}], "open_questions": []},
+               {"repos": [{"state": "waiting", "owner": {"id": "p2", "name": "Sam"}}],
+                "open_questions": [{"to": {"id": "p1", "name": "Sam"}}]}]
+        ck("two people of one name are two entries in the waiting counts",
+           factory_team.waiting_counts(two) == [("Sam", 2), ("Sam", 1)],
+           factory_team.waiting_counts(two))
+        ck("the stub has the same shape in two homes with no other key", all(
+            set(p) == {"hidden", "lead"} for p in (await home_of("kim", "team"))["projects"] if p.get("hidden")))
+
+        print("== part two: the crews ==")
+        r = await call("root", "POST", "/api/sources", {"name": "claude_code", "connector": "claude_code",
+                                                         "poll": "10s", "config": {"push": True}})
+        ck("the claude_code source is made", r.status_code < 300, r.text)
+
+        def st_line(sid, station, role, ago_min, crew, machine, project=""):
+            o = {"type": "session_station", "sessionId": sid, "cwd": "/w/crew",
+                 "timestamp": (now_utc() - timedelta(minutes=ago_min)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+                 "station": station, "role": role, "parent": "", "factory_station": station,
+                 "factory_crew": crew, "crew": crew, "factory_machine": machine, "machine": machine}
+            if project:
+                o["tares_project"] = project
+            return o
+
+        def state_line(sid, st_, ago_min):
+            return {"type": "session_state", "sessionId": sid, "cwd": "/w/crew", "state": st_, "reason": "",
+                    "timestamp": (now_utc() - timedelta(minutes=ago_min)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"}
+
+        async def push(who, lines):
+            hdr = keys[who]
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
+                                         headers={**hdr, "Content-Type": "application/x-ndjson"}) as cx:
+                r = await cx.post("/ingest/claude_code", content="\n".join(json.dumps(x) for x in lines) + "\n")
+            ck(f"{who}'s crew lines are taken in", r.status_code < 300, r.text)
+
+        await push("alex", [st_line("a1", "a-orchestrator", "orchestrator", 10, "a", "m1"),
+                            st_line("a2", "a-build-m1", "builder", 4, "a", "m1", project=atlas),
+                            state_line("a2", "working", 4)])
+        await push("kim", [st_line("k1", "k-orchestrator", "orchestrator", 6, "k", "m3"),
+                           state_line("k1", "idle", 6)])
+        await push("lee", [st_line("l1", "l-orchestrator", "orchestrator", 2 * 24 * 60, "l", "m2"),
+                           state_line("l1", "idle", 2 * 24 * 60)])
+        h = await home_of("alex")
+        names = [c["name"] for c in h["crews"]]
+        ck("Alex: his own crew first, then Kim's; Lee's, silent for two days, is named apart",
+           names == ["Your crew", "Kim's crew"] and h["crews_quiet"] == ["Lee's crew"], (names, h["crews_quiet"]))
+        mine_c = h["crews"][0]
+        ck("his crew: machine, person, how many work, and what they are doing",
+           mine_c["machine"] == "m1" and mine_c["person"] == {"id": pid["alex"], "name": "Alex"}
+           and mine_c["working"] == 1 and mine_c["doing"] == "Building Atlas."
+           and mine_c["heard"] == "4 minutes ago" and mine_c["last_seen"], mine_c)
+        ck("Kim's crew is idle", h["crews"][1]["doing"] == "Idle." and h["crews"][1]["working"] == 0
+           and h["crews"][1]["person"] == {"id": pid["kim"], "name": "Kim"}, h["crews"][1])
+        h = await home_of("lee")
+        ck("Lee sees his own silent crew as 'Your crew' among the quiet ones",
+           [c["name"] for c in h["crews"]] == ["Alex's crew", "Kim's crew"], [c["name"] for c in h["crews"]])
+        ck("... and the quiet list says it is his", h["crews_quiet"] == ["Your crew"], h["crews_quiet"])
+        h = await home_of("kim")
+        ck("Kim: her crew first, Alex's second, Lee's quiet",
+           [c["name"] for c in h["crews"]] == ["Your crew", "Alex's crew"]
+           and h["crews_quiet"] == ["Lee's crew"], ([c["name"] for c in h["crews"]], h["crews_quiet"]))
+
+        print("== part two: how far a crew may go ==")
+        h = await home_of("alex")
+        ck("with no limit set, the team allows up to merge and Alex's is the same, in words",
+           h["crew_limit"] == {"mine": "you approve each merge", "team": "you approve each merge",
+                               "text": "The team allows up to merge. Yours can be stricter, not looser."},
+           h["crew_limit"])
+        r = await call("root", "PUT", "/api/crew/settings", {"autonomy": "L4-ship"})
+        ck("the team lets the crew merge on its own", r.status_code == 200, r.text)
+        r = await call("alex", "PUT", "/api/crew/settings", {"autonomy": "L3-review"})
+        ck("Alex keeps his own at review", r.status_code == 200, r.text)
+        cl = (await home_of("alex"))["crew_limit"]
+        ck("the team's limit and Alex's own, apart", cl["team"] == "a builder merges after the reviewer's pass "
+           "and green CI" and cl["mine"] == "you approve each merge" and cl["text"] == (
+               "The team allows merging on its own after review and green CI. Yours can be stricter, "
+               "not looser."), cl)
+        cl = (await home_of("kim"))["crew_limit"]
+        ck("Kim has set none: hers follows the team's", cl["mine"] == cl["team"], cl)
 
         print("== part two: the repos a person owns ==")
         h = await home_of("alex")
@@ -457,7 +618,7 @@ async def main():
         print("== part two: the new keys pass the same checks ==")
         for who in ("alex", "kim", "lee"):
             body = await home_of(who)
-            for k_ in ("you_are_waiting_on", "areas"):
+            for k_ in ("you_are_waiting_on", "crews", "crews_quiet", "crew_limit", "areas", "counts"):
                 ck(f"{who.capitalize()}: {k_} is in the body", k_ in body)
             for e in body["you_are_waiting_on"]:
                 for a in e["actions"]:
@@ -465,9 +626,12 @@ async def main():
                        (("href" in a) != ("do" in a)) and ("do" not in a or a["do"] in fh.ACTIONS), a)
         part2 = []
         for body in BODIES:
-            for k_ in ("you_are_waiting_on", "areas", "summary"):
+            for k_ in ("you_are_waiting_on", "crews", "crews_quiet", "crew_limit", "areas", "summary",
+                       "counts", "hidden_summary"):
                 if k_ in body:
                     part2.append(body[k_])
+            for p in body.get("projects", []):
+                part2.append(p.get("yours_text") or "")
         text2 = list(strings(part2))
         bad2 = [(s, words.offenders(s)) for s in text2 if words.offenders(s)]
         ck("every new string passes the words check, names and all", not bad2, bad2[:3])
@@ -501,37 +665,6 @@ async def main():
         l = by_kind(await home("lee"))
         ck("Lee leads none of them: none of the three", not ({"ready_to_start", "calls_to_confirm"} & set(l))
            and f"signoff:{fin}" not in {i["id"] for i in l.get("signoff", [])}, l)
-
-        # two crews heard from, so a desk item can come from the caller's crew or another person's
-        r = await call("root", "POST", "/api/sources", {"name": "claude_code", "connector": "claude_code",
-                                                         "poll": "10s", "config": {"push": True}})
-        ck("the claude_code source is made", r.status_code < 300, r.text)
-
-        def st_line(sid, station, role, ago_min, crew, machine, project=""):
-            o = {"type": "session_station", "sessionId": sid, "cwd": "/w/crew",
-                 "timestamp": (now_utc() - timedelta(minutes=ago_min)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
-                 "station": station, "role": role, "parent": "", "factory_station": station,
-                 "factory_crew": crew, "crew": crew, "factory_machine": machine, "machine": machine}
-            if project:
-                o["tares_project"] = project
-            return o
-
-        def state_line(sid, st_, ago_min):
-            return {"type": "session_state", "sessionId": sid, "cwd": "/w/crew", "state": st_, "reason": "",
-                    "timestamp": (now_utc() - timedelta(minutes=ago_min)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"}
-
-        async def push(who, lines):
-            hdr = keys[who]
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
-                                         headers={**hdr, "Content-Type": "application/x-ndjson"}) as cx:
-                r = await cx.post("/ingest/claude_code", content="\n".join(json.dumps(x) for x in lines) + "\n")
-            ck(f"{who}'s crew lines are taken in", r.status_code < 300, r.text)
-
-        await push("alex", [st_line("a1", "a-orchestrator", "orchestrator", 10, "a", "m1"),
-                            st_line("a2", "a-build-m1", "builder", 4, "a", "m1", project=atlas),
-                            state_line("a2", "working", 4)])
-        await push("kim", [st_line("k1", "k-orchestrator", "orchestrator", 6, "k", "m3"),
-                           state_line("k1", "idle", 6)])
 
         print("== behaviours a quick change could drop ==")
         own = store.add_desk_item(orbit, "Pick a name?", "", [], "Nova", "short", "", [], False,

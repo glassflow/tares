@@ -410,7 +410,7 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     ids = [p["id"] for p in open_ps]
     tickets = store.tickets_by_project(ids)
     milestones = store.milestones_by_project(ids)
-    desk_open = len(store.list_desk("open", None))
+    desk_open = len([d for d in store.list_desk("open", None) if d.get("project") not in hidden])
     waiting = team["waiting_for_you"] if team else waiting_items(store, fx, now)
     rows = []
     for p in open_ps:
@@ -419,6 +419,9 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
         rows.append(row)
     rows.sort(key=lambda r: (_STATE_ORDER[r["state"]],
                              -(_dt(r["last_activity_at"]) or datetime.fromtimestamp(0, timezone.utc)).timestamp()))
+    if team:   # the team's project list: lead, members, scope, Mine and Team (TR-739)
+        team = {**team, **fx.team_projects(request, open_ps, tickets, rows, projects_view(request), now,
+                                                  team["waiting_for_you"])}
     crew = _crew(stations, settings, {p["id"] for p in open_ps}, tickets, desk_open, now)
     orch = next((s for s in stations if s["role"] == "orchestrator"), None)
     silent = _minutes(orch["last_at"], now) if orch and crew["running"] else None
@@ -445,19 +448,29 @@ _cache: dict = {}
 _cache_lock = threading.Lock()
 
 
+def projects_view(request) -> str:
+    """The `projects` query of GET /api/home: "team" or "mine" (the default, also for any other
+    value)."""
+    q = getattr(request, "query_params", None)
+    return "team" if q is not None and q.get("projects") == "team" else "mine"
+
+
 def _cache_key(store, request) -> tuple:
-    """One kept home per cell, credential and person: two keys of one name, or a key rebound to
-    another person, never share a home that is addressed to a person."""
+    """One kept home per cell, credential, person and project view: two keys of one name, or a
+    key rebound to another person, never share a home that is addressed to a person."""
     state = getattr(request, "state", None)
     cred = getattr(state, "credential", None) or {}
-    return (id(store), cred.get("name") or "open", (cred.get("person") or {}).get("id"))
+    return (id(store), cred.get("name") or "open", (cred.get("person") or {}).get("id"),
+            projects_view(request))
 
 
 def drop_cache(store, request) -> None:
     """Forget the kept home of the request's credential, so its next read shows a change made
     just now (the start block's hide and show)."""
     with _cache_lock:
-        _cache.pop(_cache_key(store, request), None)
+        key = _cache_key(store, request)
+        for k in [k for k in _cache if k[:3] == key[:3]]:   # every project view of it
+            _cache.pop(k, None)
 
 
 def build(store, fx=None, request=None, now=None) -> dict:
