@@ -185,7 +185,7 @@ export interface HomeData {
   you_are_waiting_on?: HomeWaitingOn[];
   // In the Team view of a team cell the list also holds HomeHiddenProject stubs (see
   // HomeProjectRow); narrow on `"hidden" in row` before reading a project field.
-  projects: HomeProject[];
+  projects: HomeProjectRow[];
   counts?: { mine: number; team: number };
   hidden_summary?: string; // "1 private project you are not on, led by Lee"
   crews?: HomeTeamCrew[];
