@@ -74,6 +74,28 @@ export interface HomeProject {
   can_close: boolean;
 }
 
+// One repo of a project the person leads, and where its owner stands.
+export interface HomeWaitingRepo {
+  repo: string;
+  owner: HomeRef | null;
+  state: "yours" | "waiting" | "signed_off" | "no_owner";
+}
+
+// A project the person leads that depends on someone else before it can go to a crew.
+export interface HomeWaitingOn {
+  project: HomeRef;
+  title: string;
+  detail: string;
+  repos: HomeWaitingRepo[];
+  open_questions: { id: string; to: HomeRef | null; asked_at: string | null; waited: string }[];
+  actions: HomeAction[];
+}
+
+export interface HomeArea {
+  repo: string;
+  note: string; // "1 sign-off asked, 1 question open", "nothing waiting"
+}
+
 // "not heard" is a station silent for a while; "waiting" says why in `doing`.
 export type HomeCrewState = "working" | "idle" | "waiting" | "not heard" | "ended";
 
@@ -126,6 +148,9 @@ export interface HomeData {
   waiting_total: number;
   // One sentence on what waits for the person; only a cell with more than one person sends it.
   summary?: string;
+  // Only a cell with more than one person sends the keys below.
+  you_are_waiting_on?: HomeWaitingOn[];
+  areas?: HomeArea[];
   projects: HomeProject[];
   finished_count: number;
   crew: HomeCrew;

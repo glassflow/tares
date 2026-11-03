@@ -70,6 +70,7 @@ async def main():
     root = {"Authorization": f"Bearer {TOKEN}"}
     keys, pid = {}, {}
     SEEN = {}   # every item any home showed during the run, by id
+    BODIES = []   # every whole home body the run read
 
     def ago(**kw):
         return now_utc() - timedelta(**kw)
@@ -87,6 +88,15 @@ async def main():
         for i in r.json()["waiting_for_you"]:
             SEEN[i["id"]] = i
         SEEN["summary:" + who] = {"summary": r.json().get("summary") or ""}
+        BODIES.append(r.json())
+        return r.json()
+
+    async def home_of(who, view=None):
+        """The home with the projects view asked for (mine is the default)."""
+        fh._cache.clear()
+        r = await call(who, "GET", "/api/home", **({"projects": view} if view else {}))
+        assert r.status_code == 200, r.text
+        BODIES.append(r.json())
         return r.json()
 
     def by_kind(h):
@@ -300,22 +310,6 @@ async def main():
            and pr["project"] == {"id": shop, "name": "Shop"}, k)
         ck("not in Lee's, who is not in Shop", "prs_to_review" not in by_kind(await home("lee")))
 
-        print("== a private project the person is not on ==")
-        vault = await make_project("lee", "Vault")
-        r = await call("lee", "PATCH", f"/api/projects/{vault}", {"scope": "private"})
-        ck("Lee makes Vault private", r.status_code < 300 and store.get_project(vault)["scope"] == "private",
-           r.text)
-        await ticket("lee", vault, "Rotate the secret keys", "acme/web")
-        store.add_desk_item(vault, "Rotate the vault keys?", "", [], "yes", "why", "", [], False,
-                            "crew-orchestrator", [], ago(minutes=3), to_person_id=pid["alex"])
-        for who in ("alex", "kim"):
-            dump = json.dumps((await home(who))["waiting_for_you"])
-            ck(f"{who.capitalize()}: nothing of Vault is in the items", not any(
-                w in dump for w in ("Vault", "secret keys", "vault keys", vault)),
-               [w for w in ("Vault", "secret keys", "vault keys", vault) if w in dump])
-        ck("Lee still sees his own project's ticket in his home",
-           any(p["id"] == vault for p in (await home("lee"))["projects"]))
-
         print("== the whole answer ==")
         for who in ("alex", "kim", "lee"):
             h = await home(who)
@@ -345,6 +339,243 @@ async def main():
             titles[who] = [i["detail"] for i in r.json()["waiting_for_you"]]
         ck("each gets their own home", titles["alex2"] == ["Cache check for Alex?"] and titles["lee2"] == [],
            titles)
+
+
+        print("== part two: who the person waits on ==")
+        atlas = await make_project("kim", "Atlas")
+        t_web = await ticket("kim", atlas, "Web part", "acme/web")
+        await ticket("kim", atlas, "Api part", "acme/api")
+        await ticket("kim", atlas, "Lib part", "other/lib")
+        r = await call("kim", "POST", f"/api/projects/{atlas}/questions",
+                       {"repo": "acme/web", "text": "Is the cart in scope?"})
+        ck("Kim asks Alex a question in Atlas", r.status_code == 201, r.text)
+        aq = r.json()["id"]
+        h = await home("kim")
+        on = {e["project"]["id"]: e for e in h["you_are_waiting_on"]}
+        e = on.get(atlas) or {}
+        ck("Kim waits on one project: Atlas (Shop went to a crew, no other project depends on anyone)",
+           list(on) == [atlas] and e["title"] == "Atlas" and e["project"] == {"id": atlas, "name": "Atlas"},
+           list(on))
+        st = {r_["repo"]: (r_["state"], r_["owner"]) for r_ in e["repos"]}
+        ck("each repo has its owner and state: one Kim's own, one waiting, one with no owner", st == {
+            "acme/api": ("yours", {"id": pid["kim"], "name": "Kim"}),
+            "acme/web": ("waiting", {"id": pid["alex"], "name": "Alex"}),
+            "other/lib": ("no_owner", None)}, st)
+        ck("the open question names who it is for and how long it has waited",
+           [(q["id"], q["to"], q["waited"]) for q in e["open_questions"]]
+           == [(aq, {"id": pid["alex"], "name": "Alex"}, "just now")]
+           and e["open_questions"][0]["asked_at"], e["open_questions"])
+        ck("the detail says in words what is missing", e["detail"] == (
+            "Waiting for Alex to sign off on acme/web. other/lib has no owner. 1 question open for Alex."),
+           e["detail"])
+        ck("Hand over anyway and Set an owner are offered", e["actions"] == [
+            {"label": "Hand over anyway", "primary": False, "do": "hand_over_anyway", "project": atlas},
+            {"label": "Set an owner", "primary": False, "href": "/settings/advanced"}], e["actions"])
+        ck("the summary adds who Kim waits on, a sign-off and a question each counting one",
+           h["summary"] == factory_team.summary(h["waiting_for_you"], [("Alex", 2)])
+           and h["summary"].endswith("You are waiting on Alex for 2."), h["summary"])
+        ck("Alex and Lee lead nothing: an empty list, and no second sentence",
+           (await home("alex"))["you_are_waiting_on"] == [] and (await home("lee"))["you_are_waiting_on"] == []
+           and "waiting on" not in (await home("alex"))["summary"])
+        ck("the cell's one-person home never has the key", "you_are_waiting_on" not in one)
+
+        r = await call("alex", "POST", f"/api/projects/{atlas}/questions/{aq}/answer", {"answer": "Yes"})
+        await call("alex", "POST", f"/api/projects/{atlas}/signoffs", {"repo": "acme/web"})
+        e = {x["project"]["id"]: x for x in (await home("kim"))["you_are_waiting_on"]}[atlas]
+        st = {r_["repo"]: r_["state"] for r_ in e["repos"]}
+        ck("Alex signs off and answers: the lead sees signed_off, the question is gone",
+           st["acme/web"] == "signed_off" and e["open_questions"] == []
+           and e["detail"] == "other/lib has no owner.", (st, e["detail"], e["open_questions"]))
+        ck("Hand over anyway stays for the repo with no owner only through Set an owner",
+           [a["label"] for a in e["actions"]] == ["Hand over anyway", "Set an owner"], e["actions"])
+        r = await call("kim", "PUT", "/api/areas/other/lib", {"person_id": pid["kim"]})
+        ck("Kim takes other/lib", r.status_code < 300, r.text)
+        h = await home("kim")
+        e = {x["project"]["id"]: x for x in h["you_are_waiting_on"]}[atlas]
+        ck("everyone signed off: the project is still listed, says so, and offers nothing",
+           e["detail"] == "Everyone has signed off. The project can go to a crew." and e["actions"] == []
+           and h["summary"] == factory_team.summary(h["waiting_for_you"]), (e, h["summary"]))
+        solo2 = await make_project("kim", "Kim only")
+        await ticket("kim", solo2, "Own repo work", "acme/api")
+        ck("a project whose repos are all Kim's, with nothing asked, is left out",
+           solo2 not in {x["project"]["id"] for x in (await home("kim"))["you_are_waiting_on"]})
+        await call("kim", "POST", f"/api/projects/{atlas}/questions",
+                   {"repo": "acme/web", "text": "Second one?"})
+        await call("kim", "POST", f"/api/projects/{solo2}/questions",
+                   {"repo": "acme/web", "text": "A ticket for you?"})
+        await ticket("kim", solo2, "Web work", "acme/web")
+        h = await home("kim")
+        ck("a second question in two projects: both listed, the sentence counts both for Alex",
+           {x["project"]["id"] for x in h["you_are_waiting_on"]} == {atlas, solo2}
+           and h["summary"].endswith("You are waiting on Alex for 3."), (h["summary"]))
+        ck("the counts sentence for several people names each, most first",
+           factory_team.summary([], [("Alex", 2), ("Lee", 1)])
+           == "Nothing waits for you. You are waiting on Alex for 2 and Lee for 1.")
+        for uid in (atlas, solo2):
+            for q in store.list_spec_questions(uid, state="open"):
+                r = await call("alex", "POST", f"/api/projects/{uid}/questions/{q['id']}/answer", {"answer": "ok"})
+                assert r.status_code == 200, r.text
+        ck("Alex answers them all", not store.list_spec_questions(atlas, state="open")
+           and not store.list_spec_questions(solo2, state="open"))
+
+        print("== part two: a private project the person is not on ==")
+        r = await call("lee", "POST", "/api/projects", {"template": "custom", "name": "Vault",
+                                                        "objects": [], "kind": "software_factory",
+                                                        "goal": "Hide the launch codes"})
+        assert r.status_code in (200, 201), r.text
+        vault = r.json()["id"]
+        r = await call("lee", "PATCH", f"/api/projects/{vault}", {"scope": "private"})
+        ck("Lee makes Vault private", r.status_code < 300 and store.get_project(vault)["scope"] == "private", r.text)
+        await ticket("lee", vault, "Rotate the secret keys", "acme/web")
+        r = await call("lee", "POST", f"/api/projects/{vault}/questions", {"repo": "acme/web",
+                                                                         "text": "Who holds the codes?"})
+        ck("Lee cannot ask Alex, who is not on his private project", r.status_code >= 400, r.text)
+        for who in ("alex", "kim"):
+            dump = json.dumps(await home_of(who))
+            ck(f"{who.capitalize()}: nothing of Vault is anywhere in the body",
+               not any(w in dump for w in ("Vault", "launch codes", "secret keys", "vault keys", vault)),
+               [w for w in ("Vault", "launch codes", "secret keys", "vault keys", vault) if w in dump])
+        store.add_desk_item(vault, "Rotate the vault keys?", "", [], "yes", "why", "", [], False,
+                            "crew-orchestrator", [], ago(minutes=3), to_person_id=pid["alex"])
+        ck("a desk item addressed to Alex in a project he is not on is not in his list",
+           "vault keys" not in json.dumps(await home_of("alex")))
+
+        print("== part two: the repos a person owns ==")
+        h = await home_of("alex")
+        ck("Alex owns acme/web: sign-offs and questions that wait for him are in the note",
+           [a["repo"] for a in h["areas"]] == ["acme/web"], h["areas"])
+        ck("Kim owns acme/api and other/lib, sorted, nothing waiting for her there",
+           (await home_of("kim"))["areas"] == [{"repo": "acme/api", "note": "nothing waiting"},
+                                               {"repo": "other/lib", "note": "nothing waiting"}])
+        ck("Lee owns nothing: an empty list", (await home_of("lee"))["areas"] == [])
+        await call("kim", "POST", f"/api/projects/{atlas}/questions", {"repo": "acme/web", "text": "Third?"})
+        n_open = len(by_kind(await home("alex")).get("question", []))
+        note = next(a for a in (await home_of("alex"))["areas"] if a["repo"] == "acme/web")["note"]
+        ck("an open question shows in the repo's note", n_open == 1
+           and note == "1 sign-off asked, 1 question open", note)
+
+        print("== part two: the new keys pass the same checks ==")
+        for who in ("alex", "kim", "lee"):
+            body = await home_of(who)
+            for k_ in ("you_are_waiting_on", "areas"):
+                ck(f"{who.capitalize()}: {k_} is in the body", k_ in body)
+            for e in body["you_are_waiting_on"]:
+                for a in e["actions"]:
+                    ck(f"{e['title']} / {a['label']}: a link or a thing to do, never both",
+                       (("href" in a) != ("do" in a)) and ("do" not in a or a["do"] in fh.ACTIONS), a)
+        part2 = []
+        for body in BODIES:
+            for k_ in ("you_are_waiting_on", "areas", "summary"):
+                if k_ in body:
+                    part2.append(body[k_])
+        text2 = list(strings(part2))
+        bad2 = [(s, words.offenders(s)) for s in text2 if words.offenders(s)]
+        ck("every new string passes the words check, names and all", not bad2, bad2[:3])
+        ck("no em dash in a new string", not [s for s in text2 if "\u2014" in s])
+        whole = words.offenders_in(BODIES, ("name", "title", "detail", "goal", "doing", "text"))
+        ck("a whole body, skipping what people wrote, passes", not whole, whole[:3])
+
+        print("== what the single-person home asks of a lead stays with the lead ==")
+        orbit = await make_project("kim", "Orbit")
+        store.create_doc(orbit, "spec", "Spec", "What to build.")
+        await ticket("kim", orbit, "Orbit page", "acme/web")
+        store.add_assumption(orbit, "Which logger?", "the standard one", "no new package", "", [],
+                             "orbit-build-m1", "builder", ago(hours=3))
+        fin = await make_project("kim", "Finished")
+        await ticket("kim", fin, "Done thing", "acme/api", stage="merged", status="done")
+        mine = await make_project("alex", "Alex Spec")
+        store.create_doc(mine, "spec", "Spec", "What to build.")
+        await ticket("alex", mine, "Alex page", "acme/web")
+        k = by_kind(await home("kim"))
+        ck("Kim leads Orbit: the spec is ready to hand to a crew", [i["title"] for i in k.get("ready_to_start", [])]
+           == ["Orbit"], k.get("ready_to_start"))
+        ck("and the call the crew made on it is hers to confirm", [i["title"] for i in k.get("calls_to_confirm", [])]
+           == ["Orbit"], k.get("calls_to_confirm"))
+        ck("and Finished is ready to close", [i["title"] for i in k.get("signoff", [])
+                                              if i["id"] == f"signoff:{fin}"] == ["Finished"], k.get("signoff"))
+        ck("not Alex Spec, which Alex leads", "Alex Spec" not in {i["title"] for i in k.get("ready_to_start", [])})
+        a = by_kind(await home("alex"))
+        ck("Alex has Alex Spec to hand over, and only that", [i["title"] for i in a.get("ready_to_start", [])]
+           == ["Alex Spec"] and "calls_to_confirm" not in a and f"signoff:{fin}" not in {
+               i["id"] for i in a.get("signoff", [])}, a)
+        l = by_kind(await home("lee"))
+        ck("Lee leads none of them: none of the three", not ({"ready_to_start", "calls_to_confirm"} & set(l))
+           and f"signoff:{fin}" not in {i["id"] for i in l.get("signoff", [])}, l)
+
+        # two crews heard from, so a desk item can come from the caller's crew or another person's
+        r = await call("root", "POST", "/api/sources", {"name": "claude_code", "connector": "claude_code",
+                                                         "poll": "10s", "config": {"push": True}})
+        ck("the claude_code source is made", r.status_code < 300, r.text)
+
+        def st_line(sid, station, role, ago_min, crew, machine, project=""):
+            o = {"type": "session_station", "sessionId": sid, "cwd": "/w/crew",
+                 "timestamp": (now_utc() - timedelta(minutes=ago_min)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+                 "station": station, "role": role, "parent": "", "factory_station": station,
+                 "factory_crew": crew, "crew": crew, "factory_machine": machine, "machine": machine}
+            if project:
+                o["tares_project"] = project
+            return o
+
+        def state_line(sid, st_, ago_min):
+            return {"type": "session_state", "sessionId": sid, "cwd": "/w/crew", "state": st_, "reason": "",
+                    "timestamp": (now_utc() - timedelta(minutes=ago_min)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"}
+
+        async def push(who, lines):
+            hdr = keys[who]
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
+                                         headers={**hdr, "Content-Type": "application/x-ndjson"}) as cx:
+                r = await cx.post("/ingest/claude_code", content="\n".join(json.dumps(x) for x in lines) + "\n")
+            ck(f"{who}'s crew lines are taken in", r.status_code < 300, r.text)
+
+        await push("alex", [st_line("a1", "a-orchestrator", "orchestrator", 10, "a", "m1"),
+                            st_line("a2", "a-build-m1", "builder", 4, "a", "m1", project=atlas),
+                            state_line("a2", "working", 4)])
+        await push("kim", [st_line("k1", "k-orchestrator", "orchestrator", 6, "k", "m3"),
+                           state_line("k1", "idle", 6)])
+
+        print("== behaviours a quick change could drop ==")
+        own = store.add_desk_item(orbit, "Pick a name?", "", [], "Nova", "short", "", [], False,
+                                  "crew-orchestrator", [], ago(minutes=9), station="a-build-m1",
+                                  to_person_id=pid["alex"])
+        theirs = store.add_desk_item(orbit, "Pick a colour?", "", [], "blue", "calm", "", [], False,
+                                     "crew-orchestrator", [], ago(minutes=8), station="k-orchestrator",
+                                     to_person_id=pid["alex"])
+        frm = {i["id"]: i["from"] for i in by_kind(await home("alex"))["desk"]}
+        ck("an item from the caller's own crew comes from Your crew",
+           frm[f"desk:{own['label']}"] == {"crew": True, "name": "Your crew"}, frm)
+        ck("an item from another person's crew comes from that person",
+           frm[f"desk:{theirs['label']}"] == {"id": pid["kim"], "name": "Kim"}, frm)
+        second = await make_project("kim", "Second shop")
+        await ticket("kim", second, "Second page", "acme/web")
+        ck("Alex owes a sign-off on a project not yet handed over", any(
+            i["project"]["id"] == second for i in by_kind(await home("alex")).get("signoff", [])))
+        store.set_handover(second, [{"path": None, "name": "acme/web"}], None, "kim", now_utc(),
+                           person_id=pid["kim"])
+        ck("once it is handed over, nothing is owed on it", not any(
+            i["project"]["id"] == second for i in by_kind(await home("alex")).get("signoff", [])))
+        busy = await make_project("kim", "Busy")
+        await ticket("kim", busy, "In flight", "acme/api", stage="doing", status="started")
+        mark = lambda kind: [{"project": {"id": busy}, "kind": kind}]
+        ck("a desk item holds a project that is building: it waits on you",
+           fh.project_state(store.get_project(busy), store.list_tickets(busy), None, mark("desk"))
+           == "waiting_on_you")
+        ck("a pull request to review does not hold it",
+           fh.project_state(store.get_project(busy), store.list_tickets(busy), None, mark("prs_to_review"))
+           == "building")
+        nobody = type("C", (), {
+            "store": type("S", (), {"only_local_person": lambda self: False})(),
+            "h": type("H", (), {"current_person": lambda self, r: None,
+                                "is_system": lambda self, r: False})()})()
+        ck("a project key, which names no person, gets none of the team keys",
+           factory_team.team_home(nobody, None, now_utc()) == {})
+        r = await call("lee", "POST", "/api/grants", {"kind": "project", "project": vault,
+                                                      "words": "ship the Vault launch codes",
+                                                      "areas": ["acme/web"]})
+        ck("Lee gives a grant over Alex's repo on his private project", r.status_code == 201, r.text)
+        g = (by_kind(await home("alex")).get("grant") or [{}])[-1]
+        ck("Alex sees it, and its title does not name the private project",
+           g.get("title") == "A grant over acme/web" and "Vault" not in json.dumps(g)
+           and "launch codes" not in json.dumps(g), g)
 
         print("== kinds, actions and words ==")
         items = [i for i in SEEN.values() if "kind" in i]

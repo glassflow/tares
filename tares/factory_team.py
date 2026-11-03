@@ -28,6 +28,7 @@ class Team:
         self.hidden = c.h.hidden_ids()
         self._stations = None
         self._names = None
+        self._people = None
 
     def stations(self) -> list[dict]:
         if self._stations is None:
@@ -39,6 +40,17 @@ class Team:
         if self._names is None:
             self._names = {p["id"]: p["name"] for p in self.store.list_projects()}
         return self._names
+
+
+    def people(self) -> dict[str, str]:
+        """{person id: name} of everyone on the cell."""
+        if self._people is None:
+            self._people = {p["id"]: p.get("name") or p["id"] for p in self.store.list_people()}
+        return self._people
+
+    def person(self, pid: str | None) -> dict | None:
+        """{id, name} of a person by id, or None."""
+        return {"id": pid, "name": self.people().get(pid) or pid} if pid else None
 
 
 def _ref(person: dict | None) -> dict | None:
@@ -146,8 +158,11 @@ def grant_items(t: Team) -> list[dict]:
             detail = (f"{who} gave this on {project['name'] if project else 'a project'}, which you "
                       "lead. It takes effect when you agree.")
         since = g["given_at"] or t.now
+        # the giver's words may name a private project the person is not on: say what it covers
+        title = (f"A grant over {fw._and(owned) if owned else 'a repo you own'}"
+                 if g["project"] in t.hidden else fw._trim(g["words"], 80))
         out.append(fh.home_item(
-            "grant", label="Grant to agree to", title=fw._trim(g["words"], 80), detail=detail,
+            "grant", label="Grant to agree to", title=title, detail=detail,
             meta="Asked " + fh.plain_ago(since, t.now), since=since, now=t.now, project=project,
             repo=owned[0] if len(owned) == 1 else None, from_=giver, id=f"grant:{g['id']}",
             actions=[{"label": "Agree", "primary": True, "do": "agree", "grant": g["id"]},
@@ -229,27 +244,151 @@ def pr_items(t: Team) -> list[dict]:
             if mine is None or (i["project"] or {}).get("id") in mine]
 
 
+# ── what the single-person home asks of whoever leads a project, kept for its lead ──
+
+def lead_items(t: Team) -> list[dict]:
+    """A spec ready to hand to the crew, calls the crew made, a project ready to close: the
+    single-person home shows them to the one person, a team home to the project's lead."""
+    from types import SimpleNamespace
+    fx = SimpleNamespace(queue=t.c.queue, settings=lambda: t.c.settings(t.request))
+    led: dict[str, bool] = {}
+
+    def mine(pid: str | None) -> bool:
+        if pid not in led:
+            led[pid] = pid not in t.hidden and t.c.leads(t.store.get_project(pid), t.me["id"])
+        return led[pid]
+
+    return [i for build in (fw.ready_to_start, fw.calls_to_confirm, fw.projects_to_close)
+            for i in build(t.store, fx, t.now) if mine((i["project"] or {}).get("id"))]
+
+
 # ── the whole answer ─────────────────────────────────────────────────────────
 
-BUILDERS = [question_items, signoff_items, grant_items, desk_items, milestone_items, pr_items]
+BUILDERS = [question_items, signoff_items, grant_items, desk_items, milestone_items, pr_items,
+            lead_items]
 
 
-def summary(waiting: list[dict]) -> str:
-    """"Nothing waits for you.", "1 thing waits for you.", "4 things wait for you." """
+# ═════════════════════════════════════════════════════════════════════════════
+# Part two: who the person waits on, the repos they own
+# ═════════════════════════════════════════════════════════════════════════════
+
+# ── "You are waiting on": the projects the person leads that cannot go to a crew yet ──
+
+def _repo_state(r: dict) -> str:
+    if r["owner"] is None:
+        return "no_owner"
+    if r["is_lead"]:
+        return "yours"
+    return "signed_off" if r["signed_off"] else "waiting"
+
+
+def _waiting_detail(rows: list[dict], questions: list[dict]) -> str:
+    bits = []
+    waiting = [r for r in rows if r["state"] == "waiting"]
+    if waiting:
+        names = list(dict.fromkeys(r["owner"]["name"] for r in waiting))
+        bits.append(f"Waiting for {fw._and(names)} to sign off on "
+                    f"{fw._and([r['repo'] for r in waiting])}.")
+    unowned = [r["repo"] for r in rows if r["state"] == "no_owner"]
+    if unowned:
+        bits.append(f"{fw._and(unowned)} {'has' if len(unowned) == 1 else 'have'} no owner.")
+    if questions:
+        names = list(dict.fromkeys(q["to"]["name"] for q in questions))
+        bits.append(f"{fh._count(len(questions), 'question')} open for {fw._and(names)}.")
+    return " ".join(bits) or "Everyone has signed off. The project can go to a crew."
+
+
+def waiting_on(t: Team) -> list[dict]:
+    """One entry per project the person leads that is not handed over yet and depends on someone
+    else: a repo another person owns (signed off or not), a repo nobody owns, or a question
+    still open. A project whose repos are all the person's own, with nothing asked, is left out."""
+    handed = set(t.store.handed_over_projects())
+    out = []
+    for p in t.store.list_projects():
+        if (p.get("kind") != "software_factory" or p["status"] == "done" or p["id"] in handed
+                or p["id"] in t.hidden or not t.c.leads(p, t.me["id"])):
+            continue
+        rows = [{"repo": r["repo"], "owner": _ref(r["owner"]), "state": _repo_state(r)}
+                for r in t.c.signoff_state(p["id"], p)]
+        questions = [{"id": q["id"], "to": _ref(q["to_person"]) or t.person(q["to_person_id"]),
+                      "asked_at": fh._iso(fh._dt(q["asked_at"])),
+                      "waited": fh.plain_wait(fh._minutes(q["asked_at"], t.now))}
+                     for q in t.store.list_spec_questions(p["id"], state="open")]
+        if not questions and all(r["state"] == "yours" for r in rows):
+            continue
+        actions = []
+        if any(r["state"] in ("waiting", "no_owner") for r in rows):
+            actions.append({"label": "Hand over anyway", "primary": False,
+                            "do": "hand_over_anyway", "project": p["id"]})
+        if any(r["state"] == "no_owner" for r in rows):
+            actions.append({"label": "Set an owner", "primary": False, "href": "/settings/advanced"})
+        out.append({"project": {"id": p["id"], "name": p["name"]}, "title": p["name"],
+                    "detail": _waiting_detail(rows, questions), "repos": rows,
+                    "open_questions": questions, "actions": actions})
+    return out
+
+
+def waiting_counts(entries: list[dict]) -> list[tuple[str, int]]:
+    """[(person name, how many things the person waits on them for)], most first: a repo
+    waiting for their sign-off and a question open for them each count one."""
+    n: dict[str, int] = {}
+    for e in entries:
+        for r in e["repos"]:
+            if r["state"] == "waiting":
+                n[r["owner"]["name"]] = n.get(r["owner"]["name"], 0) + 1
+        for q in e["open_questions"]:
+            n[q["to"]["name"]] = n.get(q["to"]["name"], 0) + 1
+    return sorted(n.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+# ── the repos the person owns, and what waits on each ────────────────────────
+
+def areas(t: Team, waiting: list[dict]) -> list[dict]:
+    """[{repo, note}] for the repos the person owns: how many sign-offs and questions wait for
+    them there, from the items already built."""
+    out = []
+    for a in sorted(areas_mod.load(t.store), key=lambda a: a["repo"]):
+        if a["person_id"] != t.me["id"]:
+            continue
+        mine = [i for i in waiting if (i["repo"] or "").lower() == a["repo"]]
+        n_sign = sum(1 for i in mine if i["kind"] == "signoff")
+        n_ask = sum(1 for i in mine if i["kind"] == "question")
+        bits = ([f"{n_sign} sign-off{'' if n_sign == 1 else 's'} asked"] if n_sign else []) + \
+               ([fh._count(n_ask, "question") + " open"] if n_ask else [])
+        out.append({"repo": a["repo"], "note": ", ".join(bits) or "nothing waiting"})
+    return out
+
+
+# ── the whole answer ─────────────────────────────────────────────────────────
+
+def summary(waiting: list[dict], counts: list[tuple[str, int]] | None = None) -> str:
+    """"Nothing waits for you.", "1 thing waits for you.", "4 things wait for you.", then
+    "You are waiting on Kim for 2." when the person waits on anyone."""
     n = len(waiting)
-    if not n:
-        return "Nothing waits for you."
-    return "1 thing waits for you." if n == 1 else f"{n} things wait for you."
+    first = ("Nothing waits for you." if not n else "1 thing waits for you." if n == 1
+             else f"{n} things wait for you.")
+    if not counts:
+        return first
+    return first + " You are waiting on " + fw._and([f"{name} for {k}" for name, k in counts]) + "."
+
+
+def _applies(c, request) -> bool:
+    """Whether the team keys apply: a cell with more than one person, and a caller with a person
+    (or the cell's own credential)."""
+    if c.store.only_local_person():
+        return False
+    return not (c.h.current_person(request) is None and not c.h.is_system(request))
 
 
 def team_home(c, request, now) -> dict:
     """The team keys of the home body for the caller, or {} for a caller the single-person home
     answers: a cell of one, or a key with no person."""
-    if c.store.only_local_person():
-        return {}
-    if c.h.current_person(request) is None and not c.h.is_system(request):
+    if not _applies(c, request):
         return {}
     t = Team(c, request, c.work_person(request), now)
     waiting = [i for build in BUILDERS for i in build(t)]
     waiting.sort(key=lambda i: fh._dt(i["since"]) or now)
-    return {"waiting_for_you": waiting, "waiting_total": len(waiting), "summary": summary(waiting)}
+    on = waiting_on(t)
+    return {"waiting_for_you": waiting, "waiting_total": len(waiting),
+            "summary": summary(waiting, waiting_counts(on)), "you_are_waiting_on": on,
+            "areas": areas(t, waiting)}

@@ -401,13 +401,16 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     is addressed to the caller's person (TR-739); its keys replace the single-person ones."""
     stations = fx.stations() if fx else []
     settings = fx.settings() if fx else dict(factory_mod.CREW_DEFAULTS)
-    projects = [p for p in store.list_projects() if p.get("kind") == "software_factory"]
+    team = fx.team_home(request, now) if request is not None and hasattr(fx, "team_home") else {}
+    # on a team cell a private project the caller is not on is left out of every count and name
+    hidden = fx.hidden_ids() if team else set()
+    projects = [p for p in store.list_projects()
+                if p.get("kind") == "software_factory" and p["id"] not in hidden]
     open_ps = [p for p in projects if p["status"] != "done"]
     ids = [p["id"] for p in open_ps]
     tickets = store.tickets_by_project(ids)
     milestones = store.milestones_by_project(ids)
     desk_open = len(store.list_desk("open", None))
-    team = fx.team_home(request, now) if request is not None and hasattr(fx, "team_home") else {}
     waiting = team["waiting_for_you"] if team else waiting_items(store, fx, now)
     rows = []
     for p in open_ps:
