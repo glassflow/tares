@@ -16,9 +16,9 @@ export interface AllowedGrant {
 
 const enc = encodeURIComponent;
 
-/** The whole home page in one read. */
-export function getHome(): Promise<HomeData> {
-  return request<HomeData>("/api/home");
+/** The whole home page in one read. A team cell lists `projects` for the view asked (`mine` unless told). */
+export function getHome(projects?: "mine" | "team"): Promise<HomeData> {
+  return request<HomeData>(projects ? `/api/home?projects=${projects}` : "/api/home");
 }
 
 /** Mark one call the crew made as kept. */
