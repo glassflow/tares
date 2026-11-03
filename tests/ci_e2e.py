@@ -30,6 +30,9 @@ LIST = os.path.join(UI, "tests", "e2e_suites.txt")
 # ports are 40 apart. The ones that set their own port (login-handoff, session-picker) ignore it.
 BASE_PORT = 9000
 PORT_STEP = 40
+# Ports fetch (undici) refuses as "bad port". A suite whose range holds one gets the next free
+# slot, so its page loads can reach its own daemon.
+BLOCKED = {10080}
 
 DEFAULT_WEIGHT = 30
 WEIGHT = {
@@ -54,8 +57,19 @@ def names(path=LIST):
     return got
 
 
+def slots(n):
+    """The first port of each of n suites' ranges, in order, skipping a range that holds a blocked port."""
+    out, p = [], BASE_PORT
+    while len(out) < n:
+        if not any(p <= b < p + PORT_STEP for b in BLOCKED):
+            out.append(p)
+        p += PORT_STEP
+    return out
+
+
 def port(suite, all_suites=None):
-    return BASE_PORT + PORT_STEP * (all_suites or names()).index(suite)
+    all_suites = all_suites or names()
+    return slots(len(all_suites))[all_suites.index(suite)]
 
 
 def shard(all_items, n, of):
