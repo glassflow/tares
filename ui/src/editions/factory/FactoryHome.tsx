@@ -21,6 +21,7 @@ import type {
 import { HOME_SAMPLES } from "./homeSamples";
 import { HOME_SAMPLES_TEAM, sampleView } from "./homeSamplesTeam";
 import { Detail } from "./HomeDetail";
+import { CrewLimit, ReposYouOwn, TeamCrews } from "./TeamSide";
 import { HiddenLine, HiddenRow, LeadLine, PrivateLock, ProjectsSwitch, type ProjectsView } from "./TeamProjects";
 import { AnswerPanel, DeclineDialog, HandOverDialog, SignOffDialog, type AnswerGiven } from "./WaitingActions";
 import { WaitingForYou } from "./WaitingForYou";
@@ -282,16 +283,19 @@ function Member({ m }: { m: HomeCrewMember }) {
 
 function CrewCard({ data }: { data: HomeData }) {
   const { crew } = data;
+  const limit = isTeam(data) ? data.crew_limit : undefined;
   return (
     <section aria-label="Your crew" className="min-w-0">
       <SectionHead title="Your crew" />
       <Panel>
         <div className="mb-2.5 text-[13px] text-muted-foreground">{crew.summary}</div>
         {crew.members.map((m) => <Member key={m.station} m={m} />)}
-        <div className="mt-1 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-t border-border pt-3 text-xs">
-          <Link to="/settings#crew" className="text-foreground">How far it may go</Link>
-          <span className="text-muted-foreground">{crew.how_far.text}</span>
-        </div>
+        {limit ? <CrewLimit limit={limit} /> : (
+          <div className="mt-1 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-t border-border pt-3 text-xs">
+            <Link to="/settings#crew" className="text-foreground">How far it may go</Link>
+            <span className="text-muted-foreground">{crew.how_far.text}</span>
+          </div>
+        )}
       </Panel>
     </section>
   );
@@ -411,6 +415,8 @@ export function FactoryHomeView({ data, onAction, onHandOver, rows, notice, pane
         </div>
         <aside className={RIGHT}>
           <CrewCard data={data} />
+          {isTeam(data) && <TeamCrews crews={data.crews ?? []} quiet={data.crews_quiet ?? []} />}
+          {isTeam(data) && <ReposYouOwn areas={data.areas ?? []} />}
           <PlanCard data={data} />
           <Tools data={data} />
         </aside>

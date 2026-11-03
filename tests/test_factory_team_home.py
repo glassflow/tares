@@ -374,7 +374,7 @@ async def main():
            e["detail"])
         ck("Hand over anyway and Set an owner are offered", e["actions"] == [
             {"label": "Hand over anyway", "primary": False, "do": "hand_over_anyway", "project": atlas},
-            {"label": "Set an owner", "primary": False, "href": "/settings/advanced"}], e["actions"])
+            {"label": "Set an owner", "primary": False, "href": "/settings/advanced?tab=areas"}], e["actions"])
         ck("the summary adds who Kim waits on, a sign-off and a question each counting one",
            h["summary"] == factory_team.summary(h["waiting_for_you"], [("Alex", 2)])
            and h["summary"].endswith("You are waiting on Alex for 2."), h["summary"])
@@ -570,6 +570,8 @@ async def main():
         names = [c["name"] for c in h["crews"]]
         ck("Alex: his own crew first, then Kim's; Lee's, silent for two days, is named apart",
            names == ["Your crew", "Kim's crew"] and h["crews_quiet"] == ["Lee's crew"], (names, h["crews_quiet"]))
+        ids = [c["id"] for c in h["crews"]]
+        ck("every crew row carries its crew id, and no two are the same", all(ids) and len(set(ids)) == len(ids), ids)
         mine_c = h["crews"][0]
         ck("his crew: machine, person, how many work, and what they are doing",
            mine_c["machine"] == "m1" and mine_c["person"] == {"id": pid["alex"], "name": "Alex"}

@@ -469,6 +469,90 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       }
       await ctx.close();
     }
+    // ── the side column, from the sample states: your crew's limit, the team's crews, the repos you own ──
+    for (const width of [390, 1440]) {
+      const t = (s) => `@${width}: ${s}`;
+      const ctx = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 } });
+      await ctx.addInitScript((tok) => { try { localStorage.setItem("taresSamples", "1"); localStorage.setItem("tares_token", tok); } catch { /* blocked */ } }, ids.keys.alex);
+      const page = await ctx.newPage();
+      const go = async (sample) => {
+        await page.goto(`${BASE}/?sample=${sample}`, { waitUntil: "load" });
+        await page.getByTestId("factory-home").waitFor();
+        await settle(page);
+      };
+      const n = (id) => page.getByTestId(id).count();
+      const texts = (id) => page.getByTestId(id).allInnerTexts();
+      const showAll = () => page.getByRole("button", { name: /Show all \d+ crews/ });
+
+      await go("threePeople");
+      ck(t("your crew shows the limit in words and the team's"), /The team allows up to merge\. Yours can be stricter, not looser\./.test((await texts("crew-limit-text"))[0] ?? "")
+         && (await texts("crew-limit-mine"))[0] === "You approve each merge", JSON.stringify(await texts("crew-limit")));
+      ck(t("How far it may go links to the crew settings"), (await page.getByRole("link", { name: "How far it may go" }).getAttribute("href")) === "/settings#crew");
+      ck(t("one other crew is a row, and your own crew is not"), (await n("team-crew-row")) === 1
+         && /Kim's crew/.test((await texts("team-crew-row"))[0] ?? "") && !/Your crew/.test((await texts("team-crew-row")).join()), JSON.stringify(await texts("team-crew-row")));
+      ck(t("a crew row says the machine, when it was heard and what it does"), /kim-mbp\. Building project-x and project-w\./.test((await texts("team-crew-row"))[0] ?? "")
+         && /1 minute ago/.test((await texts("team-crew-row"))[0] ?? ""));
+      ck(t("a crew not seen in a day is on one line, not a row"), (await n("quiet-crews")) === 1
+         && (await texts("quiet-crews"))[0].trim() === "Not seen in a day: Lee's crew" && !/Lee/.test((await texts("team-crew-row")).join()), JSON.stringify(await texts("quiet-crews")));
+      ck(t("three crews or fewer have no Show all"), (await showAll().count()) === 0);
+      ck(t("two repos are listed with what waits on each"), (await n("repo-you-own")) === 2
+         && /example-org\/service-a/.test((await texts("repo-you-own"))[0]) && /1 sign-off asked/.test((await texts("repo-you-own"))[0])
+         && /nothing waiting/.test((await texts("repo-you-own"))[1]), JSON.stringify(await texts("repo-you-own")));
+      ck(t("All owners links to Settings, Advanced"), (await page.getByRole("link", { name: "All owners" }).getAttribute("href")) === "/settings/advanced?tab=areas");
+      ck(t("the Claude plan and the connected tools stay"), (await page.locator('section[aria-label="Your Claude plan"]').count()) === 1
+         && (await page.locator('section[aria-label="Connected"]').count()) === 1);
+      ck(t("no horizontal scroll"), (await overflow(page)) <= 0, `${await overflow(page)}px over`);
+      await shot(page, "side-three-people", width);
+      await checkWords(page, ck, t("side, three people"));
+
+      await go("manyItems");
+      ck(t("six crews: three rows, then Show all 6 crews"), (await n("team-crew-row")) === 3 && (await showAll().count()) === 1
+         && (await showAll().innerText()) === "Show all 6 crews", String(await n("team-crew-row")));
+      ck(t("the quiet crew is still one line, not the seventh"), (await n("quiet-crews")) === 1);
+      if ((await showAll().count()) === 1) await showAll().click();
+      ck(t("Show all lists six crews and the button is gone"), (await n("team-crew-row")) === 6 && (await showAll().count()) === 0, String(await n("team-crew-row")));
+      ck(t("no horizontal scroll with all of them"), (await overflow(page)) <= 0);
+      await shot(page, "side-many-items", width);
+      await checkWords(page, ck, t("side, many items"));
+
+      await go("longText");
+      ck(t("a long crew name, machine, repo and quiet crew wrap and never push the page wider"), (await overflow(page)) <= 0
+         && (await n("team-crew-row")) === 1 && (await n("repo-you-own")) === 1 && (await n("quiet-crews")) === 1, `${await overflow(page)}px over`);
+      await shot(page, "side-long-text", width);
+      await checkWords(page, ck, t("side, long text"));
+
+      await go("nothingWaitingTeam");
+      ck(t("nothing waits on any repo you own"), (await texts("repo-you-own")).every((x) => /nothing waiting/.test(x)) && (await n("repo-you-own")) === 2);
+      await shot(page, "side-nothing-waiting", width);
+      await checkWords(page, ck, t("side, nothing waiting"));
+
+      await go("noOwnedRepos");
+      ck(t("no repo owned: there is no Repos you own block or All owners link"), (await n("repos-you-own")) === 0
+         && (await page.getByRole("link", { name: "All owners" }).count()) === 0 && (await n("team-crews")) === 1);
+      await checkWords(page, ck, t("side, no owned repos"));
+
+      await go("ownCrewQuiet");
+      ck(t("your own quiet crew is never named under Not seen in a day"), (await n("quiet-crews")) === 1
+         && (await texts("quiet-crews"))[0].trim() === "Not seen in a day: Lee's crew", JSON.stringify(await texts("quiet-crews")));
+      await checkWords(page, ck, t("side, own crew quiet"));
+
+      await go("onePerson");
+      ck(t("a cell of one keeps today's side: no limit foot, team crews or repos you own"),
+         (await n("crew-limit")) === 0 && (await n("team-crews")) === 0 && (await n("team-crew-row")) === 0 && (await n("quiet-crews")) === 0 && (await n("repos-you-own")) === 0);
+      ck(t("a cell of one still has How far it may go and the plan"), (await page.getByRole("link", { name: "How far it may go" }).count()) === 1
+         && (await page.locator('section[aria-label="Your Claude plan"]').count()) === 1);
+      await ctx.close();
+    }
+    // a cell of one person on its own daemon has none of the side column's team parts
+    {
+      const { ctx, page } = await open("solo", 1440);
+      await page.goto(`http://127.0.0.1:${SOLO}/`, { waitUntil: "load" });
+      await page.getByTestId("factory-home").waitFor();
+      await settle(page);
+      ck("a live cell of one has no team crews, quiet line, repos you own or limit foot",
+         (await page.getByTestId("team-crews").count()) + (await page.getByTestId("quiet-crews").count()) + (await page.getByTestId("repos-you-own").count()) + (await page.getByTestId("crew-limit").count()) === 0);
+      await ctx.close();
+    }
     const soloHome = await fetch(`http://127.0.0.1:${SOLO}/api/home`).then((r) => r.json());
     ck("a cell of one person has no team keys in /api/home", !("you_are_waiting_on" in soloHome) && !("crews_quiet" in soloHome));
   } finally {

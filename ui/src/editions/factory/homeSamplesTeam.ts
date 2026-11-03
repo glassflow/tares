@@ -1,4 +1,4 @@
-import type { HomeData, HomeItem, HomeProject, HomeProjectRow, HomeRef, HomeWaitingOn } from "./home.types";
+import type { HomeArea, HomeData, HomeItem, HomeProject, HomeProjectRow, HomeRef, HomeTeamCrew, HomeWaitingOn } from "./home.types";
 import { busy, project } from "./homeSamples";
 
 // Sample bodies of the factory home on a cell with more than one person (the keys tares/factory_team.py
@@ -82,7 +82,7 @@ const waitingOn: HomeWaitingOn[] = [
       { repo: "example-org/service-c", owner: null, state: "no_owner" },
     ],
     open_questions: [],
-    actions: [{ label: "Set an owner", primary: true, href: "/settings/advanced" }],
+    actions: [{ label: "Set an owner", primary: true, href: "/settings/advanced?tab=areas" }],
   },
 ];
 
@@ -153,13 +153,36 @@ export function sampleView(data: HomeData, view: "mine" | "team"): HomeData {
   return { ...data, projects: data.projects.filter((r) => !("hidden" in r) && r.mine) };
 }
 
+// ── the side column: the crews as the cell lists them (the person's own first), the limit, the repos owned ──
+
+function crewRow(who: HomeRef | null, name: string, machine: string, heard: string, doing: string, working = 0): HomeTeamCrew {
+  return { id: `crew-${machine}`, name, machine, person: who, last_seen: "2026-11-02T08:58:00Z", heard, working, doing };
+}
+
+const OWN_CREW = crewRow(alex, "Your crew", "alex-mbp", "17 seconds ago", "Building project-z.", 1);
+const KIM_CREW = crewRow(kim, "Kim's crew", "kim-mbp", "1 minute ago", "Building project-x and project-w.", 2);
+const CREW_LIMIT = {
+  mine: "you approve each merge", team: "you approve each merge",
+  text: "The team allows up to merge. Yours can be stricter, not looser.",
+};
+const AREAS: HomeArea[] = [
+  { repo: "example-org/service-a", note: "1 sign-off asked" },
+  { repo: "example-org/service-d", note: "nothing waiting" },
+];
+const MORE_CREWS: HomeTeamCrew[] = [
+  ["Sam", "sam-mbp", "4 minutes ago", "Building project-w."], ["Robin", "robin-mbp", "9 minutes ago", "Idle."],
+  ["Jo", "jo-mbp", "20 minutes ago", "Building project-c."], ["Max", "max-mbp", "3 hours ago", "Idle."],
+  ["Ana", "ana-mbp", "5 hours ago", "Waiting for an answer."],
+].map(([n, m, h, d]) => crewRow({ id: n.toLowerCase(), name: n }, `${n}'s crew`, m, h, d));
+
 const TEAM_KEYS = {
   summary: "6 things wait for you. You are waiting on Kim for 1 sign-off.",
   you_are_waiting_on: waitingOn,
   ...projectKeys(TEAM_PROJECTS),
-  crews: [],
-  crews_quiet: [],
-  areas: [],
+  crews: [OWN_CREW, KIM_CREW],
+  crews_quiet: ["Lee's crew"],
+  crew_limit: CREW_LIMIT,
+  areas: AREAS,
 };
 
 function team(items: HomeItem[], headline: string, over: Partial<HomeData> = {}): HomeData {
@@ -180,6 +203,7 @@ export const threePeople: HomeData = team(
 export const nothingWaiting: HomeData = {
   ...team([], "The crew is working on 5 tickets. Nothing waits for you.", { you_are_waiting_on: [] }),
   summary: "Nothing waits for you.",
+  areas: AREAS.map((a) => ({ ...a, note: "nothing waiting" })),
 };
 
 /** A question of about 600 characters, which wraps and never pushes the row wider than the card. */
@@ -204,6 +228,10 @@ export const longText: HomeData = team(
   {
     ...projectKeys([LONG_PROJECT, TEAM_PROJECTS[3]]),
     summary: "1 thing waits for you. You are waiting on Kim for 1 sign-off.",
+    crews: [OWN_CREW, crewRow({ ...kim, name: "Alexandria Kimberley-Lee-Hargreaves-Montgomery" }, "Alexandria Kimberley-Lee-Hargreaves-Montgomery's crew",
+                              "a-laptop-with-a-long-machine-name-2026", "1 minute ago", `Building ${LONG_NAME}.`, 1)],
+    crews_quiet: ["Lee's crew with a name that is long enough to wrap onto a second line on a phone"],
+    areas: [{ repo: "example-org/a-repository-with-a-very-long-name-service-b", note: "1 sign-off asked, 2 questions open, nothing else waits there" }],
     you_are_waiting_on: [{ ...waitingOn[0], project: { ...projectY, name: LONG_NAME }, title: `${LONG_NAME}: the web ticket cannot be handed over yet` }],
   },
 );
@@ -217,7 +245,8 @@ export const manyItems: HomeData = team(
     actions: [{ label: "Answer", primary: true, do: "answer" }],
   })),
   "30 things wait for you, the oldest for 31 hours.",
-  { summary: "30 things wait for you.", you_are_waiting_on: [], ...projectKeys(MANY_PROJECTS) },
+  { summary: "30 things wait for you.", you_are_waiting_on: [], ...projectKeys(MANY_PROJECTS),
+    crews: [OWN_CREW, KIM_CREW, ...MORE_CREWS] },
 );
 
 /** A private project the person is not on: a quiet row in Team, one line under the list in Mine. */
@@ -226,9 +255,18 @@ export const privateNotOn: HomeData = team(
   { summary: "2 things wait for you.", ...projectKeys([...TEAM_PROJECTS, { hidden: true, lead: { name: "Lee" } }]) },
 );
 
+/** The person owns no repo: the side column has no "Repos you own" block at all. */
+export const noOwnedRepos: HomeData = team(asked.slice(0, 2), "2 things wait for you.", { summary: "2 things wait for you.", areas: [] });
+
+/** The person's own crew went quiet too: the cell names it, the page never lists it among the team's. */
+export const ownCrewQuiet: HomeData = team(
+  asked.slice(0, 2), "2 things wait for you.",
+  { summary: "2 things wait for you.", crews: [KIM_CREW], crews_quiet: ["Your crew", "Lee's crew"] },
+);
+
 /** A cell of one person: no team keys, so the page keeps the v2 list. */
 export const onePerson: HomeData = busy;
 
 export const HOME_SAMPLES_TEAM: Record<string, HomeData> = {
-  onePerson, threePeople, nothingWaitingTeam: nothingWaiting, longText, manyItems, privateNotOn,
+  onePerson, threePeople, nothingWaitingTeam: nothingWaiting, longText, manyItems, privateNotOn, noOwnedRepos, ownCrewQuiet,
 };
