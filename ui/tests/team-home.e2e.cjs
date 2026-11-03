@@ -248,6 +248,10 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("Lee's crew, last heard two days ago, is under Not seen in a day"), (await n("quiet-crews")) === 1 && (await texts("quiet-crews"))[0].trim() === "Not seen in a day: Lee's crew", JSON.stringify(await texts("quiet-crews")));
       ck(t("the daemon agrees: Kim's crew is heard from, Lee's is quiet"), JSON.stringify(alexHome.crews.map((c) => c.name)) === JSON.stringify(["Your crew", "Kim's crew"])
          && JSON.stringify(alexHome.crews_quiet) === JSON.stringify(["Lee's crew"]), JSON.stringify([alexHome.crews.map((c) => c.name), alexHome.crews_quiet]));
+      const members = (await texts("crew-member")).map((x) => x.split("\n")[0].trim());
+      ck(t("Your crew holds Alex's own orchestrator and builder, not Kim's or Lee's orchestrator"), members.length === 2
+         && members[0] === "Orchestrator" && /^Builder/.test(members[1]), JSON.stringify(members));
+      ck(t("Your crew reads his orchestrator: running, heard 4 minutes ago"), (await page.getByText("Running, last heard 4 minutes ago").count()) === 1);
       const owned = await texts("repo-you-own");
       ck(t("Repos you own lists what the daemon says, acme/web, and not acme/docs, which nobody owns"), alexHome.areas.map((a) => a.repo).join() === "acme/web" && owned.length === 1
          && /acme\/web/.test(owned[0]) && !/acme\/docs/.test(owned.join()), JSON.stringify([alexHome.areas, owned]));

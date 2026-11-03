@@ -579,6 +579,13 @@ async def main():
            and mine_c["heard"] == "4 minutes ago" and mine_c["last_seen"], mine_c)
         ck("Kim's crew is idle", h["crews"][1]["doing"] == "Idle." and h["crews"][1]["working"] == 0
            and h["crews"][1]["person"] == {"id": pid["kim"], "name": "Kim"}, h["crews"][1])
+        members = lambda h: sorted(m["station"] for m in h["crew"]["members"])
+        ck("Alex's Your crew card holds his own stations only, not Kim's or Lee's orchestrator",
+           members(h) == ["a-build-m1", "a-orchestrator"], members(h))
+        ck("... and its headline and summary read his orchestrator: running, heard 10 minutes ago",
+           h["crew"]["running"] and h["crew"]["heard"] == "10 minutes ago", h["crew"])
+        ck("Kim's card holds her orchestrator only", members(await home_of("kim")) == ["k-orchestrator"],
+           members(await home_of("kim")))
         h = await home_of("lee")
         ck("Lee sees his own silent crew as 'Your crew' among the quiet ones",
            [c["name"] for c in h["crews"]] == ["Alex's crew", "Kim's crew"], [c["name"] for c in h["crews"]])

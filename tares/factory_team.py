@@ -512,6 +512,16 @@ def _applies(c, request) -> bool:
     return not (c.h.current_person(request) is None and not c.h.is_system(request))
 
 
+def own_stations(c, request, rows: list[dict]) -> list[dict]:
+    """The stations of the caller's own crews, for "Your crew" on the home: on a team cell the
+    other people's crews are the side column's rows, not members of the caller's. Every station
+    for a caller the single-person home answers."""
+    if not _applies(c, request):
+        return rows
+    me = c.work_person(request)["id"]
+    return [s for s in rows if (s["person"] or {}).get("id") == me]
+
+
 def team_home(c, request, now) -> dict:
     """The team keys of the home body for the caller, or {} for a caller the single-person home
     answers: a cell of one, or a key with no person."""

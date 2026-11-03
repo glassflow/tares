@@ -13,7 +13,7 @@ thing of every kind waiting for Alex, written through the running daemon's API o
               own; acme/api, Kim has not signed off), so he waits on Kim for two repos. Shop gets a ticket on
               acme/docs. Kim leads Billing, Lee leads Search, Mobile and Vault; Vault is private and Alex is not on
               it. Alex sees Shop, Portal and Notes under Mine and six under Team, plus one hidden stub.
-  Crews:      Alex's and Kim's crew were heard a few minutes ago, Lee's two days ago (so it is "not seen in a day").
+  Crews:      Alex's crew (an orchestrator and a builder on Notes) and Kim's were heard a few minutes ago, Lee's two days ago (so it is "not seen in a day").
 usage: python seed-team-home.py <port> <root-token>
 Prints a JSON map on the last line: keys and people by first name, project, question, grants and desk labels."""
 import json, sys, urllib.error, urllib.request
@@ -113,7 +113,7 @@ def push(who, lines):
 
 
 def crew(who, tag, machine, minutes_ago, state, role="orchestrator", project_id=""):
-    sid = f"{tag}-1"
+    sid = f"{tag}-{role}"
     line = {"type": "session_station", "sessionId": sid, "cwd": "/w/crew", "timestamp": stamp(minutes_ago),
             "station": f"{tag}-{role}", "role": role, "parent": "", "factory_station": f"{tag}-{role}",
             "factory_crew": tag, "crew": tag, "factory_machine": machine, "machine": machine}
@@ -123,6 +123,7 @@ def crew(who, tag, machine, minutes_ago, state, role="orchestrator", project_id=
                       "timestamp": stamp(minutes_ago)}])
 
 
+crew("alex", "a", "alex-mbp", 4, "idle")
 crew("alex", "a", "alex-mbp", 4, "working", "builder", notes)
 crew("kim", "k", "kim-mbp", 6, "idle")
 crew("lee", "l", "lee-mbp", 2 * 24 * 60, "idle")

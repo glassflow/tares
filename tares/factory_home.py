@@ -422,8 +422,10 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     if team:   # the team's project list: lead, members, scope, Mine and Team (TR-739)
         team = {**team, **fx.team_projects(request, open_ps, tickets, rows, projects_view(request), now,
                                                   team["waiting_for_you"])}
-    crew = _crew(stations, settings, {p["id"] for p in open_ps}, tickets, desk_open, now)
-    orch = next((s for s in stations if s["role"] == "orchestrator"), None)
+    # on a team cell "Your crew" is the caller's own crew; the others are the side column's rows
+    mine = fx.own_stations(request, stations) if team and hasattr(fx, "own_stations") else stations
+    crew = _crew(mine, settings, {p["id"] for p in open_ps}, tickets, desk_open, now)
+    orch = next((s for s in mine if s["role"] == "orchestrator"), None)
     silent = _minutes(orch["last_at"], now) if orch and crew["running"] else None
     working = sum(factory_mod.progress(ts)["doing"] for ts in tickets.values())
     linear = linear_mod.public_connection(store)["connected"]
