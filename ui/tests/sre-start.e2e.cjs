@@ -168,6 +168,33 @@ function cleanEnv(home, dist, extra = {}) {
     await page.getByTestId("home-headline").waitFor();
     await page.waitForLoadState("networkidle");
     ck("new: after a reload it is still gone", (await page.getByTestId("start-checklist").count()) === 0);
+
+    // the way back: a quiet line while the list is hidden and has open steps
+    const hiddenLine = page.getByTestId("start-hidden");
+    ck("new: a line says the list is hidden", (await hiddenLine.count()) === 1 && (await text(hiddenLine)).startsWith("The list \u201cGet started\u201d is hidden."),
+       await hiddenLine.count() ? await text(hiddenLine) : "no line");
+    ck("new: with one button named Show it again", (await hiddenLine.getByRole("button", { name: "Show it again" }).count()) === 1);
+    await shot(page, "sre-start-hidden-line-1440.png");
+    await checkWords(page, ck, "new hidden line");
+    // a Show it again the cell refuses keeps the line and says so
+    await page.route("**/api/home/start/hide", (r) => r.request().method() === "DELETE"
+      ? r.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "down" }) }) : r.fallback());
+    await hiddenLine.getByRole("button", { name: "Show it again" }).click();
+    await page.getByTestId("start-show-error").waitFor();
+    ck("new: a refused Show it again keeps the line", (await hiddenLine.count()) === 1 && (await page.getByTestId("start-checklist").count()) === 0);
+    ck("new: and says so in plain words", (await text(page.getByTestId("start-show-error"))) === "Could not show the list. Try again in a moment.",
+       await text(page.getByTestId("start-show-error")));
+    await page.unroute("**/api/home/start/hide");
+    // Show it again for real: one DELETE, the list is back with its five steps, the line is gone
+    posts.length = 0;
+    await hiddenLine.getByRole("button", { name: "Show it again" }).click();
+    await page.getByTestId("start-checklist").waitFor();
+    ck("new: Show it again calls the daemon once with DELETE", posts.join() === "DELETE", posts.join());
+    ck("new: the list is back with its five steps", (await steps(page).count()) === 5);
+    ck("new: and the line is gone", (await page.getByTestId("start-hidden").count()) === 0);
+    await page.reload({ waitUntil: "load" });
+    await page.getByTestId("start-checklist").waitFor();
+    ck("new: after a reload the list is still shown", (await steps(page).count()) === 5);
     await ctx.close();
   });
 

@@ -219,6 +219,7 @@ async def main():
         os.environ["TARES_SLACK_BOT_TOKEN"] = "xoxb-invented-token"
         block = start_of(store, runtime)
         eq("every row done", (block["done"], block["total"], block["show"]), (6, 6, False))
+        eq("a finished list is not offered back", block.get("hidden"), False)
         os.environ.pop("TARES_SLACK_BOT_TOKEN")
 
         print("== hiding ==")
@@ -232,11 +233,15 @@ async def main():
         eq("and the answer says hidden", r.json()["show"], False)
         r = await cx.get("/api/home")
         eq("the very next read is hidden (no wait on the cache)", r.json()["start"]["show"], False)
+        eq("and the block says this person hid it, so the page can offer it back",
+           (r.json()["start"].get("hidden"), r.json()["start"]["done"] < r.json()["start"]["total"]), (True, True))
         eq("another credential still sees it", start_of(store, runtime, "someone-else")["show"], True)
+        eq("and it is not marked hidden for them", start_of(store, runtime, "someone-else").get("hidden"), False)
         r = await cx.request("DELETE", "/api/home/start/hide")
         eq("unhide answers", r.status_code, 200)
         r = await cx.get("/api/home")
         eq("shown again at once", r.json()["start"]["show"], True)
+        eq("and it is not marked hidden any more", r.json()["start"].get("hidden"), False)
 
         print("== hiding with a key bound to a person ==")
         # the home reads under the person's name, so the hide must be kept under it too
