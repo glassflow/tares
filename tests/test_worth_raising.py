@@ -124,6 +124,9 @@ async def cell():
             assert r.status_code == 201, r.text
             return H(r.json()["secret"])
 
+        # a second person, so a key bound to nobody keeps its own name (while `local` is alone it
+        # acts as them, and alice and bob would be one voice)
+        store.create_person("Sam Ops")
         alice = await key_for("alice", ["admin"])
         bob = await key_for("bob", ["admin"])
         reader = await key_for("reader", ["read"])
