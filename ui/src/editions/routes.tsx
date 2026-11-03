@@ -78,8 +78,8 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     "/start": { page: null, fallback: { redirect: "/" } },
   },
   any: {
-    // TR-755 sets the chooser page
-    "/welcome/edition": { page: null, fallback: { redirect: "/" } },
+    // TR-755: the chooser, for a cell with no edition yet; any other cell's address lands on /
+    "/welcome/edition": { page: React.lazy(() => import("./ChooseEdition")), fallback: { redirect: "/" } },
   },
 };
 
