@@ -172,6 +172,9 @@ def test_first_run_edition():
         ck("and the stored edition is named, state in Postgres", "tares: Software Factory" in out, out)
         got, n, out, _ = _up_with(False, edition="factory", state_dsn=dsn)
         ck("the same choice says nothing extra, state in Postgres", "change it in Settings" not in out, out)
+        got, n, out, _ = _up_with(False, state_dsn=dsn, seed_db=lambda p: _seed_db(p, "sre"))
+        ck("Postgres wins over a different edition in the local file", "tares: Software Factory" in out
+           and "tares: AI SRE" not in out, out)
         with psycopg.connect(pg, autocommit=True) as c:
             c.execute(f"DROP SCHEMA {schema} CASCADE")
 
