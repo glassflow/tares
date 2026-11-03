@@ -677,14 +677,16 @@ def exists(store, catalog, name: str) -> bool:
     return canonical(name, store.service_settings()) in _compute_cached(store, catalog, None)["recs"]
 
 
-def deploys(store, catalog, name: str, since, limit: int = 50) -> list[dict]:
+def deploys(store, catalog, name: str, since, limit: int = 50, detail: bool = False,
+            until=None) -> list[dict]:
     """The pushes, merges and commits of the repos linked to `name`, newest first, from `since`
-    on (None for ever): {at, repo, kind: push | merge | commit, text, url}."""
+    on (None for ever) and before `until` (None for no end): {at, repo, kind: push | merge | commit, text, url}. `detail` adds author,
+    branch and commits."""
     repos = _linked_repos(store.service_settings(), name)
     follow = [s.name for s in catalog.sources.values()
               if s.connector == "github" and not (s.config or {}).get("branch")]
     return [{**d, "at": _iso(d["at"])} for d in
-            store.deploy_events(github_sources(catalog), repos, since, limit, follow)]
+            store.deploy_events(github_sources(catalog), repos, since, limit, follow, detail, until)]
 
 
 # ── blind spots (TR-747) ─────────────────────────────────────────────────────

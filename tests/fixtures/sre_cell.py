@@ -17,6 +17,8 @@ cell takes about 40 seconds to build and no test needs a second way in.
 `services=N` (TR-748) adds N more services on prod-otlp, extra-svc-01 to extra-svc-NN: each sends
 two lines in the last 10 minutes (one of them an error) and a line every 90 minutes over the
 last day, so a list of 24 services has a sparkline and an error count to draw.
+`spread=N` (TR-752) spreads the `events` lines over N services instead of two: edge-proxy,
+service-a and service-03 to service-N, and every 97th line that is not edge-proxy's is an error.
 
 seed_cell(data_dir, edition="sre", **kw) is what ui/tests/seed-sre-*.py call.
 """
@@ -55,7 +57,8 @@ def _github(now, minutes_ago, event_type, text, labels=None, payload=None):
 
 
 def build(store: Store, now, *, watcher: bool = False, investigator: bool = False,
-          quiet_hours: int = 0, events: int = 0, blind: bool = False, services: int = 0) -> dict:
+          quiet_hours: int = 0, events: int = 0, blind: bool = False, services: int = 0,
+          spread: int = 0) -> dict:
     """Write the cell into `store` as of `now`. Returns the names it made."""
     store.upsert_catalog_source("prod-otlp", source_type_for("otlp"), "otlp", "5s", {
         "labels": [{"name": "service", "field": "service.name", "primary": True},
@@ -118,13 +121,23 @@ def build(store: Store, now, *, watcher: bool = False, investigator: bool = Fals
         batch = []
         for i in range(start, min(start + BATCH, events)):
             minutes_ago = 60 + (i * (23 * 60 - 10)) // max(events, 1)
+            if spread > 2:
+                pick = i % spread
+                if pick == 0:
+                    batch.append(_edge(now, minutes_ago, via=blind))
+                else:
+                    name = "service-a" if pick == 1 else f"service-{pick + 1:02d}"
+                    level = "ERROR" if i % 97 == 0 else "INFO"
+                    batch.append(_otlp(now, minutes_ago, name, level, f"handled request {i}"))
+                continue
             batch.append(_edge(now, minutes_ago, via=blind) if i % 2 == 0 else
                          _otlp(now, minutes_ago, "service-a", "INFO", f"handled request {i}"))
         store.append(batch)
 
     made = {"sources": ["prod-otlp", "docs-site", "github"],
             "services": ["edge-proxy", "service-a", "docs-site", "service-a-receiver"]
-            + (["service-b"] if blind else []) + extra,
+            + (["service-b"] if blind else []) + extra
+            + [f"service-{n + 1:02d}" for n in range(2, spread)],
             "events": events}
     if watcher or investigator:
         made.update(_agents(store, now, investigator, quiet_hours))
