@@ -238,6 +238,30 @@ const whoami = () => new Promise((res, rej) => http.get(`${BASE}/api/whoami`, (r
       ck(`B: /projects goes to the chooser at ${at}`, path_(page) === "/welcome/edition", page.url());
 
       if (width === WIDTHS[WIDTHS.length - 1]) {
+        // TR-829: the choice is saved, then the read that follows fails. The page says so and offers
+        // a reload instead of bouncing back to the chooser as if nothing had happened.
+        await load(page, "/welcome/edition", "B: saved, read fails");
+        await page.route("**/api/settings/edition", (route) => (route.request().method() === "PUT"
+          ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, edition: "sre" }) })
+          : route.continue()));
+        await page.route("**/api/whoami", (route) => route.abort());
+        await card(page, "sre").click();
+        await page.getByTestId("choose-continue").click();
+        await page.getByTestId("choose-stale").waitFor();
+        ck("B: a saved choice with a failed read says it was saved", /Your choice was saved\. The cell did not answer when we asked again\. Reload to continue\./.test(await page.getByTestId("choose-stale").innerText()));
+        ck("B: and does not claim it was not saved", (await page.getByTestId("choose-error").count()) === 0);
+        ck("B: the page stays put, with Reload offered", path_(page) === "/welcome/edition" && (await page.getByRole("button", { name: "Reload" }).count()) === 1);
+        ck("B: Continue is gone, so the choice is not sent twice", (await page.getByTestId("choose-continue").count()) === 0);
+        await checkWords(page, ck, "B: saved, read fails");
+        await shot(page, "saved-reload", width);
+        await page.unroute("**/api/whoami");
+        await page.unroute("**/api/settings/edition");
+        const reloaded = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/whoami");
+        await page.getByRole("button", { name: "Reload" }).click();
+        await reloaded;
+        await page.getByTestId("choose-continue").waitFor();
+        ck("B: Reload asks the cell again and shows the chooser (the cell still has no edition here)", (await page.getByRole("radio").count()) === 2);
+
         // AI SRE picked, the save fails, the choice stays, Retry saves it and lands on Home
         await page.route("**/api/settings/edition", (route) => (route.request().method() === "PUT"
           ? route.fulfill({ status: 500, contentType: "application/json", body: "{}" }) : route.continue()));
