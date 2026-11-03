@@ -16,6 +16,7 @@ test_builder_flow
 test_catalog_sync
 test_challenger_workflow
 test_ci_check
+test_ci_e2e
 test_ci_list
 test_claude_usage
 test_clean_env

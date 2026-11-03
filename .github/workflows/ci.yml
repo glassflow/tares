@@ -79,6 +79,55 @@ jobs:
           if [ "${{ matrix.suite }}" = postgres ]; then export PYTHONPATH="$PWD/tests/pg_harness"; fi
           python tests/ci_run.py --suite ${{ matrix.suite }} --shard ${{ matrix.shard }} --of 5
 
+  # The browser e2e suites named in ui/tests/e2e_suites.txt (tests/ci_e2e.py gives each its own port),
+  # in 2 shards. Each suite starts its own scratch daemons, so tares is installed and Playwright's
+  # Chromium comes with it. Screenshots are uploaded only when a shard fails.
+  e2e:
+    name: e2e (${{ matrix.shard }}/2)
+    # Pinned: Playwright does not install Chromium on the Ubuntu that ubuntu-latest points at now.
+    runs-on: ubuntu-24.04
+    # The runner kills a silent suite after 10 minutes; this stops the job itself if something else hangs.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Console build (the daemon serves ui/dist) and Chromium
+        run: |
+          npm ci
+          npm run build
+          npx playwright install --with-deps chromium
+        working-directory: ui
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Browser e2e suites
+        run: |
+          pip install -e .
+          python tests/ci_e2e.py --shard ${{ matrix.shard }} --of 2
+        env:
+          E2E_SHOTS: ${{ runner.temp }}/e2e-shots
+
+      - name: Screenshots of the failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-shots-${{ matrix.shard }}
+          path: ${{ runner.temp }}/e2e-shots
+          if-no-files-found: ignore
+          retention-days: 7
+
   secrets:
     runs-on: ubuntu-latest
     steps:
