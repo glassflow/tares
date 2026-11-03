@@ -152,7 +152,9 @@ function resultTone(result: string): string {
 
 function Checks({ items }: { items: FactoryTicketData["checks"] }) {
   const [all, setAll] = React.useState(false);
-  const shown = all ? items : items.slice(0, SHOW_CHECKS);
+  // the API sends the oldest first; the page leads with the latest run
+  const newest = React.useMemo(() => [...items].reverse(), [items]);
+  const shown = all ? newest : newest.slice(0, SHOW_CHECKS);
   const hidden = items.length - shown.length;
   return (
     <Section id="checks" title="Checks" aside={items.length > 0 ? `${items.length} ran` : undefined}>
@@ -265,11 +267,11 @@ function Notes({ text }: { text: string }) {
     <Section id="notes" title="Working notes" aside={lines > 0 ? `${lines.toLocaleString("en-US")} ${lines === 1 ? "line" : "lines"}` : undefined}>
       {!text ? <span className={NONE} data-testid="notes-empty">Nothing noted yet</span> : (
         <>
-          <div className="min-w-0 border border-border bg-[var(--white)] text-sm [overflow-wrap:anywhere]" data-testid="notes-box" data-open={open}>
+          <div className="min-w-0 border border-border bg-card text-sm [overflow-wrap:anywhere]" data-testid="notes-box" data-open={open}>
             <div className={cn("md px-3.5 py-3 [&_:is(h1,h2,h3,h4)]:mt-3.5! [&_:is(h1,h2,h3,h4)]:mb-1! [&_:is(h1,h2,h3,h4)]:text-[14px]! [&_:is(h1,h2,h3,h4):first-child]:mt-0!", !open && "max-h-[460px] overflow-auto")} data-words-exempt data-testid="notes-text">
               <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN}>{text}</ReactMarkdown>
             </div>
-            {!open && <div aria-hidden className="pointer-events-none relative -mt-9 h-9 bg-gradient-to-b from-transparent to-[var(--white)]" />}
+            {!open && <div aria-hidden className="pointer-events-none relative -mt-9 h-9 bg-gradient-to-b from-transparent to-card" />}
           </div>
           {long && (
             <Button variant="secondary" className={MORE} onClick={() => setWhole((w) => !w)} aria-expanded={open} data-testid="notes-toggle">
@@ -408,8 +410,8 @@ function Loading({ href }: { href: string }) {
   );
 }
 
-/** The page for a ticket, from what the cell answered. `data` is the ticket; with none, `notFound`
- *  says the cell has no such ticket, `error` says it did not answer, and neither is still loading.
+/** The page for a ticket, from what the cell answered. `data` is the ticket; `notFound`
+ *  says the cell has no such ticket (even if it showed one before), `error` says it did not answer, and neither is still loading.
  *  `projectHref` is where the back link goes while the ticket's project is not known. */
 export function FactoryTicketView({ data: d, error, notFound, projectHref, onRetry }: {
   data?: FactoryTicketData;
@@ -418,18 +420,19 @@ export function FactoryTicketView({ data: d, error, notFound, projectHref, onRet
   projectHref: string;
   onRetry?: () => void;
 }) {
-  if (!d) {
-    if (notFound) {
-      return (
-        <div className="grid min-w-0 gap-4" data-testid="ticket-notfound">
-          <Back href={projectHref} />
-          <div className="grid gap-2 border border-border bg-card px-3.5 py-3">
-            <h2 className="m-0! text-base!">This ticket was not found</h2>
-            <span className={NONE}>It may have been deleted, or the link may be old.</span>
-          </div>
+  // a ticket that was shown and is gone on a later read (deleted meanwhile) is not found too
+  if (notFound) {
+    return (
+      <div className="grid min-w-0 gap-4" data-testid="ticket-notfound">
+        <Back href={projectHref} />
+        <div className="grid gap-2 border border-border bg-card px-3.5 py-3">
+          <h2 className="m-0! text-base!">This ticket was not found</h2>
+          <span className={NONE}>It may have been deleted, or the link may be old.</span>
         </div>
-      );
-    }
+      </div>
+    );
+  }
+  if (!d) {
     if (error) {
       return (
         <div className="grid min-w-0 gap-4" data-testid="ticket-error">
@@ -496,7 +499,7 @@ function TicketPage({ id, reference }: { id: string; reference: string }) {
       (e) => { setMissing(e instanceof ApiError && e.status === 404); throw e; },
     ), POLL_MS);
   return (
-    <FactoryTicketView data={data} error={error} notFound={missing && !data}
+    <FactoryTicketView data={data} error={error} notFound={missing}
                        projectHref={`/projects/${encodeURIComponent(id)}`} onRetry={reload} />
   );
 }

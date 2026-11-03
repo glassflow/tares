@@ -72,6 +72,10 @@ async function waitFor(url, tries = 100) {
       if (sampleFlag) await ctx.addInitScript(() => { try { localStorage.setItem("taresSamples", "1"); } catch (e) { /* none */ } });
       return { ctx, page: await ctx.newPage() };
     };
+    // the console's own theme switch is data-theme on <html> (index.html sets it from localStorage); a
+    // media query alone does not change it
+    const setTheme = (page, theme) => page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
+    const lightness = (css) => { const m = css.match(/[\d.]+/g).map(Number); return (m[0] + m[1] + m[2]) / 3; };
     const shot = async (page, n) => { if (SHOTS) await page.screenshot({ path: path.join(SHOTS, n), fullPage: true }); };
     const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     const settle = async (page) => { await page.waitForLoadState("networkidle"); await page.waitForTimeout(THEME_MS); };
@@ -141,12 +145,19 @@ async function waitFor(url, tries = 100) {
     // checks: twelve, eight shown
     ck("twelve checks, eight shown", (await txt(T("ticket-checks").locator("span").filter({ hasText: /^12 ran$/ }))) === "12 ran" && (await T("check-row").count()) === 8
        && (await txt(T("checks-more"))) === "Show 4 more");
+    ck("the latest check leads, the oldest is last", (await txt(T("check-row").first())).includes("npm test -- footer-11")
+       && (await txt(T("check-row").last())).includes("npm test -- footer-4"));
+    await T("checks-more").click();
+    ck("Show 4 more shows all twelve, the oldest last", (await T("check-row").count()) === 12 && (await T("checks-more").count()) === 0
+       && (await txt(T("check-row").last())).includes("npm test -- footer-0"));
+    // the failing run (footer-3) is one of the four that were folded away
     const colour = (loc) => loc.evaluate((e) => getComputedStyle(e).color);
+    const token = (name) => page.evaluate((n) => { const e = document.createElement("i"); e.style.color = `var(${n})`; document.body.appendChild(e);
+      const c = getComputedStyle(e).color; e.remove(); return c; }, name);
     const failing = T("check-row").filter({ hasText: "2 failed" }).locator("span").last();
     const passing = T("check-row").filter({ hasText: "passed, 0 failed" }).first().locator("span").last();
-    ck("a failing result is shown in a different colour from a passing one", (await colour(failing)) !== (await colour(passing)), `${await colour(failing)} / ${await colour(passing)}`);
-    await T("checks-more").click();
-    ck("Show 4 more shows all twelve", (await T("check-row").count()) === 12 && (await T("checks-more").count()) === 0);
+    ck("a failing result is in the error colour, a passing one in the ok colour, and they differ", (await colour(failing)) === (await token("--err"))
+       && (await colour(passing)) === (await token("--ok")) && (await colour(failing)) !== (await colour(passing)), `${await colour(failing)} / ${await colour(passing)}`);
 
     // calls and decisions
     ck("three calls, in words", (await T("call-row").count()) === 3
@@ -216,6 +227,27 @@ async function waitFor(url, tries = 100) {
        (await txt(T("ticket-blocked-reason"))).startsWith("Waiting for T2, "));
     await checkWords(page, ck, "T3");
 
+    // the notes in the dark theme: the box is dark, and so is the fade over its cut-off edge
+    await open(page, "T2");
+    await setTheme(page, "dark");
+    await page.waitForTimeout(THEME_MS);
+    const notesBg = await T("notes-box").evaluate((e) => getComputedStyle(e).backgroundColor);
+    const fadeBg = await T("notes-box").locator("[aria-hidden]").last().evaluate((e) => getComputedStyle(e).backgroundImage);
+    ck("dark: the notes box is dark, not white", lightness(notesBg) < 80, notesBg);
+    ck("dark: the fade over the cut-off notes ends in the box's own colour", fadeBg.includes(notesBg), `${fadeBg} / ${notesBg}`);
+    await setTheme(page, "light");
+
+    // an old ticket address stays on today's project page for a project the ticket page does not answer for
+    for (const [what, pid] of [["a draft factory project", ids["project-z"]], ["a project that is not a factory project", ids["project-w"]]]) {
+      await page.goto(`${BASE}/projects/${pid}?view=ticket:T1`, { waitUntil: "load" });
+      await page.waitForLoadState("networkidle");
+      await page.getByTestId("route-probe").waitFor({ state: "detached" });
+      await page.waitForTimeout(THEME_MS);
+      ck(`?view=ticket:T1 on ${what} stays on today's project page`, new URL(page.url()).pathname.startsWith(`/projects/${pid}`) && !page.url().includes("/tickets/")
+         && (await T("factory-ticket").count()) === 0 && (await T("ticket-notfound").count()) === 0 && (await T("route-probe").count()) === 0
+         && (await page.evaluate(() => document.body.innerText.trim().length)) > 40, page.url());
+    }
+
     // a ticket the project does not have, and a project that is not a factory project
     await page.goto(`${BASE}/projects/${y}/tickets/T99`, { waitUntil: "load" });
     await T("ticket-notfound").waitFor();
@@ -226,6 +258,39 @@ async function waitFor(url, tries = 100) {
     await T("ticket-notfound").waitFor();
     ck("a project that is not a factory project says the same", (await T("factory-ticket").count()) === 0);
     await ctx.close();
+
+    // the page reads again on its own, keeps the ticket when a read fails, and says so when the ticket is gone
+    {
+      const { ctx: c, page: p } = await newPage(1440);
+      await p.clock.install();
+      let reads = 0, mode = "ok";
+      await p.route(`**/api/factory/projects/${y}/tickets/T2`, (route) => {
+        reads++;
+        if (mode === "404") return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "no such ticket" }) });
+        if (mode === "500") return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "down" }) });
+        return route.continue();
+      });
+      await open(p, "T2");
+      const readsAfter = async (min) => { for (let i = 0; i < 50 && reads < min; i++) await new Promise((r) => setTimeout(r, 100)); return reads; };
+      const first = reads;
+      await p.clock.runFor(16000);
+      ck("the page reads the ticket again by itself", (await readsAfter(first + 1)) > first, `${first} -> ${reads}`);
+      mode = "500";
+      const before = reads;
+      await p.clock.runFor(16000);
+      await readsAfter(before + 1);
+      await p.getByText("This page did not refresh.").waitFor({ timeout: 5000 }).catch(() => {});
+      ck("a failed read keeps the ticket on the page and says it did not refresh", (await p.getByTestId("factory-ticket").count()) === 1
+         && (await p.getByText("This page did not refresh.").count()) === 1);
+      mode = "404";
+      const before404 = reads;
+      await p.clock.runFor(16000);
+      await readsAfter(before404 + 1);
+      await p.getByTestId("ticket-notfound").waitFor({ timeout: 5000 }).catch(() => {});
+      ck("a ticket that is gone on a later read says it was not found", (await p.getByTestId("factory-ticket").count()) === 0
+         && (await txt(p.getByTestId("ticket-notfound"))).includes("This ticket was not found"));
+      await c.close();
+    }
 
     // ── 2. 390 px: the live pages do not scroll sideways ────────────────────────────────────────
     {
@@ -291,12 +356,13 @@ async function waitFor(url, tries = 100) {
         }
         if (name === "changes" || name === "many") {
           // the page in the dark theme too
-          await p.emulateMedia({ colorScheme: "dark" });
+          await setTheme(p, "dark");
           await p.waitForTimeout(THEME_MS);
+          ck(`${label} dark: the page is dark`, lightness(await p.evaluate(() => getComputedStyle(document.body).backgroundColor)) < 80);
           ck(`${label} dark: no sideways scroll`, (await overflow(p)) <= 0);
           await checkWords(p, ck, `${label} dark`);
           await shot(p, `${name}-dark-${width}.png`);
-          await p.emulateMedia({ colorScheme: "light" });
+          await setTheme(p, "light");
           await p.waitForTimeout(THEME_MS);
         }
         await shot(p, `${{ load: "loading", err: "error" }[name] || name}-${width}.png`);

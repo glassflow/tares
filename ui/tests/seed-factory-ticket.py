@@ -9,7 +9,8 @@ history shows it. Invented names only. Writes straight to the cell's database, s
     T4 to do: nothing yet (every section empty);
     T5 in Linear: in progress, a link out, no pull request;
     T6 a long title and a long unbroken word, for narrow screens;
-  project-w (not a factory project): its tickets answer 404.
+  project-w (not a factory project): its tickets answer 404;
+  project-z (a factory project still at its setup, a draft): its tickets answer 404 too.
 Prints a JSON map of names to ids on the last line.
 usage: python seed-factory-ticket.py <data-dir>"""
 import json, os, sys
@@ -129,4 +130,9 @@ store.add_check(y, t6, "python " + "a" * 150 + ".py", "b" * 180, "aaaaaaa1111", 
 # not a factory project
 pw = project("project-w", factory=False)
 ticket(pw, "Not a factory ticket")
+
+# a factory project that is still a draft
+pz = project("project-z")
+store.update_project(pz, status="draft")
+ticket(pz, "A ticket in a draft")
 print(json.dumps(ids))
