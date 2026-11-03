@@ -138,6 +138,9 @@ def waiting_items(store, fx, now) -> list[dict]:
 
 # ── projects ──────────────────────────────────────────────────────────────────
 
+_ASKS = ("permission", "question", "desk")   # the crew is held up until the person answers
+
+
 def project_state(p: dict, tickets: list[dict], handover: dict | None, waiting: list[dict]) -> str:
     """building, waiting_on_you, not_started or ready_to_close, in this order of precedence."""
     prog = factory_mod.progress(tickets)
@@ -146,7 +149,7 @@ def project_state(p: dict, tickets: list[dict], handover: dict | None, waiting: 
     if prog["done"] == 0 and prog["doing"] == 0:
         return "not_started"
     mine = [w for w in waiting if (w.get("project") or {}).get("id") == p["id"]]
-    if (mine and prog["doing"] == 0) or any(w["kind"] in ("permission", "question") for w in mine):
+    if (mine and prog["doing"] == 0) or any(w["kind"] in _ASKS for w in mine):
         return "waiting_on_you"
     return "building"
 
@@ -392,9 +395,10 @@ def _start_ctx(store, stations: list[dict], tickets: dict, linear: bool) -> star
         spec_with_tickets=spec)
 
 
-def home(store, fx, now, credential_key: str = "open") -> dict:
+def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     """Everything the home page shows, from one read of the projects, their tickets, the stations,
-    the plan and the desk."""
+    the plan and the desk. On a cell with more than one person, `fx.team_home(request)` adds what
+    is addressed to the caller's person (TR-739); its keys replace the single-person ones."""
     stations = fx.stations() if fx else []
     settings = fx.settings() if fx else dict(factory_mod.CREW_DEFAULTS)
     projects = [p for p in store.list_projects() if p.get("kind") == "software_factory"]
@@ -403,7 +407,8 @@ def home(store, fx, now, credential_key: str = "open") -> dict:
     tickets = store.tickets_by_project(ids)
     milestones = store.milestones_by_project(ids)
     desk_open = len(store.list_desk("open", None))
-    waiting = waiting_items(store, fx, now)
+    team = fx.team_home(request, now) if request is not None and hasattr(fx, "team_home") else {}
+    waiting = team["waiting_for_you"] if team else waiting_items(store, fx, now)
     rows = []
     for p in open_ps:
         row = project_row(p, tickets[p["id"]], store.get_handover(p["id"]), waiting, stations, now,
@@ -416,7 +421,7 @@ def home(store, fx, now, credential_key: str = "open") -> dict:
     silent = _minutes(orch["last_at"], now) if orch and crew["running"] else None
     working = sum(factory_mod.progress(ts)["doing"] for ts in tickets.values())
     linear = linear_mod.public_connection(store)["connected"]
-    return {"edition": "factory",
+    body = {"edition": "factory",
             "headline": _headline(crew, rows, len(projects) - len(open_ps), working, waiting, silent),
             "waiting_for_you": waiting, "waiting_total": len(waiting), "projects": rows,
             "finished_count": len(projects) - len(open_ps), "crew": crew,
@@ -429,32 +434,40 @@ def home(store, fx, now, credential_key: str = "open") -> dict:
                 store, start_steps.factory_steps(_start_ctx(store, stations, tickets, linear)),
                 "console" if credential_key == "open" else credential_key),
             "now": now.isoformat()}
+    body.update(team)
+    return body
 
 
 _cache: dict = {}
 _cache_lock = threading.Lock()
 
 
+def _cache_key(store, request) -> tuple:
+    """One kept home per cell, credential and person: two keys of one name, or a key rebound to
+    another person, never share a home that is addressed to a person."""
+    state = getattr(request, "state", None)
+    cred = getattr(state, "credential", None) or {}
+    return (id(store), cred.get("name") or "open", (cred.get("person") or {}).get("id"))
+
+
 def drop_cache(store, request) -> None:
     """Forget the kept home of the request's credential, so its next read shows a change made
     just now (the start block's hide and show)."""
-    cred = getattr(getattr(request, "state", None), "credential", None)
     with _cache_lock:
-        _cache.pop((id(store), (cred or {}).get("name") or "open"), None)
+        _cache.pop(_cache_key(store, request), None)
 
 
 def build(store, fx=None, request=None, now=None) -> dict:
     """GET /api/home: `home()` kept for 5 seconds per credential (the page polls every 15). A
     caller who passes `now` (a test) gets a fresh read."""
     if now is not None:
-        return home(store, fx, now)
-    cred = getattr(getattr(request, "state", None), "credential", None)
-    key = (id(store), (cred or {}).get("name") or "open")
+        return home(store, fx, now, request=request)
+    key = _cache_key(store, request)
     with _cache_lock:
         hit = _cache.get(key)
         if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
             return hit[1]
-    out = home(store, fx, now_utc(), key[1])
+    out = home(store, fx, now_utc(), key[1], request)
     with _cache_lock:
         _cache[key] = (time.monotonic(), out)
     return out
