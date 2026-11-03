@@ -220,6 +220,13 @@ async def main():
         tl = json.loads(await m.list_tickets(project="Invoices"))
         ck("a project with Tares tickets has no github link", tl["github"] is None, tl)
 
+        # the console's routes (TR-740) are a person's: no MCP tool calls them, so a crew session
+        # can never record an answer as one made on the page
+        import tares.mcp_factory as mf
+        src = open(mf.__file__).read()
+        ck("no MCP tool posts to /reply or /decline", "/reply" not in src and "/decline" not in src
+           and '/answer"' in src)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

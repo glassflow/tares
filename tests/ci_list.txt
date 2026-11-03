@@ -23,6 +23,7 @@ test_claude_usage
 test_clean_env
 test_cli
 test_cloud_connect
+test_console_answers
 test_crew_standup
 test_crews
 test_degraded

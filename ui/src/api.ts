@@ -9,7 +9,7 @@ import type {
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults, ProjectScope,
   Skill, SkillSummary,
-  Area, Assumption, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, GrantKind, Grant, GrantsView, PersonalDoc, PersonalDocs, CrewMessage, CrewPace, CrewProject, CrewGroup, CrewSettings, CrewStation, Decision, DeskAllowed, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, SignoffRow, SpecQuestion, LinearLink, LinearStatus, Milestone,
+  Area, Assumption, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, GrantKind, Grant, GrantsView, PersonalDoc, PersonalDocs, CrewMessage, CrewPace, CrewProject, CrewGroup, CrewSettings, CrewStation, Decision, DeskAllowed, DeskReplyBody, DeskReplied, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, SignoffRow, SpecQuestion, LinearLink, LinearStatus, Milestone,
   ProjectSession, Ticket, TicketStatus,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, ModelProvider, ModelProviders, Standup,
@@ -620,6 +620,9 @@ export const api = {
   allowDesk: (ref: string, words: string, scope: "project" | "all") =>
     request<DeskAllowed>(`/api/desk/${encodeURIComponent(ref)}/allow`,
       { method: "POST", body: JSON.stringify({ words, scope }) }),
+  deskReply: (ref: string, body: DeskReplyBody) =>
+    request<DeskReplied>(`/api/desk/${encodeURIComponent(ref)}/reply`,
+      { method: "POST", body: JSON.stringify(body) }),
   projectDecisions: (id: string) =>
     request<{ decisions: Decision[] }>(`/api/projects/${encodeURIComponent(id)}/decisions`),
   reviewQueue: () => request<{ queue: QueueItem[]; now: string }>("/api/review-queue"),
@@ -643,6 +646,9 @@ export const api = {
     request<{ added: boolean; grant: Grant }>("/api/grants", { method: "POST", body: JSON.stringify(body) }),
   consentGrant: (id: string) =>
     request<{ grant: Grant }>(`/api/grants/${encodeURIComponent(id)}/consent`, { method: "POST" }),
+  declineGrant: (id: string, reason?: string) =>
+    request<{ grant: Grant }>(`/api/grants/${encodeURIComponent(id)}/decline`,
+      { method: "POST", body: JSON.stringify(reason ? { reason } : {}) }),
   revokeGrant: (id: string) =>
     request<{ grant: Grant }>(`/api/grants/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
   personalDocs: () => request<PersonalDocs>("/api/docs/personal"),
@@ -676,6 +682,12 @@ export const api = {
       `/api/projects/${encodeURIComponent(id)}/crew`),
   projectQuestions: (id: string) =>
     request<{ questions: SpecQuestion[] }>(`/api/projects/${encodeURIComponent(id)}/questions`),
+  answerQuestion: (id: string, qid: string, answer: string) =>
+    request<SpecQuestion>(`/api/projects/${encodeURIComponent(id)}/questions/${encodeURIComponent(qid)}/answer`,
+      { method: "POST", body: JSON.stringify({ answer }) }),
+  signOff: (id: string, repo: string) =>
+    request<{ signoffs: SignoffRow[] }>(`/api/projects/${encodeURIComponent(id)}/signoffs`,
+      { method: "POST", body: JSON.stringify({ repo }) }),
   projectSignoffs: (id: string) =>
     request<{ signoffs: SignoffRow[]; waiting_for: string[] }>(`/api/projects/${encodeURIComponent(id)}/signoffs`),
   projectSessions: (id: string) =>

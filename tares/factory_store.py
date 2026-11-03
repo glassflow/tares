@@ -300,6 +300,8 @@ FACTORY_SCHEMA = [
       state         TEXT,
       PRIMARY KEY (project, id)
     )""",
+    # Where the answer came from: "console" when the person gave it on the page (TR-740).
+    "ALTER TABLE spec_questions ADD COLUMN IF NOT EXISTS via TEXT",
     # The owner of a repo saying the tickets in their repo are right (TR-636); the hand-over waits
     # for one per repo. One row per repo and project: signing again keeps the first.
     """CREATE TABLE IF NOT EXISTS signoffs (
@@ -309,6 +311,7 @@ FACTORY_SCHEMA = [
       "at"       TIMESTAMPTZ,
       PRIMARY KEY (project, repo)
     )""",
+    "ALTER TABLE signoffs ADD COLUMN IF NOT EXISTS via TEXT",
     # A hand-over the project lead pushed through without every sign-off, and why (TR-636).
     "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS override_reason TEXT",
     "ALTER TABLE handovers ADD COLUMN IF NOT EXISTS override_at TIMESTAMPTZ",
@@ -1436,12 +1439,12 @@ class FactoryStore:
 
     # ── questions to an area owner and their sign-offs (TR-636) ───────────────
     _SQ_COLS = ("project, id, to_person_id, repo, text, asked_by, asked_at, answer, answered_by, "
-                "answered_at, state")
+                "answered_at, state, via")
 
     def _sq_rows(self, rows) -> list[dict]:
         out = [{"project": r[0], "id": r[1], "to_person_id": r[2], "repo": r[3], "text": r[4],
                 "asked_by": r[5], "asked_at": r[6], "answer": r[7], "answered_by": r[8],
-                "answered_at": r[9], "state": r[10]} for r in rows]
+                "answered_at": r[9], "state": r[10], "via": r[11]} for r in rows]
         refs = self._person_refs([x for r in out for x in (r["to_person_id"], r["asked_by"],
                                                            r["answered_by"])])
         for r in out:
@@ -1463,7 +1466,7 @@ class FactoryStore:
                 qid = f"Q{top + 1}"
                 self.sc.execute(
                     f"INSERT INTO spec_questions ({self._SQ_COLS}) VALUES "
-                    "(?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'open')",
+                    "(?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'open', NULL)",
                     [project, qid, to_person_id, repo, text, asked_by or None, at])
                 self.sc.execute("COMMIT")
             except Exception:
@@ -1494,31 +1497,46 @@ class FactoryStore:
         return self._sq_rows(rows)
 
     def answer_spec_question(self, project: str, qid: str, answer: str, by: str | None,
-                             at) -> bool:
-        """Record the answer of an open question; False when it was not open."""
+                             at, via: str | None = None) -> bool:
+        """Record the answer of an open question, and where it came from (`via`, "console" for
+        the page); False when it was not open."""
         with self._swrite:
             hit = self.sc.execute(
                 "UPDATE spec_questions SET answer = ?, answered_by = ?, answered_at = ?, "
-                "state = 'answered' WHERE project = ? AND id = ? AND state = 'open' RETURNING id",
-                [answer, by or None, at, project, qid]).fetchone()
+                "state = 'answered', via = ? WHERE project = ? AND id = ? AND state = 'open' "
+                "RETURNING id",
+                [answer, by or None, at, via, project, qid]).fetchone()
         return hit is not None
 
-    def add_signoff(self, project: str, repo: str, person_id: str, at) -> None:
-        """The area owner's sign-off for a repo. Signing again keeps the first time; when the
-        area has a new owner, their sign-off replaces the old owner's."""
+    def decline_waiting_grant(self, gid: str, consents: list[dict]) -> bool:
+        """End a grant that still waits and keep who said no; False when it was no longer waiting
+        (another consent settled it first)."""
         with self._swrite:
-            self.sc.execute("INSERT INTO signoffs (project, repo, person_id, \"at\") "
-                             "VALUES (?, ?, ?, ?) ON CONFLICT (project, repo) DO UPDATE SET "
-                             "person_id = excluded.person_id, \"at\" = excluded.\"at\" "
+            hit = self.sc.execute(
+                "UPDATE grants SET state = 'revoked', consents = ? WHERE id = ? AND state = 'waiting' "
+                "RETURNING id", [json.dumps(consents), gid]).fetchone()
+        return hit is not None
+
+    def add_signoff(self, project: str, repo: str, person_id: str, at,
+                    via: str | None = None) -> None:
+        """The area owner's sign-off for a repo, and where it came from (`via`). Signing again
+        keeps the first time; when the area has a new owner, their sign-off replaces the old
+        owner's."""
+        with self._swrite:
+            self.sc.execute("INSERT INTO signoffs (project, repo, person_id, \"at\", via) "
+                             "VALUES (?, ?, ?, ?, ?) ON CONFLICT (project, repo) DO UPDATE SET "
+                             "person_id = excluded.person_id, \"at\" = excluded.\"at\", "
+                             "via = excluded.via "
                              "WHERE signoffs.person_id <> excluded.person_id",
-                             [project, repo, person_id, at])
+                             [project, repo, person_id, at, via])
 
     def list_signoffs(self, project: str) -> list[dict]:
         with self._sread:
-            rows = self.sc.execute("SELECT repo, person_id, \"at\" FROM signoffs WHERE project = ? "
+            rows = self.sc.execute("SELECT repo, person_id, \"at\", via FROM signoffs WHERE project = ? "
                                     "ORDER BY \"at\", repo", [project]).fetchall()
         refs = self._person_refs(r[1] for r in rows)
-        return [{"repo": r[0], "person_id": r[1], "person": refs.get(r[1]), "at": r[2]}
+        return [{"repo": r[0], "person_id": r[1], "person": refs.get(r[1]), "at": r[2],
+                 "via": r[3]}
                 for r in rows]
 
     def delete_milestone(self, mid: str) -> None:
