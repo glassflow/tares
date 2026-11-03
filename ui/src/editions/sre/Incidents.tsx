@@ -494,12 +494,7 @@ function IncidentView({ id }: { id: string }) {
         <p className="m-0 min-w-0 font-bold [overflow-wrap:anywhere]" data-testid="status-line">{statusOf(d, me, at)}</p>
         <div className="flex flex-wrap gap-2">
           {d.state === "open" && <>{can("on_it") && btn("on_it", "I'm on it", "primary")}{can("resolve") && btn("resolve", "Mark resolved", "secondary")}</>}
-          {d.state === "on_it" && (
-            <>
-              {can("resolve") && btn("resolve", "Mark resolved", "primary")}
-              {!mine && btn("on_it", "I'm on it too", "secondary")}
-            </>
-          )}
+          {d.state === "on_it" && can("resolve") && btn("resolve", "Mark resolved", "primary")}
           {d.state === "resolved" && can("reopen") && btn("reopen", "Reopen", "secondary")}
         </div>
       </section>

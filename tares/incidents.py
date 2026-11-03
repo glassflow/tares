@@ -137,17 +137,34 @@ def _changed(store, incident: dict | None, via: str) -> None:
             print(f"[incidents] hook failed: {type(e).__name__}: {e}")
 
 
+class Held(Exception):
+    """Somebody else is on the incident; the message names them."""
+
+    def __init__(self, inc: dict):
+        self.name = inc.get("owner_name") or inc.get("owner") or "Someone"
+        super().__init__(f"{self.name} is on it.")
+
+
 def take(store, incident_id: str, by_id: str | None, by_name: str | None,
          via: str = "console") -> dict | None:
-    """Somebody is on it. Taking an incident somebody else has takes it over."""
+    """Somebody is on it. Taking an incident somebody else is on changes nothing and raises Held.
+    The write is conditional on the state that was read, so of two people who take a free incident
+    at the same moment one holds it and the other gets Held."""
     inc = store.get_incident(incident_id)
-    if inc is None:
-        return None
-    if inc["state"] == "on_it" and inc["owner"] == by_id and inc["owner_name"] == by_name:
-        return inc
-    out = store.set_incident_state(incident_id, "on_it", by_id, by_name, via)
-    _changed(store, out, via)
-    return out
+    for _ in range(5):
+        if inc is None:
+            return None
+        if inc["state"] == "on_it":
+            if inc["owner"] == by_id and inc["owner_name"] == by_name:
+                return inc
+            raise Held(inc)
+        out = store.set_incident_state(incident_id, "on_it", by_id, by_name, via,
+                                       expect=inc["state"])
+        if out is not None:
+            _changed(store, out, via)
+            return out
+        inc = store.get_incident(incident_id)   # it moved between the read and the write: look again
+    return inc
 
 
 def resolve(store, incident_id: str, by_id: str | None, by_name: str | None,
