@@ -190,10 +190,81 @@ def main():
     print("== a rerun after a new version files the same again ==")
     new_store.set_setting(incidents.BACKFILL_SETTING, "1")
     eq("same count", incidents.backfill(new_store, now=NOW), filed)
-    eq("same incidents", [t[:2] + t[2:5] for t in shape(new_store)],
-       [t[:2] + t[2:5] for t in new_shape])
+    again = shape(new_store)
+    eq("same incidents, times and notes", [t[:7] for t in again], [t[:7] for t in new_shape])
+    eq("same history (the first pass's log is cleaned, not doubled)", [t[8] for t in again],
+       [t[8] for t in new_shape])
+    eq("the same notes in the same order per incident", [t[1] for t in again],
+       [t[1] for t in new_shape])
     new_store.con.close()
     old_store.con.close()
+
+    print("== runs that started together page in a fixed order (BACKFILL_PAGE small) ==")
+    big = Store(os.path.join(TMP, "big.duckdb"))
+    small = Store(os.path.join(TMP, "small.duckdb"))
+    dup = Store(os.path.join(TMP, "dup.duckdb"))
+    for st in (big, small, dup):
+        uid = build(st, NOW, watcher=True, investigator=True)["project"]
+        for i in range(60):
+            rid = f"t{i:04d}"
+            st.start_agent_run(rid, "investigator", "watch-prod", "", f"svc-{i % 5}", "h",
+                               project=uid)
+            st.finish_agent_run(rid, "ok", finding=f"svc-{i % 5} errors.", outcome="finding",
+                                verdict="rca")
+            with st._swrite:   # six timestamps for sixty runs: ten runs tie on each
+                st.sc.execute("UPDATE agent_runs SET started_at = ? WHERE id = ?",
+                              [NOW - timedelta(days=10 + (i % 6)), rid])
+        st.set_setting(incidents.BACKFILL_SETTING, "0")
+    want_big = incidents.backfill(big, now=NOW)
+    old_page = incidents.BACKFILL_PAGE
+    incidents.BACKFILL_PAGE = 7
+    try:
+        got_small = incidents.backfill(small, now=NOW)
+        pages = []
+        real = dup.list_agent_runs
+
+        def repeating(*a, **k):
+            """A store that repeats the last run of the previous page, as a new run does."""
+            if k.get("offset"):
+                k["offset"] -= 1    # everything moved down one: the last run comes again
+            rows = real(*a, **k)
+            if rows:
+                pages.append(rows[-1])
+            return rows
+        dup.list_agent_runs = repeating
+        got_dup = incidents.backfill(dup, now=NOW)
+    finally:
+        incidents.BACKFILL_PAGE = old_page
+    eq("all sixty notes filed with a page of 7", got_small, want_big)
+    eq("the same incidents as with one big page", [t[:7] for t in shape(small)],
+       [t[:7] for t in shape(big)])
+    eq("a run a page repeats is filed once", got_dup, want_big)
+    ck("and the flag is set", small.get_setting(incidents.BACKFILL_SETTING)
+       == incidents.BACKFILL_VERSION and dup.get_setting(incidents.BACKFILL_SETTING)
+       == incidents.BACKFILL_VERSION)
+
+    print("== a note joins a kept incident and moves its last note ==")
+    kst = Store(os.path.join(TMP, "kept.duckdb"))
+    uid = build(kst, NOW, watcher=True, investigator=True)["project"]
+    opened = NOW - timedelta(hours=3)
+    kept = kst.create_incident("svc-9", uid, opened)
+    kst.add_incident_note(kept["id"], "k0", opened)
+    kst.log_incident(kept["id"], "opened", None, "investigator", "runner", opened)
+    kst.start_agent_run("k0", "investigator", "watch-prod", "", "svc-9", "h", project=uid)
+    kst.finish_agent_run("k0", "ok", finding="svc-9 errors.", outcome="finding", verdict="rca")
+    for rid, ago in (("k1", timedelta(hours=2, minutes=57)), ("k2", timedelta(hours=2, minutes=54))):
+        kst.start_agent_run(rid, "investigator", "watch-prod", "", "svc-9", "h", project=uid)
+        kst.finish_agent_run(rid, "ok", finding="svc-9 errors.", outcome="finding", verdict="rca")
+        with kst._swrite:
+            kst.sc.execute("UPDATE agent_runs SET started_at = ? WHERE id = ?", [NOW - ago, rid])
+    kst.set_setting(incidents.BACKFILL_SETTING, "0")
+    incidents.backfill(kst, now=NOW)
+    inc = kst.get_incident(kept["id"])
+    ck("both later notes joined the kept incident",
+       {n["run_id"] for n in kst.incident_notes(kept["id"])} >= {"k1", "k2"},
+       [n["run_id"] for n in kst.incident_notes(kept["id"])])
+    eq("its last note moved to the newest one", incidents._aware(inc["last_note_at"]),
+       NOW - timedelta(hours=2, minutes=54))
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)
 

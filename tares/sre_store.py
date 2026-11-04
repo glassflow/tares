@@ -817,8 +817,10 @@ class SreStore:
         opened_at, last_note_at, resolved_at, resolution}); `notes`: (run_id, incident_id,
         joined_at); `log`: (incident_id, at_time, action, via, by_name); `bumped`: (incident_id,
         last_note_at) for kept incidents a note joined. Each kind goes in as a few batches under
-        one hold of the write lock. Nothing here must be atomic: a pass that stops halfway is
-        undone by the next one, which deletes the backfill's incidents first."""
+        one hold of the write lock. Nothing here is atomic: a pass that stops halfway is redone by
+        the next one, which deletes the backfill's incidents first and files again. A kept
+        incident that a stopped pass bumped keeps its later last note time, which only moves it
+        later and is the time the next pass computes again."""
         def insert(table, cols, rows):
             # one multi-row INSERT per batch: far cheaper than a statement per row, on DuckDB
             # and on Postgres alike

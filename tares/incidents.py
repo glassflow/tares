@@ -322,13 +322,16 @@ def backfill(store, catalog=None, now=None) -> int:
     # only runs that can be a note: the same first checks as is_note, in SQL
     maybe = ("status = 'ok' AND outcome = 'finding' AND COALESCE(practice, FALSE) = FALSE "
              "AND finding IS NOT NULL AND finding <> ''")
-    notes, offset = [], 0
+    notes, offset, read = [], 0, set()
     while True:   # newest first, a page at a time
         page = store.list_agent_runs(None, limit=BACKFILL_PAGE, offset=offset, where_sql=maybe)
         if not page:
             break
         offset += len(page)
         for r in page:
+            if r["id"] in read:    # a run a later page repeats (one started while this ran)
+                continue
+            read.add(r["id"])
             if r.get("started_at") is not None and is_note(store, catalog, {"name": r["agent"]},
                                                            r, roles):
                 notes.append(r)
