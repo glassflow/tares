@@ -107,7 +107,7 @@ def hit_rate_words(row: dict, days: int = 30) -> str:
 def hit_rates(store, days: int = 30, now=None, hide=(), skip_agent=None) -> list[dict]:
     """Per watcher and project: answered, yes, no, hit_rate (None under MIN_ANSWERS), words.
     `hide` leaves out the private projects the caller cannot see, `skip_agent` the watchers only
-    those projects use (a row with no project of its own)."""
+    those projects use, with all their rows: a private watcher's name stays out of what she can read."""
     now = now or datetime.now(timezone.utc)
     out = []
     for row in store.watcher_hit_rates(now - timedelta(days=days)):

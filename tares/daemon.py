@@ -5970,15 +5970,31 @@ def make_app() -> FastAPI:
         return {"ok": True, "worth": {**counts, "mine": mine}}
 
     def _hidden_agent():
-        """A test for a watcher only private projects the caller cannot see use; None when none is hidden."""
+        """A test for a watcher only private projects the caller cannot see use; None when none is hidden.
+        Each watcher is looked up once per call."""
         hidden = _hidden_ids()
-        return (lambda a: _owned_by_hidden("agent", a, hidden)) if hidden else None
+        if not hidden:
+            return None
+        known: dict = {}
+
+        def test(agent):
+            if agent not in known:
+                known[agent] = _owned_by_hidden("agent", agent, hidden)
+            return known[agent]
+        return test
 
     def _run_visible_or_404(run_id: str) -> None:
         """A run of a private project the caller cannot see reads as no run at all."""
         hidden = _hidden_ids()
+        if not hidden:
+            return
         uids = store.run_projects(run_id)
-        if hidden and uids and set(uids) <= hidden:
+        if uids:
+            gone = set(uids) <= hidden
+        else:   # a run with no project of its own follows the watcher that raised it
+            run = store.get_agent_run(run_id)
+            gone = bool(run) and _owned_by_hidden("agent", run["agent"], hidden)
+        if gone:
             _err(LookupError(f"no run {run_id!r}"), 404)
 
     @app.put("/api/findings/{run_id}/worth")

@@ -115,12 +115,22 @@ async def main():
                                    budget_usd=20.0, budget_period="month", concludes=True)
         store.put_in_project("trigger", "watch-edge", open_uid)
         store.put_in_project("agent", "edge-seer", open_uid)
+        # a trigger Edgewatch owns that reads the private source (the check below removes the
+        # membership the cell would add, so the early return in the dependents route is what answers)
+        store.upsert_catalog_trigger("watch-edge-mirror", ["zephyr-logs"], {"every": "15m"}, {}, "15m")
+        store.upsert_catalog_agent("edge-mirror-seer", "watch-edge-mirror", "Look at edge-proxy.",
+                                   budget_usd=5.0, budget_period="month", concludes=True)
+        store.put_in_project("trigger", "watch-edge-mirror", open_uid)
+        store.put_in_project("agent", "edge-mirror-seer", open_uid)
         # a memory source both projects write to
         store.upsert_catalog_source("agent-memory", "agent_memory", "memory", "5s", {})
         # and one only Zephyrwatch uses, whose notes carry no project of their own
         store.upsert_catalog_source("zephyr-memory", "agent_memory", "memory", "5s", {})
         store.put_in_project("source", "zephyr-memory", vault)
         runtime.reload_catalog()
+        with store._swrite:
+            store.sc.execute("DELETE FROM usecase_objects WHERE kind = 'source' AND name = 'zephyr-logs' "
+                             "AND usecase_id = ?", [open_uid])
 
         def event(source, service, text, project=None, minutes=3):
             t = base - timedelta(minutes=minutes)
@@ -166,6 +176,7 @@ async def main():
         store.add_run_projects("r-shared", [vault, open_uid])
         run("r-zephyr-np", "zephyr-seer", "watch-zephyr", "zephyr-api", "Zephyr result, no project.",
             None, 9)
+        run("r-edge-np", "edge-seer", "watch-edge", "edge-proxy", "Edge result, no project.", None, 8)
         ck("the fixture ties the run to the private project", store.run_projects("r-zephyr") == [vault],
            str(store.run_projects("r-zephyr")))
 
@@ -241,6 +252,18 @@ async def main():
         r = await call("kim", "PUT", "/api/findings/r-shared/worth", {"worth": True})
         ck("and on a run the open project shares with the private one", r.status_code == 200,
            f"{r.status_code} {r.text[:120]}")
+        before = len(store.feedback_for(["r-zephyr-np"]).get("r-zephyr-np", []))
+        r = await call("kim", "PUT", "/api/findings/r-zephyr-np/worth", {"worth": True})
+        ck("an answer on a result the private watcher raised with no project is a 404 as well",
+           r.status_code == 404 and r.text.replace("r-zephyr-np", "X") == unknown.text.replace("r-nothing", "X"),
+           f"{r.status_code} {r.text[:120]} vs {unknown.status_code} {unknown.text}")
+        r = await call("kim", "DELETE", "/api/findings/r-zephyr-np/worth")
+        ck("so is taking one back", r.status_code == 404, f"{r.status_code} {r.text[:120]}")
+        ck("and the stored answers stay", len(store.feedback_for(["r-zephyr-np"])["r-zephyr-np"]) == before,
+           str(before))
+        r = await call("kim", "PUT", "/api/findings/r-edge-np/worth", {"worth": True})
+        ck("a visible watcher's result with no project can be answered", r.status_code in (200, 409),
+           f"{r.status_code} {r.text[:120]}")
 
         print("== usage ==")
         r = await get("kim", "/api/usage")
@@ -257,6 +280,9 @@ async def main():
         ck("the private source answers as one that is not there",
            r.status_code == none_src.status_code and r.json() == none_src.json() == {"dependents": []},
            f"{r.status_code} {r.text[:120]} vs {none_src.status_code} {none_src.text[:120]}")
+        ck("even when a trigger she can see reads that private source",
+           "watch-edge-mirror" in [t.name for t in runtime.catalog.triggers]
+           and "zephyr-logs" in next(t.sources for t in runtime.catalog.triggers if t.name == "watch-edge-mirror"))
         r = await get("kim", "/api/catalog/dependents", kind="trigger", name="watch-zephyr")
         none_trg = await get("kim", "/api/catalog/dependents", kind="trigger", name="no-such-trigger")
         ck("and so does the private trigger",
