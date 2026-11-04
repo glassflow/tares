@@ -263,27 +263,34 @@ async function waitFor(url, tries = 100) {
     {
       const { ctx: c, page: p } = await newPage(1440);
       await p.clock.install();
-      let reads = 0, mode = "ok";
-      await p.route(`**/api/factory/projects/${y}/tickets/T2`, (route) => {
+      // A read counts when its answer has been handed to the page, not when it starts: the cell answers
+      // an ok read in its own time, and an older answer that lands after a newer failed one puts the
+      // ticket back and takes the banner away (the page does not drop an answer that is out of order).
+      let started = 0, reads = 0, mode = "ok";
+      await p.route(`**/api/factory/projects/${y}/tickets/T2`, async (route) => {
+        started++;
+        if (mode === "404") await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "no such ticket" }) });
+        else if (mode === "500") await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "down" }) });
+        else await route.fulfill({ response: await route.fetch() });
         reads++;
-        if (mode === "404") return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "no such ticket" }) });
-        if (mode === "500") return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "down" }) });
-        return route.continue();
       });
       await open(p, "T2");
-      const readsAfter = async (min) => { for (let i = 0; i < 50 && reads < min; i++) await new Promise((r) => setTimeout(r, 100)); return reads; };
-      const first = reads;
+      const waitFor = async (what) => { for (let i = 0; i < 100 && !what(); i++) await new Promise((r) => setTimeout(r, 100)); };
+      const answered = async () => { await waitFor(() => reads === started); return reads; };
+      const readsAfter = async (min) => { await waitFor(() => reads >= min && reads === started); return reads; };
+      const first = await answered();
       await p.clock.runFor(16000);
       ck("the page reads the ticket again by itself", (await readsAfter(first + 1)) > first, `${first} -> ${reads}`);
       mode = "500";
-      const before = reads;
+      const before = await answered();
       await p.clock.runFor(16000);
       await readsAfter(before + 1);
       await p.getByText("This page did not refresh.").waitFor({ timeout: 5000 }).catch(() => {});
       ck("a failed read keeps the ticket on the page and says it did not refresh", (await p.getByTestId("factory-ticket").count()) === 1
-         && (await p.getByText("This page did not refresh.").count()) === 1);
+         && (await p.getByText("This page did not refresh.").count()) === 1,
+         `reads ${before} -> ${reads}, ticket ${await p.getByTestId("factory-ticket").count()}, banner ${await p.getByText("This page did not refresh.").count()}`);
       mode = "404";
-      const before404 = reads;
+      const before404 = await answered();
       await p.clock.runFor(16000);
       await readsAfter(before404 + 1);
       await p.getByTestId("ticket-notfound").waitFor({ timeout: 5000 }).catch(() => {});

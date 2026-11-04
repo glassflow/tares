@@ -106,6 +106,13 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
     };
     const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     const settle = async (page) => { await page.waitForLoadState("networkidle"); await page.waitForTimeout(150); };
+    // A fake clock for a page that fast-forwards. The page asks for "the last 6 hours" as a from of
+    // its own clock minus 6 hours, while the cell answers by its own clock, which does not move. The
+    // cell groups events into 10-minute stretches from the start of the range, so a fast-forward that
+    // carries the page's clock over a 10-minute mark moves the first stretch and the list changes
+    // between two reads of the same data. Start the page's clock in the middle of a 10-minute mark,
+    // and no fast-forward in this file (95 seconds at most) reaches the next one.
+    const installClock = (page) => page.clock.install({ time: Math.floor(Date.now() / 600e3) * 600e3 + 300e3 });
 
     const items = (page) => page.getByTestId("timeline-item");
     const ids = (page) => items(page).evaluateAll((e) => e.map((x) => x.dataset.id));
@@ -363,7 +370,7 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
     // 7. error: the list did not load; it tries again by itself and on a click
     for (const width of [1440, 390]) {
       const { ctx, page } = await newPage(width);
-      await page.clock.install();
+      await installClock(page);
       let down = true;
       await page.route(TL_URL, (route) => down
         ? route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "down" }) })
@@ -529,7 +536,7 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
     // 12. the list reads again every 30 seconds, and nothing else does
     {
       const { ctx, page } = await newPage(1440);
-      await page.clock.install();
+      await installClock(page);
       const seen = track(page);
       await page.goto(`${BASE}/timeline`, { waitUntil: "load" });
       await items(page).first().waitFor();
@@ -554,7 +561,7 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
     // 12b. a refresh replaces the first page: a quiet stretch whose start moved is one line, not two
     {
       const { ctx, page } = await newPage(1440);
-      await page.clock.install();
+      await installClock(page);
       let reads = 0;
       await page.route(TL_URL, async (route) => {
         const resp = await route.fetch();
@@ -577,7 +584,7 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
     // 12b2. a list of two pages: a poll before "Load earlier" must not leave the old stretch behind
     {
       const { ctx, page } = await newPage(1440);
-      await page.clock.install();
+      await installClock(page);
       let firstPageReads = 0, earlierReads = 0;
       let head = null;
       await page.route(TL_URL, async (route) => {
@@ -620,7 +627,7 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
     {
       const from = new Date(B.getTime() - 120 * 60e3), to = new Date(B.getTime() - 10 * 60e3);
       const { ctx, page } = await newPage(1440);
-      await page.clock.install();
+      await installClock(page);
       const seen = track(page);
       await page.goto(`${BASE}/timeline?service=edge-proxy&from=${local(from)}&to=${local(to)}`, { waitUntil: "load" });
       await page.getByTestId("timeline-custom").waitFor();
@@ -637,7 +644,7 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
     {
       const from = new Date(B.getTime() - 120 * 60e3);
       const { ctx, page } = await newPage(1440);
-      await page.clock.install();
+      await installClock(page);
       const seen = track(page);
       await page.goto(`${BASE}/timeline?range=custom&from=${local(from)}`, { waitUntil: "load" });
       await page.getByTestId("timeline-custom").waitFor();
