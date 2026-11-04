@@ -2233,17 +2233,19 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
                                  f"not {choice!r}"))
             choice = picked
         standing = bool(body.get("standing"))
+        # a letter stands for the option it picked: a standing answer keeps that option, never "A"
+        grant_words = choice if letter is not None else words
         if standing:
             try:
-                factory_mod.grant_line(words, now_utc().date().isoformat())
+                factory_mod.grant_line(grant_words, now_utc().date().isoformat())
             except docs_mod.DocError as e:
                 h.err(e)
         over = body.get("overturned") or {}
         if not isinstance(over, dict):
             h.err(ValueError("overturned is {A<n>: the person's words}"))
         return {"words": words, "scope": scope, "grant_kind": grant_kind, "choice": choice,
-                "letter": letter, "standing": standing,
-                "kept": [str(a) for a in body.get("kept") or []], "over": over}
+                "letter": letter, "grant_words": grant_words,
+                "standing": standing, "kept": [str(a) for a in body.get("kept") or []], "over": over}
 
     def assumption_plan(d: dict, kept: list[str], over: dict) -> list[tuple]:
         """An assumption batch: every assumption of the item kept or overturned, with the
@@ -2274,7 +2276,7 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         row = None
         if grant:
             kind, grant_project, areas, needs_lead = grant
-            row, _ = put_grant(kind, a["words"], grant_project, giver, areas, needs_lead, by)
+            row, _ = put_grant(kind, a["grant_words"], grant_project, giver, areas, needs_lead, by)
             granted = row["state"] == "active"   # one waiting for consent is not in effect yet
         changed = []
         for asm, st, w in plan:

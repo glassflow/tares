@@ -368,6 +368,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
          && (await optPanel.getByRole("button", { name: "green", exact: true }).count()) === 1 && (await optPanel.getByRole("button", { name: "b!", exact: true }).count()) === 1
          && (await optPanel.getByTestId("answer-text").count()) === 0);
       ck(t("a crew question can stand for next time"), (await optPanel.getByTestId("answer-standing").count()) === 1);
+      await optPanel.getByTestId("answer-standing").click();
       await optPanel.getByRole("button", { name: "b!", exact: true }).click();
       await colour.waitFor({ state: "detached" });
       const decided = (await api("GET", `/api/projects/${ids.project}/decisions`)).body.decisions.find((d) => /Which colour for the links/.test(d.question));
@@ -375,6 +376,9 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       const replyPost = ctl.posts.find((x) => /^\/api\/desk\/[^/]+\/reply$/.test(x.path));
       ck(t("F5, F3: the option clicked is sent as the choice, with its position as the words"), !!replyPost && JSON.parse(replyPost.body || "{}").choice === "b!" && JSON.parse(replyPost.body || "{}").words === "C", JSON.stringify(replyPost));
       ck(t("F5, F3: the daemon recorded the option clicked, not the one a look-alike letter names"), !!decided && decided.choice === "b!", JSON.stringify(decided));
+      const stood = (await api("GET", `/api/grants?project=${ids.project}`, undefined, ids.keys.kim)).body;
+      const stoodWords = (stood.grants || stood).map((g) => g.words);
+      ck(t("F5: a standing option click keeps the option text as the grant, never its letter"), !!decided && decided.standing === true && stoodWords.includes("b!") && !stoodWords.includes("C"), JSON.stringify(stoodWords));
       const desk = (await api("GET", "/api/desk?state=answered")).body.desk;
       ck(t("the desk item is answered"), desk.some((d) => d.label === ids.desk.options), JSON.stringify(desk.map((d) => d.label)));
       ck(t("five remain"), (await rows.count()) === 5, String(await rows.count()));
