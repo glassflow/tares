@@ -2116,7 +2116,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             params.append(status)
         if where:
             sql += "WHERE " + " AND ".join(where) + " "
-        sql += "ORDER BY started_at DESC LIMIT ? OFFSET ?"
+        sql += "ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?"   # id: runs that started together page in a fixed order
         params += [int(limit), max(0, int(offset))]
         with self._sread:
             rows = self.sc.execute(sql, params).fetchall()

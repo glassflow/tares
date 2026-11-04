@@ -763,16 +763,85 @@ class SreStore:
         """Remove the incidents the backfill made with their notes and log rows: the ones it
         closed (resolution before_tracking) and the ones it left open that nobody has touched
         since (every log row is the backfill's). Returns how many incidents went."""
-        with self._swrite:
-            ids = [r[0] for r in self.sc.execute(
-                "SELECT id FROM incidents WHERE resolution = 'before_tracking' "
+        pick = ("SELECT id FROM incidents WHERE resolution = 'before_tracking' "
                 "OR (state = 'open' AND id NOT IN "
-                "(SELECT incident_id FROM incident_log WHERE via <> 'backfill'))").fetchall()]
-            for iid in ids:
-                self.sc.execute("DELETE FROM incident_notes WHERE incident_id = ?", [iid])
-                self.sc.execute("DELETE FROM incident_log WHERE incident_id = ?", [iid])
-                self.sc.execute("DELETE FROM incidents WHERE id = ?", [iid])
-        return len(ids)
+                "(SELECT incident_id FROM incident_log WHERE via <> 'backfill'))")
+        with self._swrite:
+            n = self.sc.execute(f"SELECT COUNT(*) FROM ({pick}) AS gone").fetchone()[0]
+            if n:   # three statements, not three per incident
+                for table, col in (("incident_notes", "incident_id"), ("incident_log", "incident_id"),
+                                   ("incidents", "id")):
+                    self.sc.execute(f"DELETE FROM {table} WHERE {col} IN ({pick})")
+        return int(n)
+
+    # ── the backfill's bulk path (TR-897): decide in memory, write in a few big statements ──
+    def kept_open_incidents(self) -> list[dict]:
+        """The incidents a backfill must join notes to when they fit: every one not resolved."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT id, service, opened_at, last_note_at FROM incidents "
+                "WHERE state <> 'resolved' ORDER BY last_note_at").fetchall()
+        return [{"id": r[0], "service": r[1], "opened_at": r[2], "last_note_at": r[3]}
+                for r in rows]
+
+    def filed_run_ids(self) -> set:
+        """The runs whose note already sits in an incident."""
+        with self._sread:
+            return {r[0] for r in self.sc.execute("SELECT run_id FROM incident_notes").fetchall()}
+
+    def agents_of_runs(self, run_ids) -> dict[str, str]:
+        """run id -> the agent that ran it, for the ids that exist."""
+        return {r[0]: r[1] for r in self._chunked_select(
+            "SELECT id, agent FROM agent_runs WHERE id IN ({ph})", run_ids)}
+
+    def projects_of_runs(self, run_ids) -> dict[str, list[str]]:
+        """run id -> its projects (what run_projects returns for one), for runs that have any."""
+        out: dict[str, list[str]] = {}
+        for run_id, project in sorted(self._chunked_select(
+                "SELECT run_id, project FROM run_projects WHERE run_id IN ({ph})", run_ids)):
+            out.setdefault(run_id, []).append(project)
+        return out
+
+    def _chunked_select(self, sql: str, ids, size: int = 500) -> list:
+        ids = list(dict.fromkeys(i for i in ids if i))
+        out = []
+        for i in range(0, len(ids), size):
+            part = ids[i:i + size]
+            with self._sread:
+                out += self.sc.execute(sql.format(ph=", ".join(["?"] * len(part))), part).fetchall()
+        return out
+
+    def write_backfill(self, made: list[dict], notes: list[tuple], log: list[tuple],
+                       bumped: list[tuple], size: int = 200) -> None:
+        """Store what a backfill decided. `made`: new incidents ({id, service, project, state,
+        opened_at, last_note_at, resolved_at, resolution}); `notes`: (run_id, incident_id,
+        joined_at); `log`: (incident_id, at_time, action, via, by_name); `bumped`: (incident_id,
+        last_note_at) for kept incidents a note joined. Each kind goes in as a few batches under
+        one hold of the write lock. Nothing here is atomic: a pass that stops halfway is redone by
+        the next one, which deletes the backfill's incidents first and files again. A kept
+        incident that a stopped pass bumped keeps its later last note time, which only moves it
+        later and is the time the next pass computes again."""
+        def insert(table, cols, rows):
+            # one multi-row INSERT per batch: far cheaper than a statement per row, on DuckDB
+            # and on Postgres alike
+            row = "(" + ", ".join(["?"] * len(cols)) + ")"
+            for i in range(0, len(rows), size):
+                part = rows[i:i + size]
+                self.sc.execute(f"INSERT INTO {table} ({', '.join(cols)}) VALUES "
+                                + ", ".join([row] * len(part)),
+                                [v for r in part for v in r])
+        with self._swrite:
+            insert("incidents", ("id", "service", "project", "state", "opened_at", "last_note_at",
+                                 "resolved_at", "resolution", "updated_at"),
+                   [(i["id"], i["service"], i["project"], i["state"], i["opened_at"],
+                     i["last_note_at"], i["resolved_at"], i["resolution"], i["last_note_at"])
+                    for i in made])
+            insert("incident_notes", ("run_id", "incident_id", "joined_at"), notes)
+            insert("incident_log", ("incident_id", "at_time", "action", "by_id", "by_name", "via"),
+                   [(iid, at, action, None, by, via) for iid, at, action, via, by in log])
+            if bumped:
+                self.sc.executemany("UPDATE incidents SET last_note_at = ?, updated_at = ? "
+                                    "WHERE id = ?", [(at, at, iid) for iid, at in bumped])
 
     def services_carrying(self, spec: dict[str, str], label: str, value: str, since) -> list[tuple]:
         """[(service, count)] by count: which service the events with `label` = `value` since
