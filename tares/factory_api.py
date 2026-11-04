@@ -2019,8 +2019,8 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
             h.err(PermissionError("a rule is the person's call: accept or reject it in the "
                                   "console"), 403)
         rp = store.get_rule_proposal(pid)
-        if rp is None:
-            h.err(KeyError(f"no rule proposal {pid!r}"), 404)
+        if rp is None or rp.get("project") in h.hidden_ids():
+            h.err(KeyError(f"no rule proposal {pid!r}"), 404)   # a private project's reads as none
         if rp["state"] != "open":
             h.err(ValueError(f"already {rp['state']}"), 409)
         if decision == "reject":
