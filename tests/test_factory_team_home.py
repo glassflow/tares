@@ -522,9 +522,19 @@ async def main():
                             "crew-orchestrator", [], ago(minutes=3), to_person_id=pid["alex"])
         ck("a desk item addressed to Alex in a project he is not on is not in his list",
            "vault keys" not in json.dumps(await home_of("alex")))
-        ck("a hidden project's desk item is not counted in the crew's open questions for Alex",
-           (await home_of("lee"))["crew"]["desk_open"] == (await home_of("alex"))["crew"]["desk_open"] + 1,
-           [(await home_of(w))["crew"]["desk_open"] for w in ("lee", "alex")])
+        store.add_desk_item(vault, "Rotate the vault certificates?", "", [], "yes", "why", "", [], False,
+                            "crew-orchestrator", [], ago(minutes=2), to_person_id=pid["lee"])
+        desk_of = lambda h: h["crew"]["desk_open"]
+        counts = {w: desk_of(await home_of(w)) for w in ("alex", "kim", "lee")}
+        mine_open = lambda who, hide=(): len([d for d in store.list_desk("open", None)
+                                              if d.get("to_person_id") == pid[who] and d["project"] not in hide])
+        ck("the crew's open questions are the ones addressed to the caller's person, not the cell's",
+           counts == {"alex": mine_open("alex", (vault,)), "kim": mine_open("kim"), "lee": mine_open("lee")},
+           counts)
+        ck("... Lee's Vault items are his alone, and the one addressed to Alex on Vault is not Alex's to count",
+           counts["lee"] == 1 and counts["alex"] == mine_open("alex") - 1, counts)
+        ck("... Kim has none addressed to her, and her headline counts no questions",
+           counts["kim"] == 0 and "question" not in (await home_of("kim"))["headline"], counts)
         two = [{"repos": [{"state": "waiting", "owner": {"id": "p1", "name": "Sam"}}], "open_questions": []},
                {"repos": [{"state": "waiting", "owner": {"id": "p2", "name": "Sam"}}],
                 "open_questions": [{"to": {"id": "p1", "name": "Sam"}}]}]
@@ -617,6 +627,47 @@ async def main():
         ck("Lee reads 'Building Vault.'", kim_doing(await home_of("lee")) == "Building Vault.",
            kim_doing(await home_of("lee")))
         await push("kim", [state_line("k2b", "ended", 1)])
+
+        print("== part two: the crew's work is the caller's person's ==")
+        # Kim's ticket on Atlas is held by a station of the same name as Alex's builder, and made first
+        await ticket("kim", atlas, "Wire billing", "acme/web", stage="doing", holder="a-build-m1",
+                     assignee_person_id=pid["kim"])
+        await ticket("kim", atlas, "Wire the mailer", "acme/web", stage="doing", holder="a-build-m1",
+                     assignee_person_id=pid["alex"])
+        h = await home_of("alex")
+        build = next(m for m in h["crew"]["members"] if m["station"] == "a-build-m1")
+        ck("Alex's card: his builder works on his ticket, not on a ticket of Kim's it shares a name with",
+           build["doing"] == "Working on Wire the mailer", build)
+        ck("... and his headline counts only his one ticket", "working on 1 ticket." in h["headline"], h["headline"])
+        h = await home_of("kim")
+        ck("Kim's card never shows Alex's builder, whatever its name shares with her ticket",
+           not any(m["station"] == "a-build-m1" for m in h["crew"]["members"]), h["crew"]["members"])
+        print("   kim headline:", h["headline"])
+        nobody = await home_of("root")
+        ck("the cell's own credential has no crew: 'not running', and none of the cell's work counted",
+           nobody["crew"]["members"] == [] and not nobody["crew"]["running"]
+           and nobody["headline"].startswith("The crew is not running.") and "working on" not in nobody["headline"],
+           nobody["headline"])
+
+        print("== part two: a station on one project that worked on another the reader cannot see ==")
+        # Kim's builder worked on Vault (Alex cannot see it) and now works on Atlas: its reason hides too
+        await push("kim", [st_line("k3a", "k-build-y", "builder", 9, "k", "m3", project=vault),
+                           state_line("k3a", "idle", 9),
+                           st_line("k3b", "k-build-y", "builder", 3, "k", "m3", project=atlas),
+                           state_line("k3b", "waiting", 3, "Waiting for the Vault pager number")])
+        h = await home_of("alex")
+        ck("Alex: no word of Vault in his home, though the station now sits on a project he sees",
+           "Vault" not in json.dumps(h) and "pager" not in json.dumps(h), kim_doing(h))
+        ck("... it reads as waiting for an answer", kim_doing(h) == "Waiting for an answer.", kim_doing(h))
+        await push("kim", [state_line("k3b", "ended", 1)])
+        # an orchestrator has no project: another crew's reason on it is not shown either
+        await push("kim", [state_line("k1", "waiting", 1, "Which Vault key do you want?")])
+        h = await home_of("alex")
+        ck("Alex: Kim's orchestrator waits with a reason that names Vault; his home says only that it waits",
+           "Vault" not in json.dumps(h) and kim_doing(h) == "Waiting for an answer.", kim_doing(h))
+        ck("Kim reads her own reason word for word",
+           kim_doing(await home_of("kim")) == "Which Vault key do you want?", kim_doing(await home_of("kim")))
+        await push("kim", [state_line("k1", "idle", 0)])
 
         print("== part two: how far a crew may go ==")
         h = await home_of("alex")

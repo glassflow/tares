@@ -410,7 +410,7 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     ids = [p["id"] for p in open_ps]
     tickets = store.tickets_by_project(ids)
     milestones = store.milestones_by_project(ids)
-    desk_open = len([d for d in store.list_desk("open", None) if d.get("project") not in hidden])
+    desk = [d for d in store.list_desk("open", None) if d.get("project") not in hidden]
     waiting = team["waiting_for_you"] if team else waiting_items(store, fx, now)
     rows = []
     for p in open_ps:
@@ -423,11 +423,14 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
         team = {**team, **fx.team_projects(request, open_ps, tickets, rows, projects_view(request), now,
                                                   team["waiting_for_you"])}
     # on a team cell "Your crew" is the caller's own crew; the others are the side column's rows
-    mine = fx.own_stations(request, stations) if team and hasattr(fx, "own_stations") else stations
-    crew = _crew(mine, settings, {p["id"] for p in open_ps}, tickets, desk_open, now)
+    # and so are its open questions and the tickets it works on: the caller's person's, not the cell's
+    mine = fx.own_stations(request, stations) if team else stations
+    own = fx.own_tickets(request, tickets, open_ps) if team else tickets
+    desk_open = len(fx.own_desk(request, desk) if team else desk)
+    crew = _crew(mine, settings, {p["id"] for p in open_ps}, own, desk_open, now)
     orch = next((s for s in mine if s["role"] == "orchestrator"), None)
     silent = _minutes(orch["last_at"], now) if orch and crew["running"] else None
-    working = sum(factory_mod.progress(ts)["doing"] for ts in tickets.values())
+    working = sum(factory_mod.progress(ts)["doing"] for ts in own.values())
     linear = linear_mod.public_connection(store)["connected"]
     body = {"edition": "factory",
             "headline": _headline(crew, rows, len(projects) - len(open_ps), working, waiting, silent),
