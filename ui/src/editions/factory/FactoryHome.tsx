@@ -691,7 +691,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
 
   const handOver = (entry: HomeWaitingOn) => setHanding({ entry, busy: false, error: null });
   const confirmHandOver = async (entry: HomeWaitingOn, why: string) => {
-    if (!live) { setHanding(null); return; }   // a sample never calls the cell
+    if (!live) { setHanding(null); toast(SAMPLE_NOTE); return; }   // a sample never calls the cell
     setHanding({ entry, busy: true, error: null });
     try {
       await handOverAnyway(entry.project.id, why);

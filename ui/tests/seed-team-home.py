@@ -65,7 +65,7 @@ for name, body in {
     "allow": {"question": "shop-build-m1 was refused a command. Allow it?", "recommendation": "shop-build-m1 may read the status of a commit",
               "why": "it needs it to wait for CI", "project": shop, "station": "shop-build-m1",
               "command": "gh api repos/acme/web/statuses/abc", "to": people["alex"]},
-    "options": {"question": "Which colour for the links?", "options": ["blue", "green"], "recommendation": "blue",
+    "options": {"question": "Which colour for the links?", "options": ["blue", "green", "b!"], "recommendation": "blue",
                 "why": "it reads best", "project": shop, "to": people["alex"]},
     "long": {"question": LONG, "recommendation": "the account", "why": "it follows the customer",
              "project": shop, "to": people["alex"]},

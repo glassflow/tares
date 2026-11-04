@@ -365,15 +365,16 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       const optPanel = colour.getByTestId("answer-panel");
       await optPanel.waitFor();
       ck(t("a question with options shows one button each"), (await optPanel.getByRole("button", { name: "blue", exact: true }).count()) === 1
-         && (await optPanel.getByRole("button", { name: "green", exact: true }).count()) === 1 && (await optPanel.getByTestId("answer-text").count()) === 0);
+         && (await optPanel.getByRole("button", { name: "green", exact: true }).count()) === 1 && (await optPanel.getByRole("button", { name: "b!", exact: true }).count()) === 1
+         && (await optPanel.getByTestId("answer-text").count()) === 0);
       ck(t("a crew question can stand for next time"), (await optPanel.getByTestId("answer-standing").count()) === 1);
-      await optPanel.getByRole("button", { name: "green", exact: true }).click();
+      await optPanel.getByRole("button", { name: "b!", exact: true }).click();
       await colour.waitFor({ state: "detached" });
       const decided = (await api("GET", `/api/projects/${ids.project}/decisions`)).body.decisions.find((d) => /Which colour for the links/.test(d.question));
-      ck(t("the option clicked is the recorded answer, made in the console"), !!decided && decided.words === "green" && decided.via === "console", JSON.stringify(decided));
+      ck(t("the option clicked is the recorded answer, made in the console"), !!decided && decided.via === "console", JSON.stringify(decided));
       const replyPost = ctl.posts.find((x) => /^\/api\/desk\/[^/]+\/reply$/.test(x.path));
-      ck(t("F5: the option clicked is sent as the choice, with its words"), !!replyPost && JSON.parse(replyPost.body || "{}").choice === "green" && JSON.parse(replyPost.body || "{}").words === "green", JSON.stringify(replyPost));
-      ck(t("F5: the daemon recorded the choice on the decision"), !!decided && decided.choice === "green", JSON.stringify(decided));
+      ck(t("F5, F3: the option clicked is sent as the choice, with its position as the words"), !!replyPost && JSON.parse(replyPost.body || "{}").choice === "b!" && JSON.parse(replyPost.body || "{}").words === "C", JSON.stringify(replyPost));
+      ck(t("F5, F3: the daemon recorded the option clicked, not the one a look-alike letter names"), !!decided && decided.choice === "b!", JSON.stringify(decided));
       const desk = (await api("GET", "/api/desk?state=answered")).body.desk;
       ck(t("the desk item is answered"), desk.some((d) => d.label === ids.desk.options), JSON.stringify(desk.map((d) => d.label)));
       ck(t("five remain"), (await rows.count()) === 5, String(await rows.count()));
@@ -639,6 +640,13 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await shot(page, "waiting-on-dialog", width);
       await page.getByRole("button", { name: "Cancel" }).click();
       ck(t("Cancel closes the box"), (await page.getByTestId("handover-dialog").count()) === 0);
+      await page.getByRole("button", { name: "Hand over anyway" }).first().click();
+      await page.getByTestId("handover-dialog").waitFor();
+      await page.getByTestId("handover-reason").fill("Kim is out until Monday, so the ticket should not wait.");
+      await confirm.click();
+      const sampleNote = page.getByText("This is a sample, so nothing was sent.");
+      await sampleNote.first().waitFor({ timeout: 3000 }).catch(() => {});
+      ck(t("F7: confirming a hand-over in a sample says nothing was sent, and the box closes"), (await sampleNote.count()) >= 1 && (await page.getByTestId("handover-dialog").count()) === 0, String(await sampleNote.count()));
       await ctx.close();
     }
     // ── Projects, from the sample states: Mine and Team, the lock, the lead line and the hidden line ──

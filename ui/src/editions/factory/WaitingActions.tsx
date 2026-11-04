@@ -14,10 +14,11 @@ const OVERRIDE_MAX = 500;   // the daemon keeps this much of a hand-over reason
 export interface AnswerGiven { words: string; choice?: string; standing: boolean }
 
 const LETTERS = "ABCDEFGH";
-/** A click on an option. An option that is itself one letter (a to h) would read as a pick by position, so it is sent as its position. */
-export function optionAnswer(options: string[], index: number): { words: string; choice: string } {
+/** A click on an option. A crew question reads a one-letter reply as a pick by position, so a click sends the position and
+ *  the option as the choice; a spec question takes the option's own words. */
+export function optionAnswer(options: string[], index: number, desk: boolean): { words: string; choice?: string } {
   const o = options[index];
-  return { words: /^\(?[a-h]\)?[.)]?$/i.test(o.trim()) ? LETTERS[index] : o, choice: o };
+  return desk && index < LETTERS.length ? { words: LETTERS[index], choice: o } : { words: o, choice: o };
 }
 
 /** Answer, open under its row: one button per option, or a text box and Send. */
@@ -37,8 +38,8 @@ export function AnswerPanel({ item, action, busy, onSend, onCancel }: {
         {options.length > 0 ? (
           <div className="flex flex-wrap gap-2" role="group" aria-label={`Answers to ${item.title}`}>
             {options.map((o, i) => (
-              <Button key={o} variant="secondary" className="h-8 text-[13px]!" disabled={busy}
-                onClick={() => onSend({ ...optionAnswer(options, i), standing })} data-user-text>
+              <Button key={i} variant="secondary" className="h-8 text-[13px]!" disabled={busy}
+                onClick={() => onSend({ ...optionAnswer(options, i, canStand), standing })} data-user-text>
                 {o}
               </Button>
             ))}
