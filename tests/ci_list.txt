@@ -158,6 +158,7 @@ test_upgrade_hard_stop
 test_usage
 test_vercel
 test_watch_escalate
+test_watch_scan_edition
 test_watch_state
 test_wiring
 test_words_sync
