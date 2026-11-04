@@ -164,7 +164,10 @@ async function waitFor(url, tries = 150) {
         await page.locator('nav[aria-label="Main"]').getByRole("link", { name: label, exact: true }).click();
         await page.waitForLoadState("networkidle");
         ck(`${e}: ${label} lands on a page`, (await page.locator("main").innerText()).includes("does not exist") === false);
-        if (label === "Timeline") ck("sre: Timeline is Explore for now", new URL(page.url()).pathname === "/explore", page.url());
+        if (label === "Timeline") {
+          await page.getByRole("heading", { level: 1, name: "Timeline", exact: true }).waitFor({ timeout: 5000 }).catch(() => {});
+          ck("sre: the Timeline row opens the Timeline page, not Explore", new URL(page.url()).pathname === "/timeline" && (await page.getByRole("heading", { level: 1, name: "Timeline", exact: true }).count()) === 1, `${page.url()} ${await page.locator("main h1").allInnerTexts()}`);
+        }
         await shellWords(page, `${e} ${label}`);
       }
       await ctx.close();

@@ -40,9 +40,9 @@ export function RaisedList({ items, note, busy, onAnswer }: {
                       <Button variant="secondary" className="h-8 text-[13px]!" busy={yes} disabled={busy !== null && !yes} onClick={() => onAnswer(r.id, true)} data-testid="worth-yes">Yes</Button>
                       <Button variant="secondary" className="h-8 text-[13px]!" busy={no} disabled={busy !== null && !no} onClick={() => onAnswer(r.id, false)} data-testid="worth-no">No</Button>
                     </>
-                  ) : (
-                    <Link to={`/incidents/${encodeURIComponent(r.id)}`} className="text-foreground underline underline-offset-2" data-testid="read-note">Read the note</Link>
-                  )}
+                  ) : r.incident_id ? (
+                    <Link to={`/incidents/${encodeURIComponent(r.incident_id)}`} className="text-foreground underline underline-offset-2" data-testid="read-note">Read the note</Link>
+                  ) : null}
                 </div>
               </li>
             );

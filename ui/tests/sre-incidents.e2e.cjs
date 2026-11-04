@@ -355,6 +355,22 @@ async function waitFor(url, tries = 150) {
       ck("Try now loads the incident", (await p.getByTestId("incident-error").count()) === 0);
     }
     {
+      // a line with no timestamp (TR-894): the page still opens, and the odd line shows without a time
+      const { page: p } = await newPage(1440);
+      await p.route((u) => u.pathname === incApi("open-a"), async (r) => {
+        const res = await r.fetch();
+        const body = await res.json();
+        if (body.evidence.length) body.evidence[0].at = null;
+        if (body.joined.length) body.joined[0].at = null;
+        await r.fulfill({ response: res, json: body });
+      });
+      await goto(p, incUrl("open-a"));
+      await p.getByTestId("status-line").waitFor({ timeout: 8000 }).catch(() => {});
+      ck("no timestamp: the incident page still opens", (await p.getByTestId("status-line").count()) === 1 && (await p.getByTestId("incident-error").count()) === 0);
+      ck("no timestamp: what it read is still listed", (await p.getByTestId("evidence-row").count()) >= 1, String(await p.getByTestId("evidence-row").count()));
+      ck("no timestamp: so are the later notes", (await p.getByTestId("joined-row").count()) >= 1, String(await p.getByTestId("joined-row").count()));
+    }
+    {
       const { page: p } = await newPage(1440);
       let broken = false;
       await p.route((u) => u.pathname === `${incApi("open-a")}/on_it`, (r) => (broken ? r.fulfill({ status: 500, body: "{}" }) : r.continue()));

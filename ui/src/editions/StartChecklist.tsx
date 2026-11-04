@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { Button, ProgressBar, Skeleton } from "../components/edition";
 import { ROW_CLASS } from "../components/edition/ListRow";
 import { cn } from "@/lib/utils";
+import { copyText } from "./copyText";
 import { hideStart, showStart, type StartAction, type StartBlock, type StartStep } from "./StartChecklist.api";
 
 // The Start checklist: the few steps that take a new cell from empty to working. It draws the block
@@ -36,7 +37,7 @@ function CopyCommand({ command }: { command: string }) {
   const timer = React.useRef<ReturnType<typeof setTimeout>>();
   React.useEffect(() => () => clearTimeout(timer.current), []);
   const copy = () => {
-    navigator.clipboard.writeText(command).then(() => {
+    copyText(command).then(() => {
       setCopied(true);
       clearTimeout(timer.current);
       timer.current = setTimeout(() => setCopied(false), COPIED_MS);
