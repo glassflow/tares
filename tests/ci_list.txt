@@ -123,6 +123,7 @@ test_rius_rca
 test_run_results
 test_schedule_trigger
 test_seed
+test_seed_new_cell_only
 test_services
 test_services_write
 test_session_flow
