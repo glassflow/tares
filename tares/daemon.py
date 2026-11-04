@@ -588,8 +588,10 @@ class SlackTeamIn(BaseModel):
 
 
 def _seed_project(store, projects) -> None:
-    """Create TARES_SEED_PROJECT's project once, on the first boot that carries the var. The
-    `seeded_project` settings marker (`seeded_usecase` before 1.14) is the one-shot record: it is written after the attempt
+    """Create TARES_SEED_PROJECT's project once, on the first boot that carries the var, and only
+    on a new cell: one with no project besides the default. A cell that already has projects (a
+    factory cell switched to SRE gets the var on its next upgrade) is not given the demo; it
+    records the skip, so it never seeds later. The `seeded_project` settings marker (`seeded_usecase` before 1.14) is the one-shot record: it is written after the attempt
     (success or failure), so a user who deletes the seeded project never gets it back on a pod
     restart. An unknown template key writes NO marker — a config typo stays fixable by fixing the
     config. Never raises: a failed seed is a log line, not a dead cell."""
@@ -600,6 +602,10 @@ def _seed_project(store, projects) -> None:
     from .projects.registry import list_templates
     if SEED_PROJECT not in {r.key for r in list_templates()}:
         print(f"taresd: TARES_SEED_PROJECT names unknown template {SEED_PROJECT!r}; not seeded")
+        return
+    if any(u.get("recipe") != "default" for u in store.list_projects()):
+        print(f"taresd: not seeding project {SEED_PROJECT!r}: this cell already has projects")
+        store.set_setting("seeded_project", SEED_PROJECT)
         return
     try:
         inst = projects.create(SEED_PROJECT, params={})
