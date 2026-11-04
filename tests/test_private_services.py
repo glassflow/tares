@@ -250,6 +250,13 @@ async def main():
         r = await cold("kim", "/api/sre/timeline", service="service-a")
         ck("and a shared service's timeline has none of the private lines", r.status_code == 200
            and not mentions(r.json()), f"{r.status_code} {r.text[:300]}")
+        def counted(resp):
+            return sum((i.get("raw") or {}).get("count", 0) for i in resp.json().get("items", [])
+                       if i.get("kind") in ("window", "quiet"))
+        tk = await cold("kim", "/api/sre/timeline", service="service-a")
+        tl = await cold("lee", "/api/sre/timeline", service="service-a")
+        ck("the timeline's windows count only the events she can see", counted(tk) < counted(tl),
+           f"{counted(tk)} vs {counted(tl)} {tk.text[:200]}")
         r = await cold("kim", "/api/sre/home")
         ck("the home names nothing private", r.status_code in (200, 404) and not mentions(r.json()),
            f"{r.status_code} {r.text[:300]}")
