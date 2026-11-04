@@ -102,7 +102,7 @@ const WATCH_ON: HomeWatch = {
 };
 
 const raised = (id: string, when: string, svc: string, what: string, outcome: string, can = true, worth: boolean | null = null): HomeRaised => ({
-  id, at: ago(60), when_words: when, service: svc, what, outcome_words: outcome, worth, can_answer: can,
+  id, incident_id: can ? null : `inc-${id}`, at: ago(60), when_words: when, service: svc, what, outcome_words: outcome, worth, can_answer: can,
 });
 const OLD_RAISED: HomeRaised[] = [
   raised("chk-a1", "29 Sep", "docs-site", "burst of 404s on /.env from a scanner", "Investigated: no real users hit. Resolved itself."),

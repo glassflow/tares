@@ -20,7 +20,7 @@ export const MENUS: Record<"factory" | "sre", MenuEntry[]> = {
     { key: "home", label: "Home", to: "/", today: true },
     { key: "services", label: "Services", to: "/services", today: false },
     { key: "incidents", label: "Incidents", to: "/incidents", today: false },
-    { key: "timeline", label: "Timeline", to: "/explore", today: true },   // Explore until the timeline page exists (TR-752)
+    { key: "timeline", label: "Timeline", to: "/timeline", today: true },
     { key: "runbooks", label: "Runbooks and memory", to: "/runbooks", today: false },
     SETTINGS_ENTRY,
   ],

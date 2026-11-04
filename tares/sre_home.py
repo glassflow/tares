@@ -307,7 +307,8 @@ def _raised(store, catalog, person, on, t, hide=()) -> tuple:
                               hide=hide)["findings"]
     feedback.with_answers(store, worth, person)
     newest = goal.cell_results(store, scheduled, limit=1, show="all", now=t, hide=hide)["findings"]
-    items = [{"id": r["id"], "at": sre._iso(_utc(r["at"])), "when_words": _when_words(r["at"], t),
+    items = [{"id": r["id"], "incident_id": (store.incident_for_run(r["id"]) or {}).get("id"),
+              "at": sre._iso(_utc(r["at"])), "when_words": _when_words(r["at"], t),
               "service": r["title_parts"]["service"], "what": r["title_parts"]["what"],
               "outcome_words": r["outcome_words"], "worth": (r.get("worth") or {}).get("mine"),
               "can_answer": r["can_answer"]} for r in worth]

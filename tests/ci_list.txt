@@ -134,6 +134,7 @@ test_slack_incident_buttons
 test_slack_verify
 test_spec_signoff
 test_sre_home
+test_sre_home_note_link
 test_sre_incident_hold
 test_sre_incidents
 test_sre_private_screens
