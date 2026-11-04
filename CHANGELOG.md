@@ -6,6 +6,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- A first-run edition notice now also shows when the cell keeps its state in Postgres, and the edition chooser tells you when your choice was saved but the cell did not answer afterwards.
+- The AI SRE home shows the demo service as soon as "Try the demo service" finishes, and a failed demo start links to the step-by-step setup.
+- The AI SRE home shows a line after you hide the Start list, with a button to show it again.
 - CI now runs the console's browser end-to-end suites on every pull request.
 - On a team cell, the home's Your crew card shows your own crew's stations only.
 - The team home's side column shows your crew's limit in words, the team's other crews, and the repos you own.
@@ -262,6 +265,11 @@ the project follows [Semantic Versioning](https://semver.org/).
   crew has a station of the same name.
 
 ### Fixed
+- The console's e2e runner in CI no longer reports a passing suite as timed out when its timer fires just as the suite ends, and its own test fails instead of hanging if the timeout kill breaks.
+- The AI SRE Start checklist stays hidden after you are renamed and is no longer shared by two people with the same name, and the factory home greets you by your own name.
+- A grant that was declined stays declined when the project lead adds the same words, and two requests settling one grant no longer remove the line of a grant that is in effect.
+- On a team cell, Your crew on the home counts only the questions addressed to you and the tickets that are yours, and another person's crew that waits shows "Waiting for an answer." instead of its reason.
+- The team home records which option you clicked when you answer a question. A sign-off over more than 20 tickets says how many more there are. An option answer you let stand keeps the option's text as the grant, not its letter. A refused sign-off or decline shows its reason once, in the box. In a sample, the buttons that open a box open it and say nothing was sent.
 - The Crew page standup line now counts only what happened in the last 24 hours: tickets done, started, sent to review, blocked and new questions, not what has been standing for days.
 - An incident someone else is on can no longer be taken over by pressing "I'm on it"; the screen says who is on it.
 - A crew's line on the team home no longer shows the reason of a station that also works on a project you cannot see.
