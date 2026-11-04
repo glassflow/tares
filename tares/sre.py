@@ -610,11 +610,14 @@ def _text(body: dict, key: str, limit: int) -> str | None:
     return v or None
 
 
-def patch_service(store, catalog, name: str, body, by: str) -> dict:
+def patch_service(store, catalog, name: str, body, by: str, hide=()) -> dict:
     """Change one service's display name, hidden flag, merge or linked repos, and return it as
     get_service does. A field left out stays as it is, null clears it. ValueError (400) when the body is
     refused, LookupError (404) when the cell knows no such service. The body is checked before
-    the name, so a refused merge says why whatever the name is."""
+    the name, so a refused merge says why whatever the name is.
+    `hide`: the project ids the caller cannot see. A service only those projects feed answers
+    404 like one that does not exist, and a merge target such as that answers like an unknown one
+    (TR-998)."""
     if not isinstance(body, dict):
         raise ValueError("the body must be a JSON object such as {\"hidden\": true}")
     unknown = sorted(set(body) - set(PATCH_FIELDS))
@@ -634,28 +637,54 @@ def patch_service(store, catalog, name: str, body, by: str) -> dict:
             raise ValueError("hidden must be true, false or null")
         changes["hidden"] = bool(body["hidden"])
     if "repos" in body:
-        changes["repos"] = _check_repos(store, catalog, body["repos"])
+        changes["repos"] = _check_repos(store, catalog, body["repos"], hide)
     settings = store.service_settings()
+    raw = _compute_cached(store, catalog, None)
+    seen = _view(store, raw, hide)["recs"]
     if "merged_into" in body:
         target = _text(body, "merged_into", MAX_NAME)
         if target is not None:
-            check_merge(settings, name, target)
+            # a service the caller cannot see has no merge state to echo back in the refusal
+            # (a service merged away still keeps its raw name inside the one it merged into)
+            blind = hidden_sources(store, hide)
+            gone = (set(raw["recs"]) - set(seen)) | {
+                n for r in raw["recs"].values() for n, srcs in r.get("raw", {}).items()
+                if srcs and srcs <= blind}
+            check_merge({n: st for n, st in settings.items() if n not in gone}, name, target)
         changes["merged_into"] = target
     # the same test GET /api/services/{name} applies, so a name that answers 404 there does here
-    if canonical(name, settings) not in _compute_cached(store, catalog, None)["recs"]:
+    if canonical(name, settings) not in seen:
         raise LookupError(f"no service named {name}")
     store.set_service(name, by, **changes)
-    return get_service(store, catalog, name)
+    return get_service(store, catalog, name, hide=hide)
 
 
-def set_service_labels(store, catalog, body) -> dict:
+def _keep_hidden(store, hide, setting: str, out: dict) -> dict:
+    """`out` plus what `setting` holds for the sources the caller cannot see: a mapping that
+    replaces the stored one must not wipe the entries of sources they never saw (TR-998)."""
+    gone = hidden_sources(store, hide)
+    if not gone:
+        return out
+    try:
+        kept = json.loads(store.get_setting(setting) or "{}")
+    except ValueError:
+        kept = {}
+    if isinstance(kept, dict):
+        out = {**out, **{k: v for k, v in kept.items() if k in gone}}
+    return out
+
+
+def set_service_labels(store, catalog, body, hide=()) -> dict:
     """Store which label names services in which source: {source name: label name, or null for a
     source that holds no services}. The mapping replaces the one stored. ValueError (400) for a
-    source the catalog does not have or a label name that is not letters, digits and underscores."""
+    source the catalog does not have or a label name that is not letters, digits and underscores.
+    `hide`: the project ids the caller cannot see; their sources count as not in the catalog, and
+    their stored entries stay as they are."""
     from .store import _FIELD_RE
     if not isinstance(body, dict):
         raise ValueError("the body must be a JSON object such as {\"prod-otlp\": \"namespace\"}")
-    unknown = sorted(s for s in body if s not in catalog.sources)
+    gone = hidden_sources(store, hide)
+    unknown = sorted(s for s in body if s not in catalog.sources or s in gone)
     if unknown:
         raise ValueError(f"no source named {', '.join(unknown)}: use the names of the sources "
                          "in this cell")
@@ -668,15 +697,17 @@ def set_service_labels(store, catalog, body) -> dict:
         else:
             raise ValueError(f"the label for {source} must be a label name (letters, digits and "
                              "underscores) or null for a source that holds no services")
-    store.set_setting(LABELS_SETTING, json.dumps(out))
+    store.set_setting(LABELS_SETTING, json.dumps(_keep_hidden(store, hide, LABELS_SETTING, out)))
     store.clear_services_cache()
     return out
 
 
-def set_via_labels(store, body) -> dict:
+def set_via_labels(store, body, hide=()) -> dict:
     """Store which labels carry another service's name in which source: {source name: [label
     name, ...]}. The mapping replaces the one stored; an empty list turns the default off for a
-    source. ValueError (400) for anything else."""
+    source. ValueError (400) for anything else. `hide`: the project ids the caller cannot see; a
+    source only those hold is left as stored whatever the body says about it, and the answer
+    is the body, as for a name the cell does not know."""
     from .store import _FIELD_RE
     if not isinstance(body, dict) or not all(
             isinstance(v, list) and all(isinstance(x, str) and _FIELD_RE.match(x) for x in v)
@@ -684,7 +715,9 @@ def set_via_labels(store, body) -> dict:
         raise ValueError("the body must be a JSON object such as {\"prod-otlp\": "
                          "[\"proxy_upstream_name\"]}, with label names (letters, digits and "
                          "underscores) in each list")
-    store.set_setting(VIA_SETTING, json.dumps(body))
+    gone = hidden_sources(store, hide)
+    store.set_setting(VIA_SETTING, json.dumps(_keep_hidden(
+        store, hide, VIA_SETTING, {k: v for k, v in body.items() if k not in gone})))
     store.clear_services_cache()
     return body
 
@@ -708,7 +741,7 @@ def github_repos(store, catalog, hide=()) -> dict:
     return {e["value"]: e["last_ingest"] for e in store.list_entities("repo", sources=names, limit=10000)}
 
 
-def _check_repos(store, catalog, repos) -> list[str]:
+def _check_repos(store, catalog, repos, hide=()) -> list[str]:
     if repos is None:
         return []
     if not isinstance(repos, list) or not all(isinstance(r, str) for r in repos):
@@ -716,7 +749,7 @@ def _check_repos(store, catalog, repos) -> list[str]:
     repos = list(dict.fromkeys(r.strip() for r in repos))
     if len(repos) > MAX_REPOS:
         raise ValueError(f"a service can link at most {MAX_REPOS} repos, and {len(repos)} were given")
-    known = github_repos(store, catalog) if repos else {}
+    known = github_repos(store, catalog, hide) if repos else {}
     for r in repos:
         if r not in known:
             raise ValueError(f"{r} has sent nothing to this workspace yet; connect it first")

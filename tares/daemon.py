@@ -40,7 +40,7 @@ from pydantic import BaseModel, model_validator
 from . import loop as loop_mod
 from .config import (SLACK_URL_PREFIX, CatalogError, agent_url, catalog_from_db, export_db_to_yaml,
                      validate_mcp_server_dict,
-                     import_yaml_to_db, slack_channel_from_url, slack_url,
+                     hidden_objects, import_yaml_to_db, slack_channel_from_url, slack_url,
                      validate_agent_dict, validate_slack_channel, validate_source_dict,
                      check_handoff_targets, normalize_handoffs, normalize_verdicts,
                      validate_trigger_dict, normalize_trigger_description, VIEWS_REMOVED,
@@ -1618,9 +1618,16 @@ def make_app() -> FastAPI:
         p = store.get_person(k["person_id"]) if k.get("person_id") else None
         return {**k, "person": {"id": p["id"], "name": p["name"]} if p else None}
 
+    def _key_hidden(k: dict | None, hidden: set[str]) -> bool:
+        """A key bound to a private project the caller cannot see (TR-998): it is not in the list
+        and answers a change as a key that is not there."""
+        return bool(k and k.get("project") and k["project"] in hidden)
+
     @app.get("/api/keys")
     def list_keys():
-        return {"keys": [_key_out(k) for k in store.list_api_keys()],
+        hidden = _hidden_ids()
+        return {"keys": [_key_out(k) for k in store.list_api_keys()
+                         if not _key_hidden(k, hidden)],
                 "enforced": bool(AUTH_TOKEN),   # without a root auth token the instance is open
                 "scopes": sorted(_SCOPES)}
 
@@ -1692,14 +1699,15 @@ def make_app() -> FastAPI:
         """Bind a key to a person: {person_id} or {person: {email, name}}. Admin."""
         if not body.get("person_id") and not body.get("person"):
             _err(ValueError("say which person: {person_id} or {person: {email, name}}"))
-        if not store.get_api_key(kid) or store.get_api_key(kid)["revoked_at"]:
+        key = store.get_api_key(kid)
+        if not key or key["revoked_at"] or _key_hidden(key, _hidden_ids()):
             _err(KeyError(f"no active key {kid!r}"), 404)
         store.set_key_person(kid, _body_person(request, body))
         return _key_out(store.get_api_key(kid))
 
     @app.delete("/api/keys/{kid}")
     def revoke_key(kid: str):
-        if not store.revoke_api_key(kid):
+        if _key_hidden(store.get_api_key(kid), _hidden_ids()) or not store.revoke_api_key(kid):
             _err(KeyError(f"no active key {kid!r}"), 404)
         return {"ok": True, "note": "key revoked; its subscriptions were removed"}
 
@@ -6162,7 +6170,7 @@ def make_app() -> FastAPI:
         who = _by(request) or "console"
         try:
             return await asyncio.to_thread(sre_mod.patch_service, store, runtime.catalog, name,
-                                           body, who)
+                                           body, who, _hidden_ids())
         except LookupError as e:
             raise HTTPException(status_code=404, detail=str(e.args[0]))
         except ValueError as e:
@@ -6173,7 +6181,8 @@ def make_app() -> FastAPI:
         """{source name: label name, or null}: which label names the services in each source.
         Replaces the stored mapping and answers it. Admin like every /api/settings route."""
         try:
-            return await asyncio.to_thread(sre_mod.set_service_labels, store, runtime.catalog, body)
+            return await asyncio.to_thread(sre_mod.set_service_labels, store, runtime.catalog, body,
+                                           _hidden_ids())
         except ValueError as e:
             _err(e)
 
@@ -6182,7 +6191,7 @@ def make_app() -> FastAPI:
         """{source name: [label name, ...]}: the labels that carry another service's name, such as
         the upstream an ingress forwarded to. Replaces the stored mapping and answers it."""
         try:
-            return await asyncio.to_thread(sre_mod.set_via_labels, store, body)
+            return await asyncio.to_thread(sre_mod.set_via_labels, store, body, _hidden_ids())
         except ValueError as e:
             _err(e)
 
@@ -6663,15 +6672,18 @@ def make_app() -> FastAPI:
         OMITTED. `sources=a,b` limits to a subset (triggers and agents filtered to stay consistent);
         `include_secrets=true` emits real connector secrets (admin-gated route)."""
         src = [s for s in sources.split(",") if s] if sources else None
-        return PlainTextResponse(export_db_to_yaml(store, src, include_secrets),
+        return PlainTextResponse(export_db_to_yaml(store, src, include_secrets, _hidden_ids()),
                                  media_type="application/yaml")
 
     @app.post("/api/catalog/import")
     def catalog_import(body: ImportReq):
+        # what the caller cannot see is neither replaced nor overwritten, and nothing answers
+        # differently for it than for a name the cell does not have (TR-998)
+        hidden = _hidden_ids()
         if body.mode == "replace":
-            store.clear_catalog()
+            store.clear_catalog(hidden_objects(store, hidden) if hidden else None, hidden)
         try:
-            counts = import_yaml_to_db(store, body.yaml, engine=projects)
+            counts = import_yaml_to_db(store, body.yaml, engine=projects, hide=hidden)
             store.migrate_claude_code_repo_label()
         except (CatalogError, ProjectError) as e:
             _err(e)
