@@ -225,11 +225,12 @@ class SreStore:
         return sorted(names)[:limit]
 
     # ── services: event counts over time (TR-767) ─────────────────────────────
-    def _series_scope(self, services: list[str]):
+    def _series_scope(self, services: list[str], skip=()):
         """What a chart over `services` reads: ({service: the raw names counted for it}, {source:
         the label naming a service in it}). A service that is merged into another is charted as
         that one, and a service counts every name merged into it. The settings (a state table)
-        are read first and only names go into the events query."""
+        are read first and only names go into the events query. `skip`: sources left out (the
+        ones a viewer cannot see)."""
         from . import sre
         from .config import catalog_from_db
         settings = self.service_settings()
@@ -237,7 +238,7 @@ class SreStore:
         spec = {}
         for s in catalog_from_db(self).sources.values():
             label = sre.service_label(s, overrides)
-            if label:
+            if label and s.name not in skip:
                 spec[s.name] = label
         names = {}
         for svc in services:
@@ -282,7 +283,8 @@ class SreStore:
                 for i in range(n)]
 
     def event_series_many(self, services: list[str], since, until, bucket_s: int,
-                          errors_only: bool = False) -> dict[str, list[tuple[str, int]]]:
+                          errors_only: bool = False,
+                          skip=()) -> dict[str, list[tuple[str, int]]]:
         """For each service, [(bucket start as ISO text, events)] over [since, until) in buckets
         of `bucket_s` seconds aligned to `since`, with 0 for a bucket where nothing arrived.
         errors_only counts only what sre.is_error_where says is an error. A service counts the
@@ -294,7 +296,7 @@ class SreStore:
         services = list(dict.fromkeys(services))
         out = {svc: [0] * len(labels) for svc in services}
         if services:
-            names, spec = self._series_scope(services)
+            names, spec = self._series_scope(services, skip)
             every = set().union(*names.values())
             if spec:
                 owners = {}
@@ -310,9 +312,11 @@ class SreStore:
         return {svc: list(zip(labels, counts)) for svc, counts in out.items()}
 
     def event_series(self, service: str, since, until, bucket_s: int,
-                     errors_only: bool = False) -> list[tuple[str, int]]:
+                     errors_only: bool = False, skip=()) -> list[tuple[str, int]]:
         """event_series_many for one service."""
-        return self.event_series_many([service], since, until, bucket_s, errors_only)[service]
+        left_out = {"skip": skip} if skip else {}
+        return self.event_series_many([service], since, until, bucket_s, errors_only,
+                                      **left_out)[service]
 
     # ── the timeline: raw rows, alerts, metrics, incident changes (TR-752) ────
     def _event_case(self, spec: dict[str, str]) -> tuple[str, list, list[str]]:
@@ -334,13 +338,14 @@ class SreStore:
             return {}
         return out if isinstance(out, dict) else {}
 
-    def service_events(self, services: list[str], since, until, limit: int) -> tuple[list[dict], int]:
+    def service_events(self, services: list[str], since, until, limit: int,
+                       skip=()) -> tuple[list[dict], int]:
         """The events of `services` that arrived in [since, until) (by ingest_time), newest first:
         ([{service, source, at, event_type, text, labels, payload}], how many there are in all).
         A service counts the services merged into it, the same names event_series_many counts.
         Events live in DuckDB only, so this reads self.con under self._lock and joins no state
         table."""
-        names, spec = self._series_scope(list(dict.fromkeys(services)))
+        names, spec = self._series_scope(list(dict.fromkeys(services)), skip)
         every = sorted(set().union(*names.values())) if names else []
         if not spec or not every:
             return [], 0
@@ -379,13 +384,13 @@ class SreStore:
                  "labels": self._json_of(r[5]), "payload": self._json_of(r[6])} for r in rows]
 
     def metric_buckets(self, services: list[str], since, until, bucket_s: int,
-                       prometheus: list[str] = (), limit: int = 20000) -> list[dict]:
+                       prometheus: list[str] = (), limit: int = 20000, skip=()) -> list[dict]:
         """The average value of each metric of `services` per bucket of `bucket_s` seconds
         (aligned to `since`) in [since, until): [{service, metric, bucket, value, unit}],
         oldest first (past `limit` buckets it is the oldest that are dropped). A metric is an
         OTLP event with a metricType or any event of the `prometheus` sources; its value is
         payload.value, asDouble or asInt. DuckDB only."""
-        names, spec = self._series_scope(list(dict.fromkeys(services)))
+        names, spec = self._series_scope(list(dict.fromkeys(services)), skip)
         every = sorted(set().union(*names.values())) if names else []
         if not spec or not every:
             return []

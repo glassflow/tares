@@ -5875,7 +5875,7 @@ def make_app() -> FastAPI:
     async def list_services_route(hidden: int = 0):
         """Services busiest first; `hidden=1` includes the ones a person hid."""
         items = await asyncio.to_thread(sre_mod.list_services, store, runtime.catalog,
-                                        None, bool(hidden))
+                                        None, bool(hidden), _hidden_ids())
         rows = await asyncio.to_thread(store.watch_rows)
         agents = {a["name"]: a for a in await asyncio.to_thread(store.list_catalog_agents)}
         for i in items:
@@ -5885,7 +5885,8 @@ def make_app() -> FastAPI:
     @app.get("/api/watch")
     async def watch_route():
         """Whether anybody is watching each service, and each watcher's state (TR-743)."""
-        return await asyncio.to_thread(watch_mod.view, store, runtime.catalog)
+        return await asyncio.to_thread(watch_mod.view, store, runtime.catalog, None,
+                                       _hidden_ids())
 
     # ── incidents (TR-744): notes with an owner and an end ──
     if incidents_mod.sweep_hook not in watch_mod.EVERY_TICK:
@@ -6013,12 +6014,19 @@ def make_app() -> FastAPI:
     @app.get("/api/repos")
     async def repos_route():
         """The repos GitHub-type sources have sent events for, and the services each is linked to."""
-        known = await asyncio.to_thread(sre_mod.github_repos, store, runtime.catalog)
+        hide = _hidden_ids()
+        known = await asyncio.to_thread(sre_mod.github_repos, store, runtime.catalog, hide)
         settings = await asyncio.to_thread(store.service_settings)
+        seen = None   # the services the caller can see, when some are hidden from them
+        if hide and await asyncio.to_thread(sre_mod.hidden_sources, store, hide):
+            seen = {i["name"] for i in await asyncio.to_thread(
+                sre_mod.list_services, store, runtime.catalog, None, True, hide)}
         owners: dict = {}
         for raw, st in settings.items():
             for repo in st["repos"]:
-                owners.setdefault(repo, set()).add(sre_mod.canonical(raw, settings))
+                owner = sre_mod.canonical(raw, settings)
+                if seen is None or owner in seen:
+                    owners.setdefault(repo, set()).add(owner)
         return {"repos": [{"repo": r, "last_seen": sre_mod._iso(t),
                            "services": sorted(owners.get(r, ()))}
                           for r, t in sorted(known.items())]}
@@ -6027,7 +6035,8 @@ def make_app() -> FastAPI:
     async def blind_spots_route():
         """What the cell cannot see: silent services, services seen only through another, rules
         that match nothing and services whose deploys are not tied to them."""
-        return {"blind_spots": await asyncio.to_thread(sre_mod.blind_spots, store, runtime.catalog)}
+        return {"blind_spots": await asyncio.to_thread(sre_mod.blind_spots, store, runtime.catalog,
+                                                           None, _hidden_ids())}
 
     # before get_service_route: its {name:path} would take the /deploys tail as part of the name
     @app.get("/api/services/{name:path}/deploys")
@@ -6036,15 +6045,17 @@ def make_app() -> FastAPI:
             since = sre_mod.series_for(window, now_utc())[0]
         except ValueError as e:
             _err(e)
-        if not await asyncio.to_thread(sre_mod.exists, store, runtime.catalog, name):
+        hide = _hidden_ids()
+        if not await asyncio.to_thread(sre_mod.exists, store, runtime.catalog, name, hide):
             raise HTTPException(status_code=404, detail=f"no service named {name}")
         canon = sre_mod.canonical(name, await asyncio.to_thread(store.service_settings))
         return {"deploys": await asyncio.to_thread(sre_mod.deploys, store, runtime.catalog,
-                                                   canon, since)}
+                                                   canon, since, hide=hide)}
 
     @app.get("/api/services/{name:path}")
     async def get_service_route(name: str):
-        item = await asyncio.to_thread(sre_mod.get_service, store, runtime.catalog, name)
+        item = await asyncio.to_thread(sre_mod.get_service, store, runtime.catalog, name, None,
+                                       _hidden_ids())
         if item is None:
             raise HTTPException(status_code=404, detail=f"no service named {name}")
         return item
