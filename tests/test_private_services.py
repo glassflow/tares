@@ -257,8 +257,8 @@ async def main():
         tl = await cold("lee", "/api/sre/timeline", service="service-a")
         ck("the timeline's windows count only the events she can see", counted(tk) < counted(tl),
            f"{counted(tk)} vs {counted(tl)} {tk.text[:200]}")
-        r = await cold("kim", "/api/sre/home")
-        ck("the home names nothing private", r.status_code in (200, 404) and not mentions(r.json()),
+        r = await cold("kim", "/api/home")
+        ck("the home names nothing private", r.status_code == 200 and not mentions(r.json()),
            f"{r.status_code} {r.text[:300]}")
 
         print("== the people who can see Zephyrwatch ==")
