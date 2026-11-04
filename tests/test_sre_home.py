@@ -632,7 +632,7 @@ async def main():
         sre_home.clear_cache()
         r = await cx.get("/api/home")
         body = r.json()
-        eq("GET /api/home on an AI SRE cell returns this body", (r.status_code, set(body)), (200, KEYS))
+        eq("GET /api/home on an AI SRE cell returns this body", (r.status_code, set(body)), (200, KEYS | {"can_act"}))
         ck("with the headline of the cell", body["headline"]["tone"] in ("quiet", "broken", "unwatched"), body["headline"])
         SEEN.append(body)
         store.set_setting(W.SYSTEM_NAME_SETTING, "Billing")

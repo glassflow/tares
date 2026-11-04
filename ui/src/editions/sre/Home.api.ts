@@ -140,6 +140,8 @@ export interface HomeTool {
 
 export interface SreHome {
   edition: "sre";
+  /** False for a key that can only read: every button on the page needs the admin scope. */
+  can_act?: boolean;
   /** The system's name, such as "Acme". */
   system: string;
   headline: HomeHeadline;

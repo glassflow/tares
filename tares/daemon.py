@@ -5873,9 +5873,13 @@ def make_app() -> FastAPI:
         if value == "factory":
             return await asyncio.to_thread(factory_home.build, store, fx, request)
         if value == "sre":
-            return await asyncio.to_thread(sre_home.cached, store, runtime.catalog,
+            body = await asyncio.to_thread(sre_home.cached, store, runtime.catalog,
                                            runtime.health_snapshot, _by(request) or "console",
                                            _start_who(request), _hidden_ids())
+            # Whether this key may press the page's buttons (they all need the admin scope). It is
+            # added here, outside the cache, because the cache is shared by every key of one name.
+            scopes = getattr(request.state, "scopes", None)
+            return {**body, "can_act": scopes is None or "admin" in scopes}
         return JSONResponse({"error": "no home on this edition"}, status_code=404)
 
     # ── services (TR-742): the services this cell receives data for, read from the events ──
