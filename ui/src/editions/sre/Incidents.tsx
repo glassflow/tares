@@ -480,6 +480,7 @@ function IncidentView({ id }: { id: string }) {
   const askWorth = worth.can_answer && (worth.answer === null || changing);
   const traffic = d.chart.traffic ?? [];
   const series = [{ label: "errors", points: d.chart.points }, ...(traffic.length > 0 ? [{ label: "traffic", points: traffic }] : [])];
+  const openedWords = stamp(opened, at, dateWords(opened));
   const btn = (a: IncidentAction, label: string, variant: "primary" | "secondary") => (
     <Button variant={variant} busy={busy === a} disabled={busy !== null && busy !== a} onClick={() => act(a)} data-testid={`act-${a}`}>{label}</Button>
   );
@@ -490,7 +491,7 @@ function IncidentView({ id }: { id: string }) {
         <div className="flex flex-wrap items-center gap-2">
           <span className={cn("border px-1.5 py-0.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.06em]", tag.cls)} data-testid="incident-tag">{tag.label}</span>
           <span className="border border-border bg-card px-2 py-0.5 text-xs" data-user-text data-testid="incident-service">{d.service}</span>
-          {stamp(opened, at, dateWords(opened)) && <span className="text-[13px] text-muted-foreground" data-testid="incident-opened">opened {stamp(opened, at, dateWords(opened))}</span>}
+          {openedWords && <span className="text-[13px] text-muted-foreground" data-testid="incident-opened">opened {openedWords}</span>}
         </div>
         <h1 className="m-0! text-[22px]! [overflow-wrap:anywhere] md:text-[28px]!" data-words-exempt data-testid="incident-title">{d.title}</h1>
       </header>

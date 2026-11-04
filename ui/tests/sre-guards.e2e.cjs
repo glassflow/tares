@@ -143,6 +143,31 @@ function loadTimeWords() {
       ck(`an incident with a bad ${label} time shows its page`, (await page.getByTestId("status-line").count()) === 1);
       ck(`bad ${label} time: nothing threw`, errors.length === 0, errors.join("; "));
       ck(`bad ${label} time: no NaN on the page`, !/NaN/.test(await body(page)), await body(page));
+      if (label === "took it") {
+        ck("bad took-it time: the status line has no 'since'", !/\bsince\b/.test(await page.getByTestId("status-line").innerText()), await page.getByTestId("status-line").innerText());
+      }
+      if (label === "opened") {
+        ck("bad opened time: no 'opened' stamp", (await page.getByTestId("incident-opened").count()) === 0);
+        ck("bad opened time: the status line has no 'since'", !/\bsince\b/.test(await page.getByTestId("status-line").innerText()), await page.getByTestId("status-line").innerText());
+      }
+      await ctx.close();
+    }
+
+    // the timeline: items with a missing or bad time sit under one heading and nothing prints NaN
+    {
+      const { ctx, page, errors } = await newPage();
+      const nowIso = new Date().toISOString();
+      const item = (id, at, end) => ({ id, kind: "alert", at, end, time_words: "", service: "edge-proxy", text: `item ${id}`, tone: "warn", link: null, raw: null });
+      await page.route(/\/api\/sre\/timeline(\?|$)/, (route) => route.fulfill({ json: {
+        range_words: "Last 6 hours", services: ["edge-proxy"], next_before: null, empty_words: null,
+        items: [item("good-1", nowIso, null), item("bad-1", "not a date", null), item("bad-2", "also not a date", null), item("bad-3", nowIso, "nope"), item("good-2", new Date(Date.now() - 7200e3).toISOString(), null)],
+      } }));
+      await page.goto(`${BASE}/timeline`, { waitUntil: "load" });
+      await page.getByTestId("timeline-list").waitFor();
+      const heads = (await page.getByTestId("timeline-hour").allInnerTexts()).map((t) => t.trim());
+      ck("timeline: the page loads with bad times", errors.length === 0, errors.join("; "));
+      ck("timeline: no NaN or undefined on the page", !/NaN|undefined/.test(await body(page)), await body(page));
+      ck("timeline: the bad times sit under one 'Time unknown' heading, last", heads.filter((h) => h === "Time unknown").length === 1 && heads[heads.length - 1] === "Time unknown", heads.join(" | "));
       await ctx.close();
     }
 
