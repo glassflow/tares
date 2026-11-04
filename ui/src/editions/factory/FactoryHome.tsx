@@ -470,6 +470,20 @@ export function FactoryHomeError({ onRetry }: { onRetry?: () => void }) {
 // ── actions ────────────────────────────────────────────────────────────────────
 
 /** The sentence of a refusal, or a plain one when the cell could not be reached. */
+/** Why a hand-over was refused. The daemon refuses a key that can only read (admin scope), a key with
+ *  no person, and a person who is not the project's lead, each with its own sentence; say which one,
+ *  and name the key when the key is the cause. */
+function handOverRefusal(e: unknown, project: string, key?: string): string {
+  const message = e instanceof ApiError ? e.message : "";
+  if (e instanceof ApiError && e.status === 403) {
+    const who = key ? `The key ${key}` : "This key";
+    if (/lacks the .* scope/i.test(message)) return `${who} can only read, so it cannot hand a project over. Sign in with a key that can.`;
+    if (/has no person/i.test(message)) return `${who} has no person, so it cannot hand a project over. An admin binds it in Settings, Keys.`;
+    return `Only the lead of ${project} can hand it over.`;
+  }
+  return reason(e);
+}
+
 function reason(e: unknown): string {
   return e instanceof ApiError && e.message ? e.message : "Could not reach the cell. Try again in a moment.";
 }
@@ -590,6 +604,7 @@ const SAMPLE_OPENS = ["answer", "sign_off", "decline"];
  *  to hide at once and to read again. */
 function useHomeActions(live: boolean, changed: (done?: Done) => void) {
   const { toast } = useToast();
+  const { credentialName } = useEdition();
   const [rows, setRows] = React.useState<Record<string, RowState>>({});
   const [allow, setAllow] = React.useState<{ item: HomeItem; desk: string; mayLimit: boolean } | null>(null);
   const [close, setClose] = React.useState<{ item: HomeItem; project: string } | null>(null);
@@ -700,8 +715,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
       setHanding(null);
       changed({ handedOver: entry.project.id });
     } catch (e) {
-      const notLead = e instanceof ApiError && e.status === 403;
-      setHanding({ entry, busy: false, error: notLead ? `Only the lead of ${entry.project.name} can hand it over.` : reason(e) });
+      setHanding({ entry, busy: false, error: handOverRefusal(e, entry.project.name, credentialName) });
     }
   };
 
