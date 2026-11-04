@@ -104,13 +104,14 @@ def hit_rate_words(row: dict, days: int = 30) -> str:
     return f"{row['yes']} of {n} worth raising in the last {days} days"
 
 
-def hit_rates(store, days: int = 30, now=None, hide=()) -> list[dict]:
+def hit_rates(store, days: int = 30, now=None, hide=(), skip_agent=None) -> list[dict]:
     """Per watcher and project: answered, yes, no, hit_rate (None under MIN_ANSWERS), words.
-    `hide` leaves out the private projects the caller cannot see."""
+    `hide` leaves out the private projects the caller cannot see, `skip_agent` the watchers only
+    those projects use (a row with no project of its own)."""
     now = now or datetime.now(timezone.utc)
     out = []
     for row in store.watcher_hit_rates(now - timedelta(days=days)):
-        if row["project"] in hide:
+        if row["project"] in hide or (skip_agent and skip_agent(row["watcher"])):
             continue
         rate = round(row["yes"] / row["answered"], 2) if row["answered"] >= MIN_ANSWERS else None
         out.append({"agent": row["watcher"], "project": row["project"],
@@ -119,8 +120,9 @@ def hit_rates(store, days: int = 30, now=None, hide=()) -> list[dict]:
     return out
 
 
-def export_rows(store, since=None, hide=()) -> list[dict]:
-    rows = [r for r in store.feedback_export(since) if r.get("project") not in hide]
+def export_rows(store, since=None, hide=(), skip_agent=None) -> list[dict]:
+    rows = [r for r in store.feedback_export(since) if r.get("project") not in hide
+            and not (skip_agent and skip_agent(r.get("watcher")))]
     return [{**{c: r[c] for c in EXPORT_COLS if c != "at"}, "at": goal._iso(r["answered_at"])}
             for r in rows]
 

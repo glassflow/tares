@@ -2038,7 +2038,7 @@ def make_app() -> FastAPI:
         hidden = _hidden_ids()
         if hidden and (name in _hidden_sources(hidden) if kind == "source"
                        else _owned_by_hidden("trigger", name, hidden)):
-            _err(KeyError(f"unknown {kind} {name!r}"), 404)   # a private project's object is unknown
+            return {"dependents": []}   # a private project's object answers as one that is not there
         return {"dependents": [d for d in dependents(store, kind, name)
                                if not _owned_by_hidden(d["kind"], d["name"], hidden)]}
 
@@ -5969,10 +5969,16 @@ def make_app() -> FastAPI:
     def _worth_out(counts: dict, mine) -> dict:
         return {"ok": True, "worth": {**counts, "mine": mine}}
 
+    def _hidden_agent():
+        """A test for a watcher only private projects the caller cannot see use; None when none is hidden."""
+        hidden = _hidden_ids()
+        return (lambda a: _owned_by_hidden("agent", a, hidden)) if hidden else None
+
     def _run_visible_or_404(run_id: str) -> None:
         """A run of a private project the caller cannot see reads as no run at all."""
         hidden = _hidden_ids()
-        if hidden and set(store.run_projects(run_id)) & hidden:
+        uids = store.run_projects(run_id)
+        if hidden and uids and set(uids) <= hidden:
             _err(LookupError(f"no run {run_id!r}"), 404)
 
     @app.put("/api/findings/{run_id}/worth")
@@ -6008,7 +6014,8 @@ def make_app() -> FastAPI:
     def watcher_hit_rate_route(days: int = 30):
         """Per watcher, how many of the answers said it was worth raising, over the last `days`."""
         days = max(1, min(int(days), 365))
-        return {"watchers": feedback_mod.hit_rates(store, days, hide=_hidden_ids())}
+        return {"watchers": feedback_mod.hit_rates(store, days, hide=_hidden_ids(),
+                                                           skip_agent=_hidden_agent())}
 
     @app.get("/api/feedback/export")
     def feedback_export_route(since: str = "", format: str = "json"):
@@ -6022,7 +6029,7 @@ def make_app() -> FastAPI:
                 cut = goal_mod._aware(datetime.fromisoformat(since.replace("Z", "+00:00")))
             except ValueError:
                 _err(ValueError("since must be a time such as 2026-10-01T12:00:00Z"))
-        rows = feedback_mod.export_rows(store, cut, hide=_hidden_ids())
+        rows = feedback_mod.export_rows(store, cut, hide=_hidden_ids(), skip_agent=_hidden_agent())
         if format == "csv":
             return Response(feedback_mod.export_csv(rows), media_type="text/csv")
         return {"feedback": rows}

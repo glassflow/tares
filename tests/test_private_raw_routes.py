@@ -117,6 +117,9 @@ async def main():
         store.put_in_project("agent", "edge-seer", open_uid)
         # a memory source both projects write to
         store.upsert_catalog_source("agent-memory", "agent_memory", "memory", "5s", {})
+        # and one only Zephyrwatch uses, whose notes carry no project of their own
+        store.upsert_catalog_source("zephyr-memory", "agent_memory", "memory", "5s", {})
+        store.put_in_project("source", "zephyr-memory", vault)
         runtime.reload_catalog()
 
         def event(source, service, text, project=None, minutes=3):
@@ -131,9 +134,11 @@ async def main():
             event("prod-otlp", "service-a", "ZEPHYR private line on a shared source", vault, 5),
             event("prod-otlp", "service-a", "plain line from a shared source", None, 6),
         ])
-        for text, project in (("ZEPHYR note about retries", vault), ("plain note about retries", None)):
+        for text, project, src in (("ZEPHYR note about retries", vault, "agent-memory"),
+                                   ("plain note about retries", None, "agent-memory"),
+                                   ("ZEPHYR private-only note", None, "zephyr-memory")):
             t = base - timedelta(minutes=2)
-            store.append([Envelope(source="agent-memory", source_type="agent_memory",
+            store.append([Envelope(source=src, source_type="agent_memory",
                                    key_value="service-a", event_type="memory", text=text,
                                    event_time=t, payload={"project": project} if project else {},
                                    labels={}, ingest_time=t)])
@@ -154,6 +159,13 @@ async def main():
                  open_uid, 20)
         shown = store.create_incident("edge-proxy", open_uid, at)["id"]
         store.add_incident_note(shown, "r-edge", at)
+        # a result a shared watcher raised for both projects, and one the private watcher raised
+        # with no project of its own
+        run("r-shared", "edge-seer", "watch-edge", "edge-proxy", "shared result on edge-proxy.",
+            open_uid, 10)
+        store.add_run_projects("r-shared", [vault, open_uid])
+        run("r-zephyr-np", "zephyr-seer", "watch-zephyr", "zephyr-api", "Zephyr result, no project.",
+            None, 9)
         ck("the fixture ties the run to the private project", store.run_projects("r-zephyr") == [vault],
            str(store.run_projects("r-zephyr")))
 
@@ -162,6 +174,8 @@ async def main():
                            "r-zephyr", None, vault)
         store.set_feedback("r-edge", "p-lee", "Lee", False, "edge note", "console", "edge-seer",
                            "r-edge", None, open_uid)
+        store.set_feedback("r-zephyr-np", "p-lee", "Lee", True, "Zephyr bare note", "console",
+                           "zephyr-seer", "r-zephyr-np", None, None)
 
         # a skill and a doc only Zephyrwatch has
         store.upsert_skill(vault, "zephyr-playbook", "Zephyr steps", "Restart the zephyr queue.")
@@ -200,7 +214,8 @@ async def main():
 
         print("== the runbooks' memory notes ==")
         r = await get("kim", "/api/sre/runbooks")
-        ck("the runbooks hold no private note", r.status_code == 200 and "ZEPHYR note" not in r.text, r.text[:300])
+        ck("the runbooks hold no private note", r.status_code == 200 and "ZEPHYR note" not in r.text
+           and "private-only note" not in r.text, r.text[:300])
         ck("and keep the open note", "plain note about retries" in json.dumps(r.json()), r.text[:300])
 
         print("== findings and feedback ==")
@@ -223,6 +238,9 @@ async def main():
         ck("and the stored answer stays", len(store.feedback_for(["r-zephyr"])["r-zephyr"]) == 1)
         r = await call("kim", "PUT", "/api/findings/r-edge/worth", {"worth": True})
         ck("an answer on the open run works", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
+        r = await call("kim", "PUT", "/api/findings/r-shared/worth", {"worth": True})
+        ck("and on a run the open project shares with the private one", r.status_code == 200,
+           f"{r.status_code} {r.text[:120]}")
 
         print("== usage ==")
         r = await get("kim", "/api/usage")
@@ -235,9 +253,15 @@ async def main():
 
         print("== dependents ==")
         r = await get("kim", "/api/catalog/dependents", kind="source", name="zephyr-logs")
-        ck("the private source is unknown", r.status_code == 404, f"{r.status_code} {r.text[:120]}")
+        none_src = await get("kim", "/api/catalog/dependents", kind="source", name="no-such-source")
+        ck("the private source answers as one that is not there",
+           r.status_code == none_src.status_code and r.json() == none_src.json() == {"dependents": []},
+           f"{r.status_code} {r.text[:120]} vs {none_src.status_code} {none_src.text[:120]}")
         r = await get("kim", "/api/catalog/dependents", kind="trigger", name="watch-zephyr")
-        ck("the private trigger is unknown", r.status_code == 404, f"{r.status_code} {r.text[:120]}")
+        none_trg = await get("kim", "/api/catalog/dependents", kind="trigger", name="no-such-trigger")
+        ck("and so does the private trigger",
+           r.status_code == none_trg.status_code and r.json() == none_trg.json() == {"dependents": []},
+           f"{r.status_code} {r.text[:120]} vs {none_trg.status_code} {none_trg.text[:120]}")
         r = await get("kim", "/api/catalog/dependents", kind="source", name="prod-otlp")
         ck("a shared source lists the dependents she can see and not the private ones",
            r.status_code == 200 and "watch-edge" in json.dumps(r.json()) and not mentions(r.json()),
