@@ -138,7 +138,7 @@ def _used_words(counts: dict, roles: dict) -> str | None:
     return f"Read by {who} {times} this week"
 
 
-def build(store, catalog, service: str | None = None) -> dict:
+def build(store, catalog, service: str | None = None, hide=()) -> dict:
     """The whole screen. `service`: the one service to show (already resolved by the caller)."""
     now = now_utc()
     today = now.astimezone(timezone.utc).date()
@@ -146,7 +146,7 @@ def build(store, catalog, service: str | None = None) -> dict:
     stored = {s["name"]: s for s in store.list_all_skills() if s["name"].startswith(PREFIX)}
     mem_sources = [s.name for s in catalog.sources.values() if s.connector == "memory"]
     notes = store.memory_notes(mem_sources, MEMORY_PER_SERVICE)
-    roles = sre.roles(store, catalog, include_paused=True)
+    roles = sre.roles(store, catalog, include_paused=True, hide=hide)
     agents = sorted({w["agent"] for w in roles["watchers"]} | {i["agent"] for i in roles["investigators"]})
     counts = store.skill_load_counts(agents, LOOKBACK_DAYS)
     out = []
@@ -181,10 +181,11 @@ def register(app, store, h, ctx):
         return item["name"]
 
     def screen(service: str | None = None) -> dict:
-        return build(store, runtime.catalog, resolve(service) if service else None)
+        return build(store, runtime.catalog, resolve(service) if service else None,
+                     h.hidden_ids())
 
     def role_projects() -> list[str]:
-        roles = sre.roles(store, runtime.catalog, include_paused=True)
+        roles = sre.roles(store, runtime.catalog, include_paused=True, hide=h.hidden_ids())
         found = [w["project"] for w in roles["watchers"]] + [i["project"] for i in roles["investigators"]]
         return list(dict.fromkeys(p for p in found if p))
 

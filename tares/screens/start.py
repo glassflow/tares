@@ -29,7 +29,7 @@ def register(app, store, h, ctx):
         factory_home.drop_cache(store, request)
         if value == "sre":
             sre_home.clear_cache()
-            return sre_home.start_block(store, ctx.runtime.catalog, who)
+            return sre_home.start_block(store, ctx.runtime.catalog, who, hide=h.hidden_ids())
         if value != "factory":
             return {"ok": True}
         return factory_home.build(store, ctx.fx, request)["start"]

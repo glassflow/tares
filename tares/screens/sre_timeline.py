@@ -275,14 +275,15 @@ def _alert_items(store, catalog, start, end, settings, display_of, want_key, hid
     return out
 
 
-def _check_items(store, catalog, start, end, now, settings, display, want_key, hidden) -> list[dict]:
+def _check_items(store, catalog, start, end, now, settings, display, want_key, hidden,
+                 hide=()) -> list[dict]:
     """The checks the agents ran in the range. Quiet ones that follow each other for a service
     are one item; one that raised something, looked into it or wrote a note is an item each."""
     scheduled = {t.name for t in catalog.triggers if getattr(t.condition, "every", None)}
     found, before = [], end   # page back from the end of the range, so a past range reads its own rows
     for _ in range(MAX_CHECK_PAGES):
         page = goal.cell_results(store, scheduled, limit=100, before=before, show="all",
-                                 service=display or "", now=now)
+                                 service=display or "", now=now, hide=hide)
         rows = page["findings"]
         found += [r for r in rows if start <= _when(r["at"], "at") < end]
         if not page["next_before"] or (rows and _when(rows[-1]["at"], "at") < start):
@@ -320,11 +321,12 @@ INCIDENT_TONE = {"opened": "bad", "on_it": "warn", "resolved": "ok", "resolved_i
                  "reopened": "bad"}
 
 
-def _incident_items(store, start, end, now, settings, display_of, want_key, hidden) -> list[dict]:
+def _incident_items(store, start, end, now, settings, display_of, want_key, hidden,
+                    hide=()) -> list[dict]:
     # the chosen service by every name merged into it, since an incident keeps the name it was opened with
     names = [n for n in settings if sre.canonical(n, settings) == want_key] + [want_key] \
         if want_key else None
-    incs, log = store.incident_changes(start, end, services=names)
+    incs, log = store.incident_changes(start, end, services=names, hide=hide)
     out = []
     for inc in incs:
         key = sre.canonical(inc["service"] or "", settings)
@@ -429,7 +431,7 @@ class _Scope:
 
 
 def timeline_screen(store, catalog, service: str = "", start=None, end=None, kinds=None,
-                    before=None, now=None) -> dict:
+                    before=None, now=None, hide=()) -> dict:
     """The timeline page. `start` and `end` default to the last 6 hours, `kinds` to all kinds,
     `before` pages (the previous answer's next_before). Raises ValueError for a bad input."""
     want = _kinds(kinds)
@@ -463,10 +465,10 @@ def timeline_screen(store, catalog, service: str = "", start=None, end=None, kin
                               sc.want_key, sc.hidden)
     if keys and on("check"):
         items += _check_items(store, catalog, sc.start, sc.end, sc.now, sc.settings,
-                              sc.shown if sc.want_key else "", sc.want_key, sc.hidden)
+                              sc.shown if sc.want_key else "", sc.want_key, sc.hidden, hide)
     if keys and on("incident"):
         items += _incident_items(store, sc.start, sc.end, sc.now, sc.settings, sc.display_of,
-                                 sc.want_key, sc.hidden)
+                                 sc.want_key, sc.hidden, hide)
     if keys and on("metric"):
         items += _metric_items(store, catalog, keys, start_w, sc.end, since, w, sc.display_of)
 
@@ -533,7 +535,8 @@ def register(app, store, h, ctx):
         """What happened to the services, newest first, in windows with the normal ones folded.
         `kinds` is a list of logs, metrics, alerts, deploys and checks; page with `before` = the
         previous answer's next_before."""
-        return await asyncio.to_thread(run, timeline_screen, service, from_, to, kinds, before)
+        return await asyncio.to_thread(run, timeline_screen, service, from_, to, kinds, before,
+                                       None, h.hidden_ids())
 
     @app.get("/api/sre/timeline/raw")
     async def sre_timeline_raw(service: str = "", from_: str = Query("", alias="from"),

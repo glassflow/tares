@@ -131,8 +131,9 @@ def register(app, store, h, ctx):
         shared = [{"id": ids.get(k, k), "kind": k, "label": LABEL[k],
                    "title": SHARED_TITLE[k]} for k in ("agents", "memory")]
         open_, done = [], []
+        hidden = h.hidden_ids()
         for p in store.list_projects():
-            if p.get("kind") != "software_factory":
+            if p.get("kind") != "software_factory" or p["id"] in hidden:
                 continue
             docs = project_docs(p["id"], gids)
             if docs:
@@ -163,7 +164,7 @@ def register(app, store, h, ctx):
             if d is None or d["kind"] not in SHOWN or not d.get("projects"):
                 raise HTTPException(404, f"no document {doc_id!r}")
             p = store.get_project(d["projects"][0])
-            if p is None or p.get("kind") != "software_factory":
+            if p is None or p.get("kind") != "software_factory" or not h.can_see(p):
                 raise HTTPException(404, f"no document {doc_id!r}")
             project = {"id": p["id"], "name": p["name"]}
             title = f"{LABEL[d['kind']]}: {p['name']}"

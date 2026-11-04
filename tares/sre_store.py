@@ -416,12 +416,17 @@ class SreStore:
                  "value": float(r[3]), "unit": r[4] or ""} for r in reversed(rows)]
 
     def incident_changes(self, since, until, services: list[str] | None = None,
-                         limit: int = 200) -> tuple[list[dict], dict[str, list[dict]]]:
+                         limit: int = 200, hide=()) -> tuple[list[dict], dict[str, list[dict]]]:
         """The incidents that were opened before `until` and touched at or after `since` (newest
         first), with their log rows inside [since, until): (incidents, {incident id: [log rows
         {at, action, by_id, by_name, via}, oldest first]}). `services` keeps the incidents of
-        those service keys. State tables only; `?` placeholders, so it runs on either store."""
+        those service keys; `hide` leaves out the incidents of those projects. State tables only;
+        `?` placeholders, so it runs on either store."""
         where, args = ["opened_at < ?", "COALESCE(updated_at, opened_at) >= ?"], [until, since]
+        clause, ids = self._unhidden(hide)
+        if clause:
+            where.append(clause)
+            args += ids
         if services is not None:
             if not services:
                 return [], {}
@@ -508,6 +513,15 @@ class SreStore:
 
     # ── incidents (TR-744) ────────────────────────────────────────────────────
     @staticmethod
+    def _unhidden(hide) -> tuple[str, list]:
+        """The WHERE part that leaves out the incidents of the projects in `hide` (a private
+        project the caller cannot see, TR-892): ("", []) when there are none."""
+        ids = sorted(hide or ())
+        if not ids:
+            return "", []
+        return f"(project IS NULL OR project NOT IN ({', '.join(['?'] * len(ids))}))", ids
+
+    @staticmethod
     def _incident(row) -> dict:
         out = dict(zip(INCIDENT_COLS, row))
         slack = out["slack"]
@@ -578,10 +592,12 @@ class SreStore:
         with self._swrite:
             self.sc.execute("UPDATE incidents SET slack_url = ? WHERE id = ?", [url, incident_id])
 
-    def incident_services(self) -> list[str]:
-        """The services that have an incident."""
+    def incident_services(self, hide=()) -> list[str]:
+        """The services that have an incident (`hide`: not counting those of these projects)."""
+        clause, ids = self._unhidden(hide)
         with self._sread:
-            rows = self.sc.execute("SELECT DISTINCT service FROM incidents").fetchall()
+            rows = self.sc.execute("SELECT DISTINCT service FROM incidents"
+                                   + (" WHERE " + clause if clause else ""), ids).fetchall()
         return sorted(r[0] for r in rows if r[0])
 
     def notes_of(self, incident_ids: list[str]) -> dict[str, list[dict]]:
@@ -685,10 +701,15 @@ class SreStore:
         return out
 
     def list_incidents(self, state: str | None = None, service: str | None = None,
-                       limit: int = 50, before=None, offset: int = 0) -> list[dict]:
+                       limit: int = 50, before=None, offset: int = 0, hide=()) -> list[dict]:
         """Newest note first. `state` is open, on_it, resolved or active (open and on_it);
-        `before` keeps the incidents whose last note is older than it; `offset` pages."""
+        `before` keeps the incidents whose last note is older than it; `offset` pages; `hide`
+        leaves out the incidents of those projects."""
         where, args = [], []
+        clause, ids = self._unhidden(hide)
+        if clause:
+            where.append(clause)
+            args += ids
         if state == "active":
             where.append("state <> 'resolved'")
         elif state:
@@ -706,11 +727,16 @@ class SreStore:
                                    args + [int(limit), max(0, int(offset))]).fetchall()
         return [self._incident(r) for r in rows]
 
-    def incident_counts(self, service: str | None = None) -> dict:
-        sql, args = "SELECT state, COUNT(*) FROM incidents", []
+    def incident_counts(self, service: str | None = None, hide=()) -> dict:
+        where, args = [], []
         if service:
-            sql += " WHERE service = ?"
+            where.append("service = ?")
             args.append(service)
+        clause, ids = self._unhidden(hide)
+        if clause:
+            where.append(clause)
+            args += ids
+        sql = "SELECT state, COUNT(*) FROM incidents" + (" WHERE " + " AND ".join(where) if where else "")
         with self._sread:
             rows = self.sc.execute(sql + " GROUP BY state", args).fetchall()
         got = {r[0]: int(r[1]) for r in rows}

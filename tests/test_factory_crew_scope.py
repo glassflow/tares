@@ -118,6 +118,26 @@ async def main():
         ck("the owner who saved L4-ship has the crew merge it: nothing waits on the Projects row and the project page",
            await waits("alex") == (False, False), str(await waits("alex")))
 
+        print("== the Tickets filter orders its projects by what waits on the person ==")
+        # a project whose tickets are all out of the builders' hands but for a passed PR waits on
+        # the person under L3-review; a busier project is newer. Under the owner's L4-ship nothing
+        # waits, so the newer project leads.
+        store.create_project("prj-y", "software_factory", "Project Y", {}, goal="Build Y")
+        store.set_project_kind("prj-y", "software_factory")
+        store.update_project("prj-y", status="active")
+        store.update_ticket(t, status="done")          # prj-x: one ticket delivered, its PR still open
+        store.create_ticket("prj-x", "tares", "Next", repo="example-org/svc")   # and one still to do
+        busy = store.create_ticket("prj-y", "tares", "Busy", repo="example-org/svc2")
+        store.update_ticket(busy, stage="doing")
+
+        async def order(who):
+            r = (await call(who, "GET", "/api/factory/tickets")).json()
+            return [p["id"] for p in r["projects"]]
+
+        ok_kim, ok_alex = await order("kim"), await order("alex")
+        ck("the person who must merge sees the project with the passed PR first", ok_kim[0] == "prj-x", str(ok_kim))
+        ck("the owner whose crew merges sees the busier project first", ok_alex[0] == "prj-y", str(ok_alex))
+
         print("== pacing follows the saved value ==")
         from datetime import timedelta
         soon = (now_utc() + timedelta(hours=1)).isoformat()

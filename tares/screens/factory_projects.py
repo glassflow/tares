@@ -91,11 +91,13 @@ def register(app, store, h, ctx):
         now = now_utc()
         fx = ctx.fx
         stations = fx.stations() if fx else []
-        projects = [p for p in store.list_projects() if p.get("kind") == "software_factory"]
+        hidden = h.hidden_ids()
+        projects = [p for p in store.list_projects()
+                    if p.get("kind") == "software_factory" and p["id"] not in hidden]
         ids = [p["id"] for p in projects]
         tickets = store.tickets_by_project(ids)
         milestones = store.milestones_by_project(ids)
-        waiting = waiting_items(store, for_caller(fx, request), now)
+        waiting = waiting_items(store, for_caller(fx, request), now, hidden)
         rows = [row_for(p, tickets[p["id"]], store.get_handover(p["id"]), waiting, stations, now,
                         milestones[p["id"]]) for p in projects]
         rows.sort(key=lambda r: (ORDER[r["state"]],
