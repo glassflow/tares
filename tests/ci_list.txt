@@ -108,6 +108,7 @@ test_private_raw_routes
 test_private_reads
 test_private_routes
 test_private_services
+test_private_writes
 test_project_access
 test_project_keys
 test_project_timeline
@@ -122,6 +123,7 @@ test_rius_rca
 test_run_results
 test_schedule_trigger
 test_seed
+test_seed_new_cell_only
 test_services
 test_services_write
 test_session_flow
